@@ -37,24 +37,42 @@ pub const FORK_PLACEHOLDER: &str = "Fork started \u{2014} processing in backgrou
 
 /// Fork subagent context — carries inherited state from parent.
 ///
-/// TS: FORK_AGENT definition + buildForkedMessages() + buildChildMessage()
+/// Caller is expected to:
+/// 1. Thread [`ForkContext::messages`] into the child's prior history.
+/// 2. Wrap the directive with [`build_fork_child_message`] and use it
+///    as the body of the new user turn (so the `<fork-boilerplate>`
+///    XML lands in the conversation; recursion detection
+///    ([`is_in_fork_child`]) depends on this).
+///
+/// Tool-pool inheritance is NOT carried on this struct — the AgentTool
+/// boundary owns that decision via
+/// [`coco_tool_runtime::AgentSpawnRequest::use_exact_tools`].
+///
+/// TS: `forkSubagent.ts::buildForkedMessages` +
+/// `forkSubagent.ts::buildChildMessage`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkContext {
-    /// Parent's conversation messages (with tool results replaced).
+    /// Parent's conversation messages (with `tool_result` content
+    /// replaced by [`FORK_PLACEHOLDER`]). Ready to thread into the
+    /// child's prior history.
     pub messages: Vec<serde_json::Value>,
-    /// Directive prepended for this specific fork child.
+    /// Directive captured from the AgentTool input. Use
+    /// [`build_fork_child_message`] to wrap it into the boilerplate
+    /// form before sending — this struct doesn't pre-wrap so the
+    /// caller can decorate (e.g. skill preload, hook context) first.
     pub directive: String,
-    /// Whether this fork should use exact parent tools (cache identity).
-    pub use_exact_tools: bool,
 }
 
-/// Build a fork context from the parent's last assistant message.
+/// Build a fork context from the parent's conversation history.
 ///
-/// Takes the parent's assistant message (with `tool_use` blocks) and creates
-/// fork context messages where all tool results are replaced with the
-/// placeholder text. The directive is prepended to guide the forked child.
+/// Rewrites `tool_result` blocks to [`FORK_PLACEHOLDER`] so every fork
+/// child produces a byte-identical API request prefix (prompt-cache
+/// sharing). The returned [`ForkContext`] carries the rewritten
+/// messages plus the directive; the caller passes the directive
+/// through [`build_fork_child_message`] when constructing the new
+/// user turn.
 ///
-/// TS: buildForkedMessages(directive, assistantMessage)
+/// TS: `buildForkedMessages(directive, parentMessages)`.
 pub fn build_fork_context(parent_messages: &[serde_json::Value], directive: &str) -> ForkContext {
     let mut forked = Vec::with_capacity(parent_messages.len());
 
@@ -91,7 +109,6 @@ pub fn build_fork_context(parent_messages: &[serde_json::Value], directive: &str
     ForkContext {
         messages: forked,
         directive: directive.to_string(),
-        use_exact_tools: true,
     }
 }
 

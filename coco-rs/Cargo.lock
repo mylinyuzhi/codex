@@ -1067,6 +1067,7 @@ dependencies = [
  "coco-error",
  "coco-frontmatter",
  "coco-messages",
+ "coco-model-card",
  "coco-otel",
  "coco-types",
  "globset",
@@ -1092,6 +1093,7 @@ dependencies = [
  "chrono",
  "coco-compact",
  "coco-config",
+ "coco-context",
  "coco-error",
  "coco-git",
  "coco-hooks",
@@ -1404,6 +1406,13 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "coco-model-card"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
 ]
 
 [[package]]

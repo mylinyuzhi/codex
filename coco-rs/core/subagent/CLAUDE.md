@@ -64,21 +64,35 @@ its own; the transitive pull is structural and predates this crate. Cleanly
 removing tokio from the graph requires splitting `AppStateReadHandle` out of
 `coco-types`, tracked separately. Do not add tokio APIs here in the meantime.
 
-## Known Phase-1 Gaps (deferred to later phases)
+## Known limitations
 
-- **No consumer wiring.** `cargo check -p coco-subagent` passes but no other
-  crate imports the catalog yet — `AgentTool`, `app/state`, `commands` still
-  use the legacy `agent_spawn.rs` / `agent_advanced.rs` paths. Phase 2-9
-  wires the new crate.
-- **Built-in `whenToUse` strings are short paraphrases**, not the verbatim
-  TS strings from `built-in/*.ts`. The model-facing prompt list will read
-  slightly differently from TS until the prompt renderers ship in Phase 2.
-- **No nested-directory walking and no per-file size cap.** The legacy
-  `agent_spawn.rs` walks two levels deep with `walkdir` and rejects files
-  over 1 MiB; this crate uses one-level `read_dir` only. Add `walkdir` +
-  size cap when the legacy loaders are deleted.
-- **`mcpServers` inline `{ name: config }` form is not parsed** — only the
-  string-reference form is read from frontmatter. TS accepts both.
+- **Built-in `whenToUse` and `system_prompt` strings are paraphrases**, not
+  byte-verbatim TS source from `built-in/*.ts`. The model-facing prompt list
+  reads slightly differently from TS. Tracked in
+  `docs/coco-rs/subagent-parity-fix-plan.md` PR 5.1 (planned `include_str!`
+  port).
 - **`extra_allow_list`** on `ToolFilterContext` is a coco-rs extension (no
-  TS equivalent), reserved for Phase-8 slash-command tool intersection.
-  Pass `None` for TS-parity behavior.
+  TS equivalent), reserved for slash-command tool intersection. Pass `None`
+  for TS-parity behavior.
+
+### Resolved gaps (history)
+
+The following entries appeared in earlier audits but verification confirmed
+they are NOT gaps in the current code:
+
+- ~~No consumer wiring~~ — `AgentTool`, `app/state`, `commands` all consume
+  the catalog. Legacy `agent_spawn.rs`/`agent_advanced.rs` are gone (one
+  comment reference in `app/cli/src/paths.rs`, no active code).
+- ~~No nested-directory walking~~ — `collect_md_paths` walks 2 levels
+  (root + 1 nested) matching TS `walkdir.max_depth(2)`. 1 MiB size cap is
+  enforced via the existing metadata check.
+- ~~`mcpServers` inline form not parsed~~ — `parse_mcp_servers`
+  (`frontmatter.rs:216-259`) handles all three TS-supported shapes:
+  string list, mixed sequence, pure inline mapping list.
+- ~~Wildcard `tools: ['*']` skips memory injection~~ — matches TS
+  exactly. TS `parseAgentToolsFromFrontmatter`
+  (`utils/markdownConfigLoader.ts:113-126`) collapses both "missing field"
+  AND `['*']` to `undefined`, and the inject site gates on
+  `tools !== undefined`. coco-rs's collapse-to-empty-Vec produces the same
+  behavior (`if def.allowed_tools.is_empty() { return; }` in
+  `inject_memory_tools`).

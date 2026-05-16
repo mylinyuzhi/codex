@@ -412,13 +412,16 @@ impl Tool for AgentTool {
         // `oneShot` flag on `ONE_SHOT_BUILTIN_AGENT_TYPES`.
         let subagent_type_for_render = subagent_type.clone();
 
-        // Fork-mode dispatch (TS `forkSubagent.ts`): when the env gate is
-        // on, agent-teams is enabled, the session is interactive, and
-        // the caller omitted `subagent_type`, the child inherits the
-        // parent's pre-rendered system-prompt bytes + full message
+        // Fork-mode dispatch (TS `forkSubagent.ts`): when the env gate
+        // is on, agent-teams is enabled, the session is interactive,
+        // and the caller omitted `subagent_type`, the child inherits
+        // the parent's pre-rendered system prompt + full message
         // history (with `tool_result` blocks replaced by
-        // `coco_subagent::FORK_PLACEHOLDER` for cache-identical request
-        // prefixes).
+        // `coco_subagent::FORK_PLACEHOLDER` for cache-identical
+        // request prefixes). The coordinator wraps the user-facing
+        // directive in `<fork-boilerplate>` so the worker receives
+        // its rules and a downstream recursion guard
+        // (`is_in_fork_child`) can detect fork-of-fork.
         let spawn_mode = if subagent_type.is_none()
             && coco_subagent::is_fork_subagent_active(&ctx.features, ctx.is_non_interactive)
         {
@@ -429,6 +432,21 @@ impl Tool for AgentTool {
                               `ToolUseContext.rendered_system_prompt` before fork-eligible \
                               tool calls — without it the prompt-cache invariant cannot be \
                               upheld."
+                        .into(),
+                    source: None,
+                });
+            };
+            // Fork requires the parent's runtime snapshot for cache
+            // parity. Without it we'd resolve the model via live
+            // `RuntimeConfig` and hot-reload would silently bust the
+            // cache. Fail loud rather than fall back.
+            let Some(parent_snapshot) = ctx.parent_runtime_snapshot.clone() else {
+                return Err(ToolError::ExecutionFailed {
+                    message: "Fork mode requested but parent's runtime snapshot is \
+                              unavailable. The engine must populate \
+                              `ToolUseContext.parent_runtime_snapshot` from \
+                              `ApiClient::fingerprint().to_snapshot()` at bootstrap — \
+                              without it Fork-mode prompt-cache parity cannot be guaranteed."
                         .into(),
                     source: None,
                 });
@@ -450,9 +468,9 @@ impl Tool for AgentTool {
                 });
             }
             coco_tool_runtime::SpawnMode::Fork {
-                rendered_system_prompt: rendered_system_prompt.into_bytes(),
+                rendered_system_prompt,
                 parent_messages: parent_messages_json,
-                inherit_tool_pool: true,
+                parent_snapshot,
             }
         } else {
             coco_tool_runtime::SpawnMode::Fresh
@@ -525,6 +543,17 @@ impl Tool for AgentTool {
             )
             || summaries_via_app_state;
 
+        // P0-1 fix — TS parity (`AgentTool.tsx:610`):
+        //   `model: isForkPath ? undefined : model`
+        // Fork mode pins to the parent's main-loop model for prompt-cache
+        // parity. Honoring a caller-supplied `model` in fork mode silently
+        // busts the cache (different cache key → full re-tokenize), which
+        // defeats the entire reason fork exists. Strip it here.
+        let is_fork = matches!(spawn_mode, coco_tool_runtime::SpawnMode::Fork { .. });
+        let caller_model = input
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let request = AgentSpawnRequest {
             prompt: prompt.to_string(),
             description: input
@@ -532,10 +561,7 @@ impl Tool for AgentTool {
                 .and_then(|v| v.as_str())
                 .map(String::from),
             subagent_type,
-            model: input
-                .get("model")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            model: if is_fork { None } else { caller_model },
             run_in_background,
             enable_summarization,
             session_id: ctx.session_id_for_history.clone().unwrap_or_default(),
@@ -593,11 +619,11 @@ impl Tool for AgentTool {
             features: Some(ctx.features.clone()),
             tool_overrides: Some(ctx.tool_overrides.clone()),
             parent_tool_filter: Some(ctx.tool_filter.clone()),
+            // `spawn_mode` carries the parent_snapshot embedded in the
+            // Fork variant (type invariant: Fork without snapshot is
+            // unconstructable). Resume/Fresh don't pin to a snapshot —
+            // they read live RuntimeConfig at spawn time.
             spawn_mode,
-            // Production wiring: when `ToolUseContext` learns to carry
-            // the parent's `ProviderClientFingerprint` (T5 follow-up),
-            // populate this from `fingerprint.to_snapshot()`.
-            parent_runtime_snapshot: None,
             // T7: resolve the agent definition once at the AgentTool
             // boundary so the runner reads `definition.model` and
             // `definition.model_role` consistently.

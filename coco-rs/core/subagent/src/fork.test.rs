@@ -21,7 +21,6 @@ fn test_build_fork_context_replaces_tool_results() {
 
     let ctx = build_fork_context(&messages, "Research the codebase");
     assert_eq!(ctx.messages.len(), 2);
-    assert!(ctx.use_exact_tools);
     assert_eq!(ctx.directive, "Research the codebase");
 
     let user_msg = &ctx.messages[1];

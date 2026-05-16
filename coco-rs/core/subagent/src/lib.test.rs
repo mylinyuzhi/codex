@@ -89,13 +89,13 @@ fn coco_guide_uses_dont_ask_permission_mode() {
     assert_eq!(def.permission_mode.as_deref(), Some("dontAsk"));
     assert_eq!(
         def.allowed_tools,
-        vec![
-            ToolName::Glob.as_str(),
-            ToolName::Grep.as_str(),
-            ToolName::Read.as_str(),
-            ToolName::WebFetch.as_str(),
-            ToolName::WebSearch.as_str(),
-        ]
+        coco_types::ToolAllowList::Explicit(vec![
+            ToolName::Glob.as_str().into(),
+            ToolName::Grep.as_str().into(),
+            ToolName::Read.as_str().into(),
+            ToolName::WebFetch.as_str().into(),
+            ToolName::WebSearch.as_str().into(),
+        ])
     );
 }
 
@@ -113,7 +113,10 @@ fn statusline_built_in_uses_orange_color_and_sonnet() {
     assert_eq!(def.model.as_deref(), Some("sonnet"));
     assert_eq!(
         def.allowed_tools,
-        vec![ToolName::Read.as_str(), ToolName::Edit.as_str()]
+        coco_types::ToolAllowList::Explicit(vec![
+            ToolName::Read.as_str().into(),
+            ToolName::Edit.as_str().into(),
+        ])
     );
 }
 
@@ -211,25 +214,35 @@ fn empty_output_marker_matches_ts_literal() {
 
 #[test]
 fn tools_description_all_branches() {
-    assert_eq!(format_tools_description(&[], &[]), "All tools");
+    use coco_types::ToolAllowList;
+    let wild = ToolAllowList::Wildcard;
+    let explicit = |v: &[&str]| ToolAllowList::Explicit(v.iter().map(|s| (*s).into()).collect());
+
+    assert_eq!(format_tools_description(&wild, &[]), "All tools");
     assert_eq!(
-        format_tools_description(&[], &["Bash".into(), "Edit".into()]),
+        format_tools_description(&wild, &["Bash".into(), "Edit".into()]),
         "All tools except Bash, Edit"
     );
     assert_eq!(
-        format_tools_description(&["Read".into(), "Grep".into()], &[]),
+        format_tools_description(&explicit(&["Read", "Grep"]), &[]),
         "Read, Grep"
     );
     assert_eq!(
-        format_tools_description(
-            &["Read".into(), "Grep".into(), "Bash".into()],
-            &["Bash".into()]
-        ),
+        format_tools_description(&explicit(&["Read", "Grep", "Bash"]), &["Bash".into()]),
         "Read, Grep"
     );
     assert_eq!(
-        format_tools_description(&["Bash".into()], &["Bash".into()]),
+        format_tools_description(&explicit(&["Bash"]), &["Bash".into()]),
         "None"
+    );
+    // Empty Explicit list renders as "All tools" — TS parity with
+    // `getToolsDescription`'s `allowedTools && allowedTools.length > 0`
+    // gate (`prompt.ts:15-37`). The runtime filter (`filter.rs`) still
+    // retains zero candidates for this state; rendering is purely
+    // cosmetic.
+    assert_eq!(
+        format_tools_description(&ToolAllowList::Explicit(vec![]), &[]),
+        "All tools"
     );
 }
 
@@ -274,13 +287,18 @@ fn allowed_agent_types_empty_names_means_match_all() {
 // ── tool filter plan ──
 
 fn agent(name: &str, allowed: &[&str], denied: &[&str]) -> coco_types::AgentDefinition {
+    let allowed_tools = if allowed.is_empty() {
+        coco_types::ToolAllowList::Wildcard
+    } else {
+        coco_types::ToolAllowList::Explicit(allowed.iter().map(|s| (*s).to_owned()).collect())
+    };
     coco_types::AgentDefinition {
         agent_type: coco_types::AgentTypeId::Custom(name.into()),
         name: name.into(),
         when_to_use: Some("test".into()),
         description: Some("test".into()),
         source: AgentSource::ProjectSettings,
-        allowed_tools: allowed.iter().map(|s| (*s).to_owned()).collect(),
+        allowed_tools,
         disallowed_tools: denied.iter().map(|s| (*s).to_owned()).collect(),
         ..Default::default()
     }
@@ -383,7 +401,11 @@ fn frontmatter_wildcard_tools_collapses_to_default_allow_list() {
     );
     store.load();
     let def = store.snapshot().find_active("wild").cloned().unwrap();
-    assert!(def.allowed_tools.is_empty(), "got: {:?}", def.allowed_tools);
+    assert!(
+        def.allowed_tools.is_wildcard(),
+        "got: {:?}",
+        def.allowed_tools
+    );
 }
 
 #[test]
@@ -859,7 +881,10 @@ fn frontmatter_tools_csv_string_is_split_on_commas() {
     store.load();
     let snap = store.snapshot();
     let def = snap.find_active("csv").unwrap();
-    assert_eq!(def.allowed_tools, vec!["Read", "Edit", "Write"]);
+    assert_eq!(
+        def.allowed_tools,
+        coco_types::ToolAllowList::Explicit(vec!["Read".into(), "Edit".into(), "Write".into()])
+    );
 }
 
 #[test]
@@ -891,7 +916,11 @@ fn auto_memory_injection_adds_read_edit_write_when_enabled() {
     store.load();
     let snap = store.snapshot();
     let def = snap.find_active("scribe").unwrap();
-    let mut tools = def.allowed_tools.clone();
+    let mut tools = def
+        .allowed_tools
+        .as_explicit()
+        .expect("scribe should have an Explicit allow-list after injection")
+        .to_vec();
     tools.sort();
     assert_eq!(
         tools,
@@ -909,8 +938,8 @@ fn auto_memory_injection_adds_read_edit_write_when_enabled() {
 #[test]
 fn auto_memory_injection_skipped_for_wildcard_agents() {
     // TS guards on `tools !== undefined`; coco-rs collapses `['*']` to
-    // an empty allow-list ("use default"). Either way the injection is
-    // a no-op because the agent already sees every tool.
+    // `ToolAllowList::Wildcard`. Either way the injection is a no-op
+    // because the agent already sees every tool.
     let project = TempDir::new().unwrap();
     write_md(
         project.path(),
@@ -935,9 +964,59 @@ fn auto_memory_injection_skipped_for_wildcard_agents() {
     let snap = store.snapshot();
     let def = snap.find_active("wild").unwrap();
     assert!(
-        def.allowed_tools.is_empty(),
-        "wildcard agent's allow-list must remain empty (= default), not {:?}",
+        def.allowed_tools.is_wildcard(),
+        "wildcard agent's allow-list must remain Wildcard after injection, not {:?}",
         def.allowed_tools
+    );
+}
+
+/// G10 TS-parity regression: `tools: []` is **NOT** Wildcard. It means
+/// "zero tools" (explicit empty list), and when paired with `memory:`,
+/// the auto-memory injector promotes it to `[Read, Edit, Write]`.
+///
+/// TS: `markdownConfigLoader.ts:113-126 parseAgentToolsFromFrontmatter`
+/// returns `[]` for `tools: []`, then `loadAgentsDir.ts:455-456` gates
+/// memory injection on `tools !== undefined` (true for `[]`).
+///
+/// Pre-fix Rust collapsed `tools: []` to `Wildcard`, silently broadening
+/// such agents' tool pool to "all tools" and skipping memory injection
+/// — opposite of user intent.
+#[test]
+fn auto_memory_injection_runs_for_explicit_empty_tools_with_memory() {
+    let project = TempDir::new().unwrap();
+    write_md(
+        project.path(),
+        "minimal.md",
+        "---\n\
+         name: minimal\n\
+         description: zero-tools agent with memory\n\
+         tools: []\n\
+         memory: project\n\
+         ---\n\
+         body",
+    );
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::default(),
+        AgentSearchPaths {
+            project_dirs: vec![project.path().to_path_buf()],
+            ..Default::default()
+        },
+    );
+    store.set_auto_memory_enabled(true);
+    store.load();
+    let snap = store.snapshot();
+    let def = snap.find_active("minimal").unwrap();
+    let mut tools = def
+        .allowed_tools
+        .as_explicit()
+        .expect("`tools: []` with memory must produce Explicit (not Wildcard) after injection")
+        .to_vec();
+    tools.sort();
+    assert_eq!(
+        tools,
+        vec!["Edit".to_owned(), "Read".to_owned(), "Write".to_owned()],
+        "auto-memory must inject Read/Edit/Write into `tools: []`; \
+         got {tools:?}",
     );
 }
 
@@ -966,7 +1045,10 @@ fn auto_memory_injection_no_op_without_memory_scope() {
     store.load();
     let snap = store.snapshot();
     let def = snap.find_active("plain").unwrap();
-    assert_eq!(def.allowed_tools, vec!["Bash", "Grep"]);
+    assert_eq!(
+        def.allowed_tools,
+        coco_types::ToolAllowList::Explicit(vec!["Bash".into(), "Grep".into()])
+    );
 }
 
 #[test]
@@ -996,7 +1078,10 @@ fn auto_memory_injection_off_by_default() {
     store.load();
     let snap = store.snapshot();
     let def = snap.find_active("scribe").unwrap();
-    assert_eq!(def.allowed_tools, vec!["Bash"]);
+    assert_eq!(
+        def.allowed_tools,
+        coco_types::ToolAllowList::Explicit(vec!["Bash".into()])
+    );
 }
 
 #[test]

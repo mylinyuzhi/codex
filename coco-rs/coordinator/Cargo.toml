@@ -32,6 +32,11 @@ coco-permissions.workspace = true
 coco-tasks.workspace = true
 coco-hooks.workspace = true
 coco-memory.workspace = true
+# `coco-context` provides the canonical `build_system_prompt` assembler
+# (env block + AGENT_NOTES + CLAUDE.md discovery + memory section).
+# Subagent spawn (PR 2.1) routes Fresh/Resume modes through it instead
+# of inlining naive `def.system_prompt + memory_block` concatenation.
+coco-context.workspace = true
 coco-git.workspace = true
 # Used by `agent_handle::teammate_engine` to micro-compact a teammate's
 # message history when it crosses the auto-compact threshold. Without

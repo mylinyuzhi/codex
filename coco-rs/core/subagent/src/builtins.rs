@@ -179,10 +179,10 @@ fn statusline_setup() -> AgentDefinition {
     AgentDefinition {
         model: Some("sonnet".into()),
         color: Some(AgentColorName::Orange),
-        allowed_tools: vec![
+        allowed_tools: coco_types::ToolAllowList::Explicit(vec![
             ToolName::Read.as_str().into(),
             ToolName::Edit.as_str().into(),
-        ],
+        ]),
         system_prompt: Some(STATUSLINE_SETUP_SYSTEM_PROMPT.into()),
         ..base(
             SubagentType::StatusLine,
@@ -259,20 +259,20 @@ fn verification() -> AgentDefinition {
 /// [`coco_types::SubagentType::CocoGuide`]).
 fn coco_guide_with(has_embedded_search_tools: bool) -> AgentDefinition {
     let allowed_tools = if has_embedded_search_tools {
-        vec![
+        coco_types::ToolAllowList::Explicit(vec![
             ToolName::Bash.as_str().into(),
             ToolName::Read.as_str().into(),
             ToolName::WebFetch.as_str().into(),
             ToolName::WebSearch.as_str().into(),
-        ]
+        ])
     } else {
-        vec![
+        coco_types::ToolAllowList::Explicit(vec![
             ToolName::Glob.as_str().into(),
             ToolName::Grep.as_str().into(),
             ToolName::Read.as_str().into(),
             ToolName::WebFetch.as_str().into(),
             ToolName::WebSearch.as_str().into(),
-        ]
+        ])
     };
     AgentDefinition {
         model: Some("haiku".into()),

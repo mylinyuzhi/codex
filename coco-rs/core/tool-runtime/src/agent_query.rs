@@ -193,15 +193,6 @@ pub struct AgentQueryConfig {
     /// subagent spawns that don't match a registered definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
-    /// Parent's resolved provider+model identity at spawn time —
-    /// threaded from `AgentSpawnRequest.parent_runtime_snapshot`. The
-    /// adapter compares against the freshly resolved child identity
-    /// to detect `RuntimeConfig` drift between parent's last turn and
-    /// the child's first turn, and (for Fork mode) to enforce prompt-
-    /// cache parity. Skipped at the JSON boundary — purely in-process.
-    /// See `coco_types::SubagentRuntimeSnapshot`.
-    #[serde(skip)]
-    pub parent_runtime_snapshot: Option<coco_types::SubagentRuntimeSnapshot>,
     /// Resolved agent definition for this query — threaded from
     /// `AgentSpawnRequest.definition`. The adapter (and downstream
     /// engine factory) consult `definition.model` /

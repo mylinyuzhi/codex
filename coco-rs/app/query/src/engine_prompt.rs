@@ -508,6 +508,16 @@ impl QueryEngine {
             // AgentTool reads `subagent_type → AgentDefinition` from
             // here at the spawn boundary.
             agent_catalog: self.agent_catalog.clone(),
+            // Missed-2 fix: parent runtime snapshot captured at engine
+            // bootstrap from `ApiClient::fingerprint().to_snapshot()`.
+            // Threaded onto every ToolUseContext for AgentTool to pin
+            // Fork-mode prompt-cache parity. Always populated when
+            // engine has an ApiClient — uses primary client's
+            // fingerprint (post-fallback would shift; that's
+            // acceptable since fork mode predates fallback).
+            parent_runtime_snapshot: Some(std::sync::Arc::new(
+                self.client.fingerprint().to_snapshot(),
+            )),
             // Per-engine live Command-source rule store. Same Arc as
             // `QueryEngine.live_command_rules` and the
             // `EngineLiveRulesHandle` installed on the executor —

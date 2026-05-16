@@ -76,6 +76,7 @@ pub use agent::MemoryScope;
 pub use agent::ModelInheritance;
 pub use agent::ModelSource;
 pub use agent::SubagentType;
+pub use agent::ToolAllowList;
 
 // Inter-agent IPC (mailbox protocol + sub-agent state snapshots)
 pub use agent_ipc::IdleReason;

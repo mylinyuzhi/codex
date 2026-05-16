@@ -431,25 +431,27 @@ fn load_one(
 }
 
 /// Auto-inject `Read`, `Edit`, `Write` into `def.allowed_tools` when
-/// the agent declares a `memory_scope` AND has a non-empty allow-list.
-/// No-op for wildcard (empty) allow-lists because the agent already
-/// sees every tool. TS parity: `loadAgentsDir.ts:455-467,662-674`. Idempotent —
-/// running the function repeatedly leaves the tool list unchanged after
-/// the first call, so future re-loads with auto-memory still on don't
-/// duplicate entries.
+/// the agent declares a `memory_scope` AND has an `Explicit` allow-list.
+/// **`Wildcard` allow-lists are skipped** — the agent already sees every
+/// tool, so injection is meaningless (and the type system, via
+/// [`ToolAllowList::as_explicit_mut`], makes it unrepresentable). TS
+/// parity: `loadAgentsDir.ts:455-467,662-674`. Idempotent — running the
+/// function repeatedly leaves the tool list unchanged after the first
+/// call, so future re-loads with auto-memory still on don't duplicate
+/// entries.
 fn inject_memory_tools(def: &mut AgentDefinition) {
     use coco_types::ToolName;
     if def.memory_scope.is_none() {
         return;
     }
-    if def.allowed_tools.is_empty() {
-        // Wildcard / default allow-list — every tool already visible.
+    let Some(list) = def.allowed_tools.as_explicit_mut() else {
+        // Wildcard — every tool already visible.
         return;
-    }
+    };
     for tool in [ToolName::Read, ToolName::Edit, ToolName::Write] {
         let name = tool.as_str();
-        if !def.allowed_tools.iter().any(|t| t == name) {
-            def.allowed_tools.push(name.to_owned());
+        if !list.iter().any(|t| t == name) {
+            list.push(name.to_owned());
         }
     }
 }

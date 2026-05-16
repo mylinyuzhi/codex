@@ -221,11 +221,16 @@ fn test_agent_spawn_request_inheritance_fields_are_serde_skip() {
         ..Default::default()
     };
     let json = serde_json::to_string(&req).unwrap();
+    // Note: `parent_runtime_snapshot` is no longer a field on
+    // `AgentSpawnRequest` — it moved inside `SpawnMode::Fork` as a
+    // non-optional `Arc<SubagentRuntimeSnapshot>`. The `spawn_mode`
+    // field itself is `#[serde(skip)]`, so the snapshot never reaches
+    // JSON either way.
     for forbidden in [
         "features",
         "tool_overrides",
         "parent_tool_filter",
-        "parent_runtime_snapshot",
+        "spawn_mode",
         "definition",
     ] {
         assert!(

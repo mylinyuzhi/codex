@@ -1,0 +1,16 @@
+[package]
+name = "coco-model-card"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# No internal deps. Model facts are vendor-defined and must be
+# usable from the foundation layer (coco-context, coco-otel, coco-tui)
+# without dragging in higher-layer crates.
+
+[dev-dependencies]
+pretty_assertions.workspace = true

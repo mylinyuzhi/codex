@@ -218,6 +218,7 @@ pub async fn build_live_server_with_options(
         client_api.provider(),
         &model_id,
         None,
+        &[],
     );
     let session_manager = Arc::new(SessionManager::new(sessions_dir.path().to_path_buf()));
 

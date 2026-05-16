@@ -71,8 +71,13 @@ pub struct AgentSpawnConstraints {
 /// `#[non_exhaustive]` — future variants (e.g. `Remote` for CCR
 /// dispatch) will be added without a major version bump. Callers must
 /// `match` with a wildcard arm or the explicit `Fresh` / `Fork` arms.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+///
+/// **No `Serialize`/`Deserialize`** — `Fork` carries
+/// `Arc<SubagentRuntimeSnapshot>` which is meaningless across an IPC
+/// boundary (the receiving runtime has its own snapshot). The field is
+/// `#[serde(skip)]` on [`AgentSpawnRequest`] so the wire form ignores
+/// it entirely.
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub enum SpawnMode {
     /// Conventional subagent spawn — child gets a fresh conversation
@@ -80,24 +85,44 @@ pub enum SpawnMode {
     #[default]
     Fresh,
     /// Fork mode — child inherits the parent's pre-rendered system
-    /// prompt bytes, parent message history, and parent tool pool.
+    /// prompt, parent message history, and parent tool pool.
     /// `tool_result` blocks in the inherited history are replaced with
     /// [`coco_subagent::FORK_PLACEHOLDER`] so all fork children produce a
     /// byte-identical API request prefix (prompt-cache sharing).
     ///
-    /// The actual runner implementation lives in a future commit
-    /// (deferred PR #3); the field carries the contract today so
-    /// upstream tooling and IPC schemas stabilise early.
+    /// Runner: [`coco_coordinator::agent_handle::spawn::spawn_subagent`]
+    /// matches on this variant and threads `rendered_system_prompt`
+    /// into `AgentQueryConfig.system_prompt` verbatim, wraps
+    /// `request.prompt` with [`coco_subagent::build_fork_child_message`]
+    /// for `<fork-boilerplate>` recursion-detection, and rewrites the
+    /// `parent_messages` `tool_result` blocks via
+    /// [`coco_subagent::build_fork_context`].
+    ///
+    /// Tool-pool inheritance is decided by
+    /// [`AgentSpawnRequest::use_exact_tools`] (TS
+    /// `runAgent.ts:624 cacheIdenticalTools`); fork mode does NOT
+    /// carry its own toggle.
     Fork {
-        /// Parent's already-rendered system-prompt bytes — must be
-        /// threaded through verbatim, not re-rendered.
-        rendered_system_prompt: Vec<u8>,
+        /// Parent's already-rendered system prompt — threaded through
+        /// verbatim, not re-rendered. `String` (not `Vec<u8>`) because
+        /// the wire form is always UTF-8 text; converting to bytes
+        /// would only invite a fallible roundtrip that hides
+        /// corruption behind `unwrap_or_default`.
+        rendered_system_prompt: String,
         /// Parent message history (cloned, not shared).
         parent_messages: Vec<serde_json::Value>,
-        /// Whether the child should also inherit the parent's exact
-        /// tool pool. TS sets this to true for cache-identical tool
-        /// definitions.
-        inherit_tool_pool: bool,
+        /// Parent's resolved provider+model identity at the moment of
+        /// fork. **Non-optional by design** — fork mode's entire
+        /// purpose is prompt-cache parity, which requires sending a
+        /// byte-identical request prefix. That parity requires
+        /// pinning to the parent's exact `(provider, api, model_id,
+        /// base_url, wire_api)` regardless of what
+        /// `RuntimeConfig::resolve_model_roles()` would return now.
+        ///
+        /// The spawn path uses this to populate the env block AND
+        /// the `AgentQueryConfig.model` for the actual API call;
+        /// reading live runtime config would break cache parity.
+        parent_snapshot: Arc<SubagentRuntimeSnapshot>,
     },
     /// Resume — child rehydrates a previously-completed background spawn
     /// from its persisted JSONL transcript. The system prompt is built
@@ -234,22 +259,13 @@ pub struct AgentSpawnRequest {
     /// AgentTool callsite when `coco_subagent::is_fork_subagent_active`
     /// returns true and `subagent_type` is omitted (TS parity with
     /// `forkSubagent.ts`).
-    #[serde(default)]
-    pub spawn_mode: SpawnMode,
-    /// Snapshot of the parent's resolved provider+model identity at
-    /// spawn time. The runner reads this to detect drift after
-    /// `RuntimeConfig` hot-reload and to enforce Fork-mode prompt-cache
-    /// parity. Skipped at the JSON boundary — purely an in-process
-    /// inheritance hint. `None` means "no parent identity available;
-    /// resolve from current runtime" (the legacy/test path).
     ///
-    /// Populated by `AgentTool::execute` from the parent's `ApiClient`
-    /// fingerprint (via `coco_inference::ProviderClientFingerprint`) at
-    /// the production call site once the runtime threads it through
-    /// `ToolUseContext`. See `coco_types::SubagentRuntimeSnapshot` for
-    /// the full contract and rationale.
+    /// **Skipped at the JSON boundary** because the runtime form holds
+    /// `Arc<SubagentRuntimeSnapshot>` inside `Fork`, which is
+    /// meaningless across IPC. AgentTool reconstructs the right
+    /// variant on the receiving side from in-process state.
     #[serde(skip)]
-    pub parent_runtime_snapshot: Option<SubagentRuntimeSnapshot>,
+    pub spawn_mode: SpawnMode,
     /// Resolved agent definition for this spawn — when the user
     /// supplies `subagent_type`, `AgentTool::execute` looks the
     /// definition up in `ToolUseContext.agent_catalog` and threads it

@@ -145,7 +145,8 @@ Add for `None` / booleans / numeric literals. Skip for string/char literals unle
 │  Standalone:  bridge, retrieval                                      │
 │  Vercel AI:   ai → openai, openai-compatible, google, anthropic,     │
 │               bytedance (on provider + provider-utils)                │
-│  Common:      types, config, error, otel, stack-trace-macro          │
+│  Common:      types, config, error, otel, stack-trace-macro,         │
+│               model-card                                              │
 │  Utils:       see Utils table below                                  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -202,6 +203,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `error` | Unified errors with `StatusCode` classification (snafu + virtstack) |
 | `otel` | OpenTelemetry tracing and metrics |
 | `stack-trace-macro` | `#[stack_trace_debug]` proc macro for snafu enums |
+| `model-card` | Vendor-defined model facts (knowledge cutoff, pricing, deprecation). Exact-id lookup; no substring matching |
 
 ### Vercel AI
 
