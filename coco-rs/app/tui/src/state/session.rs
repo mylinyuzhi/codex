@@ -143,8 +143,8 @@ pub struct SessionState {
     pub model: String,
     /// Active provider id for [`Self::model`] (e.g. `anthropic`, `openai`,
     /// `google`). Sourced from `RuntimeConfig.model_roles[Main].provider` at
-    /// session bootstrap; the picker keeps a prefix-match fallback for
-    /// builtin entries that aren't paired with a registered role.
+    /// session bootstrap; the picker reads provider metadata from the
+    /// session-frozen model catalog rather than inferring it from model ids.
     pub provider: String,
     /// Session-frozen view of every `(provider, model_id)` pair known
     /// to the runtime. Seeded once at startup; consumed by
@@ -220,7 +220,7 @@ pub struct SessionState {
     /// `ServerNotification::SessionStarted.lsp_active`; drives the
     /// "LSP" badge on the status bar.
     pub lsp_active: bool,
-    /// Focused subagent index for side panel.
+    /// Focused subagent index for teammate/activity views.
     pub focused_subagent_index: Option<i32>,
     /// Current turn number (within multi-turn loop).
     pub current_turn_number: Option<i32>,
@@ -533,8 +533,6 @@ pub enum MessageContent {
     BashOutput { output: String, exit_code: i32 },
     /// Plan mode entry/exit marker.
     PlanMarker { action: PlanAction },
-    /// Memory update content.
-    MemoryInput { content: String },
     /// Agent notification summary.
     AgentNotification { agent_id: String, summary: String },
     /// Teammate message.
@@ -753,23 +751,6 @@ impl ChatMessage {
         }
     }
 
-    /// Create a memory-input user message.
-    /// TS parity: `UserMemoryInputMessage`.
-    pub fn user_memory_input(id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            role: ChatRole::User,
-            content: MessageContent::MemoryInput {
-                content: content.into(),
-            },
-            is_meta: false,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: None,
-        }
-    }
-
     /// Create a simple assistant text message.
     pub fn assistant_text(id: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
@@ -881,7 +862,6 @@ impl ChatMessage {
             MessageContent::ToolRejected { reason, .. } => reason,
             MessageContent::ToolCanceled { tool_name } => tool_name,
             MessageContent::Thinking { content, .. } => content,
-            MessageContent::MemoryInput { content } => content,
             MessageContent::HookSuccess { output, .. }
             | MessageContent::HookAsyncResponse { output, .. } => output,
             MessageContent::HookNonBlockingError { error, .. }

@@ -9,11 +9,12 @@ members = [
     "common/config-reload",
     "common/model-card",
 
-    # ─── utils/ (25) ── 24 from cocode-rs + 1 new ───
+    # ─── utils/ (26) ── 24 from cocode-rs + 2 new ───
     "utils/absolute-path",
     "utils/async-utils",
     "utils/cache",
     "utils/cargo-bin",
+    "utils/coco-paths",
     "utils/common",
     "utils/cursor",
     "utils/file-encoding",
@@ -59,7 +60,6 @@ members = [
     "services/rmcp-client",
     "services/lsp",
     "services/compact",
-    "services/session-memory",
 
     # ─── core/ (7) ───
     "core/messages",
@@ -125,6 +125,7 @@ coco-file-search = { path = "utils/file-search" }
 coco-file-watch = { path = "utils/file-watch" }
 coco-symbol-search = { path = "utils/symbol-search" }
 coco-git = { path = "utils/git" }
+coco-paths = { path = "utils/coco-paths" }
 coco-utils-absolute-path = { path = "utils/absolute-path" }
 coco-utils-cache = { path = "utils/cache" }
 coco-utils-cargo-bin = { path = "utils/cargo-bin" }
@@ -162,7 +163,6 @@ coco-mcp-types = { path = "services/mcp-types" }
 coco-rmcp-client = { path = "services/rmcp-client" }
 coco-lsp = { path = "services/lsp" }
 coco-compact = { path = "services/compact" }
-coco-session-memory = { path = "services/session-memory" }
 coco-test-harness = { path = "tests/harness" }
 
 # Internal - core
@@ -205,6 +205,7 @@ coco-retrieval = { path = "retrieval" }
 
 # External (only those actually used by existing crates)
 anyhow = "1"
+arc-swap = "1.7"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-trait = "0.1.89"

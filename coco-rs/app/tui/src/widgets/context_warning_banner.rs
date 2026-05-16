@@ -15,7 +15,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 use crate::widgets::lifecycle_banner::render_banner_row;
 
 /// Percentage (inclusive) at which we show the warning banner.
@@ -25,12 +25,12 @@ pub const CONTEXT_CRITICAL_THRESHOLD: f64 = 95.0;
 
 pub struct ContextWarningBanner<'a> {
     percent: f64,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> ContextWarningBanner<'a> {
-    pub fn new(percent: f64, theme: &'a Theme) -> Self {
-        Self { percent, theme }
+    pub fn new(percent: f64, styles: UiStyles<'a>) -> Self {
+        Self { percent, styles }
     }
 
     pub fn should_display(percent: Option<f64>) -> bool {
@@ -41,9 +41,9 @@ impl<'a> ContextWarningBanner<'a> {
 impl Widget for ContextWarningBanner<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let color = if self.percent >= CONTEXT_CRITICAL_THRESHOLD {
-            self.theme.error
+            self.styles.error()
         } else {
-            self.theme.warning
+            self.styles.warning()
         };
         let parts = vec![
             Span::styled(
@@ -60,10 +60,10 @@ impl Widget for ContextWarningBanner<'_> {
             ),
             Span::styled(
                 t!("context_warning.message").to_string(),
-                Style::default().fg(self.theme.text_dim),
+                Style::default().fg(self.styles.dim()),
             ),
         ];
-        render_banner_row(parts, self.theme, area, buf);
+        render_banner_row(parts, self.styles, area, buf);
     }
 }
 

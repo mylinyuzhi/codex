@@ -54,7 +54,7 @@ Write, and Edit before filesystem syscalls.
 ## Round 12: System-Reminder + Sandbox Alignment (May 7, 2026)
 
 End-to-end audit of `core/system-reminder` and `exec/sandbox` against
-TS `claude-code` (`src/utils/attachments.ts`, `messages.ts`,
+TS source (`utils/attachments.ts`, `messages.ts`,
 `utils/sandbox/sandbox-adapter.ts`, `entrypoints/sandboxTypes.ts`,
 `tools/BashTool/shouldUseSandbox.ts`) plus codex-rs reference (linux-sandbox + sandboxing).
 
@@ -85,7 +85,12 @@ deferred Round 12 item. Read, Write, and Edit now call
 
 ## Round 11: Skills / Commands / Plugins Parity Deep-Review (May 2, 2026)
 
-Verified TS-vs-Rust audit across `coco-rs/skills`, `coco-rs/commands`, `coco-rs/plugins` against `/lyz/codespace/3rd/claude-code/src/{skills,commands,plugins,utils/{plugins,skills}}`. **Full plan**: [parity-skills-commands-plugins.md](parity-skills-commands-plugins.md) — every gap below has TS file:line citations, type definitions, behavior, and UI specs.
+Verified TS-vs-Rust audit across `coco-rs/skills`, `coco-rs/commands`,
+`coco-rs/plugins` against TS `skills`, `commands`, `plugins`, and
+`utils/{plugins,skills}`. TS file paths are relative to the TS project's `src/`
+directory. **Full plan**:
+[parity-skills-commands-plugins.md](parity-skills-commands-plugins.md) — every
+gap below has TS file:line citations, type definitions, behavior, and UI specs.
 
 ### Summary
 
@@ -476,7 +481,7 @@ Multi-provider awareness checked. Shell-parser strategy updated to HYBRID (cocod
 
 ### 1. coco-messages: 100+ missing functions
 
-`src/utils/messages.ts` exports **114 functions** — plan documents only 7.
+`utils/messages.ts` exports **114 functions** — plan documents only 7.
 
 **Missing categories:**
 - 15 message creation helpers (createUserInterruptionMessage, createSyntheticUserCaveatMessage, etc.)
@@ -506,7 +511,7 @@ Multi-provider awareness checked. Shell-parser strategy updated to HYBRID (cocod
 
 ### 3. coco-permissions: auto-mode/yolo classifier not documented
 
-`src/utils/permissions/yoloClassifier.ts` (1495 LOC) — two-stage XML classifier system:
+`utils/permissions/yoloClassifier.ts` (1495 LOC) — two-stage XML classifier system:
 - Stage 1: FAST (64 tokens, nudged for quick block decision)
 - Stage 2: THINKING (4096+ tokens, full chain-of-thought reasoning)
 - Shared prompt prefix for cache hits between stages
@@ -620,7 +625,7 @@ Multi-provider awareness checked. Shell-parser strategy updated to HYBRID (cocod
 
 ### 12. Hooks system: 15+ executor files not documented
 
-`src/utils/hooks/` has 15+ files. Plan mentions 4 executor types (bash, prompt, http, agent). Missing:
+`utils/hooks/` has 15+ files. Plan mentions 4 executor types (bash, prompt, http, agent). Missing:
 - `fileChangedWatcher.ts` — file change hooks
 - `hookEvents.ts` — event type definitions
 - `hooksConfigManager.ts` — config management
@@ -862,7 +867,7 @@ Deep comparison of coco-rs multi-provider design against opencode (TS, 40+ provi
 
 ## Cross-Review Round 7 (Prompt-Cache Implementation — May 2026)
 
-Implementation of `prompt-cache-design.md` (2456 lines). Primary references: TS `claude-code/src/services/prompt-caching/`, `betas.ts`, `should1hCacheTTL`. See round-3 findings (R3-F1..F8) embedded in the design doc.
+Implementation of `prompt-cache-design.md` (2456 lines). Primary references: TS `services/prompt-caching/`, `betas.ts`, `should1hCacheTTL`. See round-3 findings (R3-F1..F8) embedded in the design doc.
 
 ### Implementation summary
 

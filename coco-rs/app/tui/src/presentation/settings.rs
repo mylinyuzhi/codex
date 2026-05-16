@@ -3,14 +3,14 @@
 use ratatui::prelude::Color;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 use crate::widgets::settings_panel::SettingsPanelState;
 use crate::widgets::settings_panel::SettingsTab;
 use crate::widgets::settings_panel::syntax_highlighting_status_for_display;
 
 pub(crate) fn settings_overlay_content(
     s: &SettingsPanelState,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let tab_bar = [
         (SettingsTab::Theme, t!("dialog.settings_tab_theme")),
@@ -102,7 +102,11 @@ pub(crate) fn settings_overlay_content(
         items.join("\n"),
         t!("dialog.hints_settings")
     );
-    (t!("dialog.title_settings").to_string(), body, theme.primary)
+    (
+        t!("dialog.title_settings").to_string(),
+        body,
+        styles.primary(),
+    )
 }
 
 #[cfg(test)]

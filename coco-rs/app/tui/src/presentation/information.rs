@@ -3,19 +3,22 @@
 use ratatui::prelude::Color;
 
 use crate::i18n::t;
+use crate::presentation::pager;
+use crate::presentation::styles::UiStyles;
 use crate::render;
 use crate::state::AppState;
 use crate::state::DiffViewOverlay;
-use crate::theme::Theme;
 
-pub(crate) fn diff_view_content(d: &DiffViewOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn diff_view_content(
+    d: &DiffViewOverlay,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
     let all_lines: Vec<&str> = d.diff.lines().collect();
-    let total = all_lines.len();
-    let offset = (d.scroll.max(0) as usize).min(total);
+    let window = pager::pager_window(all_lines.len(), d.scroll, 30);
     let visible: String = all_lines
+        .get(window.range())
+        .unwrap_or_default()
         .iter()
-        .skip(offset)
-        .take(30)
         .map(|line| {
             if line.starts_with('+') && !line.starts_with("+++") {
                 format!("  + {}", line.strip_prefix('+').unwrap_or(line))
@@ -30,11 +33,7 @@ pub(crate) fn diff_view_content(d: &DiffViewOverlay, theme: &Theme) -> (String, 
         .collect::<Vec<_>>()
         .join("\n");
 
-    let position = if total > 0 {
-        format!(" [{}/{total}]", offset + 1)
-    } else {
-        String::new()
-    };
+    let position = window.position_suffix();
     (
         t!(
             "dialog.title_diff",
@@ -43,11 +42,14 @@ pub(crate) fn diff_view_content(d: &DiffViewOverlay, theme: &Theme) -> (String, 
         )
         .to_string(),
         format!("{visible}\n\n{}", t!("dialog.scroll_close_hints")),
-        theme.primary,
+        styles.primary(),
     )
 }
 
-pub(crate) fn context_viz_content(state: &AppState, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn context_viz_content(
+    state: &AppState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
     let used = state.session.context_window_used;
     let total = state.session.context_window_total.max(1);
     let pct = (used * 100) / total;
@@ -81,7 +83,7 @@ pub(crate) fn context_viz_content(state: &AppState, theme: &Theme) -> (String, S
     (
         t!("dialog.title_context_window").to_string(),
         format!("{body}\n\n{}", t!("dialog.esc_close")),
-        theme.primary,
+        styles.primary(),
     )
 }
 

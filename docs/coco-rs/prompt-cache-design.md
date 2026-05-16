@@ -2,7 +2,7 @@
 
 > Status: Target design
 > Scope: `coco-rs/common/types/`, `coco-rs/common/config/`, `coco-rs/services/inference/`, `coco-rs/vercel-ai/anthropic/`, `coco-rs/app/query/`
-> Sources: `claude-code/src/services/api/claude.ts`, `claude-code/src/utils/{betas,api}.ts`, `claude-code/src/constants/betas.ts`, `claude-code/src/services/api/promptCacheBreakDetection.ts`
+> Sources: `services/api/claude.ts`, `utils/{betas,api}.ts`, `constants/betas.ts`, `services/api/promptCacheBreakDetection.ts`
 > Owners: coco-inference + vercel-ai-anthropic + coco-types + coco-config (capability flags) + coco-query (intent assembly)
 >
 > **Source of truth.** This document owns the cross-crate prompt-cache feature
@@ -100,7 +100,7 @@ Prompt cache is a **two-axis Anthropic-only feature** in coco-rs:
 
 In priority order:
 
-1. **TS behavioral fidelity** — cache marker positions, TTL latch semantics, beta header gates, cache-break detection thresholds match `claude-code/src/` exactly.
+1. **TS behavioral fidelity** — cache marker positions, TTL latch semantics, beta header gates, cache-break detection thresholds match the TS source exactly.
 2. **Provider isolation** — Anthropic-specific wire knowledge (cache_control JSON shape, beta header strings, marker placement algorithm) lives only in `vercel-ai-anthropic`. `services/inference` stays provider-neutral.
 3. **Capability-driven** — whether a model supports prompt cache is declarative on `ModelInfo.capabilities`, not hardcoded by name match.
 4. **Multi-provider safe** — non-Anthropic providers never see `cache_strategy` or `beta_capabilities` keys in their `provider_options` namespace; no Anthropic JSON leaks.
@@ -117,7 +117,8 @@ In priority order:
 
 ## 3. TS Reference Behavior (Specification)
 
-These are the load-bearing behaviors from `/lyz/codespace/3rd/claude-code/`. coco-rs must mirror them.
+These are the load-bearing behaviors from the TS source. TS file paths are
+relative to the TS project's `src/` directory. coco-rs must mirror them.
 
 ### 3.1 Cache marker placement
 
@@ -2175,7 +2176,7 @@ Step ordering: 1, 2, 3a are pure additions (no behavior change). Step 3b adds in
 1. **Where do session-level fields populate?** `AccountKind` and `in_overage` come from `coco-config` (`~/.coco/config.json` `account.kind`, `account.in_overage`). They flow to the adapter via **`RuntimeConfig.account: AccountConfig` → read by `build_anthropic` → stored on `AnthropicConfig`** (Round-3 Finding 3). They are NOT carried per-call. Owner: `crate-coco-config.md` to add the `account` schema; this design references the values and pins the read site (provider construction, not per-request).
 2. **`load_allowlist` source.** Initially read from `~/.coco/config.json` `prompt_cache.allowlist: Vec<String>`. Future: hookable for remote feature-gate (TS uses GrowthBook `tengu_prompt_cache_1h_config`).
 3. **`SystemPromptBlock::CacheBreakpoint` integration.** Defined in `provider-prompt-role-architecture.md:543-625`. When `mode: Manual`, this design defers placement to those hints; when `mode: Auto`, this design's algorithm runs. Confirm the precedence with the prompt-layout owners.
-4. ~~**OAuth beta exact string.** `OAUTH_BETA_HEADER` value not visible in our TS extracts.~~ **Resolved.** Confirmed via `/lyz/codespace/3rd/claude-code/src/constants/oauth.ts:36`: `export const OAUTH_BETA_HEADER = 'oauth-2025-04-20'`. Note: the constant lives in `constants/oauth.ts`, not `constants/betas.ts` — adjust the import in §10.3 to `use crate::constants::OAUTH_BETA_HEADER;` (or hard-code `"oauth-2025-04-20"` with a `// constants/oauth.ts:36` comment).
+4. ~~**OAuth beta exact string.** `OAUTH_BETA_HEADER` value not visible in our TS extracts.~~ **Resolved.** Confirmed via `constants/oauth.ts:36`: `export const OAUTH_BETA_HEADER = 'oauth-2025-04-20'`. Note: the constant lives in `constants/oauth.ts`, not `constants/betas.ts` — adjust the import in §10.3 to `use crate::constants::OAUTH_BETA_HEADER;` (or hard-code `"oauth-2025-04-20"` with a `// constants/oauth.ts:36` comment).
 5. ~~**`UserType::Ant` follow-up cleanup.**~~ **Withdrawn (Round-3 Finding 7).** `UserType::Ant` is still actively consumed by `coco-rs/skills/src/bundled.rs:144` (ant-only skill bundle gating) and `coco-rs/core/permissions/src/dangerous_rules.rs:25` + `mode_transition.rs:138` + `setup.rs:233` + `shell_rules.rs:265` (dangerous-rule strip behavior). This design does not depend on `UserType::Ant`, but does not invalidate other in-tree consumers; **no cleanup ticket should be filed.** The earlier "follow-up cleanup" prose has been removed from §7.1, §17, and §18.
 
 ## 16a. RuntimeConfig schema additions (Round-3 Finding 4)

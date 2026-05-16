@@ -3,9 +3,12 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::information;
+use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
-use crate::theme::Theme;
 
-pub(super) fn context_viz_content(state: &AppState, theme: &Theme) -> (String, String, Color) {
-    information::context_viz_content(state, theme)
+pub(super) fn context_viz_content(
+    state: &AppState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    information::context_viz_content(state, styles)
 }

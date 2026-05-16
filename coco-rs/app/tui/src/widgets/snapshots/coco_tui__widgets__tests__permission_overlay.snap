@@ -1,6 +1,5 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
-assertion_line: 134
 expression: output
 ---
  ╭─╮ ╭─╮   COCO v0.0.0                                                          
@@ -8,7 +7,7 @@ expression: output
  ╰─╯ ╰─╯                                                                        
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
-❯ Type a mes┌ Bash [HIGH] ─────────────────────────────────────────┐            
+❯           ┌ Bash [HIGH] ─────────────────────────────────────────┐            
 ────────────│Execute shell command                                 │────────────
  opus-4 * au│                                                      │            
             │Command:                                              │            

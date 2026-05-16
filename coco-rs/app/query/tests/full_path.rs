@@ -364,31 +364,49 @@ async fn test_full_path_with_bash_safety() {
 
 #[tokio::test]
 async fn test_session_persistence_round_trip() {
+    // Post-fix the SessionManager has no sidecar `.json` files —
+    // every session-level fact is derived from the JSONL transcript.
+    // This integration test seeds a transcript via `TranscriptStore`
+    // (the same path the runtime exercises) and verifies
+    // SessionManager's derive / delete operations work end-to-end
+    // against the on-disk JSONL.
+    use coco_session::TranscriptEntry;
+    use coco_session::TranscriptStore;
+
     let dir = tempfile::tempdir().unwrap();
-    let mgr = SessionManager::new(dir.path().join("sessions"));
+    let mgr = SessionManager::new(dir.path().to_path_buf());
 
-    // Create a session
-    let session = mgr
-        .create("mock-model", std::path::Path::new("/tmp"))
-        .unwrap();
-    assert!(!session.id.is_empty());
+    let cwd = std::path::Path::new("/tmp/test-cwd");
+    let paths = std::sync::Arc::new(coco_paths::ProjectPaths::new(dir.path().to_path_buf(), cwd));
+    let store = TranscriptStore::new(paths);
+    let sid = "round-trip-sess";
+    let entry = TranscriptEntry {
+        entry_type: "user".to_string(),
+        uuid: format!("{sid}-u1"),
+        parent_uuid: None,
+        session_id: sid.to_string(),
+        cwd: cwd.display().to_string(),
+        timestamp: "2025-01-15T10:00:00Z".to_string(),
+        version: None,
+        git_branch: None,
+        is_sidechain: false,
+        message: Some(serde_json::json!({"role":"user","content":"hi"})),
+        usage: None,
+        model: None,
+        cost_usd: None,
+        extra: serde_json::Map::new(),
+    };
+    store.append_message(sid, &entry).unwrap();
 
-    // List sessions
     let sessions = mgr.list().unwrap();
     assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].model, "mock-model");
+    assert_eq!(sessions[0].id, sid);
+    assert_eq!(sessions[0].working_dir, cwd);
 
-    // Resume session
-    let resumed = mgr.resume(&session.id).unwrap();
-    assert!(resumed.updated_at.is_some());
+    let loaded = mgr.load(sid).unwrap();
+    assert_eq!(loaded.id, sid);
 
-    // Load it back
-    let loaded = mgr.load(&session.id).unwrap();
-    assert_eq!(loaded.model, "mock-model");
-    assert!(loaded.updated_at.is_some());
-
-    // Delete
-    mgr.delete(&session.id).unwrap();
+    mgr.delete(sid).unwrap();
     assert!(mgr.list().unwrap().is_empty());
 }
 

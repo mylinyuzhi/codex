@@ -153,6 +153,22 @@ pub fn tool_call_count(msg: &Message) -> usize {
     }
 }
 
+/// Count tool calls in the **last** assistant message of `messages`,
+/// walking from the tail. Returns 0 when no assistant message exists.
+///
+/// TS: `hasToolCallsInLastAssistantTurn` style — used by the
+/// session-memory natural-break gate and by compact's SM-first
+/// short-circuit to decide whether the last turn ended on a tool
+/// call (orphan-risk for downstream summaries).
+pub fn count_tool_calls_in_last_assistant_turn(messages: &[Message]) -> i32 {
+    for m in messages.iter().rev() {
+        if matches!(m, Message::Assistant(_)) {
+            return tool_call_count(m) as i32;
+        }
+    }
+    0
+}
+
 #[cfg(test)]
 #[path = "predicates.test.rs"]
 mod tests;

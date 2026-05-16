@@ -1,6 +1,8 @@
 # Parity Plan — Skills / Commands / Plugins (TS-mirrored)
 
-Delta against `crate-coco-{skills,commands,plugins}.md`. Every item below has been verified against the TS source at `/lyz/codespace/3rd/claude-code/src/`. Each entry follows:
+Delta against `crate-coco-{skills,commands,plugins}.md`. Every item below has
+been verified against the TS source. TS file paths are relative to the TS
+project's `src/` directory. Each entry follows:
 
 > **TS source** · **Define** (types) · **Behavior** (algorithm) · **UI** (what the user sees) · **Rust today** · **Mirror plan**
 

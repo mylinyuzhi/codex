@@ -67,10 +67,15 @@ impl std::fmt::Debug for ExtractState {
 /// Shared swappable cell for the agent handle. The runtime owns the
 /// master `Arc<RwLock<...>>` and hands clones to every service so a
 /// later `MemoryRuntime::install_agent(handle)` propagates atomically
-/// — no need to rebuild service instances. `tokio::sync::RwLock` is
-/// the right primitive here: writes are rare (session bootstrap), reads
-/// are async-friendly and concurrent.
-pub type AgentSlot = Arc<tokio::sync::RwLock<AgentHandleRef>>;
+/// — no need to rebuild service instances.
+///
+/// `std::sync::RwLock` (not `tokio::sync::RwLock`) because reads are
+/// "clone the inner `Arc` and drop the guard immediately" — no await
+/// across the guard, no need for an async-aware lock, no futex hop
+/// onto the runtime. `arc_swap::ArcSwapAny<Arc<dyn AgentHandle>>`
+/// would be even cheaper but DSTs (`dyn AgentHandle`) don't satisfy
+/// arc-swap's `RefCnt: Sized` bound; RwLock is the next-best primitive.
+pub type AgentSlot = Arc<std::sync::RwLock<AgentHandleRef>>;
 
 /// Turn-end extraction service.
 pub struct ExtractService {
@@ -153,7 +158,7 @@ impl ExtractService {
         Self::with_shared_agent(
             memory_dir,
             config,
-            Arc::new(tokio::sync::RwLock::new(agent)),
+            Arc::new(std::sync::RwLock::new(agent)),
             Arc::new(NoopEmitter),
         )
     }
@@ -412,7 +417,17 @@ impl ExtractService {
             ..Default::default()
         };
 
-        let agent = self.agent.read().await.clone();
+        // Clone the inner `Arc<dyn AgentHandle>` while holding the
+        // sync read guard, then drop the guard before any `.await`.
+        // `PoisonError::into_inner` recovers from a poisoned lock —
+        // poisoning only happens if a prior write panicked, and for
+        // an install-only handle a stale-but-readable handle beats
+        // crashing the extract path.
+        let agent = self
+            .agent
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         match agent.spawn_agent(request).await {
             Ok(response) => {
                 let duration_ms = start.elapsed().as_millis() as i64;

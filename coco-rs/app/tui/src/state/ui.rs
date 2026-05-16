@@ -120,6 +120,10 @@ pub struct UiState {
     /// TS `AppStateStore.ts::showTeammateMessagePreview` (default
     /// false). Toggled via `app:toggleTeammatePreview` (Ctrl+Shift+O).
     pub show_teammate_message_preview: bool,
+    /// Whether subagent activity renders the coordinator task view.
+    /// Resolved by the CLI runner from runtime feature gates and env
+    /// before rendering, so the view remains deterministic from state.
+    pub coordinator_mode_active: bool,
     /// Stashed input draft from `chat:stash` (Ctrl+S in defaults).
     ///
     /// Mirrors TS `PromptInput.tsx::handleStash` (single-slot push/pop
@@ -178,6 +182,7 @@ impl UiState {
             kb_handle: KeybindingHandle::from_defaults(),
             stashed_input: None,
             show_teammate_message_preview: false,
+            coordinator_mode_active: false,
         }
     }
 
@@ -394,11 +399,8 @@ impl HistoryEntry {
 /// * `Bash` mirrors TS `PromptInputMode = 'bash'` (typed `!` prefix in
 ///   `components/PromptInput/inputModes.ts`). Submit bypasses the model
 ///   loop and runs the shell directly, like TS's `LocalShellTask`.
-/// * `Memory` is a coco-rs-only ergonomic addition — TS triggers memory
-///   capture via the `/memory` slash command and a file picker, not a
-///   prompt prefix. We expose `#` as a shorthand for "append to project
-///   `CLAUDE.md`" so quick captures don't require opening the picker.
-///   Document this divergence in user-facing help.
+/// * Memory capture uses the `/memory` slash command and file picker.
+///   Leading `#` is ordinary chat text, matching TS input-mode behavior.
 ///
 /// The mode is computed on the fly so backspacing past the prefix
 /// character returns to `Normal` automatically — no separate state to
@@ -413,9 +415,6 @@ pub enum PromptMode {
     Normal,
     /// Leading `!` — submit runs as a shell command. TS: `LocalShellTask`.
     Bash,
-    /// Leading `#` — submit appends to a `CLAUDE.md` memory file. TS:
-    /// `UserMemoryInputMessage` + `MemoryFileSelector`.
-    Memory,
 }
 
 impl PromptMode {
@@ -427,7 +426,6 @@ impl PromptMode {
     pub fn from_text(text: &str) -> Self {
         match text.as_bytes().first() {
             Some(b'!') => Self::Bash,
-            Some(b'#') => Self::Memory,
             _ => Self::Normal,
         }
     }
@@ -435,12 +433,11 @@ impl PromptMode {
     /// Strip the mode prefix from `text` (including one optional space
     /// after it). Returns `text` unchanged for `Normal`.
     ///
-    /// Used at submit time so `!ls -la` becomes the command `ls -la`
-    /// and `# fix bug` becomes the memory body `fix bug`.
+    /// Used at submit time so `!ls -la` becomes the command `ls -la`.
     pub fn strip_prefix(self, text: &str) -> &str {
         match self {
             Self::Normal => text,
-            Self::Bash | Self::Memory => {
+            Self::Bash => {
                 let stripped = &text[1..];
                 stripped.strip_prefix(' ').unwrap_or(stripped)
             }
@@ -452,7 +449,6 @@ impl PromptMode {
         match self {
             Self::Normal => "input.title",
             Self::Bash => "input.title_bash_mode",
-            Self::Memory => "input.title_memory_mode",
         }
     }
 }

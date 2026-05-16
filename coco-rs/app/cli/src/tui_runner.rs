@@ -14,6 +14,7 @@
 //!                                 FileHistoryState
 //! ```
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -141,7 +142,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // `SessionRuntime::build` can borrow it and the cleanup task can
     // own it.
     let session_manager = Arc::new(coco_session::SessionManager::new(
-        coco_cli::paths::sessions_dir(),
+        coco_config::global_config::config_home(),
     ));
     let _ = session_manager.create(&model_id, &cwd);
     {
@@ -149,7 +150,8 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         // default retention period. Mirrors TS `utils/cleanup.ts`
         // `DEFAULT_CLEANUP_PERIOD_DAYS = 30`. Fire-and-forget.
         let mgr = session_manager.clone();
-        let transcript_store = coco_session::TranscriptStore::new(coco_cli::paths::sessions_dir());
+        let transcript_store =
+            coco_session::TranscriptStore::new(coco_cli::paths::project_paths(&cwd));
         tokio::spawn(async move {
             let period = coco_session::default_cleanup_period();
             match tokio::task::spawn_blocking(move || -> coco_session::Result<(i32, i32)> {
@@ -365,6 +367,8 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     app.state_mut().ui.apply_display_settings(
         coco_tui::DisplaySettings::from_settings_with_sources(&runtime.runtime_config.settings),
     );
+    app.state_mut().ui.coordinator_mode_active =
+        coco_subagent::is_coordinator_mode(&runtime.runtime_config.features);
     if let Some(rx) = display_settings_rx {
         app = app.with_display_settings_reload(rx);
     }
@@ -601,6 +605,7 @@ async fn run_agent_driver(
     // cooperative-async makes that natural; Rust needs an explicit
     // `tokio::spawn` to free the recv loop.
     let active_turn: Arc<Mutex<Option<ActiveTurn>>> = Arc::new(Mutex::new(None));
+    let mut pending_editor_requests: HashMap<String, PendingEditorRequest> = HashMap::new();
 
     while let Some(command) = command_rx.recv().await {
         // Re-read each turn so `/clear` regen picks up the new id.
@@ -665,6 +670,15 @@ async fn run_agent_driver(
                         }
                         SlashOutcome::TriggerAddDir { path } => {
                             run_add_working_dir(&runtime, &path).await;
+                            continue;
+                        }
+                        SlashOutcome::TriggerOpenPlanEditor { path } => {
+                            prepare_external_editor_request(
+                                &mut pending_editor_requests,
+                                PendingEditorRequest::Plan { path },
+                                &event_tx,
+                            )
+                            .await;
                             continue;
                         }
                         SlashOutcome::TriggerReloadPlugins => {
@@ -739,20 +753,58 @@ async fn run_agent_driver(
                 });
             }
 
-            UserCommand::SubmitMemory {
-                user_message_id: _,
-                content,
-            } => {
-                let event_tx_t = event_tx.clone();
-                let cwd = runtime
-                    .runtime_config
-                    .paths
-                    .project_dir
-                    .clone()
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                tokio::spawn(async move {
-                    run_prompt_mode_memory(&cwd, content, event_tx_t).await;
-                });
+            UserCommand::OpenMemoryFile { path } => {
+                prepare_external_editor_request(
+                    &mut pending_editor_requests,
+                    PendingEditorRequest::Memory { path },
+                    &event_tx,
+                )
+                .await;
+            }
+
+            UserCommand::OpenPlanEditor => {
+                let path = runtime_session_plan_file_path(&runtime).await;
+                prepare_external_editor_request(
+                    &mut pending_editor_requests,
+                    PendingEditorRequest::Plan { path },
+                    &event_tx,
+                )
+                .await;
+            }
+
+            UserCommand::OpenPromptEditor { initial_content } => {
+                prepare_external_editor_request(
+                    &mut pending_editor_requests,
+                    PendingEditorRequest::Prompt { initial_content },
+                    &event_tx,
+                )
+                .await;
+            }
+
+            UserCommand::ExternalEditorTerminalReady { request_id } => {
+                let Some(request) = pending_editor_requests.remove(&request_id) else {
+                    warn!(%request_id, "terminal ready for unknown external editor request");
+                    continue;
+                };
+                match request {
+                    PendingEditorRequest::Memory { path } => {
+                        run_open_memory_file(path, event_tx.clone()).await;
+                    }
+                    PendingEditorRequest::Plan { path } => {
+                        run_open_plan_file(path, event_tx.clone()).await;
+                    }
+                    PendingEditorRequest::Prompt { initial_content } => {
+                        run_prompt_editor(initial_content, event_tx.clone()).await;
+                    }
+                }
+            }
+
+            UserCommand::ExternalEditorTerminalPrepareFailed { request_id, error } => {
+                let Some(request) = pending_editor_requests.remove(&request_id) else {
+                    warn!(%request_id, "terminal prepare failed for unknown editor request");
+                    continue;
+                };
+                emit_editor_prepare_failed(request, error, event_tx.clone()).await;
             }
 
             UserCommand::SetModelRole {
@@ -847,6 +899,14 @@ async fn run_agent_driver(
                     }
                     SlashOutcome::TriggerAddDir { path } => {
                         run_add_working_dir(&runtime, &path).await;
+                    }
+                    SlashOutcome::TriggerOpenPlanEditor { path } => {
+                        prepare_external_editor_request(
+                            &mut pending_editor_requests,
+                            PendingEditorRequest::Plan { path },
+                            &event_tx,
+                        )
+                        .await;
                     }
                     SlashOutcome::TriggerReloadPlugins => {
                         run_reload_plugins(&runtime, &event_tx).await;
@@ -1374,6 +1434,9 @@ enum SlashOutcome {
     /// next turn's permission context sees the wider scope. TS:
     /// `useWorkingDirectories` REPL hook reacting to `/add-dir`.
     TriggerAddDir { path: String },
+    /// Open a concrete session plan file through the same external
+    /// editor terminal handoff used by prompt and memory editing.
+    TriggerOpenPlanEditor { path: std::path::PathBuf },
     /// Rebuild the slash-command registry from disk and atomically
     /// swap. Triggered by `/reload-plugins`. TS:
     /// `useManagePlugins.refreshActivePlugins`.
@@ -1399,6 +1462,55 @@ fn parse_slash_command(text: &str) -> Option<(&str, &str)> {
         Some((name, rest)) => (name, rest.trim_start()),
         None => (stripped, ""),
     })
+}
+
+fn session_plans_dir(
+    config_home: &std::path::Path,
+    project_dir: Option<&std::path::Path>,
+    plans_directory_setting: Option<&str>,
+) -> std::path::PathBuf {
+    coco_context::resolve_plans_directory(config_home, project_dir, plans_directory_setting)
+}
+
+fn session_plan_file_path(
+    config_home: &std::path::Path,
+    project_dir: Option<&std::path::Path>,
+    plans_directory_setting: Option<&str>,
+    session_id: &str,
+) -> std::path::PathBuf {
+    let plans_dir = session_plans_dir(config_home, project_dir, plans_directory_setting);
+    coco_context::get_plan_file_path(session_id, &plans_dir, /*agent_id*/ None)
+}
+
+async fn runtime_session_plan_file_path(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+) -> std::path::PathBuf {
+    let session_id = runtime.current_session_id().await;
+    session_plan_file_path(
+        &runtime.config_home,
+        runtime.runtime_config.paths.project_dir.as_deref(),
+        runtime
+            .runtime_config
+            .settings
+            .merged
+            .plans_directory
+            .as_deref(),
+        &session_id,
+    )
+}
+
+async fn prepare_external_editor_request(
+    pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
+    request: PendingEditorRequest,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    pending_editor_requests.insert(request_id.clone(), request);
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::ExternalEditorPrepare {
+            request_id,
+        }))
+        .await;
 }
 
 /// Decision-tree classifier for sentinel-prefixed handler output.
@@ -1716,26 +1828,33 @@ async fn dispatch_slash_command(
                     // consume the event without depending on coco-commands.
                     let wire_entries: Vec<coco_types::MemoryDialogEntry> = entries
                         .into_iter()
-                        .map(|e| coco_types::MemoryDialogEntry {
-                            path: e.path.display().to_string(),
-                            label: e.label,
-                            scope: match e.scope {
-                                coco_commands::MemoryScope::Managed => {
-                                    coco_types::MemoryDialogScope::Managed
-                                }
-                                coco_commands::MemoryScope::User => {
-                                    coco_types::MemoryDialogScope::User
-                                }
-                                coco_commands::MemoryScope::Project => {
-                                    coco_types::MemoryDialogScope::Project
-                                }
-                                coco_commands::MemoryScope::ProjectLocal => {
-                                    coco_types::MemoryDialogScope::ProjectLocal
-                                }
-                                coco_commands::MemoryScope::Subdir => {
-                                    coco_types::MemoryDialogScope::Subdir
-                                }
-                            },
+                        .map(|e| {
+                            let exists = e.path.exists();
+                            coco_types::MemoryDialogEntry {
+                                path: e.path.display().to_string(),
+                                label: e.label,
+                                scope: match e.scope {
+                                    coco_commands::MemoryScope::Managed => {
+                                        coco_types::MemoryDialogScope::Managed
+                                    }
+                                    coco_commands::MemoryScope::User => {
+                                        coco_types::MemoryDialogScope::User
+                                    }
+                                    coco_commands::MemoryScope::Project => {
+                                        coco_types::MemoryDialogScope::Project
+                                    }
+                                    coco_commands::MemoryScope::ProjectLocal => {
+                                        coco_types::MemoryDialogScope::ProjectLocal
+                                    }
+                                    coco_commands::MemoryScope::Subdir => {
+                                        coco_types::MemoryDialogScope::Subdir
+                                    }
+                                },
+                                row_kind: coco_types::MemoryDialogRowKind::File {
+                                    exists,
+                                    read_only: false,
+                                },
+                            }
                         })
                         .collect();
                     let _ = event_tx
@@ -1814,11 +1933,14 @@ async fn dispatch_plan(
 ) -> SlashOutcome {
     let args = args.trim();
     let session_id = runtime.current_session_id().await;
-    let plans_dir = coco_context::resolve_plans_directory(
-        &runtime.config_home,
-        /*project_dir*/ None,
-        /*setting*/ None,
-    );
+    let project_dir = runtime.runtime_config.paths.project_dir.as_deref();
+    let plans_directory_setting = runtime
+        .runtime_config
+        .settings
+        .merged
+        .plans_directory
+        .as_deref();
+    let plans_dir = session_plans_dir(&runtime.config_home, project_dir, plans_directory_setting);
 
     // TS `commands/plan/plan.tsx:70-91` reads `appState.toolPermissionContext.mode`
     // first; coco-rs does the same — live cross-turn state
@@ -1883,38 +2005,16 @@ async fn dispatch_plan(
     }
 
     if args == "open" {
-        if let Some(parent) = plan_path.parent()
-            && let Err(e) = tokio::fs::create_dir_all(parent).await
-        {
-            emit_slash_text(
-                event_tx,
-                "plan",
-                &format!("Failed to create plans directory: {e}"),
-            )
-            .await;
-            return SlashOutcome::Handled;
-        }
-        if !plan_path.exists() {
-            let _ = tokio::fs::write(&plan_path, "").await;
-        }
-        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-        let editor_msg = match tokio::process::Command::new(&editor)
-            .arg(&plan_path)
-            .spawn()
-        {
-            Ok(_) => format!("Opened plan in {editor}: {}", plan_path.display()),
-            Err(e) => format!(
-                "Failed to launch editor `{editor}`: {e}\n\nPlan file: {}",
-                plan_path.display()
-            ),
-        };
         let text = if was_in_plan {
-            editor_msg
+            format!("Opening plan file: {}", plan_path.display())
         } else {
-            format!("Enabled plan mode.\n\n{editor_msg}")
+            format!(
+                "Enabled plan mode.\n\nOpening plan file: {}",
+                plan_path.display()
+            )
         };
         emit_slash_text(event_tx, "plan", &text).await;
-        return SlashOutcome::Handled;
+        return SlashOutcome::TriggerOpenPlanEditor { path: plan_path };
     }
 
     // `/plan <description>` —
@@ -1971,6 +2071,12 @@ struct ActiveTurn {
     /// `signal.reason`. The `.finally` block in `REPL.tsx:3001` reads
     /// the reason to decide whether auto-restore applies.
     cancel_reason: Arc<OnceLock<CancelReason>>,
+}
+
+enum PendingEditorRequest {
+    Memory { path: std::path::PathBuf },
+    Plan { path: std::path::PathBuf },
+    Prompt { initial_content: String },
 }
 
 /// Cancel the in-flight turn (if any) and await its completion.
@@ -2079,8 +2185,7 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
         .last()
         .and_then(|m| m.uuid())
         .map(uuid::Uuid::to_string);
-    let had_tool_calls =
-        coco_session_memory::count_tool_calls_in_last_assistant_turn(&history_msgs) > 0;
+    let had_tool_calls = coco_messages::count_tool_calls_in_last_assistant_turn(&history_msgs) > 0;
     let _ = memory_runtime
         .session_memory
         .force(tokens, last_msg_id, had_tool_calls)
@@ -2971,61 +3076,191 @@ async fn run_prompt_mode_bash(
         .await;
 }
 
-/// Append a `#`-prefixed memory entry to the project `CLAUDE.md`. If no
-/// `CLAUDE.md` exists at the cwd root we create one. The full memory
-/// scope picker (project / user / managed / external-includes) ships as
-/// a follow-up — for now we mirror TS's default behaviour of writing to
-/// the closest project memory file.
-async fn run_prompt_mode_memory(
-    cwd: &std::path::Path,
-    content: String,
+/// Create a selected `/memory` target if needed and launch the configured
+/// editor. Effects live in the CLI bridge so TUI reducers stay pure.
+async fn run_open_memory_file(path: std::path::PathBuf, event_tx: mpsc::Sender<CoreEvent>) {
+    let path_display = path.display().to_string();
+    let result = tokio::task::spawn_blocking(move || open_memory_file_blocking(&path)).await;
+
+    let event = match result {
+        Ok(Ok(())) => TuiOnlyEvent::MemoryFileOpened { path: path_display },
+        Ok(Err(error)) => TuiOnlyEvent::MemoryFileOpenFailed {
+            path: path_display,
+            error,
+        },
+        Err(err) => {
+            warn!(error = %err, "memory editor task panicked");
+            TuiOnlyEvent::MemoryFileOpenFailed {
+                path: path_display,
+                error: format!("memory editor task failed: {err}"),
+            }
+        }
+    };
+
+    let _ = event_tx.send(CoreEvent::Tui(event)).await;
+}
+
+/// Create this session's plan target if needed and launch the configured
+/// editor. Uses the same terminal handoff as prompt and memory editing.
+async fn run_open_plan_file(path: std::path::PathBuf, event_tx: mpsc::Sender<CoreEvent>) {
+    let path_display = path.display().to_string();
+    let result = tokio::task::spawn_blocking(move || open_plan_file_blocking(&path)).await;
+
+    let event = match result {
+        Ok(Ok(())) => TuiOnlyEvent::PlanFileOpened { path: path_display },
+        Ok(Err(error)) => TuiOnlyEvent::PlanFileOpenFailed {
+            path: path_display,
+            error,
+        },
+        Err(err) => {
+            warn!(error = %err, "plan editor task panicked");
+            TuiOnlyEvent::PlanFileOpenFailed {
+                path: path_display,
+                error: format!("plan editor task failed: {err}"),
+            }
+        }
+    };
+
+    let _ = event_tx.send(CoreEvent::Tui(event)).await;
+}
+
+async fn emit_editor_prepare_failed(
+    request: PendingEditorRequest,
+    error: String,
     event_tx: mpsc::Sender<CoreEvent>,
 ) {
-    let path = cwd.join("CLAUDE.md");
-    let path_display = path.display().to_string();
-    let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        // Each `#` entry becomes a bulleted line under no specific
-        // heading. TS uses the file picker so the user chooses scope +
-        // section; this MVP just appends. If the file is empty seed a
-        // newline so the bullet starts on its own line.
-        let metadata = file.metadata()?;
-        if metadata.len() > 0 {
-            writeln!(file)?;
-        }
-        writeln!(file, "- {content}")?;
-        Ok(())
-    })
-    .await;
+    let message = format!("failed to prepare terminal for editor: {error}");
+    let event = match request {
+        PendingEditorRequest::Memory { path } => TuiOnlyEvent::MemoryFileOpenFailed {
+            path: path.display().to_string(),
+            error: message,
+        },
+        PendingEditorRequest::Plan { path } => TuiOnlyEvent::PlanFileOpenFailed {
+            path: path.display().to_string(),
+            error: message,
+        },
+        PendingEditorRequest::Prompt { .. } => TuiOnlyEvent::PromptEditorFailed { error: message },
+    };
+    let _ = event_tx.send(CoreEvent::Tui(event)).await;
+}
 
-    match result {
-        Ok(Ok(())) => {
-            let _ = event_tx
-                .send(CoreEvent::Tui(TuiOnlyEvent::MemorySaved {
-                    path: path_display,
-                }))
-                .await;
-        }
-        Ok(Err(err)) => {
-            warn!(error = %err, "memory append failed");
-            let _ = event_tx
-                .send(CoreEvent::Protocol(ServerNotification::Error(
-                    coco_types::ErrorParams {
-                        message: format!("memory append failed: {err}"),
-                        category: None,
-                        retryable: false,
-                    },
-                )))
-                .await;
-        }
-        Err(err) => {
-            warn!(error = %err, "memory append task panicked");
-        }
+fn open_memory_file_blocking(path: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create parent directory: {err}"))?;
     }
+
+    // `wx` semantics: create exclusively, but an existing memory file is
+    // fine. We just need the target present before launching the editor.
+    if let Err(err) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        && err.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(format!("failed to create memory file: {err}"));
+    }
+
+    run_editor_on_file(path)
+}
+
+fn open_plan_file_blocking(path: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create plans directory: {err}"))?;
+    }
+
+    if let Err(err) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        && err.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(format!("failed to create plan file: {err}"));
+    }
+
+    run_editor_on_file(path)
+}
+
+async fn run_prompt_editor(initial_content: String, event_tx: mpsc::Sender<CoreEvent>) {
+    let result =
+        tokio::task::spawn_blocking(move || open_prompt_editor_blocking(&initial_content)).await;
+
+    let event = match result {
+        Ok(Ok((content, modified))) => TuiOnlyEvent::PromptEditorCompleted { content, modified },
+        Ok(Err(error)) => TuiOnlyEvent::PromptEditorFailed { error },
+        Err(err) => {
+            warn!(error = %err, "prompt editor task panicked");
+            TuiOnlyEvent::PromptEditorFailed {
+                error: format!("prompt editor task failed: {err}"),
+            }
+        }
+    };
+
+    let _ = event_tx.send(CoreEvent::Tui(event)).await;
+}
+
+fn open_prompt_editor_blocking(initial_content: &str) -> Result<(String, bool), String> {
+    let path = std::env::temp_dir().join(format!("coco-prompt-edit-{}.md", uuid::Uuid::new_v4()));
+    std::fs::write(&path, initial_content)
+        .map_err(|err| format!("failed to write editor temp file: {err}"))?;
+
+    let result = run_editor_on_file(&path).and_then(|()| {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|err| format!("failed to read editor temp file: {err}"))?;
+        let modified = content != initial_content;
+        Ok((content, modified))
+    });
+
+    if let Err(err) = std::fs::remove_file(&path)
+        && result.is_ok()
+    {
+        return Err(format!("failed to remove editor temp file: {err}"));
+    }
+
+    result
+}
+
+fn resolve_editor_command() -> Result<(String, Vec<String>), String> {
+    let raw = std::env::var("VISUAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| "vi".to_string());
+
+    parse_editor_command(&raw)
+}
+
+fn parse_editor_command(raw: &str) -> Result<(String, Vec<String>), String> {
+    let mut parts =
+        shlex::split(raw).ok_or_else(|| format!("failed to parse editor command `{raw}`"))?;
+    if parts.is_empty() {
+        return Err("editor command resolved to an empty argv".to_string());
+    }
+    let program = parts.remove(0);
+    Ok((program, parts))
+}
+
+fn run_editor_on_file(path: &std::path::Path) -> Result<(), String> {
+    let (program, args) = resolve_editor_command()?;
+    let status = std::process::Command::new(&program)
+        .args(args)
+        .arg(path)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .map_err(|err| format!("failed to launch editor `{program}`: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("editor `{program}` exited with status {status}"));
+    }
+
+    Ok(())
 }
 
 /// Cap `text` at the smaller of `max_bytes` or `max_lines`, appending a

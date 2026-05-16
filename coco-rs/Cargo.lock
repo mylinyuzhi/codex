@@ -949,12 +949,12 @@ dependencies = [
  "coco-messages",
  "coco-otel",
  "coco-output-styles",
+ "coco-paths",
  "coco-permissions",
  "coco-plugins",
  "coco-query",
  "coco-sandbox",
  "coco-session",
- "coco-session-memory",
  "coco-shell",
  "coco-skills",
  "coco-state",
@@ -971,6 +971,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "shlex",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1069,6 +1070,7 @@ dependencies = [
  "coco-messages",
  "coco-model-card",
  "coco-otel",
+ "coco-paths",
  "coco-types",
  "globset",
  "ignore",
@@ -1209,6 +1211,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "ts-rs",
+ "unicode-normalization",
  "walkdir",
 ]
 
@@ -1367,6 +1370,7 @@ dependencies = [
 name = "coco-memory"
 version = "0.0.0"
 dependencies = [
+ "arc-swap",
  "async-trait",
  "chrono",
  "coco-config",
@@ -1375,6 +1379,7 @@ dependencies = [
  "coco-frontmatter",
  "coco-git",
  "coco-otel",
+ "coco-paths",
  "coco-secret-redact",
  "coco-shell-parser",
  "coco-tool-runtime",
@@ -1393,6 +1398,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1457,6 +1463,15 @@ dependencies = [
  "tokio",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "coco-paths"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "tempfile",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -1528,10 +1543,10 @@ dependencies = [
  "coco-memory",
  "coco-messages",
  "coco-otel",
+ "coco-paths",
  "coco-permissions",
  "coco-sandbox",
  "coco-session",
- "coco-session-memory",
  "coco-shell",
  "coco-skills",
  "coco-subagent",
@@ -1690,35 +1705,18 @@ version = "0.0.0"
 dependencies = [
  "coco-config",
  "coco-error",
+ "coco-git",
  "coco-messages",
+ "coco-paths",
  "coco-types",
  "fs2",
+ "libc",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "coco-session-memory"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "coco-compact",
- "coco-config",
- "coco-error",
- "coco-inference",
- "coco-messages",
- "coco-types",
- "pretty_assertions",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
  "tracing",
  "uuid",
 ]
@@ -2061,6 +2059,7 @@ dependencies = [
  "coco-file-watch",
  "coco-git",
  "coco-keybindings",
+ "coco-subagent",
  "coco-types",
  "crossterm",
  "dirs 6.0.0",

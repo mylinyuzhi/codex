@@ -1,4 +1,5 @@
 use super::*;
+use coco_paths::ProjectPaths;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
@@ -16,23 +17,33 @@ fn override_path_wins() {
 
 #[test]
 fn default_layout_outside_git_uses_project_path() {
-    // tmp dir won't be a git repo so canonicalization falls through.
+    // tmp dir won't be a git repo so canonicalization falls through to
+    // the literal project_root. The slug is whatever
+    // `coco_paths::ProjectPaths` produces for that path.
     let temp = tempfile::tempdir().unwrap();
     let dir = MemoryDir::resolve(Path::new("/home/u/.coco"), temp.path(), None);
-    let sanitized = sanitize_project_path(temp.path());
-    assert_eq!(
-        dir.personal,
-        PathBuf::from("/home/u/.coco")
-            .join("projects")
-            .join(sanitized)
-            .join("memory")
-    );
+    let project_paths = ProjectPaths::new(PathBuf::from("/home/u/.coco"), temp.path());
+    assert_eq!(dir.personal, project_paths.memory_dir());
+    assert_eq!(dir.team, project_paths.team_memory_dir());
 }
 
 #[test]
-fn sanitize_replaces_separators() {
-    assert_eq!(sanitize_project_path(Path::new("/a/b/c")), "a-b-c");
-    assert_eq!(sanitize_project_path(Path::new("a/b")), "a-b");
+fn default_layout_matches_observed_ts_slug_for_known_cwd() {
+    // The literal directory observed on this dev machine at
+    // `~/.claude/projects/-Users-linyuzhi-codespace-myagent-codex/`.
+    // Our slug for the same cwd MUST match — pre-fix, the local
+    // `sanitize_project_path` stripped the leading `/` and produced
+    // `Users-…` instead of `-Users-…`, silently disagreeing with
+    // every other TS Claude Code instance pointed at the same repo.
+    let dir = MemoryDir::resolve(
+        Path::new("/home/u/.coco"),
+        Path::new("/Users/linyuzhi/codespace/myagent/codex"),
+        None,
+    );
+    assert_eq!(
+        dir.personal,
+        PathBuf::from("/home/u/.coco/projects/-Users-linyuzhi-codespace-myagent-codex/memory",),
+    );
 }
 
 #[test]

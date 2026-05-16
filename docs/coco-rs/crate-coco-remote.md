@@ -1,7 +1,7 @@
 # coco-remote — Crate Plan
 
 Directory: `remote/` (v3)
-TS source: `src/remote/` (4 files, ~1.1K LOC), `src/upstreamproxy/` (2 files, ~740 LOC)
+TS source: `remote/` (4 files, ~1.1K LOC), `upstreamproxy/` (2 files, ~740 LOC)
 Total: ~1.9K LOC across 6 files
 
 ## Dependencies

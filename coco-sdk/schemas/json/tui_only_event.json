@@ -569,7 +569,7 @@
       }
     },
     {
-      "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash dispatcher pre-builds entries via `coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries` and carries them through here so the TUI doesn't recompute paths. On selection the TUI creates the file (`mode wx` semantics), opens `$VISUAL || $EDITOR`, and emits a system message; on cancel it emits \"Cancelled memory editing\". TS parity: `commands/memory/memory.tsx`.",
+      "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash dispatcher pre-builds entries via `coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries` and carries them through here so the TUI doesn't recompute paths. On selection the TUI sends an `OpenMemoryFile` command to the CLI bridge; the bridge creates the file (`mode wx` semantics), opens `$VISUAL || $EDITOR`, and reports the result back as a transcript visible event. On cancel the TUI emits \"Cancelled memory editing\". TS parity: `commands/memory/memory.tsx`.",
       "type": "object",
       "required": [
         "entries",
@@ -586,6 +586,161 @@
           "type": "string",
           "enum": [
             "open_memory_dialog"
+          ]
+        }
+      }
+    },
+    {
+      "description": "`/memory` editor launch completed successfully.",
+      "type": "object",
+      "required": [
+        "path",
+        "type"
+      ],
+      "properties": {
+        "path": {
+          "description": "Path of the file passed to the editor.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "memory_file_opened"
+          ]
+        }
+      }
+    },
+    {
+      "description": "`/memory` editor launch failed before a process was started.",
+      "type": "object",
+      "required": [
+        "error",
+        "path",
+        "type"
+      ],
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path of the file the user selected.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "memory_file_open_failed"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Plan editor launch completed successfully.",
+      "type": "object",
+      "required": [
+        "path",
+        "type"
+      ],
+      "properties": {
+        "path": {
+          "description": "Path of the session plan file passed to the editor.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "plan_file_opened"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Plan editor launch failed before a process was started.",
+      "type": "object",
+      "required": [
+        "error",
+        "path",
+        "type"
+      ],
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path of the session plan file.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "plan_file_open_failed"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Request the foreground TUI to leave raw mode / alt-screen before the CLI runner starts an interactive editor process.",
+      "type": "object",
+      "required": [
+        "request_id",
+        "type"
+      ],
+      "properties": {
+        "request_id": {
+          "description": "Opaque request id echoed back by the TUI once terminal modes are ready for the external editor.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "external_editor_prepare"
+          ]
+        }
+      }
+    },
+    {
+      "description": "External prompt editor completed.",
+      "type": "object",
+      "required": [
+        "content",
+        "modified",
+        "type"
+      ],
+      "properties": {
+        "content": {
+          "description": "Edited prompt content read back from the temp file.",
+          "type": "string"
+        },
+        "modified": {
+          "description": "Whether the edited content differs from the initial content.",
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "prompt_editor_completed"
+          ]
+        }
+      }
+    },
+    {
+      "description": "External prompt editor failed before content could be read back.",
+      "type": "object",
+      "required": [
+        "error",
+        "type"
+      ],
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "prompt_editor_failed"
           ]
         }
       }
@@ -618,26 +773,6 @@
         "user_message_id": {
           "description": "Shared id of the bash input/output pair so rewind groups them.",
           "type": "string"
-        }
-      }
-    },
-    {
-      "description": "Confirmation that a prompt-mode `#`-prefixed memory entry was appended to a CLAUDE.md file. The TUI surfaces a toast and the `MemoryInput` chat message that was already pushed locally.",
-      "type": "object",
-      "required": [
-        "path",
-        "type"
-      ],
-      "properties": {
-        "path": {
-          "description": "Path of the file that was appended to (project / user scope).",
-          "type": "string"
-        },
-        "type": {
-          "type": "string",
-          "enum": [
-            "memory_saved"
-          ]
         }
       }
     },
@@ -675,6 +810,19 @@
           "description": "Filesystem path of the memory file (also the editor target).",
           "type": "string"
         },
+        "row_kind": {
+          "description": "Row semantics for rendering and selection behavior.",
+          "default": {
+            "exists": false,
+            "kind": "file",
+            "read_only": false
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryDialogRowKind"
+            }
+          ]
+        },
         "scope": {
           "description": "Scope tag (drives ordering and color hint).",
           "allOf": [
@@ -684,6 +832,76 @@
           ]
         }
       }
+    },
+    "MemoryDialogRowKind": {
+      "description": "Semantic row kind for the `/memory` picker.",
+      "oneOf": [
+        {
+          "description": "Editable memory file.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "exists": {
+              "description": "Whether the file already exists at event construction time.",
+              "default": false,
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "file"
+              ]
+            },
+            "read_only": {
+              "description": "Whether the row should be treated as read-only by future UIs.",
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "description": "Folder grouping row for future memory directory surfaces.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "enabled": {
+              "description": "Whether the folder is currently enabled.",
+              "default": false,
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "folder"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Toggle row for future auto-memory settings.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "enabled": {
+              "description": "Current toggle state.",
+              "default": false,
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "toggle"
+              ]
+            }
+          }
+        }
+      ]
     },
     "MemoryDialogScope": {
       "description": "Scope tag for a memory file picker entry. Mirrors `coco_commands::MemoryScope` — kept in `coco-types` so the TUI can consume the event without depending on `coco-commands`.",

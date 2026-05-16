@@ -29,7 +29,6 @@ coco-lsp.workspace = true
 coco-mcp.workspace = true
 coco-memory.workspace = true
 coco-session.workspace = true
-coco-session-memory.workspace = true
 coco-tasks.workspace = true
 chrono.workspace = true
 lru.workspace = true
@@ -48,6 +47,7 @@ uuid = { workspace = true, features = ["v4"] }
 anyhow.workspace = true
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
+coco-paths.workspace = true
 coco-tools.workspace = true
 coco-tool-runtime = { workspace = true, features = ["testing"] }
 coco-hooks.workspace = true

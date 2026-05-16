@@ -7,22 +7,10 @@ use std::time::Duration;
 
 // ========== Layout ==========
 
-/// Minimum terminal width (columns) before the side panel is shown.
-pub const SIDE_PANEL_MIN_WIDTH: i32 = 100;
-
-/// Main area percentage in normal-width terminals.
-pub const NORMAL_TERMINAL_MAIN_PCT: i32 = 70;
-
-/// Side area percentage in normal-width terminals.
-pub const NORMAL_TERMINAL_SIDE_PCT: i32 = 30;
-
 /// Maximum height (rows) for the multi-line input box, including borders.
 pub const MAX_INPUT_HEIGHT: i32 = 10;
 
 // ========== Display Limits ==========
-
-/// Maximum number of subagents shown in the side panel.
-pub const MAX_SUBAGENT_PANEL_DISPLAY: i32 = 5;
 
 /// Maximum active toast notifications at once.
 pub const MAX_TOASTS: i32 = 5;

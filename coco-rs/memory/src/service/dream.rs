@@ -76,7 +76,7 @@ impl DreamService {
         Self::with_shared_agent(
             memory_dir,
             config,
-            Arc::new(tokio::sync::RwLock::new(agent)),
+            Arc::new(std::sync::RwLock::new(agent)),
             Arc::new(NoopEmitter),
         )
     }
@@ -273,7 +273,11 @@ impl DreamService {
             "spawning auto-dream consolidation subagent"
         );
 
-        let agent = self.agent.read().await.clone();
+        let agent = self
+            .agent
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         match agent.spawn_agent(request).await {
             Ok(resp) => {
                 let duration_ms = start.elapsed().as_millis() as i64;

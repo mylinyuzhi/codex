@@ -28,9 +28,9 @@ pub(super) fn try_render<'a>(
             // full row width rather than just the glyphs — the bg must
             // therefore live on the `Line`, not on individual spans.
             for line in text.lines() {
-                let span = Span::raw(format!("❯ {line}")).fg(w.theme.user_message);
+                let span = Span::raw(format!("❯ {line}")).fg(w.styles.user_message());
                 let mut chat_line = Line::from(span);
-                if let Some(bg) = w.theme.user_message_bg {
+                if let Some(bg) = w.styles.user_message_bg() {
                     chat_line = chat_line.style(ratatui::style::Style::default().bg(bg));
                 }
                 lines.push(chat_line);
@@ -39,9 +39,9 @@ pub(super) fn try_render<'a>(
         }
         MessageContent::Image { path } => {
             lines.push(Line::from(vec![
-                Span::raw("❯ ").fg(w.theme.user_message),
-                Span::raw("📎 ").fg(w.theme.accent),
-                Span::raw(path.as_str()).fg(w.theme.primary).underlined(),
+                Span::raw("❯ ").fg(w.styles.user_message()),
+                Span::raw("📎 ").fg(w.styles.accent()),
+                Span::raw(path.as_str()).fg(w.styles.primary()).underlined(),
             ]));
             Some(())
         }
@@ -50,16 +50,16 @@ pub(super) fn try_render<'a>(
             // `bashBorder` style. We re-use the input-area mode glyph so
             // the chat echo visually matches the prompt the user typed.
             lines.push(Line::from(vec![
-                Span::raw("! ").fg(w.theme.accent).bold(),
-                Span::raw(command.as_str()).fg(w.theme.accent),
+                Span::raw("! ").fg(w.styles.accent()).bold(),
+                Span::raw(command.as_str()).fg(w.styles.accent()),
             ]));
             Some(())
         }
         MessageContent::BashOutput { output, exit_code } => {
             let color = if *exit_code == 0 {
-                w.theme.text_dim
+                w.styles.dim()
             } else {
-                w.theme.error
+                w.styles.error()
             };
             for line in output.lines().take(20) {
                 lines.push(Line::from(Span::raw(format!("  {line}")).fg(color)));
@@ -67,13 +67,14 @@ pub(super) fn try_render<'a>(
             if output.lines().count() > 20 {
                 lines.push(Line::from(
                     Span::raw(t!("chat.truncated").to_string())
-                        .fg(w.theme.text_dim)
+                        .fg(w.styles.dim())
                         .italic(),
                 ));
             }
             if *exit_code != 0 {
                 lines.push(Line::from(
-                    Span::raw(t!("chat.exit_code", code = exit_code).to_string()).fg(w.theme.error),
+                    Span::raw(t!("chat.exit_code", code = exit_code).to_string())
+                        .fg(w.styles.error()),
                 ));
             }
             Some(())
@@ -84,25 +85,15 @@ pub(super) fn try_render<'a>(
                 PlanAction::Exit => t!("chat.plan_exited"),
             };
             lines.push(Line::from(
-                Span::raw(format!("  {text}"))
-                    .fg(w.theme.plan_mode)
-                    .italic(),
+                Span::raw(format!("  {text}")).fg(w.styles.plan()).italic(),
             ));
-            Some(())
-        }
-        MessageContent::MemoryInput { content } => {
-            lines.push(Line::from(vec![
-                Span::raw("❯ ").fg(w.theme.user_message),
-                Span::raw("💾 ").fg(w.theme.accent),
-                Span::raw(content.as_str()).fg(w.theme.text_dim),
-            ]));
             Some(())
         }
         MessageContent::AgentNotification { agent_id, summary } => {
             lines.push(Line::from(vec![
-                Span::raw("  🤖 ").fg(w.theme.accent),
-                Span::raw(format!("[{agent_id}] ")).fg(w.theme.text_dim),
-                Span::raw(summary.as_str()).fg(w.theme.text),
+                Span::raw("  🤖 ").fg(w.styles.accent()),
+                Span::raw(format!("[{agent_id}] ")).fg(w.styles.dim()),
+                Span::raw(summary.as_str()).fg(w.styles.text()),
             ]));
             Some(())
         }
@@ -110,8 +101,8 @@ pub(super) fn try_render<'a>(
             let parsed = parse_teammate_xml(content);
             if parsed.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::raw(format!("  @{teammate}: ")).fg(w.theme.primary),
-                    Span::raw(content.clone()).fg(w.theme.text),
+                    Span::raw(format!("  @{teammate}: ")).fg(w.styles.primary()),
+                    Span::raw(content.clone()).fg(w.styles.text()),
                 ]));
             } else {
                 for part in parsed {
@@ -119,7 +110,7 @@ pub(super) fn try_render<'a>(
                         .color
                         .as_deref()
                         .map(teammate_color_to_ratatui)
-                        .unwrap_or(w.theme.primary);
+                        .unwrap_or(w.styles.primary());
                     let mut header =
                         vec![Span::raw(format!("  @{}: ", part.teammate_id)).fg(name_color)];
                     if let Some(summary) = part.summary {
@@ -129,7 +120,7 @@ pub(super) fn try_render<'a>(
                     for line in part.content.lines() {
                         lines.push(Line::from(vec![
                             Span::raw("    ".to_string()),
-                            Span::raw(line.to_string()).fg(w.theme.text),
+                            Span::raw(line.to_string()).fg(w.styles.text()),
                         ]));
                     }
                 }
@@ -141,9 +132,9 @@ pub(super) fn try_render<'a>(
             preview,
         } => {
             lines.push(Line::from(vec![
-                Span::raw("❯ ").fg(w.theme.user_message),
-                Span::raw(format!("📎 [{attachment_type}] ")).fg(w.theme.accent),
-                Span::raw(preview.as_str()).fg(w.theme.text_dim),
+                Span::raw("❯ ").fg(w.styles.user_message()),
+                Span::raw(format!("📎 [{attachment_type}] ")).fg(w.styles.accent()),
+                Span::raw(preview.as_str()).fg(w.styles.dim()),
             ]));
             Some(())
         }
@@ -155,13 +146,13 @@ pub(super) fn try_render<'a>(
             // TS UserChannelMessage: "source ⇢ [user] truncated-body"
             let short_source = source.rsplit(':').next().unwrap_or(source);
             let mut header = vec![
-                Span::raw("  ⇢ ").fg(w.theme.accent),
+                Span::raw("  ⇢ ").fg(w.styles.accent()),
                 Span::raw(short_source.to_string())
-                    .fg(w.theme.primary)
+                    .fg(w.styles.primary())
                     .bold(),
             ];
             if let Some(u) = user {
-                header.push(Span::raw(format!(" [{u}]")).fg(w.theme.text_dim));
+                header.push(Span::raw(format!(" [{u}]")).fg(w.styles.dim()));
             }
             lines.push(Line::from(header));
             let body = content.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -173,7 +164,7 @@ pub(super) fn try_render<'a>(
                 body
             };
             lines.push(Line::from(
-                Span::raw(format!("    {truncated}")).fg(w.theme.text),
+                Span::raw(format!("    {truncated}")).fg(w.styles.text()),
             ));
             Some(())
         }
@@ -190,14 +181,14 @@ pub(super) fn try_render<'a>(
             };
             let display_target = format_resource_target(target);
             let mut parts = vec![
-                Span::raw("  ↻ ").fg(w.theme.accent),
-                Span::raw(format!("{label} ")).fg(w.theme.text_dim),
-                Span::raw(server.as_str()).fg(w.theme.primary),
-                Span::raw(" · ").fg(w.theme.text_dim),
-                Span::raw(display_target).fg(w.theme.text),
+                Span::raw("  ↻ ").fg(w.styles.accent()),
+                Span::raw(format!("{label} ")).fg(w.styles.dim()),
+                Span::raw(server.as_str()).fg(w.styles.primary()),
+                Span::raw(" · ").fg(w.styles.dim()),
+                Span::raw(display_target).fg(w.styles.text()),
             ];
             if let Some(r) = reason {
-                parts.push(Span::raw(format!(" ({r})")).fg(w.theme.text_dim).italic());
+                parts.push(Span::raw(format!(" ({r})")).fg(w.styles.dim()).italic());
             }
             lines.push(Line::from(parts));
             Some(())

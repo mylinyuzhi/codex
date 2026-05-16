@@ -25,6 +25,12 @@ use crate::command_queue::QueuedCommand;
 use crate::emit::emit_protocol;
 use crate::emit::emit_stream;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum ToolCompletionEventMode {
+    Emit,
+    Defer,
+}
+
 /// Convert between the two-name alias for `AssistantContent`.
 ///
 /// `coco_messages::AssistantContent` and `coco_inference::AssistantContentPart`
@@ -211,24 +217,27 @@ pub(crate) fn extract_last_assistant_text(history: &MessageHistory) -> String {
 /// `StreamingHandle::feed_plan(ToolCallPlan::EarlyOutcome(...))` so
 /// `commit_flush` surfaces them in the correct post-assistant slot. See
 /// [`build_streaming_early_outcome`] for the wrap routine.
-pub(crate) async fn complete_tool_call_with_error(
+pub(crate) async fn complete_tool_call_with_error_mode(
     event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
     history: &mut MessageHistory,
     tool_call_id: &str,
     tool_name: &str,
     tool_id: &ToolId,
     output: &str,
+    event_mode: ToolCompletionEventMode,
 ) {
-    let _delivered = emit_stream(
-        event_tx,
-        crate::AgentStreamEvent::ToolUseCompleted {
-            call_id: tool_call_id.to_string(),
-            name: tool_name.to_string(),
-            output: output.to_string(),
-            is_error: true,
-        },
-    )
-    .await;
+    if event_mode == ToolCompletionEventMode::Emit {
+        let _delivered = emit_stream(
+            event_tx,
+            crate::AgentStreamEvent::ToolUseCompleted {
+                call_id: tool_call_id.to_string(),
+                name: tool_name.to_string(),
+                output: output.to_string(),
+                is_error: true,
+            },
+        )
+        .await;
+    }
     history.push(create_error_tool_result(
         tool_call_id,
         tool_name,

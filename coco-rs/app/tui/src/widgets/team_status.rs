@@ -13,23 +13,23 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// Team status indicator for the status bar.
 pub struct TeamStatusWidget<'a> {
     teammate_count: i32,
     selected: bool,
     show_hint: bool,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> TeamStatusWidget<'a> {
-    pub fn new(teammate_count: i32, theme: &'a Theme) -> Self {
+    pub fn new(teammate_count: i32, styles: UiStyles<'a>) -> Self {
         Self {
             teammate_count,
             selected: false,
             show_hint: false,
-            theme,
+            styles,
         }
     }
 
@@ -56,7 +56,7 @@ impl Widget for TeamStatusWidget<'_> {
             t!("team.teammates_other", count = self.teammate_count).to_string()
         };
 
-        let mut spans = vec![Span::raw(label).fg(self.theme.accent)];
+        let mut spans = vec![Span::raw(label).fg(self.styles.accent())];
 
         if self.selected && self.show_hint {
             spans.push(Span::raw(t!("team.hint_enter_view").to_string()).dim());

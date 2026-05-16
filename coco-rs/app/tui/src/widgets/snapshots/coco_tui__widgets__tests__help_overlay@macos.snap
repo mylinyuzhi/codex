@@ -7,7 +7,7 @@ expression: output
  ╰─╯ ╰─╯    │Cursor & history                                      │            
             │Ctrl+A             Move to beginning of line          │            
 ────────────│Ctrl+E             Move to end of line                │────────────
-❯ Type a mes│Ctrl+B             Move one character left            │            
+❯           │Ctrl+B             Move one character left            │            
 ────────────│Ctrl+F             Move one character right           │────────────
  opus-4 * au│Alt+B              Move one word left                 │            
             │Alt+F              Move one word right                │            

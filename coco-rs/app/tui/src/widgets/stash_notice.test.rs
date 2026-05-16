@@ -1,6 +1,7 @@
 //! Unit tests for [`StashNotice`] visibility + preview truncation.
 
 use super::StashNotice;
+use crate::presentation::styles::UiStyles;
 use crate::state::ui::StashedInput;
 use pretty_assertions::assert_eq;
 
@@ -33,7 +34,7 @@ fn should_not_display_when_only_whitespace() {
 fn truncated_preview_collapses_to_first_line() {
     let theme = crate::theme::Theme::default();
     let stash = stash_with("line one\nline two\nline three");
-    let widget = StashNotice::new(&stash, &theme);
+    let widget = StashNotice::new(&stash, UiStyles::new(&theme));
     assert_eq!(widget.truncated_preview(), "line one");
 }
 
@@ -42,7 +43,7 @@ fn truncated_preview_caps_at_40_chars_with_ellipsis() {
     let theme = crate::theme::Theme::default();
     let long = "a".repeat(80);
     let stash = stash_with(&long);
-    let widget = StashNotice::new(&stash, &theme);
+    let widget = StashNotice::new(&stash, UiStyles::new(&theme));
     let preview = widget.truncated_preview();
     let chars: Vec<char> = preview.chars().collect();
     // 40 'a's + 1 ellipsis = 41 visible chars.

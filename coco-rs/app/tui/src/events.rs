@@ -146,9 +146,9 @@ pub enum TuiCommand {
     FocusNext,
     /// Focus previous panel.
     FocusPrevious,
-    /// Focus next agent in side panel.
+    /// Focus next agent in the activity surface.
     FocusNextAgent,
-    /// Focus previous agent in side panel.
+    /// Focus previous agent in the activity surface.
     FocusPrevAgent,
 
     // ── Overlay actions ──

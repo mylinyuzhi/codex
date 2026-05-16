@@ -2,7 +2,9 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
+use crate::presentation::styles::UiStyles;
 use crate::state::rewind::SummarizeDirection;
+use crate::theme::Theme;
 
 fn message(id: &str, text: &str) -> RewindableMessage {
     RewindableMessage {
@@ -42,7 +44,7 @@ fn rewind_message_select_renders_empty_state_when_only_current_row_exists() {
     current.is_current_prompt = true;
     let overlay = overlay_with_messages(vec![current]);
 
-    let (title, body, border) = rewind_overlay_content(&overlay, &theme);
+    let (title, body, border) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Rewind ");
     assert_eq!(border, theme.accent);
@@ -66,7 +68,7 @@ fn rewind_message_select_renders_diff_metadata_and_scroll_hint() {
     let mut overlay = overlay_with_messages(messages);
     overlay.selected = 6;
 
-    let (_, body, _) = rewind_overlay_content(&overlay, &theme);
+    let (_, body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
 
     assert!(body.contains("Restore the code and/or conversation"));
     assert!(body.contains("> message 6 (2 minutes ago)"));
@@ -94,7 +96,7 @@ fn rewind_restore_options_describes_code_restore_and_manual_warning() {
     });
     overlay.has_file_changes = true;
 
-    let (_, body, _) = rewind_overlay_content(&overlay, &theme);
+    let (_, body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
 
     assert!(body.contains("Confirm you want to restore"));
     assert!(body.contains("> Restore code and conversation"));
@@ -113,7 +115,7 @@ fn rewind_restore_options_clamps_negative_selection() {
     overlay.option_selected = -2;
     overlay.available_options = vec![RestoreType::Both, RestoreType::Nevermind];
 
-    let (_, body, _) = rewind_overlay_content(&overlay, &theme);
+    let (_, body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
 
     assert!(body.contains("│ fix bug"));
     assert!(body.contains("> Restore code and conversation"));
@@ -126,16 +128,16 @@ fn rewind_summarize_feedback_and_confirming_use_pending_state() {
     let mut overlay = overlay_with_messages(vec![message("msg-1", "fix bug")]);
     overlay.phase = RewindPhase::SummarizeFeedback;
 
-    let (_, empty_body, _) = rewind_overlay_content(&overlay, &theme);
+    let (_, empty_body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
     assert!(empty_body.contains("add context (optional)"));
     assert!(empty_body.contains("(empty submit cancels)"));
 
     overlay.summarize_feedback = "keep errors".to_string();
-    let (_, typed_body, _) = rewind_overlay_content(&overlay, &theme);
+    let (_, typed_body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
     assert!(typed_body.contains("> keep errors"));
 
     overlay.phase = RewindPhase::Confirming;
     overlay.pending_summarize = Some(SummarizeDirection::From);
-    let (_, confirming_body, _) = rewind_overlay_content(&overlay, &theme);
+    let (_, confirming_body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
     assert!(confirming_body.contains("Summarizing"));
 }

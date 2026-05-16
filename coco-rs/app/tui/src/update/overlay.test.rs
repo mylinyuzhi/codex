@@ -9,6 +9,10 @@
 use super::*;
 use crate::command::UserCommand;
 use crate::state::AppState;
+use crate::state::MemoryDialogEntry;
+use crate::state::MemoryDialogOverlay;
+use crate::state::MemoryDialogRowKind;
+use crate::state::MemoryDialogScope;
 use crate::state::ModelEntry;
 use crate::state::ModelPickerOverlay;
 use crate::state::Overlay;
@@ -134,6 +138,64 @@ async fn confirm_model_picker_blocks_unavailable_provider() {
     assert_eq!(s.ui.toasts.len(), 1);
     assert_eq!(s.ui.toasts[0].severity, ToastSeverity::Warning);
     assert!(s.ui.toasts[0].message.contains("TEST_API_KEY"));
+}
+
+#[tokio::test]
+async fn confirm_memory_dialog_sends_open_memory_file_command() {
+    let path = std::path::PathBuf::from("/tmp/coco-memory-test/CLAUDE.md");
+    let mut state = AppState::new();
+    state
+        .ui
+        .set_overlay(Overlay::MemoryDialog(MemoryDialogOverlay {
+            entries: vec![MemoryDialogEntry {
+                path: path.clone(),
+                label: "Project memory".to_string(),
+                scope: MemoryDialogScope::Project,
+                row_kind: MemoryDialogRowKind::File {
+                    exists: false,
+                    read_only: false,
+                },
+            }],
+            selected: 0,
+        }));
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+
+    confirm(&mut state, &tx).await;
+
+    let UserCommand::OpenMemoryFile { path: sent_path } =
+        rx.try_recv().expect("memory open command sent")
+    else {
+        panic!("expected OpenMemoryFile")
+    };
+    assert_eq!(sent_path, path);
+    assert!(state.ui.overlay.is_none(), "overlay dismissed after select");
+}
+
+#[tokio::test]
+async fn confirm_memory_dialog_keeps_non_file_rows_open() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .set_overlay(Overlay::MemoryDialog(MemoryDialogOverlay {
+            entries: vec![MemoryDialogEntry {
+                path: std::path::PathBuf::from("/tmp/coco-memory-test"),
+                label: "Auto-memory folder".to_string(),
+                scope: MemoryDialogScope::User,
+                row_kind: MemoryDialogRowKind::Folder { enabled: true },
+            }],
+            selected: 0,
+        }));
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+
+    confirm(&mut state, &tx).await;
+
+    assert!(rx.try_recv().is_err(), "no editor command for non-file row");
+    assert!(
+        matches!(state.ui.overlay, Some(Overlay::MemoryDialog(_))),
+        "overlay stays open"
+    );
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
 }
 
 // ── Permission overlay: multi-choice commit path ──

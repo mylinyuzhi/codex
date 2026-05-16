@@ -771,7 +771,7 @@ contract violation.
 1. Each builtin's `system_prompt` body comes from
    `include_str!("ts_prompts/<name>.md")`.
 2. Each `.md` file copies the TS string from `built-in/<agent>.ts`
-   verbatim, with a header comment `# Source: claude-code-kim/src/tools/AgentTool/built-in/<file>.ts`.
+   verbatim, with a header comment `# Source: tools/AgentTool/built-in/<file>.ts`.
 3. Same for `whenToUse` strings — extract to `<name>_when.txt` files
    and `include_str!`.
 

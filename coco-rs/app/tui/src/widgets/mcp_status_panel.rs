@@ -17,17 +17,17 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
 use crate::state::session::McpServerStatus;
-use crate::theme::Theme;
 
 pub struct McpStatusPanel<'a> {
     servers: &'a [McpServerStatus],
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> McpStatusPanel<'a> {
-    pub fn new(servers: &'a [McpServerStatus], theme: &'a Theme) -> Self {
-        Self { servers, theme }
+    pub fn new(servers: &'a [McpServerStatus], styles: UiStyles<'a>) -> Self {
+        Self { servers, styles }
     }
 
     pub fn should_display(servers: &[McpServerStatus]) -> bool {
@@ -45,16 +45,19 @@ impl Widget for McpStatusPanel<'_> {
             .iter()
             .map(|s| {
                 let (dot, color) = if s.connected {
-                    ("●", self.theme.success)
+                    ("●", self.styles.success())
                 } else {
-                    ("○", self.theme.text_dim)
+                    ("○", self.styles.dim())
                 };
                 Line::from(vec![
                     Span::styled(format!(" {dot} "), Style::default().fg(color)),
-                    Span::styled(s.name.as_str(), Style::default().fg(self.theme.text).bold()),
+                    Span::styled(
+                        s.name.as_str(),
+                        Style::default().fg(self.styles.text()).bold(),
+                    ),
                     Span::styled(
                         format!("  {}", t!("mcp.tools_count", count = s.tool_count)),
-                        Style::default().fg(self.theme.text_dim),
+                        Style::default().fg(self.styles.dim()),
                     ),
                 ])
             })
@@ -65,7 +68,7 @@ impl Widget for McpStatusPanel<'_> {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(format!(" {} ", t!("mcp.panel_title")))
-                    .border_style(Style::default().fg(self.theme.border)),
+                    .border_style(Style::default().fg(self.styles.border())),
             )
             .render(area, buf);
     }

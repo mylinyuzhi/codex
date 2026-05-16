@@ -1,6 +1,6 @@
 # coco-types — Crate Plan
 
-TS source: `src/types/` (7 files + `generated/`), `src/Tool.ts`, `src/Task.ts`
+TS source: `types/` (7 files + `generated/`), `Tool.ts`, `Task.ts`
 
 Note: `types/message.ts` does not exist as a source file — message types are build-time generated
 (imports reference `types/message.js`). The message type definitions below are derived from the

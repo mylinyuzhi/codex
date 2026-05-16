@@ -105,11 +105,41 @@ fn parse_caps_very_long_titles() {
     assert!(parsed.len() <= 100);
 }
 
+/// Seed a JSONL transcript so the JSONL-canonical `SessionManager`
+/// (post-fix) can locate and derive a `Session` for the id.
+fn seed_transcript(memory_base: &std::path::Path, sid: &str) {
+    use crate::storage::TranscriptEntry;
+    use crate::storage::TranscriptStore;
+    let paths = std::sync::Arc::new(coco_paths::ProjectPaths::new(
+        memory_base.to_path_buf(),
+        std::path::Path::new("/test-cwd"),
+    ));
+    let store = TranscriptStore::new(paths);
+    let entry = TranscriptEntry {
+        entry_type: "user".to_string(),
+        uuid: format!("{sid}-u1"),
+        parent_uuid: None,
+        session_id: sid.to_string(),
+        cwd: "/test-cwd".to_string(),
+        timestamp: "2025-01-15T10:00:00Z".to_string(),
+        version: None,
+        git_branch: None,
+        is_sidechain: false,
+        message: Some(serde_json::json!({"role":"user","content":"hi"})),
+        usage: None,
+        model: None,
+        cost_usd: None,
+        extra: serde_json::Map::new(),
+    };
+    store.append_message(sid, &entry).unwrap();
+}
+
 #[test]
 fn apply_title_persists_when_session_has_none() {
     let tmp = tempfile::tempdir().unwrap();
     let mgr = crate::SessionManager::new(tmp.path().to_path_buf());
-    let s = mgr.create("claude-opus-4-6", tmp.path()).unwrap();
+    seed_transcript(tmp.path(), "sess-a");
+    let s = mgr.load("sess-a").unwrap();
     assert!(s.title.is_none());
 
     let applied = apply_title(&mgr, &s.id, "Fix login button".into()).unwrap();
@@ -123,13 +153,12 @@ fn apply_title_persists_when_session_has_none() {
 fn apply_title_respects_existing_title() {
     let tmp = tempfile::tempdir().unwrap();
     let mgr = crate::SessionManager::new(tmp.path().to_path_buf());
-    let mut s = mgr.create("claude-opus-4-6", tmp.path()).unwrap();
-    s.title = Some("User-set title".into());
-    mgr.save(&s).unwrap();
+    seed_transcript(tmp.path(), "sess-b");
+    mgr.set_title("sess-b", "User-set title").unwrap();
 
-    let applied = apply_title(&mgr, &s.id, "Auto title".into()).unwrap();
+    let applied = apply_title(&mgr, "sess-b", "Auto title".into()).unwrap();
     assert!(!applied, "must not overwrite user-set title");
 
-    let reloaded = mgr.load(&s.id).unwrap();
+    let reloaded = mgr.load("sess-b").unwrap();
     assert_eq!(reloaded.title.as_deref(), Some("User-set title"));
 }

@@ -5,7 +5,7 @@
 Create `coco-rs` — a Rust code agent whose **core logic follows the Claude Code TypeScript implementation**, while leveraging cocode-rs's base infrastructure (error handling, utils, vercel-ai multi-provider SDK) and Rust best practices.
 
 **Principles**:
-1. **TS-first**: Each TS `src/` module maps to a Rust crate. TS defines the architecture.
+1. **TS-first**: Each TS source module maps to a Rust crate. TS defines the architecture.
 2. **Rust best practices for details**: snafu errors, trait-based tool system, CancellationToken, Arc sharing
 3. **Copy only base infra from cocode-rs**: error, otel, utils, vercel-ai. Everything else is redesigned.
 4. **provider-sdks removed**: vercel-ai handles all provider abstraction directly
@@ -85,7 +85,7 @@ When the plan keeps cocode-rs code instead of rewriting from TS, one of these re
 
 **provider-sdks/ REMOVED** — vercel-ai handles all provider abstraction.
 
-### Layer 1: Types (TS `src/types/` + `src/Tool.ts` + `src/Task.ts`)
+### Layer 1: Types (TS `types/` + `Tool.ts` + `Task.ts`)
 
 | TS source | Rust crate | Key types |
 |-----------|-----------|-----------|
@@ -99,7 +99,7 @@ When the plan keeps cocode-rs code instead of rewriting from TS, one of these re
 | `Task.ts` | `coco-types` | `TaskType`, `TaskStatus`, `TaskStateBase`, `TaskHandle` |
 | (from cocode-rs sandbox) | `coco-types` | `SandboxMode` (ReadOnly, WorkspaceWrite, FullAccess, ExternalSandbox) — needed by exec/sandbox |
 
-### Layer 2: Config & Model (TS `src/utils/settings/` + `src/utils/model/`)
+### Layer 2: Config & Model (TS `utils/settings/` + `utils/model/`)
 
 | TS source | Rust crate | Key types |
 |-----------|-----------|-----------|
@@ -313,10 +313,10 @@ When the plan keeps cocode-rs code instead of rewriting from TS, one of these re
 
 1. **Max 2-level nesting**: `group/crate/` — proven at scale in cocode-rs (81 crates)
 2. **No single-crate directories**: every group has 2+ crates, otherwise standalone at root
-3. **TS-first naming**: group names should match TS `src/` directory names where possible
+3. **TS-first naming**: group names should match TS source directory names where possible
 4. **Explicit workspace members**: no glob patterns (Cargo.toml lists each path)
 
-### TS `src/` layout analysis
+### TS Source Layout Analysis
 
 TS is essentially **flat** — 35 top-level dirs. The only grouped directory is `services/` (20 subdirs: api, mcp, lsp, compact, tools orchestration, analytics, oauth, etc.).
 

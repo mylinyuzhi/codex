@@ -1,16 +1,38 @@
 use super::*;
 use crate::state::AppState;
+use crate::state::ModelCatalogEntry;
 use crate::state::Overlay;
 use crate::state::ProviderStatus;
 use crate::state::ProviderUnavailableReason;
 use coco_types::ModelRole;
+use coco_types::ReasoningEffort;
 
-/// `cycle_model` opens the picker for the Main role, seeded with at
-/// least the builtin Anthropic / OpenAI / Google / DeepSeek entries
-/// (provider-grouped because the seeder sorts on provider_display).
+fn catalog_entry(provider: &str, provider_display: &str, model_id: &str) -> ModelCatalogEntry {
+    ModelCatalogEntry {
+        provider: provider.to_string(),
+        provider_display: provider_display.to_string(),
+        model_id: model_id.to_string(),
+        display_name: model_id.to_string(),
+        context_window: Some(200_000),
+        supported_efforts: vec![ReasoningEffort::Auto],
+        default_effort: Some(ReasoningEffort::Auto),
+    }
+}
+
+fn seed_catalog(state: &mut AppState) {
+    state.session.model_catalog = vec![
+        catalog_entry("anthropic", "Anthropic", "claude-sonnet-4-6"),
+        catalog_entry("openai", "OpenAI", "gpt-5-4"),
+    ];
+}
+
+/// `cycle_model` opens the picker for the Main role from the
+/// session-frozen model catalog (provider-grouped because the seeder
+/// sorts on provider_display).
 #[test]
-fn cycle_model_seeds_builtin_registry() {
+fn cycle_model_uses_session_model_catalog() {
     let mut state = AppState::new();
+    seed_catalog(&mut state);
     state.session.model = "claude-sonnet-4-6".to_string();
     state.session.provider = "anthropic".to_string();
     cycle_model(&mut state);
@@ -31,6 +53,7 @@ fn cycle_model_seeds_builtin_registry() {
 #[test]
 fn cycle_model_marks_provider_config_unavailable() {
     let mut state = AppState::new();
+    seed_catalog(&mut state);
     state.session.provider_statuses.insert(
         "openai".to_string(),
         ProviderStatus {
@@ -58,6 +81,7 @@ fn cycle_model_marks_provider_config_unavailable() {
 #[test]
 fn cycle_model_adds_unavailable_provider_without_models() {
     let mut state = AppState::new();
+    seed_catalog(&mut state);
     state.session.provider_statuses.insert(
         "custom".to_string(),
         ProviderStatus {
@@ -84,7 +108,9 @@ fn cycle_model_adds_unavailable_provider_without_models() {
 #[test]
 fn cycle_model_role_wraps_and_resets_filter() {
     let mut state = AppState::new();
+    seed_catalog(&mut state);
     state.session.model = "claude-sonnet-4-6".to_string();
+    state.session.provider = "anthropic".to_string();
     cycle_model(&mut state);
     if let Some(Overlay::ModelPicker(m)) = &mut state.ui.overlay {
         m.filter = "ignored".to_string();
@@ -107,6 +133,17 @@ fn cycle_model_role_wraps_and_resets_filter() {
     assert_eq!(m.role, ModelRole::Subagent);
 }
 
+#[test]
+fn build_model_entries_empty_catalog_has_no_prefix_inference() {
+    let mut state = AppState::new();
+    state.session.model = "claude-sonnet-4-6".to_string();
+    state.session.provider = "anthropic".to_string();
+
+    let entries = build_model_entries(&state, ModelRole::Main);
+
+    assert!(entries.is_empty());
+}
+
 /// `next_role` cycles deterministically over the canonical order and
 /// stays consistent with the renderer (see render_overlays/pickers.rs).
 #[test]
@@ -117,18 +154,15 @@ fn next_role_cycles_canonical_order() {
     assert_eq!(next_role(ModelRole::Plan, 2), ModelRole::Review);
 }
 
-/// Provider inference covers every builtin family. The `o`-prefix case
-/// is broad on purpose — OpenAI's `o1`/`o3` reasoning models would
-/// land here if they're added to the registry.
 #[test]
-fn infer_provider_covers_builtin_families() {
-    assert_eq!(
-        infer_provider("claude-sonnet-4-6"),
-        ("anthropic", "Anthropic")
-    );
-    assert_eq!(infer_provider("gpt-5-4"), ("openai", "OpenAI"));
-    assert_eq!(infer_provider("o1-preview"), ("openai", "OpenAI"));
-    assert_eq!(infer_provider("gemini-2.5-pro"), ("google", "Google"));
-    assert_eq!(infer_provider("deepseek-v4-pro"), ("deepseek", "DeepSeek"));
-    assert_eq!(infer_provider("custom-model"), ("other", "Other"));
+fn build_model_entries_applies_available_model_allowlist_to_catalog() {
+    let mut state = AppState::new();
+    seed_catalog(&mut state);
+    state.session.available_models = vec!["gpt-5-4".to_string()];
+
+    let entries = build_model_entries(&state, ModelRole::Main);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].provider, "openai");
+    assert_eq!(entries[0].model_id, "gpt-5-4");
 }

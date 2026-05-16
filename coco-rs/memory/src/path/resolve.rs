@@ -1,8 +1,8 @@
 //! Resolve the memory directory for a project.
 //!
-//! TS: `memdir/paths.ts:getAutoMemPath`. The TS chain is:
-//!   1. `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` env override (operator)
-//!   2. `CLAUDE_CODE_REMOTE_MEMORY_DIR` env (CCR / swarm leader)
+//! TS: `memdir/paths.ts:getAutoMemPath`. The resolution chain is:
+//!   1. `COCO_MEMORY_PATH_OVERRIDE` env override (operator)
+//!   2. `COCO_REMOTE_MEMORY_DIR` env (CCR / swarm leader)
 //!   3. `settings.json` `autoMemoryDirectory`
 //!   4. `<config_home>/projects/<sanitized-canonical-git-root>/memory/`
 //!
@@ -12,6 +12,12 @@
 //! handles step (4): the default layout under the config home, anchored
 //! to the **canonical** git root so worktrees of the same repo share
 //! one memory dir.
+//!
+//! The slug computation lives in [`coco_paths::ProjectSlug`] /
+//! [`coco_paths::ProjectPaths`] — see that crate for the
+//! TS-equivalent `[^a-zA-Z0-9]` + NFC + 200-byte djb2-hash algorithm
+//! we mirror. Prior to that consolidation this file held its own
+//! buggy variant.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -41,8 +47,9 @@ impl MemoryDir {
             None => {
                 let canonical = coco_git::find_canonical_git_root(project_root)
                     .unwrap_or_else(|| project_root.to_path_buf());
-                let sanitized = sanitize_project_path(&canonical);
-                config_home.join("projects").join(sanitized).join("memory")
+                let project_paths =
+                    coco_paths::ProjectPaths::new(config_home.to_path_buf(), &canonical);
+                project_paths.memory_dir()
             }
         };
         let team = personal.join("team");
@@ -58,15 +65,6 @@ impl MemoryDir {
     pub fn team_index(&self) -> PathBuf {
         self.team.join(crate::store::ENTRYPOINT_NAME)
     }
-}
-
-/// Sanitize a path for use as a directory name.
-///
-/// Replaces path separators with `-` and strips leading separators.
-/// Mirrors TS `sanitizePath` in `memdir/paths.ts`.
-pub fn sanitize_project_path(path: &Path) -> String {
-    let s = path.to_string_lossy();
-    s.trim_start_matches(['/', '\\']).replace(['/', '\\'], "-")
 }
 
 #[cfg(test)]

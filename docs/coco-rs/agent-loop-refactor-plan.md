@@ -1,11 +1,7 @@
 # coco-rs Agent Loop Refactor Plan
 
 This document is a development guide for refactoring the coco-rs agent loop so
-it aligns with the TypeScript implementation in:
-
-```text
-/lyz/codespace/3rd/claude-code
-```
+it aligns with the TypeScript implementation.
 
 The TypeScript project is the behavioral specification. The Rust
 implementation should not copy TS structure line by line. Instead, it should
@@ -142,28 +138,28 @@ QueryEngine appends those messages and continues.
 ## TS Source Mapping
 
 The following TS files are the primary behavior references. Paths are relative
-to `/lyz/codespace/3rd/claude-code`.
+to the TS project's `src/` directory.
 
 | TS file | Behavior to preserve | Rust target |
 |---------|----------------------|-------------|
-| `src/query.ts` | Main recursive agent loop: build prompt, call model, stream tokens, collect tool calls, execute tools, append results, compact, continue or stop. | `coco-rs/app/query/src/engine.rs`, new `model_runtime.rs`, new `tool_runner.rs` |
-| `src/services/tools/toolExecution.ts` | Single tool lifecycle: tool lookup, input validation, hooks, permission, execution, post hooks, failure hooks, `newMessages`, continuation stop. | new `coco-rs/app/query/src/tool_runner.rs`; some reusable logic may live in `coco-rs/core/tool/src/execution.rs` |
-| `src/services/tools/toolOrchestration.ts` | Partition safe vs unsafe tools, run concurrent-safe tools together, apply context modifiers after batches. | `coco-rs/core/tool/src/executor.rs`, new `ToolCallRunner` scheduling integration |
-| `src/services/tools/StreamingToolExecutor.ts` | Streaming tool scheduling: add tool calls as they finish streaming, drain completed results, preserve same lifecycle as non-streaming tools. | `coco-rs/core/tool/src/executor.rs`, new streaming scheduling wrapper in `tool_runner.rs` |
-| `src/services/tools/toolHooks.ts` | PreToolUse, PostToolUse, PostToolUseFailure behavior and hook output interpretation. | `coco-rs/hooks/src/orchestration.rs`, new `app/query/src/hook_adapter.rs` |
-| `src/tools/AgentTool/AgentTool.tsx` | AgentTool input semantics: sync/background agents, teammate spawn, fork guard, worktree/remote isolation, progress, result shape. | `coco-rs/core/tools/src/tools/agent.rs`, new `AgentRuntime` behind `AgentHandle` |
-| `src/tools/AgentTool/runAgent.ts` | Real subagent runtime: child model, child system prompt, child tools, permission inheritance, MCP, hooks, transcript, result aggregation. | `coco-rs/app/query/src/agent_adapter.rs`, `coco-rs/app/state/src/swarm_agent_handle.rs`, new `agent_runtime.rs` or state runtime |
-| `src/tools/AgentTool/agentToolUtils.ts` | Agent tool filtering, allowed agent types, final AgentTool result shape, background lifecycle helpers. | `coco-rs/core/tools/src/tools/agent_advanced.rs`, `agent_spawn.rs`, AgentRuntime |
-| `src/tools/AgentTool/loadAgentsDir.ts` | Agent definition loading and frontmatter parsing. | `coco-rs/core/tools/src/tools/agent_spawn.rs`, `agent_advanced.rs` |
-| `src/tools/AgentTool/builtInAgents.ts` | Built-in agent definitions and default behavior. | `coco-rs/core/tools/src/tools/agent_spawn.rs` |
-| `src/tools/SkillTool/SkillTool.ts` | SkillTool permission, inline expansion, forked skills, remote skills, `newMessages`, context modifiers. | `coco-rs/core/tools/src/tools/agent.rs`, new `SkillRuntime`, `coco-rs/skills/src/lib.rs`, `skill_advanced.rs` |
-| `src/tools/SkillTool/prompt.ts` | Dynamic SkillTool prompt listing and skill visibility rules. | `coco-rs/skills/src/lib.rs`, `Tool::prompt`, provider-agnostic tool catalog builder |
-| `src/query/tokenBudget.ts` | Token-budget continuation rules. | `coco-rs/app/query/src/budget.rs`, `engine.rs` |
-| `src/utils/attachments.ts` | Attachment injection around turns and tool-generated context. | `coco-rs/core/context`, `coco-rs/core/system-reminder`, `app/query` attachment inbox |
-| `src/utils/messages.ts` | Message creation and API normalization, including tool results. | `coco-rs/core/messages`, `coco-rs/common/types` |
-| `src/utils/permissions/*` | Permission rule evaluation, auto-mode, denial tracking, user approval flow. | `coco-rs/core/permissions`, `app/query` permission controller |
-| `src/utils/hooks/*` | Hook config, execution, aggregation, stop behavior, additional context. | `coco-rs/hooks`, new `HookAdapter` |
-| `src/utils/swarm/*` | In-process teammates, mailbox, team spawn, task state. | `coco-rs/app/state/src/swarm_*` |
+| `query.ts` | Main recursive agent loop: build prompt, call model, stream tokens, collect tool calls, execute tools, append results, compact, continue or stop. | `coco-rs/app/query/src/engine.rs`, new `model_runtime.rs`, new `tool_runner.rs` |
+| `services/tools/toolExecution.ts` | Single tool lifecycle: tool lookup, input validation, hooks, permission, execution, post hooks, failure hooks, `newMessages`, continuation stop. | new `coco-rs/app/query/src/tool_runner.rs`; some reusable logic may live in `coco-rs/core/tool/src/execution.rs` |
+| `services/tools/toolOrchestration.ts` | Partition safe vs unsafe tools, run concurrent-safe tools together, apply context modifiers after batches. | `coco-rs/core/tool/src/executor.rs`, new `ToolCallRunner` scheduling integration |
+| `services/tools/StreamingToolExecutor.ts` | Streaming tool scheduling: add tool calls as they finish streaming, drain completed results, preserve same lifecycle as non-streaming tools. | `coco-rs/core/tool/src/executor.rs`, new streaming scheduling wrapper in `tool_runner.rs` |
+| `services/tools/toolHooks.ts` | PreToolUse, PostToolUse, PostToolUseFailure behavior and hook output interpretation. | `coco-rs/hooks/src/orchestration.rs`, new `app/query/src/hook_adapter.rs` |
+| `tools/AgentTool/AgentTool.tsx` | AgentTool input semantics: sync/background agents, teammate spawn, fork guard, worktree/remote isolation, progress, result shape. | `coco-rs/core/tools/src/tools/agent.rs`, new `AgentRuntime` behind `AgentHandle` |
+| `tools/AgentTool/runAgent.ts` | Real subagent runtime: child model, child system prompt, child tools, permission inheritance, MCP, hooks, transcript, result aggregation. | `coco-rs/app/query/src/agent_adapter.rs`, `coco-rs/app/state/src/swarm_agent_handle.rs`, new `agent_runtime.rs` or state runtime |
+| `tools/AgentTool/agentToolUtils.ts` | Agent tool filtering, allowed agent types, final AgentTool result shape, background lifecycle helpers. | `coco-rs/core/tools/src/tools/agent_advanced.rs`, `agent_spawn.rs`, AgentRuntime |
+| `tools/AgentTool/loadAgentsDir.ts` | Agent definition loading and frontmatter parsing. | `coco-rs/core/tools/src/tools/agent_spawn.rs`, `agent_advanced.rs` |
+| `tools/AgentTool/builtInAgents.ts` | Built-in agent definitions and default behavior. | `coco-rs/core/tools/src/tools/agent_spawn.rs` |
+| `tools/SkillTool/SkillTool.ts` | SkillTool permission, inline expansion, forked skills, remote skills, `newMessages`, context modifiers. | `coco-rs/core/tools/src/tools/agent.rs`, new `SkillRuntime`, `coco-rs/skills/src/lib.rs`, `skill_advanced.rs` |
+| `tools/SkillTool/prompt.ts` | Dynamic SkillTool prompt listing and skill visibility rules. | `coco-rs/skills/src/lib.rs`, `Tool::prompt`, provider-agnostic tool catalog builder |
+| `query/tokenBudget.ts` | Token-budget continuation rules. | `coco-rs/app/query/src/budget.rs`, `engine.rs` |
+| `utils/attachments.ts` | Attachment injection around turns and tool-generated context. | `coco-rs/core/context`, `coco-rs/core/system-reminder`, `app/query` attachment inbox |
+| `utils/messages.ts` | Message creation and API normalization, including tool results. | `coco-rs/core/messages`, `coco-rs/common/types` |
+| `utils/permissions/*` | Permission rule evaluation, auto-mode, denial tracking, user approval flow. | `coco-rs/core/permissions`, `app/query` permission controller |
+| `utils/hooks/*` | Hook config, execution, aggregation, stop behavior, additional context. | `coco-rs/hooks`, new `HookAdapter` |
+| `utils/swarm/*` | In-process teammates, mailbox, team spawn, task state. | `coco-rs/app/state/src/swarm_*` |
 
 ## TS Behavioral Contract
 
@@ -171,7 +167,7 @@ This section is the implementation checklist extracted from the TS project. The
 Rust code does not need to mirror the TS call graph, but it must preserve these
 observable behaviors.
 
-### `src/query.ts`
+### `query.ts`
 
 Rust parity target:
 
@@ -200,7 +196,7 @@ Important TS details:
 - Hook continuation stops are represented as attachment messages and affect the
   next loop decision.
 
-### `src/services/tools/toolExecution.ts`
+### `services/tools/toolExecution.ts`
 
 Rust parity target for a single tool call:
 
@@ -232,7 +228,7 @@ Rust should validate hook-updated input before execution even if TS currently
 relies on hook trust. That is a Rust-side safety improvement and does not change
 the model-visible TS contract.
 
-### `src/services/tools/toolOrchestration.ts`
+### `services/tools/toolOrchestration.ts`
 
 Rust parity target:
 
@@ -253,7 +249,7 @@ Rust equivalent:
   mutating shared state directly.
 - Concurrent tools should not mutate shared app state inline.
 
-### `src/services/tools/StreamingToolExecutor.ts`
+### `services/tools/StreamingToolExecutor.ts`
 
 Rust parity target:
 
@@ -269,7 +265,7 @@ Rust implication:
 The current eager path that directly calls `tool.execute` should be removed or
 rewired so it calls `ToolCallRunner`.
 
-### `src/tools/AgentTool/AgentTool.tsx` And `src/tools/AgentTool/runAgent.ts`
+### `tools/AgentTool/AgentTool.tsx` And `tools/AgentTool/runAgent.ts`
 
 Rust parity target:
 
@@ -290,7 +286,7 @@ Rust implication:
 a real runtime in normal sessions. `NoOpAgentHandle` is only valid for tests or
 explicitly unsupported contexts.
 
-### `src/tools/SkillTool/SkillTool.ts` And `src/tools/SkillTool/prompt.ts`
+### `tools/SkillTool/SkillTool.ts` And `tools/SkillTool/prompt.ts`
 
 Rust parity target:
 
@@ -2573,8 +2569,8 @@ Runtime behavior:
 
 TS reference:
 
-- `src/tools/AgentTool/AgentTool.tsx`
-- `src/tools/AgentTool/runAgent.ts`
+- `tools/AgentTool/AgentTool.tsx`
+- `tools/AgentTool/runAgent.ts`
 
 Rust behavior:
 

@@ -1,4 +1,4 @@
-//! Tool panel widget — running/completed tool executions in side panel.
+//! Tool panel widget — running/completed tool executions in a compact activity surface.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -13,19 +13,19 @@ use ratatui::widgets::Widget;
 
 use crate::constants;
 use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
 use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
-use crate::theme::Theme;
 
 /// Side panel showing tool execution status.
 pub struct ToolPanel<'a> {
     tools: &'a [ToolExecution],
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> ToolPanel<'a> {
-    pub fn new(tools: &'a [ToolExecution], theme: &'a Theme) -> Self {
-        Self { tools, theme }
+    pub fn new(tools: &'a [ToolExecution], styles: UiStyles<'a>) -> Self {
+        Self { tools, styles }
     }
 }
 
@@ -41,10 +41,10 @@ impl Widget for ToolPanel<'_> {
 
         for tool in &self.tools[start..] {
             let (icon, color) = match tool.status {
-                ToolStatus::Queued => ("◦", self.theme.tool_running),
-                ToolStatus::Running => ("⏳", self.theme.tool_running),
-                ToolStatus::Completed => ("✓", self.theme.tool_completed),
-                ToolStatus::Failed => ("✗", self.theme.tool_error),
+                ToolStatus::Queued => ("◦", self.styles.tool_running()),
+                ToolStatus::Running => ("⏳", self.styles.tool_running()),
+                ToolStatus::Completed => ("✓", self.styles.tool_completed()),
+                ToolStatus::Failed => ("✗", self.styles.tool_error()),
             };
 
             let elapsed = tool.elapsed();
@@ -66,14 +66,14 @@ impl Widget for ToolPanel<'_> {
 
             lines.push(Line::from(vec![
                 Span::raw(format!("{icon} ")).fg(color),
-                Span::raw(truncated).fg(self.theme.text),
-                Span::raw(format!(" ({elapsed_str})")).fg(self.theme.text_dim),
+                Span::raw(truncated).fg(self.styles.text()),
+                Span::raw(format!(" ({elapsed_str})")).fg(self.styles.dim()),
             ]));
         }
 
         if lines.is_empty() {
             lines.push(Line::from(
-                Span::raw(format!("  {}", t!("tool.no_active"))).fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("tool.no_active"))).fg(self.styles.dim()),
             ));
         }
 
@@ -81,7 +81,7 @@ impl Widget for ToolPanel<'_> {
             Block::default()
                 .borders(Borders::LEFT)
                 .title(format!(" {} ", t!("tool.title")))
-                .border_style(Style::default().fg(self.theme.border)),
+                .border_style(Style::default().fg(self.styles.border())),
         );
         panel.render(area, buf);
     }

@@ -2,6 +2,8 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
+use crate::presentation::styles::UiStyles;
+use crate::theme::Theme;
 
 #[test]
 fn help_content_renders_grouped_keymap_with_live_bindings() {
@@ -9,7 +11,7 @@ fn help_content_renders_grouped_keymap_with_live_bindings() {
     let state = AppState::default();
     let theme = Theme::default();
 
-    let (title, body, border) = help_content(&state, &theme);
+    let (title, body, border) = help_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Help ");
     assert_eq!(border, theme.primary);
@@ -31,7 +33,7 @@ fn help_content_localizes_to_zh() {
     let state = AppState::default();
     let theme = Theme::default();
 
-    let (title, body, _border) = help_content(&state, &theme);
+    let (title, body, _border) = help_content(&state, UiStyles::new(&theme));
 
     // help.title is " 帮助 " in zh-CN (single border-padded spaces).
     assert_eq!(title.trim(), "帮助");

@@ -22,19 +22,19 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 pub struct LocalCommandLog<'a> {
     entries: &'a VecDeque<String>,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
     max_rows: u16,
 }
 
 impl<'a> LocalCommandLog<'a> {
-    pub fn new(entries: &'a VecDeque<String>, theme: &'a Theme) -> Self {
+    pub fn new(entries: &'a VecDeque<String>, styles: UiStyles<'a>) -> Self {
         Self {
             entries,
-            theme,
+            styles,
             max_rows: 8,
         }
     }
@@ -64,8 +64,8 @@ impl Widget for LocalCommandLog<'_> {
             .skip(start)
             .map(|entry| {
                 Line::from(vec![
-                    Span::styled("$ ", Style::default().fg(self.theme.accent).bold()),
-                    Span::styled(entry.as_str(), Style::default().fg(self.theme.text)),
+                    Span::styled("$ ", Style::default().fg(self.styles.accent()).bold()),
+                    Span::styled(entry.as_str(), Style::default().fg(self.styles.text())),
                 ])
             })
             .collect();
@@ -76,7 +76,7 @@ impl Widget for LocalCommandLog<'_> {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(t!("local_command_log.panel_title").to_string())
-                    .border_style(Style::default().fg(self.theme.border)),
+                    .border_style(Style::default().fg(self.styles.border())),
             )
             .render(area, buf);
     }

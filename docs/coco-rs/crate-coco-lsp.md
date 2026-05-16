@@ -1,6 +1,6 @@
 # coco-lsp — Crate Plan
 
-TS source: `src/services/lsp/` (7 files, ~3K LOC)
+TS source: `services/lsp/` (7 files, ~3K LOC)
 cocode-rs source: `lsp/` (516K LOC) — HYBRID strategy (cocode-rs base + TS diagnostic tracking + plugin discovery)
 
 cocode-rs provides the production-ready LSP infrastructure:

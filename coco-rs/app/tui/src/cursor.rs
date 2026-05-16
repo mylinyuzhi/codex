@@ -1,12 +1,9 @@
 //! Cursor decision — single point of truth.
 //!
-//! `render::render` returns a [`FrameLayout`]; this module turns that
-//! plus `AppState` into an optional [`CursorClaim`]. `Tui::draw` collects
-//! the claim from the render closure and applies it via crossterm
-//! `queue!(SetCursorStyle, MoveTo, Show)` post-draw. No widget calls
-//! `Frame::set_cursor_position` anywhere; ratatui's own cursor handling
-//! sees `cursor_position == None` and emits a `Hide`, then our post-draw
-//! pin overrides with the final position + style.
+//! The active surface renderer returns a [`FrameLayout`]; this module turns
+//! that plus `AppState` into an optional [`CursorClaim`]. `SurfaceTerminal`
+//! applies the claim after drawing the retained viewport. No widget calls
+//! `Frame::set_cursor_position` directly.
 //!
 //! Why post-draw instead of `Frame::set_cursor_position` inside the
 //! closure: ratatui 0.30's `Frame` exposes no `set_cursor_style`, so the
@@ -24,7 +21,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::state::Overlay;
-use crate::state::PromptMode;
+use crate::widgets::InputRenderModel;
 
 /// What the cursor should look like at the end of this frame.
 ///
@@ -73,52 +70,37 @@ pub fn compute_cursor(state: &AppState, input_area: Rect) -> Option<CursorClaim>
 /// "cursor floats to the status bar on focus regain" bug — the cursor
 /// always has a defined home.
 fn compute_input_xy(state: &AppState, area: Rect) -> (u16, u16) {
-    // While streaming we render in "queue input" mode and force Normal
-    // prompt: the `! ` / `# ` indicators don't apply to queued messages.
-    // Mirrors `render_input` at render.rs:671-675.
     let is_streaming = state.is_streaming();
-    let prompt_mode = if is_streaming {
-        PromptMode::Normal
-    } else {
-        state.ui.input.prompt_mode()
-    };
-    let is_empty = state.ui.input.is_empty();
-
-    // The indicator owns 1 char + optional space when in Bash / Memory
-    // mode. The visible text starts after that, and the cursor's byte
-    // offset is computed against the *visible* slice.
-    let prefix_consumed: usize = if is_empty || prompt_mode == PromptMode::Normal {
-        0
-    } else {
-        let body = &state.ui.input.text()[1..];
-        1 + if body.starts_with(' ') { 1 } else { 0 }
-    };
-
-    // When the command palette is open, the input bar mirrors `/<filter>`
-    // and cursor follows the filter end — bypasses the textarea's own
-    // cursor position. Same logic as render.rs:714-716.
     let command_palette_filter: Option<&str> = match state.ui.overlay.as_ref() {
         Some(Overlay::CommandPalette(cp)) => Some(cp.filter.as_str()),
         _ => None,
     };
+    let model = InputRenderModel::build(
+        &state.ui.input,
+        is_streaming,
+        state.is_plan_mode(),
+        state.session.prompt_suggestions.last().map(String::as_str),
+        !state.session.queued_commands.is_empty(),
+        command_palette_filter,
+    );
 
-    // The indicator span ("❯ " / "! " / "# " / "~ ") is always 2 cols.
+    // The indicator span ("❯ " / "! " / "~ ") is always 2 cols.
     let indicator_width: u16 = 2;
 
-    let raw_cursor: i32 = if let Some(filter) = command_palette_filter {
+    let raw_cursor: i32 = if let Some(filter) = model.command_palette_filter.as_deref() {
         // 1 col for the leading `/` + visible filter width.
         1 + UnicodeWidthStr::width(filter) as i32
     } else {
         // Display column = width of the visible text up to the cursor's
         // byte offset. Handles CJK ("你好" with cursor at end → col 4).
         let text = state.ui.input.text();
-        let visible_text = &text[prefix_consumed..];
+        let visible_text = &text[model.prefix_consumed..];
         let cursor_byte = state
             .ui
             .input
             .textarea
             .cursor()
-            .saturating_sub(prefix_consumed);
+            .saturating_sub(model.prefix_consumed);
         let cursor_byte = cursor_byte.min(visible_text.len());
         UnicodeWidthStr::width(&visible_text[..cursor_byte]) as i32
     };

@@ -3,6 +3,7 @@
 use ratatui::prelude::Color;
 
 use super::layout;
+use super::styles::UiStyles;
 use crate::i18n::t;
 use crate::state::OTHER_OPTION_DISPLAY;
 use crate::state::OTHER_OPTION_LABEL;
@@ -12,9 +13,11 @@ use crate::state::QuestionFocus;
 use crate::state::QuestionItem;
 use crate::state::QuestionOverlay;
 use crate::state::RiskLevel;
-use crate::theme::Theme;
 
-pub(crate) fn permission_content(p: &PermissionOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn permission_content(
+    p: &PermissionOverlay,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
     let detail = permission_detail(&p.detail);
     let risk_badge = match p.risk_level {
         Some(RiskLevel::Low) => t!("dialog.risk_low").to_string(),
@@ -55,8 +58,8 @@ pub(crate) fn permission_content(p: &PermissionOverlay, theme: &Theme) -> (Strin
     };
 
     let border = match p.risk_level {
-        Some(RiskLevel::High) => theme.error,
-        _ => theme.warning,
+        Some(RiskLevel::High) => styles.error(),
+        _ => styles.warning(),
     };
 
     (
@@ -69,14 +72,17 @@ pub(crate) fn permission_content(p: &PermissionOverlay, theme: &Theme) -> (Strin
     )
 }
 
-pub(crate) fn question_content(q: &QuestionOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn question_content(
+    q: &QuestionOverlay,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
     let title = t!("dialog.title_question").to_string();
 
     if q.questions.is_empty() {
         return (
             title,
             t!("dialog.hints_nav_select").to_string(),
-            theme.primary,
+            styles.primary(),
         );
     }
 
@@ -140,7 +146,7 @@ pub(crate) fn question_content(q: &QuestionOverlay, theme: &Theme) -> (String, S
         body.push_str("  Space: toggle");
     }
 
-    (title, body, theme.primary)
+    (title, body, styles.primary())
 }
 
 fn permission_detail(detail: &PermissionDetail) -> String {

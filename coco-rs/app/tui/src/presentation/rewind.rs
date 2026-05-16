@@ -3,6 +3,7 @@
 use ratatui::prelude::Color;
 
 use super::layout;
+use super::styles::UiStyles;
 use crate::constants;
 use crate::i18n::t;
 use crate::state::DiffStatsPreview;
@@ -10,21 +11,20 @@ use crate::state::rewind::RestoreType;
 use crate::state::rewind::RewindOverlay;
 use crate::state::rewind::RewindPhase;
 use crate::state::rewind::RewindableMessage;
-use crate::theme::Theme;
 
 pub(crate) fn rewind_overlay_content(
     overlay: &RewindOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     match overlay.phase {
-        RewindPhase::MessageSelect => message_select(overlay, theme),
-        RewindPhase::RestoreOptions => restore_options(overlay, theme),
-        RewindPhase::SummarizeFeedback => summarize_feedback(overlay, theme),
-        RewindPhase::Confirming => confirming(overlay, theme),
+        RewindPhase::MessageSelect => message_select(overlay, styles),
+        RewindPhase::RestoreOptions => restore_options(overlay, styles),
+        RewindPhase::SummarizeFeedback => summarize_feedback(overlay, styles),
+        RewindPhase::Confirming => confirming(overlay, styles),
     }
 }
 
-fn confirming(overlay: &RewindOverlay, theme: &Theme) -> (String, String, Color) {
+fn confirming(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
     let body = if overlay.pending_summarize.is_some() {
         t!("dialog.rewind_summarizing")
     } else {
@@ -33,11 +33,11 @@ fn confirming(overlay: &RewindOverlay, theme: &Theme) -> (String, String, Color)
     (
         t!("dialog.title_rewind").to_string(),
         body.to_string(),
-        theme.accent,
+        styles.accent(),
     )
 }
 
-fn summarize_feedback(overlay: &RewindOverlay, theme: &Theme) -> (String, String, Color) {
+fn summarize_feedback(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
     let prompt = t!("dialog.rewind_summarize_prompt");
     let typed = if overlay.summarize_feedback.is_empty() {
         t!("dialog.rewind_summarize_placeholder").into_owned()
@@ -50,11 +50,11 @@ fn summarize_feedback(overlay: &RewindOverlay, theme: &Theme) -> (String, String
             "{prompt}\n\n  > {typed}\n\n{}",
             t!("dialog.hints_summarize_feedback")
         ),
-        theme.accent,
+        styles.accent(),
     )
 }
 
-fn message_select(overlay: &RewindOverlay, theme: &Theme) -> (String, String, Color) {
+fn message_select(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
     if picker_is_empty(overlay) {
         return (
             t!("dialog.title_rewind").to_string(),
@@ -63,7 +63,7 @@ fn message_select(overlay: &RewindOverlay, theme: &Theme) -> (String, String, Co
                 t!("dialog.rewind_no_messages_inline"),
                 t!("dialog.esc_close")
             ),
-            theme.accent,
+            styles.accent(),
         );
     }
 
@@ -117,7 +117,7 @@ fn message_select(overlay: &RewindOverlay, theme: &Theme) -> (String, String, Co
             items.join("\n"),
             t!("dialog.hints_nav_select_cancel")
         ),
-        theme.accent,
+        styles.accent(),
     )
 }
 
@@ -178,7 +178,7 @@ fn file_label(stats: &DiffStatsPreview) -> Option<String> {
     }
 }
 
-fn restore_options(overlay: &RewindOverlay, theme: &Theme) -> (String, String, Color) {
+fn restore_options(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
     let selected_option =
         layout::selected_in_bounds(overlay.option_selected, overlay.available_options.len());
     let items: Vec<String> = overlay
@@ -261,7 +261,7 @@ fn restore_options(overlay: &RewindOverlay, theme: &Theme) -> (String, String, C
             items.join("\n"),
             t!("dialog.hints_nav_confirm_back")
         ),
-        theme.accent,
+        styles.accent(),
     )
 }
 

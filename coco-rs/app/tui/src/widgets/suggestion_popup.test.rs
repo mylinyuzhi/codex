@@ -13,6 +13,7 @@ use ratatui::layout::Rect;
 
 use super::SuggestionItem;
 use super::SuggestionPopup;
+use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
 
 fn item(label: &str, description: Option<&str>) -> SuggestionItem {
@@ -28,7 +29,7 @@ fn item(label: &str, description: Option<&str>) -> SuggestionItem {
 /// from the anchor, so the popup ends up filling the rows just above.
 fn render_popup(items: &[SuggestionItem], selected: usize, w: u16, h: u16) -> String {
     let theme = Theme::default();
-    let popup = SuggestionPopup::new(items, &theme).selected(selected);
+    let popup = SuggestionPopup::new(items, UiStyles::new(&theme)).selected(selected);
 
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();

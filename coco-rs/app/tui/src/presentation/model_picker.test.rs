@@ -1,5 +1,7 @@
 use super::*;
 use crate::i18n::locale_test_guard;
+use crate::presentation::styles::UiStyles;
+use crate::theme::Theme;
 use coco_types::ReasoningEffort;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -73,7 +75,7 @@ fn render_snapshot(width: u16, height: u16, overlay: &ModelPickerOverlay) -> Str
     let mut terminal = Terminal::new(backend).unwrap();
     let theme = Theme::default();
     terminal
-        .draw(|frame| render_model_picker(frame, frame.area(), overlay, &theme))
+        .draw(|frame| render_model_picker(frame, frame.area(), overlay, UiStyles::new(&theme)))
         .unwrap();
     let buf = terminal.backend().buffer().clone();
     let mut out = String::new();

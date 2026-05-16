@@ -300,9 +300,14 @@ pub async fn handle_command(
                 state.ui.overlay,
                 Some(crate::state::Overlay::MemoryDialog(_))
             ) {
-                state.ui.add_toast(crate::state::ui::Toast::info(
-                    crate::i18n::t!("toast.memory_cancelled").to_string(),
-                ));
+                let text = crate::i18n::t!("toast.memory_cancelled").to_string();
+                state
+                    .session
+                    .add_message(crate::state::session::ChatMessage::system_text(
+                        uuid::Uuid::new_v4().to_string(),
+                        text.clone(),
+                    ));
+                state.ui.add_toast(crate::state::ui::Toast::info(text));
             }
             if state.has_overlay() {
                 state.ui.dismiss_overlay();
@@ -684,7 +689,18 @@ pub async fn handle_command(
         }
 
         // ── External editor / clipboard ──
-        TuiCommand::OpenExternalEditor | TuiCommand::OpenPlanEditor => true,
+        TuiCommand::OpenExternalEditor => {
+            let _ = command_tx
+                .send(UserCommand::OpenPromptEditor {
+                    initial_content: state.ui.input.text().to_string(),
+                })
+                .await;
+            true
+        }
+        TuiCommand::OpenPlanEditor => {
+            let _ = command_tx.send(UserCommand::OpenPlanEditor).await;
+            true
+        }
         TuiCommand::PasteFromClipboard => {
             clipboard::paste_from_clipboard(state).await;
             true

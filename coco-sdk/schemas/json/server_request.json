@@ -97,6 +97,25 @@
           "$ref": "#/definitions/ServerCancelRequestParams"
         }
       }
+    },
+    {
+      "description": "Forward an MCP-server-initiated elicitation request to the SDK client, which renders a form and replies with the user's answer. Expected response: `ClientRequest::ElicitationResolve` (delivered as the synchronous JSON-RPC response to this request — the SDK reply payload matches `ElicitationResolveParams`).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/requestElicitation"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/RequestElicitationParams"
+        }
+      }
     }
   ],
   "definitions": {
@@ -206,6 +225,28 @@
           "type": "string"
         },
         "server_name": {
+          "type": "string"
+        }
+      }
+    },
+    "RequestElicitationParams": {
+      "description": "Forward an MCP server's elicitation request to the SDK client.\n\nThe MCP protocol lets servers ask the user for structured input (form fields with a JSON schema). When the bound MCP transport fires its `elicitation/create` callback, the SDK server bridges it to the connected SDK client via this `ServerRequest`. The client renders a form and returns an [`ElicitationResolveParams`] payload as the synchronous JSON-RPC response.",
+      "type": "object",
+      "required": [
+        "elicitation",
+        "mcp_server_name",
+        "request_id"
+      ],
+      "properties": {
+        "elicitation": {
+          "description": "JSON serialization of the rmcp `Elicitation` (`CreateElicitationRequestParam`): contains the human-readable `message` and the requested-field JSON schema."
+        },
+        "mcp_server_name": {
+          "description": "Which MCP server originated the elicitation. SDK clients surface this in the UI so users know who is asking.",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "Correlation id (SDK must echo in the response payload).",
           "type": "string"
         }
       }

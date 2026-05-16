@@ -1,6 +1,6 @@
 # coco-config — Crate Plan
 
-TS source: `src/utils/settings/`, `src/utils/model/`, `src/utils/effort.ts`, `src/utils/fastMode.ts`, `src/constants/`, `src/migrations/`, `src/utils/envUtils.ts`, `src/utils/config.ts`
+TS source: `utils/settings/`, `utils/model/`, `utils/effort.ts`, `utils/fastMode.ts`, `constants/`, `migrations/`, `utils/envUtils.ts`, `utils/config.ts`
 
 ## Scope
 

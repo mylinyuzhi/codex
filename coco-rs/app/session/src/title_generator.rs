@@ -117,17 +117,21 @@ fn normalize_title(raw: &str) -> Option<String> {
 ///
 /// Returns `true` if the title was applied, `false` if the session
 /// already had one.
+///
+/// Persistence runs through [`SessionManager::set_title`], which
+/// appends a `CustomTitle` metadata entry to the session's JSONL
+/// transcript. There is no separate sidecar file (pre-fix coco-rs
+/// wrote a `{id}.json`; TS does not).
 pub fn apply_title(
     manager: &crate::SessionManager,
     session_id: &str,
     title: String,
 ) -> crate::Result<bool> {
-    let mut session = manager.load(session_id)?;
+    let session = manager.load(session_id)?;
     if session.title.as_deref().is_some_and(|t| !t.is_empty()) {
         return Ok(false);
     }
-    session.title = Some(title);
-    manager.save(&session)?;
+    manager.set_title(session_id, &title)?;
     Ok(true)
 }
 

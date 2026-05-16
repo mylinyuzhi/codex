@@ -15,20 +15,20 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
 use crate::state::ui::StashedInput;
-use crate::theme::Theme;
 
 const PREVIEW_CHARS: usize = 40;
 
 /// Stash-present indicator: `↺ Stashed: <preview>`.
 pub struct StashNotice<'a> {
     stash: &'a StashedInput,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> StashNotice<'a> {
-    pub fn new(stash: &'a StashedInput, theme: &'a Theme) -> Self {
-        Self { stash, theme }
+    pub fn new(stash: &'a StashedInput, styles: UiStyles<'a>) -> Self {
+        Self { stash, styles }
     }
 
     /// Returns `true` when this notice should occupy a row in the layout.
@@ -54,10 +54,10 @@ impl Widget for StashNotice<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let preview = self.truncated_preview();
         let line = Line::from(vec![
-            Span::raw(" ↺ ").fg(self.theme.accent),
-            Span::raw(t!("input.stash_label").to_string()).fg(self.theme.text_dim),
-            Span::raw(" ").fg(self.theme.text_dim),
-            Span::raw(preview).fg(self.theme.text_dim).italic(),
+            Span::raw(" ↺ ").fg(self.styles.accent()),
+            Span::raw(t!("input.stash_label").to_string()).fg(self.styles.dim()),
+            Span::raw(" ").fg(self.styles.dim()),
+            Span::raw(preview).fg(self.styles.dim()).italic(),
         ]);
         Paragraph::new(line)
             .style(Style::default())

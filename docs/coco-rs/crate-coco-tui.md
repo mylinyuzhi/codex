@@ -31,8 +31,9 @@ Primary current sources:
 
 Reference-only sources:
 
-- `/lyz/codespace/3rd/claude-code` is a behavior reference for
-  provider-neutral UI flows, not a Rust module template.
+- The TS project is a behavior reference for provider-neutral UI flows, not a
+  Rust module template. TS file paths in these docs are relative to that
+  project's `src/` directory.
 - `codex-rs/tui` is a terminal-mechanics reference for ratatui patterns.
 - `cocode-rs/` and `codex-rs/` are not the active implementation.
 
@@ -308,8 +309,9 @@ Current behavior:
   reasons.
 - Production rows come from `SessionState.model_catalog` and
   `SessionState.provider_statuses`.
-- `update/show.rs` keeps a builtin fallback that infers provider from model id
-  only when the catalog is empty, mainly for tests or pre-bootstrap paths.
+- An empty `SessionState.model_catalog` yields no model rows. Tests and
+  pre-bootstrap mocks seed catalog entries explicitly; production does not
+  infer provider from model-id prefixes.
 
 Target product changes are documented in `ui/agent-console-design.md`;
 terminal-surface constraints are documented in
@@ -317,25 +319,24 @@ terminal-surface constraints are documented in
 
 ## Memory Baseline
 
-Current memory UX has two paths:
+Current memory UX has one entrypoint:
 
 - `/memory` opens `Overlay::MemoryDialog` from
   `TuiOnlyEvent::OpenMemoryDialog`.
-- The legacy memory prefix path dispatches a runner command that appends a
-  bullet directly to `CLAUDE.md`.
+- Leading `#` is ordinary chat text; the legacy prompt-prefix append path has
+  been removed.
 
-The `/memory` dialog currently receives path/label/scope rows only:
+The `/memory` dialog receives typed rows:
 
 - managed
 - user
 - project
 - project-local
 - subdirectory
+- row kind (`file`, `folder`, or `toggle`), currently produced as file rows
 
-The dialog opens the selected file through current TUI/editor logic and uses
-simple string rendering. The target is a row-kind-aware memory picker with
-file/folder/toggle rows and side effects routed through a narrow editor/opener
-service.
+The dialog opens file rows through the CLI editor/opener boundary. Non-file
+rows are rendered with their kind tag and are not treated as editor targets.
 
 ## Autocomplete Baseline
 
@@ -367,7 +368,7 @@ Top-level rendering lives in `render.rs`:
 - header
 - lifecycle and status banners
 - conversation area
-- optional expanded task/teammate panel
+- inline live activity surface
 - input area
 - queued command list
 - status bar
@@ -392,7 +393,8 @@ The top-level layout is a full-screen ratatui frame:
 
 ```text
 header
-main conversation plus optional expanded task/teammate panel
+main conversation
+inline live activity surface
 input and queued-command area
 status bar
 overlays and toasts above the base frame
@@ -400,9 +402,9 @@ overlays and toasts above the base frame
 
 The automatic right-side tool execution list was removed to keep the transcript
 as the primary surface and avoid a second transient projection of tool state.
-Expanded task and teammate panels remain explicit views for now. One known debt
-is that `render.rs` still reads a typed environment helper to decide
-coordinator mode during render.
+Task, teammate, coordinator, stream, and tool status now enter the same inline
+activity view above the composer. Coordinator panel selection is resolved into
+`UiState` by the CLI runner before rendering.
 
 ## Theme and Display Settings
 
@@ -415,9 +417,13 @@ TUI theme state is separate from `RuntimeConfig`:
 Display settings come from `settings.json` via the CLI runner and hot-reload
 into `UiState.display_settings`.
 
-Current widgets commonly read `Theme` fields directly. The target design adds a
-minimal semantic `UiStyles` facade so new presentation code depends on style
-intent rather than palette field names.
+`UiStyles` is the semantic facade over the active `Theme`. It is used by
+overlay frame/content helpers, composer chrome, footer/toast/activity,
+lifecycle banners, stash/queue/suggestion widgets, teammate header, and the
+request/confirm/model/picker/settings presentation surfaces. Rich transcript /
+chat, markdown/diff rendering, and specialist panels consume the same facade;
+the top-level renderer constructs `UiStyles` once from `UiState.theme` and
+passes the facade through concrete renderers.
 
 ## Notifications and Clipboard
 
@@ -443,16 +449,20 @@ These are current facts, not target design:
 
 | Area | Current state | Target direction |
 |---|---|---|
-| Memory prompt mode | `PromptMode::Memory`, `UserCommand::SubmitMemory`, `TuiOnlyEvent::MemorySaved`, and `MessageContent::MemoryInput` exist for the legacy prefix path. | Remove the prefix path. `/memory` becomes the only memory entrypoint. |
-| Direct memory append | `app/cli/src/tui_runner.rs::run_prompt_mode_memory` appends a bullet directly to `CLAUDE.md`. | Route memory editing through the `/memory` picker and editor/opener service. |
-| Memory dialog payload | `OpenMemoryDialog` carries path/label/scope only. | Expand to row-kind-aware memory rows with file/folder/toggle semantics. |
-| Input rendering | `render.rs::render_input` and `widgets/input.rs` both implement input presentation details. | Collapse to a single input view model and renderer. |
-| Render-time config/env decisions | `render.rs` calls typed config env helpers for coordinator mode. | Resolve display mode before render and store it in state/view model. |
-| Theme coupling | Widgets and overlay renderers read `Theme` fields directly. | New presentation code goes through `UiStyles`; migrate existing widgets incrementally. |
+| Memory prompt mode | Removed. `#` is ordinary chat text; TS `components/PromptInput/inputModes.ts` recognizes only `!` as an input mode character. | Keep `/memory` as the only memory entrypoint. |
+| Direct memory append | Removed. The input bar no longer writes directly to `CLAUDE.md`. | Keep memory editing routed through the `/memory` picker and editor/opener service. |
+| Memory dialog payload | `OpenMemoryDialog` carries path/label/scope plus row-kind-aware file/folder/toggle semantics. Current producer emits file rows. | Keep renderer and selection behavior keyed by row kind. |
+| Input rendering | `widgets/input.rs` owns the input view model and renderer; `render.rs` only wires state into the widget. | Keep composer presentation centralized. |
+| Render-time config/env decisions | Coordinator mode is resolved into `UiState` before render; `render.rs` no longer reads config/env helpers. | Keep display decisions in state/view models. |
+| Theme coupling | Overlay, chrome, input, transcript/chat, markdown/diff, and specialist widget renderers use `UiStyles`. Direct `Theme` access is limited to theme loading/state and the top-level `UiStyles::new(&state.ui.theme)` adapter, plus tests that create default themes. | Keep new and changed surfaces on `UiStyles`; add semantic accessors instead of passing `Theme` into renderers. |
 | Overlay rendering | Many overlays are still string-body dialogs. | Complex overlays move to typed view models and shared dialog/picker/pager primitives. |
-| Model picker fallback | Provider inference exists when the session catalog is empty. | Keep inference out of production paths; constrain fallback to tests/pre-bootstrap. |
-| Editor spawning | External editor logic is split across update/runner paths. | Route all editor/open intents through one CLI/service boundary. |
-| Command dialogs | Some slash command `DialogSpec` variants report dialog-pending status instead of opening a TUI overlay. | Add typed overlays or document intentional non-support per command. |
+| Model picker fallback | Removed. Empty catalogs no longer synthesize builtin rows or infer providers from model ids. | Keep production model rows catalog-backed; tests/pre-bootstrap mocks seed catalog entries explicitly. |
+| Editor/open effects | `/memory`, prompt external-editor, and plan-editor requests route through the CLI command boundary. The runner resolves the concrete session plan file from runtime config, asks the TUI App to leave raw mode / alt-screen before launching an editor, and the TUI restores modes before applying completion events. | Keep editor/open effects in the runner; future opener flows should reuse the same terminal handoff. |
+| Conversation/diff rendering | Structured diff row parsing, source-backed transcript presentation cells, streaming-tail blocks, same-hook lifecycle batching, task-notification/background-bash/teammate-shutdown batching, active streaming/busy-tail cells, and pager windows live in presentation view models before widgets render ratatui lines. | Keep future conversation surfaces and display-collapse reducers on these view models before adding widget logic. |
+| Activity surface | `presentation::activity::TurnActivityView` resolves whether the main area uses no activity, a plan surface, an agent/coordinator surface, or a general activity surface. `widgets::ActivityPanel` renders the unified inline row view model directly above the composer. | Keep live plan/tool/agent/activity rows behind the presentation view model before ratatui rendering. |
+| Input/suggestions/footer | `widgets/input.rs` owns the composer render model; `presentation::input::InlinePopupView` resolves autocomplete and command-palette popup rows; `presentation::footer::FooterView` resolves status-bar and exit-prompt props. | Keep suggestions, queued hints, and footer/status props on presentation view models before render. |
+| Slash command parity | `ui/slash-command-audit.md` accounts for TS command names as implemented, compatibility-thinned, backend-specific, or deliberately omitted. `/help` includes provider-neutral commands such as `/output-style`, `/sandbox`, `/session`, `/usage`, `/add-dir`, `/doctor`, and `/hooks`. | Keep command-surface gaps explicit in the audit and `commands/CLAUDE.md` instead of treating TS-only commands as TUI bugs. |
+| Command dialogs | Wired dialogs are rewind, memory, and model. Dormant plugin/MCPB/confirm `DialogSpec` variants have no current built-in producers; if produced, the dispatcher emits a transcript-visible `dialog_pending` status. | Add typed overlays when a real producer appears; do not leave silent gaps. |
 
 ## Testing
 

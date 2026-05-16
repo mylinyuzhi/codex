@@ -1,6 +1,5 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
-assertion_line: 294
 expression: output
 ---
  ╭─╮ ╭─╮   COCO v0.0.0                                                          
@@ -11,6 +10,6 @@ expression: output
 ❯ Plan the implementation                                                       
                                                                                 
  Plan Mode ─────────────────────────────────────────────────────────────────────
-❯ Type a message...                                                             
+❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
  opus-4 * auto, plan mode on | ↑0 ↓0 · cache 0% | ctx 0% | 1 msgs

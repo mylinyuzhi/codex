@@ -5,22 +5,22 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// A single-line progress bar: `[████████░░░░░░░░░░░░] 42%`
 pub struct ProgressBarWidget<'a> {
     progress: f64,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
     label: Option<&'a str>,
     filled_char: char,
     empty_char: char,
 }
 
 impl<'a> ProgressBarWidget<'a> {
-    pub fn new(progress: f64, theme: &'a Theme) -> Self {
+    pub fn new(progress: f64, styles: UiStyles<'a>) -> Self {
         Self {
             progress: progress.clamp(0.0, 1.0),
-            theme,
+            styles,
             label: None,
             filled_char: '\u{2588}', // █
             empty_char: '\u{2591}',  // ░
@@ -79,11 +79,11 @@ impl Widget for ProgressBarWidget<'_> {
                 break;
             }
             let style = if ch == self.filled_char {
-                Style::default().fg(self.theme.progress_bar)
+                Style::default().fg(self.styles.progress_bar())
             } else if ch == self.empty_char {
-                Style::default().fg(self.theme.context_free)
+                Style::default().fg(self.styles.context_free())
             } else {
-                Style::default().fg(self.theme.text_dim)
+                Style::default().fg(self.styles.dim())
             };
             buf.set_string(x, y, ch.to_string(), style);
             x += 1;

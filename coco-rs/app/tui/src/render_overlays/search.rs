@@ -3,12 +3,12 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::picker;
+use crate::presentation::styles::UiStyles;
 use crate::state::GlobalSearchOverlay;
-use crate::theme::Theme;
 
 pub(super) fn global_search_content(
     g: &GlobalSearchOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    picker::global_search_content(g, theme)
+    picker::global_search_content(g, styles)
 }

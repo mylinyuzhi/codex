@@ -56,7 +56,7 @@ pub(super) fn try_render<'a>(
             // gutter so wrapped prose stays at column 0.
             let mut md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
                 text,
-                w.theme,
+                w.styles,
                 w.width,
                 w.syntax_highlighting,
             );
@@ -69,7 +69,7 @@ pub(super) fn try_render<'a>(
                 // `<NoSelect minWidth={2}>⏺</NoSelect><Markdown>…`.
                 let dot_span = Span::styled(
                     format!("{ASSISTANT_DOT} "),
-                    ratatui::style::Style::default().fg(w.theme.assistant_message),
+                    ratatui::style::Style::default().fg(w.styles.assistant_message()),
                 );
                 let leading_is_indent = first
                     .spans
@@ -85,7 +85,7 @@ pub(super) fn try_render<'a>(
                 // Empty markdown (e.g. blank response) — still emit the
                 // marker line so the turn boundary is visible.
                 lines.push(Line::from(
-                    Span::raw(ASSISTANT_DOT.to_string()).fg(w.theme.assistant_message),
+                    Span::raw(ASSISTANT_DOT.to_string()).fg(w.styles.assistant_message()),
                 ));
             }
             lines.extend(md_lines);
@@ -119,7 +119,7 @@ pub(super) fn try_render<'a>(
                 .to_string();
                 lines.push(Line::from(
                     Span::raw(t!("chat.thinking_header", suffix = suffix.as_str()).to_string())
-                        .fg(w.theme.thinking)
+                        .fg(w.styles.thinking())
                         .dim()
                         .italic(),
                 ));
@@ -131,14 +131,14 @@ pub(super) fn try_render<'a>(
                 for line in content.lines().take(constants::THINKING_PREVIEW_LINES) {
                     lines.push(Line::from(
                         Span::raw(format!("    {line}"))
-                            .fg(w.theme.thinking)
+                            .fg(w.styles.thinking())
                             .dim()
                             .italic(),
                     ));
                 }
                 if content.lines().count() > constants::THINKING_PREVIEW_LINES {
                     lines.push(Line::from(
-                        Span::raw("    …").fg(w.theme.thinking).dim().italic(),
+                        Span::raw("    …").fg(w.styles.thinking()).dim().italic(),
                     ));
                 }
             } else {
@@ -148,7 +148,7 @@ pub(super) fn try_render<'a>(
                 // its own modifier wording.
                 lines.push(Line::from(
                     Span::raw(t!("chat.thinking_collapsed").to_string())
-                        .fg(w.theme.thinking)
+                        .fg(w.styles.thinking())
                         .dim()
                         .italic(),
                 ));
@@ -161,7 +161,7 @@ pub(super) fn try_render<'a>(
             // can tell at a glance the block isn't finalized.
             lines.push(Line::from(
                 Span::raw(t!("chat.redacted_thinking").to_string())
-                    .fg(w.theme.thinking)
+                    .fg(w.styles.thinking())
                     .dim()
                     .italic(),
             ));
@@ -182,10 +182,10 @@ pub(super) fn try_render<'a>(
             // `bold` tool name plus the inline preview match the TS
             // layout `<dot> <bold name>(<preview>)`.
             let color = match status {
-                ToolUseStatus::Queued => w.theme.text_dim,
-                ToolUseStatus::Running => w.theme.tool_running,
-                ToolUseStatus::Completed => w.theme.tool_completed,
-                ToolUseStatus::Failed => w.theme.tool_error,
+                ToolUseStatus::Queued => w.styles.dim(),
+                ToolUseStatus::Running => w.styles.tool_running(),
+                ToolUseStatus::Completed => w.styles.tool_completed(),
+                ToolUseStatus::Failed => w.styles.tool_error(),
             };
             let preview = if input_preview.len() > constants::TOOL_DESCRIPTION_MAX_CHARS as usize {
                 format!(
@@ -208,9 +208,9 @@ pub(super) fn try_render<'a>(
                 .unwrap_or_default();
             lines.push(Line::from(vec![
                 Span::raw("  ● ").fg(color),
-                Span::raw(tool_name.clone()).fg(w.theme.text).bold(),
-                Span::raw(format!("({preview})")).fg(w.theme.text_dim),
-                Span::raw(elapsed_badge).fg(w.theme.text_dim).dim(),
+                Span::raw(tool_name.clone()).fg(w.styles.text()).bold(),
+                Span::raw(format!("({preview})")).fg(w.styles.dim()),
+                Span::raw(elapsed_badge).fg(w.styles.dim()).dim(),
             ]));
             Some(())
         }
@@ -219,14 +219,14 @@ pub(super) fn try_render<'a>(
             content,
         } => {
             lines.push(Line::from(vec![
-                Span::raw("  📋 ").fg(w.theme.accent),
+                Span::raw("  📋 ").fg(w.styles.accent()),
                 Span::raw(format!("[advisor:{advisor_id}] "))
-                    .fg(w.theme.text_dim)
+                    .fg(w.styles.dim())
                     .bold(),
             ]));
             let md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
                 content,
-                w.theme,
+                w.styles,
                 w.width,
                 w.syntax_highlighting,
             );

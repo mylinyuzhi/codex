@@ -1,7 +1,7 @@
 # coco-voice — Crate Plan
 
 Directory: `voice/` (v2)
-TS source: `src/voice/` (1 file, 54 LOC), `src/services/voice.ts` (525 LOC), `src/services/voiceKeyterms.ts` (106 LOC), `src/services/voiceStreamSTT.ts` (544 LOC), `src/hooks/useVoice.ts` (1,144 LOC), `src/hooks/useVoiceIntegration.tsx` (676 LOC), `src/hooks/useVoiceEnabled.ts` (25 LOC)
+TS source: `voice/` (1 file, 54 LOC), `services/voice.ts` (525 LOC), `services/voiceKeyterms.ts` (106 LOC), `services/voiceStreamSTT.ts` (544 LOC), `hooks/useVoice.ts` (1,144 LOC), `hooks/useVoiceIntegration.tsx` (676 LOC), `hooks/useVoiceEnabled.ts` (25 LOC)
 Total: ~3.1K LOC across 7 files
 
 ## Dependencies

@@ -407,10 +407,13 @@ impl QueryEngine {
     }
 
     /// Install the session-memory service so `try_session_memory_compact`
-    /// can wait for any in-flight extraction.
+    /// can wait for any in-flight extraction and read the cached body.
+    /// This is the same `Arc` held by [`coco_memory::MemoryRuntime::session_memory`] —
+    /// the engine keeps a separate handle so the compact path doesn't
+    /// have to hop through an `Option<MemoryRuntime>` indirection.
     pub fn with_session_memory_service(
         mut self,
-        svc: Arc<coco_session_memory::SessionMemoryService>,
+        svc: Arc<coco_memory::SessionMemoryService>,
     ) -> Self {
         self.session_memory_service = Some(svc);
         self

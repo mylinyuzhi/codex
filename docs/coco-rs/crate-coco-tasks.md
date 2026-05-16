@@ -1,6 +1,6 @@
 # coco-tasks — Crate Plan
 
-TS source: `src/tasks/` (8 files, 1.1K LOC), `src/Task.ts`, `src/utils/task/` (5 files, 1.2K LOC), `src/utils/plans.ts` (397 LOC), `src/utils/planModeV2.ts`
+TS source: `tasks/` (8 files, 1.1K LOC), `Task.ts`, `utils/task/` (5 files, 1.2K LOC), `utils/plans.ts` (397 LOC), `utils/planModeV2.ts`
 
 ## Dependencies
 

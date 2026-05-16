@@ -19,17 +19,17 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
 use crate::state::session::QueuedCommandDisplay;
-use crate::theme::Theme;
 
 pub struct QueueStatusWidget<'a> {
     queued: &'a VecDeque<QueuedCommandDisplay>,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> QueueStatusWidget<'a> {
-    pub fn new(queued: &'a VecDeque<QueuedCommandDisplay>, theme: &'a Theme) -> Self {
-        Self { queued, theme }
+    pub fn new(queued: &'a VecDeque<QueuedCommandDisplay>, styles: UiStyles<'a>) -> Self {
+        Self { queued, styles }
     }
 
     pub fn should_display(queued: &VecDeque<QueuedCommandDisplay>) -> bool {
@@ -45,23 +45,23 @@ impl Widget for QueueStatusWidget<'_> {
         let count = self.queued.len();
         let mut parts = vec![Span::styled(
             t!("queue_status.count", count = count).to_string(),
-            Style::default().fg(self.theme.accent).bold(),
+            Style::default().fg(self.styles.accent()).bold(),
         )];
         if let Some(first) = self.queued.front() {
             let preview: String = first.preview.chars().take(48).collect();
             parts.push(Span::styled(
                 t!("queue_status.next_preview", preview = preview).to_string(),
-                Style::default().fg(self.theme.text_dim),
+                Style::default().fg(self.styles.dim()),
             ));
             if count > 1 {
                 parts.push(Span::styled(
                     t!("queue_status.more", count = count - 1).to_string(),
-                    Style::default().fg(self.theme.text_dim),
+                    Style::default().fg(self.styles.dim()),
                 ));
             }
         }
         Paragraph::new(Line::from(parts))
-            .style(Style::default().bg(self.theme.border))
+            .style(Style::default().bg(self.styles.border()))
             .render(area, buf);
     }
 }

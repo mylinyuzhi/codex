@@ -1,4 +1,5 @@
 use super::VerificationNudgeBanner;
+use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -17,7 +18,10 @@ fn renders_warning_label_and_message() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
-            frame.render_widget(VerificationNudgeBanner::new(&theme), Rect::new(0, 0, 80, 1));
+            frame.render_widget(
+                VerificationNudgeBanner::new(UiStyles::new(&theme)),
+                Rect::new(0, 0, 80, 1),
+            );
         })
         .unwrap();
     let buf = terminal.backend().buffer().clone();

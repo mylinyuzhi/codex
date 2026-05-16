@@ -23,7 +23,6 @@ coco-hooks.workspace = true
 coco-session.workspace = true
 coco-inference.workspace = true
 coco-compact.workspace = true
-coco-session-memory.workspace = true
 coco-memory.workspace = true
 coco-shell.workspace = true
 coco-tool-runtime.workspace = true
@@ -43,6 +42,7 @@ coco-coordinator.workspace = true
 coco-tasks.workspace = true
 coco-state.workspace = true
 coco-git.workspace = true
+coco-paths.workspace = true
 coco-subagent.workspace = true
 coco-tui.workspace = true
 coco-keybindings = { workspace = true, features = ["loader"] }
@@ -64,6 +64,7 @@ thiserror.workspace = true
 tokio-util.workspace = true
 reqwest.workspace = true
 tracing.workspace = true
+shlex.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

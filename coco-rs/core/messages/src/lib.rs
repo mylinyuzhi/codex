@@ -48,3 +48,4 @@ pub use normalize::normalize_messages_for_api;
 pub use normalize::strip_images_from_messages;
 pub use normalize::strip_signature_blocks;
 pub use normalize::to_llm_prompt;
+pub use predicates::count_tool_calls_in_last_assistant_turn;

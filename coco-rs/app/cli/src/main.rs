@@ -8,7 +8,6 @@ use coco_cli::Commands;
 use coco_cli::McpAction;
 use coco_cli::headless::build_runtime_config_for_cli;
 use coco_cli::headless::create_api_client;
-use coco_cli::paths::sessions_dir;
 use coco_cli::paths::standard_agent_search_paths;
 use coco_cli::resume_resolver;
 use coco_cli::resume_resolver::ResumePlan;
@@ -71,7 +70,9 @@ async fn main() -> Result<()> {
                     Some(id) => cli_for_resume.resume = Some(id),
                     None => cli_for_resume.continue_session = true,
                 }
-                let plan = resume_resolver::resolve(&cli_for_resume, &sessions_dir())?;
+                let cwd = std::env::current_dir()?;
+                let plan =
+                    resume_resolver::resolve(&cli_for_resume, &global_config::config_home(), &cwd)?;
                 if plan.is_none() {
                     println!("No sessions to resume.");
                     return Ok(());
@@ -155,8 +156,48 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             Commands::Ps => {
-                println!("Running background sessions:");
-                println!("  (none)");
+                let config_home = global_config::config_home();
+                let count = coco_session::count_concurrent_sessions(&config_home);
+                let dir = config_home.join("sessions");
+                println!("Live coco sessions ({count} total):");
+                match std::fs::read_dir(&dir) {
+                    Ok(entries) => {
+                        let mut found = 0;
+                        for entry in entries.flatten() {
+                            let name_os = entry.file_name();
+                            let name = name_os.to_string_lossy();
+                            let Some(stem) = name.strip_suffix(".json") else {
+                                continue;
+                            };
+                            let Ok(pid) = stem.parse::<u32>() else {
+                                continue;
+                            };
+                            if let Ok(Some(rec)) =
+                                coco_session::read_session_registration(&config_home, pid)
+                            {
+                                found += 1;
+                                let kind = serde_json::to_value(rec.kind)
+                                    .ok()
+                                    .and_then(|v| v.as_str().map(str::to_owned))
+                                    .unwrap_or_else(|| "?".into());
+                                println!(
+                                    "  pid={pid:<6} kind={kind:<14} sid={} cwd={}",
+                                    rec.session_id,
+                                    rec.cwd.display(),
+                                );
+                            }
+                        }
+                        if found == 0 {
+                            println!("  (none)");
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        println!("  (none)");
+                    }
+                    Err(e) => {
+                        eprintln!("warning: failed to read {}: {e}", dir.display());
+                    }
+                }
                 return Ok(());
             }
             Commands::Logs { session_id } => {
@@ -222,7 +263,9 @@ async fn main() -> Result<()> {
         // Resolve `--resume` / `--continue` / `--fork-session` once
         // and hand off to the TUI runner. `None` keeps the default
         // fresh-session bootstrap.
-        let plan: Option<ResumePlan> = resume_resolver::resolve(&cli, &sessions_dir())?;
+        let cwd = std::env::current_dir()?;
+        let plan: Option<ResumePlan> =
+            resume_resolver::resolve(&cli, &global_config::config_home(), &cwd)?;
         tracing::info!(
             target: "coco_cli::startup",
             mode = "tui",
@@ -241,7 +284,8 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
     // the boot edge so headless and TUI share identical semantics.
     // `None` means no resume flag was set; fall through to a fresh
     // session.
-    let plan = resume_resolver::resolve(cli, &sessions_dir())?;
+    let cwd = std::env::current_dir()?;
+    let plan = resume_resolver::resolve(cli, &global_config::config_home(), &cwd)?;
     if let Some(p) = &plan {
         eprintln!(
             "{} session {} ({} prior message(s))",
@@ -301,7 +345,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let model_id = resources.model_id.clone();
     let system_prompt = Some(resources.system_prompt.clone());
 
-    let session_manager = Arc::new(SessionManager::new(sessions_dir()));
+    let session_manager = Arc::new(SessionManager::new(global_config::config_home()));
     let session_manager_for_runtime = session_manager.clone();
 
     let mcp_manager = Arc::new(tokio::sync::Mutex::new(

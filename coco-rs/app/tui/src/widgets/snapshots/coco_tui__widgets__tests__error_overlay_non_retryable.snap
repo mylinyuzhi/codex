@@ -1,6 +1,5 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
-assertion_line: 269
 expression: output
 ---
  ╭─╮ ╭─╮   COCO v0.0.0                                                          
@@ -8,7 +7,7 @@ expression: output
  ╰─╯ ╰─╯                                                                        
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
-❯ Type a message...                                                             
+❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
  opus-4 * au┌ Error ───────────────────────────────────────────────┐            
             │Connection refused after 3 retries                    │            

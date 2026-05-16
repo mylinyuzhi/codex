@@ -16,18 +16,18 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
 use crate::state::session::HookEntry;
 use crate::state::session::HookEntryStatus;
-use crate::theme::Theme;
 
 pub struct HookStatusPanel<'a> {
     hooks: &'a [HookEntry],
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> HookStatusPanel<'a> {
-    pub fn new(hooks: &'a [HookEntry], theme: &'a Theme) -> Self {
-        Self { hooks, theme }
+    pub fn new(hooks: &'a [HookEntry], styles: UiStyles<'a>) -> Self {
+        Self { hooks, styles }
     }
 
     pub fn should_display(hooks: &[HookEntry]) -> bool {
@@ -45,15 +45,15 @@ impl Widget for HookStatusPanel<'_> {
             .iter()
             .map(|h| {
                 let (glyph, color) = match h.status {
-                    HookEntryStatus::Running => ("◌", self.theme.warning),
-                    HookEntryStatus::Completed => ("✓", self.theme.success),
-                    HookEntryStatus::Failed => ("✗", self.theme.error),
+                    HookEntryStatus::Running => ("◌", self.styles.warning()),
+                    HookEntryStatus::Completed => ("✓", self.styles.success()),
+                    HookEntryStatus::Failed => ("✗", self.styles.error()),
                 };
                 let mut spans = vec![
                     Span::styled(format!(" {glyph} "), Style::default().fg(color)),
                     Span::styled(
                         h.hook_name.as_str(),
-                        Style::default().fg(self.theme.text).bold(),
+                        Style::default().fg(self.styles.text()).bold(),
                     ),
                 ];
                 if let Some(out) = h.output.as_deref().filter(|s| !s.is_empty()) {
@@ -63,7 +63,7 @@ impl Widget for HookStatusPanel<'_> {
                         out.lines().next().unwrap_or("").chars().take(60).collect();
                     spans.push(Span::styled(
                         format!("  {snippet}"),
-                        Style::default().fg(self.theme.text_dim),
+                        Style::default().fg(self.styles.dim()),
                     ));
                 }
                 Line::from(spans)
@@ -75,7 +75,7 @@ impl Widget for HookStatusPanel<'_> {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(format!(" {} ", t!("hook.panel_title")))
-                    .border_style(Style::default().fg(self.theme.border)),
+                    .border_style(Style::default().fg(self.styles.border())),
             )
             .render(area, buf);
     }

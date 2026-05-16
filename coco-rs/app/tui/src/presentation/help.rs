@@ -15,12 +15,12 @@ use crate::keymap::GROUP_ORDER;
 use crate::keymap::KeymapBinding;
 use crate::keymap::KeymapEntry;
 use crate::keymap::entries_for_group;
+use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
-use crate::theme::Theme;
 
 const SHORTCUT_COLUMN_WIDTH: usize = 18;
 
-pub(crate) fn help_content(state: &AppState, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn help_content(state: &AppState, styles: UiStyles<'_>) -> (String, String, Color) {
     let mut sections = Vec::new();
     for &group in GROUP_ORDER {
         let mut group_lines = Vec::new();
@@ -34,7 +34,7 @@ pub(crate) fn help_content(state: &AppState, theme: &Theme) -> (String, String, 
         sections.push(format!("{title}\n{}", group_lines.join("\n")));
     }
     let body = sections.join("\n\n");
-    (t!("help.title").to_string(), body, theme.primary)
+    (t!("help.title").to_string(), body, styles.primary())
 }
 
 fn render_row(state: &AppState, entry: &KeymapEntry) -> String {

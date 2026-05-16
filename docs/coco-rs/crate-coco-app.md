@@ -1,6 +1,6 @@
 # Application Crates — Combined Plan (`app/`)
 
-TS source: `src/state/`, `src/bootstrap/`, `src/components/`, `src/screens/`, `src/ink/`, `src/outputStyles/`, `src/entrypoints/`, `src/main.tsx`, `src/cli/`, `src/server/`, `src/bridge/`
+TS source: `state/`, `bootstrap/`, `components/`, `screens/`, `ink/`, `outputStyles/`, `entrypoints/`, `main.tsx`, `cli/`, `server/`, `bridge/`
 
 All in `app/` directory: query, state, session, tui, cli.
 `bridge/` is standalone at workspace root (separate entry point).
@@ -39,7 +39,7 @@ coco-state/coco-session/coco-tui do NOT depend on each other circularly.
 
 ## coco-state
 
-TS source: `src/state/AppState.tsx`, `src/state/AppStateStore.ts`, `src/bootstrap/state.ts`
+TS source: `state/AppState.tsx`, `state/AppStateStore.ts`, `bootstrap/state.ts`
 
 TS has TWO state tiers:
 1. **AppState** — reactive UI state (`Arc<RwLock<AppState>>`, ~80+ fields)
@@ -138,7 +138,7 @@ pub struct AppState {
 
 ### Bootstrap State (non-reactive process singleton, ~70 fields)
 
-TS `src/bootstrap/state.ts` holds process-lifetime state that does NOT need UI reactivity.
+TS `bootstrap/state.ts` holds process-lifetime state that does NOT need UI reactivity.
 In Rust this maps to a `static` or a `OnceCell<Arc<BootstrapState>>`.
 
 Key field categories (not exhaustive — see TS source for full list):
@@ -204,7 +204,7 @@ pub fn get_default_app_state() -> AppState;
 
 ## coco-session
 
-TS source: `src/bootstrap/state.ts`, session management
+TS source: `bootstrap/state.ts`, session management
 
 ### Data Definitions
 
@@ -247,7 +247,7 @@ impl SessionManager {
 
 ## coco-tui
 
-TS source: `src/components/`, `src/screens/`, `src/ink/`, `src/outputStyles/`
+TS source: `components/`, `screens/`, `ink/`, `outputStyles/`
 
 ### Architecture: TEA (The Elm Architecture) with ratatui
 
@@ -301,7 +301,7 @@ impl App {
 
 ## coco-cli
 
-TS source: `src/main.tsx` (~4500 LOC), `src/entrypoints/cli.tsx`, `src/cli/`
+TS source: `main.tsx` (~4500 LOC), `entrypoints/cli.tsx`, `cli/`
 
 ### Two-Tier Dispatch Architecture
 
@@ -438,20 +438,20 @@ Retry/timeout constants:
 
 ## coco-bridge
 
-TS source: `src/bridge/` (CCR daemon), `src/server/` (DirectConnect)
+TS source: `bridge/` (CCR daemon), `server/` (DirectConnect)
 
 ### Architecture
 
 **NOTE**: The bridge is NOT a direct IDE↔agent WebSocket relay.
 The TS implementation has TWO distinct subsystems:
 
-1. **CCR Bridge** (`src/bridge/`): A standalone daemon process that registers as an
+1. **CCR Bridge** (`bridge/`): A standalone daemon process that registers as an
    "environment" with the Anthropic backend (REST), long-polls for work items, spawns
    child `claude` processes per session, and relays events. It has 3 spawn modes
    (`single-session`, `worktree`, `same-dir`), JWT-based session ingress auth,
    V1 (WebSocket) and V2 (HybridTransport: WS read + HTTP POST write) transports.
 
-2. **DirectConnect Server** (`src/server/`): A local HTTP+WebSocket server
+2. **DirectConnect Server** (`server/`): A local HTTP+WebSocket server
    (`POST /sessions` → `{session_id, ws_url, work_dir}`) for programmatic SDK use.
    Session lifecycle: starting → running → detached → stopping → stopped.
    NDJSON codec: WebSocket uses newline-delimited JSON, each line parsed independently.

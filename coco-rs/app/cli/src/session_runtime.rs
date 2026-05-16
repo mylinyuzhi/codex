@@ -38,6 +38,7 @@ use coco_context::FileHistoryState;
 use coco_context::FileReadState;
 use coco_hooks::HookRegistry;
 use coco_inference::ApiClient;
+use coco_memory::SessionMemoryService;
 use coco_messages::Message;
 use coco_query::CommandQueue;
 use coco_query::QueryEngine;
@@ -46,7 +47,6 @@ use coco_query::SessionStartHookSideEffectSink;
 use coco_query::SessionStartHookSideEffects;
 use coco_session::SessionManager;
 use coco_session::TranscriptStore;
-use coco_session_memory::SessionMemoryService;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::MailboxHandleRef;
 use coco_tool_runtime::ToolPermissionBridgeRef;
@@ -76,9 +76,12 @@ struct TranscriptFileHistorySink {
 }
 
 impl TranscriptFileHistorySink {
-    fn new(sessions_dir: PathBuf, session_id: Arc<std::sync::RwLock<String>>) -> Self {
+    fn new(
+        project_paths: Arc<coco_paths::ProjectPaths>,
+        session_id: Arc<std::sync::RwLock<String>>,
+    ) -> Self {
         Self {
-            store: TranscriptStore::new(sessions_dir),
+            store: TranscriptStore::new(project_paths),
             session_id,
         }
     }
@@ -150,6 +153,20 @@ impl FileWatchRegistrationContext {
         if let Some(watcher) = slot.as_ref() {
             watcher.add_paths(path_bufs);
         }
+    }
+}
+
+fn clone_std_rwlock<T: Clone>(lock: &std::sync::RwLock<T>) -> T {
+    match lock.read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
+fn write_std_rwlock<T>(lock: &std::sync::RwLock<T>, value: T) {
+    match lock.write() {
+        Ok(mut guard) => *guard = value,
+        Err(poisoned) => *poisoned.into_inner() = value,
     }
 }
 
@@ -456,6 +473,11 @@ pub struct SessionRuntime {
     /// Engine config; mutated by [`Self::clear_conversation`] (session_id)
     /// and [`Self::update_engine_config`]. Read by every per-turn build.
     engine_config: Arc<RwLock<QueryEngineConfig>>,
+    /// Synchronous snapshot for detached hook factories. Those
+    /// factories run from async tasks but expose a sync `Fn()`, so they
+    /// must not call Tokio `blocking_read()` on runtime worker threads.
+    orchestration_session_id: Arc<std::sync::RwLock<String>>,
+    orchestration_engine_config: Arc<std::sync::RwLock<QueryEngineConfig>>,
     /// Per-session in-memory model-role overrides. Populated by the TUI
     /// model picker (`UserCommand::SetModelRole`) and Ctrl+T thinking
     /// cycle (`UserCommand::SetThinkingLevel`). Layered ABOVE
@@ -480,11 +502,12 @@ pub struct SessionRuntime {
     /// Denial history for Auto mode classifier decisions. Shared across
     /// per-turn engines and cleared when the session changes or compacts.
     denial_tracker: Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>,
-    /// Session-memory extractor + on-disk cache. Used by
-    /// [`Self::wire_engine`] (engine reads `current_text`) and
-    /// [`Self::start_new_session`] / [`Self::clear_conversation`]
-    /// (session-id retarget + cache wipe).
-    session_memory_service: Arc<SessionMemoryService>,
+    /// Session-memory extractor + on-disk cache. The same `Arc` as
+    /// `memory_runtime.session_memory` when `Feature::AutoMemory` is
+    /// on, otherwise `None`. Used by [`Self::wire_engine`] (engine
+    /// reads `current_text`) and [`Self::start_new_session`] /
+    /// [`Self::clear_conversation`] (session-id retarget + cache wipe).
+    session_memory_service: Option<Arc<SessionMemoryService>>,
     /// Auto-memory runtime — extraction / dream / 9-section session
     /// memory / recall ranker. `None` when `Feature::AutoMemory` is
     /// off; otherwise threaded into every engine via
@@ -663,6 +686,16 @@ pub struct SessionRuntime {
     /// parity with `getAgentPendingMessageAttachments` which surfaces
     /// coordinator messages as `queued_command` attachments.
     command_queue: CommandQueue,
+    /// Concurrent-sessions PID registry guard. Wraps
+    /// `<config_home>/sessions/{pid}.json`; the file is created at
+    /// build time and removed when this field is dropped (i.e. when
+    /// the last `Arc<SessionRuntime>` reference falls). `None` when
+    /// the registration was skipped (subagent context per
+    /// `COCO_AGENT_ID`) or the write failed (best-effort — we
+    /// `tracing::warn` and proceed without a registry entry rather
+    /// than block session startup). TS parity:
+    /// `utils/concurrentSessions.ts::registerSession`.
+    _pid_registry: Option<coco_session::SessionRegistry>,
 }
 
 impl SessionRuntime {
@@ -693,87 +726,48 @@ impl SessionRuntime {
         let config_home = coco_config::global_config::config_home();
         let session_id = uuid::Uuid::new_v4().to_string();
 
+        // Concurrent-sessions PID registry. Skipped for subagent
+        // contexts (TS `getAgentId() != null`), and best-effort: a
+        // write failure here is logged and ignored so a constrained
+        // FS doesn't block session startup. TS parity:
+        // `utils/concurrentSessions.ts::registerSession`.
+        let pid_registry = {
+            let agent_id_env = coco_config::env::var(coco_config::env::EnvKey::CocoAgentId).ok();
+            match coco_session::SessionRegistry::register(
+                &config_home,
+                &session_id,
+                &cwd,
+                agent_id_env.as_deref(),
+            ) {
+                Ok(reg) => reg,
+                Err(e) => {
+                    warn!("concurrent-sessions register failed (non-fatal): {e}");
+                    None
+                }
+            }
+        };
+
         // FileReadState — @mention dedup + Read tool dedup.
         let file_read_state = Arc::new(RwLock::new(FileReadState::new()));
 
-        // SessionMemoryService — caller-driven extraction pipeline.
-        let session_memory_service = Arc::new(SessionMemoryService::new(
-            config_home.clone(),
-            session_id.clone(),
-        ));
-        if let Err(e) = session_memory_service.load_from_disk().await {
-            warn!("session-memory load failed (non-fatal): {e}");
-        }
-
-        // Install the forked-agent summarizer using the dedicated `Memory`
-        // role from settings.json (`models.memory`).
-        if let Some(memory_spec) = runtime_config
-            .model_roles
-            .get(coco_types::ModelRole::Memory)
-            .cloned()
-        {
-            match coco_inference::model_factory::build_api_client(
-                &runtime_config,
-                &memory_spec,
-                runtime_config.api.retry.clone().into(),
-            ) {
-                Ok(memory_client) => {
-                    let summarizer: coco_session_memory::SummarizerFn =
-                        Arc::new(move |prompt: String| {
-                            let client = memory_client.clone();
-                            Box::pin(async move {
-                                let params = coco_inference::QueryParams {
-                                    prompt: vec![coco_messages::LlmMessage::user_text(&prompt)],
-                                    max_tokens: Some(2_000),
-                                    thinking_level: None,
-                                    fast_mode: false,
-                                    tools: None,
-                                    context_management: None,
-                                    query_source: None,
-                                    agent_id: None,
-                                    time_since_last_assistant_ms: None,
-                                    // Session-memory summarizer helper —
-                                    // not the agent loop.
-                                    agentic: false,
-                                    cache: None,
-                                    stop_sequences: None,
-                                };
-                                let result =
-                                    client.query(&params).await.map_err(coco_error::boxed_err)?;
-                                let text = result
-                                    .content
-                                    .iter()
-                                    .filter_map(|c| match c {
-                                        coco_messages::AssistantContent::Text(t) => {
-                                            Some(t.text.as_str())
-                                        }
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("");
-                                Ok(text)
-                            })
-                        });
-                    session_memory_service.set_summarizer(summarizer).await;
-                    info!(
-                        role = ?coco_types::ModelRole::Memory,
-                        model_id = %memory_spec.model_id,
-                        "session-memory extractor installed"
-                    );
-                }
-                Err(e) => warn!("session-memory client build failed (non-fatal): {e}"),
-            }
-        }
+        // Per-project filesystem layout — one `Arc<ProjectPaths>` shared
+        // by the memory runtime, the transcript enumerator, and any
+        // future subsystem that needs the same canonical slug. Built
+        // once via `crate::paths::project_paths` (canonical-git-root
+        // + slug).
+        let project_paths = crate::paths::project_paths(&cwd);
 
         // ── Auto-memory runtime ──
         //
         // Built once per session, gated on `Feature::AutoMemory`. The
         // runtime owns the three services (extract / dream / session
         // memory) plus the recall ranker state. We hand it the
-        // resolved `MemoryConfig` (already merged with env overrides)
-        // and an `AgentHandle` so the forked extraction / dream
-        // subagents can spawn against the same swarm runtime that
-        // user-facing `Agent` tool spawns use.
+        // resolved `MemoryConfig` (already merged with env overrides),
+        // the shared `Arc<ProjectPaths>` (so the SM file lives at
+        // `<projectDir>/<sid>/session-memory/summary.md`), and an
+        // `AgentHandle` so the forked extraction / dream subagents
+        // spawn against the same swarm runtime that user-facing
+        // `Agent` tool spawns use.
         //
         // The handle starts as `NoOpAgentHandle`; the SDK / TUI
         // runner calls `MemoryRuntime::install_agent` once the real
@@ -786,10 +780,11 @@ impl SessionRuntime {
             let agent: coco_tool_runtime::AgentHandleRef =
                 Arc::new(coco_tool_runtime::NoOpAgentHandle);
             let mem_cfg = coco_memory::MemoryConfig::from(runtime_config.memory.clone());
-            // TS `getProjectDir(getOriginalCwd())` lives at
-            // `<config_home>/sessions/<session_id>`; the parent dir is
-            // what the dream / searching-past-context prompts grep over.
-            let transcript_root = config_home.join("sessions");
+            // Transcript root for dream's grep examples / searching-
+            // past-context section. TS parity:
+            // `getProjectDir(getOriginalCwd())` lives at
+            // `<memory_base>/projects/<slug>/`.
+            let transcript_root = project_paths.project_dir();
             let runtime = coco_memory::runtime::MemoryRuntimeBuilder::new(
                 config_home.clone(),
                 cwd.clone(),
@@ -797,20 +792,13 @@ impl SessionRuntime {
                 mem_cfg,
                 agent,
             )
+            .with_project_paths(project_paths.clone())
             .with_transcript_dir(transcript_root)
             .build();
             info!(
                 personal_dir = %runtime.personal_dir().display(),
                 "auto-memory runtime initialized"
             );
-            // Fire-and-forget auto-dream gate-check at session start.
-            // Internal three-gate scheduler short-circuits when time
-            // / sessions / lock conditions aren't met, so this is
-            // cheap when nothing is due. A full consolidation only
-            // runs when `dream_min_hours` (default 24h) have elapsed
-            // AND `dream_min_sessions` (default 5) have produced
-            // transcripts since the last consolidation. TS parity:
-            // `initAutoDream` schedules on session start.
             let runtime_arc = Arc::new(runtime);
             // Wire the session enumerator backed by `TranscriptStore`
             // so per-turn `tick_dream` can list real prior sessions.
@@ -821,11 +809,11 @@ impl SessionRuntime {
             // contract; it is invoked **only** after the time + scan
             // throttle gates pass inside `DreamService` so cost is
             // bounded.
-            let enumerator_sessions_dir = config_home.join("sessions");
+            let enumerator_project_paths = project_paths.clone();
             let enumerator_session_id = session_id.clone();
             let enumerator_memory_dir = runtime_arc.personal_dir().to_path_buf();
             let enumerator: coco_memory::SessionEnumerator = Arc::new(move || {
-                let store = coco_session::TranscriptStore::new(enumerator_sessions_dir.clone());
+                let store = coco_session::TranscriptStore::new(enumerator_project_paths.clone());
                 let last_ms =
                     coco_memory::lock::last_consolidated_at(&enumerator_memory_dir).unwrap_or(0);
                 match store.list_main_sessions() {
@@ -843,7 +831,10 @@ impl SessionRuntime {
                     Err(_) => Vec::new(),
                 }
             });
-            runtime_arc.install_session_enumerator(enumerator).await;
+            // install_* are one-shot in production (this is the only
+            // call site per slot); swallow the duplicate-install Err so
+            // a future double-install in tests doesn't blow up startup.
+            let _ = runtime_arc.install_session_enumerator(enumerator);
             // Fire-and-forget gate-check at session start. With the
             // enumerator installed, this can actually fire (vs the
             // pre-wire empty-slice path that always tripped the
@@ -914,13 +905,23 @@ impl SessionRuntime {
         // dispatches a real `ModelRole::Memory` query instead of
         // falling back to the recency heuristic.
         if let Some(runtime) = &memory_runtime {
-            runtime.install_agent(swarm_agent_handle.clone()).await;
+            runtime.install_agent(swarm_agent_handle.clone());
             let side_query: coco_tool_runtime::SideQueryHandle =
                 Arc::new(crate::side_query_impl::SideQueryAdapter::new(
                     client.clone(),
                     runtime_config.clone(),
                 ));
-            runtime.install_side_query(side_query).await;
+            let _ = runtime.install_side_query(side_query);
+        }
+
+        // Session-memory handle threaded into the engine. Same `Arc`
+        // the memory runtime holds when `Feature::AutoMemory` is on;
+        // `None` otherwise (engine's SM-first compact path then falls
+        // back to LLM summarization). Warm the on-disk cache here so
+        // the first compact short-circuit doesn't have to read disk.
+        let session_memory_service = memory_runtime.as_ref().map(|r| r.session_memory.clone());
+        if let Some(svc) = &session_memory_service {
+            svc.load_from_disk().await;
         }
 
         // FileHistoryState — backed by JSONL transcript when enabled.
@@ -928,10 +929,10 @@ impl SessionRuntime {
         // /clear regen propagates immediately (no rebuild required).
         let (file_history, file_history_sink_session_id) =
             if runtime_config.settings.merged.file_checkpointing_enabled {
-                let transcript_dir = config_home.join("sessions");
+                let project_paths = crate::paths::project_paths(&cwd);
                 let sink_id = Arc::new(std::sync::RwLock::new(session_id.clone()));
                 let sink: Arc<dyn FileHistorySnapshotSink> = Arc::new(
-                    TranscriptFileHistorySink::new(transcript_dir, sink_id.clone()),
+                    TranscriptFileHistorySink::new(project_paths, sink_id.clone()),
                 );
                 let mut state = FileHistoryState::new();
                 state.set_sink(sink);
@@ -1149,8 +1150,8 @@ impl SessionRuntime {
         // file-history sink, the per-turn message append in
         // `engine_finalize_turn`, and the agent-transcript persistence
         // path all share the same `TranscriptStore` instance keyed at
-        // `<config_home>/sessions/`.
-        let transcript_store = Arc::new(TranscriptStore::new(config_home.join("sessions")));
+        // `<memory_base>/projects/<slug>/` for this cwd.
+        let transcript_store = Arc::new(TranscriptStore::new(crate::paths::project_paths(&cwd)));
         let transcript_dedup = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::<
             uuid::Uuid,
         >::new()));
@@ -1210,6 +1211,9 @@ impl SessionRuntime {
         };
         let agent_catalog = Arc::new(RwLock::new(initial_agent_snapshot));
 
+        let orchestration_session_id = Arc::new(std::sync::RwLock::new(session_id.clone()));
+        let orchestration_engine_config = Arc::new(std::sync::RwLock::new(engine_config.clone()));
+
         Ok(Arc::new(Self {
             original_cwd: session_original_cwd,
             current_cwd: session_current_cwd,
@@ -1229,6 +1233,8 @@ impl SessionRuntime {
             cancel: CancellationToken::new(),
             session_id: Arc::new(RwLock::new(session_id)),
             engine_config: Arc::new(RwLock::new(engine_config)),
+            orchestration_session_id,
+            orchestration_engine_config,
             role_overrides: Arc::new(RwLock::new(HashMap::new())),
             sandbox_state,
             file_read_state,
@@ -1265,6 +1271,7 @@ impl SessionRuntime {
             transcript_dedup,
             tool_result_replacement_state,
             command_queue: CommandQueue::new(),
+            _pid_registry: pid_registry,
         }))
     }
 
@@ -1551,12 +1558,12 @@ impl SessionRuntime {
             // call route through the new model; this projection makes
             // every config consumer (`tool_context`, finalize hooks,
             // SDK params) see the new identity too.
-            {
-                let mut cfg = self.engine_config.write().await;
+            self.update_engine_config(move |cfg| {
                 cfg.model_id = model_id;
                 cfg.thinking_level =
                     effort.map(|e| thinking_level_for_effort_from(&cfg.model_id, e));
-            }
+            })
+            .await;
             // Atomic-ish swap of the live Main client. Concurrent
             // turn-build readers either see the old (snapshot via
             // `main_client()` before the lock acquires) or the new
@@ -1598,8 +1605,11 @@ impl SessionRuntime {
         }
         drop(overrides);
         if role == ModelRole::Main {
-            let mut cfg = self.engine_config.write().await;
-            cfg.thinking_level = effort.map(|e| thinking_level_for_effort_from(&cfg.model_id, e));
+            self.update_engine_config(|cfg| {
+                cfg.thinking_level =
+                    effort.map(|e| thinking_level_for_effort_from(&cfg.model_id, e));
+            })
+            .await;
         }
     }
 
@@ -1704,16 +1714,16 @@ impl SessionRuntime {
     /// Used by detached hook firings (e.g. the `Elicitation` /
     /// `ElicitationResult` wrapper around `SendElicitation`, the
     /// FileChanged file watcher) that need a context built from inside
-    /// a sync closure. Each call snapshots the current session id and
-    /// engine config via `blocking_read` — short locks, never held
-    /// across `.await`.
+    /// a sync closure. Each call reads the synchronous snapshot mirrors
+    /// kept up to date by session/config mutations, avoiding Tokio
+    /// `blocking_read()` on runtime worker threads.
     pub fn orchestration_ctx_factory(
         self: &Arc<Self>,
     ) -> Arc<dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync> {
         let runtime = self.clone();
         Arc::new(move || {
-            let cfg = runtime.engine_config.blocking_read().clone();
-            let session_id = runtime.session_id.blocking_read().clone();
+            let cfg = clone_std_rwlock(&runtime.orchestration_engine_config);
+            let session_id = clone_std_rwlock(&runtime.orchestration_session_id);
             coco_hooks::orchestration::OrchestrationContext {
                 session_id,
                 cwd: std::env::current_dir().unwrap_or_default(),
@@ -1836,9 +1846,11 @@ impl SessionRuntime {
         // `runtime.command_queue()` would land on an instance the
         // running engine cannot see.
         engine = engine.with_command_queue(self.command_queue.clone());
-        let sm_text_now = self.session_memory_service.current_text().await;
-        engine = engine.with_session_memory_text(sm_text_now);
-        engine = engine.with_session_memory_service(self.session_memory_service.clone());
+        if let Some(svc) = &self.session_memory_service {
+            let sm_text_now = svc.current_text().await;
+            engine = engine.with_session_memory_text(sm_text_now);
+            engine = engine.with_session_memory_service(svc.clone());
+        }
         // Install the real swarm-backed AgentHandle so AgentTool /
         // SendMessageTool / TeamCreateTool reach the swarm runtime
         // on every engine instance.
@@ -2470,12 +2482,13 @@ impl SessionRuntime {
             let mut s = self.session_id.write().await;
             *s = new_session_id.to_string();
         }
+        write_std_rwlock(&self.orchestration_session_id, new_session_id.to_string());
         let new_id_for_cfg = new_session_id.to_string();
         self.update_engine_config(|cfg| cfg.session_id = new_id_for_cfg)
             .await;
-        self.session_memory_service
-            .set_session_id(new_session_id.to_string())
-            .await;
+        if let Some(svc) = &self.session_memory_service {
+            svc.set_session_id(new_session_id.to_string()).await;
+        }
         if let Some(sink_id) = &self.file_history_sink_session_id
             && let Ok(mut g) = sink_id.write()
         {
@@ -2501,8 +2514,12 @@ impl SessionRuntime {
     where
         F: FnOnce(&mut QueryEngineConfig),
     {
-        let mut g = self.engine_config.write().await;
-        f(&mut g);
+        let snapshot = {
+            let mut g = self.engine_config.write().await;
+            f(&mut g);
+            g.clone()
+        };
+        write_std_rwlock(&self.orchestration_engine_config, snapshot);
     }
 
     /// Snapshot the current command registry. Cheap (single Arc clone).
@@ -2698,9 +2715,9 @@ impl SessionRuntime {
             let mut fh = fh.write().await;
             *fh = FileHistoryState::default();
         }
-        self.session_memory_service
-            .set_last_summarized_message_id(None)
-            .await;
+        if let Some(svc) = &self.session_memory_service {
+            svc.set_last_summarized_message_id(None).await;
+        }
 
         // Reset the auto-memory runtime's per-conversation state — recall
         // PrefetchState, extraction cursor + throttle counter, and the
@@ -2918,3 +2935,7 @@ pub(crate) fn build_sandbox_state(
     };
     Ok(Some(Arc::new(state)))
 }
+
+#[cfg(test)]
+#[path = "session_runtime.test.rs"]
+mod tests;

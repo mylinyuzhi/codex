@@ -2,12 +2,20 @@
 //!
 //! TS: bootstrap/state.ts + session management + history.ts
 
+pub mod concurrent_sessions;
 pub mod error;
 pub mod history;
 pub mod recovery;
 pub mod storage;
 pub mod title_generator;
 
+pub use concurrent_sessions::SessionKind;
+pub use concurrent_sessions::SessionRegistration;
+pub use concurrent_sessions::SessionRegistry;
+pub use concurrent_sessions::SessionStatus;
+pub use concurrent_sessions::count_concurrent_sessions;
+pub use concurrent_sessions::is_bg_session;
+pub use concurrent_sessions::read_registration as read_session_registration;
 pub use error::SessionError;
 pub use history::HistoryEntry;
 pub use history::PromptHistory;
@@ -24,10 +32,12 @@ pub use storage::TranscriptUsage;
 pub use storage::build_file_history_snapshot_chain;
 pub use storage::restore_cost_from_transcript;
 
+use coco_paths::ProjectPaths;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Crate-local Result alias. Default error type is `SessionError` but the
 /// generic stays open so `Result::ok` / 2-arg `Result<T, E>` callsites
@@ -35,6 +45,14 @@ use std::path::PathBuf;
 pub type Result<T, E = SessionError> = std::result::Result<T, E>;
 
 /// A session record.
+///
+/// **Derived value** in the JSONL-canonical model: this struct is
+/// reconstructed from the on-disk transcript (first/last lines + tag
+/// / custom-title metadata entries), not persisted as its own file.
+/// Mirrors TS, which has no `{session_id}.json` sidecar — every
+/// session-level fact (title, tags, model, created/updated_at,
+/// message counts) is derivable from the transcript's first entry +
+/// trailing metadata block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -57,21 +75,65 @@ pub struct Session {
     pub tags: Vec<String>,
 }
 
-/// Session manager — create, load, save, list, resume sessions.
+impl Session {
+    /// Build a `Session` from a [`storage::TranscriptMetadata`] —
+    /// the lite metadata view the session picker uses.
+    fn from_transcript_metadata(meta: storage::TranscriptMetadata) -> Self {
+        let working_dir = meta.cwd.as_deref().map(PathBuf::from).unwrap_or_default();
+        Session {
+            id: meta.session_id,
+            created_at: meta.created_at,
+            updated_at: Some(meta.modified_at),
+            // model is filled by a deeper scan if needed; the lite
+            // metadata view doesn't carry it. The session picker
+            // displays the title / first_prompt instead.
+            model: String::new(),
+            working_dir,
+            title: meta.custom_title,
+            message_count: meta.message_count,
+            total_tokens: 0,
+            tags: meta.tag.map(|t| vec![t]).unwrap_or_default(),
+        }
+    }
+}
+
+/// Session manager — TS-aligned: every operation reads/writes the
+/// JSONL transcript and its metadata entries. There is no
+/// `{session_id}.json` sidecar (pre-fix coco-rs had one; TS has
+/// none, and the duplication produced silent state drift between
+/// the sidecar and the source-of-truth transcript on every
+/// `/rename`, `/tag`, or interrupted save).
+///
+/// `memory_base` is `coco_config::global_config::config_home()`
+/// unless overridden by `COCO_REMOTE_MEMORY_DIR`. The manager spans
+/// every project under `<memory_base>/projects/*/` — operations
+/// keyed by session id walk projects to locate the transcript.
 pub struct SessionManager {
-    pub sessions_dir: PathBuf,
+    memory_base: PathBuf,
 }
 
 impl SessionManager {
-    pub fn new(sessions_dir: PathBuf) -> Self {
-        Self { sessions_dir }
+    /// Build a session manager rooted at `memory_base` (typically
+    /// `coco_config::global_config::config_home()`).
+    pub fn new(memory_base: PathBuf) -> Self {
+        Self { memory_base }
     }
 
-    /// Create a new session.
+    fn project_paths_for(&self, cwd: &Path) -> Arc<ProjectPaths> {
+        Arc::new(ProjectPaths::new(self.memory_base.clone(), cwd))
+    }
+
+    fn store_for(&self, cwd: &Path) -> storage::TranscriptStore {
+        storage::TranscriptStore::new(self.project_paths_for(cwd))
+    }
+
+    /// Create a new in-memory session. **Does not write to disk** —
+    /// the transcript JSONL is created lazily by the first
+    /// `append_message` call from the runtime, matching TS's
+    /// no-eager-create behaviour.
     pub fn create(&self, model: &str, cwd: &Path) -> crate::Result<Session> {
-        let id = uuid::Uuid::new_v4().to_string();
-        let session = Session {
-            id,
+        Ok(Session {
+            id: uuid::Uuid::new_v4().to_string(),
             created_at: timestamp_now(),
             updated_at: None,
             model: model.to_string(),
@@ -80,27 +142,40 @@ impl SessionManager {
             message_count: 0,
             total_tokens: 0,
             tags: Vec::new(),
-        };
-        self.save(&session)?;
-        Ok(session)
+        })
     }
 
-    /// Set the session title (`/rename <name>`). Loads the session,
-    /// updates `title`, bumps `updated_at`, and writes it back. Errors
-    /// when the session id isn't on disk.
+    /// Set the session title (`/rename <name>`). Appends a
+    /// `CustomTitle` metadata entry to the transcript JSONL — the
+    /// session picker reads the most recent such entry. TS parity:
+    /// `appendMetadataEntry({type: 'custom-title', sessionId,
+    /// customTitle})`.
+    ///
+    /// Errors when no transcript exists for `id` under any project.
     pub fn set_title(&self, id: &str, title: &str) -> crate::Result<Session> {
         let mut session = self.load(id)?;
+        let store = self.store_for(&session.working_dir);
+        store.append_metadata(
+            id,
+            &storage::MetadataEntry::CustomTitle {
+                session_id: id.to_string(),
+                custom_title: title.to_string(),
+            },
+        )?;
         session.title = Some(title.to_string());
         session.updated_at = Some(timestamp_now());
-        self.save(&session)?;
         Ok(session)
     }
 
-    /// Toggle a tag on/off (`/tag <name>`). If the tag is present, it's
-    /// removed; otherwise appended. Mirrors the TS toggle semantics
-    /// where re-running `/tag X` removes a previously-added X.
+    /// Toggle a tag on/off (`/tag <name>`). Tag presence is decided
+    /// from the current Session derive; the new state is appended
+    /// as a `Tag` metadata entry. Mirrors TS toggle semantics where
+    /// re-running `/tag X` adds and then removes X — we just append
+    /// the new desired state and let the picker's tail-window scan
+    /// pick up the latest.
     pub fn toggle_tag(&self, id: &str, tag: &str) -> crate::Result<(Session, bool)> {
         let mut session = self.load(id)?;
+        let store = self.store_for(&session.working_dir);
         let added = if let Some(idx) = session.tags.iter().position(|t| t == tag) {
             session.tags.remove(idx);
             false
@@ -108,73 +183,83 @@ impl SessionManager {
             session.tags.push(tag.to_string());
             true
         };
+        // Build the tag set serialised as a single `Tag` metadata
+        // entry — TS reads only the most recent so we collapse on
+        // write. Empty set still writes (an empty Tag effectively
+        // clears the picker).
+        store.append_metadata(
+            id,
+            &storage::MetadataEntry::Tag {
+                session_id: id.to_string(),
+                tag: session.tags.join(","),
+            },
+        )?;
         session.updated_at = Some(timestamp_now());
-        self.save(&session)?;
         Ok((session, added))
     }
 
-    /// Save/update a session.
-    pub fn save(&self, session: &Session) -> crate::Result<()> {
-        std::fs::create_dir_all(&self.sessions_dir)?;
-        let session_file = self.sessions_dir.join(format!("{}.json", session.id));
-        let json = serde_json::to_string_pretty(session)?;
-        std::fs::write(session_file, json)?;
+    /// Backwards-compatibility shim. The JSONL-canonical model has
+    /// no separate "save" step — title/tag mutations are persisted
+    /// inline via [`set_title`] / [`toggle_tag`], and the JSONL
+    /// owns every other field. This method now no-ops so existing
+    /// callers don't need rewriting.
+    pub fn save(&self, _session: &Session) -> crate::Result<()> {
         Ok(())
     }
 
-    /// Load a session by ID.
+    /// Load a session by id by locating its transcript under
+    /// `<memory_base>/projects/*/{id}.jsonl` (via global scan) and
+    /// deriving the lite metadata view.
     pub fn load(&self, id: &str) -> crate::Result<Session> {
-        let session_file = self.sessions_dir.join(format!("{id}.json"));
-        let content = std::fs::read_to_string(&session_file)?;
-        let session: Session = serde_json::from_str(&content)?;
-        Ok(session)
+        let Some(resolved) = storage::resolve_session_file_path(&self.memory_base, id, None)?
+        else {
+            return Err(SessionError::TranscriptNotFound {
+                path: coco_paths::projects_root(&self.memory_base).join(format!("*/{id}.jsonl")),
+            });
+        };
+        let meta = storage::read_transcript_metadata_at(&resolved.file_path, id)?;
+        Ok(Session::from_transcript_metadata(meta))
     }
 
-    /// Resume a session — loads it and updates the timestamp.
+    /// Resume a session — equivalent to [`load`] in the
+    /// JSONL-canonical model. Pre-fix this also bumped a sidecar
+    /// `updated_at` field; the JSONL's own mtime now serves the
+    /// same purpose.
     pub fn resume(&self, id: &str) -> crate::Result<Session> {
-        let mut session = self.load(id)?;
-        session.updated_at = Some(timestamp_now());
-        self.save(&session)?;
-        Ok(session)
+        self.load(id)
     }
 
-    /// List all sessions, newest first.
+    /// List every session across every project, newest first.
     pub fn list(&self) -> crate::Result<Vec<Session>> {
-        let mut sessions = Vec::new();
-        if !self.sessions_dir.exists() {
-            return Ok(sessions);
-        }
-        for entry in std::fs::read_dir(&self.sessions_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "json")
-                && let Ok(content) = std::fs::read_to_string(&path)
-                && let Ok(session) = serde_json::from_str::<Session>(&content)
-            {
-                sessions.push(session);
-            }
-        }
-        sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        Ok(sessions)
+        let metas = storage::list_all_sessions(&self.memory_base)?;
+        Ok(metas
+            .into_iter()
+            .map(Session::from_transcript_metadata)
+            .collect())
     }
 
-    /// Delete a session.
+    /// Delete a session — removes its transcript JSONL. The
+    /// session subdirectory (`<project>/<id>/`) is left intact;
+    /// the retention sweep handles its eventual collection.
     pub fn delete(&self, id: &str) -> crate::Result<()> {
-        let session_file = self.sessions_dir.join(format!("{id}.json"));
-        match std::fs::remove_file(session_file) {
+        let Some(resolved) = storage::resolve_session_file_path(&self.memory_base, id, None)?
+        else {
+            return Ok(());
+        };
+        match std::fs::remove_file(&resolved.file_path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
         }
     }
 
-    /// Get the most recent session.
+    /// Most-recent session across every project (= the first entry
+    /// of [`list`]).
     pub fn most_recent(&self) -> crate::Result<Option<Session>> {
-        let sessions = self.list()?;
-        Ok(sessions.into_iter().next())
+        Ok(self.list()?.into_iter().next())
     }
 
-    /// Clean up old sessions beyond a limit.
+    /// Keep the `keep_count` most-recent sessions, delete the rest.
     pub fn cleanup(&self, keep_count: usize) -> crate::Result<i32> {
         let sessions = self.list()?;
         let mut removed = 0;
@@ -185,37 +270,47 @@ impl SessionManager {
         Ok(removed)
     }
 
-    /// TS-aligned mtime-based retention: delete every session file whose
-    /// on-disk mtime is older than `older_than`. Mirrors TS
-    /// `utils/cleanup.ts` behavior (`DEFAULT_CLEANUP_PERIOD_DAYS = 30`).
+    /// TS-aligned mtime-based retention: delete every transcript
+    /// `.jsonl` whose on-disk mtime is older than `older_than`.
+    /// Mirrors TS `utils/cleanup.ts` behaviour
+    /// (`DEFAULT_CLEANUP_PERIOD_DAYS = 30`).
     ///
-    /// Walks the sessions dir directly (stat-only, no JSON parsing) so a
-    /// corrupt session file doesn't prevent cleanup.
-    ///
-    /// Returns the number of sessions removed.
+    /// Walks `<memory_base>/projects/*/*.jsonl` stat-only — a
+    /// corrupt transcript doesn't prevent cleanup.
     pub fn cleanup_older_than(&self, older_than: std::time::Duration) -> crate::Result<i32> {
         let cutoff = std::time::SystemTime::now()
             .checked_sub(older_than)
             .ok_or(SessionError::DurationOverflow)?;
-        if !self.sessions_dir.exists() {
-            return Ok(0);
-        }
+        let projects_root = coco_paths::projects_root(&self.memory_base);
+        let project_entries = match std::fs::read_dir(&projects_root) {
+            Ok(it) => it,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e.into()),
+        };
         let mut removed = 0;
-        for entry in std::fs::read_dir(&self.sessions_dir)? {
-            let Ok(entry) = entry else { continue };
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "json") {
+        for project in project_entries.flatten() {
+            let project_dir = project.path();
+            if !project_dir.is_dir() {
                 continue;
             }
-            let Ok(meta) = entry.metadata() else { continue };
-            let Ok(mtime) = meta.modified() else { continue };
-            if mtime >= cutoff {
+            let Ok(entries) = std::fs::read_dir(&project_dir) else {
                 continue;
-            }
-            match std::fs::remove_file(&path) {
-                Ok(()) => removed += 1,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|e| e != "jsonl") {
+                    continue;
+                }
+                let Ok(meta) = entry.metadata() else { continue };
+                let Ok(mtime) = meta.modified() else { continue };
+                if mtime >= cutoff {
+                    continue;
+                }
+                match std::fs::remove_file(&path) {
+                    Ok(()) => removed += 1,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
             }
         }
         Ok(removed)
@@ -231,11 +326,18 @@ pub const fn default_cleanup_period() -> std::time::Duration {
     std::time::Duration::from_secs(DEFAULT_CLEANUP_PERIOD_DAYS * 24 * 60 * 60)
 }
 
+/// Wall-clock now as a unix-millisecond string.
+///
+/// Must match the unit `storage::read_transcript_metadata` emits for
+/// `created_at` / `modified_at` (`as_millis().to_string()`). Mixed
+/// units silently corrupt `list_all_sessions`'s newest-first sort
+/// since `parse::<u128>()` compares scaled-different numbers as if
+/// they were the same scale.
 pub fn timestamp_now() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    format!("{}", now.as_secs())
+    format!("{}", now.as_millis())
 }
 
 #[cfg(test)]

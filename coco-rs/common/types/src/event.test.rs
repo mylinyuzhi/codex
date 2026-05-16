@@ -491,3 +491,38 @@ fn session_started_has_all_init_fields() {
     assert_eq!(j["tools"].as_array().unwrap().len(), 2);
     assert_eq!(j["mcp_servers"][0]["name"], "github");
 }
+
+#[test]
+fn memory_dialog_entry_defaults_to_file_row_kind() {
+    let entry: MemoryDialogEntry = serde_json::from_value(json!({
+        "path": "/tmp/CLAUDE.md",
+        "label": "Project memory",
+        "scope": "project"
+    }))
+    .unwrap();
+
+    assert_eq!(
+        entry.row_kind,
+        MemoryDialogRowKind::File {
+            exists: false,
+            read_only: false
+        }
+    );
+}
+
+#[test]
+fn memory_dialog_entry_round_trips_row_kind() {
+    let entry = MemoryDialogEntry {
+        path: "/tmp".into(),
+        label: "Auto memory".into(),
+        scope: MemoryDialogScope::User,
+        row_kind: MemoryDialogRowKind::Toggle { enabled: true },
+    };
+
+    let json = serde_json::to_value(&entry).unwrap();
+    assert_eq!(json["row_kind"]["kind"], "toggle");
+    assert_eq!(json["row_kind"]["enabled"], true);
+
+    let back: MemoryDialogEntry = serde_json::from_value(json).unwrap();
+    assert_eq!(back, entry);
+}

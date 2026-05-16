@@ -331,28 +331,25 @@ impl QueryEngine {
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         outer_trigger: coco_types::CompactTrigger,
     ) -> bool {
-        // Wait for any in-flight extraction so we don't snapshot an
-        // about-to-be-overwritten memory file. TS: waitForSessionMemoryExtraction
-        // (sessionMemoryCompact.ts:527).
+        // Wait for any in-flight forked-agent extraction so we don't
+        // snapshot an about-to-be-overwritten memory file. TS:
+        // waitForSessionMemoryExtraction (sessionMemoryCompact.ts:527).
+        // Past `STALE_THRESHOLD` (60s) the call returns false and we
+        // proceed — extraction is presumed crashed.
         if let Some(svc) = &self.session_memory_service {
-            svc.wait_for_extraction().await;
-        }
-        // Same guard for the new auto-memory 9-section session
-        // memory: if a SessionMemoryService extraction is in flight,
-        // wait up to 15 s so the file on disk is settled before
-        // compact reads it. Past 60 s (`STALE_THRESHOLD`) the call
-        // returns false and we proceed — extraction is presumed
-        // crashed.
-        if let Some(runtime) = &self.memory_runtime {
-            let _ = runtime
-                .session_memory
+            let _ = svc
                 .wait_for_extraction(coco_memory::service::session::DEFAULT_WAIT_TIMEOUT)
                 .await;
         }
 
-        let memory_text = {
-            let guard = self.session_memory_text.read().await;
-            guard.clone()
+        // Prefer the service's cached body — refreshed inside
+        // `run_with_label` after each successful extract. Falls
+        // back to the engine-local text (legacy / test path) when
+        // the service isn't wired.
+        let memory_text = if let Some(svc) = &self.session_memory_service {
+            svc.current_text().await
+        } else {
+            self.session_memory_text.read().await.clone()
         };
         if memory_text.trim().is_empty() {
             return false;
@@ -386,7 +383,7 @@ impl QueryEngine {
         // engine-local Mutex for tests / SDK paths that bypass the
         // service. Sync the local cache so subsequent reads agree.
         let last_summarized = if let Some(svc) = &self.session_memory_service {
-            let from_svc = svc.last_summarized_message_id().await;
+            let from_svc = svc.last_summarized_message_uuid().await;
             if let Some(uuid) = from_svc
                 && let Ok(mut guard) = self.last_summarized_message_id.lock()
             {

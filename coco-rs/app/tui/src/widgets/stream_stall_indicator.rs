@@ -15,16 +15,16 @@ use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 use crate::widgets::lifecycle_banner::render_banner_row;
 
 pub struct StreamStallIndicator<'a> {
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> StreamStallIndicator<'a> {
-    pub fn new(theme: &'a Theme) -> Self {
-        Self { theme }
+    pub fn new(styles: UiStyles<'a>) -> Self {
+        Self { styles }
     }
 
     pub fn should_display(stream_stall: bool) -> bool {
@@ -37,14 +37,14 @@ impl Widget for StreamStallIndicator<'_> {
         let parts = vec![
             Span::styled(
                 t!("stream_stall.label").to_string(),
-                Style::default().fg(self.theme.warning).bold(),
+                Style::default().fg(self.styles.warning()).bold(),
             ),
             Span::styled(
                 t!("stream_stall.message").to_string(),
-                Style::default().fg(self.theme.text_dim),
+                Style::default().fg(self.styles.dim()),
             ),
         ];
-        render_banner_row(parts, self.theme, area, buf);
+        render_banner_row(parts, self.styles, area, buf);
     }
 }
 

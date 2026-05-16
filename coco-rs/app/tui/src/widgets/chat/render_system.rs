@@ -19,7 +19,7 @@ pub(super) fn try_render<'a>(
         MessageContent::SystemText(text) => {
             for line in text.lines() {
                 lines.push(Line::from(
-                    Span::raw(format!("  # {line}")).fg(w.theme.system_message),
+                    Span::raw(format!("  # {line}")).fg(w.styles.system_message()),
                 ));
             }
             Some(())
@@ -41,7 +41,7 @@ pub(super) fn try_render<'a>(
                         retry = retry
                     )
                 ))
-                .fg(w.theme.error),
+                .fg(w.styles.error()),
             ));
             Some(())
         }
@@ -50,14 +50,14 @@ pub(super) fn try_render<'a>(
                 .map(|t| format!(" (resets at {t})"))
                 .unwrap_or_default();
             lines.push(Line::from(
-                Span::raw(format!("  ⏱ {message}{reset}")).fg(w.theme.warning),
+                Span::raw(format!("  ⏱ {message}{reset}")).fg(w.styles.warning()),
             ));
             Some(())
         }
         MessageContent::Shutdown { reason } => {
             lines.push(Line::from(
                 Span::raw(t!("chat.session_ended", reason = reason).to_string())
-                    .fg(w.theme.text_dim)
+                    .fg(w.styles.dim())
                     .italic(),
             ));
             Some(())
@@ -71,20 +71,20 @@ pub(super) fn try_render<'a>(
                 Span::raw(
                     t!("chat.shutdown_requested", from = from, reason = reason_text).to_string(),
                 )
-                .fg(w.theme.error),
+                .fg(w.styles.error()),
             ));
             Some(())
         }
         MessageContent::ShutdownRejected { from, reason } => {
             lines.push(Line::from(
                 Span::raw(t!("chat.shutdown_rejected", from = from, reason = reason).to_string())
-                    .fg(w.theme.text_dim),
+                    .fg(w.styles.dim()),
             ));
             Some(())
         }
         MessageContent::HookSuccess { hook_name, output } => {
             lines.push(Line::from(vec![
-                Span::raw("  ⚙ ").fg(w.theme.accent),
+                Span::raw("  ⚙ ").fg(w.styles.accent()),
                 Span::raw(format!("{hook_name}: ")).dim(),
                 Span::raw(output.clone()).green(),
             ]));
@@ -92,9 +92,9 @@ pub(super) fn try_render<'a>(
         }
         MessageContent::HookNonBlockingError { hook_name, error } => {
             lines.push(Line::from(vec![
-                Span::raw("  ⚠ ").fg(w.theme.warning),
-                Span::raw(format!("{hook_name}: ")).fg(w.theme.text_dim),
-                Span::raw(error.clone()).fg(w.theme.warning),
+                Span::raw("  ⚠ ").fg(w.styles.warning()),
+                Span::raw(format!("{hook_name}: ")).fg(w.styles.dim()),
+                Span::raw(error.clone()).fg(w.styles.warning()),
             ]));
             Some(())
         }
@@ -104,8 +104,8 @@ pub(super) fn try_render<'a>(
             command,
         } => {
             lines.push(Line::from(vec![
-                Span::raw("  ✗ ").fg(w.theme.error),
-                Span::raw(format!("{hook_name}: ")).fg(w.theme.text_dim),
+                Span::raw("  ✗ ").fg(w.styles.error()),
+                Span::raw(format!("{hook_name}: ")).fg(w.styles.dim()),
                 Span::raw(error.clone()).red(),
             ]));
             lines.push(Line::from(
@@ -122,7 +122,7 @@ pub(super) fn try_render<'a>(
         }
         MessageContent::HookSystemMessage { hook_name, message } => {
             lines.push(Line::from(vec![
-                Span::raw(format!("  {hook_name}: ")).fg(w.theme.text_dim),
+                Span::raw(format!("  {hook_name}: ")).fg(w.styles.dim()),
                 Span::raw(message.clone()).cyan(),
             ]));
             Some(())
@@ -130,34 +130,34 @@ pub(super) fn try_render<'a>(
         MessageContent::HookAdditionalContext { hook_name, context } => {
             lines.push(Line::from(vec![
                 Span::raw(format!("  {hook_name}: ")).dim(),
-                Span::raw(context.clone()).fg(w.theme.text),
+                Span::raw(context.clone()).fg(w.styles.text()),
             ]));
             Some(())
         }
         MessageContent::HookStoppedContinuation { hook_name, reason } => {
             lines.push(Line::from(vec![
-                Span::raw(format!("  {hook_name}: ")).fg(w.theme.text_dim),
-                Span::raw(reason.clone()).fg(w.theme.warning),
+                Span::raw(format!("  {hook_name}: ")).fg(w.styles.dim()),
+                Span::raw(reason.clone()).fg(w.styles.warning()),
             ]));
             Some(())
         }
         MessageContent::HookAsyncResponse { hook_name, output } => {
             lines.push(Line::from(vec![
-                Span::raw("  ⚙ ").fg(w.theme.accent),
+                Span::raw("  ⚙ ").fg(w.styles.accent()),
                 Span::raw(format!("{hook_name}: ")).dim(),
-                Span::raw(output.clone()).fg(w.theme.text),
+                Span::raw(output.clone()).fg(w.styles.text()),
             ]));
             Some(())
         }
         MessageContent::PlanApproval { plan, .. } => {
             lines.push(Line::from(
                 Span::raw(t!("chat.plan_for_review").to_string())
-                    .fg(w.theme.plan_mode)
+                    .fg(w.styles.plan())
                     .bold(),
             ));
             for line in plan.lines().take(20) {
                 lines.push(Line::from(
-                    Span::raw(format!("  │ {line}")).fg(w.theme.text),
+                    Span::raw(format!("  │ {line}")).fg(w.styles.text()),
                 ));
             }
             Some(())
@@ -165,7 +165,7 @@ pub(super) fn try_render<'a>(
         MessageContent::CompactBoundary => {
             let border = "─".repeat(40);
             lines.push(Line::from(
-                Span::raw(format!("  {border}")).fg(w.theme.border).dim(),
+                Span::raw(format!("  {border}")).fg(w.styles.border()).dim(),
             ));
             Some(())
         }
@@ -184,21 +184,21 @@ pub(super) fn try_render<'a>(
                 _ => "Conversation summary",
             };
             let mut hdr = vec![
-                Span::raw("  ✻ ").fg(w.theme.accent),
-                Span::raw(heading).fg(w.theme.primary).bold(),
+                Span::raw("  ✻ ").fg(w.styles.accent()),
+                Span::raw(heading).fg(w.styles.primary()).bold(),
             ];
             if let Some(n) = messages_summarized {
-                hdr.push(Span::raw(format!(" · {n} messages")).fg(w.theme.text_dim));
+                hdr.push(Span::raw(format!(" · {n} messages")).fg(w.styles.dim()));
             }
             lines.push(Line::from(hdr));
             if let Some(ctx) = user_context.as_ref().filter(|s| !s.is_empty()) {
                 lines.push(Line::from(
-                    Span::raw(format!("    focus: {ctx}")).fg(w.theme.text_dim),
+                    Span::raw(format!("    focus: {ctx}")).fg(w.styles.dim()),
                 ));
             }
             for line in summary.lines().take(8) {
                 lines.push(Line::from(
-                    Span::raw(format!("    {line}")).fg(w.theme.text),
+                    Span::raw(format!("    {line}")).fg(w.styles.text()),
                 ));
             }
             if summary.lines().count() > 8 {
@@ -216,8 +216,7 @@ pub(super) fn try_render<'a>(
                     })
                     .unwrap_or_else(|| "ctrl+o".to_string());
                 lines.push(Line::from(
-                    Span::raw(format!("    …({shortcut} to see full summary)"))
-                        .fg(w.theme.text_dim),
+                    Span::raw(format!("    …({shortcut} to see full summary)")).fg(w.styles.dim()),
                 ));
             }
             Some(())
@@ -228,11 +227,11 @@ pub(super) fn try_render<'a>(
             description,
         } => {
             lines.push(Line::from(vec![
-                Span::raw("  📌 ").fg(w.theme.accent),
+                Span::raw("  📌 ").fg(w.styles.accent()),
                 Span::raw(format!("Task {task_id} → @{assignee}: "))
-                    .fg(w.theme.primary)
+                    .fg(w.styles.primary())
                     .bold(),
-                Span::raw(description.clone()).fg(w.theme.text),
+                Span::raw(description.clone()).fg(w.styles.text()),
             ]));
             Some(())
         }

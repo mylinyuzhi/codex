@@ -23,6 +23,18 @@ pub enum EnvKey {
     CocoAgentColor,
     CocoAgentId,
     CocoAgentName,
+    /// Entrypoint label written to the concurrent-sessions PID registry
+    /// (`<config_home>/sessions/{pid}.json`). Identifies *how* the
+    /// session was started ("sdk-py", "tmux-bg", "cli-interactive", …)
+    /// so `claude ps` / `coco ps` can attribute live sessions. Optional;
+    /// missing means the field is omitted from the registry record.
+    /// TS parity: `CLAUDE_CODE_ENTRYPOINT` in `utils/concurrentSessions.ts`.
+    CocoEntrypoint,
+    /// SessionKind override for the concurrent-sessions PID registry.
+    /// Accepted values: `bg`, `daemon`, `daemon-worker`. Anything else
+    /// (or unset) means the session registers as `interactive`. TS
+    /// parity: `CLAUDE_CODE_SESSION_KIND` in `utils/concurrentSessions.ts`.
+    CocoSessionKind,
     CocoBashAutoBackgroundOnTimeout,
     /// Truthy ⇒ snap the bash cwd back to `originalCwd` after every
     /// command, regardless of whether the cwd is inside the allowed
@@ -67,6 +79,13 @@ pub enum EnvKey {
     CocoLspMaxFileSizeBytes,
     CocoMaxContextTokens,
     CocoMaxToolUseConcurrency,
+    /// Full-path override for the auto-memory directory. When set, replaces
+    /// the computed `<config_home>/projects/<sanitized-canonical-git-root>/memory/`
+    /// path. Used by Cowork-style deployments where the per-session cwd
+    /// contains a process-name suffix and would otherwise produce a
+    /// different project key per session.
+    ///
+    /// TS source: `memdir/paths.ts:163` (operator override slot).
     CocoMemoryPathOverride,
     /// Force-disable turn-end memory extraction. Wins over settings.
     CocoMemoryExtractionDisable,
@@ -81,6 +100,13 @@ pub enum EnvKey {
     CocoParentSessionId,
     CocoPlanModeRequired,
     CocoRemote,
+    /// Override for the memory base directory (the parent of `projects/`).
+    /// When set, replaces `<config_home>` as the root of the
+    /// `<base>/projects/<sanitized>/memory/` resolution chain. Used by
+    /// CCR / swarm leaders that mount persistent memory from a network
+    /// volume separate from the session's config home.
+    ///
+    /// TS source: `memdir/paths.ts:86` (remote-memory-dir slot).
     CocoRemoteMemoryDir,
     CocoSandboxAllowNetwork,
     CocoSandboxExcludedCommands,
@@ -223,6 +249,8 @@ impl EnvKey {
             Self::CocoAgentColor => "COCO_AGENT_COLOR",
             Self::CocoAgentId => "COCO_AGENT_ID",
             Self::CocoAgentName => "COCO_AGENT_NAME",
+            Self::CocoEntrypoint => "COCO_ENTRYPOINT",
+            Self::CocoSessionKind => "COCO_SESSION_KIND",
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",
             Self::CocoBashMaintainProjectWorkingDir => "COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR",
             Self::CocoBubblewrap => "COCO_BUBBLEWRAP",

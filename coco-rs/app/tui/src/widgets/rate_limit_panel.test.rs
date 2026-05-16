@@ -3,6 +3,7 @@ use ratatui::backend::TestBackend;
 
 use super::RateLimitPanel;
 use super::format_duration;
+use crate::presentation::styles::UiStyles;
 use crate::state::session::RateLimitInfo;
 use crate::theme::Theme;
 
@@ -44,7 +45,7 @@ fn renders_reset_countdown_and_provider() {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            let panel = RateLimitPanel::new(&info, &theme).with_now(400);
+            let panel = RateLimitPanel::new(&info, UiStyles::new(&theme)).with_now(400);
             frame.render_widget(panel, area);
         })
         .unwrap();

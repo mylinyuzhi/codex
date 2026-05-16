@@ -19,6 +19,7 @@
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use coco_session::TranscriptStore;
@@ -72,14 +73,22 @@ pub struct ResumePlan {
 /// - `--fork-session`: requires `--resume <id>`; copies the source
 ///   JSONL into `<dest_session_id>.jsonl` (where `dest` is
 ///   `--session-id` if provided, else a fresh uuid).
-pub fn resolve(cli: &Cli, sessions_dir: &Path) -> Result<Option<ResumePlan>> {
-    let store = TranscriptStore::new(sessions_dir.to_path_buf());
+pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<ResumePlan>> {
+    // The destination store is always the current project — fork
+    // outputs land in the cwd-scoped project dir even when the
+    // source lives in a different project (legitimate
+    // "fork-into-this-repo" workflow).
+    let dest_paths = Arc::new(coco_paths::ProjectPaths::new(
+        memory_base.to_path_buf(),
+        cwd,
+    ));
+    let dest_store = TranscriptStore::new(Arc::clone(&dest_paths));
 
     let (source_session_id, source_path): (String, PathBuf) =
         if let Some(arg) = cli.resume.as_deref() {
-            resolve_source_arg(&store, sessions_dir, arg)?
+            resolve_source_arg(memory_base, cwd, &dest_store, arg)?
         } else if cli.continue_session {
-            match resolve_most_recent(&store)? {
+            match resolve_most_recent_across_projects(memory_base)? {
                 Some(s) => s,
                 None => {
                     // No prior sessions to continue. Treat as a no-op
@@ -93,7 +102,7 @@ pub fn resolve(cli: &Cli, sessions_dir: &Path) -> Result<Option<ResumePlan>> {
             // Fork without an explicit source: fork the most-recent.
             // TS allows `--fork-session` standalone with the same
             // implicit-most-recent behavior.
-            match resolve_most_recent(&store)? {
+            match resolve_most_recent_across_projects(memory_base)? {
                 Some(s) => s,
                 None => {
                     anyhow::bail!("--fork-session requires an existing session to copy from");
@@ -119,7 +128,7 @@ pub fn resolve(cli: &Cli, sessions_dir: &Path) -> Result<Option<ResumePlan>> {
             .session_id
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let dest_path = store.transcript_path(&dest_id);
+        let dest_path = dest_store.transcript_path(&dest_id);
         fork_conversation(&source_path, &dest_path).map_err(|e| {
             anyhow::anyhow!(
                 "fork copy {} → {} failed: {e}",
@@ -151,9 +160,16 @@ pub fn resolve(cli: &Cli, sessions_dir: &Path) -> Result<Option<ResumePlan>> {
 
 /// Resolve `--resume <arg>` — accepts either a bare session id or a
 /// `.jsonl` path. Returns `(session_id, transcript_path)`.
+///
+/// For bare session ids we walk every project under
+/// `<memory_base>/projects/*/` (TS `resolveSessionFilePath` with no
+/// cwd hint), preferring the cwd-scoped project when present so
+/// `--resume <id>` from inside a repo lands on that repo's session
+/// even if the id exists in multiple projects.
 fn resolve_source_arg(
-    store: &TranscriptStore,
-    sessions_dir: &Path,
+    memory_base: &Path,
+    cwd: &Path,
+    dest_store: &TranscriptStore,
     arg: &str,
 ) -> Result<(String, PathBuf)> {
     if arg.ends_with(".jsonl") {
@@ -161,9 +177,10 @@ fn resolve_source_arg(
         let abs = if path.is_absolute() {
             path
         } else {
-            // Relative .jsonl path is rooted in sessions_dir per
-            // TS's `loadMessagesFromJsonlPath` resolution rule.
-            sessions_dir.join(&path)
+            // Relative .jsonl path is rooted in the cwd's project
+            // dir, matching TS `loadMessagesFromJsonlPath` (which
+            // resolves relative against the project's sessions dir).
+            dest_store.project_paths().project_dir().join(&path)
         };
         let id = abs
             .file_stem()
@@ -172,29 +189,51 @@ fn resolve_source_arg(
             .unwrap_or_default();
         return Ok((id, abs));
     }
-    let path = store.transcript_path(arg);
-    if !path.exists() {
-        anyhow::bail!("no session found for id {arg}; expected {}", path.display(),);
+
+    // Bare id: prefer this project, then fall back to a global scan
+    // (TS `resolveSessionFilePath` with worktree + global stages).
+    if let Some(resolved) =
+        coco_session::storage::resolve_session_file_path(memory_base, arg, Some(cwd))?
+    {
+        return Ok((arg.to_string(), resolved.file_path));
     }
-    Ok((arg.to_string(), path))
+    if let Some(resolved) =
+        coco_session::storage::resolve_session_file_path(memory_base, arg, None)?
+    {
+        return Ok((arg.to_string(), resolved.file_path));
+    }
+    anyhow::bail!(
+        "no session found for id {arg} under {}",
+        coco_paths::projects_root(memory_base).display(),
+    );
 }
 
-/// Pick the newest non-sidechain session by transcript mtime.
-fn resolve_most_recent(store: &TranscriptStore) -> Result<Option<(String, PathBuf)>> {
-    let mut sessions = store
-        .list_main_sessions()
+/// Pick the newest non-sidechain session across **every** project.
+/// Mirrors TS `loadInitialMessages` for `--continue` (the resume
+/// picker walks all known projects, not just the current cwd).
+fn resolve_most_recent_across_projects(memory_base: &Path) -> Result<Option<(String, PathBuf)>> {
+    let mut sessions = coco_session::storage::list_all_sessions(memory_base)
         .map_err(|e| anyhow::anyhow!("listing sessions failed: {e}"))?;
+    // Filter out sidechains — same predicate as
+    // `TranscriptStore::list_main_sessions`.
+    sessions.retain(|m| !m.is_sidechain);
     if sessions.is_empty() {
         return Ok(None);
     }
-    // `list_main_sessions` sorts newest-first, so the first one is
-    // the one we want.
     let latest = sessions.remove(0);
     if latest.session_id.is_empty() {
         return Ok(None);
     }
-    let path = store.transcript_path(&latest.session_id);
-    Ok(Some((latest.session_id, path)))
+    // Resolve back to the on-disk path via the global scan since
+    // `list_all_sessions` returned bare metadata.
+    let resolved =
+        coco_session::storage::resolve_session_file_path(memory_base, &latest.session_id, None)?;
+    let Some(resolved) = resolved else {
+        // Race: file disappeared between list and resolve. Treat as
+        // no recent session rather than erroring.
+        return Ok(None);
+    };
+    Ok(Some((latest.session_id, resolved.file_path)))
 }
 
 #[cfg(test)]

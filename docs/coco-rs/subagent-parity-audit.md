@@ -3,7 +3,8 @@
 Date: 2026-05-15
 Scope: `coco_subagent`, `AgentTool`, `SwarmAgentHandle` (coordinator), and the
 seams in `app/query`, `app/cli`, `core/tools`, `memory`, `hooks`.
-Reference: `claude-code-kim/src/tools/AgentTool/**`, `claude-code-kim/src/utils/swarm/**`.
+Reference: `tools/AgentTool/**`, `utils/swarm/**`. TS file paths are relative
+to the TS project's `src/` directory.
 
 This document is an **adversarial parity audit**, not a refactor plan. It
 catalogs every functional / behavioral divergence I could verify against
@@ -487,14 +488,14 @@ during this pass (not just grepped):
 - `app/cli/src/session_runtime.rs` (around 1163-1290 — bootstrap)
 - `app/query/src/engine.rs` (around 1056-1087 — plan-mode swap)
 - TS reference:
-  - `agents/claude-code-kim/src/tools/AgentTool/AgentTool.tsx`
-  - `agents/claude-code-kim/src/tools/AgentTool/runAgent.ts`
-  - `agents/claude-code-kim/src/tools/AgentTool/loadAgentsDir.ts`
-  - `agents/claude-code-kim/src/tools/AgentTool/agentMemory.ts`
-  - `agents/claude-code-kim/src/tools/AgentTool/forkSubagent.ts`
-  - `agents/claude-code-kim/src/tools/AgentTool/agentToolUtils.ts`
-  - `agents/claude-code-kim/src/tools/AgentTool/constants/tools.ts`
-  - `agents/claude-code-kim/src/utils/model/agent.ts`
+  - `tools/AgentTool/AgentTool.tsx`
+  - `tools/AgentTool/runAgent.ts`
+  - `tools/AgentTool/loadAgentsDir.ts`
+  - `tools/AgentTool/agentMemory.ts`
+  - `tools/AgentTool/forkSubagent.ts`
+  - `tools/AgentTool/agentToolUtils.ts`
+  - `tools/AgentTool/constants/tools.ts`
+  - `utils/model/agent.ts`
 
 ## Appendix B — Claims Retracted
 

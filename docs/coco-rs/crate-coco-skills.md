@@ -1,6 +1,6 @@
 # coco-skills — Crate Plan
 
-TS source: `src/skills/` (20 files, 1.35K LOC)
+TS source: `skills/` (20 files, 1.35K LOC)
 
 ## Dependencies
 

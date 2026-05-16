@@ -7,12 +7,38 @@
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use coco_config::global_config;
+use coco_paths::ProjectPaths;
 
-/// `~/.coco/sessions` — disk root for `SessionManager`.
+/// `~/.coco/sessions` — legacy flat session directory.
+///
+/// **DEPRECATED** for new code. The TS-aligned layout puts session
+/// files under `~/.coco/projects/{sanitized_cwd}/{session_id}.jsonl`
+/// — use [`project_paths`] to construct paths in the new layout.
+///
+/// This function is retained until every consumer migrates to
+/// `ProjectPaths`. TODO(parity): remove once the migration in
+/// `docs/coco-rs/session-projects-migration.md` is complete.
 pub fn sessions_dir() -> PathBuf {
     global_config::config_home().join("sessions")
+}
+
+/// Build the TS-aligned [`ProjectPaths`] for `cwd`.
+///
+/// Returns an `Arc<ProjectPaths>` so callers can cheaply share one
+/// instance across subsystems (transcript store, memory store,
+/// KAIROS daily log, etc.).
+///
+/// `cwd` should already be canonicalised by the caller; this helper
+/// then applies the same `coco_git::find_canonical_git_root` rule
+/// the memory layer uses so a linked worktree and the main repo
+/// share one project slug.
+pub fn project_paths(cwd: &Path) -> Arc<ProjectPaths> {
+    let memory_base = global_config::config_home();
+    let canonical = coco_git::find_canonical_git_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    Arc::new(ProjectPaths::new(memory_base, &canonical))
 }
 
 /// `~/.coco/output-styles` — user-scope output style markdown dir.

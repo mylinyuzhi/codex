@@ -1,7 +1,7 @@
 # coco-vim — Crate Plan
 
 Directory: `app/tui/` (vim submodule, v2)
-TS source: `src/vim/` (5 files, ~1.5K LOC), `src/commands/vim/` (2 files, 51 LOC)
+TS source: `vim/` (5 files, ~1.5K LOC), `commands/vim/` (2 files, 51 LOC)
 
 ## Dependencies
 

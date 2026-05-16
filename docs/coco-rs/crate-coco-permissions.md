@@ -1,6 +1,6 @@
 # coco-permissions — Crate Plan
 
-TS source: `src/utils/permissions/` (26 files), `src/types/permissions.ts`
+TS source: `utils/permissions/` (26 files), `types/permissions.ts`
 
 ## Integration Points
 

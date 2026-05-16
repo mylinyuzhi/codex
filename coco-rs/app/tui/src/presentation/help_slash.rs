@@ -189,6 +189,16 @@ const CATEGORIES: &[Category] = &[
                 usage: "/keybindings",
             },
             CommandEntry {
+                name: "output-style",
+                aliases: &[],
+                usage: "/output-style [name]",
+            },
+            CommandEntry {
+                name: "sandbox",
+                aliases: &[],
+                usage: "/sandbox [on|off|status]",
+            },
+            CommandEntry {
                 name: "fast",
                 aliases: &[],
                 usage: "/fast",
@@ -214,6 +224,11 @@ const CATEGORIES: &[Category] = &[
                 usage: "/resume [session-id]",
             },
             CommandEntry {
+                name: "session",
+                aliases: &["remote"],
+                usage: "/session [list|delete|info] [id]",
+            },
+            CommandEntry {
                 name: "rewind",
                 aliases: &["checkpoint"],
                 usage: "/rewind",
@@ -227,6 +242,11 @@ const CATEGORIES: &[Category] = &[
                 name: "export",
                 aliases: &[],
                 usage: "/export [filename]",
+            },
+            CommandEntry {
+                name: "usage",
+                aliases: &[],
+                usage: "/usage",
             },
         ],
     },
@@ -258,6 +278,16 @@ const CATEGORIES: &[Category] = &[
                 aliases: &[],
                 usage: "/init",
             },
+            CommandEntry {
+                name: "add-dir",
+                aliases: &[],
+                usage: "/add-dir <path>",
+            },
+            CommandEntry {
+                name: "doctor",
+                aliases: &[],
+                usage: "/doctor",
+            },
         ],
     },
     Category {
@@ -287,6 +317,11 @@ const CATEGORIES: &[Category] = &[
                 name: "skills",
                 aliases: &[],
                 usage: "/skills",
+            },
+            CommandEntry {
+                name: "hooks",
+                aliases: &[],
+                usage: "/hooks",
             },
             CommandEntry {
                 name: "memory",

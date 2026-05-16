@@ -1,7 +1,7 @@
 # coco-coordinator — Crate Plan
 
 Directory: `coordinator/` (v2)
-TS source: `src/coordinator/coordinatorMode.ts`, `src/utils/swarm/` (22 files, ~7K LOC)
+TS source: `coordinator/coordinatorMode.ts`, `utils/swarm/` (22 files, ~7K LOC)
 
 ## Dependencies
 

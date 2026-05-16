@@ -1,8 +1,8 @@
 # Bypass Permissions: CLI Flags, Capability Gate, and Killswitch
 
-**TS reference**: `src/utils/permissions/permissionSetup.ts`,
-`src/utils/permissions/bypassPermissionsKillswitch.ts`, `src/setup.ts:395-442`,
-`src/cli/print.ts:4588-4600`.
+**TS reference**: `utils/permissions/permissionSetup.ts`,
+`utils/permissions/bypassPermissionsKillswitch.ts`, `setup.ts:395-442`,
+`cli/print.ts:4588-4600`.
 
 `BypassPermissions` is the most permissive mode coco-rs ships — it auto-allows
 every tool call without prompting the user. The surface around it is

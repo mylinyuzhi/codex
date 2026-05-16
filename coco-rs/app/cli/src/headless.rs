@@ -711,7 +711,7 @@ pub async fn run_chat_with_options(
     // and re-appending them would corrupt the chain.
     if opts.session_id_override.is_some() {
         let store = Arc::new(coco_session::TranscriptStore::new(
-            crate::paths::sessions_dir(),
+            crate::paths::project_paths(&cwd),
         ));
         let mut seen: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
         for msg in &opts.prior_messages {

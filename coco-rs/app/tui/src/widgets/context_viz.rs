@@ -12,7 +12,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// Context window visualization showing token usage as a horizontal bar.
 pub struct ContextVizWidget<'a> {
@@ -21,7 +21,7 @@ pub struct ContextVizWidget<'a> {
     input: i64,
     output: i64,
     cache_read: i64,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> ContextVizWidget<'a> {
@@ -31,7 +31,7 @@ impl<'a> ContextVizWidget<'a> {
         input: i64,
         output: i64,
         cache_read: i64,
-        theme: &'a Theme,
+        styles: UiStyles<'a>,
     ) -> Self {
         Self {
             used,
@@ -39,7 +39,7 @@ impl<'a> ContextVizWidget<'a> {
             input,
             output,
             cache_read,
-            theme,
+            styles,
         }
     }
 }
@@ -68,7 +68,7 @@ impl Widget for ContextVizWidget<'_> {
             area.width.saturating_sub(4), // account for block borders + padding
             progress,
             pct,
-            self.theme,
+            self.styles,
         ));
 
         // Line 2: breakdown
@@ -91,14 +91,19 @@ impl Widget for ContextVizWidget<'_> {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(t!("context_viz.panel_title").to_string())
-            .border_style(Style::default().fg(self.theme.border));
+            .border_style(Style::default().fg(self.styles.border()));
 
         Paragraph::new(lines).block(block).render(area, buf);
     }
 }
 
 /// Build the bar line: `[████████░░░░░░░░░░░░] 42%`
-fn build_bar_line<'a>(available_width: u16, progress: f64, pct: i32, theme: &Theme) -> Line<'a> {
+fn build_bar_line<'a>(
+    available_width: u16,
+    progress: f64,
+    pct: i32,
+    styles: UiStyles<'_>,
+) -> Line<'a> {
     let pct_label = format!(" {pct}%");
     // brackets + pct label
     let overhead = 2 + pct_label.len() as u16;
@@ -111,11 +116,11 @@ fn build_bar_line<'a>(available_width: u16, progress: f64, pct: i32, theme: &The
     let empty_str: String = std::iter::repeat_n('\u{2591}', empty as usize).collect();
 
     Line::from(vec![
-        Span::raw("[").fg(theme.text_dim),
-        Span::raw(filled_str).fg(theme.context_used),
-        Span::raw(empty_str).fg(theme.context_free),
-        Span::raw("]").fg(theme.text_dim),
-        Span::raw(pct_label).bold().fg(theme.text),
+        Span::raw("[").fg(styles.dim()),
+        Span::raw(filled_str).fg(styles.context_used()),
+        Span::raw(empty_str).fg(styles.context_free()),
+        Span::raw("]").fg(styles.dim()),
+        Span::raw(pct_label).bold().fg(styles.text()),
     ])
 }
 

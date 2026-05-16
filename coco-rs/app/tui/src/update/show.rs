@@ -26,10 +26,8 @@ use crate::state::SessionBrowserOverlay;
 use crate::state::SessionOption;
 use crate::update_rewind;
 
-/// Open the model picker for the `Main` role, seeded from the builtin
-/// registry. Provider attribution is inferred from `model_id` prefix
-/// because [`coco_config::builtin_models_partial`] doesn't carry it
-/// (it's keyed only by `model_id`). The picker is open-only: changing
+/// Open the model picker for the `Main` role, seeded from the
+/// session-frozen model catalog. The picker is open-only: changing
 /// roles inside it cycles via `update::overlay::cycle_model_role`.
 ///
 /// `pub(crate)` so the `OpenModelPicker` TuiOnlyEvent handler can
@@ -58,13 +56,10 @@ pub(crate) fn cycle_model(state: &mut AppState) {
 /// Build the picker entries for `role` from the session-frozen
 /// `model_catalog`. The catalog covers all three resolution layers
 /// (L0 builtin + L1 `~/.coco/models.json` + L2 per-provider
-/// overrides), seeded by `tui_runner` at session start.
-///
-/// **Fallback when catalog is empty**: synthesize entries from
-/// `coco_config::builtin_models_partial()` directly. This keeps tests
-/// (`AppState::new()` without a seed step) and pre-bootstrap mock
-/// paths working — production goes through the seed and never hits
-/// this branch.
+/// overrides), seeded by `tui_runner` at session start. When the
+/// catalog is empty, the picker shows only provider-level availability
+/// rows; tests and mock pre-bootstrap paths must seed catalog entries
+/// explicitly.
 pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<ModelEntry> {
     let allowlist: Option<&[String]> = if state.session.available_models.is_empty() {
         None
@@ -73,70 +68,30 @@ pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<Mode
     };
     let current_for_role = current_model_for_role(state, role);
 
-    if !state.session.model_catalog.is_empty() {
-        let entries = state
-            .session
-            .model_catalog
-            .iter()
-            .filter(|entry| {
-                allowlist
-                    .map(|a| a.iter().any(|s| s == &entry.model_id))
-                    .unwrap_or(true)
-            })
-            .map(|entry| ModelEntry {
-                provider: entry.provider.clone(),
-                provider_display: entry.provider_display.clone(),
-                model_id: entry.model_id.clone(),
-                display_name: entry.display_name.clone(),
-                context_window: entry.context_window,
-                supported_efforts: entry.supported_efforts.clone(),
-                default_effort: entry.default_effort,
-                is_current_for_role: current_for_role
-                    .as_ref()
-                    .map(|(p, m)| p == &entry.provider && m == &entry.model_id)
-                    .unwrap_or(false),
-                unavailable_reasons: Vec::new(),
-            })
-            .collect();
-        return apply_provider_statuses(state, entries);
-    }
-
-    // Fallback: builtin-only synthesis. Provider inferred from
-    // model_id prefix because the builtin map is keyed only by id.
-    let mut entries: Vec<ModelEntry> = coco_config::builtin_models_partial()
+    let entries = state
+        .session
+        .model_catalog
         .iter()
-        .filter(|(model_id, _)| {
+        .filter(|entry| {
             allowlist
-                .map(|a| a.iter().any(|s| s == *model_id))
+                .map(|a| a.iter().any(|s| s == &entry.model_id))
                 .unwrap_or(true)
         })
-        .map(|(model_id, partial)| {
-            let (provider, provider_display) = infer_provider(model_id);
-            let supported_efforts = partial
-                .supported_thinking_levels
+        .map(|entry| ModelEntry {
+            provider: entry.provider.clone(),
+            provider_display: entry.provider_display.clone(),
+            model_id: entry.model_id.clone(),
+            display_name: entry.display_name.clone(),
+            context_window: entry.context_window,
+            supported_efforts: entry.supported_efforts.clone(),
+            default_effort: entry.default_effort,
+            is_current_for_role: current_for_role
                 .as_ref()
-                .map(|levels| levels.iter().map(|l| l.effort).collect())
-                .unwrap_or_default();
-            ModelEntry {
-                provider: provider.to_string(),
-                provider_display: provider_display.to_string(),
-                model_id: model_id.clone(),
-                display_name: partial
-                    .display_name
-                    .clone()
-                    .unwrap_or_else(|| model_id.clone()),
-                context_window: partial.context_window.map(|t| t.get() as i64),
-                supported_efforts,
-                default_effort: partial.default_thinking_level,
-                is_current_for_role: current_for_role
-                    .as_ref()
-                    .map(|(_, m)| m == model_id)
-                    .unwrap_or(false),
-                unavailable_reasons: Vec::new(),
-            }
+                .map(|(p, m)| p == &entry.provider && m == &entry.model_id)
+                .unwrap_or(false),
+            unavailable_reasons: Vec::new(),
         })
         .collect();
-    sort_model_entries(&mut entries);
     apply_provider_statuses(state, entries)
 }
 
@@ -180,24 +135,6 @@ fn sort_model_entries(entries: &mut [ModelEntry]) {
             .cmp(&b.provider_display)
             .then_with(|| a.display_name.cmp(&b.display_name))
     });
-}
-
-/// Map a builtin `model_id` to its canonical provider. Used only by
-/// the fallback branch in [`build_model_entries`] when
-/// `state.session.model_catalog` is empty (tests / pre-bootstrap).
-/// Production reads provider directly off the catalog entries.
-fn infer_provider(model_id: &str) -> (&'static str, &'static str) {
-    if model_id.starts_with("claude-") {
-        ("anthropic", "Anthropic")
-    } else if model_id.starts_with("gpt-") || model_id.starts_with('o') {
-        ("openai", "OpenAI")
-    } else if model_id.starts_with("gemini-") {
-        ("google", "Google")
-    } else if model_id.starts_with("deepseek-") {
-        ("deepseek", "DeepSeek")
-    } else {
-        ("other", "Other")
-    }
 }
 
 /// Lookup the `(provider, model_id)` pair currently bound to `role`.

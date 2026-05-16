@@ -129,7 +129,7 @@ fn is_selectable_user_message(msg: &crate::state::ChatMessage) -> bool {
     // entries. In coco-rs that maps to: keep only `Text` / `Image` /
     // `BashInput`; drop everything else (BashOutput, Attachment,
     // ChannelMessage, ResourceUpdate, AgentNotification,
-    // TeammateMessage, MemoryInput, PlanMarker, CompactBoundary, …).
+    // TeammateMessage, PlanMarker, CompactBoundary, …).
     use crate::state::MessageContent;
     if !matches!(
         msg.content,

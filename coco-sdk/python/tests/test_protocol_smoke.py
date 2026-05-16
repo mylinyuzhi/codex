@@ -224,13 +224,14 @@ def test_client_request_methods_match_rust_wire_strings() -> None:
         assert member.value == wire, f"{member.name} = {member.value!r}, expected {wire!r}"
 
 
-def test_server_request_methods_cover_five_variants() -> None:
+def test_server_request_methods_cover_variants() -> None:
     from coco_sdk import ServerRequestMethod
 
     expected = {
         "approval/askForApproval",
         "input/requestUserInput",
         "mcp/routeMessage",
+        "mcp/requestElicitation",
         "hook/callback",
         "control/cancelRequest",
     }

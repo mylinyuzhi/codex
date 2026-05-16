@@ -48,6 +48,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::emit::emit_stream;
+use crate::helpers::ToolCompletionEventMode;
 use crate::session_state::SessionStateTracker;
 use crate::tool_call_preparer::PendingToolPreparation;
 use crate::tool_call_preparer::prepare_pending_tool_calls;
@@ -121,6 +122,7 @@ impl<'a> ToolCallRunner<'a> {
             denial_tracker: self.denial_tracker,
             client: self.client,
             auto_mode_rules: self.auto_mode_rules,
+            completion_event_mode: ToolCompletionEventMode::Emit,
         })
         .await;
 

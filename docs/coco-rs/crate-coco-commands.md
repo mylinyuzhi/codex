@@ -1,6 +1,6 @@
 # coco-commands — Crate Plan
 
-TS source: `src/commands.ts`, `src/commands/` (86 command dirs + 15 top-level command files = ~100 total)
+TS source: `commands.ts`, `commands/` (86 command dirs + 15 top-level command files = ~100 total)
 
 ## Dependencies
 

@@ -2,6 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
+use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
 use crate::widgets::settings_panel::PermissionRuleDisplay;
 use crate::widgets::settings_panel::SettingsPanelState;
@@ -13,7 +14,7 @@ fn settings_overlay_content_renders_theme_tab_and_syntax_row() {
     let theme = Theme::default();
     let state = SettingsPanelState::default();
 
-    let (title, body, border) = settings_overlay_content(&state, &theme);
+    let (title, body, border) = settings_overlay_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Settings ");
     assert_eq!(border, theme.primary);
@@ -33,12 +34,12 @@ fn settings_overlay_content_marks_output_style_selection() {
         ..SettingsPanelState::default()
     };
 
-    let (_, body, _) = settings_overlay_content(&state, &theme);
+    let (_, body, _) = settings_overlay_content(&state, UiStyles::new(&theme));
     assert!(body.contains("  Brief"));
     assert!(body.contains("▸ Detailed"));
 
     state.output_styles.clear();
-    let (_, empty_body, _) = settings_overlay_content(&state, &theme);
+    let (_, empty_body, _) = settings_overlay_content(&state, UiStyles::new(&theme));
     assert!(empty_body.contains("(no custom output styles)"));
 }
 
@@ -56,7 +57,7 @@ fn settings_overlay_content_lists_permission_rules() {
         ..SettingsPanelState::default()
     };
 
-    let (_, body, _) = settings_overlay_content(&state, &theme);
+    let (_, body, _) = settings_overlay_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("[Permissions]"));
     assert!(body.contains("  Bash → allow (project)"));

@@ -13,23 +13,23 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// Teammate view header widget.
 pub struct TeammateViewHeader<'a> {
     agent_name: &'a str,
     agent_color: Option<&'a str>,
     description: Option<&'a str>,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> TeammateViewHeader<'a> {
-    pub fn new(agent_name: &'a str, theme: &'a Theme) -> Self {
+    pub fn new(agent_name: &'a str, styles: UiStyles<'a>) -> Self {
         Self {
             agent_name,
             agent_color: None,
             description: None,
-            theme,
+            styles,
         }
     }
 
@@ -49,7 +49,7 @@ impl Widget for TeammateViewHeader<'_> {
         let name_color = self
             .agent_color
             .map(agent_color_to_ratatui)
-            .unwrap_or(self.theme.primary);
+            .unwrap_or(self.styles.primary());
 
         let mut lines = vec![Line::from(vec![
             Span::raw(t!("team.viewing_prefix").to_string()).dim(),

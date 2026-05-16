@@ -4,7 +4,7 @@ TS-first Rust code agent. TS defines architecture; Rust best practices for imple
 
 ## Principles
 
-1. **TS-first**: Each TS `src/` module maps to a Rust crate. TS source is the specification.
+1. **TS-first**: Each TS source module maps to a Rust crate. TS source is the specification.
 2. **Rust for details**: snafu errors, CancellationToken, Arc sharing, trait-based tools.
 3. **Copy only base infra from cocode-rs**: error, otel, utils (24), vercel-ai (8). Everything else rewrites from TS.
 4. **provider-sdks removed**: vercel-ai handles all provider abstraction.
@@ -539,9 +539,9 @@ Note: cocode-rs has 81 crates. coco-rs v1 has 64 (provider-sdks removed, core/ c
 
 ## TS Dir → Crate → Plan Doc Mapping
 
-Every TS `src/` directory maps to a Rust crate, and every crate has a plan doc.
+Every TS source directory maps to a Rust crate, and every crate has a plan doc.
 
-| TS `src/` dir(s) | Rust crate | Plan doc | Version |
+| TS dir(s) | Rust crate | Plan doc | Version |
 |-------------------|-----------|----------|---------|
 | `types/` | `coco-types` | `crate-coco-types.md` | v1 |
 | `constants/`, `utils/settings/`, `utils/model/`, `migrations/`, `services/remoteManagedSettings/`, `services/settingsSync/` | `coco-config` | `crate-coco-config.md` | v1 |
@@ -632,7 +632,7 @@ Remaining deferred — will be documented during implementation:
 
 ## React Hooks -> Rust Architecture
 
-TS `src/hooks/` has 85 files. In React, hooks are the primary mechanism for connecting business logic to UI state. In Rust, these patterns translate differently:
+TS `hooks/` has 85 files. In React, hooks are the primary mechanism for connecting business logic to UI state. In Rust, these patterns translate differently:
 
 | React pattern | Rust equivalent |
 |--------------|-----------------|
@@ -649,7 +649,7 @@ TS `src/hooks/` has 85 files. In React, hooks are the primary mechanism for conn
 Key v1 hooks: `useTasksV2` (file watcher → tokio::fs), `useFileHistorySnapshotInit` (HashMap state), `useIDEIntegration` (bridge callbacks).
 Key v2 hooks: `useSwarmInitialization` (coordinator), `useHistorySearch` (regex + typeahead), `useScheduledTasks` (tokio::time cron).
 
-Similarly, `src/context/` (9 React Contexts) maps to fields in `coco-state::AppState` — React's Context.Provider pattern is replaced by `Arc<RwLock<AppState>>` shared across components.
+Similarly, `context/` (9 React Contexts) maps to fields in `coco-state::AppState` — React's Context.Provider pattern is replaced by `Arc<RwLock<AppState>>` shared across components.
 
 ## Previously Missing TS Mappings (now added to ts-to-rust-mapping.md)
 
@@ -665,8 +665,8 @@ Added in Round 2 review:
 |------|-----------|
 | `CLAUDE.md` | This file. Entry point. Resolves ambiguities. Review rules. |
 | `coco-rs-plan.md` | Master plan: directory structure, dependency graph, phases, copy/rewrite decisions |
-| `ts-to-rust-mapping.md` | Every TS `src/` directory -> Rust crate (version, strategy) |
-| `ts-utils-mapping.md` | All 338 TS `src/utils/*.ts` files -> Rust target |
+| `ts-to-rust-mapping.md` | Every TS source directory -> Rust crate (version, strategy) |
+| `ts-utils-mapping.md` | All 338 TS `utils/*.ts` files -> Rust target |
 | `multi-provider-plan.md` | Multi-LLM architecture: flow, beta headers, provider branching |
 | `tool-result-budget-plan.md` | Two-level Tool Result Budget plan: Level 1 per-tool persistence (`<persisted-output>` + 2KB preview + session-scoped storage) and Level 2 per-message aggregate budget (`ContentReplacementState` + `enforceToolResultBudget`). Owners: `coco-tool-runtime` + `coco-query` + `coco-session` (re-routed from `coco-context`). |
 | `parity-skills-commands-plugins.md` | Deep-review parity plan for `coco-skills` / `coco-commands` / `coco-plugins`: every P1/P2/P3 gap mirrors TS define/behavior/UI with file:line citations. Round 11 (May 2026). Cross-references `crate-coco-{skills,commands,plugins}.md` and `audit-gaps.md`. |

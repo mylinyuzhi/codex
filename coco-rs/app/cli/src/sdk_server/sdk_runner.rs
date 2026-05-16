@@ -255,7 +255,7 @@ impl TurnRunner for QueryEngineRunner {
                         .and_then(|m| m.uuid())
                         .map(uuid::Uuid::to_string);
                     let had_tool_calls =
-                        coco_session_memory::count_tool_calls_in_last_assistant_turn(&combined) > 0;
+                        coco_messages::count_tool_calls_in_last_assistant_turn(&combined) > 0;
                     let _ = runtime
                         .session_memory
                         .force(tokens, last_msg_id, had_tool_calls)

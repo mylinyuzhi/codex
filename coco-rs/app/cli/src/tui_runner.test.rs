@@ -8,8 +8,10 @@ use super::PermissionsMutation;
 use super::SentinelTrigger;
 use super::classify_sentinel_trigger;
 use super::parse_clear_scope;
+use super::parse_editor_command;
 use super::parse_permissions_mutation;
 use super::parse_slash_command;
+use super::session_plan_file_path;
 use super::should_trigger_title_gen;
 use coco_tui::ClearScope;
 
@@ -92,6 +94,35 @@ fn parse_slash_rejects_non_slash() {
 fn parse_slash_rejects_bare_slash() {
     assert_eq!(parse_slash_command("/"), None);
     assert_eq!(parse_slash_command("   /   "), None);
+}
+
+#[test]
+fn session_plan_file_path_uses_runtime_plan_directory_setting() {
+    let config_home = tempfile::tempdir().expect("config home");
+    let project = tempfile::tempdir().expect("project");
+    let path = session_plan_file_path(
+        config_home.path(),
+        Some(project.path()),
+        Some("plans"),
+        "session-1",
+    );
+
+    assert!(path.starts_with(project.path().canonicalize().unwrap().join("plans")));
+    assert_eq!(path.extension().and_then(|e| e.to_str()), Some("md"));
+}
+
+#[test]
+fn parse_editor_command_splits_quoted_args() {
+    let (program, args) =
+        parse_editor_command("code --wait --reuse-window 'memory file.md'").expect("parsed");
+    assert_eq!(program, "code");
+    assert_eq!(args, vec!["--wait", "--reuse-window", "memory file.md"]);
+}
+
+#[test]
+fn parse_editor_command_rejects_unbalanced_quotes() {
+    let err = parse_editor_command("code 'unterminated").expect_err("should reject");
+    assert!(err.contains("failed to parse editor command"));
 }
 
 // `classify_sentinel_trigger` — decides whether a registry handler's

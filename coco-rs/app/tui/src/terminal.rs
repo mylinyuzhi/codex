@@ -1,7 +1,7 @@
 //! Terminal setup and management.
 //!
 //! Provides terminal initialization/restoration and the [`Tui`] wrapper
-//! that manages the ratatui terminal instance.
+//! that manages the native scrollback terminal surface.
 
 use std::io::IsTerminal;
 use std::io::Stdout;
@@ -10,33 +10,41 @@ use std::io::{self};
 use std::panic;
 use std::sync::OnceLock;
 
-use crossterm::cursor::Hide;
-use crossterm::cursor::MoveTo;
+use crossterm::cursor::MoveToNextLine;
 use crossterm::cursor::Show;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::execute;
-use crossterm::queue;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::disable_raw_mode;
 use crossterm::terminal::enable_raw_mode;
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Rect;
+use ratatui::layout::Size;
 
-use crate::cursor::CursorClaim;
 use crate::job_control::SuspendContext;
+use crate::render::FrameLayout;
+use crate::state::AppState;
+use crate::surface::controller::NativeSurfaceController;
+use crate::surface::overlay::OverlaySurfacePlacement;
+use crate::surface::overlay::overlay_surface_placement;
+use crate::surface::terminal::SurfaceTerminal;
+use crate::surface::viewport::interactive_viewport_desired_height;
 
 /// Type alias for the terminal backend.
 pub type TerminalBackend = CrosstermBackend<Stdout>;
 
-/// Type alias for the ratatui terminal.
-pub type RatatuiTerminal = Terminal<TerminalBackend>;
+/// Type alias for the native surface terminal.
+pub(crate) type NativeTerminal = SurfaceTerminal<TerminalBackend>;
 
-/// Enable the TUI-private terminal modes (raw mode, alt-screen,
-/// bracketed paste, focus-change reporting).
+const NATIVE_VIEWPORT_MIN_HEIGHT: u16 = 4;
+const NATIVE_VIEWPORT_MAX_HEIGHT: u16 = 12;
+
+/// Enable the TUI-private terminal modes (raw mode, bracketed paste, and
+/// focus-change reporting).
 ///
 /// Shared by [`setup_terminal`] (initial install) and
 /// [`crate::job_control::SuspendContext::suspend`] (re-arm after SIGCONT).
@@ -44,17 +52,13 @@ pub type RatatuiTerminal = Terminal<TerminalBackend>;
 /// while already in raw mode is a no-op.
 pub(crate) fn enter_tui_modes(stdout: &mut Stdout) -> io::Result<()> {
     enable_raw_mode()?;
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableBracketedPaste,
-        EnableFocusChange,
-    )?;
+    execute!(stdout, EnableBracketedPaste, EnableFocusChange)?;
     Ok(())
 }
 
-/// Disable the TUI-private terminal modes. Mirror image of
-/// [`enter_tui_modes`].
+/// Disable TUI-private terminal modes and leave alt-screen if an overlay had
+/// entered it. `LeaveAlternateScreen` is intentionally idempotent here so panic
+/// cleanup and suspend/external-process paths share one terminal reset.
 pub(crate) fn leave_tui_modes() -> io::Result<()> {
     disable_raw_mode()?;
     execute!(
@@ -68,14 +72,14 @@ pub(crate) fn leave_tui_modes() -> io::Result<()> {
 
 /// Set up the terminal for TUI mode.
 ///
-/// Enables alt-screen, raw mode, bracketed paste, and focus-change
-/// reporting. Uses ratatui's default [`Viewport::Fullscreen`] so the
-/// whole alt-screen is the canvas — same model as TS Claude Code via
-/// Ink.
+/// Enables raw mode, bracketed paste, and focus-change reporting. The normal
+/// surface stays in the main terminal buffer so finalized history can be
+/// inserted into native scrollback. Alt-screen is entered only for overlay
+/// surfaces that explicitly request it.
 ///
 /// Panic hook install is idempotent across repeated [`setup_terminal`]
 /// calls (e.g. tests that build and drop multiple Tui instances).
-pub fn setup_terminal() -> io::Result<RatatuiTerminal> {
+pub(crate) fn setup_terminal() -> io::Result<NativeTerminal> {
     if !io::stdin().is_terminal() {
         return Err(io::Error::other("stdin is not a terminal"));
     }
@@ -89,7 +93,7 @@ pub fn setup_terminal() -> io::Result<RatatuiTerminal> {
     install_panic_hook_once();
 
     let backend = CrosstermBackend::new(stdout);
-    Terminal::new(backend)
+    SurfaceTerminal::new(backend)
 }
 
 /// Restore the terminal to its original state — leaves alt-screen and
@@ -114,10 +118,12 @@ fn install_panic_hook_once() {
     });
 }
 
-/// TUI manager wrapping the ratatui terminal.
+/// TUI manager wrapping the native scrollback terminal surface.
 pub struct Tui {
-    terminal: RatatuiTerminal,
+    terminal: NativeTerminal,
+    surface: NativeSurfaceController,
     suspend_context: SuspendContext,
+    alt_screen_active: bool,
 }
 
 impl Tui {
@@ -126,59 +132,21 @@ impl Tui {
         let terminal = setup_terminal()?;
         Ok(Self {
             terminal,
+            surface: NativeSurfaceController::new(),
             suspend_context: SuspendContext::new(),
+            alt_screen_active: false,
         })
     }
 
-    /// Create from an existing terminal (for testing).
-    pub fn with_terminal(terminal: RatatuiTerminal) -> Self {
-        Self {
-            terminal,
-            suspend_context: SuspendContext::new(),
-        }
-    }
-
-    /// Draw a frame to the alt-screen.
-    ///
-    /// The render closure returns [`Option<CursorClaim>`]: where (and
-    /// how) the cursor should land at the end of this frame. We collect
-    /// it inside the `terminal.draw` body, let ratatui flush its own
-    /// pass (which emits `Hide` because we never call
-    /// `frame.set_cursor_position`), and then post-draw we override:
-    ///
-    /// - `Some(claim)` → `queue!(SetCursorStyle, MoveTo, Show)` so the
-    ///   cursor lands at the exact column/row with the requested shape.
-    /// - `None`        → `queue!(Hide, MoveTo(0, 0))` so the cursor has
-    ///   a defined home; otherwise terminals like iTerm2 / Terminal.app
-    ///   re-show it at the last write position (status bar end) on
-    ///   focus-gained.
-    ///
-    /// Before painting, applies any pending [`crate::job_control::PreparedResumeAction`]
-    /// left by a prior `Ctrl+Z → fg` cycle so the terminal modes are
-    /// re-armed before the render closure runs.
-    pub fn draw<F>(&mut self, render_fn: F) -> io::Result<()>
-    where
-        F: FnOnce(&mut ratatui::Frame) -> Option<CursorClaim>,
-    {
+    /// Draw one native surface frame.
+    pub fn draw(&mut self, state: &AppState) -> io::Result<FrameLayout> {
         if let Some(prepared) = self.suspend_context.prepare_resume_action() {
-            prepared.apply(&mut self.terminal)?;
+            prepared.apply(|| self.clear_surface_after_resume())?;
         }
 
-        let mut claim: Option<CursorClaim> = None;
-        self.terminal.draw(|frame| {
-            claim = render_fn(frame);
-        })?;
-
-        let backend = self.terminal.backend_mut();
-        match claim {
-            Some(c) => {
-                queue!(backend, c.style, MoveTo(c.position.x, c.position.y), Show,)?;
-            }
-            None => {
-                queue!(backend, Hide, MoveTo(0, 0))?;
-            }
-        }
-        backend.flush()
+        self.sync_surface_area(state)?;
+        let outcome = self.surface.draw(&mut self.terminal, state)?;
+        Ok(outcome.layout)
     }
 
     /// Initiate the Ctrl+Z suspend dance. Blocks until SIGCONT delivered
@@ -187,23 +155,120 @@ impl Tui {
     /// next [`draw`].
     ///
     /// No-op on non-Unix platforms.
-    pub fn trigger_suspend(&self) -> io::Result<()> {
-        self.suspend_context.suspend()
+    pub fn trigger_suspend(&mut self) -> io::Result<()> {
+        self.suspend_context.suspend()?;
+        self.alt_screen_active = false;
+        Ok(())
+    }
+
+    /// Leave TUI-private terminal modes before running an interactive
+    /// child process such as `$EDITOR`.
+    pub fn prepare_external_process(&mut self) -> io::Result<()> {
+        let mut stdout = io::stdout();
+        leave_tui_modes()?;
+        self.alt_screen_active = false;
+        if let Err(err) = execute!(stdout, MoveToNextLine(1), Show) {
+            let _ = enter_tui_modes(&mut stdout);
+            return Err(err);
+        }
+        stdout.flush()
+    }
+
+    /// Re-enter TUI modes after an external process exits and force the
+    /// next frame to repaint the native surface.
+    pub fn restore_after_external_process(&mut self) -> io::Result<()> {
+        let mut stdout = io::stdout();
+        enter_tui_modes(&mut stdout)?;
+        self.alt_screen_active = false;
+        self.clear_surface_after_resume()
     }
 
     /// Clear the terminal.
     pub fn clear(&mut self) -> io::Result<()> {
-        self.terminal.clear()
+        self.terminal.clear_owned_scrollback()?;
+        self.surface.reset();
+        Ok(())
     }
 
     /// Get terminal size.
     pub fn size(&self) -> io::Result<ratatui::layout::Size> {
         self.terminal.size()
     }
+
+    fn clear_surface_after_resume(&mut self) -> io::Result<()> {
+        self.terminal.clear_owned_scrollback()?;
+        self.surface.reset();
+        Ok(())
+    }
+
+    fn prepare_shell_prompt_after_exit(&mut self) -> io::Result<()> {
+        let size = self.terminal.size()?;
+        if self.alt_screen_active {
+            execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+            self.alt_screen_active = false;
+            self.terminal
+                .set_viewport_area(native_viewport_area(size, NATIVE_VIEWPORT_MIN_HEIGHT));
+        }
+
+        self.terminal.prepare_shell_prompt_after_exit()?;
+        std::io::Write::flush(self.terminal.backend_mut())
+    }
+
+    fn sync_surface_area(&mut self, state: &AppState) -> io::Result<()> {
+        let size = self.terminal.size()?;
+        let wants_alt = matches!(
+            overlay_surface_placement(state.ui.overlay.as_ref()),
+            Some(OverlaySurfacePlacement::AltScreen)
+        );
+
+        if wants_alt && !self.alt_screen_active {
+            execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
+            self.alt_screen_active = true;
+            self.terminal.clear_owned_scrollback()?;
+        } else if !wants_alt && self.alt_screen_active {
+            execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+            self.alt_screen_active = false;
+            self.terminal.clear_owned_scrollback()?;
+            self.surface.reset();
+        }
+
+        let area = if self.alt_screen_active {
+            Rect::new(0, 0, size.width, size.height)
+        } else {
+            let desired_height =
+                interactive_viewport_desired_height(state, size.width, NATIVE_VIEWPORT_MAX_HEIGHT);
+            native_viewport_area(size, desired_height)
+        };
+        if self.terminal.viewport_area() != area {
+            self.terminal
+                .apply_viewport_area(area, !self.alt_screen_active)?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Tui {
     fn drop(&mut self) {
+        let _ = self.prepare_shell_prompt_after_exit();
         let _ = restore_terminal();
+        // zsh shows PROMPT_EOL_MARK (`%`) when the command's final output
+        // does not end in a newline. Terminal mode restore emits escape
+        // sequences, so the newline must be the last best-effort write.
+        let _ = self.terminal.backend_mut().write_all(b"\r\n");
+        let _ = self.terminal.backend_mut().flush();
     }
 }
+
+fn native_viewport_area(size: Size, desired_height: u16) -> Rect {
+    if size.height == 0 {
+        return Rect::new(0, 0, size.width, 0);
+    }
+    let height = desired_height
+        .clamp(NATIVE_VIEWPORT_MIN_HEIGHT, NATIVE_VIEWPORT_MAX_HEIGHT)
+        .min(size.height);
+    Rect::new(0, size.height - height, size.width, height)
+}
+
+#[cfg(test)]
+#[path = "terminal.test.rs"]
+mod tests;

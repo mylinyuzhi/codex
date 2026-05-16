@@ -308,20 +308,21 @@ fn do_clear_conversation(state: &mut AppState, clear_plan_state: bool) {
 }
 
 /// Handle a submission whose leading character is a prompt-mode prefix
-/// (`!` bash or `#` memory). Pushes the appropriate local
-/// `ChatMessage` so the user sees the input echoed immediately, then
-/// dispatches a typed `UserCommand` for the engine bridge to execute.
+/// (`!` bash). Pushes the appropriate local `ChatMessage` so the user
+/// sees the input echoed immediately, then dispatches a typed
+/// `UserCommand` for the engine bridge to execute.
 ///
 /// The bridge in `tui_runner` is responsible for emitting the matching
-/// follow-up message (`BashOutput` / a memory-write confirmation). The
-/// TUI never touches the filesystem or shell directly — keeps the
-/// permission model and side-effect surface in one place.
+/// follow-up `BashOutput` message. The TUI never touches the shell
+/// directly — keeps the permission model and side-effect surface in one
+/// place.
 async fn submit_prefixed(
     state: &mut AppState,
     command_tx: &mpsc::Sender<UserCommand>,
     mode: PromptMode,
     text: &str,
 ) -> bool {
+    debug_assert_eq!(mode, PromptMode::Bash);
     let payload = mode.strip_prefix(text).to_string();
     if payload.is_empty() {
         // Empty body after stripping the prefix (e.g. user typed just
@@ -335,29 +336,19 @@ async fn submit_prefixed(
     state.ui.input.add_to_history(text.to_string());
 
     let user_message_id = uuid::Uuid::new_v4().to_string();
-    let message = match mode {
-        PromptMode::Bash => {
-            crate::state::session::ChatMessage::user_bash_input(user_message_id.clone(), &payload)
-        }
-        PromptMode::Memory => {
-            crate::state::session::ChatMessage::user_memory_input(user_message_id.clone(), &payload)
-        }
-        PromptMode::Normal => unreachable!("submit_prefixed only handles non-Normal modes"),
-    };
-    state.session.add_message(message);
+    state
+        .session
+        .add_message(crate::state::session::ChatMessage::user_bash_input(
+            user_message_id.clone(),
+            &payload,
+        ));
 
-    let command = match mode {
-        PromptMode::Bash => UserCommand::SubmitBash {
+    let _ = command_tx
+        .send(UserCommand::SubmitBash {
             user_message_id,
             command: payload,
-        },
-        PromptMode::Memory => UserCommand::SubmitMemory {
-            user_message_id,
-            content: payload,
-        },
-        PromptMode::Normal => unreachable!("submit_prefixed only handles non-Normal modes"),
-    };
-    let _ = command_tx.send(command).await;
+        })
+        .await;
 
     state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;

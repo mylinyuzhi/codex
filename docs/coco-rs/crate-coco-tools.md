@@ -1,6 +1,6 @@
 # coco-tools — Crate Plan
 
-TS source: `src/tools/` (40 tool directories + `shared/` + `testing/`)
+TS source: `tools/` (40 tool directories + `shared/` + `testing/`)
 
 Each tool implements the `Tool` trait from `coco-tool`.
 

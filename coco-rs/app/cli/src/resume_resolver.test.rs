@@ -8,7 +8,24 @@ fn cli_with(args: &[&str]) -> Cli {
     Cli::parse_from(full)
 }
 
-fn write_minimal_session(dir: &std::path::Path, id: &str) {
+/// Synthetic cwd used by every test in this module. Any path works
+/// — the resolver's worktree fallback collapses unknown paths
+/// through `coco_paths::ProjectPaths` slugging.
+const TEST_CWD: &str = "/test-cwd";
+
+/// Resolve the on-disk project directory for `TEST_CWD` under
+/// `memory_base` (= the tempdir root). Tests write fixture JSONLs
+/// under this dir so the resolver finds them via the same path math
+/// production code uses.
+fn project_dir(memory_base: &std::path::Path) -> std::path::PathBuf {
+    let paths =
+        coco_paths::ProjectPaths::new(memory_base.to_path_buf(), std::path::Path::new(TEST_CWD));
+    paths.project_dir()
+}
+
+fn write_minimal_session(memory_base: &std::path::Path, id: &str) {
+    let dir = project_dir(memory_base);
+    std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{id}.jsonl"));
     let body = format!(
         "{}\n{}\n",
@@ -36,7 +53,7 @@ fn write_minimal_session(dir: &std::path::Path, id: &str) {
 fn no_flags_returns_none() {
     let dir = tempfile::tempdir().unwrap();
     let cli = cli_with(&[]);
-    let plan = resolve(&cli, dir.path()).expect("resolve runs");
+    let plan = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD)).expect("resolve runs");
     assert!(plan.is_none(), "no resume flags ⇒ no plan");
 }
 
@@ -46,7 +63,7 @@ fn resume_by_id_loads_messages() {
     write_minimal_session(dir.path(), "alpha");
 
     let cli = cli_with(&["--resume", "alpha"]);
-    let plan = resolve(&cli, dir.path())
+    let plan = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD))
         .expect("resolve runs")
         .expect("plan emitted");
 
@@ -62,7 +79,8 @@ fn resume_by_id_loads_messages() {
 fn resume_unknown_id_errors() {
     let dir = tempfile::tempdir().unwrap();
     let cli = cli_with(&["--resume", "nope"]);
-    let err = resolve(&cli, dir.path()).expect_err("unknown id ⇒ error");
+    let err =
+        resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD)).expect_err("unknown id ⇒ error");
     assert!(err.to_string().contains("no session found"));
 }
 
@@ -70,7 +88,7 @@ fn resume_unknown_id_errors() {
 fn continue_with_no_sessions_returns_none() {
     let dir = tempfile::tempdir().unwrap();
     let cli = cli_with(&["--continue"]);
-    let plan = resolve(&cli, dir.path()).expect("resolve runs");
+    let plan = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD)).expect("resolve runs");
     assert!(plan.is_none(), "no sessions ⇒ fall through to fresh");
 }
 
@@ -84,7 +102,7 @@ fn continue_picks_most_recent() {
     write_minimal_session(dir.path(), "newer");
 
     let cli = cli_with(&["--continue"]);
-    let plan = resolve(&cli, dir.path())
+    let plan = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD))
         .expect("resolve runs")
         .expect("plan emitted");
     assert_eq!(plan.source_session_id, "newer");
@@ -96,7 +114,7 @@ fn fork_creates_new_id_and_copies_jsonl() {
     write_minimal_session(dir.path(), "src");
 
     let cli = cli_with(&["--resume", "src", "--fork-session"]);
-    let plan = resolve(&cli, dir.path())
+    let plan = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD))
         .expect("resolve runs")
         .expect("plan emitted");
 
@@ -131,7 +149,7 @@ fn fork_honors_explicit_session_id() {
         "--session-id",
         "forked-1",
     ]);
-    let plan = resolve(&cli, dir.path())
+    let plan = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD))
         .expect("resolve runs")
         .expect("plan emitted");
     assert_eq!(plan.session_id, "forked-1");
