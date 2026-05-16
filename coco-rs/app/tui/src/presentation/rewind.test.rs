@@ -1,7 +1,7 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-use crate::i18n::set_locale;
+use crate::i18n::locale_test_guard;
 use crate::state::rewind::SummarizeDirection;
 
 fn message(id: &str, text: &str) -> RewindableMessage {
@@ -36,7 +36,7 @@ fn overlay_with_messages(messages: Vec<RewindableMessage>) -> RewindOverlay {
 
 #[test]
 fn rewind_message_select_renders_empty_state_when_only_current_row_exists() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut current = message("", "(current)");
     current.is_current_prompt = true;
@@ -52,7 +52,7 @@ fn rewind_message_select_renders_empty_state_when_only_current_row_exists() {
 
 #[test]
 fn rewind_message_select_renders_diff_metadata_and_scroll_hint() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut messages = (0..9)
         .map(|i| message(&format!("msg-{i}"), &format!("message {i}")))
@@ -77,7 +77,7 @@ fn rewind_message_select_renders_diff_metadata_and_scroll_hint() {
 
 #[test]
 fn rewind_restore_options_describes_code_restore_and_manual_warning() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut overlay = overlay_with_messages(vec![message("msg-1", "fix bug")]);
     overlay.phase = RewindPhase::RestoreOptions;
@@ -105,7 +105,7 @@ fn rewind_restore_options_describes_code_restore_and_manual_warning() {
 
 #[test]
 fn rewind_restore_options_clamps_negative_selection() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut overlay = overlay_with_messages(vec![message("msg-1", "fix bug")]);
     overlay.phase = RewindPhase::RestoreOptions;
@@ -121,7 +121,7 @@ fn rewind_restore_options_clamps_negative_selection() {
 
 #[test]
 fn rewind_summarize_feedback_and_confirming_use_pending_state() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut overlay = overlay_with_messages(vec![message("msg-1", "fix bug")]);
     overlay.phase = RewindPhase::SummarizeFeedback;

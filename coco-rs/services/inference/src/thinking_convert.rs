@@ -77,7 +77,7 @@ pub fn to_extra_body(
             // that can silently emit `{"type":"enabled"}` for
             // Disable/Auto.
             match level.effort {
-                ReasoningEffort::Disable => {
+                ReasoningEffort::Off => {
                     out.insert("thinking".into(), serde_json::json!({"type": "disabled"}));
                 }
                 ReasoningEffort::Auto => {
@@ -121,7 +121,7 @@ pub fn to_extra_body(
                         ReasoningEffort::Medium => "medium",
                         ReasoningEffort::High => "high",
                         ReasoningEffort::XHigh => "max",
-                        ReasoningEffort::Disable | ReasoningEffort::Auto => unreachable!(),
+                        ReasoningEffort::Off | ReasoningEffort::Auto => unreachable!(),
                     };
                     out.insert(
                         "output_config".into(),

@@ -1,5 +1,6 @@
 use super::*;
-use crate::i18n::set_locale;
+use crate::i18n::locale_test_guard;
+use coco_types::ReasoningEffort;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
@@ -67,7 +68,7 @@ fn lines_text(lines: &[Line<'_>]) -> String {
 }
 
 fn render_snapshot(width: u16, height: u16, overlay: &ModelPickerOverlay) -> String {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     let theme = Theme::default();
@@ -87,7 +88,7 @@ fn render_snapshot(width: u16, height: u16, overlay: &ModelPickerOverlay) -> Str
 
 #[test]
 fn groups_rows_by_provider() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let overlay = sample_overlay();
     let view = build_view_model(&overlay, 20);
 
@@ -107,7 +108,7 @@ fn groups_rows_by_provider() {
 
 #[test]
 fn current_row_is_visible_and_badged() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let overlay = sample_overlay();
     let theme = Theme::default();
     let lines = render_model_picker_lines(&overlay, UiStyles::new(&theme), 80, 18);
@@ -119,7 +120,7 @@ fn current_row_is_visible_and_badged() {
 
 #[test]
 fn unavailable_provider_rows_stay_visible_with_reason() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let mut overlay = sample_overlay();
     overlay.selected = 3;
     overlay.effort = Some(ReasoningEffort::Low);
@@ -134,7 +135,7 @@ fn unavailable_provider_rows_stay_visible_with_reason() {
 
 #[test]
 fn effort_line_handles_supported_and_unsupported_models() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let mut overlay = sample_overlay();
     let theme = Theme::default();
     let supported = build_view_model(&overlay, 10);
@@ -160,7 +161,7 @@ fn effort_line_handles_supported_and_unsupported_models() {
 
 #[test]
 fn filtered_selection_uses_filtered_index() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let mut overlay = sample_overlay();
     overlay.filter = "open".to_string();
     overlay.selected = 0;

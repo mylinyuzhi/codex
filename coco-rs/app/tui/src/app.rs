@@ -215,8 +215,7 @@ impl App {
     /// - Spinner timer (50ms — animation frames)
     pub async fn run(&mut self) -> io::Result<()> {
         // Initial render
-        let state = &self.state;
-        self.tui.draw(|frame| render::render(frame, state))?;
+        self.redraw()?;
 
         let mut event_stream = EventStream::new();
         let mut tick_interval = interval(constants::TICK_INTERVAL);
@@ -293,8 +292,7 @@ impl App {
             self.dispatch_pending_search();
 
             if needs_redraw {
-                let state = &self.state;
-                self.tui.draw(|frame| render::render(frame, state))?;
+                self.redraw()?;
             }
 
             if self.state.should_exit() {
@@ -302,6 +300,19 @@ impl App {
             }
         }
 
+        Ok(())
+    }
+
+    /// Run a single draw cycle.
+    ///
+    /// The closure returns a cursor claim that `Tui::draw` consumes
+    /// post-draw via crossterm `queue!`.
+    fn redraw(&mut self) -> io::Result<()> {
+        let state = &self.state;
+        self.tui.draw(|frame| {
+            let layout = render::render(frame, state);
+            crate::cursor::compute_cursor(state, layout.input)
+        })?;
         Ok(())
     }
 
@@ -354,6 +365,17 @@ impl App {
                 // Only handle key press events (not release/repeat) for cross-platform
                 if key.kind != KeyEventKind::Press {
                     return None;
+                }
+                // Intercept Ctrl+Z before keybinding dispatch so the
+                // user can never accidentally remap process suspend.
+                // Raw mode would otherwise eat the keystroke silently.
+                // On non-Unix it falls through as a normal Key event
+                // (no SIGTSTP semantics anyway).
+                #[cfg(unix)]
+                if key.code == crossterm::event::KeyCode::Char('z')
+                    && key.modifiers == crossterm::event::KeyModifiers::CONTROL
+                {
+                    return Some(TuiEvent::Suspend);
                 }
                 Some(TuiEvent::Key(key))
             }
@@ -433,11 +455,29 @@ impl App {
                 crate::autocomplete::refresh_suggestions(&mut self.state);
                 true
             }
+            TuiEvent::Suspend => {
+                // Blocks until SIGCONT (typically delivered by `fg` in
+                // the parent shell). On return, `Tui::draw` will pick
+                // up the pending resume action and re-enter alt-screen
+                // + clear on the next frame. If the suspend/restore path
+                // fails, exit instead of continuing in an unknown terminal
+                // mode.
+                if let Err(err) = self.tui.trigger_suspend() {
+                    tracing::error!(error = %err, "trigger_suspend failed; exiting TUI");
+                    self.state.quit();
+                    return false;
+                }
+                true
+            }
             TuiEvent::Resize { .. } => true,
             TuiEvent::FocusChanged { focused } => {
                 // Track focus for turn-complete notification gating.
                 self.state.ui.terminal_focused = focused;
-                false
+                // Force a redraw so the post-draw cursor pin re-asserts
+                // the cursor position. Without this, terminals like
+                // iTerm2 / Terminal.app re-show the cursor at the last
+                // write position (status bar end) on focus-gained.
+                true
             }
             TuiEvent::Draw => true,
             TuiEvent::ClassifierApproved {

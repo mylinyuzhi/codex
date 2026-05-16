@@ -670,7 +670,11 @@ Added in Round 2 review:
 | `multi-provider-plan.md` | Multi-LLM architecture: flow, beta headers, provider branching |
 | `tool-result-budget-plan.md` | Two-level Tool Result Budget plan: Level 1 per-tool persistence (`<persisted-output>` + 2KB preview + session-scoped storage) and Level 2 per-message aggregate budget (`ContentReplacementState` + `enforceToolResultBudget`). Owners: `coco-tool-runtime` + `coco-query` + `coco-session` (re-routed from `coco-context`). |
 | `parity-skills-commands-plugins.md` | Deep-review parity plan for `coco-skills` / `coco-commands` / `coco-plugins`: every P1/P2/P3 gap mirrors TS define/behavior/UI with file:line citations. Round 11 (May 2026). Cross-references `crate-coco-{skills,commands,plugins}.md` and `audit-gaps.md`. |
-| `tui-overall-design.md` | TUI overall design: conversation workspace, theme/style contract, typed picker architecture, `/memory` picker convergence, model/provider picker constraints, and phased implementation plan. |
+| `ui/agent-console-design.md` | Final agent-console product architecture: TEA / `AppState`, transcript, streaming, activity, bottom pane, prompts, pickers, pagers, effects, and verification. |
+| `ui/terminal-surface-design.md` | Native terminal-surface constraints: native scrollback as the base surface, SurfaceTerminal, cursor/resize/suspend behavior, and terminal verification. |
+| `ui/migration-roadmap.md` | Historical TUI migration notes; not the final product organization. |
+| `ui/rendering-hardening-and-rollback.md` | TUI rendering-layer hardening: cursor pin (single decision point + post-draw queue) and suspend/resume (Ctrl+Z keystroke + libc::kill). Records why the stock-ratatui inline viewport experiment was rolled back. |
+| `ui/native-scrollback-architecture.md` | Native terminal scrollback architecture for coco-tui, based on codex-rs custom terminal / insert-history / transcript-reflow design rather than stock ratatui inline viewport. |
 | `config-file-map.md` | Every file coco-rs reads/writes, which crate owns it |
 | `audit-gaps.md` | Gap analysis with fix status and priority |
 | `current-gap-fix-plan.md` | Current prioritized fix plan for active gaps, plus stale audit rows to clean up before assigning implementation work. |

@@ -897,14 +897,23 @@ pub enum ProviderApi {
 #[serde(rename_all = "snake_case")]
 pub enum ModelRole {
     Main,       // Primary conversation
-    Fast,       // Quick/cheap (Haiku)
-    Compact,    // Summarization (falls back to Main)
-    Plan,       // Planning/architecture
-    Explore,    // Codebase exploration
-    Review,     // Code review
-    HookAgent,  // Hook agent execution
+    Plan,       // Planning/architecture and plan subagents
+    Fast,       // Quick/cheap work
+    Explore,    // Codebase exploration subagents
+    Review,     // Code review / verification subagents
+    Subagent,   // Default role for generic/custom subagent execution
     Memory,     // Memory relevance ranking
+    HookAgent,  // Hook agent execution
 }
+
+// There is no ModelRole::Compact in the current type. Compaction uses the
+// compact service/config path and model-role fallback rules instead of a
+// separate closed role variant.
+//
+// Subagent role resolution is owned by core/subagent:
+// AgentDefinition.model_role > built-in subagent mapping > ModelRole::Subagent.
+// Built-ins map Explore -> Explore, Plan -> Plan, Verification -> Review, and
+// generic/custom subagents default to Subagent.
 
 /// A resolved model identity: provider + model ID.
 /// Produced by coco-config, consumed by coco-inference.

@@ -123,7 +123,6 @@ role.review: "审阅"
 role.hook_agent: "Hook"
 role.memory: "记忆"
 role.subagent: "子代理"
-toast.model_set: "已设置 %{role} → %{provider}/%{model}%{effort}"
 toast.model_save_failed: "保存模型选择失败: %{error}"
 toast.syntax_highlighting_saved: "语法高亮已%{status}；已保存到 %{path}"
 toast.syntax_highlighting_save_failed: "保存语法高亮设置失败: %{error}"
@@ -444,13 +443,6 @@ chat.auto_approved: "\n✓ 已自动批准 · 匹配 '%{rule}'"
 chat.risk_badge: "\n\n⚠ %{risk}"
 chat.tool_rejected: "%{tool_name} 已拒绝: "
 chat.tool_canceled: "%{tool_name} 已取消"
-
-# ─── 工具面板 ──────────────────────────────────────────────
-tool.title: "工具"
-tool.no_active: "无活动工具"
-tool.running: "运行中"
-tool.completed: "已完成"
-tool.failed: "失败"
 
 # ─── 子代理面板 ────────────────────────────────────────────
 subagent.title: "代理"

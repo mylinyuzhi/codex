@@ -25,17 +25,18 @@ fn parse_locale_unknown_returns_none() {
 
 #[test]
 fn t_macro_returns_non_empty_for_known_key() {
+    let _locale = locale_test_guard("en");
     let text = t!("command.toggle_plan_mode");
     assert!(!text.is_empty());
 }
 
 #[test]
 fn set_locale_switches_translation() {
+    let _locale = locale_test_guard("en");
     set_locale("en");
     let en = t!("command.submit_input").to_string();
     set_locale("zh-CN");
     let zh = t!("command.submit_input").to_string();
-    set_locale("en");
 
     assert_eq!(en, "Submit Input");
     assert_eq!(zh, "提交");

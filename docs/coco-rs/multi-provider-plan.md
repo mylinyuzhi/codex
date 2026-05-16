@@ -140,6 +140,30 @@ A single `ProviderApi::OpenaiCompat` may back N instance identifiers (`xai`, `gr
                  model.do_generate(call_options)   ← Layer 3 (upstream)
 ```
 
+### 3.1 Model Roles And Subagent Precedence
+
+The canonical closed set is `coco_types::ModelRole`, documented in
+`crate-coco-types.md`: `Main`, `Fast`, `Plan`, `Explore`, `Review`,
+`Subagent`, `Memory`, and `HookAgent`. There is no `Compact` role in the
+current enum; compaction uses the compact service/config path and fallback
+rules rather than `ModelRole::Compact`.
+
+`ModelRole::Subagent` is the default LLM role for generic/custom subagent
+execution. It does not replace the narrower built-in subagent roles. Spawn-time
+selection follows this order:
+
+1. explicit model override: AgentTool request `model` > agent definition
+   `model`;
+2. explicit role override: `AgentDefinition.model_role`;
+3. built-in subagent mapping: `Explore` -> `Explore`, `Plan` -> `Plan`,
+   `Verification` -> `Review`;
+4. generic built-ins (`GeneralPurpose`, `StatusLine`, `CocoGuide`), custom
+   agents, and missing type -> `Subagent`.
+
+The concrete model override and semantic model role are independent. A subagent
+can pin a concrete model while still carrying a role for fallback, recovery
+policy, and telemetry.
+
 ## 4. Configuration File Shape
 
 Three fixed-name sibling files under `~/.coco/`:
@@ -841,8 +865,8 @@ The vercel-ai contract says: **the language model implementation reads `provider
 
 ```
 settings.providers.<KEY>      → ProviderConfig.name = <KEY>
-                              → call.provider_options[<KEY>]  
-                              → model.provider() returns <KEY>      
+                              → call.provider_options[<KEY>]
+                              → model.provider() returns <KEY>
                               → reads its own namespace ✓
 ```
 

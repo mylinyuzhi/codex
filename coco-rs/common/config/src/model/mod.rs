@@ -119,11 +119,31 @@ impl ModelInfo {
     /// Resolve a `PartialModelInfo` into a complete `ModelInfo`. The
     /// only public path from JSON; surfaces a typed error when a
     /// required field never appeared anywhere in the merge chain.
+    ///
+    /// Cross-field invariants enforced here:
+    /// - `default_thinking_level` (when set) must match the `.effort`
+    ///   of some entry in `supported_thinking_levels` (when set).
+    ///   The default exists to identify the picker entry to highlight,
+    ///   so an unmatched default would silently degrade `default_thinking()`
+    ///   to `None`.
     pub fn from_partial(
         provider: &str,
         model_id: &str,
         partial: PartialModelInfo,
     ) -> Result<Self, ConfigError> {
+        if let (Some(default), Some(levels)) = (
+            partial.default_thinking_level,
+            partial.supported_thinking_levels.as_ref(),
+        ) && !levels.iter().any(|l| l.effort == default)
+        {
+            return Err(ConfigError::DefaultThinkingLevelNotSupported {
+                provider: provider.to_string(),
+                model: model_id.to_string(),
+                default,
+                supported: levels.iter().map(|l| l.effort).collect(),
+            });
+        }
+
         Ok(Self {
             model_id: model_id.to_string(),
             display_name: partial.display_name,

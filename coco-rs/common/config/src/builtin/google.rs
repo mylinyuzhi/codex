@@ -45,7 +45,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                 Capability::ClientSideToolSearch,
             ]),
             supported_thinking_levels: Some(gemini_thinking_levels()),
-            default_thinking_level: Some(ReasoningEffort::Auto),
+            default_thinking_level: Some(ReasoningEffort::Medium),
             ..Default::default()
         },
     )]

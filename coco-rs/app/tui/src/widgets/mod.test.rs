@@ -3,6 +3,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
+use crate::i18n::locale_test_guard;
 use crate::render;
 use crate::state::AppState;
 use crate::state::Overlay;
@@ -15,10 +16,13 @@ use crate::state::session::MessageContent;
 use crate::state::session::ToolUseStatus;
 
 fn render_to_string(state: &AppState, width: u16, height: u16) -> String {
+    let _locale = locale_test_guard("en");
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal creation");
     terminal
-        .draw(|frame| render::render(frame, state))
+        .draw(|frame| {
+            let _layout = render::render(frame, state);
+        })
         .expect("render");
     let buf = terminal.backend().buffer().clone();
 

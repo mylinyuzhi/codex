@@ -39,7 +39,6 @@ mod teammate_spinner;
 mod teammate_view_header;
 pub mod textarea;
 mod toast;
-mod tool_panel;
 mod verification_nudge_banner;
 
 #[cfg(test)]
@@ -75,5 +74,4 @@ pub use textarea::BolBehavior;
 pub use textarea::EolBehavior;
 pub use textarea::TextArea;
 pub use toast::ToastWidget;
-pub use tool_panel::ToolPanel;
 pub use verification_nudge_banner::VerificationNudgeBanner;

@@ -1,25 +1,41 @@
-# TUI Overall Design and Migration Roadmap
+# TUI Historical Migration Notes
 
-Status: target design for the next `coco-rs/app/tui` consolidation.
+Status: historical implementation notes. Not the final product organization.
 
 `docs/coco-rs/crate-coco-tui.md` is the current implementation baseline. This
-document defines the desired direction, migration sequence, and acceptance
-criteria. It uses the current `coco-rs/app/tui` implementation as the baseline,
-the TypeScript project at `/lyz/codespace/3rd/claude-code` as a behavior
-reference, and `codex-rs/tui` as a ratatui terminal-mechanics reference.
+document captures broader migration notes, surface-by-surface sequencing, and
+acceptance criteria. The final product target lives in
+`agent-console-design.md`; the native terminal-surface constraints live in
+`terminal-surface-design.md`. These notes use the current `coco-rs/app/tui`
+implementation as the baseline, the TypeScript project at
+`/lyz/codespace/3rd/claude-code` as a behavior reference, `codex-rs/tui` as a
+ratatui terminal-mechanics reference, and `codex-rs-tui-comparison.md` as the
+visible UI design comparison.
+
+Do not extend this file to describe the final console. New final console design
+content belongs in `agent-console-design.md`, organized by final console
+surface or system boundary.
+
+The `I*` sections below are archived implementation notes. They are useful for
+understanding how earlier migration work was decomposed, but they are not the
+current execution plan and must not override the evidence gates in
+`agent-console-design.md` or `terminal-surface-design.md`.
 
 ## Authority
 
 | Document | Authority |
 |---|---|
 | `crate-coco-tui.md` | Current TUI state, current APIs, current technical debt. |
-| `tui-overall-design.md` | Target architecture, migration phases, acceptance criteria. |
+| `ui/agent-console-design.md` | Complete target agent-console architecture on TEA / `AppState`; product-scope authority. |
+| `ui/terminal-surface-design.md` | Native-scrollback terminal surface and rendering-invariant authority. |
+| `ui/migration-roadmap.md` | Historical implementation notes; not final product organization. |
+| `ui/codex-rs-tui-comparison.md` | Deep comparison of `codex-rs/tui` visible UI capability versus coco target boundaries. |
 | `coco-rs/app/tui/CLAUDE.md` | Crate-local engineering conventions. |
 | `coco-rs/commands/CLAUDE.md` | Slash-command parity, deliberate command omissions, deferred command gaps. |
 
 When this document names something for deletion, it is target-state language.
-Do not edit current code solely to match this document unless the task is in an
-implementation phase.
+Do not use this file to define final UX structure; use
+`agent-console-design.md` for that.
 
 ## Goal
 
@@ -223,6 +239,64 @@ presentation/
 This list is a target map, not a mandate to create empty modules. Add modules
 when a phase needs them.
 
+## Codex-RS TUI Capability Transfer Plan
+
+See `codex-rs-tui-comparison.md` for the deeper UI design analysis. This
+section keeps only the implementation transfer map.
+
+`codex-rs/tui` is useful for two different reasons that must stay separate:
+
+- terminal mechanics: custom terminal, native history insertion, resize reflow,
+  suspend/resume, cursor style, and alt-screen overlays;
+- visible UI capability: composer stack, popups, history cells, markdown/table
+  rendering, diff/pager, status surfaces, pickers, and peripheral integrations.
+
+The first group informs `native-scrollback-architecture.md`. The second group
+is mostly product capability that `coco-rs` probably needs, but it should be
+rebuilt through coco state, commands, config, and provider-neutral model roles.
+Copy behavior, fixtures, and edge cases; do not copy module ownership blindly.
+
+| Capability family | Codex reference | Coco need | Build plan | Priority |
+|---|---|---|---|---|
+| Renderable/presentation primitives | `render/renderable.rs`, `style.rs`, `ui_consts.rs` | Shared measurement, cursor claims, and by-reference rendering for cells, overlays, and bottom pane. | Add `presentation::renderable` and `UiRenderable`; use ratatui `unstable-widget-ref` and `unstable-rendered-line-info` behind coco traits. Cursor style remains a surface concern. | P0/P1 |
+| Native transcript/history cells | `history_cell/*`, `transcript_reflow.rs`, `app/resize_reflow.rs` | Finalized messages, tool results, plans, approvals, patches, searches, and notices all need stable transcript rows and native scrollback replay. | Define typed transcript cell view models from `SessionState.messages`; render finalized cells to both transcript rows and history insertion lines. Source-backed replay is mandatory before native scrollback is complete. | P0 |
+| Bottom pane and local surface stack | `bottom_pane/mod.rs`, `bottom_pane_view.rs`, `chat_composer/*`, `textarea.rs` | Composer, queued input, paste bursts, suggestions, approval prompts, request-user-input, and MCP elicitation must coexist without losing input state. | Build `presentation::surface_stack` over existing `Overlay` priority. Local key handling order is focused surface, keybinding context, composer, global. Keep composer state outside transient views. | P1 |
+| Suggestions and command popups | `command_popup.rs`, `file_search_popup.rs`, `skill_popup.rs`, `mentions_v2/*` | Slash commands, file search, skill selection, mentions, and queued-command hints need one focus and row model. | Use `FuzzyPicker` / `PickerScaffold` with typed row kinds. Back rows by commands, skills, file-search utilities, and session state rather than codex-specific globals. | P1 |
+| Permission, question, and MCP prompts | `approval_overlay.rs`, `request_user_input/*`, `mcp_server_elicitation/*` | Tool permissions, user questions, and MCP elicitation are core agent workflows. | Build typed prompt view models with options, selected index, cancel semantics, classifier state, and sticky footer. Small prompts stay inline when scrollback context matters; long content uses pager. | P1 |
+| Markdown, streaming, wrapping, and tables | `markdown.rs`, `markdown_render.rs`, `markdown_stream.rs`, `table_detect.rs`, `wrapping.rs`, `line_truncation.rs` | Assistant output, tool output, plans, and docs need consistent wrapping and readable tables during streaming and after commit. | Keep existing coco markdown widgets as baseline, then add source-backed rendered-line tests. Use ratatui line measurement for display height, not as the transcript source. | P1/P2 |
+| Live tool/activity surfaces | `exec_cell/*`, `chatwidget/tool_lifecycle.rs`, `unified_exec_footer.rs`, `status_surfaces.rs` | Running tools, subagents, background tasks, plans, and stream stalls should appear as one live activity surface, then commit as transcript cells. | Add `TurnActivityView` from query/task/tool state. Avoid a persistent right rail; finalized activity becomes transcript/history rows. | P1/P2 |
+| Diff, pager, and review surfaces | `diff_model.rs`, `diff_render.rs`, `pager_overlay.rs` | Large diffs, plans, help, status detail, and transcript review need scrollable views without corrupting native history. | Add shared `pager` and `diff` view models. Large read-only surfaces temporarily enter alt-screen and restore the inline viewport on close. | P2 |
+| Pickers, settings, and setup surfaces | `selection_list.rs`, `theme_picker.rs`, `resume_picker.rs`, `keymap_setup/*`, `status/*` | Model, memory, theme, keybinding, session resume, status, plugin, and config surfaces need common list semantics. | Reuse `PickerScaffold`, typed rows, preview state, and footer hints. Production model rows must come from `SessionState.model_catalog` and `ModelRole`. | P2 |
+| Terminal peripherals | `clipboard_copy.rs`, `clipboard_paste.rs`, `external_editor.rs`, `terminal_title.rs`, `terminal_palette.rs`, `notifications/*` | Clipboard, paste classification, editor handoff, title updates, palette/style setup, and notifications are necessary for a polished TUI. | Keep effects behind service boundaries. Renderers emit intents; runner/update code performs clipboard/editor/title operations and records transcript-visible outcomes when needed. | P2 |
+| Product-specific or low-ROI surfaces | `onboarding/*`, `voice.rs`, `realtime.rs`, `pets/*`, account-specific status views | Some flows are useful only when coco has matching provider-neutral runtime support. | Do not port directly. Revisit only after the runtime exposes a provider-neutral capability and config path. Decorative surfaces are out of scope. | P3 |
+
+Implementation sequencing:
+
+1. Build the P0 substrate first: `SurfaceTerminal`, typed transcript cells, and
+   source-backed history replay.
+2. Add P1 interactive surfaces next: renderable primitives, bottom pane stack,
+   prompt surfaces, suggestions, and markdown/streaming hardening.
+3. Add P2 breadth after the core loop is stable: diff/pager, settings pickers,
+   resume/status surfaces, and terminal peripherals.
+4. Keep P3 out of the migration unless a later product requirement promotes it.
+
+Ratatui feature boundary:
+
+- The canonical feature policy lives in
+  `native-scrollback-architecture.md#ratatui-feature-policy`.
+- This historical transfer map should not repeat the feature table; when in
+  doubt, native scrollback and terminal API decisions defer to that document.
+
+Acceptance for each transferred capability:
+
+- The source of truth is `AppState` / `SessionState`, not terminal contents or
+  widget-local business state.
+- Rendering consumes typed view models and semantic styles.
+- Provider-specific behavior does not leak into generic UI control flow.
+- Native scrollback, resize, suspend/resume, narrow terminals, and focus/cancel
+  behavior have snapshots, unit tests, VT100 tests, or terminal-matrix notes
+  proportional to risk.
+
 ## Phase D0-D2: Documentation
 
 | Phase | Work | Acceptance |
@@ -365,6 +439,8 @@ Acceptance:
 Target behavior:
 
 - role axis: Main, Fast, Plan, Explore, Review, HookAgent, Memory, Subagent
+- `ModelRole::Subagent` is the default LLM role used to run subagents when the
+  spawn does not select a more specific role
 - model axis: provider-grouped entries
 - effort axis: supported reasoning efforts for the focused model
 - typed unavailable rows
@@ -497,7 +573,8 @@ Add `TurnActivityView` for live state:
 
 Acceptance:
 
-- The side panel renders one activity view model.
+- The inline activity area above the composer renders one activity view model;
+  no permanent side panel or right rail remains in the target UI.
 - Top-level render no longer chooses between business-specific panels.
 - Feature/env/config decisions are resolved before render.
 

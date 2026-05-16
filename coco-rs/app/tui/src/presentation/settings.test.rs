@@ -1,7 +1,7 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-use crate::i18n::set_locale;
+use crate::i18n::locale_test_guard;
 use crate::theme::Theme;
 use crate::widgets::settings_panel::PermissionRuleDisplay;
 use crate::widgets::settings_panel::SettingsPanelState;
@@ -9,7 +9,7 @@ use crate::widgets::settings_panel::SettingsTab;
 
 #[test]
 fn settings_overlay_content_renders_theme_tab_and_syntax_row() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let state = SettingsPanelState::default();
 
@@ -24,7 +24,7 @@ fn settings_overlay_content_renders_theme_tab_and_syntax_row() {
 
 #[test]
 fn settings_overlay_content_marks_output_style_selection() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut state = SettingsPanelState {
         active_tab: SettingsTab::OutputStyle,
@@ -44,7 +44,7 @@ fn settings_overlay_content_marks_output_style_selection() {
 
 #[test]
 fn settings_overlay_content_lists_permission_rules() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let state = SettingsPanelState {
         active_tab: SettingsTab::Permissions,

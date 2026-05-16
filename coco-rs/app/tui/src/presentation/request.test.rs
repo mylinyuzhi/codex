@@ -3,7 +3,7 @@ use coco_types::PermissionAskChoice;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use crate::i18n::set_locale;
+use crate::i18n::locale_test_guard;
 use crate::state::PermissionDetail;
 use crate::state::QuestionOption;
 use crate::theme::Theme;
@@ -26,7 +26,7 @@ fn permission_overlay(detail: PermissionDetail) -> PermissionOverlay {
 
 #[test]
 fn permission_content_uses_high_risk_border() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut overlay = permission_overlay(PermissionDetail::Bash {
         command: "rm -rf target/tmp".to_string(),
@@ -48,7 +48,7 @@ fn permission_content_uses_high_risk_border() {
 
 #[test]
 fn permission_content_renders_choices_instead_of_default_actions() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut overlay = permission_overlay(PermissionDetail::Generic {
         input_preview: "Pick an option".to_string(),
@@ -78,7 +78,7 @@ fn permission_content_renders_choices_instead_of_default_actions() {
 
 #[test]
 fn permission_content_truncates_unicode_file_edit_preview() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let diff = "切".repeat(501);
     let overlay = permission_overlay(PermissionDetail::FileEdit {
@@ -104,7 +104,7 @@ fn question_overlay(question: QuestionItem) -> QuestionOverlay {
 
 #[test]
 fn question_content_renders_other_answer_buffer() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = question_overlay(QuestionItem {
         header: "Auth".to_string(),
@@ -139,7 +139,7 @@ fn question_content_renders_other_answer_buffer() {
 
 #[test]
 fn question_content_renders_multiselect_footer_hints() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut overlay = question_overlay(QuestionItem {
         header: "Tools".to_string(),
@@ -175,7 +175,7 @@ fn question_content_renders_multiselect_footer_hints() {
 
 #[test]
 fn question_content_clamps_negative_focus_and_selection() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut overlay = QuestionOverlay {
         request_id: "req-1".to_string(),

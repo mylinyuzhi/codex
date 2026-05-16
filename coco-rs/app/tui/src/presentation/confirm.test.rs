@@ -1,7 +1,7 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-use crate::i18n::set_locale;
+use crate::i18n::locale_test_guard;
 use crate::state::CostWarningOverlay;
 use crate::state::FeedbackOverlay;
 use crate::state::PlanApprovalOverlay;
@@ -10,7 +10,7 @@ use crate::theme::Theme;
 
 #[test]
 fn cost_warning_content_formats_cents() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = CostWarningOverlay {
         current_cost_cents: 123,
@@ -27,7 +27,7 @@ fn cost_warning_content_formats_cents() {
 
 #[test]
 fn task_detail_content_applies_scroll_window() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = TaskDetailOverlay {
         task_id: "task-1".to_string(),
@@ -54,7 +54,7 @@ fn task_detail_content_applies_scroll_window() {
 
 #[test]
 fn task_detail_content_clamps_negative_scroll_to_start() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = TaskDetailOverlay {
         task_id: "task-1".to_string(),
@@ -77,7 +77,7 @@ fn task_detail_content_clamps_negative_scroll_to_start() {
 
 #[test]
 fn plan_approval_content_truncates_long_preview_and_marks_focus() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut overlay = PlanApprovalOverlay::new(
         "req-1".to_string(),
@@ -103,7 +103,7 @@ fn plan_approval_content_truncates_long_preview_and_marks_focus() {
 
 #[test]
 fn feedback_content_marks_selected_option() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = FeedbackOverlay {
         prompt: "How was it?".to_string(),

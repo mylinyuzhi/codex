@@ -10,15 +10,6 @@ use std::time::Duration;
 /// Minimum terminal width (columns) before the side panel is shown.
 pub const SIDE_PANEL_MIN_WIDTH: i32 = 100;
 
-/// Terminal width at which we switch to a wider main/side split ratio.
-pub const WIDE_TERMINAL_WIDTH: i32 = 160;
-
-/// Main area percentage in wide terminals (>= 160 columns).
-pub const WIDE_TERMINAL_MAIN_PCT: i32 = 75;
-
-/// Side area percentage in wide terminals.
-pub const WIDE_TERMINAL_SIDE_PCT: i32 = 25;
-
 /// Main area percentage in normal-width terminals.
 pub const NORMAL_TERMINAL_MAIN_PCT: i32 = 70;
 
@@ -29,9 +20,6 @@ pub const NORMAL_TERMINAL_SIDE_PCT: i32 = 30;
 pub const MAX_INPUT_HEIGHT: i32 = 10;
 
 // ========== Display Limits ==========
-
-/// Maximum number of tool executions shown in the side panel.
-pub const MAX_TOOL_PANEL_DISPLAY: i32 = 8;
 
 /// Maximum number of subagents shown in the side panel.
 pub const MAX_SUBAGENT_PANEL_DISPLAY: i32 = 5;
@@ -80,7 +68,7 @@ pub const TOAST_ERROR_DURATION: Duration = Duration::from_secs(8);
 
 // ========== Text ==========
 
-/// Maximum characters for tool description preview in side panel.
+/// Maximum characters for inline tool description preview.
 pub const TOOL_DESCRIPTION_MAX_CHARS: i32 = 40;
 
 /// Multiplier to estimate token count from word count.

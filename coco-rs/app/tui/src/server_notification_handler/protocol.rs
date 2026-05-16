@@ -420,19 +420,6 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                 state.session.thinking_effort =
                     p.effort.unwrap_or(coco_types::ReasoningEffort::Auto);
             }
-            // Success toast — terse, since the picker confirm already
-            // closed and the new binding shows in the status bar.
-            let effort_suffix = p.effort.map(|e| format!(" · {e}")).unwrap_or_default();
-            state.ui.add_toast(Toast::success(
-                t!(
-                    "toast.model_set",
-                    role = p.role.as_str(),
-                    provider = p.provider.as_str(),
-                    model = p.model_id.as_str(),
-                    effort = effort_suffix.as_str()
-                )
-                .to_string(),
-            ));
             true
         }
         ServerNotification::FastModeChanged { active } => {

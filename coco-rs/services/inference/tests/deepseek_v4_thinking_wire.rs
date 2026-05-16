@@ -40,7 +40,7 @@ use vercel_ai_provider::LanguageModelV4Message;
 fn deepseek_v4_flash_info(provider_name: &str) -> ModelInfo {
     let levels = vec![
         ThinkingLevel {
-            effort: ReasoningEffort::Disable,
+            effort: ReasoningEffort::Off,
             budget_tokens: None,
             options: HashMap::from([(
                 "thinking".to_string(),

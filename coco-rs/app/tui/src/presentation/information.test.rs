@@ -1,13 +1,13 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-use crate::i18n::set_locale;
+use crate::i18n::locale_test_guard;
 use crate::state::DiffViewOverlay;
 use crate::theme::Theme;
 
 #[test]
 fn diff_view_content_formats_diff_lines_and_clamps_negative_scroll() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = DiffViewOverlay {
         path: "src/lib.rs".to_string(),
@@ -35,7 +35,7 @@ fn diff_view_content_formats_diff_lines_and_clamps_negative_scroll() {
 
 #[test]
 fn diff_view_content_scrolls_and_caps_to_thirty_lines() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = DiffViewOverlay {
         path: "src/lib.rs".to_string(),
@@ -57,7 +57,7 @@ fn diff_view_content_scrolls_and_caps_to_thirty_lines() {
 
 #[test]
 fn context_viz_content_caps_bar_when_usage_exceeds_total() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut state = AppState::default();
     state.session.context_window_used = 150;

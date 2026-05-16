@@ -1,5 +1,5 @@
 use super::*;
-use crate::i18n::set_locale;
+use crate::i18n::locale_test_guard;
 use crate::state::ExportFormat;
 use crate::state::ExportOverlay;
 use crate::state::GlobalSearchOverlay;
@@ -50,7 +50,7 @@ fn collapse_hints_keeps_output_within_width() {
 
 #[test]
 fn session_browser_content_handles_empty_and_populated_states() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let empty = SessionBrowserOverlay {
         sessions: Vec::new(),
@@ -82,7 +82,7 @@ fn session_browser_content_handles_empty_and_populated_states() {
 
 #[test]
 fn quick_open_content_caps_visible_files_at_fifteen() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = QuickOpenOverlay {
         filter: "src".to_string(),
@@ -102,7 +102,7 @@ fn quick_open_content_caps_visible_files_at_fifteen() {
 
 #[test]
 fn global_search_content_caps_results_and_marks_selection() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = GlobalSearchOverlay {
         query: "needle".to_string(),
@@ -129,7 +129,7 @@ fn global_search_content_caps_results_and_marks_selection() {
 
 #[test]
 fn global_search_content_reports_searching_and_empty_states() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let searching = GlobalSearchOverlay {
         query: "needle".to_string(),
@@ -152,7 +152,7 @@ fn global_search_content_reports_searching_and_empty_states() {
 
 #[test]
 fn export_content_marks_selected_format() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = ExportOverlay {
         formats: vec![
@@ -175,7 +175,7 @@ fn export_content_marks_selected_format() {
 
 #[test]
 fn memory_dialog_content_renders_scope_tags_and_empty_state() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let empty = MemoryDialogOverlay {
         entries: Vec::new(),
@@ -211,7 +211,7 @@ fn memory_dialog_content_renders_scope_tags_and_empty_state() {
 
 #[test]
 fn mcp_server_select_content_preserves_checkbox_rows() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let overlay = McpServerSelectOverlay {
         servers: vec![

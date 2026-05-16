@@ -1,5 +1,6 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
+assertion_line: 42
 expression: output
 ---
  ╭─╮ ╭─╮   COCO v0.0.0                                                          

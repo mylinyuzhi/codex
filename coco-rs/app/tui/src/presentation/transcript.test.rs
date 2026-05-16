@@ -1,11 +1,11 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-use crate::i18n::set_locale;
+use crate::i18n::locale_test_guard;
 
 #[test]
 fn transcript_overlay_content_renders_empty_state_and_show_all_footer() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let state = AppState::default();
     let theme = Theme::default();
     let mut overlay = TranscriptOverlay::new();

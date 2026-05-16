@@ -431,7 +431,9 @@ impl TuiHarness {
     pub fn render_to_string(&mut self) -> Result<String> {
         let state = &self.state;
         self.terminal
-            .draw(|frame| render::render(frame, state))
+            .draw(|frame| {
+                let _layout = render::render(frame, state);
+            })
             .context("render TUI to TestBackend")?;
         let buf = self.terminal.backend().buffer().clone();
         let mut out = String::new();

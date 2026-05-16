@@ -26,6 +26,17 @@ use crate::widgets::SuggestionPopup;
 /// Crate version surfaced in the header bar.
 const COCO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Layout slots produced by `render` for downstream consumers.
+///
+/// Today only the cursor decision (in `crate::cursor`) reads this — it
+/// needs the `input` Rect to compute the cursor position after draw.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FrameLayout {
+    /// Bordered input widget rect. `Rect::default()` when render did not
+    /// reach the input (e.g. an overlay covers the full screen).
+    pub input: Rect,
+}
+
 /// Total height of the header band (logo + info rows).
 const HEADER_HEIGHT: u16 = 3;
 
@@ -34,7 +45,14 @@ const HEADER_HEIGHT: u16 = 3;
 const HEADER_LOGO_WIDTH: u16 = 11;
 
 /// Render the full TUI layout.
-pub fn render(frame: &mut Frame, state: &AppState) {
+///
+/// Returns the [`FrameLayout`] for downstream consumers (cursor pin,
+/// future desired-height calc). The cursor decision in `crate::cursor`
+/// reads `layout.input` after this returns; ratatui's frame is fully
+/// painted by the time we return so it's safe to do post-draw side
+/// effects keyed off the layout.
+pub fn render(frame: &mut Frame, state: &AppState) -> FrameLayout {
+    let mut layout = FrameLayout::default();
     let area = frame.area();
     let theme = &state.ui.theme;
 
@@ -169,7 +187,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             verification_nudge,
         );
     }
-    render_main_area(frame, main, state, theme);
+    render_main_area(frame, main, state, theme, &mut layout);
 
     // Overlays on top
     if let Some(ref overlay) = state.ui.overlay {
@@ -180,6 +198,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     if state.ui.has_toasts() {
         render_toasts(frame, area, &state.ui.toasts, theme);
     }
+
+    layout
 }
 
 /// Header band: 3-row COCO mascot + 3 info rows.
@@ -330,15 +350,19 @@ fn truncate_path_for_width(path: &str, max_width: usize) -> String {
     format!("…{suffix_chars}")
 }
 
-/// Main area: chat + input, optionally with side panel.
-fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let has_tools =
-        !state.session.tool_executions.is_empty() || !state.session.subagents.is_empty();
+/// Main area: chat + input, optionally with expanded task/teammate panel.
+fn render_main_area(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    theme: &Theme,
+    layout: &mut FrameLayout,
+) {
+    let has_subagents = !state.session.subagents.is_empty();
     let wide_enough = area.width >= constants::SIDE_PANEL_MIN_WIDTH as u16;
 
-    // Task panel takes precedence over the tool side panel when the
-    // user / a tool just auto-expanded it. Mirrors TS
-    // `AppState.expandedView == 'tasks'` driving the right-rail layout.
+    // Task panel takes precedence when the user / a tool just
+    // auto-expanded it. Mirrors TS `AppState.expandedView == 'tasks'`.
     let show_plan_panel = matches!(state.session.expanded_view, coco_types::ExpandedView::Tasks)
         && wide_enough
         && (!state.session.plan_tasks.is_empty() || !state.session.todos_by_agent.is_empty());
@@ -348,14 +372,14 @@ fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
         state.session.expanded_view,
         coco_types::ExpandedView::Teammates
     ) && wide_enough
-        && !state.session.subagents.is_empty();
+        && has_subagents;
 
     if show_plan_panel {
         let [main, side] = area.layout(&Layout::horizontal([
             Constraint::Percentage(constants::NORMAL_TERMINAL_MAIN_PCT as u16),
             Constraint::Percentage(constants::NORMAL_TERMINAL_SIDE_PCT as u16),
         ]));
-        render_chat_and_input(frame, main, state, theme);
+        render_chat_and_input(frame, main, state, theme, layout);
         let running_entries = running_tasks_as_entries(&state.session.active_tasks);
         let panel = crate::widgets::PlanPanel::new(
             &state.session.plan_tasks,
@@ -369,34 +393,20 @@ fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
             Constraint::Percentage(constants::NORMAL_TERMINAL_MAIN_PCT as u16),
             Constraint::Percentage(constants::NORMAL_TERMINAL_SIDE_PCT as u16),
         ]));
-        render_chat_and_input(frame, main, state, theme);
-        // ExpandedView::Teammates → subagent panel takes the entire
-        // right rail (no tool panel above it). Honors
+        render_chat_and_input(frame, main, state, theme, layout);
+        // ExpandedView::Teammates → subagent panel. Honors
         // `state.ui.show_teammate_message_preview` for per-agent
         // recent-message preview lines.
         render_subagent_panel(frame, side, state, theme);
-    } else if has_tools && wide_enough {
-        let (main_pct, side_pct) = if area.width >= constants::WIDE_TERMINAL_WIDTH as u16 {
-            (
-                constants::WIDE_TERMINAL_MAIN_PCT,
-                constants::WIDE_TERMINAL_SIDE_PCT,
-            )
-        } else {
-            (
-                constants::NORMAL_TERMINAL_MAIN_PCT,
-                constants::NORMAL_TERMINAL_SIDE_PCT,
-            )
-        };
-
+    } else if has_subagents && wide_enough {
         let [main, side] = area.layout(&Layout::horizontal([
-            Constraint::Percentage(main_pct as u16),
-            Constraint::Percentage(side_pct as u16),
+            Constraint::Percentage(constants::NORMAL_TERMINAL_MAIN_PCT as u16),
+            Constraint::Percentage(constants::NORMAL_TERMINAL_SIDE_PCT as u16),
         ]));
-
-        render_chat_and_input(frame, main, state, theme);
-        render_side_panel(frame, side, state, theme);
+        render_chat_and_input(frame, main, state, theme, layout);
+        render_subagent_panel(frame, side, state, theme);
     } else {
-        render_chat_and_input(frame, area, state, theme);
+        render_chat_and_input(frame, area, state, theme, layout);
     }
 }
 
@@ -434,7 +444,13 @@ fn running_tasks_as_entries(
 /// chat to make the focus visible and remind the user that Esc
 /// returns to the main view. TS parity:
 /// `components/TeammateViewHeader.tsx`.
-fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+fn render_chat_and_input(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    theme: &Theme,
+    layout: &mut FrameLayout,
+) {
     let input_height = 3.min(constants::MAX_INPUT_HEIGHT as u16);
     let focused_subagent = state
         .session
@@ -502,6 +518,11 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
             Constraint::Length(bottom_height),
             Constraint::Min(0),
         ]));
+
+    // Hand the input Rect to the cursor decision (consumed post-draw
+    // in `Tui::draw` via `cursor::compute_cursor`). Cursor is no longer
+    // set inside `render_input` itself.
+    layout.input = input;
 
     if let Some(agent) = focused_subagent {
         let header_widget = crate::widgets::TeammateViewHeader::new(&agent.agent_type, theme)
@@ -608,8 +629,10 @@ fn command_palette_suggestion_items(
 }
 
 /// Build a fully-configured `ChatWidget` for the current session state.
-/// Extracted so the same widget can be reused for both height
-/// computation (via `build_lines_owned`) and final rendering.
+/// Renders all committed messages plus any in-flight streaming buffer
+/// and running-tool spinner. Mirrors TS Ink behavior: the viewport is
+/// the single source of truth for what the user sees; nothing is pushed
+/// to terminal native scrollback.
 fn build_chat_widget<'a>(
     state: &'a AppState,
     theme: &'a Theme,
@@ -794,61 +817,10 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
     );
 
     frame.render_widget(input, area);
-
-    // Cursor position: indicator owns 2 columns. The visual cursor sits
-    // `prefix_consumed` chars left of the raw cursor (the indicator owns
-    // those chars) and clamps to 0 when the raw cursor lands inside the
-    // consumed prefix (so backspace at that point deletes the `!` / `#`).
-    // When the command palette is open, the cursor follows the mirrored
-    // `/<filter>` so it stays at the end of what the user typed.
-    let should_show_cursor = is_focused && (command_palette_filter.is_some() || !is_empty);
-    if should_show_cursor {
-        let indicator_width = 2_u16;
-        let raw_cursor = if let Some(filter) = command_palette_filter {
-            // 1 column for the leading `/` + visible filter width.
-            1 + unicode_width::UnicodeWidthStr::width(filter) as i32
-        } else {
-            // Display column = width of the visible text up to the byte
-            // offset of the cursor. Fixes CJK / wide-char cursor placement:
-            // "你好" with cursor at end → column 4 (not 2).
-            let visible_text = &state.ui.input.text()[prefix_consumed..];
-            let cursor_byte = state
-                .ui
-                .input
-                .textarea
-                .cursor()
-                .saturating_sub(prefix_consumed);
-            let cursor_byte = cursor_byte.min(visible_text.len());
-            unicode_width::UnicodeWidthStr::width(&visible_text[..cursor_byte]) as i32
-        };
-        let max_cursor = area.width.saturating_sub(indicator_width + 1) as i32;
-        let cursor_x = area.x + indicator_width + raw_cursor.min(max_cursor) as u16;
-        let cursor_y = area.y + 1;
-        frame.set_cursor_position((cursor_x, cursor_y));
-    }
-}
-
-/// Render the side panel with tools and subagents.
-fn render_side_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let has_subagents = !state.session.subagents.is_empty();
-
-    if has_subagents {
-        let [tools, subagents] = area.layout(&Layout::vertical([
-            Constraint::Percentage(60),
-            Constraint::Percentage(40),
-        ]));
-
-        render_tool_panel(frame, tools, state, theme);
-        render_subagent_panel(frame, subagents, state, theme);
-    } else {
-        render_tool_panel(frame, area, state, theme);
-    }
-}
-
-/// Render active/completed tool executions using ToolPanel widget.
-fn render_tool_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let panel = crate::widgets::ToolPanel::new(&state.session.tool_executions, theme);
-    frame.render_widget(panel, area);
+    // Cursor placement is no longer set here. The single decision point
+    // lives in `crate::cursor::compute_cursor`, consumed post-draw by
+    // `Tui::draw` via `queue!(stdout, SetCursorStyle, MoveTo, Show/Hide)`.
+    // See `docs/coco-rs/ui/rendering-hardening-and-rollback.md`.
 }
 
 /// Render subagent instances using SubagentPanel widget. Switches to

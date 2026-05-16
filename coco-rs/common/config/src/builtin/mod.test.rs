@@ -255,13 +255,14 @@ fn builtin_deepseek_v4_declares_three_thinking_levels() {
             "{model_id} must declare ExtendedThinking"
         );
 
-        // Default = Auto. Auto is the implicit fallback — not in the
-        // picker, but applied when no level is selected so DeepSeek's
-        // server default (enabled+high) kicks in.
+        // Default = Medium (UX "high"). The default-in-supported
+        // invariant enforced by `ModelInfo::from_partial` requires the
+        // default to match an entry in `supported_thinking_levels`,
+        // so Medium is picked from the three explicit states.
         assert_eq!(
             info.default_thinking_level,
-            Some(ReasoningEffort::Auto),
-            "{model_id} default thinking level must be Auto"
+            Some(ReasoningEffort::Medium),
+            "{model_id} default thinking level must be Medium"
         );
 
         // Surface: 3 explicit levels [Disable, Medium, XHigh] in that order.
@@ -270,7 +271,7 @@ fn builtin_deepseek_v4_declares_three_thinking_levels() {
             .as_ref()
             .expect("thinking levels");
         assert_eq!(levels.len(), 3, "{model_id} must expose 3 thinking levels");
-        assert_eq!(levels[0].effort, ReasoningEffort::Disable);
+        assert_eq!(levels[0].effort, ReasoningEffort::Off);
         assert_eq!(levels[1].effort, ReasoningEffort::Medium);
         assert_eq!(levels[2].effort, ReasoningEffort::XHigh);
 
@@ -313,7 +314,7 @@ fn builtin_gpt5_models_declare_full_picker_thinking_levels() {
         assert_eq!(
             levels.iter().map(|level| level.effort).collect::<Vec<_>>(),
             vec![
-                ReasoningEffort::Disable,
+                ReasoningEffort::Off,
                 ReasoningEffort::Auto,
                 ReasoningEffort::Low,
                 ReasoningEffort::Medium,
@@ -329,15 +330,15 @@ fn builtin_gpt5_models_declare_full_picker_thinking_levels() {
 fn builtin_gemini_models_declare_three_thinking_levels() {
     // Gemini's thinking_config maps cleanly to low / medium / high
     // token budgets — no disable/xhigh rung in the upstream API.
-    // `default_thinking_level = Auto` is the implicit fallback when
-    // no level is picked (convert layer then omits the field).
+    // `default_thinking_level = Medium` satisfies the default-in-
+    // supported invariant enforced by `ModelInfo::from_partial`.
     let builtin = builtin_models_partial();
     let model_id = "gemini-3.1-pro-preview";
     let info = builtin.get(model_id).expect(model_id);
     assert_eq!(
         info.default_thinking_level,
-        Some(ReasoningEffort::Auto),
-        "{model_id} default thinking level must be Auto"
+        Some(ReasoningEffort::Medium),
+        "{model_id} default thinking level must be Medium"
     );
     let levels = info
         .supported_thinking_levels

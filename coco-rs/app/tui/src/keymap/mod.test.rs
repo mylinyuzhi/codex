@@ -16,6 +16,7 @@
 use std::collections::HashSet;
 
 use super::*;
+use crate::i18n::locale_test_guard;
 use rust_i18n::set_locale;
 
 #[test]
@@ -32,19 +33,19 @@ fn ids_are_unique() {
 
 #[test]
 fn every_description_key_resolves_en() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     assert_all_resolve();
 }
 
 #[test]
 fn every_description_key_resolves_zh() {
-    set_locale("zh-CN");
+    let _locale = locale_test_guard("zh-CN");
     assert_all_resolve();
 }
 
 #[test]
 fn every_group_title_resolves_en() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     for &group in GROUP_ORDER {
         let key = group.title_key();
         let value = crate::i18n::t!(key).to_string();
@@ -54,7 +55,7 @@ fn every_group_title_resolves_en() {
 
 #[test]
 fn every_group_title_resolves_zh() {
-    set_locale("zh-CN");
+    let _locale = locale_test_guard("zh-CN");
     for &group in GROUP_ORDER {
         let key = group.title_key();
         let value = crate::i18n::t!(key).to_string();
@@ -150,7 +151,7 @@ fn entries_for_group_returns_only_that_group() {
 
 #[test]
 fn export_json_round_trips() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let json = export_json();
     let parsed: serde_json::Value =
         serde_json::from_str(&json).expect("export_json must produce valid JSON");
@@ -167,7 +168,7 @@ fn export_json_round_trips() {
 
 #[test]
 fn export_markdown_contains_every_combo() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let md = export_markdown();
     for entry in KEYMAP {
         assert!(
@@ -181,6 +182,7 @@ fn export_markdown_contains_every_combo() {
 
 #[test]
 fn export_markdown_uses_locale() {
+    let _locale = locale_test_guard("en");
     set_locale("zh-CN");
     let zh = export_markdown();
     set_locale("en");

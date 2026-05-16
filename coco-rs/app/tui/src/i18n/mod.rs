@@ -37,6 +37,34 @@ pub fn set_locale(locale: &str) {
     rust_i18n::set_locale(locale);
 }
 
+#[cfg(test)]
+pub(crate) struct LocaleTestGuard {
+    previous_locale: String,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for LocaleTestGuard {
+    fn drop(&mut self) {
+        rust_i18n::set_locale(&self.previous_locale);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn locale_test_guard(locale: &str) -> LocaleTestGuard {
+    static LOCALE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    let guard = LOCALE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous_locale = rust_i18n::locale().to_string();
+    rust_i18n::set_locale(locale);
+    LocaleTestGuard {
+        previous_locale,
+        _guard: guard,
+    }
+}
+
 fn detect_locale() -> &'static str {
     if let Some(value) = env::env_opt(EnvKey::CocoLang)
         && let Some(locale) = parse_locale(&value)

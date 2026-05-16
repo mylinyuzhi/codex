@@ -34,6 +34,19 @@ pub enum TuiEvent {
     /// Bracketed paste content.
     Paste(String),
 
+    // ── Process control ──
+    /// User requested process suspend (Ctrl+Z on Unix).
+    ///
+    /// In raw mode the terminal no longer translates Ctrl+Z into a
+    /// SIGTSTP automatically, so [`App::convert_crossterm_event`]
+    /// intercepts the key and emits this event. The handler calls
+    /// `Tui::trigger_suspend`, which delivers `SIGTSTP` to the process
+    /// group via `libc::kill` and blocks until SIGCONT.
+    ///
+    /// No-op on non-Unix platforms (key falls through as a normal
+    /// `Key` event).
+    Suspend,
+
     // ── Permission events ──
     /// Background classifier approved a pending permission request.
     ///

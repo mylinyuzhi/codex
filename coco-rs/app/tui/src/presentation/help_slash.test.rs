@@ -5,10 +5,10 @@
 //! in the user's terminal.
 
 use super::*;
-use rust_i18n::set_locale;
+use crate::i18n::locale_test_guard;
 
 fn render_in(locale: &str) -> String {
-    set_locale(locale);
+    let _locale = locale_test_guard(locale);
     render_overview()
 }
 
@@ -31,7 +31,7 @@ fn overview_contains_translated_section_titles_zh() {
 
 #[test]
 fn overview_lists_every_command_in_categories() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let out = render_overview();
     for category in CATEGORIES {
         for cmd in category.commands {
@@ -46,13 +46,13 @@ fn overview_lists_every_command_in_categories() {
 
 #[test]
 fn every_i18n_key_resolves_en() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     assert_all_keys_resolve();
 }
 
 #[test]
 fn every_i18n_key_resolves_zh() {
-    set_locale("zh-CN");
+    let _locale = locale_test_guard("zh-CN");
     assert_all_keys_resolve();
 }
 
@@ -87,7 +87,7 @@ fn assert_all_keys_resolve() {
 
 #[test]
 fn command_detail_lookup_by_alias() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let out = render_command_detail("st").expect("status alias should resolve");
     assert!(out.contains("/status"));
     assert!(out.contains("Aliases:"));
@@ -95,13 +95,13 @@ fn command_detail_lookup_by_alias() {
 
 #[test]
 fn command_detail_unknown_returns_none() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     assert!(render_command_detail("nonexistent-cmd").is_none());
 }
 
 #[test]
 fn not_found_message_includes_query() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let msg = render_not_found("foo");
     assert!(msg.contains("foo"));
 }

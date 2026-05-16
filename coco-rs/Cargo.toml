@@ -303,8 +303,15 @@ dunce = "1.0.4"
 insta = "1"
 itertools = "0.14"
 # Workspace uses crossterm 0.29; matches ratatui-crossterm's default feature so
-# the dep tree stays single-version.
-ratatui = "0.30"
+# the dep tree stays single-version. Ratatui features are enabled by ROI:
+# scrolling-regions for the native scrollback substrate, widget-ref for
+# composable presentation surfaces, and rendered-line-info for measurement.
+# unstable-backend-writer stays off until we need direct writer_mut access.
+ratatui = { version = "0.30", features = [
+    "scrolling-regions",
+    "unstable-rendered-line-info",
+    "unstable-widget-ref",
+] }
 ratatui-macros = "0.7"
 textwrap = "0.16"
 tokio-test = "0.4"

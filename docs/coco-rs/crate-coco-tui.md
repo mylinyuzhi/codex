@@ -2,10 +2,11 @@
 
 Status: current-state documentation for `coco-rs/app/tui`.
 
-This file describes what the TUI does today. The target architecture and
-migration roadmap live in `docs/coco-rs/tui-overall-design.md`. If the two
+This file describes what the TUI does today. The final product architecture
+lives in `docs/coco-rs/ui/agent-console-design.md`; terminal-surface
+constraints live in `docs/coco-rs/ui/terminal-surface-design.md`. If the
 documents disagree, treat this file as the source of current facts and
-`tui-overall-design.md` as the source of intended direction.
+`ui/agent-console-design.md` as the source of intended product direction.
 
 Do not copy source statistics or long enum listings into this document. The TUI
 surface changes quickly; use the canonical source files named below for exact
@@ -296,9 +297,13 @@ Current behavior:
 
 - Tab and Shift-Tab cycle role across Main, Fast, Plan, Explore, Review,
   HookAgent, Memory, and Subagent.
+- Subagent is a real `ModelRole`: it is the default LLM binding for subagent
+  execution when no more specific subagent role is selected.
 - Up/Down changes model selection.
 - Left/Right changes thinking effort.
 - Confirm emits `UserCommand::SetModelRole`.
+- Model and thinking-effort changes are reflected in the header/status bar, not
+  duplicated as success toasts.
 - Rows are grouped by provider display name and carry typed unavailable
   reasons.
 - Production rows come from `SessionState.model_catalog` and
@@ -306,7 +311,9 @@ Current behavior:
 - `update/show.rs` keeps a builtin fallback that infers provider from model id
   only when the catalog is empty, mainly for tests or pre-bootstrap paths.
 
-Target changes are documented in `tui-overall-design.md`.
+Target product changes are documented in `ui/agent-console-design.md`;
+terminal-surface constraints are documented in
+`ui/terminal-surface-design.md`.
 
 ## Memory Baseline
 
@@ -360,7 +367,7 @@ Top-level rendering lives in `render.rs`:
 - header
 - lifecycle and status banners
 - conversation area
-- optional side panel
+- optional expanded task/teammate panel
 - input area
 - queued command list
 - status bar
@@ -385,16 +392,17 @@ The top-level layout is a full-screen ratatui frame:
 
 ```text
 header
-main conversation plus optional right-side activity panel
+main conversation plus optional expanded task/teammate panel
 input and queued-command area
 status bar
 overlays and toasts above the base frame
 ```
 
-The right-side panel is hidden on narrow terminals and switches between tool,
-subagent, coordinator, and task views based on current state. One known debt is
-that `render.rs` still reads a typed environment helper to decide coordinator
-mode during render.
+The automatic right-side tool execution list was removed to keep the transcript
+as the primary surface and avoid a second transient projection of tool state.
+Expanded task and teammate panels remain explicit views for now. One known debt
+is that `render.rs` still reads a typed environment helper to decide
+coordinator mode during render.
 
 ## Theme and Display Settings
 
@@ -468,8 +476,15 @@ enough. Rust checks are required when code changes accompany the docs.
 - Keep this file descriptive, not aspirational.
 - Name canonical source files instead of copying long enums.
 - Do not record volatile file counts or line counts.
-- Use `tui-overall-design.md` for target-state architecture and migration
-  sequencing.
+- Use `ui/agent-console-design.md` for final agent-console architecture.
+- Use `ui/terminal-surface-design.md` for native terminal-surface constraints.
+- Use `ui/migration-roadmap.md` only for historical implementation notes.
 - Use `commands/CLAUDE.md` for slash-command parity and deliberate omissions.
+- Use `ui/rendering-hardening-and-rollback.md` for rendering-layer hardening
+  (cursor pin and suspend-resume) and for the rollback record of the stock
+  ratatui inline viewport experiment.
+- Use `ui/native-scrollback-architecture.md` for the real native-scrollback target
+  architecture: custom terminal, history insertion, source-backed resize
+  reflow, and overlay surface ownership.
 - Keep multi-LLM facts structured around provider id, API, model id,
   `ModelRole`, and `ReasoningEffort`.

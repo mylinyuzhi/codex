@@ -347,7 +347,7 @@ fn reasoning_effort_to_level(effort: ReasoningEffort) -> ReasoningLevel {
         ReasoningEffort::Medium => ReasoningLevel::Medium,
         ReasoningEffort::High => ReasoningLevel::High,
         ReasoningEffort::XHigh => ReasoningLevel::Xhigh,
-        ReasoningEffort::Disable | ReasoningEffort::Auto => unreachable!(
+        ReasoningEffort::Off | ReasoningEffort::Auto => unreachable!(
             "reasoning_effort_to_level called with non-explicit effort {effort:?}; \
              Lane A2 must gate on `effort.is_explicit_level()` before invoking this"
         ),

@@ -291,7 +291,7 @@ impl App {
 - `ChatWidget` — message list with markdown rendering
 - `InputWidget` — user input with autocomplete
 - `SpinnerWidget` — progress indicator with streaming deltas
-- `ToolPanelWidget` — tool execution progress
+- inline tool status rows — tool execution progress inside the transcript
 - `PermissionDialogWidget` — permission approval overlay
 - `CommandPaletteWidget` — fuzzy command search
 - `SessionBrowserWidget` — session list with search

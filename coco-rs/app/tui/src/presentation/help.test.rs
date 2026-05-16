@@ -1,11 +1,11 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-use crate::i18n::set_locale;
+use crate::i18n::locale_test_guard;
 
 #[test]
 fn help_content_renders_grouped_keymap_with_live_bindings() {
-    set_locale("en");
+    let _locale = locale_test_guard("en");
     let state = AppState::default();
     let theme = Theme::default();
 
@@ -27,7 +27,7 @@ fn help_content_renders_grouped_keymap_with_live_bindings() {
 
 #[test]
 fn help_content_localizes_to_zh() {
-    set_locale("zh-CN");
+    let _locale = locale_test_guard("zh-CN");
     let state = AppState::default();
     let theme = Theme::default();
 
@@ -37,6 +37,4 @@ fn help_content_localizes_to_zh() {
     assert_eq!(title.trim(), "帮助");
     assert!(body.contains("光标 / 历史"));
     assert!(body.contains("Vim Normal 模式"));
-    // Reset to en so other tests see the default locale.
-    set_locale("en");
 }

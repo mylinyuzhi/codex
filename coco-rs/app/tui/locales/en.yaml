@@ -123,7 +123,6 @@ role.review: "Review"
 role.hook_agent: "Hook"
 role.memory: "Memory"
 role.subagent: "Subagent"
-toast.model_set: "Set %{role} → %{provider}/%{model}%{effort}"
 toast.model_save_failed: "Failed to persist model selection: %{error}"
 toast.syntax_highlighting_saved: "Syntax highlighting %{status}; saved to %{path}"
 toast.syntax_highlighting_save_failed: "Failed to save syntax highlighting setting: %{error}"
@@ -461,13 +460,6 @@ chat.auto_approved: "\n✓ Auto-approved · matched '%{rule}'"
 chat.risk_badge: "\n\n⚠ %{risk}"
 chat.tool_rejected: "%{tool_name} rejected: "
 chat.tool_canceled: "%{tool_name} canceled"
-
-# ─── Tool panel ──────────────────────────────────────────────
-tool.title: "Tools"
-tool.no_active: "No active tools"
-tool.running: "Running"
-tool.completed: "Completed"
-tool.failed: "Failed"
 
 # ─── Subagent panel ──────────────────────────────────────────
 subagent.title: "Agents"
