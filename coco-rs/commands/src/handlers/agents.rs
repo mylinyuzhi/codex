@@ -113,11 +113,16 @@ fn render_show(snapshot: &coco_subagent::AgentCatalogSnapshot, name: &str) -> St
     if def.background {
         out.push_str("Background:    true\n");
     }
-    if !def.allowed_tools.is_empty() {
-        out.push_str(&format!(
-            "Tools:         {}\n",
-            def.allowed_tools.join(", ")
-        ));
+    match &def.allowed_tools {
+        coco_types::ToolAllowList::Wildcard => {
+            // Wildcard = "all tools". Match TS slash-command output by
+            // omitting the line (TS only emits when an explicit list
+            // is set).
+        }
+        coco_types::ToolAllowList::Explicit(list) if !list.is_empty() => {
+            out.push_str(&format!("Tools:         {}\n", list.join(", ")));
+        }
+        coco_types::ToolAllowList::Explicit(_) => {}
     }
     if !def.disallowed_tools.is_empty() {
         out.push_str(&format!(

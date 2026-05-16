@@ -431,6 +431,130 @@ pub struct ModelInheritance {
     pub source: ModelSource,
 }
 
+// ── Tool allow-list ──
+
+/// An agent's tool allow-list as parsed from frontmatter. The enum
+/// distinguishes three states that `Vec<String>` collapsed into one:
+///
+/// - `Wildcard` — the frontmatter omitted `tools:` or declared
+///   `tools: ['*']`. Semantically: the agent sees every registered
+///   tool (subject to the deny-list and parent narrowing). TS:
+///   `tools === undefined`.
+/// - `Explicit(non-empty list)` — the frontmatter declared a finite
+///   list. The agent sees only those tools (subject to deny-list /
+///   parent narrowing).
+/// - `Explicit(vec![])` — the frontmatter explicitly declared
+///   `tools: []`. Semantically: **zero tools** (the agent is
+///   tool-less). TS `parseAgentToolsFromFrontmatter` returns `[]` for
+///   this case so the auto-memory injector at `loadAgentsDir.ts:455`
+///   can promote it to `[Read, Edit, Write]` when `memory:` is set.
+///   The agent-tool renderer collapses `Explicit(vec![])` back to
+///   "All tools" wording, matching TS `getToolsDescription`'s
+///   `allowedTools.length > 0` gate.
+///
+/// TS parity matrix (`utils/markdownConfigLoader.ts:113-126`,
+/// `loadAgentsDir.ts:455-479`):
+///
+/// | Frontmatter        | parsed   | Rust                | Memory injection |
+/// |--------------------|----------|---------------------|------------------|
+/// | (key absent)       | undef    | `Wildcard`          | skipped          |
+/// | `tools: ['*']`     | undef    | `Wildcard`          | skipped          |
+/// | `tools: []`        | `[]`     | `Explicit(vec![])`  | runs             |
+/// | `tools: [Read]`    | `[Read]` | `Explicit([Read])`  | runs             |
+///
+/// Representing the distinction in the type system prevents the next
+/// refactor from confusing "wildcard" with "no tools".
+///
+/// Wire shape: a flat `Vec<String>` mirroring TS JSON. `Wildcard` ↔
+/// `["*"]`; `Explicit(v)` ↔ `v` (including `[]`). Combined with
+/// `#[serde(skip_serializing_if = "ToolAllowList::is_wildcard")]` on
+/// `AgentDefinition.allowed_tools`, wildcard agents emit no `tools`
+/// key at all — matching TS `tools: undefined` byte-for-byte.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ToolAllowList {
+    /// Every registered tool is visible (subject to deny-list +
+    /// parent filter). Mirrors TS `tools: undefined`.
+    #[default]
+    Wildcard,
+    /// Only these tool names are visible.
+    Explicit(Vec<String>),
+}
+
+impl ToolAllowList {
+    /// Frontmatter-friendly constructor.
+    ///
+    /// - `['*']` (single-star sentinel) → [`Self::Wildcard`].
+    /// - `[]` (empty list explicitly declared in YAML) →
+    ///   [`Self::Explicit`]`(vec![])`. **Distinct from `Wildcard`**:
+    ///   TS `parseAgentToolsFromFrontmatter` returns `[]` for
+    ///   `tools: []` so the auto-memory injector
+    ///   (`loadAgentsDir.ts:455`) can promote it to `[Read, Edit,
+    ///   Write]` when `memory:` is set. Preserving the empty array
+    ///   here keeps that semantics intact.
+    /// - Otherwise → [`Self::Explicit`]`(items)`.
+    ///
+    /// "Key absent" (whole field omitted from the YAML) is *not*
+    /// distinguishable at this entry point — callers must use
+    /// `.unwrap_or_default()` on the `Option<Vec<String>>` returned by
+    /// the frontmatter reader, which yields [`Self::Wildcard`].
+    pub fn from_frontmatter(items: Vec<String>) -> Self {
+        if items.len() == 1 && items[0].trim() == "*" {
+            return Self::Wildcard;
+        }
+        Self::Explicit(items)
+    }
+
+    /// Returns `true` if every registered tool is visible.
+    pub fn is_wildcard(&self) -> bool {
+        matches!(self, Self::Wildcard)
+    }
+
+    /// Returns the explicit list, or `None` for wildcard.
+    pub fn as_explicit(&self) -> Option<&[String]> {
+        match self {
+            Self::Wildcard => None,
+            Self::Explicit(v) => Some(v),
+        }
+    }
+
+    /// Mutable access to the explicit list. Returns `None` for wildcard
+    /// — callers that want to inject tools (e.g. memory auto-injection)
+    /// must check `is_wildcard()` and skip rather than coerce.
+    pub fn as_explicit_mut(&mut self) -> Option<&mut Vec<String>> {
+        match self {
+            Self::Wildcard => None,
+            Self::Explicit(v) => Some(v),
+        }
+    }
+}
+
+impl Serialize for ToolAllowList {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        match self {
+            Self::Wildcard => {
+                // Wire form `["*"]` for the rare case the field is
+                // emitted at all. With
+                // `#[serde(skip_serializing_if = "is_wildcard")]` on
+                // the field, this branch is normally unreachable —
+                // kept so direct `serde_json::to_value(&list)` calls
+                // still produce a valid TS-compatible shape.
+                let mut s = serializer.serialize_seq(Some(1))?;
+                s.serialize_element("*")?;
+                s.end()
+            }
+            Self::Explicit(items) => items.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolAllowList {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let items = <Vec<String>>::deserialize(deserializer)?;
+        Ok(Self::from_frontmatter(items))
+    }
+}
+
 // ── Agent Definition ──
 
 /// Complete agent definition — the declarative spec for a subagent.
@@ -530,10 +654,15 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disallowed_tools: Vec<String>,
 
-    /// Tools this agent is explicitly allowed to use (allow-list).
-    /// Empty means "use the default filtered set".
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
+    /// Tools this agent is explicitly allowed to use. The enum
+    /// distinguishes `Wildcard` (every registered tool, mirroring TS
+    /// `tools: undefined` and `tools: ['*']`) from `Explicit(list)` so
+    /// the inject site for auto-memory tools can skip wildcards rather
+    /// than silently coerce them into `Explicit([Read, Edit, Write])`.
+    /// Skipped at serialize time when `Wildcard` so the JSON byte-matches
+    /// TS `tools: undefined`.
+    #[serde(default, skip_serializing_if = "ToolAllowList::is_wildcard")]
+    pub allowed_tools: ToolAllowList,
 
     /// System prompt / identity override (legacy — prefer `system_prompt`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -622,7 +751,7 @@ impl Default for AgentDefinition {
             initial_prompt: None,
             max_turns: None,
             disallowed_tools: Vec::new(),
-            allowed_tools: Vec::new(),
+            allowed_tools: ToolAllowList::Wildcard,
             identity: None,
             color: None,
             skills: Vec::new(),

@@ -211,6 +211,23 @@ pub struct ToolUseContext {
     /// AgentTool degrades to subagent_type→role mapping alone.
     pub agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
 
+    /// Snapshot of the parent session's resolved provider+API+model
+    /// identity. Captured at engine bootstrap via
+    /// `ApiClient::fingerprint().to_snapshot()` and threaded onto every
+    /// `ToolUseContext`.
+    ///
+    /// `AgentTool::execute` reads this to construct
+    /// `SpawnMode::Fork { parent_snapshot, .. }` — the snapshot lives
+    /// **inside** the Fork variant non-optionally, so the type system
+    /// forbids constructing Fork without a snapshot. When this field is
+    /// `None`, `AgentTool` refuses to enter Fork mode (returns
+    /// `ExecutionFailed`) rather than fall back to a live-runtime model
+    /// resolution that would silently break cache parity.
+    ///
+    /// `None` is the legacy/test path — production engines populate it
+    /// at bootstrap; tests pass `None` and never trigger Fork mode.
+    pub parent_runtime_snapshot: Option<Arc<coco_types::SubagentRuntimeSnapshot>>,
+
     // ── File Tracking ──
     /// File reading limits.
     pub file_reading_limits: FileReadingLimits,
@@ -579,6 +596,7 @@ impl ToolUseContext {
             agent_id: self.agent_id.clone(),
             agent_type: self.agent_type.clone(),
             agent_catalog: self.agent_catalog.clone(),
+            parent_runtime_snapshot: self.parent_runtime_snapshot.clone(),
             file_reading_limits: self.file_reading_limits.clone(),
             glob_limits: self.glob_limits.clone(),
             // Share both trigger sets across concurrent siblings so all
@@ -762,6 +780,7 @@ impl ToolUseContext {
             agent_id: None,
             agent_type: None,
             agent_catalog: None,
+            parent_runtime_snapshot: None,
             file_reading_limits: FileReadingLimits::default(),
             glob_limits: GlobLimits::default(),
             nested_memory_attachment_triggers: Arc::new(RwLock::new(HashSet::new())),

@@ -246,7 +246,7 @@ fn test_agent_definition_default() {
     assert_eq!(def.source, AgentSource::BuiltIn);
     assert!(def.mcp_servers.is_empty());
     assert!(def.disallowed_tools.is_empty());
-    assert!(def.allowed_tools.is_empty());
+    assert!(def.allowed_tools.is_wildcard());
     assert!(def.effort.is_none());
     assert!(def.model.is_none());
     assert!(def.memory_scope.is_none());
@@ -280,7 +280,7 @@ fn test_agent_definition_serde_roundtrip() {
         initial_prompt: Some("Search the codebase for patterns.".into()),
         max_turns: Some(10),
         disallowed_tools: vec!["Bash".into()],
-        allowed_tools: vec!["Read".into(), "Grep".into()],
+        allowed_tools: ToolAllowList::Explicit(vec!["Read".into(), "Grep".into()]),
         identity: Some("You are a code researcher.".into()),
         color: Some(AgentColorName::Blue),
         ..Default::default()
@@ -312,8 +312,60 @@ fn test_agent_definition_serde_roundtrip() {
     );
     assert_eq!(parsed.max_turns, Some(10));
     assert_eq!(parsed.disallowed_tools, vec!["Bash"]);
-    assert_eq!(parsed.allowed_tools, vec!["Read", "Grep"]);
+    assert_eq!(
+        parsed.allowed_tools,
+        ToolAllowList::Explicit(vec!["Read".into(), "Grep".into()])
+    );
     assert_eq!(parsed.color, Some(AgentColorName::Blue));
+}
+
+// ── ToolAllowList from_frontmatter parity matrix ──
+
+#[test]
+fn test_tool_allow_list_from_frontmatter_matrix() {
+    // TS parity matrix from `parseAgentToolsFromFrontmatter`
+    // (`utils/markdownConfigLoader.ts:113-126`).
+    //
+    // The "missing key" case is *not* exercised here — it bypasses
+    // `from_frontmatter` entirely (callers do `.unwrap_or_default()`
+    // on `Option<Vec<String>>`, yielding `Wildcard`). All four rows
+    // below are the inputs `from_frontmatter` actually sees.
+    assert_eq!(
+        ToolAllowList::from_frontmatter(vec!["*".into()]),
+        ToolAllowList::Wildcard,
+        "tools: ['*'] must collapse to Wildcard (TS undefined)"
+    );
+    assert_eq!(
+        ToolAllowList::from_frontmatter(vec![" * ".into()]),
+        ToolAllowList::Wildcard,
+        "tools: [' * '] (whitespace around star) must collapse to Wildcard"
+    );
+    assert_eq!(
+        ToolAllowList::from_frontmatter(vec![]),
+        ToolAllowList::Explicit(vec![]),
+        "tools: [] must preserve as Explicit(empty) — TS parity for \
+         auto-memory injection (loadAgentsDir.ts:455 gates on \
+         `tools !== undefined`, NOT on length > 0)"
+    );
+    assert_eq!(
+        ToolAllowList::from_frontmatter(vec!["Read".into(), "Edit".into()]),
+        ToolAllowList::Explicit(vec!["Read".into(), "Edit".into()]),
+        "tools: [Read, Edit] must produce Explicit(list)"
+    );
+}
+
+#[test]
+fn test_tool_allow_list_explicit_empty_serializes_as_empty_array() {
+    // Wire shape parity: `Explicit(vec![])` round-trips as `[]`. This
+    // is what TS sees on disk when an agent author writes `tools: []`
+    // — and it's what TS reads back to drive the auto-memory inject
+    // gate.
+    let list = ToolAllowList::Explicit(vec![]);
+    let json = serde_json::to_string(&list).unwrap();
+    assert_eq!(json, "[]");
+    let parsed: ToolAllowList = serde_json::from_str("[]").unwrap();
+    assert_eq!(parsed, ToolAllowList::Explicit(vec![]));
+    assert!(!parsed.is_wildcard());
 }
 
 #[test]

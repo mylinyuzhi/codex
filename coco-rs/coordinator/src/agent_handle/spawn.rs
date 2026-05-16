@@ -679,98 +679,194 @@ impl SwarmAgentHandle {
         //
         // `preserve_tool_use_results` flips on for Fork and Resume so
         // downstream compaction doesn't strip the inherited results.
-        let definition_prompt = || {
-            request
-                .definition
-                .as_deref()
-                .and_then(|d| d.system_prompt.clone())
-                .unwrap_or_default()
+        // Resolve cwd + model once — both feed into env_info / CLAUDE.md
+        // discovery / per-agent memory.
+        let cwd_for_prompt = cwd_override
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from(&self.cwd));
+        // Model resolution by spawn mode:
+        //
+        // - **Fork**: pin to the snapshot's `api_model_name` (carried
+        //   non-optionally inside `SpawnMode::Fork`). The whole point
+        //   of fork is prompt-cache parity; reading live
+        //   `RuntimeConfig` here would silently bust the cache after
+        //   a hot-reload between the parent's last turn and this
+        //   spawn. Used for BOTH env-block rendering AND the actual
+        //   `AgentQueryConfig.model` below — they must agree.
+        //
+        // - **Resume**: rebuild fresh from current runtime. Resume
+        //   restarts a previously-backgrounded agent in a (possibly
+        //   different) process; pinning to a snapshot captured *now*
+        //   at engine bootstrap would conflate "current parent" with
+        //   "original spawn" and is meaningless.
+        //
+        // - **Fresh**: caller's `request.model` > `def.model` >
+        //   coordinator's current Main role.
+        let model_pinned_to_snapshot = match &request.spawn_mode {
+            coco_tool_runtime::SpawnMode::Fork {
+                parent_snapshot, ..
+            } => Some(parent_snapshot.api_model_name.clone()),
+            _ => None,
         };
-        let (mut system_prompt, fork_context_messages, preserve_tool_use_results) =
-            match &request.spawn_mode {
-                coco_tool_runtime::SpawnMode::Fork {
-                    rendered_system_prompt,
-                    parent_messages,
-                    inherit_tool_pool: _,
-                } => {
-                    let prompt_str = std::str::from_utf8(rendered_system_prompt)
-                        .map(str::to_string)
-                        .unwrap_or_default();
-                    let ctx = coco_subagent::build_fork_context(parent_messages, &request.prompt);
-                    (prompt_str, ctx.messages, true)
-                }
-                coco_tool_runtime::SpawnMode::Resume { parent_messages } => {
-                    (definition_prompt(), parent_messages.clone(), true)
-                }
-                coco_tool_runtime::SpawnMode::Fresh => (
-                    definition_prompt(),
-                    request.fork_context_messages.clone(),
-                    false,
-                ),
-                // `SpawnMode` is `#[non_exhaustive]` (cross-crate), so the
-                // compiler forces a wildcard. Future variants need
-                // explicit handling at this seam.
-                other => {
-                    tracing::warn!(?other, "unknown SpawnMode; treating as Fresh");
-                    (
-                        definition_prompt(),
-                        request.fork_context_messages.clone(),
-                        false,
-                    )
-                }
-            };
+        let model_for_env = model_pinned_to_snapshot.clone().unwrap_or_else(|| {
+            selection
+                .model
+                .clone()
+                .unwrap_or_else(|| self.current_main_model_id())
+        });
+        // `dirs::home_dir()` can return `None` on minimal containers
+        // (no `$HOME`, no passwd entry). The legacy code fell back to
+        // `/tmp`, which silently routed memory lookups to the wrong
+        // directory. Skip per-agent memory injection entirely instead
+        // — better an empty memory section than fabricated paths.
+        let home = dirs::home_dir();
 
-        // ── Gap B fix — per-agent MEMORY.md injection ──
-        //
-        // When the resolved AgentDefinition declares `memory:
-        // user|project|local`, append the agent's persistent
-        // MEMORY.md body to its system prompt so the child sees its
-        // own scoped memory at every spawn.
-        //
-        // TS parity: `tools/AgentTool/loadAgentsDir.ts:484, 728` and
-        // `utils/plugins/loadPluginAgents.ts:207` call
-        // `loadAgentMemoryPrompt(agentType, memory)` and concatenate
-        // it onto the agent's system prompt. Before this fix the
-        // `memory_scope` field was parsed and threaded through
-        // `AgentDefinition` / `SpawnConfig` / `AgentContext` but
-        // never read — frontmatter `memory: project` silently had
-        // no effect.
-        //
-        // Fork mode uses parent's pre-rendered system prompt verbatim
-        // (cache parity invariant), so per-agent memory injection is
-        // skipped for Fork — the parent's rendered prompt already
-        // captures whatever main-agent memory it cares about.
+        // Per-agent memory block (TS parity:
+        // `tools/AgentTool/loadAgentsDir.ts:484,728` + `loadPluginAgents.ts:207`).
+        // Fork inherits parent's rendered prompt verbatim so memory
+        // injection is skipped there.
         let inject_memory = !matches!(
             request.spawn_mode,
             coco_tool_runtime::SpawnMode::Fork { .. }
         );
-        if inject_memory
-            && let Some(definition) = request.definition.as_deref()
-            && let Some(scope) = definition.memory_scope
-        {
-            let cwd_path = cwd_override
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from(&self.cwd));
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-            let memory_block = coco_memory::agent_memory::load_agent_memory_prompt(
-                agent_type, scope, &cwd_path, &home,
-            );
-            if !system_prompt.is_empty() {
-                system_prompt.push_str("\n\n");
+        let memory_block = match (
+            inject_memory,
+            request.definition.as_deref().and_then(|d| d.memory_scope),
+            home.as_deref(),
+        ) {
+            (true, Some(scope), Some(home_dir)) => {
+                Some(coco_memory::agent_memory::load_agent_memory_prompt(
+                    agent_type,
+                    scope,
+                    &cwd_for_prompt,
+                    home_dir,
+                ))
             }
-            system_prompt.push_str(&memory_block);
-        }
+            (true, Some(_), None) => {
+                tracing::warn!(
+                    target: "coco_coordinator",
+                    agent_type,
+                    "skipping per-agent memory injection: home_dir unavailable"
+                );
+                None
+            }
+            _ => None,
+        };
+
+        // Build the Fresh/Resume system prompt via the shared
+        // `coco_context::build_system_prompt` assembler — same code path
+        // the leader uses. This restores:
+        //   - <env>...</env> block (Working directory, git repo Y/N,
+        //     Platform, Shell, OS Version, model line, knowledge cutoff)
+        //   - 4 AGENT_NOTES bullets (absolute paths, no emojis, …)
+        //   - CLAUDE.md discovery (gated by `def.omit_claude_md`)
+        //   - Memory block (appended at the correct cache-broken
+        //     position)
+        // TS parity: `AgentTool.tsx:534`
+        // `enhanceSystemPromptWithEnvDetails([agentPrompt], model, …)`.
+        let build_fresh_prompt = || -> String {
+            let def = request.definition.as_deref();
+            let identity = def
+                .and_then(|d| d.system_prompt.as_deref())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(coco_context::prompt::DEFAULT_AGENT_IDENTITY);
+            let claude_md_files: Vec<coco_context::MemoryFile> =
+                if def.map(|d| d.omit_claude_md).unwrap_or(false) {
+                    Vec::new()
+                } else {
+                    coco_context::discover_memory_files(&cwd_for_prompt)
+                };
+            let env_info = coco_context::get_environment_info(&cwd_for_prompt, &model_for_env);
+            coco_context::build_system_prompt(
+                identity,
+                &claude_md_files,
+                &env_info,
+                // `skill_listing` here is the system-prompt slot — never
+                // populated by the main agent either (skill listing flows
+                // via `coco_system_reminder::generators::skill_listing`
+                // per-turn, not as a baked-in section). Subagent matches
+                // main agent: pass None. Separate gap covered below
+                // wires the skill listing through the subagent's
+                // GeneratorContext so the per-turn reminder fires.
+                /*skill_listing=*/
+                None,
+                memory_block.as_deref(),
+                // AGENT_NOTES via `notes_after_env` — TS subagent path
+                // (`AgentTool.tsx:534 enhanceSystemPromptWithEnvDetails`)
+                // bundles `notes` with the env block. By passing them
+                // through this slot they render BEFORE memory (matching
+                // TS), not after. Main agent path passes `None` because
+                // TS `getSystemPrompt` has richer per-section rules
+                // instead of these 4 condensed bullets.
+                Some(coco_context::prompt::AGENT_NOTES),
+                /*output_style=*/ None,
+                /*additional_working_directories=*/ &[],
+            )
+            .full_text()
+        };
+
+        // Resolve (system_prompt, prior_messages, preserve_tool_use_results)
+        // by spawn mode. `is_fork` controls whether the child's first
+        // user turn gets wrapped in `<fork-boilerplate>` XML so the
+        // recursion guard ([`coco_subagent::is_in_fork_child`]) can
+        // detect fork-of-fork and the worker receives its rules. TS
+        // parity: `forkSubagent.ts::buildChildMessage`.
+        let (system_prompt, fork_context_messages, preserve_tool_use_results, is_fork) =
+            match &request.spawn_mode {
+                coco_tool_runtime::SpawnMode::Fork {
+                    rendered_system_prompt,
+                    parent_messages,
+                    parent_snapshot: _,
+                } => {
+                    // Fork MUST use parent's pre-rendered prompt verbatim
+                    // for prompt-cache parity. Memory was already
+                    // captured by the parent's own assembly.
+                    let ctx = coco_subagent::build_fork_context(parent_messages, &request.prompt);
+                    (rendered_system_prompt.clone(), ctx.messages, true, true)
+                }
+                coco_tool_runtime::SpawnMode::Resume { parent_messages } => {
+                    (build_fresh_prompt(), parent_messages.clone(), true, false)
+                }
+                coco_tool_runtime::SpawnMode::Fresh => (
+                    build_fresh_prompt(),
+                    request.fork_context_messages.clone(),
+                    false,
+                    false,
+                ),
+                // `SpawnMode` is `#[non_exhaustive]` (cross-crate), so the
+                // compiler forces a wildcard. Future variants MUST be
+                // wired explicitly at this seam — failing fast beats
+                // a Fresh fallback that silently degrades cache parity
+                // / recursion guarantees the new variant might rely on.
+                other => {
+                    return Ok(spawn_failed(
+                        agent_id,
+                        format!(
+                            "Unhandled SpawnMode variant {other:?}; the coordinator must be \
+                             updated to thread the new mode through `spawn_subagent`."
+                        ),
+                        start.elapsed().as_millis() as i64,
+                    ));
+                }
+            };
         let query_config = coco_tool_runtime::AgentQueryConfig {
             system_prompt,
-            // `selection.model` carries the explicit override (request >
-            // definition). When unset, the engine factory consumes
-            // `model_role` and resolves the primary `ModelSpec` from the
-            // live `RuntimeConfig` — so a hot-reload between parent's last
-            // turn and this spawn picks up the new Main mapping (T6).
-            model: selection
-                .model
-                .clone()
-                .unwrap_or_else(|| self.current_main_model_id()),
+            // **Fork**: pin to `parent_snapshot.api_model_name`
+            // (carried by `SpawnMode::Fork`). Cache parity requires
+            // the API call to use the exact model the parent's
+            // snapshot captured — falling back to `current_main_model_id()`
+            // after a hot-reload would silently break the cache.
+            //
+            // **Fresh/Resume**: `selection.model` (request > definition)
+            // wins; otherwise fall through to the role-resolved primary
+            // from live `RuntimeConfig` via `current_main_model_id()`
+            // (T6 hot-reload pickup).
+            model: model_pinned_to_snapshot.clone().unwrap_or_else(|| {
+                selection
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| self.current_main_model_id())
+            }),
             max_turns: request
                 .constraints
                 .as_ref()
@@ -819,12 +915,32 @@ impl SwarmAgentHandle {
                 .as_ref()
                 .map(|c| c.allowed_write_roots.clone())
                 .unwrap_or_default(),
-            model_role: Some(selection.model_role),
+            // P1-6 fix — plan-mode children route through ModelRole::Plan
+            // regardless of the agent's declared role. TS parity: in
+            // plan mode the leader's main client swap promotes to the
+            // plan model (`engine.rs:1056-1087`); for custom agents
+            // spawned with `mode: "plan"` we replicate that promotion
+            // at the role level so the inference layer's role-resolver
+            // routes to the plan client. Without this, a custom agent
+            // declaring `model_role: subagent` and called with
+            // `mode: plan` ran on the cheaper Subagent model — silently
+            // worse for plan-mode reasoning quality.
+            model_role: Some(
+                if request.mode.as_deref() == Some("plan")
+                    && !matches!(
+                        request.spawn_mode,
+                        coco_tool_runtime::SpawnMode::Fork { .. }
+                    )
+                {
+                    coco_types::ModelRole::Plan
+                } else {
+                    selection.model_role
+                },
+            ),
             effort: request.effort.clone(),
             use_exact_tools: request.use_exact_tools,
             mcp_servers: request.mcp_servers.clone(),
             initial_prompt: request.initial_prompt.clone(),
-            parent_runtime_snapshot: request.parent_runtime_snapshot.clone(),
             definition: request.definition.clone(),
             // In-process AgentTool spawns inherit the leader's
             // `ToolPermissionBridge` via `wire_engine`. Setting an override
@@ -856,6 +972,7 @@ impl SwarmAgentHandle {
                     worktree_session,
                     start,
                     engine,
+                    is_fork,
                 )
                 .await;
         }
@@ -895,9 +1012,22 @@ impl SwarmAgentHandle {
         // system-reminder block. Pre-fix: SubagentStart was defined in
         // the hook event taxonomy but no caller ever fired it for
         // subagent spawns.
-        let (effective_prompt, _start_result) = self
+        let (decorated_prompt, _start_result) = self
             .fire_subagent_start_hook(&agent_id, agent_type, &prompt_with_skills)
             .await;
+
+        // Fork mode: wrap the decorated directive in the TS-parity
+        // `<fork-boilerplate>...</fork-boilerplate>` envelope so:
+        //   - the worker receives its rules (no-converse, scope-bound,
+        //     report-format) — TS `forkSubagent.ts:173-194`.
+        //   - the conversation contains the boilerplate tag so a future
+        //     `is_in_fork_child(parent_messages)` scan blocks recursive
+        //     forking — `forkSubagent.ts::isInForkChild`.
+        let effective_prompt = if is_fork {
+            coco_subagent::build_fork_child_message(&decorated_prompt)
+        } else {
+            decorated_prompt
+        };
 
         // Sync path.
         let query_result = engine.execute_query(&effective_prompt, query_config).await;
@@ -1040,6 +1170,7 @@ impl SwarmAgentHandle {
         worktree_session: Option<crate::worktree::AgentWorktreeSession>,
         start: Instant,
         engine: coco_tool_runtime::AgentQueryEngineRef,
+        is_fork: bool,
     ) -> Result<AgentSpawnResponse, String> {
         if worktree_session.is_some() {
             if let (Some(m), Some(session)) = (self.worktree_manager(), worktree_session.clone()) {
@@ -1280,7 +1411,7 @@ impl SwarmAgentHandle {
             // prepend any returned context blocks to the prompt. TS
             // parity: `runAgent.ts:530-555`. Bg path mirrors the sync
             // path's behaviour (added in this fix round).
-            let effective_prompt = fire_subagent_start_for_task(
+            let decorated_prompt = fire_subagent_start_for_task(
                 hook_registry_for_task.clone(),
                 &cwd_for_task,
                 &agent_id_for_task,
@@ -1288,6 +1419,16 @@ impl SwarmAgentHandle {
                 &prompt,
             )
             .await;
+
+            // Fork mode: wrap the decorated directive in the TS-parity
+            // `<fork-boilerplate>...</fork-boilerplate>` envelope. See
+            // sync-path comment above for the rationale (recursion
+            // guard + worker rules). Mirrors `forkSubagent.ts::buildChildMessage`.
+            let effective_prompt = if is_fork {
+                coco_subagent::build_fork_child_message(&decorated_prompt)
+            } else {
+                decorated_prompt
+            };
 
             // Race the engine query against the cancellation token so
             // `kill_task` propagates. The engine itself honours its config

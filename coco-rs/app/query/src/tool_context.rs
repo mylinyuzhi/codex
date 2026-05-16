@@ -122,6 +122,13 @@ pub(crate) struct ToolContextFactory {
     /// and refreshed on `/agents reload`. `None` is the legacy/test
     /// path — AgentTool degrades to subagent_type→role mapping alone.
     pub(crate) agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
+    /// Parent's resolved runtime identity (provider + API + model). Set
+    /// at engine bootstrap from `ApiClient::fingerprint().to_snapshot()`
+    /// and threaded onto every `ToolUseContext` so subagent spawns can
+    /// pin Fork-mode prompt cache to the parent's model. `None` is the
+    /// legacy/test path; AgentTool degrades to coordinator's
+    /// `current_main_model_id()` which can drift on hot-reload.
+    pub(crate) parent_runtime_snapshot: Option<Arc<coco_types::SubagentRuntimeSnapshot>>,
     /// Per-engine skill-emitted Command-source rule store, shared by
     /// `Arc` with `QueryEngine.live_command_rules` and the
     /// `EngineLiveRulesHandle` installed on the executor.
@@ -369,6 +376,14 @@ impl ToolContextFactory {
             // `None` resolves AgentTool to the subagent_type→role
             // mapping alone (legacy / test path).
             agent_catalog: self.agent_catalog.clone(),
+            // Missed-2 fix: parent runtime snapshot threaded onto every
+            // ToolUseContext. AgentTool reads this and populates
+            // `AgentSpawnRequest.parent_runtime_snapshot` so fork-mode
+            // prompt-cache parity survives `RuntimeConfig` hot-reload.
+            // Installed at engine bootstrap via
+            // `ToolContextFactory::with_parent_runtime_snapshot` from
+            // `ApiClient::fingerprint().to_snapshot()`.
+            parent_runtime_snapshot: self.parent_runtime_snapshot.clone(),
             file_reading_limits: Default::default(),
             glob_limits: Default::default(),
             nested_memory_attachment_triggers: Arc::new(RwLock::new(Default::default())),

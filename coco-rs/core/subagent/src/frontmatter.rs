@@ -183,7 +183,7 @@ pub fn parse_agent_markdown(
     }
 
     def.allowed_tools = read_csv_or_list_aliased(frontmatter, &["tools", "allowed_tools"])
-        .map(collapse_wildcard_to_default)
+        .map(coco_types::ToolAllowList::from_frontmatter)
         .unwrap_or_default();
     def.disallowed_tools =
         read_csv_or_list_aliased(frontmatter, &["disallowedTools", "disallowed_tools"])
@@ -358,17 +358,6 @@ const VALID_PERMISSION_MODES: &[&str] = &[
     "ask",
     "deny",
 ];
-
-/// TS `parseAgentToolsFromFrontmatter` (`utils/markdownConfigLoader.ts:122-124`)
-/// collapses `['*']` to `undefined`, which downstream means "use the default
-/// allow set = all tools". Coco-rs represents that with an empty allow-list,
-/// so collapse to `vec![]` here.
-fn collapse_wildcard_to_default(items: Vec<String>) -> Vec<String> {
-    if items.len() == 1 && items[0].trim() == "*" {
-        return Vec::new();
-    }
-    items
-}
 
 /// Read a frontmatter value that may be either:
 /// - a YAML list (`tools:\n  - Read\n  - Edit`), or

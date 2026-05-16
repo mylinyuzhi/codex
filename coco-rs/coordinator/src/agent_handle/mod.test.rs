@@ -864,3 +864,141 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
         "Resume must NOT rewrite tool_results to FORK_PLACEHOLDER; got {serialized}",
     );
 }
+
+/// G1 regression: fork-mode user turn must be wrapped in
+/// `<fork-boilerplate>...</fork-boilerplate>` + `Your directive: ` so
+/// the worker receives its rules AND a future
+/// `is_in_fork_child(parent_messages)` scan can detect recursion.
+///
+/// Pre-fix, spawn.rs called `build_fork_context` but threw away
+/// `ctx.directive` and sent `request.prompt` verbatim — recursion
+/// guard could never trigger.
+///
+/// TS parity: `forkSubagent.ts::buildChildMessage`.
+#[tokio::test]
+async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+
+    struct CapturingEngine {
+        captured_prompt: tokio::sync::Mutex<Option<String>>,
+        captured_system: tokio::sync::Mutex<Option<String>>,
+        captured_messages: tokio::sync::Mutex<Option<Vec<serde_json::Value>>>,
+    }
+    #[async_trait]
+    impl AgentQueryEngine for CapturingEngine {
+        async fn execute_query(
+            &self,
+            prompt: &str,
+            config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            *self.captured_prompt.lock().await = Some(prompt.to_string());
+            *self.captured_system.lock().await = Some(config.system_prompt.clone());
+            *self.captured_messages.lock().await = Some(config.fork_context_messages.clone());
+            Ok(AgentQueryResult {
+                response_text: Some("done".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 0,
+                cancelled: false,
+            })
+        }
+    }
+
+    let captured = Arc::new(CapturingEngine {
+        captured_prompt: tokio::sync::Mutex::new(None),
+        captured_system: tokio::sync::Mutex::new(None),
+        captured_messages: tokio::sync::Mutex::new(None),
+    });
+    let mut handle = create_test_handle();
+    handle.set_execution_engine(captured.clone());
+    handle.set_hook_registry(Arc::new(coco_hooks::HookRegistry::new()));
+
+    let parent_messages = vec![serde_json::json!({
+        "role": "user",
+        "content": [{
+            "type": "tool_result",
+            "tool_use_id": "tu1",
+            "content": "noisy parent output",
+        }],
+    })];
+    let parent_snapshot = std::sync::Arc::new(coco_types::SubagentRuntimeSnapshot {
+        provider: "anthropic".into(),
+        api: coco_types::ProviderApi::Anthropic,
+        api_model_name: "claude-opus-4-7".into(),
+        base_url: "https://api.anthropic.com".into(),
+        wire_api: None,
+    });
+
+    let request = AgentSpawnRequest {
+        prompt: "Research how Foo works".into(),
+        // Fork mode is only chosen by AgentTool when no subagent_type
+        // is supplied; mirror that here so the runner takes the Fork
+        // branch.
+        subagent_type: None,
+        spawn_mode: coco_tool_runtime::SpawnMode::Fork {
+            rendered_system_prompt: "PARENT SYSTEM PROMPT".into(),
+            parent_messages: parent_messages.clone(),
+            parent_snapshot,
+        },
+        ..Default::default()
+    };
+    let response = handle.spawn_agent(request).await.unwrap();
+    assert_eq!(response.status, AgentSpawnStatus::Completed);
+
+    // Worker user turn carries the boilerplate + rules + directive.
+    let observed_prompt = captured.captured_prompt.lock().await.clone().unwrap();
+    assert!(
+        observed_prompt.contains(&format!("<{}>", coco_subagent::FORK_BOILERPLATE_TAG)),
+        "fork directive must be wrapped in `<{}>`; got: {observed_prompt}",
+        coco_subagent::FORK_BOILERPLATE_TAG,
+    );
+    assert!(
+        observed_prompt.contains(&format!("</{}>", coco_subagent::FORK_BOILERPLATE_TAG)),
+        "fork directive must close the `</{}>` tag; got: {observed_prompt}",
+        coco_subagent::FORK_BOILERPLATE_TAG,
+    );
+    assert!(
+        observed_prompt.contains(coco_subagent::FORK_DIRECTIVE_PREFIX),
+        "fork prompt must include the `Your directive: ` prefix; got: {observed_prompt}",
+    );
+    assert!(
+        observed_prompt.contains("Research how Foo works"),
+        "fork prompt must end with the original directive text; got: {observed_prompt}",
+    );
+
+    // Recursion guard precondition: the wrapped child message must be
+    // detectable by `is_in_fork_child` once it lands in history. The
+    // runner injects only via the new user turn (not into parent
+    // messages), so we synthesize the user message a downstream turn
+    // would see and assert detection.
+    let downstream_history = vec![serde_json::json!({
+        "role": "user",
+        "content": [{"type": "text", "text": observed_prompt}],
+    })];
+    assert!(
+        coco_subagent::is_in_fork_child(&downstream_history),
+        "is_in_fork_child must detect the wrapped directive — without this, fork-of-fork is silently allowed",
+    );
+
+    // Inherited history's `tool_result` blocks were rewritten to
+    // FORK_PLACEHOLDER (build_fork_context contract).
+    let observed_messages = captured.captured_messages.lock().await.clone().unwrap();
+    let serialized = serde_json::to_string(&observed_messages).unwrap();
+    assert!(
+        serialized.contains(coco_subagent::FORK_PLACEHOLDER),
+        "Fork must rewrite parent tool_results to FORK_PLACEHOLDER; got: {serialized}",
+    );
+    assert!(
+        !serialized.contains("noisy parent output"),
+        "Fork must scrub the original tool_result content; got: {serialized}",
+    );
+
+    // Pinned system prompt — verbatim from the snapshot.
+    let observed_system = captured.captured_system.lock().await.clone().unwrap();
+    assert_eq!(observed_system, "PARENT SYSTEM PROMPT");
+}

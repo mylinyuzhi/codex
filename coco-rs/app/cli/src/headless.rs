@@ -277,6 +277,7 @@ pub fn build_system_prompt(
     model_id: &str,
     base_instructions: Option<&str>,
     output_style: Option<&coco_output_styles::OutputStyleConfig>,
+    additional_working_directories: &[String],
 ) -> String {
     let claude_files = coco_context::discover_memory_files(cwd);
     let env_info = coco_context::get_environment_info(cwd, model_id);
@@ -290,6 +291,7 @@ pub fn build_system_prompt(
         None,
         None,
         section,
+        additional_working_directories,
     )
     .full_text()
 }
@@ -302,12 +304,19 @@ pub fn build_system_prompt_for_model(
     provider: &str,
     model_id: &str,
     output_style: Option<&coco_output_styles::OutputStyleConfig>,
+    additional_working_directories: &[String],
 ) -> String {
     let resolved = runtime_config.model_registry.resolve(provider, model_id);
     let base_instructions = resolved
         .as_ref()
         .and_then(|model| model.info.base_instructions.as_deref());
-    build_system_prompt(cwd, model_id, base_instructions, output_style)
+    build_system_prompt(
+        cwd,
+        model_id,
+        base_instructions,
+        output_style,
+        additional_working_directories,
+    )
 }
 
 // ─── Permission resolution ───────────────────────────────────────────
@@ -817,10 +826,18 @@ fn compose_system_prompt(
 ) -> Result<String> {
     // 1. Base layer: `--system-prompt` wholly replaces the default
     //    identity + CLAUDE.md discovery. Otherwise build the default.
+    let additional_dirs = resolve_additional_dirs_display(cli, cwd);
     let mut prompt = if let Some(custom) = cli.system_prompt.as_deref() {
         custom.to_string()
     } else {
-        build_system_prompt_for_model(cwd, runtime_config, provider, model_id, output_style)
+        build_system_prompt_for_model(
+            cwd,
+            runtime_config,
+            provider,
+            model_id,
+            output_style,
+            &additional_dirs,
+        )
     };
     // 2. Append from `--append-system-prompt` (verbatim).
     if let Some(append) = cli.append_system_prompt.as_deref() {
@@ -869,6 +886,9 @@ fn summarize_tool_filter(cli: &Cli) -> Option<ToolFilterSummary> {
 }
 
 /// Resolve `--add-dir` flag values to absolute paths anchored at `cwd`.
+/// Used internally by `compose_system_prompt` to anchor `--add-dir`
+/// paths for fence checks; callers that need the rendered display form
+/// for the env block should use [`resolve_additional_dirs_display`].
 fn resolve_additional_dirs(cli: &Cli, cwd: &Path) -> Vec<PathBuf> {
     cli.add_dir
         .iter()
@@ -880,5 +900,17 @@ fn resolve_additional_dirs(cli: &Cli, cwd: &Path) -> Vec<PathBuf> {
                 cwd.join(p)
             }
         })
+        .collect()
+}
+
+/// Public sibling of [`resolve_additional_dirs`] returning the display
+/// form (`String`) that flows into `coco_context::build_system_prompt`'s
+/// `additional_working_directories` slot. Single source of truth for the
+/// `--add-dir` → env-block transformation; previously duplicated in
+/// `session_bootstrap.rs` and `headless::compose_system_prompt`.
+pub fn resolve_additional_dirs_display(cli: &Cli, cwd: &Path) -> Vec<String> {
+    resolve_additional_dirs(cli, cwd)
+        .iter()
+        .map(|p| p.display().to_string())
         .collect()
 }

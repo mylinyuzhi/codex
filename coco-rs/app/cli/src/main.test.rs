@@ -33,7 +33,8 @@ fn build_system_prompt_uses_model_instructions_when_present() {
     let cwd = TempDir::new().unwrap();
     let runtime = runtime_for_model("openai/gpt-5-4", &home);
 
-    let prompt = build_system_prompt_for_model(cwd.path(), &runtime, "openai", "gpt-5-4", None);
+    let prompt =
+        build_system_prompt_for_model(cwd.path(), &runtime, "openai", "gpt-5-4", None, &[]);
 
     assert!(
         prompt.starts_with("You are Codex, a coding agent based on GPT-5."),
@@ -49,9 +50,15 @@ fn build_system_prompt_falls_back_when_model_has_no_instructions() {
     let cwd = TempDir::new().unwrap();
     let runtime = runtime_for_model("anthropic/claude-sonnet-4-6", &home);
 
-    let prompt =
-        build_system_prompt_for_model(cwd.path(), &runtime, "anthropic", "claude-sonnet-4-6", None);
+    let prompt = build_system_prompt_for_model(
+        cwd.path(),
+        &runtime,
+        "anthropic",
+        "claude-sonnet-4-6",
+        None,
+        &[],
+    );
 
     assert!(prompt.starts_with(DEFAULT_SYSTEM_PROMPT_IDENTITY));
-    assert!(prompt.contains("# Environment"));
+    assert!(prompt.contains("<env>"));
 }

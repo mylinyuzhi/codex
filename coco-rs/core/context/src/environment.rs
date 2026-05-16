@@ -1,8 +1,20 @@
 use serde::Deserialize;
 use serde::Serialize;
+use std::fmt;
 use std::path::Path;
 
 /// Platform information.
+///
+/// Has two textual forms:
+/// - [`Display`](fmt::Display) — human title-case (`macOS` / `Linux` /
+///   `Windows`). Used for the os-version fallback string.
+/// - [`Self::ts_name`] — lowercase wire identifier (`darwin` / `linux` /
+///   `win32`) used in the system-prompt `<env>` block for TS parity.
+///
+/// Kept as two methods because the two forms are semantically distinct
+/// (human display vs wire format), but `Display` is idiomatic Rust so
+/// the title-case form goes through `to_string()` rather than a named
+/// `display_name()` helper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform {
@@ -22,12 +34,25 @@ impl Platform {
         }
     }
 
-    pub fn display_name(&self) -> &str {
+    /// Lowercase identifier matching TS `env.platform` value
+    /// (`darwin`/`linux`/`win32`). Used in the system-prompt env
+    /// block for byte-parity with `constants/prompts.ts::computeEnvInfo`.
+    pub fn ts_name(&self) -> &'static str {
         match self {
+            Self::Darwin => "darwin",
+            Self::Linux => "linux",
+            Self::Windows => "win32",
+        }
+    }
+}
+
+impl fmt::Display for Platform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
             Self::Darwin => "macOS",
             Self::Linux => "Linux",
             Self::Windows => "Windows",
-        }
+        })
     }
 }
 
@@ -55,6 +80,31 @@ impl ShellKind {
             Self::Bash // default
         }
     }
+
+    /// Lowercase shell name matching TS `getShellInfoLine` output
+    /// (`bash`/`zsh`/`sh`/`powershell`).
+    pub fn ts_name(&self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::Zsh => "zsh",
+            Self::Sh => "sh",
+            Self::PowerShell => "powershell",
+        }
+    }
+}
+
+/// Per-model knowledge cutoff date. Delegates to
+/// [`coco_model_card::knowledge_cutoff`] — exact-id lookup against the
+/// static vendor-fact catalog in `common/model-card`. Returns `None`
+/// for unknown model IDs so the env block omits the line rather than
+/// render a wrong date.
+///
+/// To add a new model's cutoff, add a `ModelCard` entry in
+/// `coco-model-card::cards`, not here. This function is a thin shim
+/// kept so `EnvironmentInfo` doesn't depend on `coco-model-card`
+/// directly.
+pub fn knowledge_cutoff_for_model(model_id: &str) -> Option<&'static str> {
+    coco_model_card::knowledge_cutoff(model_id)
 }
 
 /// Collected environment information for system prompt.
@@ -93,6 +143,9 @@ pub fn get_environment_info(cwd: &Path, model: &str) -> EnvironmentInfo {
     };
 
     let os_version = get_os_version();
+    let knowledge_cutoff = knowledge_cutoff_for_model(model)
+        .map(str::to_string)
+        .unwrap_or_default();
 
     EnvironmentInfo {
         cwd: cwd.to_string_lossy().to_string(),
@@ -100,7 +153,7 @@ pub fn get_environment_info(cwd: &Path, model: &str) -> EnvironmentInfo {
         shell: ShellKind::detect(),
         os_version,
         model: model.to_string(),
-        knowledge_cutoff: "May 2025".to_string(),
+        knowledge_cutoff,
         is_git_repo,
         git_status,
     }
@@ -151,7 +204,7 @@ fn get_os_version() -> String {
     output
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| Platform::current().display_name().to_string())
+        .unwrap_or_else(|| Platform::current().to_string())
 }
 
 #[cfg(test)]

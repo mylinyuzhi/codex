@@ -195,14 +195,14 @@ impl AgentToolFilter {
         }
 
         // Agent's allow-list intersection (TS `resolveAgentTools`
-        // wildcard-handling at `agentToolUtils.ts:162-173`). Empty
-        // allow-list = wildcard = keep everything. MCP tools do NOT bypass
-        // the allow-list — TS only auto-includes them when the agent gave
-        // no allow-list at all.
-        let uses_default_allow_list = def.allowed_tools.is_empty();
+        // wildcard-handling at `agentToolUtils.ts:162-173`). `Wildcard`
+        // = keep everything. MCP tools do NOT bypass the allow-list —
+        // TS only auto-includes them when the agent gave no allow-list
+        // at all.
+        let uses_default_allow_list = def.allowed_tools.is_wildcard();
         let mut unknown_tools: Vec<String> = Vec::new();
-        if !uses_default_allow_list {
-            let allowed = parse_tool_allow_list(&def.allowed_tools);
+        if let Some(explicit) = def.allowed_tools.as_explicit() {
+            let allowed = parse_tool_allow_list(explicit);
             unknown_tools = allowed
                 .iter()
                 .filter(|name| !candidates.contains(*name))

@@ -242,13 +242,6 @@ impl SkillHandle for QuerySkillRuntime {
                     use_exact_tools: false,
                     mcp_servers: Vec::new(),
                     initial_prompt: None,
-                    // Skills don't currently propagate the parent's
-                    // runtime fingerprint — the skill runner reuses the
-                    // parent ApiClient by construction. When/if the
-                    // skill path moves to a fresh-engine spawn, fill
-                    // this from the parent's `ApiClient.fingerprint()`
-                    // via `to_snapshot()` to surface drift detection.
-                    parent_runtime_snapshot: None,
                     // Skills don't have an AgentDefinition counterpart
                     // (they're a separate first-class workflow type).
                     definition: None,

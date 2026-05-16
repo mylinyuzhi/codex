@@ -18,6 +18,7 @@
 #   - common/error              IS coco-error (no self-dep)
 #   - common/stack-trace-macro  proc-macro crate (no runtime deps)
 #   - common/types              foundation types, zero internal deps, no errors
+#   - common/model-card         vendor model facts, zero internal deps, no errors
 #   - services/mcp-types        auto-generated wire types, no errors
 #   - keybindings               leaf parser, ParseError is intentionally
 #                               stringly per parser.rs (user-facing messages,
@@ -67,6 +68,7 @@ is_tier3_main_trunk() {
         # to classify, so the "must depend on coco-error" rule does not apply.
         common/error|common/stack-trace-macro) return 1 ;;
         common/types|services/mcp-types)      return 1 ;;
+        common/model-card)                    return 1 ;;
         keybindings)                          return 1 ;;
         app/state|core/messages)              return 1 ;;
         *) return 0 ;;

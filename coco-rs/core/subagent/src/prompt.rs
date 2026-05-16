@@ -230,27 +230,37 @@ fn format_agent_line(def: &AgentDefinition) -> String {
 }
 
 /// Reproduces TS `getToolsDescription` (`prompt.ts:15-37`) verbatim.
-pub fn format_tools_description(allowed: &[String], disallowed: &[String]) -> String {
-    let allow_empty = allowed.is_empty();
+/// `Wildcard` allowed-list mirrors TS `tools === undefined`:
+/// "All tools" (or "All tools except …" when deny-list is non-empty).
+pub fn format_tools_description(
+    allowed: &coco_types::ToolAllowList,
+    disallowed: &[String],
+) -> String {
     let deny_empty = disallowed.is_empty();
-    if !allow_empty && !deny_empty {
-        let effective: Vec<&String> = allowed.iter().filter(|t| !disallowed.contains(t)).collect();
-        if effective.is_empty() {
-            return "None".to_owned();
+    match allowed {
+        coco_types::ToolAllowList::Explicit(list) if !list.is_empty() => {
+            if !deny_empty {
+                let effective: Vec<&String> =
+                    list.iter().filter(|t| !disallowed.contains(t)).collect();
+                if effective.is_empty() {
+                    return "None".to_owned();
+                }
+                return effective
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            }
+            list.join(", ")
         }
-        return effective
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
+        coco_types::ToolAllowList::Explicit(_) | coco_types::ToolAllowList::Wildcard => {
+            if !deny_empty {
+                format!("All tools except {}", disallowed.join(", "))
+            } else {
+                "All tools".to_owned()
+            }
+        }
     }
-    if !allow_empty {
-        return allowed.join(", ");
-    }
-    if !deny_empty {
-        return format!("All tools except {}", disallowed.join(", "));
-    }
-    "All tools".to_owned()
 }
 
 /// "When NOT to use" guidance — verbatim TS `prompt.ts:232-240` minus

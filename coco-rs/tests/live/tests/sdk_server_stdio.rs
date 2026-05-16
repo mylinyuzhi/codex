@@ -157,6 +157,7 @@ async fn serve(args: Args) -> Result<()> {
         client_api.provider(),
         &model_id,
         None,
+        &[],
     );
     let session_manager = Arc::new(SessionManager::new(sessions_dir.path().to_path_buf()));
     let startup =

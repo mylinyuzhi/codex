@@ -7,6 +7,7 @@ members = [
     "common/types",
     "common/config",
     "common/config-reload",
+    "common/model-card",
 
     # ─── utils/ (25) ── 24 from cocode-rs + 1 new ───
     "utils/absolute-path",
@@ -113,6 +114,7 @@ coco-otel = { path = "common/otel" }
 coco-types = { path = "common/types" }
 coco-config = { path = "common/config" }
 coco-config-reload = { path = "common/config-reload" }
+coco-model-card = { path = "common/model-card" }
 
 # Internal - utilities
 coco-file-encoding = { path = "utils/file-encoding" }

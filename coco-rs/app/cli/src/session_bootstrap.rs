@@ -37,6 +37,7 @@ use crate::headless::StartupPermissionState;
 use crate::headless::build_output_style_manager;
 use crate::headless::build_system_prompt_for_model;
 use crate::headless::create_api_client;
+use crate::headless::resolve_additional_dirs_display;
 use crate::headless::resolve_startup_permission_state;
 use crate::session_runtime::SessionRuntime;
 
@@ -140,12 +141,18 @@ pub fn build_engine_resources(
     // per-turn reminder generator.
     let output_style_manager = build_output_style_manager(runtime_config, cwd, &[]);
 
+    // `--add-dir` flow into the env block. TS:
+    // `enhanceSystemPromptWithEnvDetails([...], model, additionalWorkingDirectories)`.
+    // Single source of truth lives in `headless::resolve_additional_dirs_display`.
+    let additional_working_directories = resolve_additional_dirs_display(cli, cwd);
+
     let system_prompt = build_system_prompt_for_model(
         cwd,
         runtime_config,
         client.provider(),
         &model_id,
         output_style_manager.active(),
+        &additional_working_directories,
     );
 
     let startup = resolve_startup_permission_state(cli, &runtime_config.settings.merged)?;

@@ -60,7 +60,10 @@ fn parse_arrays_and_csv_for_tools() {
         "disallowedTools": "Write, NotebookEdit",
     }));
     let (def, _warn) = parse_agent_json("arr", &entry, AgentSource::FlagSettings).unwrap();
-    assert_eq!(def.allowed_tools, vec!["Read", "Edit"]);
+    assert_eq!(
+        def.allowed_tools,
+        coco_types::ToolAllowList::Explicit(vec!["Read".into(), "Edit".into()])
+    );
     assert_eq!(def.disallowed_tools, vec!["Write", "NotebookEdit"]);
 }
 
@@ -71,7 +74,7 @@ fn parse_wildcard_tools_collapses_to_default() {
     // markdown parser.
     let entry = entry_with(serde_json::json!({ "tools": ["*"] }));
     let (def, _warn) = parse_agent_json("wild", &entry, AgentSource::FlagSettings).unwrap();
-    assert!(def.allowed_tools.is_empty());
+    assert!(def.allowed_tools.is_wildcard());
 }
 
 #[test]
