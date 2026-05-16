@@ -14,7 +14,8 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::helpers::complete_tool_call_with_error;
+use crate::helpers::ToolCompletionEventMode;
+use crate::helpers::complete_tool_call_with_error_mode;
 
 pub(crate) enum PreToolUseOutcome {
     Continue {
@@ -63,6 +64,7 @@ impl<'a> HookController<'a> {
         history: &mut MessageHistory,
         tool_call: &ToolCallPart,
         tool_id: &ToolId,
+        completion_event_mode: ToolCompletionEventMode,
     ) -> PreToolUseOutcome {
         let Some(hooks) = self.hooks else {
             return PreToolUseOutcome::Continue {
@@ -92,13 +94,14 @@ impl<'a> HookController<'a> {
                     %output,
                     "PreToolUse hook blocked tool execution"
                 );
-                complete_tool_call_with_error(
+                complete_tool_call_with_error_mode(
                     event_tx,
                     history,
                     &tool_call.tool_call_id,
                     &tool_call.tool_name,
                     tool_id,
                     &output,
+                    completion_event_mode,
                 )
                 .await;
                 PreToolUseOutcome::Blocked

@@ -200,6 +200,7 @@ pub async fn persist_to_disk(
         Ok(mut file) => {
             use tokio::io::AsyncWriteExt;
             file.write_all(content.as_bytes()).await?;
+            file.flush().await?;
         }
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e),
@@ -243,6 +244,7 @@ pub async fn persist_mcp_binary_to_disk(
         Ok(mut file) => {
             use tokio::io::AsyncWriteExt;
             file.write_all(bytes).await?;
+            file.flush().await?;
         }
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e),

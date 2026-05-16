@@ -15,7 +15,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// A task entry for the task list display.
 #[derive(Debug, Clone)]
@@ -50,15 +50,15 @@ pub enum TaskDisplayType {
 pub struct TaskListWidget<'a> {
     tasks: &'a [TaskEntry],
     selected: i32,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> TaskListWidget<'a> {
-    pub fn new(tasks: &'a [TaskEntry], theme: &'a Theme) -> Self {
+    pub fn new(tasks: &'a [TaskEntry], styles: UiStyles<'a>) -> Self {
         Self {
             tasks,
             selected: 0,
-            theme,
+            styles,
         }
     }
 
@@ -74,7 +74,7 @@ impl Widget for TaskListWidget<'_> {
 
         if self.tasks.is_empty() {
             lines.push(Line::from(
-                Span::raw(format!("  {}", t!("task.none"))).fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("task.none"))).fg(self.styles.dim()),
             ));
         }
 
@@ -83,10 +83,10 @@ impl Widget for TaskListWidget<'_> {
             let marker = if is_selected { "▸ " } else { "  " };
 
             let (icon, color) = match task.status {
-                TaskDisplayStatus::Running => ("●", self.theme.tool_running),
-                TaskDisplayStatus::Completed => ("✓", self.theme.tool_completed),
-                TaskDisplayStatus::Failed => ("✗", self.theme.tool_error),
-                TaskDisplayStatus::Backgrounded => ("◐", self.theme.text_dim),
+                TaskDisplayStatus::Running => ("●", self.styles.tool_running()),
+                TaskDisplayStatus::Completed => ("✓", self.styles.tool_completed()),
+                TaskDisplayStatus::Failed => ("✗", self.styles.tool_error()),
+                TaskDisplayStatus::Backgrounded => ("◐", self.styles.dim()),
             };
 
             let type_label = match task.task_type {
@@ -101,15 +101,15 @@ impl Widget for TaskListWidget<'_> {
             let mut spans = vec![
                 Span::raw(marker),
                 Span::raw(format!("{icon} ")).fg(color),
-                Span::raw(&task.name).fg(self.theme.text),
-                Span::raw(format!(" [{type_label}]")).fg(self.theme.text_dim),
-                Span::raw(format!(" ({elapsed})")).fg(self.theme.text_dim),
+                Span::raw(&task.name).fg(self.styles.text()),
+                Span::raw(format!(" [{type_label}]")).fg(self.styles.dim()),
+                Span::raw(format!(" ({elapsed})")).fg(self.styles.dim()),
             ];
 
             if let Some(ref progress) = task.progress {
                 spans.push(
                     Span::raw(format!(" — {progress}"))
-                        .fg(self.theme.text_dim)
+                        .fg(self.styles.dim())
                         .italic(),
                 );
             }
@@ -119,15 +119,15 @@ impl Widget for TaskListWidget<'_> {
 
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::raw(format!("  {}", t!("task.hint_view"))).fg(self.theme.text_dim),
-            Span::raw(t!("task.hint_kill").to_string()).fg(self.theme.text_dim),
-            Span::raw(t!("task.hint_close").to_string()).fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("task.hint_view"))).fg(self.styles.dim()),
+            Span::raw(t!("task.hint_kill").to_string()).fg(self.styles.dim()),
+            Span::raw(t!("task.hint_close").to_string()).fg(self.styles.dim()),
         ]));
 
         let block = Block::default()
             .borders(Borders::ALL)
             .title(t!("task.panel_title").to_string())
-            .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
+            .border_style(ratatui::style::Style::default().fg(self.styles.focused_border()));
 
         let paragraph = Paragraph::new(lines)
             .block(block)

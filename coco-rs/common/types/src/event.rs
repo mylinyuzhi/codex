@@ -1509,11 +1509,55 @@ pub enum TuiOnlyEvent {
     /// dispatcher pre-builds entries via
     /// `coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries`
     /// and carries them through here so the TUI doesn't recompute paths.
-    /// On selection the TUI creates the file (`mode wx` semantics), opens
-    /// `$VISUAL || $EDITOR`, and emits a system message; on cancel it
-    /// emits "Cancelled memory editing". TS parity:
-    /// `commands/memory/memory.tsx`.
+    /// On selection the TUI sends an `OpenMemoryFile` command to the CLI
+    /// bridge; the bridge creates the file (`mode wx` semantics), opens
+    /// `$VISUAL || $EDITOR`, and reports the result back as a transcript
+    /// visible event. On cancel the TUI emits "Cancelled memory editing".
+    /// TS parity: `commands/memory/memory.tsx`.
     OpenMemoryDialog { entries: Vec<MemoryDialogEntry> },
+    /// `/memory` editor launch completed successfully.
+    MemoryFileOpened {
+        /// Path of the file passed to the editor.
+        path: String,
+    },
+    /// `/memory` editor launch failed before a process was started.
+    MemoryFileOpenFailed {
+        /// Path of the file the user selected.
+        path: String,
+        /// User-visible failure summary.
+        error: String,
+    },
+    /// Plan editor launch completed successfully.
+    PlanFileOpened {
+        /// Path of the session plan file passed to the editor.
+        path: String,
+    },
+    /// Plan editor launch failed before a process was started.
+    PlanFileOpenFailed {
+        /// Path of the session plan file.
+        path: String,
+        /// User-visible failure summary.
+        error: String,
+    },
+    /// Request the foreground TUI to leave raw mode / alt-screen before
+    /// the CLI runner starts an interactive editor process.
+    ExternalEditorPrepare {
+        /// Opaque request id echoed back by the TUI once terminal modes
+        /// are ready for the external editor.
+        request_id: String,
+    },
+    /// External prompt editor completed.
+    PromptEditorCompleted {
+        /// Edited prompt content read back from the temp file.
+        content: String,
+        /// Whether the edited content differs from the initial content.
+        modified: bool,
+    },
+    /// External prompt editor failed before content could be read back.
+    PromptEditorFailed {
+        /// User-visible failure summary.
+        error: String,
+    },
     /// Result of a prompt-mode `!`-prefixed bash submission. The TUI
     /// folds this into a `MessageContent::BashOutput` chat message
     /// keyed by the same `user_message_id` as the matching
@@ -1528,13 +1572,6 @@ pub enum TuiOnlyEvent {
         output: String,
         /// Process exit code; non-zero shades the output red.
         exit_code: i32,
-    },
-    /// Confirmation that a prompt-mode `#`-prefixed memory entry was
-    /// appended to a CLAUDE.md file. The TUI surfaces a toast and the
-    /// `MemoryInput` chat message that was already pushed locally.
-    MemorySaved {
-        /// Path of the file that was appended to (project / user scope).
-        path: String,
     },
     /// Tell the TUI to open the provider-grouped model picker. Emitted
     /// when the slash dispatcher resolves `/model` with no args (typed
@@ -1554,6 +1591,44 @@ pub struct MemoryDialogEntry {
     pub label: String,
     /// Scope tag (drives ordering and color hint).
     pub scope: MemoryDialogScope,
+    /// Row semantics for rendering and selection behavior.
+    #[serde(default = "default_memory_dialog_row_kind")]
+    pub row_kind: MemoryDialogRowKind,
+}
+
+fn default_memory_dialog_row_kind() -> MemoryDialogRowKind {
+    MemoryDialogRowKind::File {
+        exists: false,
+        read_only: false,
+    }
+}
+
+/// Semantic row kind for the `/memory` picker.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MemoryDialogRowKind {
+    /// Editable memory file.
+    File {
+        /// Whether the file already exists at event construction time.
+        #[serde(default)]
+        exists: bool,
+        /// Whether the row should be treated as read-only by future UIs.
+        #[serde(default)]
+        read_only: bool,
+    },
+    /// Folder grouping row for future memory directory surfaces.
+    Folder {
+        /// Whether the folder is currently enabled.
+        #[serde(default)]
+        enabled: bool,
+    },
+    /// Toggle row for future auto-memory settings.
+    Toggle {
+        /// Current toggle state.
+        #[serde(default)]
+        enabled: bool,
+    },
 }
 
 /// Scope tag for a memory file picker entry. Mirrors

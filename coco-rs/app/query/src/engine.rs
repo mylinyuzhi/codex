@@ -357,10 +357,14 @@ pub struct QueryEngine {
     /// Pre-extracted session memory summary text. Empty string disables
     /// the SM-first compact path. TS: contents of `getSessionMemoryPath()`.
     pub(crate) session_memory_text: Arc<tokio::sync::RwLock<String>>,
-    /// Optional handle to the extraction service. When present,
-    /// `try_session_memory_compact` calls `wait_for_extraction()` to
-    /// avoid racing the in-flight extractor. TS: waitForSessionMemoryExtraction.
-    pub(crate) session_memory_service: Option<Arc<coco_session_memory::SessionMemoryService>>,
+    /// Optional handle to the consolidated session-memory service.
+    /// When present, `try_session_memory_compact` reads its cached
+    /// body and calls `wait_for_extraction()` to avoid racing the
+    /// in-flight forked-agent extractor. TS: waitForSessionMemoryExtraction.
+    /// This is the same `Arc` as `memory_runtime.session_memory`
+    /// when both are populated — wired by `SessionRuntime` for
+    /// direct access without an `Option<MemoryRuntime>` hop.
+    pub(crate) session_memory_service: Option<Arc<coco_memory::SessionMemoryService>>,
     /// Auto-memory runtime — extraction / dream / 9-section session
     /// memory / recall ranker. Distinct from
     /// `session_memory_service` above (which is the compact-side
@@ -1479,6 +1483,8 @@ impl QueryEngine {
                                 denial_tracker: self.denial_tracker.as_ref(),
                                 client: &self.client,
                                 auto_mode_rules: &self.auto_mode_rules,
+                                completion_event_mode:
+                                    crate::helpers::ToolCompletionEventMode::Defer,
                             };
                             let pre_prep_len = prep_args.history.messages.len();
                             let prep_result =
@@ -1538,35 +1544,83 @@ impl QueryEngine {
                                 }
                                 None if !captured.is_empty() => {
                                     // Preparation failed and pushed a
-                                    // synthetic-error tool_result.
-                                    // Re-wrap and feed as EarlyOutcome
-                                    // so commit_flush surfaces it
-                                    // after the assistant message
-                                    // commits (I1 ordering fix).
-                                    let tool_id_for_outcome: coco_types::ToolId =
-                                        buf.tool_name.parse().unwrap_or_else(|_| {
-                                            coco_types::ToolId::Custom(buf.tool_name.clone())
-                                        });
-                                    let model_index = streaming_model_index;
-                                    streaming_model_index += 1;
-                                    let outcome = crate::helpers::build_streaming_early_outcome(
-                                        &id,
-                                        tool_id_for_outcome,
-                                        model_index,
-                                        captured,
-                                    );
-                                    handle.feed_plan(
-                                        coco_tool_runtime::ToolCallPlan::EarlyOutcome(outcome),
-                                    );
+                                    // synthetic-error tool_result. If
+                                    // cancellation raced the permission
+                                    // wait, preserve a valid partial
+                                    // assistant/tool_result pair now;
+                                    // the normal Finish path will not
+                                    // run commit_flush after the cancel
+                                    // token is set.
+                                    if self.cancel.is_cancelled() {
+                                        let mut content_parts = Vec::new();
+                                        if !response_text.is_empty() {
+                                            content_parts.push(AssistantContentPart::Text(
+                                                TextPart {
+                                                    text: response_text.clone(),
+                                                    provider_metadata: None,
+                                                },
+                                            ));
+                                        }
+                                        content_parts
+                                            .push(AssistantContentPart::ToolCall(tcp.clone()));
+                                        history.push(Message::Assistant(
+                                            coco_messages::AssistantMessage {
+                                                message: LlmMessage::Assistant {
+                                                    content: content_parts
+                                                        .into_iter()
+                                                        .map(convert_to_assistant_content)
+                                                        .collect(),
+                                                    provider_options: None,
+                                                },
+                                                uuid: uuid::Uuid::new_v4(),
+                                                model: model_runtime.current_model_id().to_string(),
+                                                stop_reason: Some(
+                                                    coco_messages::StopReason::ToolUse,
+                                                ),
+                                                usage: None,
+                                                cost_usd: None,
+                                                request_id: None,
+                                                api_error: None,
+                                            },
+                                        ));
+                                        for msg in captured {
+                                            history.push(msg);
+                                        }
+                                    } else {
+                                        // Re-wrap and feed as EarlyOutcome
+                                        // so commit_flush surfaces it
+                                        // after the assistant message
+                                        // commits (I1 ordering fix).
+                                        // The streaming preparer runs in
+                                        // `ToolCompletionEventMode::Defer`,
+                                        // so it did NOT emit
+                                        // `ToolUseCompleted` inline —
+                                        // commit_flush's `on_outcome`
+                                        // callback is the sole emitter
+                                        // for this id and must not be
+                                        // suppressed by dedup.
+                                        let tool_id_for_outcome: coco_types::ToolId =
+                                            buf.tool_name.parse().unwrap_or_else(|_| {
+                                                coco_types::ToolId::Custom(buf.tool_name.clone())
+                                            });
+                                        let model_index = streaming_model_index;
+                                        streaming_model_index += 1;
+                                        let outcome = crate::helpers::build_streaming_early_outcome(
+                                            &id,
+                                            tool_id_for_outcome,
+                                            model_index,
+                                            captured,
+                                        );
+                                        handle.feed_plan(
+                                            coco_tool_runtime::ToolCallPlan::EarlyOutcome(outcome),
+                                        );
+                                    }
                                 }
                                 None => {
                                     // Rare: prep returned None with
-                                    // no captured messages (e.g.
-                                    // cancellation observed). Drop
-                                    // silently — the cancellation
-                                    // path produces no tool_result
-                                    // and the assistant message
-                                    // still commits normally.
+                                    // no captured messages. Drop
+                                    // silently — there is no
+                                    // model-visible result to pair.
                                 }
                             }
                         }
@@ -1619,7 +1673,83 @@ impl QueryEngine {
             // streaming handle in-flight is implicitly aborted when
             // this function unwinds (JoinSet drops cancel pending
             // tasks).
+            //
+            // Before dropping the handle we still drain its
+            // `pending_early` queue — cancel races with
+            // `prepare_one_pending_tool_call` (e.g. cancel during
+            // permission wait) may have parked synthesized error
+            // `tool_result` rows there for the I1-ordered commit. We
+            // emit a synthetic assistant_msg containing the matching
+            // tool_use blocks so the final history honors Anthropic's
+            // tool_use ↔ tool_result adjacency. TS parity:
+            // `query.ts:1015-1028` (`yieldMissingToolResultBlocks`
+            // after abort).
             if self.cancel.is_cancelled() {
+                if let Some(handle) = streaming_handle.take() {
+                    let discarded = handle.discard().await;
+                    let early: Vec<_> = discarded
+                        .into_iter()
+                        .filter(|o| !o.ordered_messages.is_empty())
+                        .collect();
+                    if !early.is_empty() {
+                        let kept_ids: std::collections::HashSet<&String> =
+                            early.iter().map(|o| &o.tool_use_id).collect();
+                        let synth_parts: Vec<coco_inference::TurnPart> = tool_order
+                            .iter()
+                            .filter(|id| kept_ids.contains(*id))
+                            .filter_map(|id| tool_buffers.get(id).map(|buf| (id, buf)))
+                            .map(|(id, buf)| {
+                                coco_inference::TurnPart::ToolCall(
+                                    coco_inference::ToolCallSegment {
+                                        id: id.clone(),
+                                        tool_name: buf.tool_name.clone(),
+                                        input_json: buf.input_json.clone(),
+                                        provider_executed: None,
+                                        dynamic: None,
+                                        is_input_complete: buf.complete,
+                                        is_complete: false,
+                                        provider_metadata: None,
+                                    },
+                                )
+                            })
+                            .collect();
+                        let synth_snapshot =
+                            coco_inference::AssistantTurnSnapshot { parts: synth_parts };
+                        let (content_parts, _) = assistant_content_from_snapshot(
+                            &synth_snapshot,
+                            crate::tool_input_normalizer::ToolInputNormalizationContext {
+                                session_id: Some(&self.config.session_id),
+                                plans_dir: plans_dir.as_deref(),
+                                agent_id: self.config.agent_id.as_deref(),
+                            },
+                        );
+                        if !content_parts.is_empty() {
+                            let assistant_msg =
+                                Message::Assistant(coco_messages::AssistantMessage {
+                                    message: LlmMessage::Assistant {
+                                        content: content_parts
+                                            .into_iter()
+                                            .map(convert_to_assistant_content)
+                                            .collect(),
+                                        provider_options: None,
+                                    },
+                                    uuid: uuid::Uuid::new_v4(),
+                                    model: model_runtime.current_model_id().to_string(),
+                                    stop_reason: None,
+                                    usage: None,
+                                    cost_usd: None,
+                                    request_id: None,
+                                    api_error: None,
+                                });
+                            history.push(assistant_msg);
+                        }
+                        for outcome in early {
+                            for msg in outcome.ordered_messages {
+                                history.push(msg);
+                            }
+                        }
+                    }
+                }
                 continue;
             }
 

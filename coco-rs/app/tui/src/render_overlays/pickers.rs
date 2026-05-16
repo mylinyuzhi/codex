@@ -4,55 +4,58 @@ use ratatui::prelude::*;
 
 use crate::presentation::model_picker;
 use crate::presentation::picker;
+use crate::presentation::styles::UiStyles;
 use crate::state::ExportOverlay;
 use crate::state::McpServerSelectOverlay;
 use crate::state::MemoryDialogOverlay;
 use crate::state::ModelPickerOverlay;
 use crate::state::QuickOpenOverlay;
 use crate::state::SessionBrowserOverlay;
-use crate::theme::Theme;
 
 pub(super) fn render_model_picker(
     frame: &mut Frame,
     area: Rect,
     m: &ModelPickerOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) {
-    model_picker::render_model_picker(frame, area, m, theme);
+    model_picker::render_model_picker(frame, area, m, styles);
 }
 
 pub(super) fn model_picker_content(
     m: &ModelPickerOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    model_picker::content(m, theme)
+    model_picker::content(m, styles)
 }
 
 pub(super) fn session_browser_content(
     s: &SessionBrowserOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    picker::session_browser_content(s, theme)
+    picker::session_browser_content(s, styles)
 }
 
-pub(super) fn quick_open_content(q: &QuickOpenOverlay, theme: &Theme) -> (String, String, Color) {
-    picker::quick_open_content(q, theme)
+pub(super) fn quick_open_content(
+    q: &QuickOpenOverlay,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    picker::quick_open_content(q, styles)
 }
 
-pub(super) fn export_content(e: &ExportOverlay, theme: &Theme) -> (String, String, Color) {
-    picker::export_content(e, theme)
+pub(super) fn export_content(e: &ExportOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
+    picker::export_content(e, styles)
 }
 
 pub(super) fn memory_dialog_content(
     m: &MemoryDialogOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    picker::memory_dialog_content(m, theme)
+    picker::memory_dialog_content(m, styles)
 }
 
 pub(super) fn mcp_server_select_content(
     ms: &McpServerSelectOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    picker::mcp_server_select_content(ms, theme)
+    picker::mcp_server_select_content(ms, styles)
 }

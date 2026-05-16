@@ -1,7 +1,7 @@
 # coco-assistant — Crate Plan
 
 Directory: `app/session/` (assistant submodule, v2)
-TS source: `src/assistant/sessionHistory.ts` (87 LOC), `src/hooks/useAssistantHistory.ts` (250 LOC)
+TS source: `assistant/sessionHistory.ts` (87 LOC), `hooks/useAssistantHistory.ts` (250 LOC)
 Total: ~337 LOC across 2 files
 
 ## Dependencies

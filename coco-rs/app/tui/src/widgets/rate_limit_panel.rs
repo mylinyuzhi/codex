@@ -16,26 +16,26 @@ use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
 use crate::state::session::RateLimitInfo;
-use crate::theme::Theme;
 use crate::widgets::lifecycle_banner::render_banner_row;
 
 /// Rate-limit persistent banner. Occupies a single row.
 pub struct RateLimitPanel<'a> {
     info: &'a RateLimitInfo,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
     now_unix_secs: i64,
 }
 
 impl<'a> RateLimitPanel<'a> {
-    pub fn new(info: &'a RateLimitInfo, theme: &'a Theme) -> Self {
+    pub fn new(info: &'a RateLimitInfo, styles: UiStyles<'a>) -> Self {
         let now_unix_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         Self {
             info,
-            theme,
+            styles,
             now_unix_secs,
         }
     }
@@ -63,14 +63,14 @@ impl Widget for RateLimitPanel<'_> {
         let mut parts = Vec::new();
         parts.push(Span::styled(
             t!("rate_limit.label").to_string(),
-            Style::default().fg(self.theme.error).bold(),
+            Style::default().fg(self.styles.error()).bold(),
         ));
 
         if let Some(provider) = self.info.provider.as_deref() {
             parts.push(Span::raw(" "));
             parts.push(Span::styled(
                 format!("[{provider}]"),
-                Style::default().fg(self.theme.text_dim),
+                Style::default().fg(self.styles.dim()),
             ));
         }
 
@@ -78,15 +78,15 @@ impl Widget for RateLimitPanel<'_> {
             let remaining_secs = reset_at.saturating_sub(self.now_unix_secs).max(0);
             parts.push(Span::styled(
                 t!("rate_limit.reset_in").to_string(),
-                Style::default().fg(self.theme.text_dim),
+                Style::default().fg(self.styles.dim()),
             ));
             parts.push(Span::styled(
                 format_duration(remaining_secs),
-                Style::default().fg(self.theme.warning).bold(),
+                Style::default().fg(self.styles.warning()).bold(),
             ));
         }
 
-        render_banner_row(parts, self.theme, area, buf);
+        render_banner_row(parts, self.styles, area, buf);
     }
 }
 

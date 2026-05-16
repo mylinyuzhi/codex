@@ -1,9 +1,9 @@
 # Plan Mode Architecture
 
-This document is the plan-mode lifecycle owner for `coco-rs`. The TS source in
-`/Users/linyuzhi/codespace/myagent/agents/claude-code-kim/src` is the behavioral
-spec. Rust mirrors the lifecycle with shared state, typed tool results, and
-explicit app-state patches.
+This document is the plan-mode lifecycle owner for `coco-rs`. The TS source is
+the behavioral spec. TS file paths are relative to the TS project's `src/`
+directory. Rust mirrors the lifecycle with shared state, typed tool results,
+and explicit app-state patches.
 
 ## TS Source Map
 

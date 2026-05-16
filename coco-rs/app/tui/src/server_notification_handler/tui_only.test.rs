@@ -10,7 +10,9 @@ use coco_types::TuiOnlyEvent;
 
 use super::handle;
 use crate::state::AppState;
+use crate::state::MessageContent;
 use crate::state::SuggestionKind;
+use crate::state::ui::ToastSeverity;
 
 fn slash(name: &str) -> SlashCommandInfo {
     SlashCommandInfo {
@@ -98,4 +100,128 @@ fn available_commands_refreshed_with_no_open_popup_is_noop_for_popup_state() {
 
     assert_eq!(state.session.available_commands.len(), 1);
     assert!(state.ui.active_suggestions.is_none());
+}
+
+#[test]
+fn memory_file_opened_is_toast_and_transcript_visible() {
+    let mut state = AppState::new();
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::MemoryFileOpened {
+            path: "/tmp/CLAUDE.md".to_string(),
+        },
+    );
+
+    assert!(consumed);
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Info);
+    assert!(
+        state
+            .session
+            .messages
+            .iter()
+            .any(|m| matches!(&m.content, MessageContent::SystemText(text) if text.contains("/tmp/CLAUDE.md")))
+    );
+}
+
+#[test]
+fn memory_file_open_failed_is_toast_and_transcript_visible() {
+    let mut state = AppState::new();
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::MemoryFileOpenFailed {
+            path: "/tmp/CLAUDE.md".to_string(),
+            error: "permission denied".to_string(),
+        },
+    );
+
+    assert!(consumed);
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
+    assert!(
+        state
+            .session
+            .messages
+            .iter()
+            .any(|m| matches!(&m.content, MessageContent::SystemText(text) if text.contains("permission denied")))
+    );
+}
+
+#[test]
+fn plan_file_opened_is_toast_and_transcript_visible() {
+    let mut state = AppState::new();
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::PlanFileOpened {
+            path: "/tmp/plan.md".to_string(),
+        },
+    );
+
+    assert!(consumed);
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Info);
+    assert!(state.session.messages.iter().any(
+        |m| matches!(&m.content, MessageContent::SystemText(text) if text.contains("/tmp/plan.md"))
+    ));
+}
+
+#[test]
+fn plan_file_open_failed_is_toast_and_transcript_visible() {
+    let mut state = AppState::new();
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::PlanFileOpenFailed {
+            path: "/tmp/plan.md".to_string(),
+            error: "editor missing".to_string(),
+        },
+    );
+
+    assert!(consumed);
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
+    assert!(
+        state
+            .session
+            .messages
+            .iter()
+            .any(|m| matches!(&m.content, MessageContent::SystemText(text) if text.contains("editor missing")))
+    );
+}
+
+#[test]
+fn prompt_editor_completed_replaces_input_and_moves_cursor_to_end() {
+    let mut state = AppState::new();
+    state.ui.input.set_text("old");
+    state.ui.input.textarea.set_cursor(0);
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::PromptEditorCompleted {
+            content: "edited prompt".to_string(),
+            modified: true,
+        },
+    );
+
+    assert!(consumed);
+    assert_eq!(state.ui.input.text(), "edited prompt");
+    assert_eq!(state.ui.input.textarea.cursor(), "edited prompt".len());
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Info);
+}
+
+#[test]
+fn prompt_editor_failed_surfaces_warning_toast() {
+    let mut state = AppState::new();
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::PromptEditorFailed {
+            error: "not found".to_string(),
+        },
+    );
+
+    assert!(consumed);
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
+    assert!(state.ui.toasts[0].message.contains("not found"));
 }

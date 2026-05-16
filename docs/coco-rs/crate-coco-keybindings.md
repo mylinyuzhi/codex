@@ -1,6 +1,6 @@
 # coco-keybindings — Crate Plan
 
-TS source: `src/keybindings/` (12 files, 2.6K LOC)
+TS source: `keybindings/` (12 files, 2.6K LOC)
 
 ## Dependencies
 

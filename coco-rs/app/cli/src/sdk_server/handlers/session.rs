@@ -746,8 +746,13 @@ pub(super) async fn handle_session_resume(
     // with an empty history (TS-aligned — `loadMessagesFromJsonlPath`
     // returns null when the file isn't readable, and the resumed
     // session starts cold rather than failing the resume call).
-    let transcript_path = coco_session::TranscriptStore::new(crate::paths::sessions_dir())
-        .transcript_path(&session.id);
+    //
+    // The transcript lives in the resumed session's own project
+    // tree (`<memory_base>/projects/<slug>/<sid>.jsonl`), so we
+    // derive the project paths from `session.working_dir`.
+    let transcript_path =
+        coco_session::TranscriptStore::new(crate::paths::project_paths(&session.working_dir))
+            .transcript_path(&session.id);
     let recovered = if transcript_path.exists() {
         match coco_session::recovery::load_conversation_for_resume(&transcript_path) {
             Ok(r) => Some(r),

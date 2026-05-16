@@ -1107,7 +1107,7 @@
           "description": "Explicit \"thinking off\". Convert layer skips typed-effort emission; `level.options` may still carry an explicit-off wire toggle (e.g. DeepSeek's `{\"thinking\":{\"type\":\"disabled\"}}`).",
           "type": "string",
           "enum": [
-            "disable"
+            "off"
           ]
         },
         {

@@ -3,6 +3,7 @@
 //! Implements the async run loop using `tokio::select!` to multiplex
 //! terminal events, agent events, and timer ticks.
 
+use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
 
@@ -29,13 +30,13 @@ use crate::constants;
 use crate::events::TuiEvent;
 use crate::git_index_watcher;
 use crate::keybinding_bridge;
-use crate::render;
 use crate::state::AppState;
 use crate::state::SuggestionKind;
 use crate::terminal::Tui;
 use crate::update::handle_command;
 
 use coco_types::CoreEvent;
+use coco_types::TuiOnlyEvent;
 
 use crate::server_notification_handler;
 
@@ -90,6 +91,11 @@ pub struct App {
     display_settings_rx: Option<mpsc::Receiver<crate::display_settings::DisplaySettings>>,
     /// Optional channel of config hot-reload failure messages.
     config_reload_errors_rx: Option<mpsc::Receiver<String>>,
+    /// External editor request currently owns the foreground terminal.
+    /// While set, terminal input is not polled and unrelated core events
+    /// are buffered until the editor completion event restores TUI modes.
+    external_editor_active: Option<String>,
+    deferred_core_events: VecDeque<CoreEvent>,
 }
 
 impl App {
@@ -127,6 +133,8 @@ impl App {
             theme_reload_rx: None,
             display_settings_rx: None,
             config_reload_errors_rx: None,
+            external_editor_active: None,
+            deferred_core_events: VecDeque::new(),
         })
     }
 
@@ -154,6 +162,8 @@ impl App {
             theme_reload_rx: None,
             display_settings_rx: None,
             config_reload_errors_rx: None,
+            external_editor_active: None,
+            deferred_core_events: VecDeque::new(),
         }
     }
 
@@ -226,7 +236,7 @@ impl App {
 
             tokio::select! {
                 // Terminal events
-                Some(Ok(evt)) = event_stream.next() => {
+                Some(Ok(evt)) = event_stream.next(), if self.external_editor_active.is_none() => {
                     if let Some(event) = self.convert_crossterm_event(evt) {
                         needs_redraw = self.handle_event(event).await;
                     }
@@ -235,15 +245,9 @@ impl App {
                 // Under high throughput (e.g. 100+ TextDeltas/sec) this avoids
                 // one redraw per token by draining all ready events first.
                 Some(event) = self.notification_rx.recv() => {
-                    needs_redraw = server_notification_handler::handle_core_event(
-                        &mut self.state,
-                        event,
-                    );
+                    needs_redraw = self.handle_core_event(event).await?;
                     while let Ok(next) = self.notification_rx.try_recv() {
-                        needs_redraw |= server_notification_handler::handle_core_event(
-                            &mut self.state,
-                            next,
-                        );
+                        needs_redraw |= self.handle_core_event(next).await?;
                     }
                 }
                 // Async file-search results (from @path triggers).
@@ -277,11 +281,11 @@ impl App {
                     needs_redraw = true;
                 }
                 // Tick timer
-                _ = tick_interval.tick() => {
+                _ = tick_interval.tick(), if self.external_editor_active.is_none() => {
                     needs_redraw = self.handle_event(TuiEvent::Tick).await;
                 }
                 // Spinner timer
-                _ = spinner_interval.tick() => {
+                _ = spinner_interval.tick(), if self.external_editor_active.is_none() => {
                     needs_redraw = self.handle_event(TuiEvent::SpinnerTick).await;
                 }
             };
@@ -304,16 +308,68 @@ impl App {
     }
 
     /// Run a single draw cycle.
-    ///
-    /// The closure returns a cursor claim that `Tui::draw` consumes
-    /// post-draw via crossterm `queue!`.
     fn redraw(&mut self) -> io::Result<()> {
-        let state = &self.state;
-        self.tui.draw(|frame| {
-            let layout = render::render(frame, state);
-            crate::cursor::compute_cursor(state, layout.input)
-        })?;
+        self.tui.draw(&self.state)?;
         Ok(())
+    }
+
+    async fn handle_core_event(&mut self, event: CoreEvent) -> io::Result<bool> {
+        if let CoreEvent::Tui(TuiOnlyEvent::ExternalEditorPrepare { request_id }) = event {
+            if self.external_editor_active.is_some() {
+                let _ = self
+                    .command_tx
+                    .send(UserCommand::ExternalEditorTerminalPrepareFailed {
+                        request_id,
+                        error: "another external editor is already active".to_string(),
+                    })
+                    .await;
+                return Ok(false);
+            }
+
+            match self.tui.prepare_external_process() {
+                Ok(()) => {
+                    self.external_editor_active = Some(request_id.clone());
+                    if self
+                        .command_tx
+                        .send(UserCommand::ExternalEditorTerminalReady { request_id })
+                        .await
+                        .is_err()
+                    {
+                        self.external_editor_active = None;
+                        self.tui.restore_after_external_process()?;
+                        return Ok(true);
+                    }
+                }
+                Err(err) => {
+                    let _ = self
+                        .command_tx
+                        .send(UserCommand::ExternalEditorTerminalPrepareFailed {
+                            request_id,
+                            error: err.to_string(),
+                        })
+                        .await;
+                }
+            }
+            return Ok(false);
+        }
+
+        if self.external_editor_active.is_some() && !is_external_editor_completion(&event) {
+            self.deferred_core_events.push_back(event);
+            return Ok(false);
+        }
+
+        let mut needs_redraw = false;
+        if self.external_editor_active.take().is_some() {
+            self.tui.restore_after_external_process()?;
+            needs_redraw = true;
+        }
+
+        needs_redraw |= server_notification_handler::handle_core_event(&mut self.state, event);
+        while let Some(deferred) = self.deferred_core_events.pop_front() {
+            needs_redraw |=
+                server_notification_handler::handle_core_event(&mut self.state, deferred);
+        }
+        Ok(needs_redraw)
     }
 
     /// Fire a file/symbol search if the active trigger's (kind, query) pair
@@ -458,8 +514,8 @@ impl App {
             TuiEvent::Suspend => {
                 // Blocks until SIGCONT (typically delivered by `fg` in
                 // the parent shell). On return, `Tui::draw` will pick
-                // up the pending resume action and re-enter alt-screen
-                // + clear on the next frame. If the suspend/restore path
+                // up the pending resume action and clear/repaint the native
+                // surface on the next frame. If the suspend/restore path
                 // fails, exit instead of continuing in an unknown terminal
                 // mode.
                 if let Err(err) = self.tui.trigger_suspend() {
@@ -606,4 +662,18 @@ fn apply_theme_reload(state: &mut AppState, result: crate::theme::ThemeLoadResul
     }
     state.ui.apply_theme_runtime(result.state);
     true
+}
+
+fn is_external_editor_completion(event: &CoreEvent) -> bool {
+    matches!(
+        event,
+        CoreEvent::Tui(
+            TuiOnlyEvent::MemoryFileOpened { .. }
+                | TuiOnlyEvent::MemoryFileOpenFailed { .. }
+                | TuiOnlyEvent::PlanFileOpened { .. }
+                | TuiOnlyEvent::PlanFileOpenFailed { .. }
+                | TuiOnlyEvent::PromptEditorCompleted { .. }
+                | TuiOnlyEvent::PromptEditorFailed { .. }
+        )
+    )
 }

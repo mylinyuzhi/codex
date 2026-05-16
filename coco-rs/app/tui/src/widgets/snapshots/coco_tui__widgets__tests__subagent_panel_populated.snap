@@ -6,23 +6,12 @@ expression: output
  │●│ │●│   opus-4  *  auto                                                                          
  ╰─╯ ╰─╯                                                                                            
                                                                                                     
-Viewing @Explore · [esc to return]                                    ┌ Agents ─────────────────────
-──────────────────────────────────────────────────────────────────────│▸ ● Search for auth handlers 
-❯ Type a message...                                                   │  ✓ Design refactor plan (Pla
-──────────────────────────────────────────────────────────────────────│  ✗ Run tests + verify (verif
- opus-4 * auto | ↑0 ↓0 · cache 0% | ctx 0% | 0 msgs                   │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │                             
-                                                                      │
+Viewing @Explore · [esc to return]                                                                  
+ Agents ────────────────────────────────────────────────────────────────────────────────────────────
+▸ ● Search for auth handlers (Explore)                                                              
+  ✓ Design refactor plan (Plan)                                                                     
+  ✗ Run tests + verify (verification)                                                               
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                                   
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto | ↑0 ↓0 · cache 0% | ctx 0% | 0 msgs

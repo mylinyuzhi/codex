@@ -18,11 +18,9 @@
 
 use coco_inference::ToolResultContent;
 use coco_inference::UserContentPart;
-use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
-use coco_messages::UserContent;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -168,82 +166,6 @@ pub(crate) async fn emit_model_fallback_notice(
         },
     )
     .await;
-}
-
-/// Build a plain-text transcript view to feed the session-memory
-/// extractor's prompt. Includes user / assistant text and tool result
-/// summaries; thinking blocks are omitted so they don't dominate the
-/// extractor's context window.
-pub(crate) fn render_transcript_for_extractor(messages: &[Message]) -> String {
-    let mut out = String::new();
-    for msg in messages {
-        match msg {
-            Message::User(u) => {
-                if let LlmMessage::User { content, .. } = &u.message {
-                    let text: String = content
-                        .iter()
-                        .filter_map(|p| match p {
-                            UserContent::Text(t) => Some(t.text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    if !text.trim().is_empty() {
-                        out.push_str("USER: ");
-                        out.push_str(text.trim());
-                        out.push('\n');
-                    }
-                }
-            }
-            Message::Assistant(a) => {
-                if let LlmMessage::Assistant { content, .. } = &a.message {
-                    let mut text = String::new();
-                    for part in content {
-                        match part {
-                            AssistantContent::Text(t) => {
-                                if !t.text.trim().is_empty() {
-                                    text.push_str(&t.text);
-                                    text.push('\n');
-                                }
-                            }
-                            AssistantContent::ToolCall(tc) => {
-                                text.push_str(&format!("[tool: {}]\n", tc.tool_name));
-                            }
-                            _ => {}
-                        }
-                    }
-                    if !text.trim().is_empty() {
-                        out.push_str("ASSISTANT: ");
-                        out.push_str(text.trim());
-                        out.push('\n');
-                    }
-                }
-            }
-            Message::ToolResult(tr) => {
-                if let LlmMessage::Tool { content, .. } = &tr.message {
-                    for part in content {
-                        if let coco_messages::ToolContent::ToolResult(r) = part
-                            && let ToolResultContent::Text { value, .. } = &r.output
-                        {
-                            let trimmed = value.trim();
-                            if !trimmed.is_empty() {
-                                let preview = if trimmed.len() > 800 {
-                                    format!("{}…", &trimmed[..800])
-                                } else {
-                                    trimmed.to_string()
-                                };
-                                out.push_str("TOOL_RESULT: ");
-                                out.push_str(&preview);
-                                out.push('\n');
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out
 }
 
 /// Extract the first `ToolResult` text payload from a run of

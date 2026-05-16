@@ -1,4 +1,5 @@
 use super::PlanPanel;
+use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
 use crate::widgets::task_list::TaskDisplayStatus;
 use crate::widgets::task_list::TaskDisplayType;
@@ -65,7 +66,7 @@ fn render(panel: PlanPanel<'_>, w: u16, h: u16) -> String {
 fn has_content_is_false_when_all_sections_empty() {
     let todos: HashMap<String, Vec<TodoRecord>> = HashMap::new();
     let theme = Theme::default();
-    let panel = PlanPanel::new(&[], &todos, &[], &theme);
+    let panel = PlanPanel::new(&[], &todos, &[], UiStyles::new(&theme));
     assert!(!panel.has_content());
 }
 
@@ -75,7 +76,7 @@ fn has_content_true_when_any_section_populated() {
     let plan = vec![task("1", "a", TaskListStatus::Pending, None)];
     let todos: HashMap<String, Vec<TodoRecord>> = HashMap::new();
     let running_vec: Vec<TaskEntry> = Vec::new();
-    assert!(PlanPanel::new(&plan, &todos, &running_vec, &theme).has_content());
+    assert!(PlanPanel::new(&plan, &todos, &running_vec, UiStyles::new(&theme)).has_content());
 }
 
 #[test]
@@ -100,7 +101,7 @@ fn renders_all_three_sections() {
     );
     let running_tasks = vec![running("bg-1", "npm test", TaskDisplayStatus::Running)];
     let theme = Theme::default();
-    let panel = PlanPanel::new(&plan, &todos, &running_tasks, &theme);
+    let panel = PlanPanel::new(&plan, &todos, &running_tasks, UiStyles::new(&theme));
     let output = render(panel, 60, 15);
 
     assert!(output.contains("Plan items"), "section header missing");
@@ -117,7 +118,7 @@ fn renders_all_three_sections() {
 fn renders_empty_state_when_nothing_to_show() {
     let todos: HashMap<String, Vec<TodoRecord>> = HashMap::new();
     let theme = Theme::default();
-    let panel = PlanPanel::new(&[], &todos, &[], &theme);
+    let panel = PlanPanel::new(&[], &todos, &[], UiStyles::new(&theme));
     let output = render(panel, 40, 4);
     assert!(
         output.contains("No tasks or todos"),
@@ -132,7 +133,7 @@ fn renders_blocked_by_marker_when_task_is_blocked() {
     let plan = vec![task("1", "First", TaskListStatus::Pending, None), blocked];
     let todos: HashMap<String, Vec<TodoRecord>> = HashMap::new();
     let theme = Theme::default();
-    let panel = PlanPanel::new(&plan, &todos, &[], &theme);
+    let panel = PlanPanel::new(&plan, &todos, &[], UiStyles::new(&theme));
     let output = render(panel, 60, 8);
     assert!(
         output.contains("blocked by"),

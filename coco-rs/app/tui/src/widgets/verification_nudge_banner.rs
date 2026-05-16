@@ -17,16 +17,16 @@ use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 use crate::widgets::lifecycle_banner::render_banner_row;
 
 pub struct VerificationNudgeBanner<'a> {
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> VerificationNudgeBanner<'a> {
-    pub fn new(theme: &'a Theme) -> Self {
-        Self { theme }
+    pub fn new(styles: UiStyles<'a>) -> Self {
+        Self { styles }
     }
 
     pub fn should_display(pending: bool) -> bool {
@@ -39,14 +39,14 @@ impl Widget for VerificationNudgeBanner<'_> {
         let parts = vec![
             Span::styled(
                 t!("verification_nudge.label").to_string(),
-                Style::default().fg(self.theme.warning).bold(),
+                Style::default().fg(self.styles.warning()).bold(),
             ),
             Span::styled(
                 t!("verification_nudge.message").to_string(),
-                Style::default().fg(self.theme.text_dim),
+                Style::default().fg(self.styles.dim()),
             ),
         ];
-        render_banner_row(parts, self.theme, area, buf);
+        render_banner_row(parts, self.styles, area, buf);
     }
 }
 

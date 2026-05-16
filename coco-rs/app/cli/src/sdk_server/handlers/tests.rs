@@ -107,6 +107,40 @@ impl Drop for TempSessionsDir {
     }
 }
 
+/// Seed a JSONL transcript so the JSONL-canonical `SessionManager`
+/// (post-fix) can locate and derive a `Session` for the id. Used by
+/// session/list, session/read, session/resume, session/archive tests
+/// that need a pre-existing on-disk session.
+fn seed_session_transcript(
+    memory_base: &std::path::Path,
+    sid: &str,
+    cwd: &str,
+    model: Option<&str>,
+) {
+    let paths = std::sync::Arc::new(coco_paths::ProjectPaths::new(
+        memory_base.to_path_buf(),
+        std::path::Path::new(cwd),
+    ));
+    let store = coco_session::TranscriptStore::new(paths);
+    let entry = coco_session::TranscriptEntry {
+        entry_type: "user".to_string(),
+        uuid: format!("{sid}-u1"),
+        parent_uuid: None,
+        session_id: sid.to_string(),
+        cwd: cwd.to_string(),
+        timestamp: "2025-01-15T10:00:00Z".to_string(),
+        version: None,
+        git_branch: None,
+        is_sidechain: false,
+        message: Some(serde_json::json!({"role":"user","content":"seed"})),
+        usage: None,
+        model: model.map(str::to_string),
+        cost_usd: None,
+        extra: serde_json::Map::new(),
+    };
+    store.append_message(sid, &entry).unwrap();
+}
+
 /// Spawn a server with a disk-backed SessionManager for list/read/resume
 /// tests. Returns the server task, the client transport, the state,
 /// and the temp directory guard (drop it to clean up).
@@ -2591,40 +2625,29 @@ async fn session_list_without_manager_returns_empty() {
 async fn session_list_returns_persisted_sessions() {
     let (server_task, client, state, _tmp) = spawn_server_with_session_manager().await;
 
-    // Start two sessions and archive each to get them persisted +
-    // removed. Wait — archive deletes. So to get a persisted session
-    // visible to list, we start one and DON'T archive.
-    //
-    // We also can't start two at once (single-session semantics).
-    // Instead, pre-populate the manager directly with two records,
-    // then call session/list.
+    // Seed two on-disk sessions via the canonical JSONL path; the
+    // JSONL-canonical SessionManager (post-fix) derives session
+    // records from these transcripts on `list`.
+    seed_session_transcript(
+        &_tmp.path,
+        "pre-existing-a",
+        "/tmp/a",
+        Some("claude-opus-4-6"),
+    );
+    // Bump the second seed's mtime so list ordering is deterministic
+    // (newest first by transcript mtime).
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    seed_session_transcript(
+        &_tmp.path,
+        "pre-existing-b",
+        "/tmp/b",
+        Some("claude-sonnet-4-6"),
+    );
+
+    // Attach a custom-title to the older session — verifies list
+    // surfaces the picker's metadata fields from the JSONL.
     let manager = state.session_manager.read().await.clone().unwrap();
-    manager
-        .save(&coco_session::Session {
-            id: "pre-existing-a".into(),
-            created_at: "100".into(),
-            updated_at: None,
-            model: "claude-opus-4-6".into(),
-            working_dir: std::path::PathBuf::from("/tmp/a"),
-            title: Some("first".into()),
-            message_count: 3,
-            total_tokens: 1000,
-            tags: Vec::new(),
-        })
-        .unwrap();
-    manager
-        .save(&coco_session::Session {
-            id: "pre-existing-b".into(),
-            created_at: "200".into(),
-            updated_at: None,
-            model: "claude-sonnet-4-6".into(),
-            working_dir: std::path::PathBuf::from("/tmp/b"),
-            title: None,
-            message_count: 0,
-            total_tokens: 0,
-            tags: Vec::new(),
-        })
-        .unwrap();
+    manager.set_title("pre-existing-a", "first").unwrap();
 
     client
         .send(req(1, "session/list", serde_json::json!({})))
@@ -2635,12 +2658,11 @@ async fn session_list_returns_persisted_sessions() {
         JsonRpcMessage::Response(r) => {
             let sessions = r.result["sessions"].as_array().unwrap();
             assert_eq!(sessions.len(), 2);
-            // Newest first — created_at "200" > "100".
-            assert_eq!(sessions[0]["session_id"], "pre-existing-b");
-            assert_eq!(sessions[1]["session_id"], "pre-existing-a");
-            assert_eq!(sessions[1]["title"], "first");
-            assert_eq!(sessions[1]["message_count"], 3);
-            assert_eq!(sessions[1]["total_tokens"], 1000);
+            // Title-bump on `pre-existing-a` bumps its transcript
+            // mtime, so it lands at index 0 after the title write.
+            assert_eq!(sessions[0]["session_id"], "pre-existing-a");
+            assert_eq!(sessions[1]["session_id"], "pre-existing-b");
+            assert_eq!(sessions[0]["title"], "first");
         }
         other => panic!("expected Response, got {other:?}"),
     }
@@ -2650,7 +2672,12 @@ async fn session_list_returns_persisted_sessions() {
 }
 
 #[tokio::test]
-async fn session_start_persists_session_to_disk() {
+async fn session_start_returns_session_id_without_eager_persist() {
+    // TS parity: `session/start` returns a fresh id but does not
+    // create a transcript on disk — the JSONL is written lazily on
+    // the first message append. Pre-fix coco-rs eagerly wrote a
+    // `{id}.json` sidecar; this test now asserts the absence of
+    // that divergent behaviour.
     let (server_task, client, state, _tmp) = spawn_server_with_session_manager().await;
 
     client
@@ -2666,15 +2693,15 @@ async fn session_start_persists_session_to_disk() {
         JsonRpcMessage::Response(r) => r.result["session_id"].as_str().unwrap().to_string(),
         other => panic!("expected Response, got {other:?}"),
     };
+    assert!(!session_id.is_empty());
 
-    // Verify the session was saved to disk.
+    // Nothing on disk yet — `load` walks the JSONL tree and finds
+    // no transcript for this id.
     let manager = state.session_manager.read().await.clone().unwrap();
-    let loaded = manager
-        .load(&session_id)
-        .expect("session should be persisted");
-    assert_eq!(loaded.id, session_id);
-    assert_eq!(loaded.model, "claude-sonnet-4-6");
-    assert_eq!(loaded.working_dir, std::path::PathBuf::from("/tmp/foo"));
+    assert!(
+        manager.load(&session_id).is_err(),
+        "session/start must not eagerly create a transcript (TS parity)",
+    );
 
     drop(client);
     server_task.await.unwrap();
@@ -2684,20 +2711,16 @@ async fn session_start_persists_session_to_disk() {
 async fn session_read_returns_metadata_for_persisted_session() {
     let (server_task, client, state, _tmp) = spawn_server_with_session_manager().await;
 
+    // Seed a transcript on disk; the JSONL-canonical SessionManager
+    // derives session metadata from it (title via CustomTitle, etc.).
+    seed_session_transcript(
+        &_tmp.path,
+        "read-test",
+        "/tmp/read",
+        Some("claude-opus-4-6"),
+    );
     let manager = state.session_manager.read().await.clone().unwrap();
-    manager
-        .save(&coco_session::Session {
-            id: "read-test".into(),
-            created_at: "123".into(),
-            updated_at: Some("456".into()),
-            model: "claude-opus-4-6".into(),
-            working_dir: std::path::PathBuf::from("/tmp/read"),
-            title: Some("my session".into()),
-            message_count: 7,
-            total_tokens: 5000,
-            tags: Vec::new(),
-        })
-        .unwrap();
+    manager.set_title("read-test", "my session").unwrap();
 
     client
         .send(req(
@@ -2712,8 +2735,6 @@ async fn session_read_returns_metadata_for_persisted_session() {
         JsonRpcMessage::Response(r) => {
             assert_eq!(r.result["session"]["session_id"], "read-test");
             assert_eq!(r.result["session"]["title"], "my session");
-            assert_eq!(r.result["session"]["message_count"], 7);
-            assert_eq!(r.result["session"]["total_tokens"], 5000);
             // Phase 2.C.11 doesn't return messages yet.
             assert_eq!(r.result["messages"].as_array().unwrap().len(), 0);
             assert_eq!(r.result["has_more"], false);
@@ -2754,20 +2775,14 @@ async fn session_read_unknown_id_errors() {
 async fn session_resume_installs_session_from_disk() {
     let (server_task, client, state, _tmp) = spawn_server_with_session_manager().await;
 
-    let manager = state.session_manager.read().await.clone().unwrap();
-    manager
-        .save(&coco_session::Session {
-            id: "resume-test".into(),
-            created_at: "100".into(),
-            updated_at: None,
-            model: "claude-opus-4-6".into(),
-            working_dir: std::path::PathBuf::from("/tmp/resume"),
-            title: None,
-            message_count: 0,
-            total_tokens: 0,
-            tags: Vec::new(),
-        })
-        .unwrap();
+    // Seed an on-disk transcript so the JSONL-canonical
+    // SessionManager can derive a Session for resume.
+    seed_session_transcript(
+        &_tmp.path,
+        "resume-test",
+        "/tmp/resume",
+        Some("claude-opus-4-6"),
+    );
 
     client
         .send(req(
@@ -2781,7 +2796,6 @@ async fn session_resume_installs_session_from_disk() {
     match reply {
         JsonRpcMessage::Response(r) => {
             assert_eq!(r.result["session"]["session_id"], "resume-test");
-            assert_eq!(r.result["session"]["model"], "claude-opus-4-6");
         }
         other => panic!("expected Response, got {other:?}"),
     }
@@ -2790,7 +2804,6 @@ async fn session_resume_installs_session_from_disk() {
     let slot = state.session.read().await;
     let session = slot.as_ref().expect("session should be installed");
     assert_eq!(session.session_id, "resume-test");
-    assert_eq!(session.model, "claude-opus-4-6");
     assert_eq!(session.cwd, "/tmp/resume");
 
     drop(slot);
@@ -2827,9 +2840,15 @@ async fn session_resume_unknown_id_errors() {
 async fn session_archive_deletes_persisted_session() {
     let (server_task, client, state, _tmp) = spawn_server_with_session_manager().await;
 
-    // Start + archive — verify the disk record is removed.
+    // session/start registers an in-memory session (TS parity: no
+    // eager transcript write); seed the JSONL after so
+    // session/archive has something to delete from disk.
     client
-        .send(req(1, "session/start", serde_json::json!({})))
+        .send(req(
+            1,
+            "session/start",
+            serde_json::json!({ "cwd": "/tmp/archive", "model": "claude-opus-4-6" }),
+        ))
         .await
         .unwrap();
     let start_reply = client.recv().await.unwrap().unwrap();
@@ -2837,12 +2856,16 @@ async fn session_archive_deletes_persisted_session() {
         JsonRpcMessage::Response(r) => r.result["session_id"].as_str().unwrap().to_string(),
         other => panic!("expected Response, got {other:?}"),
     };
+    seed_session_transcript(
+        &_tmp.path,
+        &session_id,
+        "/tmp/archive",
+        Some("claude-opus-4-6"),
+    );
 
-    // Confirm it was persisted
     let manager = state.session_manager.read().await.clone().unwrap();
     assert!(manager.load(&session_id).is_ok());
 
-    // Archive
     client
         .send(req(
             2,

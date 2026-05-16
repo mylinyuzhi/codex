@@ -72,6 +72,7 @@
     "files/persisted",
     "elicitation/complete",
     "tool/useSummary",
-    "tool/progress"
+    "tool/progress",
+    "plugins/changed"
   ]
 }

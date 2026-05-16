@@ -1,6 +1,6 @@
 # coco-tool — Crate Plan
 
-TS source: `src/Tool.ts`, `src/services/tools/StreamingToolExecutor.ts`, `src/services/tools/toolOrchestration.ts`, `src/tools.ts`
+TS source: `Tool.ts`, `services/tools/StreamingToolExecutor.ts`, `services/tools/toolOrchestration.ts`, `tools.ts`
 
 ## Dependencies
 

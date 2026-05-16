@@ -4,6 +4,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use crate::i18n::locale_test_guard;
+use crate::presentation::styles::UiStyles;
 use crate::state::PermissionDetail;
 use crate::state::QuestionOption;
 use crate::theme::Theme;
@@ -36,7 +37,7 @@ fn permission_content_uses_high_risk_border() {
     overlay.risk_level = Some(RiskLevel::High);
     overlay.show_always_allow = true;
 
-    let (title, body, border) = permission_content(&overlay, &theme);
+    let (title, body, border) = permission_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(border, theme.error);
     assert!(title.contains("Edit"));
@@ -68,7 +69,7 @@ fn permission_content_renders_choices_instead_of_default_actions() {
         },
     ]);
 
-    let (_, body, _) = permission_content(&overlay, &theme);
+    let (_, body, _) = permission_content(&overlay, UiStyles::new(&theme));
 
     assert!(body.contains("  Keep context"));
     assert!(body.contains("▸ Clear context"));
@@ -86,7 +87,7 @@ fn permission_content_truncates_unicode_file_edit_preview() {
         diff,
     });
 
-    let (_, body, _) = permission_content(&overlay, &theme);
+    let (_, body, _) = permission_content(&overlay, UiStyles::new(&theme));
 
     assert!(body.contains("File: src/lib.rs"));
     assert!(body.contains(&format!("{}...", "切".repeat(500))));
@@ -128,7 +129,7 @@ fn question_content_renders_other_answer_buffer() {
         editing_notes: true,
     });
 
-    let (title, body, border) = question_content(&overlay, &theme);
+    let (title, body, border) = question_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Question ");
     assert_eq!(border, theme.primary);
@@ -164,7 +165,7 @@ fn question_content_renders_multiselect_footer_hints() {
     });
     overlay.is_in_plan_mode = true;
 
-    let (_, body, _) = question_content(&overlay, &theme);
+    let (_, body, _) = question_content(&overlay, UiStyles::new(&theme));
 
     assert!(body.contains("> [x] Read"));
     assert!(body.contains("— preview —"));
@@ -217,7 +218,7 @@ fn question_content_clamps_negative_focus_and_selection() {
         is_in_plan_mode: false,
     };
 
-    let (_, body, _) = question_content(&overlay, &theme);
+    let (_, body, _) = question_content(&overlay, UiStyles::new(&theme));
 
     assert!(body.contains("[First] 1/2"));
     assert!(body.contains("▸  Alpha"));
@@ -225,6 +226,6 @@ fn question_content_clamps_negative_focus_and_selection() {
     assert!(!body.contains("[Second]"));
 
     overlay.questions[0].selected = 99;
-    let (_, body, _) = question_content(&overlay, &theme);
+    let (_, body, _) = question_content(&overlay, UiStyles::new(&theme));
     assert!(body.contains("▸  Beta"));
 }

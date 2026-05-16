@@ -101,7 +101,7 @@ TS source: `services/extractMemories/extractMemories.ts::createAutoMemCanUseTool
 - The system-prompt assembly seam (`coco-context::build_system_prompt`) — memory only renders its block via `prompt::build_system_prompt_section` and hands it through.
 - LLM client construction — see `coco-inference`.
 - Session storage, transcripts — see `coco-session`.
-- Team-memory HTTP sync — deferred (the v1 `team_sync.rs` skeleton was deleted; v2 will port `services/teamMemorySync/` properly).
+- Team-memory HTTP sync — partial. `team_sync/` holds the in-tree v2 port (`service`, `watcher`, `secret_scanner`, `types`); full parity with `services/teamMemorySync/` is still pending.
 - Compaction logic — `coco-compact` reads session-memory off disk via `MemoryRuntime::session_memory.current_content().await` and uses our pure `compact_truncate::truncate_session_memory_for_compact` helper.
 
 ## Cargo deps

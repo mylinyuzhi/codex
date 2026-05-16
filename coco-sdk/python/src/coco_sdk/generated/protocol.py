@@ -229,6 +229,7 @@ class NotificationMethod(str, Enum):
     elicitation_complete = 'elicitation/complete'
     tool_useSummary = 'tool/useSummary'
     tool_progress = 'tool/progress'
+    plugins_changed = 'plugins/changed'
 
 class PermissionBehavior(str, Enum):
     allow = 'allow'
@@ -281,7 +282,7 @@ class ReasoningEffort(str, Enum):
     medium = 'medium'
     high = 'high'
     x_high = 'x_high'
-    disable = 'disable'
+    off = 'off'
     auto = 'auto'
 
 class ServerRequestMethod(str, Enum):
@@ -290,6 +291,7 @@ class ServerRequestMethod(str, Enum):
     mcp_routeMessage = 'mcp/routeMessage'
     hook_callback = 'hook/callback'
     control_cancelRequest = 'control/cancelRequest'
+    mcp_requestElicitation = 'mcp/requestElicitation'
 
 class SessionState(str, Enum):
     idle = 'idle'
@@ -315,8 +317,26 @@ class WireApi(str, Enum):
 # Union type aliases
 # ---------------------------------------------------------------------------
 
+# Agent-loop stream events. Higher-level than `coco_types::StreamEvent` (which represents raw LLM inference deltas). Adds:
+AgentStreamEvent = dict[str, Any]
+
+# Top-level wire message. SDK clients send these over stdin; coco-rs writes these to stdout. Consumers dispatch on the `ty
+JsonRpcMessage = dict[str, Any]
+
+# Semantic row kind for the `/memory` picker.
+MemoryDialogRowKind = dict[str, Any]
+
+# A permission update action.
+PermissionUpdate = dict[str, Any]
+
 # Request identifier. Can be a string or integer per JSON-RPC 2.0. SDK clients typically use integers; coco-rs accepts bot
 RequestId = int | str
+
+# Categorization of a `SlashCommandStatus` payload. Each variant maps to a `slash.status.*` key in the TUI locale catalog.
+SlashCommandStatusKind = dict[str, Any]
+
+# TUI-exclusive events.
+TuiOnlyEvent = dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +744,9 @@ class SessionStateChangedParams(BaseModel):
 class TurnMaxReachedParams(BaseModel):
     max_turns: int | None = None
 
+class PluginsChangedParams(BaseModel):
+    reason: str
+
 
 # ---------------------------------------------------------------------------
 # Notification wire-method constants
@@ -801,6 +824,7 @@ class NotificationMethod(str, Enum):
     ELICITATION_COMPLETE = 'elicitation/complete'
     TOOL_USE_SUMMARY = 'tool/useSummary'
     TOOL_PROGRESS = 'tool/progress'
+    PLUGINS_CHANGED = 'plugins/changed'
 
 
 # ---------------------------------------------------------------------------
@@ -1158,6 +1182,11 @@ class ServerNotification(BaseModel):
             return ToolProgressParams.model_validate(self.params)
         return None
 
+    def as_plugins_changed(self) -> PluginsChangedParams | None:
+        if self.method == 'plugins/changed':
+            return PluginsChangedParams.model_validate(self.params)
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Server requests (server -> client, require response)
@@ -1187,6 +1216,11 @@ class McpRouteMessageParams(BaseModel):
     request_id: str
     server_name: str
 
+class RequestElicitationParams(BaseModel):
+    elicitation: Any
+    mcp_server_name: str
+    request_id: str
+
 class RequestUserInputParams(BaseModel):
     prompt: str
     request_id: str
@@ -1207,6 +1241,7 @@ class ServerRequestMethod(str, Enum):
     MCP_ROUTE_MESSAGE = 'mcp/routeMessage'
     HOOK_CALLBACK = 'hook/callback'
     CONTROL_CANCEL_REQUEST = 'control/cancelRequest'
+    MCP_REQUEST_ELICITATION = 'mcp/requestElicitation'
 
 
 class ServerRequest(BaseModel):
@@ -1238,6 +1273,11 @@ class ServerRequest(BaseModel):
     def as_control_cancel_request(self) -> ServerCancelRequestParams | None:
         if self.method == 'control/cancelRequest':
             return ServerCancelRequestParams.model_validate(self.params)
+        return None
+
+    def as_mcp_request_elicitation(self) -> RequestElicitationParams | None:
+        if self.method == 'mcp/requestElicitation':
+            return RequestElicitationParams.model_validate(self.params)
         return None
 
 
@@ -1273,9 +1313,6 @@ McpServerConfig = StdioMcpServerConfig | SseMcpServerConfig | HttpMcpServerConfi
 # ---------------------------------------------------------------------------
 # Config types
 # ---------------------------------------------------------------------------
-
-# Union type: see Rust source for variants
-PermissionUpdate = Any
 
 
 # ---------------------------------------------------------------------------
@@ -1754,6 +1791,7 @@ class MemoryDialogEntry(BaseModel):
     label: str
     path: str
     scope: MemoryDialogScope
+    row_kind: MemoryDialogRowKind = {}
 
 class ModelSpec(BaseModel):
     api: ProviderApi

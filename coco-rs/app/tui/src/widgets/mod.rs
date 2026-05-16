@@ -3,6 +3,7 @@
 //! Each widget implements the `ratatui::widgets::Widget` trait
 //! and is constructed via builder pattern from immutable state references.
 
+mod activity_panel;
 mod chat;
 mod context_viz;
 mod context_warning_banner;
@@ -45,12 +46,14 @@ mod verification_nudge_banner;
 #[path = "mod.test.rs"]
 mod tests;
 
+pub(crate) use activity_panel::ActivityPanel;
 pub use chat::ChatWidget;
 pub use context_viz::ContextVizWidget;
 pub use context_warning_banner::ContextWarningBanner;
 pub use coordinator_panel::CoordinatorPanel;
 pub use coordinator_panel::CoordinatorTask;
 pub use hook_status_panel::HookStatusPanel;
+pub(crate) use input::InputRenderModel;
 pub use input::InputWidget;
 pub use interrupt_banner::InterruptBanner;
 pub use local_command_log::LocalCommandLog;

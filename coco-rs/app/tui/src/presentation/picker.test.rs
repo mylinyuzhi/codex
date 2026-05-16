@@ -1,5 +1,6 @@
 use super::*;
 use crate::i18n::locale_test_guard;
+use crate::presentation::styles::UiStyles;
 use crate::state::ExportFormat;
 use crate::state::ExportOverlay;
 use crate::state::GlobalSearchOverlay;
@@ -7,6 +8,7 @@ use crate::state::McpServerOption;
 use crate::state::McpServerSelectOverlay;
 use crate::state::MemoryDialogEntry;
 use crate::state::MemoryDialogOverlay;
+use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
 use crate::state::QuickOpenOverlay;
 use crate::state::SearchResult;
@@ -58,7 +60,7 @@ fn session_browser_content_handles_empty_and_populated_states() {
         selected: 0,
     };
 
-    let (_, empty_body, _) = session_browser_content(&empty, &theme);
+    let (_, empty_body, _) = session_browser_content(&empty, UiStyles::new(&theme));
     assert_eq!(empty_body, "No saved sessions");
 
     let populated = SessionBrowserOverlay {
@@ -72,7 +74,7 @@ fn session_browser_content_handles_empty_and_populated_states() {
         selected: 0,
     };
 
-    let (title, body, border) = session_browser_content(&populated, &theme);
+    let (title, body, border) = session_browser_content(&populated, UiStyles::new(&theme));
     assert_eq!(title, " Sessions ");
     assert_eq!(border, theme.primary);
     assert!(body.contains("Type to filter sessions..."));
@@ -90,7 +92,7 @@ fn quick_open_content_caps_visible_files_at_fifteen() {
         selected: 2,
     };
 
-    let (title, body, border) = quick_open_content(&overlay, &theme);
+    let (title, body, border) = quick_open_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Quick Open ");
     assert_eq!(border, theme.primary);
@@ -117,7 +119,7 @@ fn global_search_content_caps_results_and_marks_selection() {
         is_searching: false,
     };
 
-    let (title, body, border) = global_search_content(&overlay, &theme);
+    let (title, body, border) = global_search_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Global Search ");
     assert_eq!(border, theme.primary);
@@ -138,7 +140,7 @@ fn global_search_content_reports_searching_and_empty_states() {
         is_searching: true,
     };
 
-    let (_, searching_body, _) = global_search_content(&searching, &theme);
+    let (_, searching_body, _) = global_search_content(&searching, UiStyles::new(&theme));
     assert!(searching_body.contains("Searching..."));
     assert!(!searching_body.contains("No results"));
 
@@ -146,7 +148,7 @@ fn global_search_content_reports_searching_and_empty_states() {
         is_searching: false,
         ..searching
     };
-    let (_, empty_body, _) = global_search_content(&empty, &theme);
+    let (_, empty_body, _) = global_search_content(&empty, UiStyles::new(&theme));
     assert!(empty_body.contains("No results"));
 }
 
@@ -163,7 +165,7 @@ fn export_content_marks_selected_format() {
         selected: 1,
     };
 
-    let (title, body, border) = export_content(&overlay, &theme);
+    let (title, body, border) = export_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Export Transcript ");
     assert_eq!(border, theme.primary);
@@ -182,7 +184,7 @@ fn memory_dialog_content_renders_scope_tags_and_empty_state() {
         selected: 0,
     };
 
-    let (title, empty_body, border) = memory_dialog_content(&empty, &theme);
+    let (title, empty_body, border) = memory_dialog_content(&empty, UiStyles::new(&theme));
     assert_eq!(title, " Memory ");
     assert_eq!(border, theme.primary);
     assert_eq!(empty_body, "No memory locations resolved.");
@@ -193,20 +195,28 @@ fn memory_dialog_content_renders_scope_tags_and_empty_state() {
                 path: "CLAUDE.md".into(),
                 label: "Project memory".to_string(),
                 scope: MemoryDialogScope::Project,
+                row_kind: MemoryDialogRowKind::File {
+                    exists: true,
+                    read_only: false,
+                },
             },
             MemoryDialogEntry {
                 path: ".claude/local/CLAUDE.md".into(),
                 label: "Local memory".to_string(),
                 scope: MemoryDialogScope::ProjectLocal,
+                row_kind: MemoryDialogRowKind::File {
+                    exists: false,
+                    read_only: false,
+                },
             },
         ],
         selected: 1,
     };
 
-    let (_, body, _) = memory_dialog_content(&populated, &theme);
+    let (_, body, _) = memory_dialog_content(&populated, UiStyles::new(&theme));
     assert!(body.contains("Select a memory file to edit:"));
-    assert!(body.contains("  [project] Project memory"));
-    assert!(body.contains("▸ [project-local] Local memory"));
+    assert!(body.contains("  [file:exists] [project] Project memory"));
+    assert!(body.contains("▸ [file:new] [project-local] Local memory"));
 }
 
 #[test]
@@ -229,7 +239,7 @@ fn mcp_server_select_content_preserves_checkbox_rows() {
         filter: "d".to_string(),
     };
 
-    let (title, body, border) = mcp_server_select_content(&overlay, &theme);
+    let (title, body, border) = mcp_server_select_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Select MCP Servers ");
     assert_eq!(border, theme.accent);

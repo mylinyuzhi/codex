@@ -2,8 +2,9 @@
 
 **Status**: implemented (Phases 0–6 done; remaining items listed under
 "Remaining deferrals" at the end of this document).
-**Scope**: nested CLAUDE.md attachment pipeline triggered by file reads — comparison
-of TS reference (`/lyz/codespace/3rd/claude-code/src`) vs current Rust (`coco-rs/`).
+**Scope**: nested CLAUDE.md attachment pipeline triggered by file reads —
+comparison of TS reference vs current Rust (`coco-rs/`). TS file paths are
+relative to the TS project's `src/` directory.
 
 ## TL;DR (current state)
 

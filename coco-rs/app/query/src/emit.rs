@@ -199,8 +199,14 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::SlashCommandStatus { .. } => "slash_command_status",
         TuiOnlyEvent::OpenRewindPicker => "open_rewind_picker",
         TuiOnlyEvent::OpenMemoryDialog { .. } => "open_memory_dialog",
+        TuiOnlyEvent::MemoryFileOpened { .. } => "memory_file_opened",
+        TuiOnlyEvent::MemoryFileOpenFailed { .. } => "memory_file_open_failed",
+        TuiOnlyEvent::PlanFileOpened { .. } => "plan_file_opened",
+        TuiOnlyEvent::PlanFileOpenFailed { .. } => "plan_file_open_failed",
+        TuiOnlyEvent::ExternalEditorPrepare { .. } => "external_editor_prepare",
+        TuiOnlyEvent::PromptEditorCompleted { .. } => "prompt_editor_completed",
+        TuiOnlyEvent::PromptEditorFailed { .. } => "prompt_editor_failed",
         TuiOnlyEvent::BashCommandCompleted { .. } => "bash_command_completed",
-        TuiOnlyEvent::MemorySaved { .. } => "memory_saved",
         TuiOnlyEvent::OpenModelPicker => "open_model_picker",
     }
 }

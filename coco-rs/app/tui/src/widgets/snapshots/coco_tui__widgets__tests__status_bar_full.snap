@@ -1,6 +1,5 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
-assertion_line: 60
 expression: output
 ---
  ╭─╮ ╭─╮   COCO v0.0.0                                                                              
@@ -8,6 +7,6 @@ expression: output
  ╰─╯ ╰─╯                                                                                            
                                                                                                     
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ Type a message...                                                                                 
+❯                                                                                                   
 ────────────────────────────────────────────────────────────────────────────────────────────────────
  deepseek/deepseek-v4-flash * auto | ↑12.3K ↓16.5K · cache 86% | ctx 14% | 0 msgs

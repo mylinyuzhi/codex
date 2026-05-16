@@ -1,7 +1,7 @@
 # coco-compact — Crate Plan
 
 Directory: `services/compact/` (matches TS `services/compact/`)
-TS source: `src/services/compact/compact.ts` (60K), `src/services/compact/microCompact.ts` (500+), `src/services/compact/grouping.ts` (64), `src/services/compact/postCompactCleanup.ts` (78), `src/services/compact/apiMicrocompact.ts` (154), `src/services/compact/timeBasedMCConfig.ts` (44), `src/services/compact/sessionMemoryCompact.ts` (630), `src/services/compact/autoCompact.ts` (351), `src/services/compact/prompt.ts` (374), `src/services/compact/compactWarningState.ts` (18)
+TS source: `services/compact/compact.ts` (60K), `services/compact/microCompact.ts` (500+), `services/compact/grouping.ts` (64), `services/compact/postCompactCleanup.ts` (78), `services/compact/apiMicrocompact.ts` (154), `services/compact/timeBasedMCConfig.ts` (44), `services/compact/sessionMemoryCompact.ts` (630), `services/compact/autoCompact.ts` (351), `services/compact/prompt.ts` (374), `services/compact/compactWarningState.ts` (18)
 
 ## Dependencies
 
@@ -467,7 +467,7 @@ in `settings.json`.
   so the ledger is `None` at runtime. **Inert by default.**
 - `experimental.display_collapses` — gate for a future port of the
   four `collapse*.ts` utilities (TUI-only message folding). These
-  reducers exist in external `src/utils/` (port cleanly) but have
+  reducers exist in external `utils/` (port cleanly) but have
   not yet been ported; `app/tui/src/widgets/chat/mod.rs::build_lines`
   carries a TS-alignment-gap comment listing the four functions to
   wire here. Defaults stay `true` so behavior flips on automatically

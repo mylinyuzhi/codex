@@ -2119,6 +2119,19 @@
           "description": "Filesystem path of the memory file (also the editor target).",
           "type": "string"
         },
+        "row_kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryDialogRowKind"
+            }
+          ],
+          "default": {
+            "exists": false,
+            "kind": "file",
+            "read_only": false
+          },
+          "description": "Row semantics for rendering and selection behavior."
+        },
         "scope": {
           "allOf": [
             {
@@ -2134,6 +2147,76 @@
         "scope"
       ],
       "type": "object"
+    },
+    "MemoryDialogRowKind": {
+      "description": "Semantic row kind for the `/memory` picker.",
+      "oneOf": [
+        {
+          "description": "Editable memory file.",
+          "properties": {
+            "exists": {
+              "default": false,
+              "description": "Whether the file already exists at event construction time.",
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "file"
+              ],
+              "type": "string"
+            },
+            "read_only": {
+              "default": false,
+              "description": "Whether the row should be treated as read-only by future UIs.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Folder grouping row for future memory directory surfaces.",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Whether the folder is currently enabled.",
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "folder"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Toggle row for future auto-memory settings.",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Current toggle state.",
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "toggle"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "MemoryDialogScope": {
       "description": "Scope tag for a memory file picker entry. Mirrors `coco_commands::MemoryScope` — kept in `coco-types` so the TUI can consume the event without depending on `coco-commands`.",
@@ -2360,7 +2443,8 @@
         "files/persisted",
         "elicitation/complete",
         "tool/useSummary",
-        "tool/progress"
+        "tool/progress",
+        "plugins/changed"
       ],
       "title": "NotificationMethod",
       "type": "string"
@@ -2899,7 +2983,7 @@
         {
           "description": "Explicit \"thinking off\". Convert layer skips typed-effort emission; `level.options` may still carry an explicit-off wire toggle (e.g. DeepSeek's `{\"thinking\":{\"type\":\"disabled\"}}`).",
           "enum": [
-            "disable"
+            "off"
           ],
           "type": "string"
         },
@@ -2911,6 +2995,28 @@
           "type": "string"
         }
       ]
+    },
+    "RequestElicitationParams": {
+      "description": "Forward an MCP server's elicitation request to the SDK client.\n\nThe MCP protocol lets servers ask the user for structured input (form fields with a JSON schema). When the bound MCP transport fires its `elicitation/create` callback, the SDK server bridges it to the connected SDK client via this `ServerRequest`. The client renders a form and returns an [`ElicitationResolveParams`] payload as the synchronous JSON-RPC response.",
+      "properties": {
+        "elicitation": {
+          "description": "JSON serialization of the rmcp `Elicitation` (`CreateElicitationRequestParam`): contains the human-readable `message` and the requested-field JSON schema."
+        },
+        "mcp_server_name": {
+          "description": "Which MCP server originated the elicitation. SDK clients surface this in the UI so users know who is asking.",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "Correlation id (SDK must echo in the response payload).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "elicitation",
+        "mcp_server_name",
+        "request_id"
+      ],
+      "type": "object"
     },
     "RequestId": {
       "anyOf": [
@@ -4495,6 +4601,33 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "description": "Plugin state changed on disk (manifest added/removed/edited, `installed_plugins.json` updated, or settings.json scope toggled). Carries a short reason string the UI can surface as a banner. TS parity: `useManagePlugins.ts:293-300` adds the \"Plugins changed. Run /reload-plugins to activate.\" notification. Never triggers an auto-reload — the explicit `/reload-plugins` invocation is what applies the change.",
+          "properties": {
+            "method": {
+              "enum": [
+                "plugins/changed"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "title": "ServerNotification"
@@ -4596,6 +4729,25 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "description": "Forward an MCP-server-initiated elicitation request to the SDK client, which renders a form and replies with the user's answer. Expected response: `ClientRequest::ElicitationResolve` (delivered as the synchronous JSON-RPC response to this request — the SDK reply payload matches `ElicitationResolveParams`).",
+          "properties": {
+            "method": {
+              "enum": [
+                "mcp/requestElicitation"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/RequestElicitationParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "title": "ServerRequest"
@@ -4607,7 +4759,8 @@
         "input/requestUserInput",
         "mcp/routeMessage",
         "hook/callback",
-        "control/cancelRequest"
+        "control/cancelRequest",
+        "mcp/requestElicitation"
       ],
       "title": "ServerRequestMethod",
       "type": "string"
@@ -6574,7 +6727,7 @@
           "type": "object"
         },
         {
-          "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash dispatcher pre-builds entries via `coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries` and carries them through here so the TUI doesn't recompute paths. On selection the TUI creates the file (`mode wx` semantics), opens `$VISUAL || $EDITOR`, and emits a system message; on cancel it emits \"Cancelled memory editing\". TS parity: `commands/memory/memory.tsx`.",
+          "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash dispatcher pre-builds entries via `coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries` and carries them through here so the TUI doesn't recompute paths. On selection the TUI sends an `OpenMemoryFile` command to the CLI bridge; the bridge creates the file (`mode wx` semantics), opens `$VISUAL || $EDITOR`, and reports the result back as a transcript visible event. On cancel the TUI emits \"Cancelled memory editing\". TS parity: `commands/memory/memory.tsx`.",
           "properties": {
             "entries": {
               "items": {
@@ -6591,6 +6744,161 @@
           },
           "required": [
             "entries",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`/memory` editor launch completed successfully.",
+          "properties": {
+            "path": {
+              "description": "Path of the file passed to the editor.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "memory_file_opened"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`/memory` editor launch failed before a process was started.",
+          "properties": {
+            "error": {
+              "description": "User-visible failure summary.",
+              "type": "string"
+            },
+            "path": {
+              "description": "Path of the file the user selected.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "memory_file_open_failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "path",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Plan editor launch completed successfully.",
+          "properties": {
+            "path": {
+              "description": "Path of the session plan file passed to the editor.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "plan_file_opened"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Plan editor launch failed before a process was started.",
+          "properties": {
+            "error": {
+              "description": "User-visible failure summary.",
+              "type": "string"
+            },
+            "path": {
+              "description": "Path of the session plan file.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "plan_file_open_failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "path",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Request the foreground TUI to leave raw mode / alt-screen before the CLI runner starts an interactive editor process.",
+          "properties": {
+            "request_id": {
+              "description": "Opaque request id echoed back by the TUI once terminal modes are ready for the external editor.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "external_editor_prepare"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "External prompt editor completed.",
+          "properties": {
+            "content": {
+              "description": "Edited prompt content read back from the temp file.",
+              "type": "string"
+            },
+            "modified": {
+              "description": "Whether the edited content differs from the initial content.",
+              "type": "boolean"
+            },
+            "type": {
+              "enum": [
+                "prompt_editor_completed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "modified",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "External prompt editor failed before content could be read back.",
+          "properties": {
+            "error": {
+              "description": "User-visible failure summary.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "prompt_editor_failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
             "type"
           ],
           "type": "object"
@@ -6623,26 +6931,6 @@
             "output",
             "type",
             "user_message_id"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Confirmation that a prompt-mode `#`-prefixed memory entry was appended to a CLAUDE.md file. The TUI surfaces a toast and the `MemoryInput` chat message that was already pushed locally.",
-          "properties": {
-            "path": {
-              "description": "Path of the file that was appended to (project / user scope).",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "memory_saved"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
           ],
           "type": "object"
         },

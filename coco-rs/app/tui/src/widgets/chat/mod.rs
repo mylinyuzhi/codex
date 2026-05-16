@@ -19,15 +19,23 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
-use crate::constants;
 use crate::display_settings::SyntaxHighlighting;
 use crate::i18n::t;
+use crate::presentation::streaming::StreamingTailBlock;
+use crate::presentation::streaming::StreamingTailView;
+use crate::presentation::styles::UiStyles;
+use crate::presentation::transcript::ActiveTranscriptCell;
+use crate::presentation::transcript::TaskNotificationBatchKind;
+use crate::presentation::transcript::TaskNotificationTone;
+use crate::presentation::transcript::TranscriptCell;
+use crate::presentation::transcript::TranscriptPresentationInput;
+use crate::presentation::transcript::TranscriptProjectionOptions;
+use crate::presentation::transcript::TranscriptSourceCell;
+use crate::presentation::transcript::transcript_presentation;
 use crate::state::session::ChatMessage;
 use crate::state::session::MessageContent;
 use crate::state::session::ToolExecution;
-use crate::state::session::ToolStatus;
 use crate::state::ui::StreamingState;
-use crate::theme::Theme;
 
 /// Chat history widget.
 pub struct ChatWidget<'a> {
@@ -39,7 +47,7 @@ pub struct ChatWidget<'a> {
     spinner_frame: &'a str,
     tool_executions: &'a [ToolExecution],
     collapsed_tools: Option<&'a HashSet<String>>,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
     syntax_highlighting: SyntaxHighlighting,
     width: u16,
     /// Keybinding handle for rendering live shortcuts (e.g. the
@@ -50,7 +58,7 @@ pub struct ChatWidget<'a> {
 }
 
 impl<'a> ChatWidget<'a> {
-    pub fn new(messages: &'a [ChatMessage], theme: &'a Theme) -> Self {
+    pub fn new(messages: &'a [ChatMessage], styles: UiStyles<'a>) -> Self {
         Self {
             messages,
             scroll_offset: 0,
@@ -60,7 +68,7 @@ impl<'a> ChatWidget<'a> {
             spinner_frame: "⠋",
             tool_executions: &[],
             collapsed_tools: None,
-            theme,
+            styles,
             syntax_highlighting: SyntaxHighlighting::Enabled,
             width: 80,
             kb_handle: None,
@@ -131,102 +139,140 @@ impl<'a> ChatWidget<'a> {
     }
 
     fn build_lines(&self) -> Vec<Line<'a>> {
-        // TS-alignment gap: TS external builds run four display-collapse
-        // reducers over the message stream before rendering, gated on
-        // `compact.experimental.display_collapses.*` (all default true):
-        //   - collapseTeammateShutdowns         (utils/collapseTeammateShutdowns.ts)
-        //   - collapseHookSummaries             (utils/collapseHookSummaries.ts)
-        //   - collapseBackgroundBashNotifications (utils/collapseBackgroundBashNotifications.ts)
-        //   - collapseReadSearchGroups          (utils/collapseReadSearch.ts, ~1100 LOC)
-        // Rust currently renders the raw stream, so on-by-default config
-        // produces no folding. Wire each reducer here when ported; until
-        // then this path matches TS-with-feature-OFF behavior.
+        let presentation = transcript_presentation(TranscriptPresentationInput {
+            messages: self.messages,
+            options: TranscriptProjectionOptions {
+                show_system_reminders: self.show_system_reminders,
+            },
+            streaming: self.streaming,
+            show_thinking: self.show_thinking,
+            tool_executions: self.tool_executions,
+        });
         let mut lines: Vec<Line> = Vec::new();
 
-        let mut i = 0;
-        while i < self.messages.len() {
-            let msg = &self.messages[i];
-            if msg.is_meta && !self.show_system_reminders {
-                // Collapsed: one-line `# [category] truncated preview` so
-                // users can tell *something* was hidden without flooding the
-                // transcript. TS: SystemTextMessage preview behaviour.
-                self.render_meta_preview(msg, &mut lines);
-                i += 1;
-                continue;
-            }
-
-            // Parallel tool-call grouping: consecutive ToolUse messages are
-            // rendered as a batch with a `‖ N in parallel` header and no
-            // inter-tool blank lines. Matches TS's batch display. A single
-            // ToolUse is not treated as a batch.
-            let batch_end = self.tool_batch_end(i);
-            if batch_end > i + 1 {
-                let count = batch_end - i;
-                lines.push(Line::from(
-                    Span::raw(format!(
-                        "  ‖ {}",
-                        t!("chat.tools_in_parallel", count = count)
-                    ))
-                    .fg(self.theme.secondary)
-                    .dim(),
-                ));
-                for j in i..batch_end {
-                    self.render_message(&self.messages[j], &mut lines);
+        for cell in presentation.cells {
+            match cell {
+                TranscriptSourceCell::Committed(TranscriptCell::MetaPreview { index }) => {
+                    self.render_meta_preview(&self.messages[index], &mut lines);
                 }
-                lines.push(Line::default());
-                i = batch_end;
-                continue;
-            }
-
-            self.render_message(msg, &mut lines);
-            lines.push(Line::default());
-            i += 1;
-        }
-
-        // Streaming content
-        if let Some(streaming) = self.streaming {
-            self.render_streaming(streaming, &mut lines);
-        }
-
-        // Spinner when busy but not streaming
-        if self.streaming.is_none() && !self.tool_executions.is_empty() {
-            let running = self
-                .tool_executions
-                .iter()
-                .any(|t| matches!(t.status, ToolStatus::Queued | ToolStatus::Running));
-            if running {
-                lines.push(Line::from(vec![
-                    Span::raw(format!("{} ", self.spinner_frame)).fg(self.theme.thinking),
-                    Span::raw(t!("chat.processing").to_string()).fg(self.theme.thinking),
-                ]));
+                TranscriptSourceCell::Committed(TranscriptCell::Message { index }) => {
+                    self.render_message(&self.messages[index], &mut lines);
+                    lines.push(Line::default());
+                }
+                TranscriptSourceCell::Committed(TranscriptCell::ToolBatch {
+                    start,
+                    end,
+                    count,
+                }) => {
+                    lines.push(Line::from(
+                        Span::raw(format!(
+                            "  ‖ {}",
+                            t!("chat.tools_in_parallel", count = count)
+                        ))
+                        .fg(self.styles.secondary())
+                        .dim(),
+                    ));
+                    for j in start..end {
+                        self.render_message(&self.messages[j], &mut lines);
+                    }
+                    lines.push(Line::default());
+                }
+                TranscriptSourceCell::Committed(TranscriptCell::HookBatch {
+                    count,
+                    hook_name,
+                    has_error,
+                    ..
+                }) => {
+                    self.render_hook_batch(count, &hook_name, has_error, &mut lines);
+                }
+                TranscriptSourceCell::Committed(TranscriptCell::TaskNotification {
+                    summary,
+                    tone,
+                    ..
+                }) => {
+                    self.render_task_notification(&summary, tone, &mut lines);
+                }
+                TranscriptSourceCell::Committed(TranscriptCell::TaskNotificationBatch {
+                    count,
+                    kind,
+                    ..
+                }) => {
+                    self.render_task_notification_batch(count, kind, &mut lines);
+                }
+                TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(view)) => {
+                    self.render_streaming(view, &mut lines);
+                }
+                TranscriptSourceCell::Active(ActiveTranscriptCell::BusySpinner) => {
+                    lines.push(Line::from(vec![
+                        Span::raw(format!("{} ", self.spinner_frame)).fg(self.styles.thinking()),
+                        Span::raw(t!("chat.processing").to_string()).fg(self.styles.thinking()),
+                    ]));
+                }
             }
         }
 
         lines
     }
 
-    /// Exclusive end index of the consecutive ToolUse run starting at `start`.
-    /// Returns `start + 1` when the message at `start` is not a ToolUse.
-    /// Meta messages inside the run are skipped (they're hidden collapsed
-    /// previews); any non-ToolUse non-meta message terminates the run.
-    fn tool_batch_end(&self, start: usize) -> usize {
-        let is_tool_use = |m: &ChatMessage| matches!(m.content, MessageContent::ToolUse { .. });
-        if !is_tool_use(&self.messages[start]) {
-            return start + 1;
-        }
-        let mut end = start + 1;
-        while end < self.messages.len() {
-            let next = &self.messages[end];
-            if is_tool_use(next) {
-                end += 1;
-            } else if next.is_meta {
-                // Skip collapsed meta previews inside a batch.
-                end += 1;
-            } else {
-                break;
+    fn render_hook_batch(
+        &self,
+        count: usize,
+        hook_name: &str,
+        has_error: bool,
+        lines: &mut Vec<Line<'a>>,
+    ) {
+        let color = if has_error {
+            self.styles.warning()
+        } else {
+            self.styles.accent()
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  ⚙ ").fg(color),
+            Span::raw(hook_name.to_string()).fg(self.styles.dim()),
+            Span::raw(": ").fg(self.styles.dim()),
+            Span::raw(t!("chat.hook_batch", count = count).to_string()).fg(color),
+        ]));
+        lines.push(Line::default());
+    }
+
+    fn render_task_notification(
+        &self,
+        summary: &str,
+        tone: TaskNotificationTone,
+        lines: &mut Vec<Line<'a>>,
+    ) {
+        let color = match tone {
+            TaskNotificationTone::Completed => self.styles.success(),
+            TaskNotificationTone::Failed => self.styles.error(),
+            TaskNotificationTone::Killed => self.styles.warning(),
+            TaskNotificationTone::Unknown => self.styles.dim(),
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  ● ").fg(color),
+            Span::raw(summary.to_string()).fg(color),
+        ]));
+        lines.push(Line::default());
+    }
+
+    fn render_task_notification_batch(
+        &self,
+        count: usize,
+        kind: TaskNotificationBatchKind,
+        lines: &mut Vec<Line<'a>>,
+    ) {
+        let label = match kind {
+            TaskNotificationBatchKind::BackgroundBashCompleted => {
+                t!("chat.background_bash_batch", count = count).to_string()
             }
-        }
-        end
+            TaskNotificationBatchKind::TeammateShutdown => {
+                t!("chat.teammate_shutdown_batch", count = count).to_string()
+            }
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  ● ").fg(self.styles.success()),
+            Span::raw(label).fg(self.styles.dim()),
+        ]));
+        lines.push(Line::default());
     }
 
     /// Render a single-line collapsed preview for a meta (system reminder)
@@ -246,8 +292,8 @@ impl<'a> ChatWidget<'a> {
             trimmed
         };
         lines.push(Line::from(vec![
-            Span::raw(format!("  # [{category}] ")).fg(self.theme.system_message),
-            Span::raw(preview).fg(self.theme.text_dim).italic(),
+            Span::raw(format!("  # [{category}] ")).fg(self.styles.system_message()),
+            Span::raw(preview).fg(self.styles.dim()).italic(),
         ]));
     }
 
@@ -261,51 +307,57 @@ impl<'a> ChatWidget<'a> {
             .or_else(|| render_system::try_render(self, &msg.content, lines));
     }
 
-    fn render_streaming(&self, streaming: &StreamingState, lines: &mut Vec<Line<'a>>) {
-        let content = streaming.visible_content();
-        if !content.is_empty() {
-            let mut md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
-                content,
-                self.theme,
-                self.width,
-                self.syntax_highlighting,
-            );
-            // Match `render_assistant::try_render`'s leading dot so the
-            // partial response and the finalised response share the same
-            // marker — otherwise the row jumps when streaming finishes
-            // and the assistant text replaces the live buffer.
-            if let Some(first) = md_lines.first_mut() {
-                let dot_span = Span::styled(
-                    "⏺ ".to_string(),
-                    ratatui::style::Style::default().fg(self.theme.assistant_message),
-                );
-                let leading_is_indent = first
-                    .spans
-                    .first()
-                    .map(|s| s.content.as_ref() == "  ")
-                    .unwrap_or(false);
-                if leading_is_indent {
-                    first.spans[0] = dot_span;
-                } else {
-                    first.spans.insert(0, dot_span);
+    fn render_streaming(&self, view: StreamingTailView<'_>, lines: &mut Vec<Line<'a>>) {
+        for block in view.blocks {
+            match block {
+                StreamingTailBlock::AssistantText(content) => {
+                    self.render_streaming_text(content, lines);
+                }
+                StreamingTailBlock::Cursor => {
+                    lines.push(Line::from(Span::raw("▌").fg(self.styles.accent())));
+                }
+                StreamingTailBlock::ThinkingTokens { count } => {
+                    lines.push(Line::from(
+                        Span::raw(format!(
+                            "  💭 {}",
+                            t!("chat.thinking_tokens", count = count)
+                        ))
+                        .fg(self.styles.thinking())
+                        .italic(),
+                    ));
                 }
             }
-            lines.extend(md_lines);
-            lines.push(Line::from(Span::raw("▌").fg(self.theme.accent)));
         }
+    }
 
-        if self.show_thinking && !streaming.thinking.is_empty() {
-            let token_est = (streaming.thinking.split_whitespace().count() as f64
-                * constants::THINKING_TOKEN_MULTIPLIER) as i64;
-            lines.push(Line::from(
-                Span::raw(format!(
-                    "  💭 {}",
-                    t!("chat.thinking_tokens", count = token_est)
-                ))
-                .fg(self.theme.thinking)
-                .italic(),
-            ));
+    fn render_streaming_text(&self, content: &str, lines: &mut Vec<Line<'a>>) {
+        let mut md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
+            content,
+            self.styles,
+            self.width,
+            self.syntax_highlighting,
+        );
+        // Match `render_assistant::try_render`'s leading dot so the
+        // partial response and the finalised response share the same
+        // marker — otherwise the row jumps when streaming finishes
+        // and the assistant text replaces the live buffer.
+        if let Some(first) = md_lines.first_mut() {
+            let dot_span = Span::styled(
+                "⏺ ".to_string(),
+                ratatui::style::Style::default().fg(self.styles.assistant_message()),
+            );
+            let leading_is_indent = first
+                .spans
+                .first()
+                .map(|s| s.content.as_ref() == "  ")
+                .unwrap_or(false);
+            if leading_is_indent {
+                first.spans[0] = dot_span;
+            } else {
+                first.spans.insert(0, dot_span);
+            }
         }
+        lines.extend(md_lines);
     }
 }
 

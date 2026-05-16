@@ -11,18 +11,18 @@ use ratatui::text::Span;
 use crate::constants::TABLE_MAX_COL_WIDTH;
 use crate::constants::TABLE_MIN_COL_WIDTH;
 use crate::display_settings::SyntaxHighlighting;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// Convert markdown text to styled lines for terminal rendering.
-pub fn markdown_to_lines(text: &str, theme: &Theme, width: u16) -> Vec<Line<'static>> {
-    markdown_to_lines_with_syntax(text, theme, width, SyntaxHighlighting::Enabled)
+pub fn markdown_to_lines(text: &str, styles: UiStyles<'_>, width: u16) -> Vec<Line<'static>> {
+    markdown_to_lines_with_syntax(text, styles, width, SyntaxHighlighting::Enabled)
 }
 
 /// Convert markdown text to styled lines with explicit syntax-highlighting
 /// behavior for fenced code blocks.
 pub fn markdown_to_lines_with_syntax(
     text: &str,
-    theme: &Theme,
+    styles: UiStyles<'_>,
     width: u16,
     syntax_highlighting: SyntaxHighlighting,
 ) -> Vec<Line<'static>> {
@@ -41,7 +41,7 @@ pub fn markdown_to_lines_with_syntax(
             if in_code_block {
                 lines.push(Line::from(
                     Span::raw(format!("  \u{2514}{}", "\u{2500}".repeat(border_len)))
-                        .fg(theme.border),
+                        .fg(styles.border()),
                 ));
                 in_code_block = false;
                 code_lang.clear();
@@ -54,7 +54,7 @@ pub fn markdown_to_lines_with_syntax(
                     let fill = border_len.saturating_sub(code_lang.len() + 3);
                     format!("  \u{250c}\u{2500} {code_lang} {}", "\u{2500}".repeat(fill))
                 };
-                lines.push(Line::from(Span::raw(label).fg(theme.border)));
+                lines.push(Line::from(Span::raw(label).fg(styles.border())));
             }
             idx += 1;
             continue;
@@ -62,11 +62,11 @@ pub fn markdown_to_lines_with_syntax(
 
         if in_code_block {
             let spans = if syntax_highlighting.is_enabled() {
-                highlight_code_line(raw_line, &code_lang, theme)
+                highlight_code_line(raw_line, &code_lang, styles)
             } else {
-                vec![Span::raw(raw_line.to_string()).fg(theme.text_dim)]
+                vec![Span::raw(raw_line.to_string()).fg(styles.dim())]
             };
-            let mut full = vec![Span::raw("  \u{2502} ").fg(theme.border)];
+            let mut full = vec![Span::raw("  \u{2502} ").fg(styles.border())];
             full.extend(spans);
             lines.push(Line::from(full));
             idx += 1;
@@ -77,7 +77,7 @@ pub fn markdown_to_lines_with_syntax(
         if raw_line.contains('|') && is_table_start(raw_line, raw_lines.get(idx + 1).copied()) {
             let table_end = find_table_end(&raw_lines, idx);
             let table_lines = &raw_lines[idx..table_end];
-            render_table(table_lines, theme, &mut lines);
+            render_table(table_lines, styles, &mut lines);
             idx = table_end;
             continue;
         }
@@ -88,7 +88,7 @@ pub fn markdown_to_lines_with_syntax(
                 Span::raw(format!("  {rest}"))
                     .bold()
                     .underlined()
-                    .fg(theme.primary),
+                    .fg(styles.primary()),
             ));
             idx += 1;
             continue;
@@ -98,7 +98,7 @@ pub fn markdown_to_lines_with_syntax(
                 Span::raw(format!("  {rest}"))
                     .bold()
                     .underlined()
-                    .fg(theme.primary),
+                    .fg(styles.primary()),
             ));
             idx += 1;
             continue;
@@ -108,7 +108,7 @@ pub fn markdown_to_lines_with_syntax(
                 Span::raw(format!("  {rest}"))
                     .bold()
                     .underlined()
-                    .fg(theme.primary),
+                    .fg(styles.primary()),
             ));
             idx += 1;
             continue;
@@ -117,7 +117,7 @@ pub fn markdown_to_lines_with_syntax(
         // Horizontal rule
         if matches!(raw_line, "---" | "***" | "___") {
             lines.push(Line::from(
-                Span::raw(format!("  {}", "\u{2500}".repeat(border_len))).fg(theme.border),
+                Span::raw(format!("  {}", "\u{2500}".repeat(border_len))).fg(styles.border()),
             ));
             idx += 1;
             continue;
@@ -140,11 +140,11 @@ pub fn markdown_to_lines_with_syntax(
             if rest.is_empty() {
                 lines.push(Line::from(
                     Span::raw(format!("  {}", "\u{2502} ".repeat(depth).trim_end()))
-                        .fg(theme.text_dim),
+                        .fg(styles.dim()),
                 ));
             } else {
-                let styled = parse_inline_styles(rest.trim(), theme);
-                let mut spans = vec![Span::raw(prefix).fg(theme.text_dim)];
+                let styled = parse_inline_styles(rest.trim(), styles);
+                let mut spans = vec![Span::raw(prefix).fg(styles.dim())];
                 spans.extend(styled.into_iter().map(ratatui::prelude::Stylize::italic));
                 lines.push(Line::from(spans));
             }
@@ -157,10 +157,10 @@ pub fn markdown_to_lines_with_syntax(
             .strip_prefix("- [x] ")
             .or_else(|| raw_line.strip_prefix("- [X] "))
         {
-            let styled = parse_inline_styles(rest, theme);
+            let styled = parse_inline_styles(rest, styles);
             let mut spans = vec![
-                Span::raw("  ").fg(theme.success),
-                Span::raw("☑ ").fg(theme.success),
+                Span::raw("  ").fg(styles.success()),
+                Span::raw("☑ ").fg(styles.success()),
             ];
             spans.extend(styled);
             lines.push(Line::from(spans));
@@ -168,10 +168,10 @@ pub fn markdown_to_lines_with_syntax(
             continue;
         }
         if let Some(rest) = raw_line.strip_prefix("- [ ] ") {
-            let styled = parse_inline_styles(rest, theme);
+            let styled = parse_inline_styles(rest, styles);
             let mut spans = vec![
-                Span::raw("  ").fg(theme.text_dim),
-                Span::raw("☐ ").fg(theme.text_dim),
+                Span::raw("  ").fg(styles.dim()),
+                Span::raw("☐ ").fg(styles.dim()),
             ];
             spans.extend(styled);
             lines.push(Line::from(spans));
@@ -184,7 +184,7 @@ pub fn markdown_to_lines_with_syntax(
             .strip_prefix("- ")
             .or_else(|| raw_line.strip_prefix("* "))
         {
-            let styled = parse_inline_styles(rest, theme);
+            let styled = parse_inline_styles(rest, styles);
             let mut spans = vec![Span::raw("  \u{2022} ")];
             spans.extend(styled);
             lines.push(Line::from(spans));
@@ -197,7 +197,7 @@ pub fn markdown_to_lines_with_syntax(
             let prefix = &raw_line[..pos];
             if prefix.chars().all(|c| c.is_ascii_digit()) && !prefix.is_empty() {
                 let rest = &raw_line[pos + 2..];
-                let styled = parse_inline_styles(rest, theme);
+                let styled = parse_inline_styles(rest, styles);
                 let mut spans = vec![Span::raw(format!("  {prefix}. "))];
                 spans.extend(styled);
                 lines.push(Line::from(spans));
@@ -214,7 +214,7 @@ pub fn markdown_to_lines_with_syntax(
         }
 
         // Regular paragraph with inline styles
-        let styled = parse_inline_styles(raw_line, theme);
+        let styled = parse_inline_styles(raw_line, styles);
         let mut spans = vec![Span::raw("  ")];
         spans.extend(styled);
         lines.push(Line::from(spans));
@@ -270,7 +270,7 @@ fn parse_table_row(line: &str) -> Vec<String> {
 }
 
 /// Render a markdown table with box-drawing borders.
-fn render_table(table_lines: &[&str], theme: &Theme, out: &mut Vec<Line<'static>>) {
+fn render_table(table_lines: &[&str], styles: UiStyles<'_>, out: &mut Vec<Line<'static>>) {
     if table_lines.len() < 2 {
         return;
     }
@@ -311,14 +311,14 @@ fn render_table(table_lines: &[&str], theme: &Theme, out: &mut Vec<Line<'static>
         "\u{252c}",
         "\u{2510}",
         &col_widths,
-        theme,
+        styles,
     ));
 
     // Header row
     out.push(table_data_line(
         &header_cells,
         &col_widths,
-        theme,
+        styles,
         /*is_header*/ true,
     ));
 
@@ -328,7 +328,7 @@ fn render_table(table_lines: &[&str], theme: &Theme, out: &mut Vec<Line<'static>
         "\u{253c}",
         "\u{2524}",
         &col_widths,
-        theme,
+        styles,
     ));
 
     // Body rows
@@ -336,7 +336,7 @@ fn render_table(table_lines: &[&str], theme: &Theme, out: &mut Vec<Line<'static>
         out.push(table_data_line(
             row,
             &col_widths,
-            theme,
+            styles,
             /*is_header*/ false,
         ));
     }
@@ -347,7 +347,7 @@ fn render_table(table_lines: &[&str], theme: &Theme, out: &mut Vec<Line<'static>
         "\u{2534}",
         "\u{2518}",
         &col_widths,
-        theme,
+        styles,
     ));
 }
 
@@ -357,7 +357,7 @@ fn table_border_line(
     mid: &str,
     right: &str,
     col_widths: &[i32],
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> Line<'static> {
     let mut s = format!("  {left}");
     for (i, &w) in col_widths.iter().enumerate() {
@@ -367,19 +367,19 @@ fn table_border_line(
         }
     }
     s.push_str(right);
-    Line::from(Span::raw(s).fg(theme.table_border))
+    Line::from(Span::raw(s).fg(styles.table_border()))
 }
 
 /// Build a data row with cell contents padded to column widths.
 fn table_data_line(
     cells: &[String],
     col_widths: &[i32],
-    theme: &Theme,
+    styles: UiStyles<'_>,
     is_header: bool,
 ) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::raw("  ").fg(theme.table_border));
-    spans.push(Span::raw("\u{2502}").fg(theme.table_border));
+    spans.push(Span::raw("  ").fg(styles.table_border()));
+    spans.push(Span::raw("\u{2502}").fg(styles.table_border()));
 
     for (i, width) in col_widths.iter().enumerate() {
         let w = *width as usize;
@@ -391,11 +391,11 @@ fn table_data_line(
         };
         let padded = format!(" {truncated:<w$} ");
         if is_header {
-            spans.push(Span::raw(padded).fg(theme.table_header).bold());
+            spans.push(Span::raw(padded).fg(styles.table_header()).bold());
         } else {
             spans.push(Span::raw(padded));
         }
-        spans.push(Span::raw("\u{2502}").fg(theme.table_border));
+        spans.push(Span::raw("\u{2502}").fg(styles.table_border()));
     }
 
     Line::from(spans)
@@ -498,10 +498,10 @@ fn keywords_for_lang(lang: &str) -> &'static [&'static str] {
 }
 
 /// Apply basic syntax highlighting to a single code line.
-fn highlight_code_line(line: &str, lang: &str, theme: &Theme) -> Vec<Span<'static>> {
+fn highlight_code_line(line: &str, lang: &str, styles: UiStyles<'_>) -> Vec<Span<'static>> {
     let keywords = keywords_for_lang(lang);
     if keywords.is_empty() {
-        return vec![Span::raw(line.to_string()).fg(theme.text_dim)];
+        return vec![Span::raw(line.to_string()).fg(styles.dim())];
     }
 
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -517,7 +517,7 @@ fn highlight_code_line(line: &str, lang: &str, theme: &Theme) -> Vec<Span<'stati
             || (ch == '#' && matches!(lang, "python" | "py" | "bash" | "sh" | "zsh" | "shell"))
         {
             let rest: String = chars[pos..].iter().collect();
-            spans.push(Span::raw(rest).fg(theme.code_comment).italic());
+            spans.push(Span::raw(rest).fg(styles.code_comment()).italic());
             break;
         }
 
@@ -536,7 +536,7 @@ fn highlight_code_line(line: &str, lang: &str, theme: &Theme) -> Vec<Span<'stati
                 pos += 1; // closing quote
             }
             let s: String = chars[start..pos].iter().collect();
-            spans.push(Span::raw(s).fg(theme.code_string));
+            spans.push(Span::raw(s).fg(styles.code_string()));
             continue;
         }
 
@@ -549,7 +549,7 @@ fn highlight_code_line(line: &str, lang: &str, theme: &Theme) -> Vec<Span<'stati
                 pos += 1;
             }
             let s: String = chars[start..pos].iter().collect();
-            spans.push(Span::raw(s).fg(theme.code_number));
+            spans.push(Span::raw(s).fg(styles.code_number()));
             continue;
         }
 
@@ -561,15 +561,15 @@ fn highlight_code_line(line: &str, lang: &str, theme: &Theme) -> Vec<Span<'stati
             }
             let word: String = chars[start..pos].iter().collect();
             if keywords.contains(&word.as_str()) {
-                spans.push(Span::raw(word).fg(theme.code_keyword).bold());
+                spans.push(Span::raw(word).fg(styles.code_keyword()).bold());
             } else {
-                spans.push(Span::raw(word).fg(theme.text_dim));
+                spans.push(Span::raw(word).fg(styles.dim()));
             }
             continue;
         }
 
         // Other characters (operators, whitespace, punctuation)
-        spans.push(Span::raw(ch.to_string()).fg(theme.text_dim));
+        spans.push(Span::raw(ch.to_string()).fg(styles.dim()));
         pos += 1;
     }
 
@@ -579,7 +579,7 @@ fn highlight_code_line(line: &str, lang: &str, theme: &Theme) -> Vec<Span<'stati
 // ── Inline style parsing ────────────────────────────────────────────
 
 /// Parse inline markdown styles: **bold**, *italic*, `code`, [links](url).
-fn parse_inline_styles(text: &str, theme: &Theme) -> Vec<Span<'static>> {
+fn parse_inline_styles(text: &str, styles: UiStyles<'_>) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut current = String::new();
     let mut chars = text.chars().peekable();
@@ -598,7 +598,7 @@ fn parse_inline_styles(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                     }
                     code.push(next);
                 }
-                spans.push(Span::raw(code).fg(theme.accent));
+                spans.push(Span::raw(code).fg(styles.accent()));
             }
             '~' if chars.peek() == Some(&'~') => {
                 chars.next(); // consume second ~
@@ -618,7 +618,7 @@ fn parse_inline_styles(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                     strike_text.push(next);
                     chars.next();
                 }
-                spans.push(Span::raw(strike_text).fg(theme.text_dim).dim());
+                spans.push(Span::raw(strike_text).fg(styles.dim()).dim());
             }
             '*' if chars.peek() == Some(&'*') => {
                 chars.next(); // consume second *
@@ -678,7 +678,7 @@ fn parse_inline_styles(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                         }
                         url.push(next);
                     }
-                    spans.push(Span::raw(link_text).fg(theme.primary).underlined());
+                    spans.push(Span::raw(link_text).fg(styles.primary()).underlined());
                     let _ = url; // URL not displayed in terminal
                 } else {
                     spans.push(Span::raw(format!("[{link_text}]")));
@@ -704,14 +704,14 @@ fn parse_inline_styles(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                     let trailing = url.pop();
                     if let Some(t) = trailing {
                         // We'll push trailing punct after the URL span
-                        spans.push(Span::raw(url).fg(theme.hyperlink).underlined());
+                        spans.push(Span::raw(url).fg(styles.hyperlink()).underlined());
                         spans.push(Span::raw(t.to_string()));
                         url = String::new();
                         break;
                     }
                 }
                 if !url.is_empty() {
-                    spans.push(Span::raw(url).fg(theme.hyperlink).underlined());
+                    spans.push(Span::raw(url).fg(styles.hyperlink()).underlined());
                 }
             }
             _ => {

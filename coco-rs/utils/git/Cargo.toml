@@ -20,6 +20,7 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
+unicode-normalization = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]

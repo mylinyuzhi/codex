@@ -1,6 +1,6 @@
 # coco-query — Crate Plan
 
-TS source: `src/QueryEngine.ts`, `src/query.ts`, `src/query/tokenBudget.ts`, `src/query/buildQueryConfig.ts`
+TS source: `QueryEngine.ts`, `query.ts`, `query/tokenBudget.ts`, `query/buildQueryConfig.ts`
 
 ## Dependencies
 

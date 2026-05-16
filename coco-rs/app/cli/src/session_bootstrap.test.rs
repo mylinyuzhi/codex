@@ -51,9 +51,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
 
     let cwd = home.path().to_path_buf();
     let cli = Cli::try_parse_from(["coco"]).expect("parse default cli");
-    let session_manager = Arc::new(coco_session::SessionManager::new(
-        home.path().join("sessions"),
-    ));
+    let session_manager = Arc::new(coco_session::SessionManager::new(home.path().to_path_buf()));
 
     let command_registry = Arc::new(tokio::sync::RwLock::new(Arc::new(
         coco_commands::CommandRegistry::new(),

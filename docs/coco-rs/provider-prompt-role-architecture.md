@@ -2,7 +2,7 @@
 
 > Status: Target design
 > Scope: `coco-rs/core/context/`, `coco-rs/app/query/`, `coco-rs/services/inference/`, `coco-rs/vercel-ai/provider/`, `coco-rs/vercel-ai/{openai,anthropic,google,openai-compatible}/`
-> Sources: `codex-rs/codex-api`, `codex-rs/core`, `claude-code-kim/src`, `gemini-cli/packages/core/src`
+> Sources: `codex-rs/codex-api`, `codex-rs/core`, TS source, `gemini-cli/packages/core/src`
 > Owners: coco-context + coco-query + coco-inference + vercel-ai provider crates
 
 > **Source of truth.** This document owns the cross-provider prompt role
@@ -58,7 +58,7 @@ cache detector: prompt_hash_inputs from "prompt_layout";
 | `(kind, family)` two-dimensional routing | Fixed kind→slot table | `Environment` is a system block in Anthropic but contextual user input in OpenAI/Gemini per references; no single slot satisfies all three. |
 | `CacheHint` independent of routing | `CacheHint::Stable` promotes Memory to system tier | Authority and cache are orthogonal axes; conflating them is a backdoor for user-context to elevate to system. |
 | `build_call_options` before layout | Layout first | `build_call_options.rs:148` constructs fresh `ProviderOptions`; reverse order would clobber `"prompt_layout"`. |
-| Reminders in `PromptEnvelope.history` | Reminders as envelope sections | Per-turn dynamic + persists across turns; reference impls (claude-code-kim) emit as user-role messages with `<system-reminder>` xml. |
+| Reminders in `PromptEnvelope.history` | Reminders as envelope sections | Per-turn dynamic + persists across turns; TS emits them as user-role messages with `<system-reminder>` xml. |
 
 **Pattern parity with `ThinkingLevel`:** typed in coco-inference, JSON across
 crate boundary. Difference: ThinkingLevel writes to per-API namespace; layout
@@ -109,8 +109,8 @@ contextual user messages.
 
 ### 2.2 Anthropic Messages
 
-`claude-code-kim/src` is authoritative for Anthropic Messages prompt and
-cache behavior.
+The TS source is authoritative for Anthropic Messages prompt and cache
+behavior. TS file paths are relative to the TS project's `src/` directory.
 
 The required shape is:
 
@@ -119,9 +119,9 @@ The required shape is:
 - Static and dynamic system sections keep stable ordering.
 - Cache hints map to Anthropic `cache_control` metadata on eligible blocks.
 - **Stable** runtime context (project instructions, environment, attribution
-  header, fingerprint) is encoded as system blocks. claude-code-kim
-  (`src/utils/sideQuery.ts:142-167`) prepends attribution to `system[]`, not
-  to user messages.
+  header, fingerprint) is encoded as system blocks. The TS source
+  (`utils/sideQuery.ts:142-167`) prepends attribution to `system[]`, not to
+  user messages.
 - **Per-turn dynamic** injections (system reminders, tool-injected hints,
   side-questions) appear as `user` messages with `<system-reminder>` xml
   framing — recognized by the model via system-prompt convention. This is
@@ -491,7 +491,7 @@ pub enum PromptSectionKind {
 **Kind → provider slot routing is two-dimensional, not global.** A single
 kind can route differently per provider, because the references disagree:
 `Environment` is a system block in Anthropic
-(`claude-code-kim/src/utils/sideQuery.ts:142-167`) but a user-role
+(`utils/sideQuery.ts:142-167`) but a user-role
 `contents[]` prepend in Gemini
 (`gemini-cli/packages/core/src/utils/environmentContext.ts:96-100`,
 `getInitialChatHistory`) and a contextual user `input[]` item in OpenAI
@@ -920,7 +920,7 @@ crate constructs or branches on `ProviderApi`.
 
 ## 8. Anthropic Messages Contract
 
-Anthropic Messages follows the `claude-code-kim` prompt/cache contract.
+Anthropic Messages follows the TS prompt/cache contract.
 
 Layout rules (executed in `services/inference`'s Anthropic Messages adapter,
 walking `PromptEnvelope.sections` in authoring order and dispatching by

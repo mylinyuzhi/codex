@@ -8,12 +8,14 @@
 //! last-prompt), and compaction markers. The file is append-only
 //! during normal operation; compaction rewrites are handled separately.
 
+use coco_paths::ProjectPaths;
 use serde::Deserialize;
 use serde::Serialize;
 use std::io::BufRead;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Maximum transcript file size we will fully read into memory (50 MB).
 /// Matches the TS `MAX_TRANSCRIPT_READ_BYTES` constant.
@@ -171,6 +173,87 @@ pub enum MetadataEntry {
         #[serde(flatten)]
         record: ContentReplacementRecord,
     },
+
+    // ---------- TS parity additions (Phase 4) ----------------------
+    //
+    // The variants below mirror metadata kinds the TS Claude Code
+    // transcript writer emits. coco-rs may not yet produce all of
+    // them — but for parity we MUST be able to read them back from
+    // a JSONL written by TS without surfacing them as `Unknown`.
+    /// AI-generated session title. Lower priority than `CustomTitle`
+    /// (user override wins). TS: `'ai-title'` —
+    /// `utils/sessionStorage.ts ~580`. Unlike `CustomTitle`, this
+    /// variant is **not** re-appended to the tail on cleanup; the
+    /// session picker still finds it via head-window scanning.
+    #[serde(rename_all = "camelCase")]
+    AiTitle {
+        session_id: String,
+        ai_title: String,
+    },
+
+    /// Periodic fork-generated task snapshot. TS: `'task-summary'`.
+    /// Untyped passthrough — payload shape is decided by the
+    /// summary fork, which lives in the agent layer.
+    #[serde(rename = "task-summary")]
+    TaskSummary {
+        #[serde(flatten)]
+        payload: serde_json::Value,
+    },
+
+    /// Custom name assigned to a swarm agent. TS: `'agent-name'`.
+    #[serde(rename_all = "camelCase")]
+    AgentName {
+        session_id: String,
+        agent_name: String,
+    },
+
+    /// UI color for a swarm agent. TS: `'agent-color'`.
+    #[serde(rename_all = "camelCase")]
+    AgentColor {
+        session_id: String,
+        agent_color: String,
+    },
+
+    /// Agent definition that this session uses. TS: `'agent-setting'`.
+    #[serde(rename_all = "camelCase")]
+    AgentSetting {
+        session_id: String,
+        agent_setting: String,
+    },
+
+    /// GitHub PR link recorded alongside a session. TS: `'pr-link'` —
+    /// passthrough because the field set evolves (`prNumber`, `prUrl`,
+    /// `prRepository`, `timestamp`) and we don't want to break-read
+    /// older transcripts when new fields land upstream.
+    #[serde(rename = "pr-link")]
+    PrLink {
+        #[serde(flatten)]
+        payload: serde_json::Value,
+    },
+
+    /// Claude character contributions per file. TS:
+    /// `'attribution-snapshot'`. Note: TS `listSessions` filters
+    /// these out before extracting fields (only the LAST one
+    /// matters); the read side here preserves them so resume can
+    /// rebuild attribution state.
+    #[serde(rename = "attribution-snapshot")]
+    AttributionSnapshot {
+        #[serde(flatten)]
+        payload: serde_json::Value,
+    },
+
+    /// Persisted worktree session state. TS: `'worktree-state'` —
+    /// last-wins on resume. Payload mirrors
+    /// `PersistedWorktreeSession` (`types/logs.ts:149-159`).
+    #[serde(rename = "worktree-state")]
+    WorktreeState {
+        #[serde(flatten)]
+        payload: serde_json::Value,
+    },
+
+    /// Session execution mode: `coordinator` vs `normal`. TS: `'mode'`.
+    #[serde(rename_all = "camelCase")]
+    Mode { session_id: String, mode: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -305,58 +388,69 @@ pub struct AgentMetadata {
 
 /// Manages reading and writing JSONL session transcripts.
 ///
-/// Path layout: `{sessions_dir}/{session_id}.jsonl`
+/// Path layout (TS-aligned, see [`ProjectPaths`]):
 ///
-/// The TS codebase nests transcripts under a sanitized project path
-/// (`~/.coco/projects/{sanitized_cwd}/{id}.jsonl`). We keep the
-/// sessions dir configurable so callers can reproduce that layout or
-/// use a flat directory.
+/// ```text
+/// <memory_base>/projects/<sanitize(cwd)>/<session_id>.jsonl                  ← transcript
+/// <memory_base>/projects/<sanitize(cwd)>/<session_id>/subagents/             ← bg agents
+/// <memory_base>/projects/<sanitize(cwd)>/<session_id>/tool-results/          ← persisted blobs
+/// <memory_base>/projects/<sanitize(cwd)>/<session_id>/remote-agents/         ← CCR sidecars
+/// ```
+///
+/// Construction takes a shared [`Arc<ProjectPaths>`] so every coco-rs
+/// subsystem keyed on the same project (transcript store, memory
+/// store, KAIROS daily log) computes paths from one source of truth.
 pub struct TranscriptStore {
-    sessions_dir: PathBuf,
+    paths: Arc<ProjectPaths>,
 }
 
 impl TranscriptStore {
-    pub fn new(sessions_dir: PathBuf) -> Self {
-        Self { sessions_dir }
+    /// Build a store scoped to one project. Path layout follows TS
+    /// `sessionStorage.ts:202-258`; the [`ProjectPaths`] facade
+    /// owns the slug + NFC + djb2-hash math so this struct just
+    /// delegates.
+    pub fn new(paths: Arc<ProjectPaths>) -> Self {
+        Self { paths }
     }
 
-    /// Resolve the JSONL path for a session.
+    /// The [`ProjectPaths`] this store is scoped to. Exposed so
+    /// adjacent subsystems (memory, daily log) can pull paths off
+    /// the same handle without re-deriving them.
+    pub fn project_paths(&self) -> &Arc<ProjectPaths> {
+        &self.paths
+    }
+
+    /// `<project>/<sessionId>.jsonl` — session transcript JSONL.
     pub fn transcript_path(&self, session_id: &str) -> PathBuf {
-        self.sessions_dir.join(format!("{session_id}.jsonl"))
+        self.paths.transcript(session_id)
     }
 
-    /// Resolve the per-agent transcript JSONL path used by
-    /// background AgentTool spawns for resume.
-    ///
-    /// Layout: `<sessions_dir>/<session_id>/subagents/agent-<agent_id>.jsonl`.
-    /// Mirrors TS `getAgentTranscriptPath` (`utils/sessionStorage.ts:247-258`)
-    /// — different from the per-session transcript path so concurrent
-    /// agent and main session writes never compete for the same file.
+    /// `<project>/<sessionId>/subagents/agent-<agentId>.jsonl` —
+    /// background-agent transcript. Mirrors TS
+    /// `getAgentTranscriptPath` (`utils/sessionStorage.ts:247-258`).
     pub fn agent_transcript_path(&self, session_id: &str, agent_id: &str) -> PathBuf {
-        self.sessions_dir
-            .join(session_id)
-            .join("subagents")
-            .join(format!("agent-{agent_id}.jsonl"))
+        self.paths.agent_transcript(session_id, agent_id)
     }
 
-    /// Resolve the per-agent metadata sidecar path. Mirrors TS
+    /// `<project>/<sessionId>/subagents/agent-<agentId>.meta.json` —
+    /// metadata sidecar for a background agent's spawn. Mirrors TS
     /// `getAgentMetadataPath` (`utils/sessionStorage.ts:260-262`).
     pub fn agent_metadata_path(&self, session_id: &str, agent_id: &str) -> PathBuf {
-        self.sessions_dir
-            .join(session_id)
-            .join("subagents")
-            .join(format!("agent-{agent_id}.meta.json"))
+        self.paths.agent_metadata(session_id, agent_id)
     }
 
-    /// Resolve the per-session tool-result storage directory.
-    ///
-    /// Layout: `<sessions_dir>/<session_id>/tool-results`, matching
-    /// TS's session-scoped artifact layout.
+    /// `<project>/<sessionId>/tool-results/` — persisted tool result
+    /// blob directory. TS: `toolResultStorage.ts:104-106`.
     pub fn tool_results_session_dir(&self, session_id: &str) -> PathBuf {
-        self.session_artifact_dir(session_id).join("tool-results")
+        self.paths.tool_results_dir(session_id)
     }
 
     /// Remove stale files under every session's `tool-results/` artifact dir.
+    ///
+    /// Scoped to **this project** (`<project_dir>/{session_id}/tool-results/`).
+    /// For cross-project cleanup invoke once per project — typically
+    /// the TUI on shutdown calls it for the active project's
+    /// [`TranscriptStore`].
     ///
     /// Mirrors TS `utils/cleanup.ts::cleanupOldSessionFiles`: direct files under
     /// `tool-results/` and one-level nested tool directories are unlinked when
@@ -371,12 +465,13 @@ impl TranscriptStore {
         let cutoff = std::time::SystemTime::now()
             .checked_sub(older_than)
             .ok_or(crate::SessionError::DurationOverflow)?;
-        if !self.sessions_dir.exists() {
+        let project_dir = self.paths.project_dir();
+        if !project_dir.exists() {
             return Ok(0);
         }
 
         let mut removed = 0;
-        for entry in std::fs::read_dir(&self.sessions_dir)? {
+        for entry in std::fs::read_dir(&project_dir)? {
             let Ok(entry) = entry else { continue };
             let Ok(file_type) = entry.file_type() else {
                 continue;
@@ -435,12 +530,12 @@ impl TranscriptStore {
         Ok(removed)
     }
 
-    /// Resolve the per-session artifact root.
+    /// `<project>/<sessionId>/` — the per-session artifact root.
     ///
     /// Tool-result helpers receive this root and append
     /// `tool-results/` themselves.
     pub fn session_artifact_dir(&self, session_id: &str) -> PathBuf {
-        self.sessions_dir.join(session_id)
+        self.paths.session_dir(session_id)
     }
 
     /// Append raw `Message` JSON values to a background agent's
@@ -726,12 +821,16 @@ impl TranscriptStore {
         read_transcript_metadata(&path, session_id)
     }
 
-    /// List all session IDs that have transcript files, newest first.
+    /// List sessions in **this project** only, newest first.
+    ///
+    /// Walks `<memory_base>/projects/<slug>/*.jsonl`. For cross-project
+    /// enumeration (the resume picker), use
+    /// [`list_all_sessions`].
     pub fn list_sessions(&self) -> crate::Result<Vec<TranscriptMetadata>> {
-        list_transcript_sessions(&self.sessions_dir)
+        list_transcript_sessions(&self.paths.project_dir())
     }
 
-    /// List sessions, excluding sidechain transcripts.
+    /// List sessions in **this project**, excluding sidechain transcripts.
     pub fn list_main_sessions(&self) -> crate::Result<Vec<TranscriptMetadata>> {
         let all = self.list_sessions()?;
         Ok(all.into_iter().filter(|m| !m.is_sidechain).collect())
@@ -891,6 +990,16 @@ const LITE_READ_WINDOW: u64 = 64 * 1024;
 
 /// Read lightweight metadata from a transcript file without loading all
 /// messages. Scans the first and last portion of the file.
+/// Public alias of the per-file lite-metadata reader so
+/// `SessionManager::load` can derive a `Session` from a resolved
+/// transcript path without re-walking the projects tree.
+pub fn read_transcript_metadata_at(
+    path: &Path,
+    session_id: &str,
+) -> crate::Result<TranscriptMetadata> {
+    read_transcript_metadata(path, session_id)
+}
+
 fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<TranscriptMetadata> {
     if !path.exists() {
         return Err(crate::SessionError::TranscriptNotFound {
@@ -976,12 +1085,30 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
                 } => {
                     last_prompt = Some(lp.clone());
                 }
+                // AI title is the picker fallback when no
+                // user-provided `CustomTitle` exists. The session
+                // picker (TS `listSessions`) already prefers
+                // `customTitle > aiTitle`, so we only set the
+                // metadata field when nothing else has filled it.
+                MetadataEntry::AiTitle { ai_title, .. } => {
+                    if custom_title.is_none() {
+                        custom_title = Some(ai_title.clone());
+                    }
+                }
                 MetadataEntry::Summary { .. }
                 | MetadataEntry::CostSummary { .. }
                 | MetadataEntry::FileHistorySnapshot { .. }
                 | MetadataEntry::MarbleOrigamiCommit { .. }
                 | MetadataEntry::MarbleOrigamiSnapshot { .. }
-                | MetadataEntry::ContentReplacement { .. } => {}
+                | MetadataEntry::ContentReplacement { .. }
+                | MetadataEntry::TaskSummary { .. }
+                | MetadataEntry::AgentName { .. }
+                | MetadataEntry::AgentColor { .. }
+                | MetadataEntry::AgentSetting { .. }
+                | MetadataEntry::PrLink { .. }
+                | MetadataEntry::AttributionSnapshot { .. }
+                | MetadataEntry::WorktreeState { .. }
+                | MetadataEntry::Mode { .. } => {}
             },
             Entry::Unknown(_) => {}
         }
@@ -1094,6 +1221,152 @@ fn list_transcript_sessions(sessions_dir: &Path) -> crate::Result<Vec<Transcript
         b_ms.cmp(&a_ms)
     });
     Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-project enumeration & worktree-aware lookup
+// ---------------------------------------------------------------------------
+
+/// Result of [`resolve_session_file_path`] — the transcript file
+/// found plus the project path (or worktree path) it lives under.
+/// Mirrors TS `sessionStoragePortable.ts:403-466` return shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSessionFile {
+    /// Absolute path to `<sessionId>.jsonl`.
+    pub file_path: PathBuf,
+    /// The project root associated with the file. For a direct
+    /// match this is `cwd_hint`; for a worktree fallback it's the
+    /// sibling worktree path; for the global scan branch
+    /// (`cwd_hint == None`) this is `None`.
+    pub project_path: Option<PathBuf>,
+}
+
+/// Locate the transcript file for `session_id`.
+///
+/// Resolution order (TS-equivalent):
+/// 1. **Direct project lookup**: if `cwd_hint` is `Some`, compute the
+///    `ProjectPaths` for that cwd and check `<project_dir>/<sid>.jsonl`.
+/// 2. **Worktree fallback**: if step 1 missed, shell out to
+///    `git worktree list --porcelain` from `cwd_hint`, slug each
+///    sibling worktree, and probe each one. Worktrees of the same
+///    repo can land under different slugs when the cwd path is long
+///    enough to trip the djb2 suffix.
+/// 3. **Global scan**: when `cwd_hint` is `None`, walk
+///    `<memory_base>/projects/*/` and return the first project that
+///    contains the transcript. Used by SDK callers without a cwd.
+///
+/// Returns `Ok(None)` when no project has the file. I/O errors at
+/// the `read_dir(<projects>)` level propagate; transient stat
+/// failures on individual entries are tolerated.
+pub fn resolve_session_file_path(
+    memory_base: &Path,
+    session_id: &str,
+    cwd_hint: Option<&Path>,
+) -> crate::Result<Option<ResolvedSessionFile>> {
+    let filename = format!("{session_id}.jsonl");
+
+    if let Some(cwd) = cwd_hint {
+        // 1. Direct lookup at the slug for this cwd.
+        let canonical = canonical_root_or_self(cwd);
+        let paths = ProjectPaths::new(memory_base.to_path_buf(), &canonical);
+        let candidate = paths.project_dir().join(&filename);
+        if has_nonzero_file(&candidate) {
+            return Ok(Some(ResolvedSessionFile {
+                file_path: candidate,
+                project_path: Some(canonical),
+            }));
+        }
+
+        // 2. Worktree fallback — only fires when (a) direct miss
+        //    and (b) git knows about other worktrees.
+        for wt in coco_git::worktree_paths(cwd) {
+            if wt == canonical {
+                continue;
+            }
+            let wt_paths = ProjectPaths::new(memory_base.to_path_buf(), &wt);
+            let cand = wt_paths.project_dir().join(&filename);
+            if has_nonzero_file(&cand) {
+                return Ok(Some(ResolvedSessionFile {
+                    file_path: cand,
+                    project_path: Some(wt),
+                }));
+            }
+        }
+        return Ok(None);
+    }
+
+    // 3. Global scan — walk every project directory.
+    let projects_root = coco_paths::projects_root(memory_base);
+    let entries = match std::fs::read_dir(&projects_root) {
+        Ok(it) => it,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries.flatten() {
+        let candidate = entry.path().join(&filename);
+        if has_nonzero_file(&candidate) {
+            return Ok(Some(ResolvedSessionFile {
+                file_path: candidate,
+                project_path: None,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// List every session transcript across **every** project under
+/// `<memory_base>/projects/*/`, newest first.
+///
+/// Used by the resume picker / SDK session enumerator — callers
+/// that only want this-project sessions should go through
+/// [`TranscriptStore::list_sessions`] instead.
+pub fn list_all_sessions(memory_base: &Path) -> crate::Result<Vec<TranscriptMetadata>> {
+    let projects_root = coco_paths::projects_root(memory_base);
+    let project_entries = match std::fs::read_dir(&projects_root) {
+        Ok(it) => it,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut results: Vec<TranscriptMetadata> = Vec::new();
+    for project_entry in project_entries.flatten() {
+        let project_dir = project_entry.path();
+        if !project_dir.is_dir() {
+            continue;
+        }
+        // Each project dir has the same internal layout — reuse
+        // the same per-dir walker as `TranscriptStore::list_sessions`.
+        if let Ok(mut found) = list_transcript_sessions(&project_dir) {
+            results.append(&mut found);
+        }
+    }
+
+    // Sort across all projects so newest wins overall.
+    results.sort_by(|a, b| {
+        let a_ms = a.modified_at.parse::<u128>().unwrap_or(0);
+        let b_ms = b.modified_at.parse::<u128>().unwrap_or(0);
+        b_ms.cmp(&a_ms)
+    });
+    Ok(results)
+}
+
+/// Canonical git root (so linked worktrees share one slug), falling
+/// back to `cwd` when not inside a git repo.
+///
+/// MUST match `coco_memory::path::resolve::MemoryDir::resolve`'s
+/// anchor choice — both call `coco_git::find_canonical_git_root` —
+/// otherwise memory and transcript paths under the same `cwd` would
+/// diverge by `<slug>`, and a session's memory dir would be invisible
+/// to that session's transcript lookup.
+fn canonical_root_or_self(cwd: &Path) -> PathBuf {
+    coco_git::find_canonical_git_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
+}
+
+fn has_nonzero_file(path: &Path) -> bool {
+    matches!(
+        std::fs::metadata(path),
+        Ok(m) if m.is_file() && m.len() > 0,
+    )
 }
 
 /// Extract a short text snippet from a transcript entry's message content.

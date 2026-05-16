@@ -25,7 +25,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 use coco_types::TaskListStatus;
 use coco_types::TaskRecord;
 use coco_types::TodoRecord;
@@ -37,7 +37,7 @@ pub struct PlanPanel<'a> {
     plan_tasks: &'a [TaskRecord],
     todos: &'a HashMap<String, Vec<TodoRecord>>,
     running: &'a [TaskEntry],
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> PlanPanel<'a> {
@@ -45,13 +45,13 @@ impl<'a> PlanPanel<'a> {
         plan_tasks: &'a [TaskRecord],
         todos: &'a HashMap<String, Vec<TodoRecord>>,
         running: &'a [TaskEntry],
-        theme: &'a Theme,
+        styles: UiStyles<'a>,
     ) -> Self {
         Self {
             plan_tasks,
             todos,
             running,
-            theme,
+            styles,
         }
     }
 
@@ -64,21 +64,24 @@ impl<'a> PlanPanel<'a> {
 
 fn status_icon_and_color(
     status: TaskListStatus,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (&'static str, ratatui::style::Color) {
     match status {
-        TaskListStatus::Pending => ("○", theme.text_dim),
-        TaskListStatus::InProgress => ("◑", theme.tool_running),
-        TaskListStatus::Completed => ("●", theme.tool_completed),
+        TaskListStatus::Pending => ("○", styles.dim()),
+        TaskListStatus::InProgress => ("◑", styles.tool_running()),
+        TaskListStatus::Completed => ("●", styles.tool_completed()),
     }
 }
 
-fn todo_icon_and_color(status: &str, theme: &Theme) -> (&'static str, ratatui::style::Color) {
+fn todo_icon_and_color(
+    status: &str,
+    styles: UiStyles<'_>,
+) -> (&'static str, ratatui::style::Color) {
     match status {
-        "pending" => ("○", theme.text_dim),
-        "in_progress" => ("◑", theme.tool_running),
-        "completed" => ("●", theme.tool_completed),
-        _ => ("?", theme.text_dim),
+        "pending" => ("○", styles.dim()),
+        "in_progress" => ("◑", styles.tool_running()),
+        "completed" => ("●", styles.tool_completed()),
+        _ => ("?", styles.dim()),
     }
 }
 
@@ -90,11 +93,11 @@ impl Widget for PlanPanel<'_> {
         if !self.plan_tasks.is_empty() {
             lines.push(Line::from(
                 Span::raw(t!("plan_panel.section_tasks").to_string())
-                    .fg(self.theme.accent)
+                    .fg(self.styles.accent())
                     .bold(),
             ));
             for task in self.plan_tasks {
-                let (icon, color) = status_icon_and_color(task.status, self.theme);
+                let (icon, color) = status_icon_and_color(task.status, self.styles);
                 let owner = task
                     .owner
                     .as_deref()
@@ -108,10 +111,10 @@ impl Widget for PlanPanel<'_> {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::raw(format!("{icon} ")).fg(color),
-                    Span::raw(format!("#{} ", task.id)).fg(self.theme.text_dim),
-                    Span::raw(task.subject.clone()).fg(self.theme.text),
-                    Span::raw(owner).fg(self.theme.text_dim),
-                    Span::raw(blocked).fg(self.theme.warning),
+                    Span::raw(format!("#{} ", task.id)).fg(self.styles.dim()),
+                    Span::raw(task.subject.clone()).fg(self.styles.text()),
+                    Span::raw(owner).fg(self.styles.dim()),
+                    Span::raw(blocked).fg(self.styles.warning()),
                 ]));
             }
             lines.push(Line::default());
@@ -121,7 +124,7 @@ impl Widget for PlanPanel<'_> {
         if !self.todos.is_empty() {
             lines.push(Line::from(
                 Span::raw(t!("plan_panel.section_todos").to_string())
-                    .fg(self.theme.accent)
+                    .fg(self.styles.accent())
                     .bold(),
             ));
             // Stable iteration order (keys sorted) so snapshots don't flake.
@@ -133,14 +136,14 @@ impl Widget for PlanPanel<'_> {
                     continue;
                 }
                 lines.push(Line::from(
-                    Span::raw(format!("  [{key}]")).fg(self.theme.text_dim),
+                    Span::raw(format!("  [{key}]")).fg(self.styles.dim()),
                 ));
                 for item in items {
-                    let (icon, color) = todo_icon_and_color(&item.status, self.theme);
+                    let (icon, color) = todo_icon_and_color(&item.status, self.styles);
                     lines.push(Line::from(vec![
                         Span::raw("  "),
                         Span::raw(format!("{icon} ")).fg(color),
-                        Span::raw(item.content.clone()).fg(self.theme.text),
+                        Span::raw(item.content.clone()).fg(self.styles.text()),
                     ]));
                 }
             }
@@ -151,22 +154,24 @@ impl Widget for PlanPanel<'_> {
         if !self.running.is_empty() {
             lines.push(Line::from(
                 Span::raw(t!("plan_panel.section_running").to_string())
-                    .fg(self.theme.accent)
+                    .fg(self.styles.accent())
                     .bold(),
             ));
             for task in self.running {
                 let (icon, color) = match task.status {
-                    super::task_list::TaskDisplayStatus::Running => ("●", self.theme.tool_running),
-                    super::task_list::TaskDisplayStatus::Completed => {
-                        ("✓", self.theme.tool_completed)
+                    super::task_list::TaskDisplayStatus::Running => {
+                        ("●", self.styles.tool_running())
                     }
-                    super::task_list::TaskDisplayStatus::Failed => ("✗", self.theme.tool_error),
-                    super::task_list::TaskDisplayStatus::Backgrounded => ("◐", self.theme.text_dim),
+                    super::task_list::TaskDisplayStatus::Completed => {
+                        ("✓", self.styles.tool_completed())
+                    }
+                    super::task_list::TaskDisplayStatus::Failed => ("✗", self.styles.tool_error()),
+                    super::task_list::TaskDisplayStatus::Backgrounded => ("◐", self.styles.dim()),
                 };
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::raw(format!("{icon} ")).fg(color),
-                    Span::raw(task.name.clone()).fg(self.theme.text),
+                    Span::raw(task.name.clone()).fg(self.styles.text()),
                 ]));
             }
             lines.push(Line::default());
@@ -174,14 +179,14 @@ impl Widget for PlanPanel<'_> {
 
         if lines.is_empty() {
             lines.push(Line::from(
-                Span::raw(format!("  {}", t!("plan_panel.empty"))).fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("plan_panel.empty"))).fg(self.styles.dim()),
             ));
         }
 
         let block = Block::default()
             .borders(Borders::ALL)
             .title(t!("plan_panel.title").to_string())
-            .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
+            .border_style(ratatui::style::Style::default().fg(self.styles.focused_border()));
         let paragraph = Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false });

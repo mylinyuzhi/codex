@@ -18,12 +18,6 @@ fn prompt_mode_bang_prefix_is_bash() {
 }
 
 #[test]
-fn prompt_mode_hash_prefix_is_memory() {
-    assert_eq!(PromptMode::from_text("#note this"), PromptMode::Memory);
-    assert_eq!(PromptMode::from_text("# note"), PromptMode::Memory);
-}
-
-#[test]
 fn prompt_mode_leading_space_kills_prefix() {
     // TS getModeFromInput uses startsWith — leading whitespace defeats it.
     assert_eq!(PromptMode::from_text(" !ls"), PromptMode::Normal);
@@ -33,6 +27,8 @@ fn prompt_mode_leading_space_kills_prefix() {
 #[test]
 fn prompt_mode_text_passthrough_for_other_chars() {
     assert_eq!(PromptMode::from_text("hello"), PromptMode::Normal);
+    assert_eq!(PromptMode::from_text("#note this"), PromptMode::Normal);
+    assert_eq!(PromptMode::from_text("# note"), PromptMode::Normal);
     assert_eq!(PromptMode::from_text("/help"), PromptMode::Normal);
     assert_eq!(PromptMode::from_text("@file.rs"), PromptMode::Normal);
 }
@@ -50,13 +46,6 @@ fn strip_prefix_bash_drops_bang_and_one_space() {
     // Multiple leading spaces: only one consumed (matches TS `slice(1)`).
     assert_eq!(PromptMode::Bash.strip_prefix("!  ls"), " ls");
     assert_eq!(PromptMode::Bash.strip_prefix("!"), "");
-}
-
-#[test]
-fn strip_prefix_memory_drops_hash_and_one_space() {
-    assert_eq!(PromptMode::Memory.strip_prefix("#note"), "note");
-    assert_eq!(PromptMode::Memory.strip_prefix("# note"), "note");
-    assert_eq!(PromptMode::Memory.strip_prefix("#"), "");
 }
 
 #[test]
@@ -78,10 +67,10 @@ fn input_state_prompt_mode_tracks_text() {
 }
 
 #[test]
-fn input_state_prompt_mode_hash_then_swap_to_bang() {
+fn input_state_prompt_mode_hash_is_normal_then_swap_to_bang() {
     let mut state = InputState::new();
     state.textarea.insert_str("#");
-    assert_eq!(state.prompt_mode(), PromptMode::Memory);
+    assert_eq!(state.prompt_mode(), PromptMode::Normal);
 
     state.textarea.set_cursor(0);
     state.textarea.delete_forward(1);
@@ -97,8 +86,4 @@ fn title_i18n_keys_match_yaml_layout() {
     // refactors that rename keys without updating both files.
     assert_eq!(PromptMode::Normal.title_i18n_key(), "input.title");
     assert_eq!(PromptMode::Bash.title_i18n_key(), "input.title_bash_mode");
-    assert_eq!(
-        PromptMode::Memory.title_i18n_key(),
-        "input.title_memory_mode"
-    );
 }

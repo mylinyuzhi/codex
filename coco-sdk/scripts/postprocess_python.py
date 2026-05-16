@@ -335,24 +335,29 @@ def is_union_alias_schema(schema: dict) -> bool:
     discriminator, no per-variant data. Python expresses this as a
     plain type alias: ``RequestId = int | str``.
     """
-    if "anyOf" not in schema or "oneOf" in schema or schema.get("type"):
+    if schema.get("type") or is_enum_schema(schema):
         return False
-    return all(isinstance(v, dict) and "enum" not in v for v in schema["anyOf"])
+    variants = schema.get("anyOf") or schema.get("oneOf")
+    if not variants:
+        return False
+    return all(isinstance(v, dict) and "enum" not in v for v in variants)
 
 
 def generate_union_alias(name: str, schema: dict, defs: dict) -> str:
     """Emit a Python type alias from an anyOf schema."""
     parts: list[str] = []
-    for variant in schema["anyOf"]:
+    for variant in schema.get("anyOf") or schema.get("oneOf") or []:
         if variant == {"type": "null"}:
             parts.append("None")
         else:
             parts.append(schema_to_python_type(variant, True, defs))
-    body = " | ".join(parts) if parts else "Any"
+    deduped_parts = list(dict.fromkeys(parts))
+    body = " | ".join(deduped_parts) if deduped_parts else "Any"
+    py_name = TYPE_RENAMES.get(name, name)
     desc = schema.get("description", "").strip().splitlines()
     if desc:
-        return f"# {desc[0][:120]}\n{name} = {body}"
-    return f"{name} = {body}"
+        return f"# {desc[0][:120]}\n{py_name} = {body}"
+    return f"{py_name} = {body}"
 
 
 def collect_definitions(schema_dir: Path) -> dict[str, dict]:
@@ -930,7 +935,12 @@ def main() -> None:
         "PermissionUpdate",
     ]
     for name in union_types:
-        if name in all_defs and name not in model_names and name not in enum_names:
+        if (
+            name in all_defs
+            and name not in model_names
+            and name not in enum_names
+            and name not in union_alias_names
+        ):
             sections.append(f"# Union type: see Rust source for variants")
             sections.append(f"{name} = Any")
             sections.append("")

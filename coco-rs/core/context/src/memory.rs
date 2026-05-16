@@ -38,6 +38,12 @@ pub struct MemoryFileInfo {
 }
 
 /// Discover memory files for a working directory.
+///
+/// Resolves the memory base via [`coco_config::global_config::config_home`].
+/// TODO(parity): honour the `COCO_REMOTE_MEMORY_DIR` override here —
+/// currently only the `coco-memory` crate consumes that env override
+/// (via `MemoryConfig::resolve`); the context-layer discovery path
+/// is still hard-coded to `config_home`.
 pub fn get_memory_files(cwd: &Path) -> Vec<MemoryFileInfo> {
     let mut files = Vec::new();
 
@@ -45,19 +51,22 @@ pub fn get_memory_files(cwd: &Path) -> Vec<MemoryFileInfo> {
     let project_mem_dir = cwd.join(".claude/memory");
     collect_memory_files(&project_mem_dir, MemoryType::Project, &mut files);
 
-    // Auto-memory: ~/.claude/projects/<sanitized>/memory/
-    let auto_mem_dir = resolve_auto_memory_dir(cwd);
-    collect_memory_files(&auto_mem_dir, MemoryType::AutoMem, &mut files);
+    // Auto-memory and team memory live under the per-project facade —
+    // single source of truth for the slug/NFC/hash math. No more
+    // hand-rolled sanitize here.
+    let memory_base = coco_config::global_config::config_home();
+    let project_paths = coco_paths::ProjectPaths::new(memory_base.clone(), cwd);
+    collect_memory_files(&project_paths.memory_dir(), MemoryType::AutoMem, &mut files);
+    collect_memory_files(
+        &project_paths.team_memory_dir(),
+        MemoryType::TeamMem,
+        &mut files,
+    );
 
-    // Team memory: auto_mem_dir/team/
-    let team_mem_dir = auto_mem_dir.join("team");
-    collect_memory_files(&team_mem_dir, MemoryType::TeamMem, &mut files);
-
-    // User memory: ~/.claude/memory/ (or COCO_CONFIG_DIR)
-    if let Ok(home) = std::env::var("HOME") {
-        let user_mem_dir = PathBuf::from(home).join(".claude/memory");
-        collect_memory_files(&user_mem_dir, MemoryType::User, &mut files);
-    }
+    // User memory: <memory_base>/memory/ (replaces the pre-fix
+    // hard-coded `~/.claude/memory/` lookup, which silently
+    // diverged from coco-rs's own config home).
+    collect_memory_files(&memory_base.join("memory"), MemoryType::User, &mut files);
 
     files
 }
@@ -87,45 +96,36 @@ fn collect_memory_files(dir: &Path, mem_type: MemoryType, out: &mut Vec<MemoryFi
     }
 }
 
-/// Resolve the auto-memory directory for a project.
-///
-/// Path: `~/.claude/projects/<sanitized-cwd>/memory/`
-fn resolve_auto_memory_dir(cwd: &Path) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let sanitized = cwd
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .replace(['/', '\\'], "-");
-    PathBuf::from(home)
-        .join(".claude")
-        .join("projects")
-        .join(sanitized)
-        .join("memory")
-}
-
 /// Check if a path belongs to any memory-managed directory.
 ///
 /// Used by the permission system to grant write carve-outs.
+///
+/// TODO(parity): plumb `memory_base` rather than calling
+/// `config_home()` so `COCO_REMOTE_MEMORY_DIR` overrides apply here too.
 pub fn is_memory_managed_path(path: &Path, cwd: &Path) -> bool {
-    let auto_dir = resolve_auto_memory_dir(cwd);
-    let project_dir = cwd.join(".claude/memory");
+    let project_paths =
+        coco_paths::ProjectPaths::new(coco_config::global_config::config_home(), cwd);
+    let auto_dir = project_paths.memory_dir();
+    let project_mem = cwd.join(".claude/memory");
 
     path.starts_with(&auto_dir)
-        || path.starts_with(&project_dir)
+        || path.starts_with(&project_mem)
         || path.to_string_lossy().contains(".claude/memory")
 }
 
 /// Determine the memory type for a given path.
 pub fn classify_memory_path(path: &Path, cwd: &Path) -> Option<MemoryType> {
-    let auto_dir = resolve_auto_memory_dir(cwd);
-    let project_dir = cwd.join(".claude/memory");
-    let team_dir = auto_dir.join("team");
+    let project_paths =
+        coco_paths::ProjectPaths::new(coco_config::global_config::config_home(), cwd);
+    let auto_dir = project_paths.memory_dir();
+    let team_dir = project_paths.team_memory_dir();
+    let project_mem = cwd.join(".claude/memory");
 
     if path.starts_with(&team_dir) {
         Some(MemoryType::TeamMem)
     } else if path.starts_with(&auto_dir) {
         Some(MemoryType::AutoMem)
-    } else if path.starts_with(&project_dir) {
+    } else if path.starts_with(&project_mem) {
         Some(MemoryType::Project)
     } else if path.to_string_lossy().contains("/.claude/memory/") {
         Some(MemoryType::User)

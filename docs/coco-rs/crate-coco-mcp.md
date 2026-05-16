@@ -1,6 +1,6 @@
 # coco-mcp — Crate Plan
 
-TS source: `src/services/mcp/` (23 files, ~12K LOC)
+TS source: `services/mcp/` (23 files, ~12K LOC)
 
 ## Dependencies
 

@@ -14,7 +14,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// IDE connection state.
 #[derive(Debug, Clone)]
@@ -48,12 +48,12 @@ pub enum IdeConnectionStatus {
 /// IDE connection dialog widget.
 pub struct IdeDialogWidget<'a> {
     state: &'a IdeConnectionState,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> IdeDialogWidget<'a> {
-    pub fn new(state: &'a IdeConnectionState, theme: &'a Theme) -> Self {
-        Self { state, theme }
+    pub fn new(state: &'a IdeConnectionState, styles: UiStyles<'a>) -> Self {
+        Self { state, styles }
     }
 }
 
@@ -63,16 +63,16 @@ impl Widget for IdeDialogWidget<'_> {
 
         // Connection status
         let (icon, color, label) = match self.state.status {
-            IdeConnectionStatus::Disconnected => ("○", self.theme.text_dim, t!("ide.disconnected")),
-            IdeConnectionStatus::Connecting => ("◌", self.theme.warning, t!("ide.connecting")),
-            IdeConnectionStatus::Connected => ("●", self.theme.success, t!("ide.connected")),
-            IdeConnectionStatus::Error => ("✗", self.theme.error, t!("ide.error")),
+            IdeConnectionStatus::Disconnected => ("○", self.styles.dim(), t!("ide.disconnected")),
+            IdeConnectionStatus::Connecting => ("◌", self.styles.warning(), t!("ide.connecting")),
+            IdeConnectionStatus::Connected => ("●", self.styles.success(), t!("ide.connected")),
+            IdeConnectionStatus::Error => ("✗", self.styles.error(), t!("ide.error")),
         };
 
         lines.push(Line::from(vec![
             Span::raw(format!("  {icon} ")).fg(color),
             Span::raw(&self.state.ide_name)
-                .fg(self.theme.primary)
+                .fg(self.styles.primary())
                 .bold(),
             Span::raw(format!(" — {label}")).fg(color),
         ]));
@@ -80,7 +80,7 @@ impl Widget for IdeDialogWidget<'_> {
         if let Some(port) = self.state.port {
             lines.push(Line::from(
                 Span::raw(format!("  {}", t!("ide.port_prefix", port = port)))
-                    .fg(self.theme.text_dim),
+                    .fg(self.styles.dim()),
             ));
         }
 
@@ -89,11 +89,11 @@ impl Widget for IdeDialogWidget<'_> {
         // Available tools
         if !self.state.tools_available.is_empty() {
             lines.push(Line::from(
-                Span::raw(format!("  {}", t!("ide.available_tools"))).fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("ide.available_tools"))).fg(self.styles.dim()),
             ));
             for tool in &self.state.tools_available {
                 lines.push(Line::from(
-                    Span::raw(format!("    • {tool}")).fg(self.theme.text),
+                    Span::raw(format!("    • {tool}")).fg(self.styles.text()),
                 ));
             }
         }
@@ -109,19 +109,19 @@ impl Widget for IdeDialogWidget<'_> {
         lines.push(Line::default());
         lines.push(Line::from(
             Span::raw(format!("  {type_desc}"))
-                .fg(self.theme.text_dim)
+                .fg(self.styles.dim())
                 .italic(),
         ));
 
         lines.push(Line::default());
         lines.push(Line::from(
-            Span::raw(format!("  {}", t!("ide.hint_close"))).fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("ide.hint_close"))).fg(self.styles.dim()),
         ));
 
         let block = Block::default()
             .borders(Borders::ALL)
             .title(t!("ide.dialog_title").to_string())
-            .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
+            .border_style(ratatui::style::Style::default().fg(self.styles.focused_border()));
 
         let paragraph = Paragraph::new(lines)
             .block(block)

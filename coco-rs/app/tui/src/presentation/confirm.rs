@@ -8,6 +8,8 @@
 use ratatui::prelude::Color;
 
 use crate::i18n::t;
+use crate::presentation::pager;
+use crate::presentation::styles::UiStyles;
 use crate::state::AutoModeOptInOverlay;
 use crate::state::BridgeOverlay;
 use crate::state::BypassPermissionsOverlay;
@@ -25,11 +27,10 @@ use crate::state::SandboxPermissionOverlay;
 use crate::state::TaskDetailOverlay;
 use crate::state::TrustOverlay;
 use crate::state::WorktreeExitOverlay;
-use crate::theme::Theme;
 
 pub(crate) fn cost_warning_content(
     c: &CostWarningOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
         t!("dialog.title_cost").to_string(),
@@ -45,14 +46,14 @@ pub(crate) fn cost_warning_content(
             ),
             t!("dialog.cost_continue"),
         ),
-        theme.warning,
+        styles.warning(),
     )
 }
 
 pub(crate) fn plan_exit_content(
     p: &PlanExitOverlay,
     bypass_permissions_available: bool,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     use crate::state::PlanExitTarget;
 
@@ -85,43 +86,46 @@ pub(crate) fn plan_exit_content(
             rendered.join("\n"),
             t!("dialog.exit_plan_hint"),
         ),
-        theme.plan_mode,
+        styles.plan(),
     )
 }
 
-pub(crate) fn plan_entry_content(p: &PlanEntryOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn plan_entry_content(
+    p: &PlanEntryOverlay,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
     (
         t!("dialog.title_enter_plan").to_string(),
         format!("{}\n\n{}", p.description, t!("dialog.confirm_yn")),
-        theme.plan_mode,
+        styles.plan(),
     )
 }
 
 pub(crate) fn sandbox_content(
     s: &SandboxPermissionOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
         t!("dialog.title_sandbox").to_string(),
         format!("{}\n\n{}", s.description, t!("dialog.allow_yn")),
-        theme.error,
+        styles.error(),
     )
 }
 
 pub(crate) fn elicitation_content(
     e: &ElicitationOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
         format!(" {} ", e.server_name),
         format!("{}\n\n{}", e.message, t!("dialog.fill_fields_hint")),
-        theme.accent,
+        styles.accent(),
     )
 }
 
 pub(crate) fn mcp_server_approval_content(
     m: &McpServerApprovalOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
         t!("dialog.title_mcp_server").to_string(),
@@ -132,13 +136,13 @@ pub(crate) fn mcp_server_approval_content(
             t!("dialog.tools_prefix", list = m.tools.join(", ")),
             t!("dialog.actions_approve_deny"),
         ),
-        theme.accent,
+        styles.accent(),
     )
 }
 
 pub(crate) fn worktree_exit_content(
     w: &WorktreeExitOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let files = if w.changed_files.is_empty() {
         t!("dialog.no_uncommitted_changes").to_string()
@@ -156,11 +160,11 @@ pub(crate) fn worktree_exit_content(
             t!("dialog.branch_prefix", name = w.branch.as_str()),
             t!("dialog.yn_exit_stay"),
         ),
-        theme.warning,
+        styles.warning(),
     )
 }
 
-pub(crate) fn doctor_content(d: &DoctorOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn doctor_content(d: &DoctorOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
     let checks: Vec<String> = d
         .checks
         .iter()
@@ -178,10 +182,14 @@ pub(crate) fn doctor_content(d: &DoctorOverlay, theme: &Theme) -> (String, Strin
     } else {
         format!("{}\n\n{}", checks.join("\n"), t!("dialog.esc_close"))
     };
-    (t!("dialog.title_doctor").to_string(), body, theme.primary)
+    (
+        t!("dialog.title_doctor").to_string(),
+        body,
+        styles.primary(),
+    )
 }
 
-pub(crate) fn bridge_content(b: &BridgeOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn bridge_content(b: &BridgeOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
     (
         t!("dialog.title_bridge", bridge_type = b.bridge_type.as_str()).to_string(),
         format!(
@@ -190,13 +198,13 @@ pub(crate) fn bridge_content(b: &BridgeOverlay, theme: &Theme) -> (String, Strin
             b.details,
             t!("dialog.esc_close")
         ),
-        theme.accent,
+        styles.accent(),
     )
 }
 
 pub(crate) fn invalid_config_content(
     ic: &InvalidConfigOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let errors = ic
         .errors
@@ -211,13 +219,13 @@ pub(crate) fn invalid_config_content(
             t!("dialog.config_errors"),
             t!("dialog.hints_invalid_config"),
         ),
-        theme.error,
+        styles.error(),
     )
 }
 
 pub(crate) fn idle_return_content(
     ir: &IdleReturnOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let mins = ir.idle_duration_secs / 60;
     (
@@ -227,11 +235,11 @@ pub(crate) fn idle_return_content(
             t!("dialog.welcome_back_body", mins = mins),
             t!("dialog.enter_continue")
         ),
-        theme.primary,
+        styles.primary(),
     )
 }
 
-pub(crate) fn trust_content(tr: &TrustOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn trust_content(tr: &TrustOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
     (
         t!("dialog.title_trust").to_string(),
         format!(
@@ -241,24 +249,24 @@ pub(crate) fn trust_content(tr: &TrustOverlay, theme: &Theme) -> (String, String
             tr.description,
             t!("dialog.yn_trust_deny"),
         ),
-        theme.warning,
+        styles.warning(),
     )
 }
 
 pub(crate) fn auto_mode_opt_in_content(
     a: &AutoModeOptInOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
         t!("dialog.title_auto_mode").to_string(),
         format!("{}\n\n{}", a.description, t!("dialog.enable_auto_approve")),
-        theme.primary,
+        styles.primary(),
     )
 }
 
 pub(crate) fn bypass_permissions_content(
     bp: &BypassPermissionsOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
         t!("dialog.title_bypass_permissions").to_string(),
@@ -267,37 +275,46 @@ pub(crate) fn bypass_permissions_content(
             t!("dialog.bypass_body", mode = bp.current_mode.as_str()),
             t!("dialog.yn_enable_cancel"),
         ),
-        theme.error,
+        styles.error(),
     )
 }
 
 pub(crate) fn task_detail_content(
     td: &TaskDetailOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let output_lines: Vec<&str> = td.output.lines().collect();
+    let window = pager::pager_window(output_lines.len(), td.scroll, 20);
     let visible: String = output_lines
-        .iter()
-        .skip(td.scroll.max(0) as usize)
-        .take(20)
-        .copied()
-        .collect::<Vec<_>>()
+        .get(window.range())
+        .unwrap_or_default()
         .join("\n");
+    let position = window.position_suffix();
+    let title = if position.is_empty() {
+        t!("dialog.title_task", name = td.task_type.as_str()).to_string()
+    } else {
+        format!(
+            "{}{position} ",
+            t!("dialog.title_task", name = td.task_type.as_str())
+                .to_string()
+                .trim_end()
+        )
+    };
     (
-        t!("dialog.title_task", name = td.task_type.as_str()).to_string(),
+        title,
         format!(
             "{}\n{}\n\n{visible}\n\n{}",
             td.description,
             t!("dialog.status_prefix", status = td.status.as_str()),
             t!("dialog.scroll_close_hints"),
         ),
-        theme.primary,
+        styles.primary(),
     )
 }
 
 pub(crate) fn plan_approval_content(
     p: &PlanApprovalOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     // Cap the plan preview so the overlay stays readable when the plan
     // body is very long. Full content is still on disk at
@@ -336,11 +353,14 @@ pub(crate) fn plan_approval_content(
             "{path_line}{preview_block}\n\n{buttons}\n\n{}",
             t!("dialog.plan_approval_hints")
         ),
-        theme.plan_mode,
+        styles.plan(),
     )
 }
 
-pub(crate) fn feedback_content(f: &FeedbackOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn feedback_content(
+    f: &FeedbackOverlay,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
     let items: Vec<String> = f
         .options
         .iter()
@@ -353,7 +373,7 @@ pub(crate) fn feedback_content(f: &FeedbackOverlay, theme: &Theme) -> (String, S
     (
         t!("dialog.title_feedback").to_string(),
         format!("{}\n\n{}", f.prompt, items.join("\n")),
-        theme.primary,
+        styles.primary(),
     )
 }
 

@@ -1,6 +1,5 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
-assertion_line: 210
 expression: output
 ---
  ╭─╮ ╭─╮   COCO v0.0.0                                                          
@@ -8,6 +7,6 @@ expression: output
  ╰─╯ ╰─╯                                                                        
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
-❯ Type a message...                                                             
+❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
  opus-4 * auto | ctrl+x … | ↑0 ↓0 · cache 0% | ctx 0% | 0 msgs

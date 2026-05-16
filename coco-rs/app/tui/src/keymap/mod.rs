@@ -40,7 +40,7 @@ pub enum KeymapGroup {
     InputSubmit,
     /// Application-wide hotkeys (transcript, palette, fast mode).
     GlobalHotkey,
-    /// Prompt prefix tokens (`!`, `#`, `@`, `/`).
+    /// Prompt and autocomplete prefix tokens (`!`, `@`, `#`, `/`).
     PromptPrefix,
     /// Vim Normal-mode keys (enabled by `/vim`).
     VimNormal,

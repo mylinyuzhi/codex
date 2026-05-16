@@ -20,7 +20,7 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use crate::presentation::layout::truncate_to_width;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// A suggestion item for the popup.
 #[derive(Debug, Clone)]
@@ -50,7 +50,7 @@ pub enum SuggestionMeta {
 pub struct SuggestionPopup<'a> {
     items: &'a [SuggestionItem],
     selected: usize,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
     max_visible: usize,
 }
 
@@ -62,11 +62,11 @@ impl<'a> SuggestionPopup<'a> {
     /// can't overflow the slot.
     pub const DEFAULT_MAX_VISIBLE: u16 = 10;
 
-    pub fn new(items: &'a [SuggestionItem], theme: &'a Theme) -> Self {
+    pub fn new(items: &'a [SuggestionItem], styles: UiStyles<'a>) -> Self {
         Self {
             items,
             selected: 0,
-            theme,
+            styles,
             max_visible: Self::DEFAULT_MAX_VISIBLE as usize,
         }
     }
@@ -147,7 +147,7 @@ impl Widget for SuggestionPopup<'_> {
                 is_selected,
                 name_col_width,
                 popup_width as usize,
-                self.theme,
+                self.styles,
             ));
         }
 
@@ -160,18 +160,18 @@ fn build_row(
     is_selected: bool,
     name_col_width: usize,
     popup_width: usize,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> Line<'static> {
     let marker = if is_selected { "▸ " } else { "  " };
     let label_style = if is_selected {
-        Style::default().fg(theme.primary).bold()
+        Style::default().fg(styles.primary()).bold()
     } else {
-        Style::default().fg(theme.text_dim)
+        Style::default().fg(styles.dim())
     };
     let desc_style = if is_selected {
-        Style::default().fg(theme.text)
+        Style::default().fg(styles.text())
     } else {
-        Style::default().fg(theme.text_dim)
+        Style::default().fg(styles.dim())
     };
 
     // Truncate label to fit the column (minus the inter-column padding)

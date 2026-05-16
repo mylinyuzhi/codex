@@ -26,7 +26,6 @@ use crate::ServerNotification;
 use crate::command_queue::QueuePriority;
 use crate::emit::emit_protocol;
 use crate::engine::QueryEngine;
-use crate::engine_helpers::render_transcript_for_extractor;
 use crate::helpers::drain_command_queue_into_history;
 
 impl QueryEngine {
@@ -394,47 +393,11 @@ impl QueryEngine {
         }
 
         // Compute message-level stats once and share across the
-        // session-memory hook (Step 0.7), the auto-memory fan-out, and
-        // the auto-compact threshold check below — all of them read the
-        // same post-Step-0.5 history.
+        // auto-memory fan-out and the auto-compact threshold check
+        // below — both read the same post-Step-0.5 history.
         let estimated_tokens = coco_compact::estimate_tokens(&history.messages);
         let tool_calls_last_turn =
-            coco_session_memory::count_tool_calls_in_last_assistant_turn(&history.messages);
-        let last_assistant_uuid = history
-            .messages
-            .iter()
-            .rev()
-            .find(|m| matches!(m, coco_messages::Message::Assistant(_)))
-            .and_then(|m| m.uuid())
-            .copied();
-
-        // Step 0.7: session-memory extraction. Forked-agent path runs
-        // `maybe_extract` after each assistant turn so the next compaction
-        // can short-circuit via SM-first. TS:
-        // services/SessionMemory/sessionMemory.ts:374 registerPostSamplingHook.
-        if let Some(svc) = self.session_memory_service.clone()
-            && self.config.compact.session_memory.enabled
-            && self.config.agent_id.is_none()
-        {
-            let transcript = render_transcript_for_extractor(&history.messages);
-            let outcome = svc
-                .maybe_extract(
-                    estimated_tokens,
-                    tool_calls_last_turn,
-                    last_assistant_uuid,
-                    &transcript,
-                )
-                .await;
-            // Refresh in-memory SM text after a successful extract so the
-            // *next* SM-first compact reads it.
-            if matches!(
-                outcome,
-                coco_session_memory::ExtractionOutcome::Extracted { .. }
-            ) {
-                let new_text = svc.current_text().await;
-                self.set_session_memory_text(new_text).await;
-            }
-        }
+            coco_messages::count_tool_calls_in_last_assistant_turn(&history.messages);
 
         // Stop-hooks gate (TS `query/stopHooks.ts:136-157`): bare
         // mode skips the entire post-turn fan-out (promptSuggestion +

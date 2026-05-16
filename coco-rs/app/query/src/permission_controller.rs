@@ -15,7 +15,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::helpers::complete_tool_call_with_error;
+use crate::helpers::ToolCompletionEventMode;
+use crate::helpers::complete_tool_call_with_error_mode;
 use crate::session_state::SessionStateTracker;
 
 pub(crate) enum PermissionOutcome {
@@ -39,6 +40,7 @@ pub(crate) struct PermissionController<'a> {
     /// hooks can override the user prompt with allow/deny.
     hooks: Option<&'a Arc<HookRegistry>>,
     orchestration_ctx: Option<&'a OrchestrationContext>,
+    completion_event_mode: ToolCompletionEventMode,
 }
 
 impl<'a> PermissionController<'a> {
@@ -53,6 +55,7 @@ impl<'a> PermissionController<'a> {
         cancel: &'a CancellationToken,
         hooks: Option<&'a Arc<HookRegistry>>,
         orchestration_ctx: Option<&'a OrchestrationContext>,
+        completion_event_mode: ToolCompletionEventMode,
     ) -> Self {
         Self {
             event_tx,
@@ -64,6 +67,7 @@ impl<'a> PermissionController<'a> {
             cancel,
             hooks,
             orchestration_ctx,
+            completion_event_mode,
         }
     }
 
@@ -82,13 +86,14 @@ impl<'a> PermissionController<'a> {
                 warn!(tool = tool_call.tool_name, %message, "tool permission denied");
                 self.record_denial(tool_call, tool_input);
                 let output = format!("Permission denied: {message}");
-                complete_tool_call_with_error(
+                complete_tool_call_with_error_mode(
                     self.event_tx,
                     self.history,
                     &tool_call.tool_call_id,
                     &tool_call.tool_name,
                     tool_id,
                     &output,
+                    self.completion_event_mode,
                 )
                 .await;
                 PermissionOutcome::Denied
@@ -149,13 +154,14 @@ impl<'a> PermissionController<'a> {
                                 );
                                 self.record_denial(tool_call, tool_input);
                                 let output = format!("Permission denied: {feedback}");
-                                complete_tool_call_with_error(
+                                complete_tool_call_with_error_mode(
                                     self.event_tx,
                                     self.history,
                                     &tool_call.tool_call_id,
                                     &tool_call.tool_name,
                                     tool_id,
                                     &output,
+                                    self.completion_event_mode,
                                 )
                                 .await;
                                 self.state_tracker
@@ -230,13 +236,14 @@ impl<'a> PermissionController<'a> {
                     warn!(tool = tool_call.tool_name, "approval bridge: rejected");
                     self.record_denial(tool_call, tool_input);
                     let output = format!("Permission denied: {feedback}");
-                    complete_tool_call_with_error(
+                    complete_tool_call_with_error_mode(
                         self.event_tx,
                         self.history,
                         &tool_call.tool_call_id,
                         &tool_call.tool_name,
                         tool_id,
                         &output,
+                        self.completion_event_mode,
                     )
                     .await;
                     self.state_tracker
@@ -253,13 +260,14 @@ impl<'a> PermissionController<'a> {
                 );
                 self.record_denial(tool_call, tool_input);
                 let output = format!("Approval bridge error: {e}");
-                complete_tool_call_with_error(
+                complete_tool_call_with_error_mode(
                     self.event_tx,
                     self.history,
                     &tool_call.tool_call_id,
                     &tool_call.tool_name,
                     tool_id,
                     &output,
+                    self.completion_event_mode,
                 )
                 .await;
                 self.state_tracker

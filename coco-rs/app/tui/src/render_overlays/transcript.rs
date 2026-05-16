@@ -2,15 +2,15 @@
 
 use ratatui::prelude::Color;
 
+use crate::presentation::styles::UiStyles;
 use crate::presentation::transcript;
 use crate::state::AppState;
 use crate::state::overlay::TranscriptOverlay;
-use crate::theme::Theme;
 
 pub(super) fn transcript_overlay_content(
     state: &AppState,
     overlay: &TranscriptOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    transcript::transcript_overlay_content(state, overlay, theme)
+    transcript::transcript_overlay_content(state, overlay, styles)
 }

@@ -4,10 +4,11 @@ This document supersedes the conflicting `subagent-refactor-plan.md` and
 `agent-loop-refactor-plan.md` for the agentteam subsystem and tracks the
 multi-PR migration started on the `feat/agentteam` branch.
 
-The TS reference is `/lyz/codespace/3rd/claude-code/src/`. Every module
-in this design has a TS-source pointer; coco-rs mirrors TS semantics
-unless explicitly noted (Anthropic-only features — CCR remote, GrowthBook
-gates, `feature('ULTRAPLAN')` — are skipped per root `CLAUDE.md`).
+The TS source is the behavior reference. TS file paths are relative to the TS
+project's `src/` directory. Every module in this design has a TS-source pointer;
+coco-rs mirrors TS semantics unless explicitly noted (Anthropic-only features —
+CCR remote, GrowthBook gates, `feature('ULTRAPLAN')` — are skipped per root
+`CLAUDE.md`).
 
 ## Layered home for each concern
 

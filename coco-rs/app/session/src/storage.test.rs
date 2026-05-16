@@ -1,5 +1,24 @@
 use super::*;
 use serde_json::json;
+use std::path::Path as StdPath;
+
+/// Build a [`TranscriptStore`] rooted at a fresh tempdir, returning
+/// the tempdir guard (so it survives the test) and the resolved
+/// project directory the store is actually writing to.
+///
+/// Production callers pass an `Arc<ProjectPaths>` derived from a
+/// real cwd; tests use a synthetic project root so the slug math is
+/// exercised without depending on the host filesystem layout.
+fn test_store() -> (tempfile::TempDir, TranscriptStore, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Arc::new(coco_paths::ProjectPaths::new(
+        dir.path().to_path_buf(),
+        StdPath::new("/test-project"),
+    ));
+    let project_dir = paths.project_dir();
+    let store = TranscriptStore::new(paths);
+    (dir, store, project_dir)
+}
 
 fn make_user_entry(uuid: &str, session_id: &str, text: &str) -> TranscriptEntry {
     TranscriptEntry {
@@ -52,8 +71,7 @@ fn make_assistant_entry(uuid: &str, parent_uuid: &str, session_id: &str) -> Tran
 
 #[test]
 fn test_append_and_load_entries() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let sid = "test-session-001";
 
     let user = make_user_entry("u1", sid, "Hello world");
@@ -84,8 +102,7 @@ fn test_append_and_load_entries() {
 
 #[test]
 fn test_metadata_entries_round_trip() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let sid = "meta-session";
 
     // Write a user message so the file has content.
@@ -134,8 +151,7 @@ fn test_metadata_entries_round_trip() {
 
 #[test]
 fn test_content_replacement_records_round_trip() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let sid = "content-replacements";
 
     let records = vec![ContentReplacementRecord::tool_result(
@@ -146,7 +162,7 @@ fn test_content_replacement_records_round_trip() {
 
     assert_eq!(
         store.tool_results_session_dir(sid),
-        dir.path().join(sid).join("tool-results")
+        _project_dir.join(sid).join("tool-results")
     );
     let loaded = store.load_content_replacements(sid).unwrap();
     assert_eq!(loaded, records);
@@ -154,8 +170,7 @@ fn test_content_replacement_records_round_trip() {
 
 #[test]
 fn test_cleanup_tool_results_older_than_removes_expired_files_and_empty_dirs() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let tool_results = store.tool_results_session_dir("session-a");
     let nested = tool_results.join("tool-dir");
     std::fs::create_dir_all(&nested).unwrap();
@@ -169,13 +184,12 @@ fn test_cleanup_tool_results_older_than_removes_expired_files_and_empty_dirs() {
 
     assert_eq!(removed, 2);
     assert!(!tool_results.exists());
-    assert!(!dir.path().join("session-a").exists());
+    assert!(!_project_dir.join("session-a").exists());
 }
 
 #[test]
 fn test_cleanup_tool_results_older_than_keeps_recent_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let tool_results = store.tool_results_session_dir("session-b");
     std::fs::create_dir_all(&tool_results).unwrap();
     let output = tool_results.join("call-1.txt");
@@ -192,8 +206,7 @@ fn test_cleanup_tool_results_older_than_keeps_recent_files() {
 
 #[test]
 fn test_list_sessions_newest_first() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
 
     // Create two sessions with a small delay so mtime differs.
     let user_a = make_user_entry("u1", "session-a", "First session");
@@ -214,8 +227,7 @@ fn test_list_sessions_newest_first() {
 
 #[test]
 fn test_load_transcript_messages_filters_metadata() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let sid = "filter-session";
 
     let user = make_user_entry("u1", sid, "Hello");
@@ -241,8 +253,7 @@ fn test_load_transcript_messages_filters_metadata() {
 
 #[test]
 fn test_exists_and_delete() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let sid = "del-session";
 
     assert!(!store.exists(sid));
@@ -287,8 +298,7 @@ fn test_truncate_prompt_long_text() {
 
 #[test]
 fn test_load_nonexistent_transcript() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let result = store.load_entries("nonexistent");
     assert!(result.is_err());
 }
@@ -320,8 +330,7 @@ fn test_empty_and_malformed_lines_skipped() {
 
 #[test]
 fn test_file_history_snapshot_round_trip_appends_in_order() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let sid = "rewind-session";
 
     // Seed transcript with at least one message so the JSONL has shape.
@@ -371,8 +380,7 @@ fn test_file_history_snapshot_chain_last_wins_on_update() {
     // overwrite the prior entry for the same `message_id` rather than
     // appending a new row. This is the load-bearing invariant for the
     // rewind picker (TS `buildFileHistorySnapshotChain`).
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let sid = "update-session";
     store
         .append_message(sid, &make_user_entry("u1", sid, "edit"))
@@ -446,8 +454,7 @@ fn test_marble_origami_entries_filtered_by_session() {
     // `sessionId` field on the payload. The loader must drop entries
     // tagged with a different session_id (e.g. when transcripts get
     // forked / merged).
-    let dir = tempfile::tempdir().unwrap();
-    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let (_dir, store, _project_dir) = test_store();
     let sid = "mo-session";
     store
         .append_message(sid, &make_user_entry("u1", sid, "p"))

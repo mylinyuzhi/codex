@@ -1,6 +1,6 @@
 # coco-context — Crate Plan
 
-TS source: `src/context.ts`, `src/utils/systemPromptType.ts`, `src/utils/attachments.ts`, `src/utils/claudemd.ts`, `src/utils/cwd.ts`, `src/utils/fileHistory.ts` (~1110 LOC), `src/utils/fileStateCache.ts` (1.5K LOC), `src/utils/fileRead.ts`
+TS source: `context.ts`, `utils/systemPromptType.ts`, `utils/attachments.ts`, `utils/claudemd.ts`, `utils/cwd.ts`, `utils/fileHistory.ts` (~1110 LOC), `utils/fileStateCache.ts` (1.5K LOC), `utils/fileRead.ts`
 
 ## Dependencies
 

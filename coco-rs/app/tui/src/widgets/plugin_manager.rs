@@ -14,7 +14,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// Plugin entry for the manager display.
 #[derive(Debug, Clone)]
@@ -95,12 +95,12 @@ impl Default for PluginManagerState {
 /// Plugin manager widget.
 pub struct PluginManagerWidget<'a> {
     state: &'a PluginManagerState,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> PluginManagerWidget<'a> {
-    pub fn new(state: &'a PluginManagerState, theme: &'a Theme) -> Self {
-        Self { state, theme }
+    pub fn new(state: &'a PluginManagerState, styles: UiStyles<'a>) -> Self {
+        Self { state, styles }
     }
 }
 
@@ -111,32 +111,32 @@ impl Widget for PluginManagerWidget<'_> {
         // Tab bar
         let installed_style = if self.state.tab == PluginTab::Installed {
             ratatui::style::Style::default()
-                .fg(self.theme.primary)
+                .fg(self.styles.primary())
                 .bold()
                 .underlined()
         } else {
-            ratatui::style::Style::default().fg(self.theme.text_dim)
+            ratatui::style::Style::default().fg(self.styles.dim())
         };
         let available_style = if self.state.tab == PluginTab::Available {
             ratatui::style::Style::default()
-                .fg(self.theme.primary)
+                .fg(self.styles.primary())
                 .bold()
                 .underlined()
         } else {
-            ratatui::style::Style::default().fg(self.theme.text_dim)
+            ratatui::style::Style::default().fg(self.styles.dim())
         };
 
         lines.push(Line::from(vec![
             Span::styled(t!("plugin.tab_installed").to_string(), installed_style),
-            Span::raw("│").fg(self.theme.border),
+            Span::raw("│").fg(self.styles.border()),
             Span::styled(t!("plugin.tab_available").to_string(), available_style),
         ]));
 
         // Filter
         if !self.state.filter.is_empty() {
             lines.push(Line::from(vec![
-                Span::raw("  🔍 ").fg(self.theme.accent),
-                Span::raw(&self.state.filter).fg(self.theme.text),
+                Span::raw("  🔍 ").fg(self.styles.accent()),
+                Span::raw(&self.state.filter).fg(self.styles.text()),
             ]));
         }
         lines.push(Line::default());
@@ -145,7 +145,7 @@ impl Widget for PluginManagerWidget<'_> {
         let filtered = self.state.filtered();
         if filtered.is_empty() {
             lines.push(Line::from(
-                Span::raw(format!("  {}", t!("plugin.none_found"))).fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("plugin.none_found"))).fg(self.styles.dim()),
             ));
         }
 
@@ -154,11 +154,11 @@ impl Widget for PluginManagerWidget<'_> {
             let marker = if is_selected { "▸ " } else { "  " };
 
             let status_icon = if plugin.error.is_some() {
-                ("✗", self.theme.error)
+                ("✗", self.styles.error())
             } else if plugin.enabled {
-                ("●", self.theme.success)
+                ("●", self.styles.success())
             } else {
-                ("○", self.theme.text_dim)
+                ("○", self.styles.dim())
             };
 
             let source_label = match plugin.source {
@@ -171,14 +171,14 @@ impl Widget for PluginManagerWidget<'_> {
             let mut spans = vec![
                 Span::raw(marker),
                 Span::raw(format!("{} ", status_icon.0)).fg(status_icon.1),
-                Span::raw(&plugin.name).fg(self.theme.text),
+                Span::raw(&plugin.name).fg(self.styles.text()),
             ];
 
             if let Some(ref ver) = plugin.version {
-                spans.push(Span::raw(format!(" v{ver}")).fg(self.theme.text_dim));
+                spans.push(Span::raw(format!(" v{ver}")).fg(self.styles.dim()));
             }
 
-            spans.push(Span::raw(format!(" [{source_label}]")).fg(self.theme.text_dim));
+            spans.push(Span::raw(format!(" [{source_label}]")).fg(self.styles.dim()));
 
             if plugin.tool_count > 0 {
                 spans.push(
@@ -186,12 +186,12 @@ impl Widget for PluginManagerWidget<'_> {
                         " {}",
                         t!("plugin.tools_suffix", count = plugin.tool_count)
                     ))
-                    .fg(self.theme.text_dim),
+                    .fg(self.styles.dim()),
                 );
             }
 
             if let Some(ref err) = plugin.error {
-                spans.push(Span::raw(format!(" ⚠ {err}")).fg(self.theme.error));
+                spans.push(Span::raw(format!(" ⚠ {err}")).fg(self.styles.error()));
             }
 
             lines.push(Line::from(spans));
@@ -199,7 +199,7 @@ impl Widget for PluginManagerWidget<'_> {
             if is_selected && let Some(ref desc) = plugin.description {
                 lines.push(Line::from(
                     Span::raw(format!("    {desc}"))
-                        .fg(self.theme.text_dim)
+                        .fg(self.styles.dim())
                         .italic(),
                 ));
             }
@@ -207,15 +207,15 @@ impl Widget for PluginManagerWidget<'_> {
 
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::raw(format!("  {}", t!("plugin.hint_switch_tab"))).fg(self.theme.text_dim),
-            Span::raw(t!("plugin.hint_toggle").to_string()).fg(self.theme.text_dim),
-            Span::raw(t!("plugin.hint_close").to_string()).fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("plugin.hint_switch_tab"))).fg(self.styles.dim()),
+            Span::raw(t!("plugin.hint_toggle").to_string()).fg(self.styles.dim()),
+            Span::raw(t!("plugin.hint_close").to_string()).fg(self.styles.dim()),
         ]));
 
         let block = Block::default()
             .borders(Borders::ALL)
             .title(t!("plugin.panel_title").to_string())
-            .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
+            .border_style(ratatui::style::Style::default().fg(self.styles.focused_border()));
 
         let paragraph = Paragraph::new(lines)
             .block(block)

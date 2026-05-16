@@ -17,7 +17,6 @@ use crate::i18n::t;
 use crate::state::ModelEntry;
 use crate::state::ModelPickerOverlay;
 use crate::state::ProviderUnavailableReason;
-use crate::theme::Theme;
 
 /// Canonical role order — must mirror `update::show::next_role` so the
 /// pill order matches Tab/Shift+Tab cycling.
@@ -45,9 +44,8 @@ pub(crate) fn render_model_picker(
     frame: &mut Frame,
     area: Rect,
     m: &ModelPickerOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) {
-    let styles = UiStyles::new(theme);
     let role_label = role_display(m.role);
     let title = t!("dialog.model_picker_title", role = role_label.as_str()).to_string();
     let overlay_area = layout::centered_overlay_area(area, MODEL_PICKER_BOUNDS);
@@ -66,7 +64,7 @@ pub(crate) fn render_model_picker(
     frame.render_widget(content, overlay_area);
 }
 
-pub(crate) fn content(m: &ModelPickerOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn content(m: &ModelPickerOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
     let filtered = filtered_entries(m);
     let role_line = render_role_pill(m.role);
     let filter_line = if m.filter.is_empty() {
@@ -87,7 +85,7 @@ pub(crate) fn content(m: &ModelPickerOverlay, theme: &Theme) -> (String, String,
 
     let role_label = role_display(m.role);
     let title = t!("dialog.model_picker_title", role = role_label.as_str()).to_string();
-    (title, body, theme.primary)
+    (title, body, styles.primary())
 }
 
 fn build_view_model(m: &ModelPickerOverlay, list_height: usize) -> ModelPickerViewModel<'_> {

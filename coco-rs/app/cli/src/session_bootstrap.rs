@@ -280,12 +280,12 @@ pub async fn install_session_late_binds(
     runtime.attach_task_runtime(task_runtime).await;
 
     // Per-agent transcript persistence (TS-faithful resume). The
-    // sessions_dir matches the runtime's transcript path so
-    // `<sessions_dir>/<session_id>/subagents/agent-<id>.*` lives
+    // project paths match the runtime's transcript path so
+    // `<project_dir>/<session_id>/subagents/agent-<id>.*` lives
     // alongside the main session JSONL.
     let agent_transcript_store: Arc<dyn coco_tool_runtime::AgentTranscriptStore> = Arc::new(
         crate::agent_transcript_persistence::SessionAgentTranscriptStore::new(Arc::new(
-            coco_session::TranscriptStore::new(crate::paths::sessions_dir()),
+            coco_session::TranscriptStore::new(crate::paths::project_paths(cwd)),
         )),
     );
     runtime

@@ -1,6 +1,6 @@
 # coco-messages — Crate Plan
 
-TS source: `src/utils/messages.ts` (5512 LOC, 114 exports), `src/utils/messages/mappers.ts`, `src/history.ts`, `src/cost-tracker.ts`
+TS source: `utils/messages.ts` (5512 LOC, 114 exports), `utils/messages/mappers.ts`, `history.ts`, `cost-tracker.ts`
 
 ## Dependencies
 

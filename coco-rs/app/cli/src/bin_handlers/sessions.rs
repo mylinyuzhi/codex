@@ -4,11 +4,11 @@
 //! TUI-bootstrap path as `coco --resume <id>` and `coco --continue`.
 
 use anyhow::Result;
-use coco_cli::paths::sessions_dir;
+use coco_config::global_config;
 use coco_session::SessionManager;
 
 pub fn handle_sessions() -> Result<()> {
-    let mgr = SessionManager::new(sessions_dir());
+    let mgr = SessionManager::new(global_config::config_home());
     let sessions = mgr.list()?;
 
     if sessions.is_empty() {

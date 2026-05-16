@@ -15,6 +15,11 @@ use crate::display_settings::DisplaySettings;
 use crate::display_settings::SyntaxHighlighting;
 use crate::events::TuiCommand;
 use crate::state::AppState;
+use crate::state::MemoryDialogEntry;
+use crate::state::MemoryDialogOverlay;
+use crate::state::MemoryDialogRowKind;
+use crate::state::MemoryDialogScope;
+use crate::state::MessageContent;
 use crate::state::Overlay;
 use crate::state::ui::ToastSeverity;
 
@@ -714,6 +719,39 @@ async fn esc_double_press_clears_input_and_records_history() {
 }
 
 #[tokio::test]
+async fn esc_on_memory_dialog_records_transcript_result() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .set_overlay(Overlay::MemoryDialog(MemoryDialogOverlay {
+            entries: vec![MemoryDialogEntry {
+                path: std::path::PathBuf::from("/tmp/coco-memory-test/CLAUDE.md"),
+                label: "Project memory".to_string(),
+                scope: MemoryDialogScope::Project,
+                row_kind: MemoryDialogRowKind::File {
+                    exists: false,
+                    read_only: false,
+                },
+            }],
+            selected: 0,
+        }));
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+
+    assert!(state.ui.overlay.is_none(), "memory dialog dismissed");
+    assert!(state.ui.toasts.iter().any(|t| {
+        t.severity == ToastSeverity::Info && t.message.contains("Cancelled memory editing")
+    }));
+    assert!(state.session.messages.iter().any(|m| {
+        matches!(
+            &m.content,
+            MessageContent::SystemText(text) if text.contains("Cancelled memory editing")
+        )
+    }));
+}
+
+#[tokio::test]
 async fn ctrl_e_moves_cursor_to_end_not_external_editor() {
     // Regression: bare Ctrl+E previously triggered OpenExternalEditor in
     // the legacy global cascade, shadowing readline's end-of-line. The
@@ -726,6 +764,35 @@ async fn ctrl_e_moves_cursor_to_end_not_external_editor() {
     handle_command(&mut state, TuiCommand::CursorEnd, &tx).await;
 
     assert_eq!(state.ui.input.textarea.cursor(), 5);
+}
+
+#[tokio::test]
+async fn open_external_editor_sends_prompt_editor_command() {
+    let mut state = AppState::new();
+    state.ui.input.set_text("draft prompt");
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::OpenExternalEditor, &tx).await;
+
+    let UserCommand::OpenPromptEditor { initial_content } =
+        rx.try_recv().expect("prompt editor command sent")
+    else {
+        panic!("expected OpenPromptEditor")
+    };
+    assert_eq!(initial_content, "draft prompt");
+}
+
+#[tokio::test]
+async fn open_plan_editor_sends_plan_editor_command() {
+    let mut state = AppState::new();
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::OpenPlanEditor, &tx).await;
+
+    let UserCommand::OpenPlanEditor = rx.try_recv().expect("plan editor command sent") else {
+        panic!("expected OpenPlanEditor")
+    };
+    assert!(state.ui.toasts.is_empty());
 }
 
 #[tokio::test]

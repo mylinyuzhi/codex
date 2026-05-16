@@ -1,6 +1,6 @@
 # coco-shell — Crate Plan (HYBRID: cocode-rs base + TS enhancements)
 
-TS source: `src/utils/bash/` (12K LOC), `src/utils/Shell.ts`, `src/utils/shell/`, `src/tools/BashTool/bashPermissions.ts` (700+), `src/tools/BashTool/bashSecurity.ts`, `src/tools/BashTool/readOnlyValidation.ts` (68K), `src/tools/BashTool/commandSemantics.ts`, `src/tools/BashTool/destructiveCommandWarning.ts` (103), `src/tools/BashTool/shouldUseSandbox.ts` (154), `src/tools/BashTool/modeValidation.ts` (116), `src/tools/BashTool/sedEditParser.ts` (200+)
+TS source: `utils/bash/` (12K LOC), `utils/Shell.ts`, `utils/shell/`, `tools/BashTool/bashPermissions.ts` (700+), `tools/BashTool/bashSecurity.ts`, `tools/BashTool/readOnlyValidation.ts` (68K), `tools/BashTool/commandSemantics.ts`, `tools/BashTool/destructiveCommandWarning.ts` (103), `tools/BashTool/shouldUseSandbox.ts` (154), `tools/BashTool/modeValidation.ts` (116), `tools/BashTool/sedEditParser.ts` (200+)
 
 **Strategy**: HYBRID — build on cocode-rs `utils/shell-parser` (24 analyzers, native Rust parsing) as the base, then add TS-specific enhancements:
 - **KEEP from cocode-rs**: shell-parser crate (command parsing, 24 risk type analyzers, AST analysis) — Rust-native, no WASM dependency

@@ -25,7 +25,8 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::helpers::complete_tool_call_with_error;
+use crate::helpers::ToolCompletionEventMode;
+use crate::helpers::complete_tool_call_with_error_mode;
 use crate::hook_controller::HookController;
 use crate::hook_controller::PreToolUseOutcome;
 use crate::permission_controller::PermissionController;
@@ -65,6 +66,7 @@ pub(crate) struct PendingToolPreparation<'a> {
     pub denial_tracker: Option<&'a Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
     pub client: &'a Arc<ApiClient>,
     pub auto_mode_rules: &'a AutoModeRules,
+    pub completion_event_mode: ToolCompletionEventMode,
 }
 
 pub(crate) async fn prepare_pending_tool_calls(
@@ -114,8 +116,15 @@ pub(crate) async fn prepare_one_pending_tool_call(
     args: &mut PendingToolPreparation<'_>,
     tc: &ToolCallPart,
 ) -> Option<(PendingToolCall, ToolResultContext)> {
-    let prepared =
-        prepare_committed_tool_call(args.event_tx, args.history, args.tools, args.ctx, tc).await?;
+    let prepared = prepare_committed_tool_call(
+        args.event_tx,
+        args.history,
+        args.tools,
+        args.ctx,
+        tc,
+        args.completion_event_mode,
+    )
+    .await?;
 
     let tool_id = prepared.tool_id;
     let tool = prepared.tool;
@@ -125,7 +134,13 @@ pub(crate) async fn prepare_one_pending_tool_call(
     let hook_controller =
         HookController::new(args.hooks, args.orchestration_ctx.clone(), args.hook_tx_opt);
     let pre_tool_outcome = hook_controller
-        .run_pre_tool_use(args.event_tx, args.history, tc, &tool_id)
+        .run_pre_tool_use(
+            args.event_tx,
+            args.history,
+            tc,
+            &tool_id,
+            args.completion_event_mode,
+        )
         .await;
 
     let (effective_input, hook_permission_behavior, hook_permission_reason) =
@@ -137,6 +152,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
             &tool_id,
             &tool,
             pre_tool_outcome,
+            args.completion_event_mode,
         )
         .await?;
 
@@ -172,6 +188,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.cancel,
         args.hooks,
         Some(&args.orchestration_ctx),
+        args.completion_event_mode,
     )
     .resolve(decision, tc, &effective_input, &tool_id)
     .await;
@@ -185,6 +202,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         &tool,
         permission_outcome,
         effective_input,
+        args.completion_event_mode,
     )
     .await?;
 
@@ -201,6 +219,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn resolve_effective_input_from_pre_hook(
     event_tx: &Option<mpsc::Sender<CoreEvent>>,
     history: &mut MessageHistory,
@@ -209,6 +228,7 @@ async fn resolve_effective_input_from_pre_hook(
     tool_id: &ToolId,
     tool: &Arc<dyn Tool>,
     pre_tool_outcome: PreToolUseOutcome,
+    completion_event_mode: ToolCompletionEventMode,
 ) -> Option<(
     Value,
     Option<coco_types::PermissionBehavior>,
@@ -230,6 +250,7 @@ async fn resolve_effective_input_from_pre_hook(
                     tool_id,
                     tool,
                     updated_input,
+                    completion_event_mode,
                 )
                 .await
                 .map(|input| (input, permission_behavior, reason));
@@ -565,6 +586,7 @@ async fn resolve_effective_input_from_permission(
     tool: &Arc<dyn Tool>,
     permission_outcome: PermissionOutcome,
     effective_input: Value,
+    completion_event_mode: ToolCompletionEventMode,
 ) -> Option<Value> {
     match permission_outcome {
         PermissionOutcome::Denied => None,
@@ -578,6 +600,7 @@ async fn resolve_effective_input_from_permission(
                     tool_id,
                     tool,
                     updated_input,
+                    completion_event_mode,
                 )
                 .await;
             }
@@ -629,6 +652,7 @@ async fn maybe_fire_permission_denied_hook(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn validate_effective_input_or_complete_error(
     event_tx: &Option<mpsc::Sender<CoreEvent>>,
     history: &mut MessageHistory,
@@ -637,6 +661,7 @@ async fn validate_effective_input_or_complete_error(
     tool_id: &ToolId,
     tool: &Arc<dyn Tool>,
     input: Value,
+    completion_event_mode: ToolCompletionEventMode,
 ) -> Option<Value> {
     // Schema validation (plan I3 Rust-side tightening): check the
     // (possibly hook-rewritten) input against the tool's JSON
@@ -652,13 +677,14 @@ async fn validate_effective_input_or_complete_error(
         && let Err(e) = validator.validate(tool.as_ref(), &input).await
     {
         let message = format!("Invalid input: {e}");
-        complete_tool_call_with_error(
+        complete_tool_call_with_error_mode(
             event_tx,
             history,
             &tool_call.tool_call_id,
             &tool_call.tool_name,
             tool_id,
             &message,
+            completion_event_mode,
         )
         .await;
         return None;
@@ -675,13 +701,14 @@ async fn validate_effective_input_or_complete_error(
         }
         coco_tool_runtime::ValidationResult::Valid => "Invalid input".to_string(),
     };
-    complete_tool_call_with_error(
+    complete_tool_call_with_error_mode(
         event_tx,
         history,
         &tool_call.tool_call_id,
         &tool_call.tool_name,
         tool_id,
         &message,
+        completion_event_mode,
     )
     .await;
     None

@@ -16,7 +16,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// A teammate entry for spinner display.
 #[derive(Debug, Clone)]
@@ -38,21 +38,21 @@ pub struct TeammateSpinnerTree<'a> {
     teammates: &'a [TeammateSpinnerEntry],
     leader_name: &'a str,
     all_idle: bool,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> TeammateSpinnerTree<'a> {
     pub fn new(
         teammates: &'a [TeammateSpinnerEntry],
         leader_name: &'a str,
-        theme: &'a Theme,
+        styles: UiStyles<'a>,
     ) -> Self {
         let all_idle = teammates.iter().all(|t| t.is_idle);
         Self {
             teammates,
             leader_name,
             all_idle,
-            theme,
+            styles,
         }
     }
 }
@@ -63,8 +63,8 @@ impl Widget for TeammateSpinnerTree<'_> {
 
         // Leader line (root)
         lines.push(Line::from(vec![
-            Span::raw("● ").fg(self.theme.primary),
-            Span::raw(self.leader_name).bold().fg(self.theme.text),
+            Span::raw("● ").fg(self.styles.primary()),
+            Span::raw(self.leader_name).bold().fg(self.styles.text()),
             " (lead)".dim(),
         ]));
 
@@ -79,13 +79,13 @@ impl Widget for TeammateSpinnerTree<'_> {
 
             // Status icon
             let (icon, icon_color) = if teammate.shutdown_requested {
-                ("■", self.theme.tool_error)
+                ("■", self.styles.tool_error())
             } else if teammate.awaiting_plan_approval {
-                ("⏸", self.theme.warning)
+                ("⏸", self.styles.warning())
             } else if teammate.is_idle {
-                ("○", self.theme.text_dim)
+                ("○", self.styles.dim())
             } else {
-                ("●", self.theme.tool_running)
+                ("●", self.styles.tool_running())
             };
             spans.push(Span::raw(format!("{icon} ")).fg(icon_color));
 
@@ -94,14 +94,14 @@ impl Widget for TeammateSpinnerTree<'_> {
                 .color
                 .as_deref()
                 .map(agent_color_to_ratatui)
-                .unwrap_or(self.theme.text);
+                .unwrap_or(self.styles.text());
             spans.push(Span::raw(&teammate.name).fg(name_color));
 
             // Status text
             if teammate.shutdown_requested {
                 spans.push(" [stopping]".dim());
             } else if teammate.awaiting_plan_approval {
-                spans.push(Span::raw(" [awaiting approval]").fg(self.theme.warning));
+                spans.push(Span::raw(" [awaiting approval]").fg(self.styles.warning()));
             } else if teammate.is_idle {
                 let idle_text = format_idle_duration(teammate.elapsed_ms);
                 if self.all_idle {
@@ -112,7 +112,7 @@ impl Widget for TeammateSpinnerTree<'_> {
                     spans.push(Span::raw(format!(" Idle {idle_text}")).dim());
                 }
             } else if let Some(verb) = &teammate.spinner_verb {
-                spans.push(Span::raw(format!(" {verb}…")).fg(self.theme.text_dim));
+                spans.push(Span::raw(format!(" {verb}…")).fg(self.styles.dim()));
             }
 
             // Stats
@@ -138,7 +138,7 @@ impl Widget for TeammateSpinnerTree<'_> {
             Block::default()
                 .borders(Borders::TOP)
                 .title(t!("teammate_spinner.panel_title").to_string())
-                .border_style(ratatui::style::Style::default().fg(self.theme.border)),
+                .border_style(ratatui::style::Style::default().fg(self.styles.border())),
         );
         panel.render(area, buf);
     }

@@ -13,7 +13,6 @@ use crate::state::AppState;
 use crate::state::CommandOption;
 use crate::state::CommandPaletteOverlay;
 use crate::state::ExportFormat;
-use crate::state::MemoryDialogEntry;
 use crate::state::ModelEntry;
 use crate::state::ModelPickerOverlay;
 use crate::state::Overlay;
@@ -842,15 +841,23 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             state.ui.overlay = Some(Overlay::Settings(s));
             return;
         }
-        // /memory file picker: create the file (mode `wx` semantics — silently
-        // OK if exists), launch `$VISUAL || $EDITOR` on it, surface a toast
-        // with the relative path. TS parity: `commands/memory/memory.tsx`'s
-        // onSelect handler.
+        // /memory file picker: the TUI owns selection only. The CLI
+        // bridge owns filesystem/editor effects and reports the result
+        // through a TUI event so it can be rendered into transcript.
         Some(Overlay::MemoryDialog(m)) => {
             if let Some(entry) = m.entries.get(m.selected as usize).cloned() {
-                open_memory_entry_async(state, &entry);
+                if entry.row_kind.is_file() {
+                    let _ = command_tx
+                        .send(UserCommand::OpenMemoryFile { path: entry.path })
+                        .await;
+                } else {
+                    state.ui.add_toast(Toast::warning(
+                        t!("toast.memory_row_not_editable").to_string(),
+                    ));
+                    state.ui.overlay = Some(Overlay::MemoryDialog(m));
+                }
             }
-            // overlay already taken; do not put back.
+            // File rows dismiss after select; non-file rows are restored above.
             return;
         }
         // Plan-approval (team-lead side): Enter sends the response
@@ -1331,61 +1338,6 @@ fn settings_item_count(s: &crate::widgets::settings_panel::SettingsPanelState) -
         SettingsTab::OutputStyle => s.output_styles.len(),
         SettingsTab::Permissions => s.permission_rules.len(),
         SettingsTab::About => 0,
-    }
-}
-
-/// Open the memory file in `$VISUAL || $EDITOR` (or `vi` fallback) and
-/// surface a toast about the result. TS parity:
-/// `commands/memory/memory.tsx:47-78`'s `onSelect` handler:
-///   1. `mkdir` parent dir (recursive),
-///   2. `open(path, 'wx')` — create-exclusive; ignore EEXIST,
-///   3. spawn `$VISUAL || $EDITOR <path>`,
-///   4. emit `Opened memory file at <path>` system message.
-///
-/// Synchronous `mkdir` + `OpenOptions::create_new` are cheap and the
-/// editor spawn is fire-and-forget (we don't wait for the editor to
-/// close — same as TS, which uses `child_process.spawn` without await).
-fn open_memory_entry_async(state: &mut AppState, entry: &MemoryDialogEntry) {
-    if let Some(parent) = entry.path.parent()
-        && let Err(e) = std::fs::create_dir_all(parent)
-    {
-        state.ui.add_toast(Toast::warning(
-            t!("toast.memory_open_failed", error = e.to_string().as_str()).to_string(),
-        ));
-        return;
-    }
-
-    // `wx` semantics: create exclusively, but it's fine if the file
-    // already exists — we just want it to be present before launching
-    // the editor. `create_new(true)` errors with `AlreadyExists`;
-    // swallow that, surface anything else.
-    if let Err(e) = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&entry.path)
-        && e.kind() != std::io::ErrorKind::AlreadyExists
-    {
-        state.ui.add_toast(Toast::warning(
-            t!("toast.memory_open_failed", error = e.to_string().as_str()).to_string(),
-        ));
-        return;
-    }
-
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string());
-
-    match std::process::Command::new(&editor).arg(&entry.path).spawn() {
-        Ok(_) => state.ui.add_toast(Toast::info(
-            t!(
-                "toast.memory_opened",
-                path = entry.path.display().to_string().as_str()
-            )
-            .to_string(),
-        )),
-        Err(e) => state.ui.add_toast(Toast::warning(
-            t!("toast.memory_open_failed", error = e.to_string().as_str()).to_string(),
-        )),
     }
 }
 

@@ -19,13 +19,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use coco_paths::sanitize_agent_type_for_path;
 use coco_types::MemoryScope;
-
-/// Replace `:` with `-` so plugin-namespaced types map to a valid
-/// directory name on every platform. TS: `sanitizeAgentTypeForPath`.
-fn sanitize_agent_type_for_path(agent_type: &str) -> String {
-    agent_type.replace(':', "-")
-}
 
 /// Resolve the per-agent memory directory for the given (type, scope).
 ///

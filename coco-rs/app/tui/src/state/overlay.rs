@@ -866,6 +866,7 @@ pub struct MemoryDialogEntry {
     pub path: std::path::PathBuf,
     pub label: String,
     pub scope: MemoryDialogScope,
+    pub row_kind: MemoryDialogRowKind,
 }
 
 /// Scope tag for a memory file picker entry. Mirrors
@@ -892,6 +893,30 @@ impl MemoryDialogScope {
     }
 }
 
+/// Semantic row kind for memory picker entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryDialogRowKind {
+    File { exists: bool, read_only: bool },
+    Folder { enabled: bool },
+    Toggle { enabled: bool },
+}
+
+impl MemoryDialogRowKind {
+    pub fn from_wire(kind: coco_types::MemoryDialogRowKind) -> Self {
+        match kind {
+            coco_types::MemoryDialogRowKind::File { exists, read_only } => {
+                Self::File { exists, read_only }
+            }
+            coco_types::MemoryDialogRowKind::Folder { enabled } => Self::Folder { enabled },
+            coco_types::MemoryDialogRowKind::Toggle { enabled } => Self::Toggle { enabled },
+        }
+    }
+
+    pub fn is_file(self) -> bool {
+        matches!(self, Self::File { .. })
+    }
+}
+
 impl MemoryDialogOverlay {
     /// Build from the wire payload (`TuiOnlyEvent::OpenMemoryDialog`).
     pub fn from_wire(entries: Vec<coco_types::MemoryDialogEntry>) -> Self {
@@ -902,6 +927,7 @@ impl MemoryDialogOverlay {
                     path: std::path::PathBuf::from(e.path),
                     label: e.label,
                     scope: MemoryDialogScope::from_wire(e.scope),
+                    row_kind: MemoryDialogRowKind::from_wire(e.row_kind),
                 })
                 .collect(),
             selected: 0,

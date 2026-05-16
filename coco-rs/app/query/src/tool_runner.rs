@@ -11,7 +11,8 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::emit::emit_stream;
-use crate::helpers::complete_tool_call_with_error;
+use crate::helpers::ToolCompletionEventMode;
+use crate::helpers::complete_tool_call_with_error_mode;
 
 /// Resolved and validated tool call ready for permission/hook/execution.
 pub(crate) struct PreparedToolCall {
@@ -37,6 +38,7 @@ pub(crate) async fn prepare_committed_tool_call(
     tools: &ToolRegistry,
     ctx: &ToolUseContext,
     tool_call: &ToolCallPart,
+    completion_event_mode: ToolCompletionEventMode,
 ) -> Option<PreparedToolCall> {
     let tool_id: ToolId = tool_call
         .tool_name
@@ -56,13 +58,14 @@ pub(crate) async fn prepare_committed_tool_call(
     let Some(tool) = tools.get(&tool_id) else {
         warn!(tool = tool_call.tool_name, "tool not found in registry");
         let output = format!("Unknown tool: {}", tool_call.tool_name);
-        complete_tool_call_with_error(
+        complete_tool_call_with_error_mode(
             event_tx,
             history,
             &tool_call.tool_call_id,
             &tool_call.tool_name,
             &tool_id,
             &output,
+            completion_event_mode,
         )
         .await;
         return None;
@@ -82,13 +85,14 @@ pub(crate) async fn prepare_committed_tool_call(
             %message,
             "tool input validation failed"
         );
-        complete_tool_call_with_error(
+        complete_tool_call_with_error_mode(
             event_tx,
             history,
             &tool_call.tool_call_id,
             &tool_call.tool_name,
             &tool_id,
             &message,
+            completion_event_mode,
         )
         .await;
         return None;

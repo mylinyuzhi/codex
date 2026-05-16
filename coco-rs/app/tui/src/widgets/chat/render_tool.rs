@@ -16,25 +16,25 @@ use crate::state::session::MessageContent;
 fn render_lsp_line<'a>(w: &ChatWidget<'_>, line: &'a str) -> Line<'a> {
     let indent = "    ";
     let Some((leading_spaces, body)) = split_leading_space(line) else {
-        return Line::from(Span::raw(format!("{indent}{line}")).fg(w.theme.text));
+        return Line::from(Span::raw(format!("{indent}{line}")).fg(w.styles.text()));
     };
 
     if let Some((before, path_part, line_part)) = parse_location_marker(body) {
         let mut spans: Vec<Span<'a>> =
-            vec![Span::raw(format!("{indent}{leading_spaces}")).fg(w.theme.text)];
+            vec![Span::raw(format!("{indent}{leading_spaces}")).fg(w.styles.text())];
         if !before.is_empty() {
-            spans.push(Span::raw(before.to_string()).fg(w.theme.text));
+            spans.push(Span::raw(before.to_string()).fg(w.styles.text()));
         }
         spans.push(
             Span::raw(path_part.to_string())
-                .fg(w.theme.primary)
+                .fg(w.styles.primary())
                 .underlined(),
         );
-        spans.push(Span::raw(line_part.to_string()).fg(w.theme.text_dim));
+        spans.push(Span::raw(line_part.to_string()).fg(w.styles.dim()));
         return Line::from(spans);
     }
 
-    Line::from(Span::raw(format!("{indent}{line}")).fg(w.theme.text))
+    Line::from(Span::raw(format!("{indent}{line}")).fg(w.styles.text()))
 }
 
 /// Split `"    body"` into `("    ", "body")`. Empty body counts as
@@ -117,8 +117,8 @@ pub(super) fn try_render<'a>(
             // four spaces past the gutter so column alignment matches
             // the tool-use header.
             lines.push(Line::from(vec![
-                Span::raw("  ● ").fg(w.theme.tool_completed),
-                Span::raw(tool_name.clone()).fg(w.theme.text).bold(),
+                Span::raw("  ● ").fg(w.styles.tool_completed()),
+                Span::raw(tool_name.clone()).fg(w.styles.text()).bold(),
             ]));
             let total = output.lines().count();
             // LSP results contain `path:line:col` location references
@@ -133,14 +133,14 @@ pub(super) fn try_render<'a>(
                     lines.push(render_lsp_line(w, line));
                 } else {
                     lines.push(Line::from(
-                        Span::raw(format!("    {line}")).fg(w.theme.text),
+                        Span::raw(format!("    {line}")).fg(w.styles.text()),
                     ));
                 }
             }
             if total > 15 {
                 lines.push(Line::from(
                     Span::raw(format!("    … ({} more lines)", total - 15))
-                        .fg(w.theme.text_dim)
+                        .fg(w.styles.dim())
                         .italic(),
                 ));
             }
@@ -148,10 +148,10 @@ pub(super) fn try_render<'a>(
         }
         MessageContent::ToolError { tool_name, error } => {
             lines.push(Line::from(vec![
-                Span::raw("  ● ").fg(w.theme.tool_error),
-                Span::raw(tool_name.clone()).fg(w.theme.text).bold(),
-                Span::raw(": ").fg(w.theme.text_dim),
-                Span::raw(error.as_str()).fg(w.theme.error),
+                Span::raw("  ● ").fg(w.styles.tool_error()),
+                Span::raw(tool_name.clone()).fg(w.styles.text()).bold(),
+                Span::raw(": ").fg(w.styles.dim()),
+                Span::raw(error.as_str()).fg(w.styles.error()),
             ]));
             Some(())
         }
@@ -161,29 +161,29 @@ pub(super) fn try_render<'a>(
             // glyphs. Warning colour keeps the row visible but not
             // alarming.
             lines.push(Line::from(vec![
-                Span::raw("  ⊘ ").fg(w.theme.warning),
+                Span::raw("  ⊘ ").fg(w.styles.warning()),
                 Span::raw(t!("chat.tool_rejected", tool_name = tool_name).to_string())
-                    .fg(w.theme.text_dim),
-                Span::raw(reason.as_str()).fg(w.theme.warning),
+                    .fg(w.styles.dim()),
+                Span::raw(reason.as_str()).fg(w.styles.warning()),
             ]));
             Some(())
         }
         MessageContent::ToolCanceled { tool_name } => {
             lines.push(Line::from(vec![
-                Span::raw("  ⊘ ").fg(w.theme.text_dim),
+                Span::raw("  ⊘ ").fg(w.styles.dim()),
                 Span::raw(t!("chat.tool_canceled", tool_name = tool_name).to_string())
-                    .fg(w.theme.text_dim)
+                    .fg(w.styles.dim())
                     .italic(),
             ]));
             Some(())
         }
         MessageContent::FileEditDiff { path, diff, .. } => {
             lines.push(Line::from(vec![
-                Span::raw("  📝 ").fg(w.theme.accent),
-                Span::raw(path.as_str()).fg(w.theme.primary).underlined(),
+                Span::raw("  📝 ").fg(w.styles.accent()),
+                Span::raw(path.as_str()).fg(w.styles.primary()).underlined(),
             ]));
             let diff_lines =
-                crate::widgets::diff_display::render_diff_lines(diff, w.theme, w.width);
+                crate::widgets::diff_display::render_diff_lines(diff, w.styles, w.width);
             lines.extend(diff_lines);
             Some(())
         }
@@ -192,10 +192,10 @@ pub(super) fn try_render<'a>(
             bytes_written,
         } => {
             lines.push(Line::from(vec![
-                Span::raw("  ✓ ").fg(w.theme.tool_completed),
-                Span::raw(t!("chat.wrote_bytes").to_string()).fg(w.theme.text_dim),
-                Span::raw(path.as_str()).fg(w.theme.primary),
-                Span::raw(format!(" ({bytes_written} bytes)")).fg(w.theme.text_dim),
+                Span::raw("  ✓ ").fg(w.styles.tool_completed()),
+                Span::raw(t!("chat.wrote_bytes").to_string()).fg(w.styles.dim()),
+                Span::raw(path.as_str()).fg(w.styles.primary()),
+                Span::raw(format!(" ({bytes_written} bytes)")).fg(w.styles.dim()),
             ]));
             Some(())
         }

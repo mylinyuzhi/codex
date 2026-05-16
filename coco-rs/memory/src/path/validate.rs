@@ -129,7 +129,10 @@ pub fn sanitize_path_key(key: &str) -> String {
         .collect()
 }
 
-fn lexical_normalize(path: &Path) -> PathBuf {
+/// Lexically normalize a path: collapse `..`/`.` components without
+/// touching the filesystem. Equivalent to TS `path.normalize` on a
+/// path that's already been joined.
+pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {

@@ -65,11 +65,9 @@ pub enum SnapshotAction {
     PromptUpdate { snapshot_timestamp: String },
 }
 
-/// Replace `:` with `-` so plugin-namespaced types map to a valid
-/// directory name. TS `sanitizeAgentTypeForPath`.
-fn sanitize_agent_type_for_path(agent_type: &str) -> String {
-    agent_type.replace(':', "-")
-}
+// `sanitize_agent_type_for_path` lives in `coco_paths::sanitize` —
+// see `agent_memory.rs` for the shared import note.
+use coco_paths::sanitize_agent_type_for_path;
 
 /// Snapshot directory for a given agent type.
 /// TS: `getSnapshotDirForAgent(agentType)`.

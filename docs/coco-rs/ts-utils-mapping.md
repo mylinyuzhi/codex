@@ -1,4 +1,4 @@
-# TS `src/utils/*.ts` → Rust Complete Mapping
+# TS `utils/*.ts` → Rust Complete Mapping
 
 All 338 top-level TS utils files mapped to their Rust destination.
 
@@ -526,4 +526,4 @@ HYBRID 策略: 复用 cocode-rs L0-L1 (export 管道 + 7 基础事件), 从 TS �
 | Skip / Not needed | ~5 | tiny |
 | **Total** | **~338** | **~80K** |
 
-All 338 top-level `src/utils/*.ts` files are now accounted for.
+All 338 top-level `utils/*.ts` files are now accounted for.

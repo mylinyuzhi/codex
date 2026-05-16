@@ -1,6 +1,6 @@
 # coco-hooks — Crate Plan
 
-TS source: `src/schemas/hooks.ts`, `src/utils/hooks/` (15+ files, 3.7K LOC)
+TS source: `schemas/hooks.ts`, `utils/hooks/` (15+ files, 3.7K LOC)
 
 ## Dependencies
 

@@ -82,17 +82,38 @@ pub enum UserCommand {
         /// Shell command (already prefix-stripped).
         command: String,
     },
-    /// Submit a memory-mode entry (input started with `#`). The TUI
-    /// has stripped the prefix and shown a `ChatMessage::MemoryInput`
-    /// locally; the engine bridge appends to the project memory file
-    /// (`CLAUDE.md` discovered via `coco_memory`). TS parity:
-    /// `UserMemoryInputMessage` + `MemoryFileSelector`. For now the
-    /// implementation writes to the project `CLAUDE.md` only — the
-    /// per-scope picker overlay is a follow-up.
-    SubmitMemory {
-        user_message_id: String,
-        /// Memory content (already prefix-stripped).
-        content: String,
+    /// Open a memory file chosen from the `/memory` picker. The TUI
+    /// only owns selection state; the CLI bridge owns filesystem and
+    /// process effects so terminal/editor behavior stays outside
+    /// reducers and renderers.
+    OpenMemoryFile {
+        /// Memory file target selected by the picker.
+        path: std::path::PathBuf,
+    },
+    /// Open the current prompt draft in an external editor. The TUI
+    /// sends the current text; the CLI bridge owns temp-file and
+    /// process effects, then emits a TUI event with the edited text.
+    OpenPromptEditor {
+        /// Prompt content to seed into the editor buffer.
+        initial_content: String,
+    },
+    /// Open this session's plan file in an external editor. The CLI
+    /// bridge resolves the concrete plan-file path from the current
+    /// session id and runtime config before launching the editor.
+    OpenPlanEditor,
+    /// The TUI has left raw mode and any active overlay alt-screen, so
+    /// the CLI runner may now start the editor process for `request_id`.
+    ExternalEditorTerminalReady {
+        /// Opaque id from `TuiOnlyEvent::ExternalEditorPrepare`.
+        request_id: String,
+    },
+    /// The TUI failed to prepare terminal modes, so the CLI runner
+    /// should drop the pending editor request and surface this failure.
+    ExternalEditorTerminalPrepareFailed {
+        /// Opaque id from `TuiOnlyEvent::ExternalEditorPrepare`.
+        request_id: String,
+        /// User-visible failure summary.
+        error: String,
     },
     /// Submit user input text with resolved paste data.
     SubmitInput {

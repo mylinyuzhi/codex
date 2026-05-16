@@ -8,19 +8,19 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use crate::presentation::styles::UiStyles;
 use crate::state::ui::Toast;
 use crate::state::ui::ToastSeverity;
-use crate::theme::Theme;
 
 /// Toast notification display.
 pub struct ToastWidget<'a> {
     toasts: &'a [Toast],
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> ToastWidget<'a> {
-    pub fn new(toasts: &'a [Toast], theme: &'a Theme) -> Self {
-        Self { toasts, theme }
+    pub fn new(toasts: &'a [Toast], styles: UiStyles<'a>) -> Self {
+        Self { toasts, styles }
     }
 }
 
@@ -35,10 +35,10 @@ impl Widget for ToastWidget<'_> {
             }
 
             let (icon, color) = match toast.severity {
-                ToastSeverity::Info => ("ℹ", self.theme.text_dim),
-                ToastSeverity::Success => ("✓", self.theme.success),
-                ToastSeverity::Warning => ("⚠", self.theme.warning),
-                ToastSeverity::Error => ("✗", self.theme.error),
+                ToastSeverity::Info => ("ℹ", self.styles.dim()),
+                ToastSeverity::Success => ("✓", self.styles.success()),
+                ToastSeverity::Warning => ("⚠", self.styles.warning()),
+                ToastSeverity::Error => ("✗", self.styles.error()),
             };
 
             let x = area.width.saturating_sub(toast_width + 1);

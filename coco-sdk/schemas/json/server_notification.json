@@ -1464,6 +1464,33 @@
           "$ref": "#/definitions/ToolProgressParams"
         }
       }
+    },
+    {
+      "description": "Plugin state changed on disk (manifest added/removed/edited, `installed_plugins.json` updated, or settings.json scope toggled). Carries a short reason string the UI can surface as a banner. TS parity: `useManagePlugins.ts:293-300` adds the \"Plugins changed. Run /reload-plugins to activate.\" notification. Never triggers an auto-reload — the explicit `/reload-plugins` invocation is what applies the change.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "plugins/changed"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "reason"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string"
+            }
+          }
+        }
+      }
     }
   ],
   "definitions": {
@@ -2445,7 +2472,7 @@
           "description": "Explicit \"thinking off\". Convert layer skips typed-effort emission; `level.options` may still carry an explicit-off wire toggle (e.g. DeepSeek's `{\"thinking\":{\"type\":\"disabled\"}}`).",
           "type": "string",
           "enum": [
-            "disable"
+            "off"
           ]
         },
         {

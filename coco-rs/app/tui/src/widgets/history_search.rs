@@ -15,9 +15,9 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
 use crate::state::session::ChatMessage;
 use crate::state::session::ChatRole;
-use crate::theme::Theme;
 
 /// A search match in the message history.
 #[derive(Debug, Clone)]
@@ -125,12 +125,12 @@ impl Default for HistorySearchState {
 /// History search overlay widget.
 pub struct HistorySearchWidget<'a> {
     state: &'a HistorySearchState,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> HistorySearchWidget<'a> {
-    pub fn new(state: &'a HistorySearchState, theme: &'a Theme) -> Self {
-        Self { state, theme }
+    pub fn new(state: &'a HistorySearchState, styles: UiStyles<'a>) -> Self {
+        Self { state, styles }
     }
 }
 
@@ -140,20 +140,20 @@ impl Widget for HistorySearchWidget<'_> {
 
         // Search input
         lines.push(Line::from(vec![
-            Span::raw("  🔍 ").fg(self.theme.accent),
+            Span::raw("  🔍 ").fg(self.styles.accent()),
             if self.state.query.is_empty() {
-                Span::raw(t!("history_search.type_to_search").to_string()).fg(self.theme.text_dim)
+                Span::raw(t!("history_search.type_to_search").to_string()).fg(self.styles.dim())
             } else {
-                Span::raw(&self.state.query).fg(self.theme.text)
+                Span::raw(&self.state.query).fg(self.styles.text())
             },
-            Span::raw("▌").fg(self.theme.accent),
+            Span::raw("▌").fg(self.styles.accent()),
         ]));
         lines.push(Line::default());
 
         // Results
         if self.state.matches.is_empty() && !self.state.query.is_empty() {
             lines.push(Line::from(
-                Span::raw(format!("  {}", t!("history_search.no_matches"))).fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("history_search.no_matches"))).fg(self.styles.dim()),
             ));
         }
 
@@ -161,15 +161,15 @@ impl Widget for HistorySearchWidget<'_> {
             let is_selected = i as i32 == self.state.selected;
             let marker = if is_selected { "▸ " } else { "  " };
             let role_color = match m.role_label.as_str() {
-                "you" => self.theme.user_message,
-                "assistant" => self.theme.assistant_message,
-                _ => self.theme.text_dim,
+                "you" => self.styles.user_message(),
+                "assistant" => self.styles.assistant_message(),
+                _ => self.styles.dim(),
             };
 
             lines.push(Line::from(vec![
                 Span::raw(marker),
                 Span::raw(format!("[{}] ", m.role_label)).fg(role_color),
-                Span::raw(&m.preview).fg(self.theme.text),
+                Span::raw(&m.preview).fg(self.styles.text()),
             ]));
         }
 
@@ -182,21 +182,21 @@ impl Widget for HistorySearchWidget<'_> {
                     )
                     .to_string(),
                 )
-                .fg(self.theme.text_dim),
+                .fg(self.styles.dim()),
             ));
         }
 
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::raw(format!("  {}", t!("history_search.hint_jump"))).fg(self.theme.text_dim),
-            Span::raw(t!("history_search.hint_navigate").to_string()).fg(self.theme.text_dim),
-            Span::raw(t!("history_search.hint_close").to_string()).fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("history_search.hint_jump"))).fg(self.styles.dim()),
+            Span::raw(t!("history_search.hint_navigate").to_string()).fg(self.styles.dim()),
+            Span::raw(t!("history_search.hint_close").to_string()).fg(self.styles.dim()),
         ]));
 
         let block = Block::default()
             .borders(Borders::ALL)
             .title(t!("history_search.panel_title").to_string())
-            .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
+            .border_style(ratatui::style::Style::default().fg(self.styles.focused_border()));
 
         let paragraph = Paragraph::new(lines)
             .block(block)

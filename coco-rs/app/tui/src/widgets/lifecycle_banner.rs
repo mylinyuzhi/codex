@@ -15,15 +15,20 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// Render a banner row: early-return on zero height, wrap spans in a paragraph
 /// styled with the theme's border background.
-pub(crate) fn render_banner_row(parts: Vec<Span<'_>>, theme: &Theme, area: Rect, buf: &mut Buffer) {
+pub(crate) fn render_banner_row(
+    parts: Vec<Span<'_>>,
+    styles: UiStyles<'_>,
+    area: Rect,
+    buf: &mut Buffer,
+) {
     if area.height == 0 {
         return;
     }
     Paragraph::new(Line::from(parts))
-        .style(Style::default().bg(theme.border))
+        .style(Style::default().bg(styles.border()))
         .render(area, buf);
 }

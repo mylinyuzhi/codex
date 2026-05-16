@@ -2,6 +2,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use super::ModelFallbackBanner;
+use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
 
 #[test]
@@ -22,7 +23,7 @@ fn renders_arrow_and_description() {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            let banner = ModelFallbackBanner::new(desc, &theme);
+            let banner = ModelFallbackBanner::new(desc, UiStyles::new(&theme));
             frame.render_widget(banner, area);
         })
         .unwrap();

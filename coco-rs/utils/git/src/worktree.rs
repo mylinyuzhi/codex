@@ -1,8 +1,77 @@
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use unicode_normalization::UnicodeNormalization;
 
 /// Branch prefix for agent worktrees.
 const AGENT_WORKTREE_BRANCH_PREFIX: &str = "agent/task-";
+
+/// Wall-clock cap on the `git worktree list` subprocess — matches TS
+/// `{timeout: 5000}` in `getWorktreePathsPortable.ts`. A hung git
+/// (corrupt repo, paused parent, network FS stall) must not block
+/// session bootstrap, so we kill and return an empty Vec on timeout.
+const WORKTREE_LIST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Return the absolute paths of every worktree associated with the
+/// repo containing `cwd`, NFC-normalised. Order is whatever
+/// `git worktree list --porcelain` produces (typically the main
+/// worktree first, then linked worktrees in creation order).
+///
+/// Empty Vec on any error (binary missing, not a repo, timeout, …).
+/// Callers treat "no worktrees" as "fallback inactive" — TS parity
+/// with `sessionStoragePortable.ts:430`.
+pub fn worktree_paths(cwd: &Path) -> Vec<PathBuf> {
+    run_worktree_list(cwd).unwrap_or_default()
+}
+
+fn run_worktree_list(cwd: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut child = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null())
+        .spawn()?;
+
+    let deadline = Instant::now() + WORKTREE_LIST_TIMEOUT;
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                if !status.success() {
+                    return Ok(Vec::new());
+                }
+                let output = child.wait_with_output()?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                return Ok(parse_worktree_output(&stdout));
+            }
+            None => {
+                if Instant::now() >= deadline {
+                    // Best-effort kill; if it fails the child becomes
+                    // a zombie until the OS reaps it, but we still
+                    // return cleanly so session resolution doesn't
+                    // block.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Ok(Vec::new());
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
+}
+
+/// Pure-function parser exposed for testing; consumes the stdout of
+/// `git worktree list --porcelain` and returns the worktree paths
+/// (NFC-normalized for filesystem-stable comparison).
+pub fn parse_worktree_output(stdout: &str) -> Vec<PathBuf> {
+    stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(|p| PathBuf::from(p.nfc().collect::<String>()))
+        .collect()
+}
 
 /// An orphaned worktree discovered during cleanup.
 #[derive(Debug)]

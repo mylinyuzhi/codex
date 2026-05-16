@@ -274,8 +274,8 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         }
         // === Open the /memory file picker overlay ===
         // Entries are pre-built by the slash dispatcher (no extra state
-        // lookup needed here). On select the TUI creates the file +
-        // launches `$VISUAL || $EDITOR`; on cancel it emits a toast.
+        // lookup needed here). On select the TUI sends a command to the
+        // CLI bridge; on cancel it emits a transcript line + toast.
         // TS: `commands/memory/memory.tsx`'s pre-flight render.
         TuiOnlyEvent::OpenMemoryDialog { entries } => {
             if entries.is_empty() {
@@ -287,6 +287,69 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     crate::state::MemoryDialogOverlay::from_wire(entries),
                 ));
             }
+            true
+        }
+        TuiOnlyEvent::MemoryFileOpened { path } => {
+            let text = t!("toast.memory_opened", path = path.as_str()).to_string();
+            state
+                .session
+                .add_message(crate::state::session::ChatMessage::system_text(
+                    uuid::Uuid::new_v4().to_string(),
+                    text.clone(),
+                ));
+            state.ui.add_toast(Toast::info(text));
+            true
+        }
+        TuiOnlyEvent::MemoryFileOpenFailed { path: _, error } => {
+            let text = t!("toast.memory_open_failed", error = error.as_str()).to_string();
+            state
+                .session
+                .add_message(crate::state::session::ChatMessage::system_text(
+                    uuid::Uuid::new_v4().to_string(),
+                    text.clone(),
+                ));
+            state.ui.add_toast(Toast::warning(text));
+            true
+        }
+        TuiOnlyEvent::PlanFileOpened { path } => {
+            let text = t!("toast.plan_opened", path = path.as_str()).to_string();
+            state
+                .session
+                .add_message(crate::state::session::ChatMessage::system_text(
+                    uuid::Uuid::new_v4().to_string(),
+                    text.clone(),
+                ));
+            state.ui.add_toast(Toast::info(text));
+            true
+        }
+        TuiOnlyEvent::PlanFileOpenFailed { path: _, error } => {
+            let text = t!("toast.plan_open_failed", error = error.as_str()).to_string();
+            state
+                .session
+                .add_message(crate::state::session::ChatMessage::system_text(
+                    uuid::Uuid::new_v4().to_string(),
+                    text.clone(),
+                ));
+            state.ui.add_toast(Toast::warning(text));
+            true
+        }
+        TuiOnlyEvent::ExternalEditorPrepare { .. } => false,
+        TuiOnlyEvent::PromptEditorCompleted { content, modified } => {
+            state.ui.input.set_text(&content);
+            state.ui.input.textarea.set_cursor(content.len());
+            let text = if modified {
+                t!("toast.prompt_editor_updated")
+            } else {
+                t!("toast.prompt_editor_unchanged")
+            }
+            .to_string();
+            state.ui.add_toast(Toast::info(text));
+            true
+        }
+        TuiOnlyEvent::PromptEditorFailed { error } => {
+            state.ui.add_toast(Toast::warning(
+                t!("toast.prompt_editor_failed", error = error.as_str()).to_string(),
+            ));
             true
         }
         TuiOnlyEvent::BashCommandCompleted {
@@ -308,12 +371,6 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     output,
                     exit_code,
                 ));
-            true
-        }
-        TuiOnlyEvent::MemorySaved { path } => {
-            state.ui.add_toast(Toast::success(
-                t!("toast.memory_saved", path = path.as_str()).to_string(),
-            ));
             true
         }
         TuiOnlyEvent::OpenModelPicker => {

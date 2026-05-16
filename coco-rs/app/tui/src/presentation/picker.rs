@@ -5,15 +5,16 @@ use std::ops::Range;
 use ratatui::prelude::*;
 
 use super::layout;
+use super::styles::UiStyles;
 use crate::i18n::t;
 use crate::state::ExportOverlay;
 use crate::state::GlobalSearchOverlay;
 use crate::state::McpServerSelectOverlay;
 use crate::state::MemoryDialogOverlay;
+use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
 use crate::state::QuickOpenOverlay;
 use crate::state::SessionBrowserOverlay;
-use crate::theme::Theme;
 
 #[derive(Debug)]
 pub(crate) enum PickerRow<'a, T> {
@@ -125,7 +126,7 @@ pub(crate) fn collapse_hints(hints: &str, width: usize) -> String {
 
 pub(crate) fn session_browser_content(
     s: &SessionBrowserOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let filter_lower = s.filter.to_lowercase();
     let items: Vec<String> = s
@@ -160,10 +161,17 @@ pub(crate) fn session_browser_content(
         )
     };
 
-    (t!("dialog.title_sessions").to_string(), body, theme.primary)
+    (
+        t!("dialog.title_sessions").to_string(),
+        body,
+        styles.primary(),
+    )
 }
 
-pub(crate) fn quick_open_content(q: &QuickOpenOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn quick_open_content(
+    q: &QuickOpenOverlay,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
     let items: Vec<String> = q
         .files
         .iter()
@@ -184,13 +192,13 @@ pub(crate) fn quick_open_content(q: &QuickOpenOverlay, theme: &Theme) -> (String
             items.join("\n"),
             t!("dialog.hints_enter_open_cancel")
         ),
-        theme.primary,
+        styles.primary(),
     )
 }
 
 pub(crate) fn global_search_content(
     g: &GlobalSearchOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let query_line = if g.query.is_empty() {
         t!("dialog.type_search").to_string()
@@ -224,11 +232,11 @@ pub(crate) fn global_search_content(
             results.join("\n"),
             t!("dialog.esc_cancel")
         ),
-        theme.primary,
+        styles.primary(),
     )
 }
 
-pub(crate) fn export_content(e: &ExportOverlay, theme: &Theme) -> (String, String, Color) {
+pub(crate) fn export_content(e: &ExportOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
     let items: Vec<String> = e
         .formats
         .iter()
@@ -244,13 +252,13 @@ pub(crate) fn export_content(e: &ExportOverlay, theme: &Theme) -> (String, Strin
             items.join("\n"),
             t!("dialog.hints_nav_export_cancel")
         ),
-        theme.primary,
+        styles.primary(),
     )
 }
 
 pub(crate) fn memory_dialog_content(
     m: &MemoryDialogOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let items: Vec<String> = m
         .entries
@@ -258,8 +266,9 @@ pub(crate) fn memory_dialog_content(
         .enumerate()
         .map(|(i, entry)| {
             format!(
-                "{} {} {}",
+                "{} {} {} {}",
                 selected_marker(i, m.selected),
+                memory_row_kind_tag(entry.row_kind),
                 memory_scope_tag(entry.scope),
                 entry.label
             )
@@ -277,12 +286,16 @@ pub(crate) fn memory_dialog_content(
         )
     };
 
-    (t!("dialog.title_memory").to_string(), body, theme.primary)
+    (
+        t!("dialog.title_memory").to_string(),
+        body,
+        styles.primary(),
+    )
 }
 
 pub(crate) fn mcp_server_select_content(
     ms: &McpServerSelectOverlay,
-    theme: &Theme,
+    styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let items: Vec<String> = ms
         .servers
@@ -304,7 +317,7 @@ pub(crate) fn mcp_server_select_content(
             t!("dialog.filter_prefix", text = ms.filter.as_str()),
             items.join("\n")
         ),
-        theme.accent,
+        styles.accent(),
     )
 }
 
@@ -325,6 +338,26 @@ fn memory_scope_tag(scope: MemoryDialogScope) -> &'static str {
         MemoryDialogScope::Project => "[project]",
         MemoryDialogScope::ProjectLocal => "[project-local]",
         MemoryDialogScope::Subdir => "[subdir]",
+    }
+}
+
+fn memory_row_kind_tag(kind: MemoryDialogRowKind) -> &'static str {
+    match kind {
+        MemoryDialogRowKind::File {
+            exists: true,
+            read_only: false,
+        } => "[file:exists]",
+        MemoryDialogRowKind::File {
+            exists: false,
+            read_only: false,
+        } => "[file:new]",
+        MemoryDialogRowKind::File {
+            read_only: true, ..
+        } => "[file:read-only]",
+        MemoryDialogRowKind::Folder { enabled: true } => "[folder:on]",
+        MemoryDialogRowKind::Folder { enabled: false } => "[folder:off]",
+        MemoryDialogRowKind::Toggle { enabled: true } => "[toggle:on]",
+        MemoryDialogRowKind::Toggle { enabled: false } => "[toggle:off]",
     }
 }
 

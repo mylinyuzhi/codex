@@ -2,7 +2,11 @@ use super::*;
 
 fn temp_store() -> SessionAgentTranscriptStore {
     let dir = std::env::temp_dir().join(format!("coco-trans-{}", uuid::Uuid::new_v4().simple()));
-    let store = Arc::new(TranscriptStore::new(dir));
+    let paths = Arc::new(coco_paths::ProjectPaths::new(
+        dir,
+        std::path::Path::new("/test-project"),
+    ));
+    let store = Arc::new(TranscriptStore::new(paths));
     SessionAgentTranscriptStore::new(store)
 }
 

@@ -17,7 +17,7 @@ use ratatui::widgets::Wrap;
 use crate::display_settings::DisplaySettings;
 use crate::display_settings::SyntaxHighlighting;
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 use crate::theme::ThemeChoice;
 use crate::theme::ThemeRuntimeState;
 use crate::theme::ThemeSetting;
@@ -148,12 +148,12 @@ pub(crate) fn syntax_highlighting_status_for_display(settings: DisplaySettings) 
 /// Settings panel widget.
 pub struct SettingsPanelWidget<'a> {
     state: &'a SettingsPanelState,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> SettingsPanelWidget<'a> {
-    pub fn new(state: &'a SettingsPanelState, theme: &'a Theme) -> Self {
-        Self { state, theme }
+    pub fn new(state: &'a SettingsPanelState, styles: UiStyles<'a>) -> Self {
+        Self { state, styles }
     }
 }
 
@@ -186,15 +186,15 @@ impl Widget for SettingsPanelWidget<'_> {
             .flat_map(|(name, active)| {
                 let style = if *active {
                     ratatui::style::Style::default()
-                        .fg(self.theme.primary)
+                        .fg(self.styles.primary())
                         .bold()
                         .underlined()
                 } else {
-                    ratatui::style::Style::default().fg(self.theme.text_dim)
+                    ratatui::style::Style::default().fg(self.styles.dim())
                 };
                 vec![
                     Span::styled(format!(" {name} "), style),
-                    Span::raw("│").fg(self.theme.border),
+                    Span::raw("│").fg(self.styles.border()),
                 ]
             })
             .collect();
@@ -217,8 +217,8 @@ impl Widget for SettingsPanelWidget<'_> {
                     };
                     lines.push(Line::from(vec![
                         Span::raw(marker),
-                        Span::raw(active).fg(self.theme.success),
-                        Span::raw(choice.label.as_str()).fg(self.theme.text),
+                        Span::raw(active).fg(self.styles.success()),
+                        Span::raw(choice.label.as_str()).fg(self.styles.text()),
                     ]));
                 }
                 lines.push(Line::default());
@@ -239,13 +239,13 @@ impl Widget for SettingsPanelWidget<'_> {
                     .syntax_highlighting_editability
                     .is_editable()
                 {
-                    self.theme.text
+                    self.styles.text()
                 } else {
-                    self.theme.text_dim
+                    self.styles.dim()
                 };
                 lines.push(Line::from(vec![
                     Span::raw(marker),
-                    Span::raw(active).fg(self.theme.success),
+                    Span::raw(active).fg(self.styles.success()),
                     Span::raw(format!("{}: {status}", t!("settings.syntax_highlighting")))
                         .fg(text_color),
                 ]));
@@ -254,11 +254,11 @@ impl Widget for SettingsPanelWidget<'_> {
                 if self.state.output_styles.is_empty() {
                     lines.push(Line::from(
                         Span::raw(format!("  {}", t!("settings.no_output_styles")))
-                            .fg(self.theme.text_dim),
+                            .fg(self.styles.dim()),
                     ));
                     lines.push(Line::from(
                         Span::raw(format!("  {}", t!("settings.add_output_styles_hint")))
-                            .fg(self.theme.text_dim),
+                            .fg(self.styles.dim()),
                     ));
                 } else {
                     for (i, style) in self.state.output_styles.iter().enumerate() {
@@ -269,7 +269,7 @@ impl Widget for SettingsPanelWidget<'_> {
                         };
                         lines.push(Line::from(vec![
                             Span::raw(marker),
-                            Span::raw(style.as_str()).fg(self.theme.text),
+                            Span::raw(style.as_str()).fg(self.styles.text()),
                         ]));
                     }
                 }
@@ -278,14 +278,14 @@ impl Widget for SettingsPanelWidget<'_> {
                 if self.state.permission_rules.is_empty() {
                     lines.push(Line::from(
                         Span::raw(format!("  {}", t!("settings.no_permission_rules")))
-                            .fg(self.theme.text_dim),
+                            .fg(self.styles.dim()),
                     ));
                 } else {
                     for rule in &self.state.permission_rules {
                         lines.push(Line::from(vec![
-                            Span::raw(format!("  {} ", rule.tool)).fg(self.theme.text),
-                            Span::raw(format!("→ {} ", rule.behavior)).fg(self.theme.accent),
-                            Span::raw(format!("({})", rule.source)).fg(self.theme.text_dim),
+                            Span::raw(format!("  {} ", rule.tool)).fg(self.styles.text()),
+                            Span::raw(format!("→ {} ", rule.behavior)).fg(self.styles.accent()),
+                            Span::raw(format!("({})", rule.source)).fg(self.styles.dim()),
                         ]));
                     }
                 }
@@ -293,31 +293,30 @@ impl Widget for SettingsPanelWidget<'_> {
             SettingsTab::About => {
                 lines.push(Line::from(
                     Span::raw(t!("dialog.settings_about_title").to_string())
-                        .fg(self.theme.primary)
+                        .fg(self.styles.primary())
                         .bold(),
                 ));
                 lines.push(Line::from(
-                    Span::raw(t!("dialog.settings_about_built").to_string())
-                        .fg(self.theme.text_dim),
+                    Span::raw(t!("dialog.settings_about_built").to_string()).fg(self.styles.dim()),
                 ));
                 lines.push(Line::from(
-                    Span::raw(t!("dialog.settings_about_arch").to_string()).fg(self.theme.text_dim),
+                    Span::raw(t!("dialog.settings_about_arch").to_string()).fg(self.styles.dim()),
                 ));
             }
         }
 
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::raw(format!("  {}", t!("settings.hint_switch_tab"))).fg(self.theme.text_dim),
-            Span::raw(t!("settings.hint_navigate").to_string()).fg(self.theme.text_dim),
-            Span::raw(t!("settings.hint_select").to_string()).fg(self.theme.text_dim),
-            Span::raw(t!("settings.hint_close").to_string()).fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("settings.hint_switch_tab"))).fg(self.styles.dim()),
+            Span::raw(t!("settings.hint_navigate").to_string()).fg(self.styles.dim()),
+            Span::raw(t!("settings.hint_select").to_string()).fg(self.styles.dim()),
+            Span::raw(t!("settings.hint_close").to_string()).fg(self.styles.dim()),
         ]));
 
         let block = Block::default()
             .borders(Borders::ALL)
             .title(t!("dialog.title_settings").to_string())
-            .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
+            .border_style(ratatui::style::Style::default().fg(self.styles.focused_border()));
 
         let paragraph = Paragraph::new(lines)
             .block(block)

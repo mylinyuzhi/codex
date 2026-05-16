@@ -123,6 +123,7 @@ pub use event::McpServerInit;
 pub use event::McpStartupCompleteParams;
 pub use event::McpStartupStatusParams;
 pub use event::MemoryDialogEntry;
+pub use event::MemoryDialogRowKind;
 pub use event::MemoryDialogScope;
 pub use event::ModelFallbackParams;
 pub use event::ModelRoleChangedParams;

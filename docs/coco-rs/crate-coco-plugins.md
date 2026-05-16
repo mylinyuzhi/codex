@@ -1,6 +1,6 @@
 # coco-plugins — Crate Plan
 
-TS source: `src/plugins/`, `src/types/plugin.ts`, `src/utils/plugins/` (44 files, 20.5K LOC)
+TS source: `plugins/`, `types/plugin.ts`, `utils/plugins/` (44 files, 20.5K LOC)
 
 ## Dependencies
 

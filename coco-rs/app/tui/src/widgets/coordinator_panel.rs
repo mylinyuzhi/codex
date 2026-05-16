@@ -16,7 +16,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 
 /// A background agent task for the coordinator panel.
 #[derive(Debug, Clone)]
@@ -52,15 +52,15 @@ impl CoordinatorTask {
 pub struct CoordinatorPanel<'a> {
     tasks: &'a [CoordinatorTask],
     selected_index: Option<i32>,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> CoordinatorPanel<'a> {
-    pub fn new(tasks: &'a [CoordinatorTask], theme: &'a Theme) -> Self {
+    pub fn new(tasks: &'a [CoordinatorTask], styles: UiStyles<'a>) -> Self {
         Self {
             tasks,
             selected_index: None,
-            theme,
+            styles,
         }
     }
 
@@ -80,9 +80,9 @@ impl Widget for CoordinatorPanel<'_> {
 
             let status_icon = if task.is_running { "▶" } else { "⏸" };
             let status_color = if task.is_running {
-                self.theme.tool_running
+                self.styles.tool_running()
             } else {
-                self.theme.text_dim
+                self.styles.dim()
             };
 
             let elapsed = format_elapsed(task.elapsed_ms);
@@ -100,7 +100,7 @@ impl Widget for CoordinatorPanel<'_> {
             } else {
                 task.description.clone()
             };
-            spans.push(Span::raw(desc).fg(self.theme.text));
+            spans.push(Span::raw(desc).fg(self.styles.text()));
 
             // Stats
             spans.push(Span::raw(format!(" {elapsed}")).dim());
@@ -108,7 +108,9 @@ impl Widget for CoordinatorPanel<'_> {
                 spans.push(Span::raw(format!(" ↕{tokens}")).dim());
             }
             if task.queued_messages > 0 {
-                spans.push(Span::raw(format!(" 📨{}", task.queued_messages)).fg(self.theme.accent));
+                spans.push(
+                    Span::raw(format!(" 📨{}", task.queued_messages)).fg(self.styles.accent()),
+                );
             }
 
             lines.push(Line::from(spans));
@@ -124,7 +126,7 @@ impl Widget for CoordinatorPanel<'_> {
             Block::default()
                 .borders(Borders::TOP)
                 .title(format!(" {} ", t!("coordinator.title")))
-                .border_style(ratatui::style::Style::default().fg(self.theme.border)),
+                .border_style(ratatui::style::Style::default().fg(self.styles.border())),
         );
         panel.render(area, buf);
     }

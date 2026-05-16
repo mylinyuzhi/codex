@@ -16,19 +16,22 @@ use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 use crate::widgets::lifecycle_banner::render_banner_row;
 
 /// Model-fallback persistent banner. Occupies a single row.
 pub struct ModelFallbackBanner<'a> {
     /// The `"from → to"` summary provided by the protocol handler.
     description: &'a str,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> ModelFallbackBanner<'a> {
-    pub fn new(description: &'a str, theme: &'a Theme) -> Self {
-        Self { description, theme }
+    pub fn new(description: &'a str, styles: UiStyles<'a>) -> Self {
+        Self {
+            description,
+            styles,
+        }
     }
 
     /// Whether to allocate a row for this banner. Handlers keep
@@ -44,14 +47,14 @@ impl Widget for ModelFallbackBanner<'_> {
         let parts = vec![
             Span::styled(
                 t!("model_fallback.label").to_string(),
-                Style::default().fg(self.theme.warning).bold(),
+                Style::default().fg(self.styles.warning()).bold(),
             ),
             Span::styled(
                 self.description,
-                Style::default().fg(self.theme.text).bold(),
+                Style::default().fg(self.styles.text()).bold(),
             ),
         ];
-        render_banner_row(parts, self.theme, area, buf);
+        render_banner_row(parts, self.styles, area, buf);
     }
 }
 

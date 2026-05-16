@@ -1,6 +1,6 @@
 # coco-inference — Crate Plan
 
-TS source: `src/services/api/claude.ts` (3419 LOC), `src/services/api/withRetry.ts` (550 LOC), `src/services/api/filesApi.ts` (748 LOC), `src/services/api/bootstrap.ts` (141 LOC), `src/services/api/dumpPrompts.ts` (227 LOC), `src/utils/auth.ts` (2002 LOC), `src/services/oauth/`, `src/services/tokenEstimation.ts`, `src/services/claudeAiLimits.ts`, `src/services/rateLimitMessages.ts`
+TS source: `services/api/claude.ts` (3419 LOC), `services/api/withRetry.ts` (550 LOC), `services/api/filesApi.ts` (748 LOC), `services/api/bootstrap.ts` (141 LOC), `services/api/dumpPrompts.ts` (227 LOC), `utils/auth.ts` (2002 LOC), `services/oauth/`, `services/tokenEstimation.ts`, `services/claudeAiLimits.ts`, `services/rateLimitMessages.ts`
 
 ## Dependencies
 

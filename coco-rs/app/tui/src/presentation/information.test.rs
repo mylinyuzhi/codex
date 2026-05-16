@@ -2,6 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
+use crate::presentation::styles::UiStyles;
 use crate::state::DiffViewOverlay;
 use crate::theme::Theme;
 
@@ -22,7 +23,7 @@ fn diff_view_content_formats_diff_lines_and_clamps_negative_scroll() {
         scroll: -4,
     };
 
-    let (title, body, border) = diff_view_content(&overlay, &theme);
+    let (title, body, border) = diff_view_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Diff: src/lib.rs [1/6] ");
     assert_eq!(border, theme.primary);
@@ -46,7 +47,7 @@ fn diff_view_content_scrolls_and_caps_to_thirty_lines() {
         scroll: 3,
     };
 
-    let (title, body, _) = diff_view_content(&overlay, &theme);
+    let (title, body, _) = diff_view_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Diff: src/lib.rs [4/35] ");
     assert!(body.lines().any(|line| line == "    line-3"));
@@ -66,7 +67,7 @@ fn context_viz_content_caps_bar_when_usage_exceeds_total() {
     state.session.token_usage.output_tokens = 8;
     state.session.token_usage.cache_read_tokens = 5;
 
-    let (title, body, border) = context_viz_content(&state, &theme);
+    let (title, body, border) = context_viz_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Context Window ");
     assert_eq!(border, theme.primary);

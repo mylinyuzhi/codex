@@ -118,6 +118,15 @@ pub enum MemoryEvent {
     /// the threshold gates.
     /// TS: `tengu_session_memory_manual_extraction`.
     SessionMemoryManualExtraction,
+
+    /// chmod 0o700/0o600 on a session-memory path failed. Flagged
+    /// because the file body is potentially sensitive (conversation
+    /// summary) and a failed chmod means it may be group/world
+    /// readable on multi-user hosts. No TS analog — TS gets atomic
+    /// `wx`+`mode` from Node's `writeFile`; Rust's chmod path can
+    /// race on platforms where setting permissions atomically isn't
+    /// always available.
+    SessionMemoryPermsFailed { path: String },
 }
 
 /// Reason auto-memory was disabled.
@@ -353,6 +362,10 @@ impl MemoryTelemetryEmitter for OtelEmitter {
             MemoryEvent::SessionMemoryManualExtraction => {
                 self.manager
                     .counter("tengu_session_memory_manual_extraction", 1, &[]);
+            }
+            MemoryEvent::SessionMemoryPermsFailed { path: _ } => {
+                self.manager
+                    .counter("coco_session_memory_perms_failed", 1, &[]);
             }
         }
     }

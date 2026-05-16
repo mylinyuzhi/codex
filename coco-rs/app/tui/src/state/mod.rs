@@ -33,6 +33,7 @@ pub use overlay::McpServerOption;
 pub use overlay::McpServerSelectOverlay;
 pub use overlay::MemoryDialogEntry;
 pub use overlay::MemoryDialogOverlay;
+pub use overlay::MemoryDialogRowKind;
 pub use overlay::MemoryDialogScope;
 pub use overlay::ModelEntry;
 pub use overlay::ModelPickerOverlay;

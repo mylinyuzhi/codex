@@ -1,6 +1,6 @@
 # TS -> Rust Complete Mapping (Source of Truth)
 
-Every TS `src/` directory and top-level file mapped to its Rust crate, version, and strategy.
+Every TS source directory and top-level file mapped to its Rust crate, version, and strategy.
 
 ## Legend
 
@@ -11,7 +11,7 @@ Every TS `src/` directory and top-level file mapped to its Rust crate, version, 
 
 ## TS Directories
 
-| TS `src/` dir | Rust crate | Rust dir | Version | Strategy | Notes |
+| TS dir | Rust crate | Rust dir | Version | Strategy | Notes |
 |---------------|-----------|----------|---------|----------|-------|
 | `types/` | `coco-types` | `common/types/` | v1 | TS | Message, Tool, Task, Permission, Command types |
 | `constants/` | `coco-config` | `common/config/` | v1 | TS | System constants, merged into config |

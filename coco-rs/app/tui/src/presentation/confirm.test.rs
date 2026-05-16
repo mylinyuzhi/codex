@@ -2,6 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
+use crate::presentation::styles::UiStyles;
 use crate::state::CostWarningOverlay;
 use crate::state::FeedbackOverlay;
 use crate::state::PlanApprovalOverlay;
@@ -17,7 +18,7 @@ fn cost_warning_content_formats_cents() {
         threshold_cents: 456,
     };
 
-    let (title, body, border) = cost_warning_content(&overlay, &theme);
+    let (title, body, border) = cost_warning_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Cost Warning ");
     assert_eq!(border, theme.warning);
@@ -41,9 +42,9 @@ fn task_detail_content_applies_scroll_window() {
         scroll: 3,
     };
 
-    let (title, body, border) = task_detail_content(&overlay, &theme);
+    let (title, body, border) = task_detail_content(&overlay, UiStyles::new(&theme));
 
-    assert_eq!(title, " Task: build ");
+    assert_eq!(title, " Task: build [4/25] ");
     assert_eq!(border, theme.primary);
     assert!(body.contains("Build output"));
     assert!(body.contains("line-3"));
@@ -68,11 +69,34 @@ fn task_detail_content_clamps_negative_scroll_to_start() {
         scroll: -5,
     };
 
-    let (_, body, _) = task_detail_content(&overlay, &theme);
+    let (_, body, _) = task_detail_content(&overlay, UiStyles::new(&theme));
 
     assert!(body.contains("line-0"));
     assert!(body.contains("line-19"));
     assert!(!body.lines().any(|line| line == "line-20"));
+}
+
+#[test]
+fn task_detail_content_clamps_past_end_and_shows_position() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let overlay = TaskDetailOverlay {
+        task_id: "task-1".to_string(),
+        task_type: "build".to_string(),
+        description: "Build output".to_string(),
+        output: (0..3)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        status: "running".to_string(),
+        scroll: 10,
+    };
+
+    let (title, body, _) = task_detail_content(&overlay, UiStyles::new(&theme));
+
+    assert_eq!(title, " Task: build [4/3] ");
+    assert!(!body.lines().any(|line| line == "line-0"));
+    assert!(body.contains("↑/↓ Scroll"));
 }
 
 #[test]
@@ -90,7 +114,7 @@ fn plan_approval_content_truncates_long_preview_and_marks_focus() {
     );
     overlay.toggle_focus();
 
-    let (title, body, border) = plan_approval_content(&overlay, &theme);
+    let (title, body, border) = plan_approval_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Plan approval — from planner ");
     assert_eq!(border, theme.plan_mode);
@@ -111,7 +135,7 @@ fn feedback_content_marks_selected_option() {
         selected: 1,
     };
 
-    let (title, body, border) = feedback_content(&overlay, &theme);
+    let (title, body, border) = feedback_content(&overlay, UiStyles::new(&theme));
 
     assert_eq!(title, " Feedback ");
     assert_eq!(border, theme.primary);

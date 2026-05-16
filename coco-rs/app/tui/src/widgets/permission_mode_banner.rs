@@ -16,17 +16,17 @@ use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::presentation::styles::UiStyles;
 use crate::widgets::lifecycle_banner::render_banner_row;
 
 pub struct PermissionModeBanner<'a> {
     mode: PermissionMode,
-    theme: &'a Theme,
+    styles: UiStyles<'a>,
 }
 
 impl<'a> PermissionModeBanner<'a> {
-    pub fn new(mode: PermissionMode, theme: &'a Theme) -> Self {
-        Self { mode, theme }
+    pub fn new(mode: PermissionMode, styles: UiStyles<'a>) -> Self {
+        Self { mode, styles }
     }
 
     /// Banner shows for every mode that isn't `Default`. Default mode
@@ -42,32 +42,32 @@ impl Widget for PermissionModeBanner<'_> {
             PermissionMode::AcceptEdits => (
                 t!("permission_mode.accept_edits"),
                 t!("permission_mode.accept_edits_desc"),
-                self.theme.accent,
+                self.styles.accent(),
             ),
             PermissionMode::Plan => (
                 t!("permission_mode.plan"),
                 t!("permission_mode.plan_desc"),
-                self.theme.plan_mode,
+                self.styles.plan(),
             ),
             PermissionMode::BypassPermissions => (
                 t!("permission_mode.bypass"),
                 t!("permission_mode.bypass_desc"),
-                self.theme.error,
+                self.styles.error(),
             ),
             PermissionMode::DontAsk => (
                 t!("permission_mode.dont_ask"),
                 t!("permission_mode.dont_ask_desc"),
-                self.theme.warning,
+                self.styles.warning(),
             ),
             PermissionMode::Auto => (
                 t!("permission_mode.auto"),
                 t!("permission_mode.auto_desc"),
-                self.theme.accent,
+                self.styles.accent(),
             ),
             PermissionMode::Bubble => (
                 t!("permission_mode.bubble"),
                 t!("permission_mode.bubble_desc"),
-                self.theme.text_dim,
+                self.styles.dim(),
             ),
             PermissionMode::Default => return, // caller should have filtered
         };
@@ -77,9 +77,9 @@ impl Widget for PermissionModeBanner<'_> {
                 Style::default().fg(color).bold(),
             ),
             Span::styled(label.to_string(), Style::default().fg(color).bold()),
-            Span::styled(blurb.to_string(), Style::default().fg(self.theme.text_dim)),
+            Span::styled(blurb.to_string(), Style::default().fg(self.styles.dim())),
         ];
-        render_banner_row(parts, self.theme, area, buf);
+        render_banner_row(parts, self.styles, area, buf);
     }
 }
 

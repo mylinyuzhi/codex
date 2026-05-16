@@ -5,9 +5,9 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
-const SESSION_MEMORY_SUBDIR: &str = "session-memory";
-
+use coco_paths::ProjectPaths;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::SideQueryHandle;
 use coco_tool_runtime::SideQueryRequest;
@@ -33,6 +33,26 @@ use crate::telemetry::NoopEmitter;
 
 /// Telemetry source label for the recall ranker side-query.
 const RECALL_QUERY_SOURCE: &str = "memory_recall";
+
+/// Read a `MEMORY.md` index file, logging unexpected errors at debug
+/// level. `ENOENT` is the expected "cold start" case and stays silent;
+/// EACCES / EIO / etc. would otherwise be swallowed by `.ok()` and
+/// surface as "no memory available" with no log trail.
+async fn read_index_file(path: &std::path::Path) -> Option<String> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(s) => Some(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            tracing::debug!(
+                target: "coco_memory::runtime",
+                path = %path.display(),
+                error = %e,
+                "MEMORY.md unreadable — memory section omitted"
+            );
+            None
+        }
+    }
+}
 
 /// Forced-tool name used to coerce the recall ranker into structured
 /// output. Mirrors TS `selectRelevantMemories`'s `tool_choice` shape.
@@ -64,18 +84,24 @@ pub struct MemoryRuntime {
     /// runner can [`MemoryRuntime::install_agent`] a real
     /// `SwarmAgentHandle` after the engine is built; until then the
     /// services see whatever was passed at build (typically
-    /// `NoOpAgentHandle`).
+    /// `NoOpAgentHandle`). Sync `std::sync::RwLock` because read sites
+    /// clone-and-drop the guard immediately — no `.await` required.
     agent_slot: crate::service::extract::AgentSlot,
     /// LLM ranker handle. `None` ⇒ recall falls back to the recency
     /// heuristic. Use [`MemoryRuntime::install_side_query`] to plug in
     /// a `coco-inference` adapter once it's built.
-    side_query: tokio::sync::RwLock<Option<SideQueryHandle>>,
+    ///
+    /// `OnceLock` instead of `RwLock<Option<...>>` because installation
+    /// is genuinely one-shot in production (called once by the CLI/SDK
+    /// runner during bootstrap). Reads become a sync atomic load with
+    /// no lock acquisition.
+    side_query: OnceLock<SideQueryHandle>,
     /// Lazy session enumerator used by [`Self::tick_dream`]. The
     /// session-runtime wires this with a closure that reads the
-    /// project's `TranscriptStore`. `None` ⇒ tick_dream sees an empty
+    /// project's `TranscriptStore`. Absence ⇒ tick_dream sees an empty
     /// list, which keeps the session-gate as the limiting factor and
-    /// matches the pre-wire baseline.
-    session_enumerator: tokio::sync::RwLock<Option<SessionEnumerator>>,
+    /// matches the pre-wire baseline. Install-once via `OnceLock`.
+    session_enumerator: OnceLock<SessionEnumerator>,
     /// Shared inbox for user-visible save notices. Extract / dream
     /// push into it on success; the engine drains it once per turn
     /// in `finalize_turn_post_tools` and injects a
@@ -114,6 +140,12 @@ pub struct MemoryRuntimeBuilder {
     /// gates its dispatch separately. Defaults to `true` so legacy
     /// callers don't accidentally suppress the init event.
     pub auto_compact_enabled: bool,
+    /// Optional pre-computed [`ProjectPaths`]. When `None`, [`Self::build`]
+    /// derives one from `config_home + canonical(project_root)`. Callers
+    /// that already hold an `Arc<ProjectPaths>` (e.g. `app-cli`'s
+    /// `paths::project_paths`) supply it here so we don't re-do the
+    /// canonical-git-root + slug walk a second time.
+    pub project_paths: Option<Arc<ProjectPaths>>,
 }
 
 impl MemoryRuntimeBuilder {
@@ -134,7 +166,17 @@ impl MemoryRuntimeBuilder {
             side_query: None,
             transcript_dir: None,
             auto_compact_enabled: true,
+            project_paths: None,
         }
+    }
+
+    /// Reuse a pre-computed [`ProjectPaths`] instead of building a
+    /// fresh one in [`Self::build`]. Saves the canonical-git-root
+    /// walk + slug NFC pass when the caller already holds a shared
+    /// instance.
+    pub fn with_project_paths(mut self, project_paths: Arc<ProjectPaths>) -> Self {
+        self.project_paths = Some(project_paths);
+        self
     }
 
     /// Tell the runtime whether auto-compact is active for this
@@ -180,11 +222,18 @@ impl MemoryRuntimeBuilder {
             &self.project_root,
             self.config.directory.as_deref(),
         );
-        let session_memory_dir = self.config_home.join(SESSION_MEMORY_SUBDIR);
+        // Reuse caller-supplied `ProjectPaths`, or derive once
+        // (canonical-git-root + slug). Session-memory writes go to
+        // `<projectDir>/<sid>/session-memory/summary.md` — TS layout.
+        let project_paths = self.project_paths.unwrap_or_else(|| {
+            let canonical = coco_git::find_canonical_git_root(&self.project_root)
+                .unwrap_or_else(|| self.project_root.clone());
+            Arc::new(ProjectPaths::new(self.config_home.clone(), &canonical))
+        });
         // Master swappable cell — every service sees the same handle
         // and observes any later `install_agent` swap.
         let agent_slot: crate::service::extract::AgentSlot =
-            Arc::new(tokio::sync::RwLock::new(self.agent.clone()));
+            Arc::new(std::sync::RwLock::new(self.agent.clone()));
         // Single shared notice inbox — `extract` and `dream` push
         // user-visible save notices here on success; the engine
         // drains via `MemoryRuntime::drain_user_notices()`. SM also
@@ -206,12 +255,18 @@ impl MemoryRuntimeBuilder {
             notices.clone(),
         ));
         let session_memory = Arc::new(SessionMemoryService::with_shared_agent(
+            project_paths,
             self.session_id,
-            session_memory_dir,
             self.config.clone(),
             agent_slot.clone(),
             self.telemetry.clone(),
         ));
+        let side_query_slot = OnceLock::new();
+        if let Some(handle) = self.side_query {
+            // Builder may pre-install — `set` is infallible on a fresh
+            // OnceLock, so .ok() is just type-erasure of the result.
+            let _ = side_query_slot.set(handle);
+        }
         MemoryRuntime {
             directories,
             config: self.config,
@@ -221,8 +276,8 @@ impl MemoryRuntimeBuilder {
             transcript_dir: self.transcript_dir,
             recall_state: Arc::new(PrefetchState::new()),
             agent_slot,
-            side_query: tokio::sync::RwLock::new(self.side_query),
-            session_enumerator: tokio::sync::RwLock::new(None),
+            side_query: side_query_slot,
+            session_enumerator: OnceLock::new(),
             notices,
         }
     }
@@ -232,26 +287,40 @@ impl MemoryRuntime {
     /// Replace the agent handle every service uses for forked spawns.
     /// Call this from the SDK / TUI runner once the real
     /// `SwarmAgentHandle` is built — until then services use whatever
-    /// the builder received (typically `NoOpAgentHandle`).
-    pub async fn install_agent(&self, handle: coco_tool_runtime::AgentHandleRef) {
-        *self.agent_slot.write().await = handle;
+    /// the builder received (typically `NoOpAgentHandle`). Sync now
+    /// that the slot is `std::sync::RwLock`; existing callsites
+    /// `.await` was a no-op so removing `async` from the signature
+    /// produces no observable change beyond the lighter call.
+    pub fn install_agent(&self, handle: coco_tool_runtime::AgentHandleRef) {
+        *self
+            .agent_slot
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = handle;
     }
 
     /// Plug in a [`coco_tool_runtime::SideQueryHandle`] for the
     /// recall ranker. With a handle present, [`Self::recall`]
     /// dispatches a `ModelRole::Memory` side-query; without one it
     /// falls back to the recency heuristic.
-    pub async fn install_side_query(&self, handle: SideQueryHandle) {
-        *self.side_query.write().await = Some(handle);
+    ///
+    /// One-shot — a second call returns the handle back to the caller
+    /// (`Err`). This matches the documented "call once at session
+    /// bootstrap" contract and prevents accidental swap during a turn,
+    /// which would surface as inconsistent ranker behavior mid-recall.
+    pub fn install_side_query(&self, handle: SideQueryHandle) -> Result<(), SideQueryHandle> {
+        self.side_query.set(handle)
     }
 
     /// Install a [`SessionEnumerator`] used by [`Self::tick_dream`].
     /// The session-runtime wires this with a closure backed by the
     /// project's `TranscriptStore`; before installation `tick_dream`
     /// sees an empty list and the session gate stays the limiting
-    /// factor. Idempotent — later installs replace earlier ones.
-    pub async fn install_session_enumerator(&self, enumerator: SessionEnumerator) {
-        *self.session_enumerator.write().await = Some(enumerator);
+    /// factor. One-shot — see [`Self::install_side_query`].
+    pub fn install_session_enumerator(
+        &self,
+        enumerator: SessionEnumerator,
+    ) -> Result<(), SessionEnumerator> {
+        self.session_enumerator.set(enumerator)
     }
 
     /// Drain user-visible memory save notices accumulated since the
@@ -271,7 +340,7 @@ impl MemoryRuntime {
     /// and is invoked **only** when the gates require it. Without an
     /// enumerator the call effectively no-ops.
     pub async fn tick_dream(&self, now_ms: i64) -> crate::service::dream::DreamOutcome {
-        let enumerator = self.session_enumerator.read().await.clone();
+        let enumerator = self.session_enumerator.get().cloned();
         let transcript_dir = self
             .transcript_dir
             .clone()
@@ -294,6 +363,14 @@ impl MemoryRuntime {
     /// cursor / session-memory init flag into the next round. The
     /// on-disk MEMORY.md and topic files are left alone — those are
     /// genuinely cross-conversation memory.
+    ///
+    /// `DreamService` is intentionally **not** reset: its 24h time
+    /// gate + scan-throttle + PID lock are global-cadence concerns,
+    /// not per-conversation state. A user running `/clear` shouldn't
+    /// re-pay the cost of a multi-minute consolidation, and TS's
+    /// `executeAutoDream` doesn't touch its scheduler state on
+    /// `clearConversation` either (`services/autoDream/autoDream.ts`
+    /// keeps state in module-scope closures across resets).
     pub async fn reset(&self) {
         self.recall_state.reset();
         self.extract.reset().await;
@@ -338,14 +415,12 @@ impl MemoryRuntime {
             SystemPromptVariant::Auto
         };
 
-        let personal_index = tokio::fs::read_to_string(self.directories.personal_index())
+        let personal_index = read_index_file(&self.directories.personal_index())
             .await
-            .ok()
             .map(|s| truncate_entrypoint_content(&s).content);
         let team_index = if matches!(variant, SystemPromptVariant::Combined) {
-            tokio::fs::read_to_string(self.directories.team_index())
+            read_index_file(&self.directories.team_index())
                 .await
-                .ok()
                 .map(|s| truncate_entrypoint_content(&s).content)
         } else {
             None
@@ -397,7 +472,7 @@ impl MemoryRuntime {
             return Vec::new();
         }
 
-        let side_query = self.side_query.read().await.clone();
+        let side_query = self.side_query.get().cloned();
         let selected: Vec<String> = match side_query {
             Some(handle) => {
                 let user_prompt =
@@ -452,14 +527,19 @@ impl MemoryRuntime {
                                 parse_selection_response(&text)
                             });
                         // Ranker returns filenames; resolve to absolute paths
-                        // by matching against the scanned manifest.
+                        // by matching against the scanned manifest via a
+                        // hash index — O(k) instead of O(n·k).
+                        let by_name: std::collections::HashMap<&str, &str> = scanned
+                            .iter()
+                            .map(|m| (m.filename.as_str(), m.path.to_str().unwrap_or("")))
+                            .collect();
                         names
                             .into_iter()
                             .filter_map(|name| {
-                                scanned
-                                    .iter()
-                                    .find(|m| m.filename == name)
-                                    .map(|m| m.path.to_string_lossy().into_owned())
+                                by_name
+                                    .get(name.as_str())
+                                    .filter(|p| !p.is_empty())
+                                    .map(|p| (*p).to_string())
                             })
                             .collect()
                     }

@@ -7,10 +7,10 @@ document captures broader migration notes, surface-by-surface sequencing, and
 acceptance criteria. The final product target lives in
 `agent-console-design.md`; the native terminal-surface constraints live in
 `terminal-surface-design.md`. These notes use the current `coco-rs/app/tui`
-implementation as the baseline, the TypeScript project at
-`/lyz/codespace/3rd/claude-code` as a behavior reference, `codex-rs/tui` as a
-ratatui terminal-mechanics reference, and `codex-rs-tui-comparison.md` as the
-visible UI design comparison.
+implementation as the baseline, the TS project as a behavior reference,
+`codex-rs/tui` as a ratatui terminal-mechanics reference, and
+`codex-rs-tui-comparison.md` as the visible UI design comparison. TS file paths
+are relative to the TS project's `src/` directory.
 
 Do not extend this file to describe the final console. New final console design
 content belongs in `agent-console-design.md`, organized by final console
@@ -100,6 +100,23 @@ These are hard constraints for all TUI work:
 
 Use TS as a behavior reference only.
 
+TS file paths in this section are relative to the TS project's `src/`
+directory. Important anchors:
+
+- `components/PromptInput/inputModes.ts`
+- `components/PromptInput/PromptInput.tsx`
+- `components/PromptInput/PromptInputFooter.tsx`
+- `components/PromptInput/PromptInputFooterSuggestions.tsx`
+- `components/memory/MemoryFileSelector.tsx`
+- `utils/handlePromptSubmit.ts`
+- `hooks/useExitOnCtrlCD.ts`
+- `hooks/useExitOnCtrlCDWithKeybindings.ts`
+- `components/MessageSelector.tsx`
+- `components/ModelPicker.tsx`
+- `components/permissions/PermissionPrompt.tsx`
+- `screens/REPL.tsx`
+- `services/compact/compactWarningHook.ts`
+
 Mirror provider-neutral, user-visible behavior:
 
 - key flow and focus order
@@ -134,17 +151,18 @@ deletion plan.
 | Old state sample listed `plan_mode: bool` | `SessionState` derives plan mode from `permission_mode == PermissionMode::Plan`. | Keep plan mode derived from permission mode. | D1 complete; code invariant ongoing. | Docs and new APIs do not add a separate plan boolean. |
 | Old state sample listed `file_suggestions` and `skill_suggestions` | `UiState` uses one `active_suggestions: Option<ActiveSuggestions>`. | Preserve a single suggestion state machine. | D1 complete; I10 preserves. | No new per-kind suggestion state. |
 | Old command sample listed `MouseScroll` / `MouseClick` | `TuiEvent` has no mouse variant and `terminal.rs` never enables mouse capture. | Mouse capture remains disabled. | D1 complete; I3a codifies. | No `EnableMouseCapture`; mouse events are dropped defensively. |
-| Memory prefix path | `PromptMode::Memory`, `UserCommand::SubmitMemory`, `TuiOnlyEvent::MemorySaved`, and `MessageContent::MemoryInput` exist. | Remove the prefix path. `/memory` is the only memory editing entrypoint. | I1 | Prefix text is ordinary chat; deleted APIs have no production call sites. |
-| Direct memory append | `tui_runner::run_prompt_mode_memory` appends directly to `CLAUDE.md`. | Memory file edits route through `/memory` and the editor/opener service. | I1, I6, I7 | No input-bar file writes. |
-| Memory dialog payload | `OpenMemoryDialog` carries path/label/scope rows. | Add row-kind-aware `MemoryPickerRow` payload. | I7 | Renderer consumes typed rows, not path/label/scope-only rows. |
-| Render reads runtime helper | `render.rs` calls a typed env helper for coordinator display. | Display decisions are folded into state/view model before render. | I2, I9 | Render is deterministic from state plus frame area. |
-| Input rendering duplication | `render.rs::render_input` and `widgets/input.rs` both know prompt titles, prefix stripping, and styling. | One input view model and renderer owns composer presentation. | I10 | Duplicate rendering path removed. |
-| Direct theme reads | Most widgets and overlay renderers read `Theme` fields directly. | New presentation code reads semantic `UiStyles`; old code migrates incrementally. | I2, I3d | New widgets do not reach into `theme.X` directly. |
-| Model fallback inference | `update/show.rs` can infer provider from builtin model id when catalog is empty. | Fallback constrained to tests/pre-bootstrap only. Production uses session catalog. | I4 | Production path has no model-prefix provider inference. |
+| Memory prefix path | Removed. TS `components/PromptInput/inputModes.ts` recognizes only `!` as an input mode character. | Keep `/memory` as the only memory editing entrypoint. | I1 complete | Leading `#` text is ordinary chat; deleted APIs have no production call sites. |
+| Direct memory append | Removed. The input bar no longer appends directly to `CLAUDE.md`, and `/memory` open results are transcript-visible. | Keep memory file edits routed through `/memory` and the editor/opener service. | I1/I6 complete for current file-row flow; I7 payload shape complete | No input-bar file writes. |
+| Memory dialog payload | `OpenMemoryDialog` carries row-kind-aware file/folder/toggle rows; current command producer emits file rows. | Keep renderer and selection behavior keyed by row kind. | I7 complete for payload shape | Renderer consumes typed rows, not path/label/scope-only rows. |
+| Render reads runtime helper | Removed. Coordinator display mode is resolved into `UiState` by the CLI runner before render. | Display decisions are folded into state/view model before render. | I2/I9 complete for coordinator mode | Render is deterministic from state plus frame area. |
+| Input rendering duplication | Removed. `widgets/input.rs` owns `InputRenderModel` and composer rendering; `render.rs` only wires state into `InputWidget`. | One input view model and renderer owns composer presentation. | I10 complete for composer | Duplicate rendering path removed. |
+| Direct theme reads | Overlay frame/content helpers, composer, footer/toast/activity, lifecycle banners, stash/queue/suggestion widgets, teammate header, request/confirm/model/picker/settings presentation, rich transcript/chat, markdown/diff rendering, and specialist panels use semantic `UiStyles`. Direct `Theme` access is limited to theme loading/state and the top-level `UiStyles::new(&state.ui.theme)` adapter, plus tests that create default themes. | New and migrated surfaces depend on `UiStyles`; add semantic accessors instead of passing `Theme` into renderers. | I2/I3d cleanup complete for widget/render-overlay style coupling | No direct `theme.X` reads in production renderers. |
+| Chat display-collapse reducers | `transcript_presentation` handles source-backed committed cells plus active streaming/busy-tail cells. `presentation::streaming` owns active streaming-tail blocks from `StreamingState`. `transcript_projection` owns committed tool batches, same-hook lifecycle batches, parseable task-notification rendering, completed background-bash batches, and in-process teammate shutdown batches. Transcript/show-all mode keeps task notifications expanded. Read/search grouping still waits for structured read/search metadata in Rust messages. | Keep display-collapse reducers in presentation transcript cells, not widget render arms. | Projection switch complete for current Rust message shapes; active tail and streaming-tail block switch complete | Main chat consumes presentation cells and streaming blocks instead of owning reducer logic. |
+| Model fallback inference | Removed. `update/show.rs` reads `SessionState.model_catalog` and provider-status rows only. | Production uses session catalog; tests/pre-bootstrap mocks seed catalog entries explicitly. | I4 complete | Production path has no model-prefix provider inference. |
 | `/fast` TS command | `commands/CLAUDE.md` marks TS `/fast` deliberately not ported. TUI has `ToggleFastMode` and runtime `FastModeState`. | Do not add TS `/fast` account/product flow. Expose provider-neutral fast state only where runtime supports it. | I11 | Command audit marks omission or provider-neutral replacement. |
 | `/login`, `/logout` | Deliberately omitted as Anthropic account flows. | No provider-generic login surface until provider crates expose one. | I11 | Audit marks deliberate omission. |
 | TS `terminalSetup` / `/terminal-setup` | Deliberately omitted as Anthropic `claude` CLI binding installer. | No direct port. | I11 | Audit marks deliberate omission. |
-| Pending command dialogs | Some `DialogSpec` variants emit dialog-pending status. | Add typed overlays or document intentional non-support. | I11 | No silent dialog gaps. |
+| Pending command dialogs | Wired dialogs are rewind, memory, and model. Dormant plugin/MCPB/confirm `DialogSpec` variants have no current built-in producers; if produced, the dispatcher emits a transcript-visible `dialog_pending` status. | Add typed overlays when a real producer appears; do not leave silent gaps. | I11 documented | No silent dialog gaps. |
 | OSC 8 links | ratatui spans do not support native hyperlinks. | Deferred. | I3a | No raw escape workaround in render code. |
 
 ## Public Interface Classification
@@ -174,7 +192,7 @@ Add or expand:
 - `FuzzyPicker`
 - `OverlayFrame`
 - `MemoryPickerRow`
-- row-kind-aware `OpenMemoryDialog` payload
+- row-kind-aware `OpenMemoryDialog` payload (added)
 - external editor/open intent and service boundary
 - typed permission/request/MCP view models
 - transcript/activity/diff/pager view models
@@ -185,11 +203,11 @@ These exist today but should not be documented as long-term design:
 
 - legacy memory prefix APIs listed in the memory deletion plan
 - path/label/scope-only memory dialog rows
-- model-prefix provider inference fallback
+- model-prefix provider inference fallback (removed)
 
 ## Memory Deletion Plan
 
-Remove these target-deleted surfaces together:
+I1 removed these target-deleted surfaces together:
 
 - `PromptMode::Memory`
 - `UserCommand::SubmitMemory`
@@ -201,6 +219,7 @@ Remove these target-deleted surfaces together:
 Acceptance:
 
 - `#` at the start of input is ordinary chat text.
+- TS parity is restored for prompt modes: only `!` is an input mode prefix.
 - `/memory` is the only memory editing entrypoint.
 - Memory edit success, cancellation, and failure are transcript-visible command
   results. Toasts may duplicate but cannot be the only feedback.
@@ -352,12 +371,14 @@ Add the first minimal presentation boundary:
 - a small `UiStyles` facade over the existing `Theme`
 - one or two presentation view models for new/migrated surfaces
 
-This phase is intentionally small. It establishes the boundary; it does not
-attempt to replace every direct `Theme` read.
+This phase establishes the boundary and the public `UiStyles` facade. It does
+not force rich transcript/chat, markdown, diff, or specialist panels through
+the facade until their semantic style tokens are named explicitly.
 
 Acceptance:
 
-- New UI code uses semantic style methods.
+- New UI code and migrated chrome/overlay/input surfaces use semantic style
+  methods.
 - Existing custom themes and hot reload still work.
 - No new `Theme` field is added unless existing fields cannot express the
   semantic intent.
@@ -432,7 +453,9 @@ Acceptance:
 
 - Footer hints do not overlap on narrow terminals.
 - Notification delivery remains in `widgets/notification.rs`.
-- New dialog/picker primitives do not read `Theme` directly.
+- Dialog/picker primitives, composer chrome, lifecycle banners, toast/footer,
+  activity surfaces, transcript/chat, markdown/diff, and specialist panels do
+  not read `Theme` directly.
 
 ## Phase I4: Multi-LLM Model Picker
 
@@ -492,6 +515,21 @@ Acceptance:
 - Prompt editor, plan editor, `/memory`, and future opener flows share the
   service.
 - Results can be rendered in transcript and toast surfaces.
+
+Current implementation status:
+
+- `/memory` file rows, prompt external-editor requests, and plan-editor
+  requests enter through `UserCommand` and are executed by the CLI runner.
+- the CLI runner requests a foreground terminal handoff before launching an
+  editor; the TUI App leaves raw mode / alt-screen, ACKs readiness, suppresses
+  terminal polling while the editor is active, and restores TUI modes before
+  applying the completion event.
+- prompt editor completion updates the input buffer through a TUI event.
+- plan editor requests resolve the current session's concrete plan file from
+  `config_home`, `project_dir`, `plans_directory`, and `session_id`, then open
+  that file through the same terminal handoff.
+- blocking terminal editors are waited on before `/memory`, plan-editor, or
+  prompt-editor completion is emitted.
 
 ## Phase I7: Rebuild Memory Picker
 
@@ -559,6 +597,18 @@ Acceptance:
 - Large diffs use pager/sticky footer instead of overflowing the active
   overlay.
 
+Current implementation status:
+
+- structured diff parsing and old/new line-number progression live in
+  `presentation::diff::DiffLineView`.
+- committed transcript cells and active tail state live in
+  `presentation::transcript` before ChatWidget renders them.
+- chat file-edit rows and full-screen diff overlays share
+  `widgets::diff_display` rendering from that view model.
+- diff overlays, transcript overlays, and task-detail overlays share
+  `presentation::pager::PagerWindow` for clamped ranges and title/footer
+  position suffixes.
+
 ## Phase I9: Unified Activity Surface
 
 Add `TurnActivityView` for live state:
@@ -578,6 +628,16 @@ Acceptance:
 - Top-level render no longer chooses between business-specific panels.
 - Feature/env/config decisions are resolved before render.
 
+Current implementation status:
+
+- Complete for the fullscreen renderer. `presentation::activity::TurnActivityView`
+  owns width-aware row capping, plan/agent/activity selection,
+  stream/interrupt status, tool activity, subagent/coordinator rows, and
+  plan/todo/background-task rows.
+- `render_main_area` keeps one main workspace; `render_chat_and_input` places
+  `widgets::ActivityPanel` inline above the composer, mapping the single
+  activity view model to ratatui spans without a right-side rail.
+
 ## Phase I10: Input, Suggestions, and Footer Unification
 
 Collapse input rendering and suggestion/footer logic:
@@ -594,6 +654,15 @@ Acceptance:
 - The legacy memory prefix cannot reappear accidentally.
 - Pasted content, images, stash, history, queued input, and suggestions are
   tested together.
+
+Current implementation status:
+
+- `widgets/input.rs` owns the composer render model and visible prefix math.
+- `presentation::input::InlinePopupView` owns autocomplete/command-palette
+  popup rows and selection before `render_chat_and_input` sizes the popup slot.
+- `presentation::footer::FooterView` owns status-bar/exit-prompt props,
+  including model display, effort, permission mode, tokens, context, MCP, chord
+  hints, and message counts.
 
 ## Phase I11: Slash Command Surface Parity
 
@@ -627,6 +696,14 @@ Acceptance:
   alias/compat-message, backend unsupported, or intentionally omitted.
 - No TS-only command is treated as a missing TUI bug without checking
   `commands/CLAUDE.md`.
+
+Current implementation status:
+
+- Complete. `docs/coco-rs/ui/slash-command-audit.md` accounts for the TS
+  command scan from `claude-code-kim/src/commands`.
+- `/help` includes the provider-neutral TUI commands from this phase, including
+  `/output-style`, `/sandbox`, `/session`, `/usage`, `/add-dir`, `/doctor`,
+  and `/hooks`.
 
 ## Design Rules
 

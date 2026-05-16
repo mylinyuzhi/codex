@@ -10,8 +10,8 @@
 //!
 //! Flow (Unix):
 //!
-//! 1. [`crate::terminal::leave_tui_modes`] — turn off raw mode, leave
-//!    alt-screen, and disable bracketed paste / focus change reporting.
+//! 1. [`crate::terminal::leave_tui_modes`] — turn off raw mode, leave any
+//!    overlay alt-screen, and disable bracketed paste / focus change reporting.
 //! 2. Show the cursor on a fresh normal-buffer row so the shell sees its
 //!    prompt.
 //! 3. Record a pending [`ResumeAction`] for the next draw.
@@ -22,8 +22,9 @@
 //! 5. [`crate::terminal::enter_tui_modes`] — re-arm raw mode etc.
 //! 6. [`SuspendContext::prepare_resume_action`] is consumed inside
 //!    [`crate::terminal::Tui::draw`] on the next frame, where
-//!    [`PreparedResumeAction::apply`] re-enters alt-screen + forces a
-//!    full repaint.
+//!    [`PreparedResumeAction::apply`] clears the native surface and forces a
+//!    full repaint. If a large overlay is still active, `Tui` re-enters
+//!    alt-screen through normal overlay placement.
 //!
 //! Windows: no `SIGTSTP`; all entry points become no-ops.
 //!
@@ -42,9 +43,6 @@ use crossterm::cursor::MoveToNextLine;
 use crossterm::cursor::Show;
 #[cfg(unix)]
 use crossterm::execute;
-
-#[cfg(unix)]
-use crate::terminal::RatatuiTerminal;
 
 // ───────────────────────── Unix implementation ─────────────────────────
 
@@ -65,13 +63,15 @@ pub struct PreparedResumeAction(ResumeAction);
 
 #[cfg(unix)]
 impl PreparedResumeAction {
-    /// Force a full repaint after SIGCONT. `terminal.clear()`
-    /// invalidates ratatui's diff buffer so the next `draw` redraws the
-    /// alt-screen canvas from scratch.
-    pub fn apply(self, terminal: &mut RatatuiTerminal) -> io::Result<()> {
+    /// Force a full repaint after SIGCONT. The caller owns the concrete
+    /// terminal surface and provides the clear/invalidate operation.
+    pub fn apply<F>(self, mut clear_surface: F) -> io::Result<()>
+    where
+        F: FnMut() -> io::Result<()>,
+    {
         match self.0 {
             ResumeAction::Restore => {
-                terminal.clear()?;
+                clear_surface()?;
                 Ok(())
             }
         }
@@ -128,16 +128,15 @@ impl SuspendContext {
             return restore_after_suspend_error(&mut stdout, io::Error::last_os_error());
         }
 
-        // 5. We're back. Re-arm TUI modes; alt-screen + clear happen on
-        //    the next `Tui::draw` via `PreparedResumeAction::apply`.
+        // 5. We're back. Re-arm TUI modes; surface clear happens on the next
+        //    `Tui::draw` via `PreparedResumeAction::apply`.
         crate::terminal::enter_tui_modes(&mut stdout)?;
         Ok(())
     }
 
     /// Consume any pending resume action. Called from
     /// [`crate::terminal::Tui::draw`] at the top of each frame so the
-    /// alt-screen + repaint happens before render reads from the
-    /// terminal.
+    /// surface repaint happens before render reads from the terminal.
     pub fn prepare_resume_action(&self) -> Option<PreparedResumeAction> {
         let action = self.resume_pending.lock().ok()?.take()?;
         Some(PreparedResumeAction(action))
@@ -184,7 +183,11 @@ impl SuspendContext {
 
 #[cfg(not(unix))]
 impl PreparedResumeAction {
-    pub fn apply(self, _terminal: &mut crate::terminal::RatatuiTerminal) -> std::io::Result<()> {
+    pub fn apply<F>(self, mut clear_surface: F) -> std::io::Result<()>
+    where
+        F: FnMut() -> std::io::Result<()>,
+    {
+        clear_surface()?;
         Ok(())
     }
 }

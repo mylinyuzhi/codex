@@ -1,6 +1,6 @@
 # crate-coco-bridge
 
-TS source: `src/bridge/` (31 files, ~12.6K LOC)
+TS source: `bridge/` (31 files, ~12.6K LOC)
 
 ## Dependencies
 
