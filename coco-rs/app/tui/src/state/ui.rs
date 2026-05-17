@@ -56,9 +56,14 @@ pub struct UiState {
     /// Current focus target.
     pub focus: FocusTarget,
     /// Active modal overlay.
-    pub overlay: Option<Overlay>,
+    overlay: Option<Overlay>,
     /// Queued overlays awaiting display.
-    pub overlay_queue: VecDeque<Overlay>,
+    overlay_queue: VecDeque<Overlay>,
+    /// Monotonic identity for the currently active overlay surface.
+    ///
+    /// Incremented only when the active overlay instance changes, not when a
+    /// renderer mutates selection/filter state inside the same overlay.
+    overlay_generation: u64,
     /// Active streaming content.
     pub streaming: Option<StreamingState>,
     /// Whether thinking content is visible.
@@ -75,6 +80,8 @@ pub struct UiState {
     pub display_settings: DisplaySettings,
     /// Active toast notifications.
     pub toasts: VecDeque<Toast>,
+    /// Status-bar warning for terminal compatibility downgrades.
+    pub terminal_compatibility_warning: Option<String>,
     /// IDs of collapsed tool calls.
     pub collapsed_tools: HashSet<String>,
     /// Help overlay scroll position.
@@ -95,6 +102,14 @@ pub struct UiState {
     /// turn-complete notifications so they only fire when the user has
     /// switched away — matches TS `ink::focus` semantics.
     pub terminal_focused: bool,
+    /// Last time the retained native surface was known to be visible.
+    ///
+    /// This intentionally excludes generic lifecycle timestamps like turn
+    /// completion. Native scrollback visibility is only considered known after
+    /// an app-directed key/paste interaction or after focus gain is followed by
+    /// a successful retained-surface draw.
+    pub surface_visibility_known_at: Option<Instant>,
+    surface_visibility_confirmation_pending: bool,
     /// Platform clipboard lease held alive for the lifetime of the TUI. On
     /// Linux/X11 and some Wayland setups the clipboard is served by the
     /// process that wrote it, so dropping the `arboard::Clipboard` handle
@@ -163,6 +178,7 @@ impl UiState {
             focus: FocusTarget::Input,
             overlay: None,
             overlay_queue: VecDeque::new(),
+            overlay_generation: 0,
             streaming: None,
             show_thinking: true,
             show_system_reminders: false,
@@ -171,12 +187,15 @@ impl UiState {
             theme_state,
             display_settings: DisplaySettings::default(),
             toasts: VecDeque::new(),
+            terminal_compatibility_warning: None,
             collapsed_tools: HashSet::new(),
             help_scroll: 0,
             ctrl_c_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             ctrl_d_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             esc_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             terminal_focused: true,
+            surface_visibility_known_at: None,
+            surface_visibility_confirmation_pending: false,
             clipboard_lease: None,
             active_suggestions: None,
             kb_handle: KeybindingHandle::from_defaults(),
@@ -207,6 +226,32 @@ impl UiState {
         }
     }
 
+    pub fn active_overlay(&self) -> Option<&Overlay> {
+        self.overlay.as_ref()
+    }
+
+    pub fn active_overlay_mut(&mut self) -> Option<&mut Overlay> {
+        self.overlay.as_mut()
+    }
+
+    pub fn has_overlay(&self) -> bool {
+        self.overlay.is_some()
+    }
+
+    pub fn overlay_generation(&self) -> u64 {
+        self.overlay_generation
+    }
+
+    #[cfg(test)]
+    pub fn overlay_queue_len(&self) -> usize {
+        self.overlay_queue.len()
+    }
+
+    #[cfg(test)]
+    pub fn overlay_queue_front(&self) -> Option<&Overlay> {
+        self.overlay_queue.front()
+    }
+
     /// Set the active overlay using the [`Overlay::priority`] ranking.
     ///
     /// Rules (see `crate-coco-tui.md` §Overlay Priority):
@@ -221,11 +266,13 @@ impl UiState {
     pub fn set_overlay(&mut self, overlay: Overlay) {
         match self.overlay.take() {
             None => {
+                self.bump_overlay_generation();
                 self.overlay = Some(overlay);
             }
             Some(current) => {
                 if overlay.priority() < current.priority() {
                     // New overlay has higher priority — displace current.
+                    self.bump_overlay_generation();
                     self.overlay = Some(overlay);
                     self.enqueue_overlay(current);
                 } else {
@@ -255,7 +302,72 @@ impl UiState {
 
     /// Dismiss the current overlay and show the next queued one.
     pub fn dismiss_overlay(&mut self) {
+        if self.overlay.is_some() || !self.overlay_queue.is_empty() {
+            self.overlay = self.overlay_queue.pop_front();
+            self.bump_overlay_generation();
+        }
+    }
+
+    /// Take the active overlay for in-place handling.
+    ///
+    /// Call [`Self::restore_active_overlay`] when putting back the same overlay,
+    /// [`Self::install_active_overlay`] when replacing it with a different
+    /// surface, or [`Self::finish_taken_overlay`] when dismissing it.
+    pub fn take_active_overlay(&mut self) -> Option<Overlay> {
+        self.overlay.take()
+    }
+
+    /// Restore the same active overlay after mutating its internal state.
+    pub fn restore_active_overlay(&mut self, overlay: Overlay) {
+        self.overlay = Some(overlay);
+    }
+
+    /// Install a different active overlay surface.
+    pub fn install_active_overlay(&mut self, overlay: Overlay) {
+        self.overlay = Some(overlay);
+        self.bump_overlay_generation();
+    }
+
+    /// Complete a handler that took and dismissed the previous active overlay.
+    pub fn finish_taken_overlay(&mut self) {
         self.overlay = self.overlay_queue.pop_front();
+        self.bump_overlay_generation();
+    }
+
+    /// Clear active and queued overlays.
+    pub fn clear_overlays(&mut self) {
+        let had_overlay = self.overlay.is_some() || !self.overlay_queue.is_empty();
+        self.overlay = None;
+        self.overlay_queue.clear();
+        if had_overlay {
+            self.bump_overlay_generation();
+        }
+    }
+
+    /// Record a key/paste interaction routed to the retained surface.
+    pub fn record_surface_interaction(&mut self, now: Instant) {
+        self.surface_visibility_known_at = Some(now);
+        self.surface_visibility_confirmation_pending = false;
+    }
+
+    /// Focus gain only proves visibility after a successful retained draw.
+    pub fn request_surface_visibility_confirmation(&mut self) {
+        self.surface_visibility_confirmation_pending = true;
+    }
+
+    pub fn clear_surface_visibility_confirmation(&mut self) {
+        self.surface_visibility_confirmation_pending = false;
+    }
+
+    pub fn confirm_surface_visibility_after_draw(&mut self, now: Instant) {
+        if self.surface_visibility_confirmation_pending {
+            self.surface_visibility_known_at = Some(now);
+            self.surface_visibility_confirmation_pending = false;
+        }
+    }
+
+    fn bump_overlay_generation(&mut self) {
+        self.overlay_generation = self.overlay_generation.wrapping_add(1);
     }
 
     /// Whether there are active toasts.

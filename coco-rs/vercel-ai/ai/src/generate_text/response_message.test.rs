@@ -73,7 +73,7 @@ fn test_build_single_tool_result_message_error() {
 fn test_response_message_data() {
     let data = ResponseMessageData::new(
         vec![AssistantContentPart::text("Hello")],
-        FinishReason::stop(),
+        FinishReason::end_turn(),
         Usage::default(),
     );
 
@@ -88,7 +88,7 @@ fn test_response_message_data_with_tools() {
 
     let data = ResponseMessageData::new(
         vec![AssistantContentPart::text("Result:")],
-        FinishReason::tool_calls(),
+        FinishReason::tool_use(),
         Usage::default(),
     )
     .with_tool_results(vec![tool_result]);

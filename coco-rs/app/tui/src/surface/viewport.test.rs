@@ -6,6 +6,7 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::state::session::ChatMessage;
 use crate::state::ui::StreamingState;
+use crate::surface::overlay::HistorySurfaceMode;
 use crate::surface::terminal::SurfaceTerminal;
 
 #[test]
@@ -17,7 +18,7 @@ fn interactive_viewport_does_not_render_session_header() {
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state);
+            render_interactive_viewport(frame, &state, native_plan());
         })
         .expect("draw");
 
@@ -31,14 +32,20 @@ fn interactive_viewport_does_not_render_session_header() {
 fn interactive_viewport_desired_height_tracks_idle_composer() {
     let state = AppState::new();
 
-    assert_eq!(interactive_viewport_desired_height(&state, 48, 12), 4);
+    assert_eq!(
+        interactive_viewport_desired_height(&state, 48, 12, native_plan()),
+        4
+    );
 }
 
 #[test]
 fn interactive_viewport_desired_height_never_exceeds_cap() {
     let state = AppState::new();
 
-    assert_eq!(interactive_viewport_desired_height(&state, 48, 2), 2);
+    assert_eq!(
+        interactive_viewport_desired_height(&state, 48, 2, native_plan()),
+        2
+    );
 }
 
 #[test]
@@ -54,12 +61,33 @@ fn interactive_viewport_does_not_render_finalized_messages() {
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state);
+            render_interactive_viewport(frame, &state, native_plan());
         })
         .expect("draw");
 
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
     assert!(!text.contains("finalized history"));
+}
+
+#[test]
+fn interactive_viewport_renders_finalized_messages_in_viewport_history_mode() {
+    let backend = TestBackend::new(48, 8);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 48, 8));
+    let mut state = AppState::new();
+    state
+        .session
+        .messages
+        .push(ChatMessage::assistant_text("a1", "fallback history"));
+
+    terminal
+        .draw_viewport(|frame| {
+            render_interactive_viewport(frame, &state, viewport_history_plan());
+        })
+        .expect("draw");
+
+    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(text.contains("fallback history"));
 }
 
 #[test]
@@ -75,7 +103,7 @@ fn interactive_viewport_renders_active_streaming_tail() {
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state);
+            render_interactive_viewport(frame, &state, native_plan());
         })
         .expect("draw");
 
@@ -93,12 +121,27 @@ fn interactive_viewport_reports_input_rect_for_cursor_policy() {
 
     terminal
         .draw_viewport(|frame| {
-            layout = render_interactive_viewport(frame, &state);
+            layout = render_interactive_viewport(frame, &state, native_plan());
         })
         .expect("draw");
 
     assert_eq!(layout.input.height, 3);
     assert_eq!(layout.input.width, 48);
+}
+
+fn native_plan() -> SurfaceFramePlan {
+    SurfaceFramePlan {
+        overlay_placement: None,
+        history_surface: HistorySurfaceMode::NativeScrollback,
+        attention_requested: false,
+    }
+}
+
+fn viewport_history_plan() -> SurfaceFramePlan {
+    SurfaceFramePlan {
+        history_surface: HistorySurfaceMode::Viewport,
+        ..native_plan()
+    }
 }
 
 fn plain_buffer_lines(buffer: &Buffer) -> Vec<String> {

@@ -2,7 +2,7 @@
 //!
 //! Drives the **production TUI bootstrap path** (Cli → headless config
 //! build → session_bootstrap → SessionRuntime → late-binds → driver
-//! loop → AppState fold → render::render) with a real provider HTTP
+//! loop → AppState fold → native-surface render) with a real provider HTTP
 //! call instead of a scripted model. See `tui_real/mod.rs` for the
 //! full pipeline.
 //!

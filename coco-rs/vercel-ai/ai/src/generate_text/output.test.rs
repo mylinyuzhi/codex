@@ -192,7 +192,7 @@ fn test_json_output_response_format() {
 fn test_output_parse_context() {
     let output = text_output();
     let context = OutputParseContext {
-        finish_reason: vercel_ai_provider::FinishReason::stop(),
+        finish_reason: vercel_ai_provider::FinishReason::end_turn(),
         usage: vercel_ai_provider::Usage::default(),
     };
     let result = output

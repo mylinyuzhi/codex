@@ -16,7 +16,7 @@ use crate::state::overlay::TranscriptOverlay;
 
 /// Open the transcript overlay if it isn't open; close it if it is.
 pub(super) fn toggle(state: &mut AppState) {
-    if matches!(state.ui.overlay, Some(Overlay::Transcript(_))) {
+    if matches!(state.ui.active_overlay(), Some(Overlay::Transcript(_))) {
         state.ui.dismiss_overlay();
     } else {
         state
@@ -29,7 +29,7 @@ pub(super) fn toggle(state: &mut AppState) {
 /// active overlay is not a transcript — protects against the chord
 /// firing while the user is in some unrelated overlay.
 pub(super) fn toggle_show_all(state: &mut AppState) -> bool {
-    if let Some(Overlay::Transcript(ref mut t)) = state.ui.overlay {
+    if let Some(Overlay::Transcript(t)) = state.ui.active_overlay_mut() {
         t.show_all = !t.show_all;
         true
     } else {

@@ -17,13 +17,13 @@
 //!   → install_session_late_binds                    (task runtime, transcript store,
 //!                                                    fork dispatcher, agent-team)
 //!   → driver loop (SubmitInput / ApprovalResponse / Interrupt / Shutdown)
-//!   → handle_core_event → AppState → render::render via TestBackend
+//!   → handle_core_event → AppState → native-surface test render
 //! ```
 //!
 //! Skipped vs `tui_mock`:
 //! - `App::run` (opens crossterm raw-mode stdin) — incompatible with a
-//!   programmatic test harness. We use `AppState::new()` + `TestBackend`
-//!   directly so the rendering pipeline is exercised but I/O isn't.
+//!   programmatic test harness. We use `AppState::new()` + native-surface
+//!   rendering so the rendering pipeline is exercised but I/O isn't.
 //! - Slash-command interception (`dispatch_slash_command`) is private
 //!   to `tui_runner.rs`. Slash command dispatch has dedicated coverage
 //!   in `coco-commands` unit tests; this suite focuses on the real-LLM

@@ -23,8 +23,10 @@ Primary current sources:
 - `coco-rs/app/tui/src/state/overlay.rs`
 - `coco-rs/app/tui/src/events.rs`
 - `coco-rs/app/tui/src/command.rs`
-- `coco-rs/app/tui/src/render.rs`
-- `coco-rs/app/tui/src/render_overlays/`
+- `coco-rs/app/tui/src/terminal.rs`
+- `coco-rs/app/tui/src/surface/`
+- `coco-rs/app/tui/src/presentation/`
+- `coco-rs/app/tui/src/overlay_content/`
 - `coco-rs/app/tui/src/widgets/`
 - `coco-rs/common/types/src/event.rs`
 - `coco-rs/app/cli/src/tui_runner.rs`
@@ -47,8 +49,9 @@ terminal input / CoreEvent
         -> keybinding and event dispatch
         -> update
         -> AppState
-        -> render
-        -> terminal frame
+        -> presentation view models
+        -> native surface draw
+        -> terminal backend
 ```
 
 The crate owns interactive terminal state, rendering, key routing, autocomplete,
@@ -363,11 +366,13 @@ available, so empty async searches do not hijack history navigation.
 
 ## Rendering Baseline
 
-Top-level rendering lives in `render.rs`:
+Top-level drawing is owned by `terminal::Tui` and `surface::controller`.
+Finalized history is emitted through `surface::history_driver`; the retained
+bottom viewport is rendered by `surface::viewport`.
 
-- header
+- header/history projection
 - lifecycle and status banners
-- conversation area
+- live conversation tail
 - inline live activity surface
 - input area
 - queued command list
@@ -382,10 +387,10 @@ Message rendering is split under `widgets/chat/`:
 - `render_tool.rs`
 - `render_system.rs`
 
-Overlay rendering is split under `render_overlays/`. Most overlays still
-produce `(title, body, color)` and are wrapped in a generic centered paragraph.
-The model picker already has a custom renderer because it needs richer layout
-than the string-body path can provide.
+Overlay content is split under `overlay_content/` and presentation modules.
+Most overlays still produce `(title, body, color)` and are placed by
+`surface::overlay`; large review/navigation overlays use alt-screen placement
+and restore the retained viewport on close.
 
 ## Layout Baseline
 
@@ -452,8 +457,8 @@ These are current facts, not target design:
 | Memory prompt mode | Removed. `#` is ordinary chat text; TS `components/PromptInput/inputModes.ts` recognizes only `!` as an input mode character. | Keep `/memory` as the only memory entrypoint. |
 | Direct memory append | Removed. The input bar no longer writes directly to `CLAUDE.md`. | Keep memory editing routed through the `/memory` picker and editor/opener service. |
 | Memory dialog payload | `OpenMemoryDialog` carries path/label/scope plus row-kind-aware file/folder/toggle semantics. Current producer emits file rows. | Keep renderer and selection behavior keyed by row kind. |
-| Input rendering | `widgets/input.rs` owns the input view model and renderer; `render.rs` only wires state into the widget. | Keep composer presentation centralized. |
-| Render-time config/env decisions | Coordinator mode is resolved into `UiState` before render; `render.rs` no longer reads config/env helpers. | Keep display decisions in state/view models. |
+| Input rendering | `widgets/input.rs` owns the input view model and renderer; `surface::viewport` only wires state into the widget. | Keep composer presentation centralized. |
+| Render-time config/env decisions | Coordinator mode is resolved into `UiState` before draw; surface renderers do not read config/env helpers. | Keep display decisions in state/view models. |
 | Theme coupling | Overlay, chrome, input, transcript/chat, markdown/diff, and specialist widget renderers use `UiStyles`. Direct `Theme` access is limited to theme loading/state and the top-level `UiStyles::new(&state.ui.theme)` adapter, plus tests that create default themes. | Keep new and changed surfaces on `UiStyles`; add semantic accessors instead of passing `Theme` into renderers. |
 | Overlay rendering | Many overlays are still string-body dialogs. | Complex overlays move to typed view models and shared dialog/picker/pager primitives. |
 | Model picker fallback | Removed. Empty catalogs no longer synthesize builtin rows or infer providers from model ids. | Keep production model rows catalog-backed; tests/pre-bootstrap mocks seed catalog entries explicitly. |
@@ -467,15 +472,16 @@ These are current facts, not target design:
 ## Testing
 
 Current TUI tests are colocated companion files, not inline `#[cfg(test)]`
-modules. Snapshot tests use `insta` and ratatui `TestBackend`.
+modules. Snapshot tests use `insta` and the native-surface test renderer over
+ratatui `TestBackend`.
 
 Useful commands from `coco-rs/`:
 
 ```bash
 just quick-check
-just test-crate coco-tui
-cargo insta pending-snapshots -p coco-tui
-cargo insta accept -p coco-tui
+cargo test -p coco-tui
+cargo insta pending-snapshots --manifest-path app/tui/Cargo.toml
+cargo insta accept --manifest-path app/tui/Cargo.toml
 ```
 
 For documentation-only edits, source and stale-content `rg` checks are normally

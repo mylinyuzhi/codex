@@ -805,7 +805,7 @@ async fn generate_text_inner(
             max_steps - 1,
             String::new(),
             vercel_ai_provider::Usage::default(),
-            vercel_ai_provider::FinishReason::stop(),
+            vercel_ai_provider::FinishReason::end_turn(),
         )
     });
 

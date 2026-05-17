@@ -16,9 +16,8 @@
 //! 3. `harness.pump_until_idle(timeout).await?` — drains every
 //!    `CoreEvent` into `AppState` until the engine emits
 //!    `SessionResult` (or `timeout` fires).
-//! 4. `harness.render_to_string()?` — render `AppState` through
-//!    `coco_tui::render::render` into a `TestBackend` buffer for
-//!    substring assertions.
+//! 4. `harness.render_to_string()?` — render `AppState` through the native
+//!    surface into a test buffer for substring assertions.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -46,15 +45,12 @@ use coco_tui::AppState;
 use coco_tui::TuiCommand;
 use coco_tui::UserCommand;
 use coco_tui::command::ShutdownReason;
-use coco_tui::render;
 use coco_tui::server_notification_handler::handle_core_event;
 use coco_tui::update::handle_command;
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
 use coco_types::TuiOnlyEvent;
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -216,7 +212,8 @@ impl RealTuiHarnessBuilder {
 /// In-process driver for a real-LLM TUI session. See module docs.
 pub struct RealTuiHarness {
     pub state: AppState,
-    pub terminal: Terminal<TestBackend>,
+    terminal_width: u16,
+    terminal_height: u16,
     pub command_tx: mpsc::Sender<UserCommand>,
     pub event_rx: mpsc::Receiver<CoreEvent>,
     pub events: Vec<CoreEvent>,
@@ -389,8 +386,6 @@ impl RealTuiHarness {
 
         // AppState seeded the same way `App::new` would (modes, model
         // label) so render output reads the same as production.
-        let backend = TestBackend::new(cfg.width, cfg.height);
-        let terminal = Terminal::new(backend).context("build TestBackend terminal")?;
         let mut state = AppState::new();
         state.session.permission_mode = startup.mode;
         state.session.bypass_permissions_available = startup.bypass_available;
@@ -398,7 +393,8 @@ impl RealTuiHarness {
 
         Ok(Self {
             state,
-            terminal,
+            terminal_width: cfg.width,
+            terminal_height: cfg.height,
             command_tx,
             event_rx,
             events: Vec::new(),
@@ -619,25 +615,14 @@ impl RealTuiHarness {
         .await
     }
 
-    /// Render `AppState` through `coco_tui::render` and return the
-    /// buffer as newline-separated text for `assert!(s.contains(…))`
-    /// checks.
+    /// Render `AppState` through the native surface and return the buffer as
+    /// newline-separated text for `assert!(s.contains(…))` checks.
     pub fn render_to_string(&mut self) -> Result<String> {
-        let state = &self.state;
-        self.terminal
-            .draw(|frame| {
-                let _layout = render::render(frame, state);
-            })
-            .context("render TUI to TestBackend")?;
-        let buf = self.terminal.backend().buffer().clone();
-        let mut out = String::new();
-        for y in 0..buf.area.height {
-            for x in 0..buf.area.width {
-                out.push_str(buf[(x, y)].symbol());
-            }
-            out.push('\n');
-        }
-        Ok(out)
+        Ok(coco_tui::testing::render_native_surface_to_string(
+            &self.state,
+            self.terminal_width,
+            self.terminal_height,
+        ))
     }
 
     /// Tool starts seen in the event stream (in order).

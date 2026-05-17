@@ -63,7 +63,7 @@ async fn synthetic_stream_emits_events_in_content_order() {
     let stream_result = synthetic_stream_from_content(
         content,
         Usage::new(11, 7),
-        FinishReason::new(UnifiedFinishReason::ToolCalls),
+        FinishReason::new(UnifiedFinishReason::ToolUse),
     );
 
     let (tx, mut rx) = mpsc::channel::<StreamEvent>(32);
@@ -230,7 +230,7 @@ async fn process_stream_with_config_uses_custom_stall_threshold() {
             },
             2 => LanguageModelV4StreamPart::Finish {
                 usage: Usage::new(1, 2),
-                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                 provider_metadata: None,
             },
             _ => return None,
@@ -291,7 +291,7 @@ async fn snapshot_preserves_provider_metadata_on_every_variant() {
     let stream_result = synthetic_stream_from_content(
         content,
         Usage::new(10, 5),
-        FinishReason::new(UnifiedFinishReason::ToolCalls),
+        FinishReason::new(UnifiedFinishReason::ToolUse),
     );
     let (tx, mut rx) = mpsc::channel::<StreamEvent>(64);
     tokio::spawn(process_stream(stream_result.stream, tx));
@@ -372,7 +372,7 @@ async fn snapshot_preserves_multiple_reasoning_segments() {
         }),
         Ok(LanguageModelV4StreamPart::Finish {
             usage: Usage::new(1, 1),
-            finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+            finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
             provider_metadata: None,
         }),
     ];
@@ -452,7 +452,7 @@ async fn snapshot_preserves_text_tool_text_interleaving() {
         }),
         Ok(LanguageModelV4StreamPart::Finish {
             usage: Usage::new(1, 1),
-            finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+            finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
             provider_metadata: None,
         }),
     ];
@@ -500,7 +500,7 @@ async fn snapshot_handles_tool_call_without_close_event() {
         // No ToolCall(tc) close.
         Ok(LanguageModelV4StreamPart::Finish {
             usage: Usage::new(1, 1),
-            finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+            finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
             provider_metadata: None,
         }),
     ];
@@ -563,7 +563,7 @@ async fn snapshot_none_close_does_not_overwrite_some_start() {
         )),
         Ok(LanguageModelV4StreamPart::Finish {
             usage: Usage::new(1, 1),
-            finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+            finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
             provider_metadata: None,
         }),
     ];
@@ -619,7 +619,7 @@ async fn snapshot_idempotent_on_duplicate_text_start() {
         }),
         Ok(LanguageModelV4StreamPart::Finish {
             usage: Usage::new(1, 1),
-            finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+            finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
             provider_metadata: None,
         }),
     ];
@@ -660,7 +660,7 @@ async fn tool_input_round_trips_through_synthetic_stream() {
     let stream_result = synthetic_stream_from_content(
         content,
         Usage::new(5, 3),
-        FinishReason::new(UnifiedFinishReason::ToolCalls),
+        FinishReason::new(UnifiedFinishReason::ToolUse),
     );
 
     // Collect all deltas for the tool call.

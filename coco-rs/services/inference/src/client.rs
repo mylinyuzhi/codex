@@ -117,7 +117,12 @@ pub struct QueryResult {
     pub content: Vec<AssistantContentPart>,
     pub usage: TokenUsage,
     pub model: String,
-    pub stop_reason: Option<String>,
+    /// Typed stop reason — the canonical 8-variant
+    /// [`UnifiedFinishReason`] (re-exported as [`crate::StopReason`])
+    /// from the vercel-ai-provider seam. Higher layers match on this
+    /// enum directly; no wire-string parsing anywhere above this
+    /// boundary.
+    pub stop_reason: Option<crate::StopReason>,
     pub request_id: Option<String>,
     pub retries: i32,
     pub total_duration_ms: i64,
@@ -421,6 +426,24 @@ impl ApiClient {
                         "api_call ok"
                     );
 
+                    // Abnormal stop_reason ≠ error, but warrants a
+                    // warn so ops can spot truncation / content-filter
+                    // events without scraping every info-level line.
+                    // Happy-path set: `EndTurn` / `StopSequence` /
+                    // `ToolUse` (see [`UnifiedFinishReason::is_normal`]).
+                    if let Some(reason) = result.stop_reason
+                        && reason.is_abnormal()
+                    {
+                        warn!(
+                            stop_reason = %reason,
+                            tokens_out = result.usage.output_tokens,
+                            max_tokens = ?params.max_tokens,
+                            query_source = ?params.query_source,
+                            model_id = %result.model,
+                            "api_call ended on non-normal stop_reason"
+                        );
+                    }
+
                     let mut usage = self.usage.lock().await;
                     usage.record(&result.model, result.usage);
                     drop(usage);
@@ -565,7 +588,9 @@ impl ApiClient {
             .and_then(|r| r.model_id.clone())
             .unwrap_or_else(|| self.model.model_id().to_string());
 
-        let stop_reason = Some(result.finish_reason.unified.to_string());
+        // Typed unified reason — single source of truth set by the
+        // provider-adapter seam (see `vercel-ai-anthropic` etc).
+        let stop_reason = Some(result.finish_reason.unified);
 
         Ok(QueryResult {
             content: result.content,

@@ -73,6 +73,20 @@ pub async fn single_turn_query(
         .collect::<Vec<_>>()
         .join("");
 
+    // Caller-side surfacing of unexpected outcomes — `SingleTurnResult`
+    // doesn't carry stop_reason, so a length-truncated or
+    // content-filtered response would otherwise reach the caller as
+    // "just a short text" with no signal that the model didn't finish.
+    let stop = result.stop_reason;
+    if text.is_empty() || stop.is_some_and(coco_messages::StopReason::is_abnormal) {
+        tracing::warn!(
+            stop_reason = ?stop,
+            tokens_out = result.usage.output_tokens,
+            text_chars = text.len(),
+            "single_turn unexpected outcome"
+        );
+    }
+
     let duration_ms = start.elapsed().as_millis() as i64;
 
     Ok(SingleTurnResult {

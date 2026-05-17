@@ -101,6 +101,11 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
         spans.push(FooterSpan::bold(hint, FooterTone::Warning));
     }
 
+    if let Some(warning) = state.ui.terminal_compatibility_warning.as_ref() {
+        separator(&mut spans);
+        spans.push(FooterSpan::bold(warning.clone(), FooterTone::Warning));
+    }
+
     let tokens = &state.session.token_usage;
     separator(&mut spans);
     spans.push(FooterSpan::new(

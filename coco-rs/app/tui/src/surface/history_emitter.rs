@@ -4,8 +4,8 @@
 #![allow(dead_code)]
 
 use crate::state::session::ChatMessage;
+use crate::surface::terminal::SurfaceBackend;
 use crate::surface::terminal::SurfaceTerminal;
-use ratatui::backend::Backend;
 use ratatui::text::Line;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,7 +95,7 @@ impl HistoryEmissionTracker {
         render_tail: F,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
-        B: Backend,
+        B: SurfaceBackend,
         F: FnOnce(&[ChatMessage]) -> Vec<Line<'static>>,
     {
         let start = match self.plan(messages) {
@@ -122,7 +122,7 @@ impl HistoryEmissionTracker {
         render_all: F,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
-        B: Backend,
+        B: SurfaceBackend,
         F: FnOnce(&[ChatMessage]) -> Vec<Line<'static>>,
     {
         terminal.clear_owned_scrollback()?;

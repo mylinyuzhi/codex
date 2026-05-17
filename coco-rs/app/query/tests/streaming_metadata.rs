@@ -104,9 +104,9 @@ impl LanguageModel for MetadataMock {
                 .iter()
                 .any(|p| matches!(p, AssistantContentPart::ToolCall(_)))
         {
-            UnifiedFinishReason::ToolCalls
+            UnifiedFinishReason::ToolUse
         } else {
-            UnifiedFinishReason::Stop
+            UnifiedFinishReason::EndTurn
         };
         Ok(LanguageModelGenerateResult {
             content,

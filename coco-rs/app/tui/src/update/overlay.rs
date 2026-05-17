@@ -95,7 +95,7 @@ fn accept_suggestion(state: &mut AppState) {
 
 /// Handle `Approve` for the current overlay.
 pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    match &state.ui.overlay {
+    match state.ui.active_overlay() {
         Some(Overlay::Permission(p)) => {
             // Multi-choice mode: 'y' commits the currently-focused
             // choice (Enter takes the same path via confirm()). The
@@ -243,7 +243,7 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
 
 /// Handle `Deny` for the current overlay.
 pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    match &state.ui.overlay {
+    match state.ui.active_overlay() {
         Some(Overlay::Permission(p)) => {
             let _ = command_tx
                 .send(UserCommand::ApprovalResponse {
@@ -343,7 +343,7 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
 /// let the user pick User / Project / Local; the runner already calls
 /// `SettingsPermissionStore::persist_update` for those destinations.
 pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    if let Some(Overlay::Permission(ref p)) = state.ui.overlay
+    if let Some(Overlay::Permission(p)) = state.ui.active_overlay()
         && p.show_always_allow
     {
         let update = coco_types::PermissionUpdate::AddRules {
@@ -380,7 +380,7 @@ pub(super) async fn classifier_auto_approve(
     command_tx: &mpsc::Sender<UserCommand>,
     request_id: String,
 ) {
-    if let Some(Overlay::Permission(ref p)) = state.ui.overlay
+    if let Some(Overlay::Permission(p)) = state.ui.active_overlay()
         && p.request_id == request_id
     {
         let _ = command_tx
@@ -404,7 +404,7 @@ pub(super) fn filter(state: &mut AppState, c: char) {
     // multi-select; printable chars edit the "Other" notes textarea
     // when that option is focused. Both consume the keystroke before
     // any filter logic. TS: `QuestionView.tsx` `onKeyDown` priority.
-    if matches!(state.ui.overlay, Some(Overlay::Question(_))) {
+    if matches!(state.ui.active_overlay(), Some(Overlay::Question(_))) {
         if c == ' ' {
             question_toggle_checked(state);
             return;
@@ -414,7 +414,7 @@ pub(super) fn filter(state: &mut AppState, c: char) {
         }
         return; // Question overlay has no filter — silently swallow.
     }
-    match &mut state.ui.overlay {
+    match state.ui.active_overlay_mut() {
         Some(Overlay::ModelPicker(m)) => {
             m.filter.push(c);
             m.selected = 0;
@@ -443,11 +443,11 @@ pub(super) fn filter(state: &mut AppState, c: char) {
 pub(super) fn filter_backspace(state: &mut AppState) {
     // Question overlay: when "Other" is focused, Backspace edits the
     // notes textarea. Otherwise no-op (Question has no filter).
-    if matches!(state.ui.overlay, Some(Overlay::Question(_))) {
+    if matches!(state.ui.active_overlay(), Some(Overlay::Question(_))) {
         question_notes_backspace(state);
         return;
     }
-    match &mut state.ui.overlay {
+    match state.ui.active_overlay_mut() {
         Some(Overlay::ModelPicker(m)) => {
             m.filter.pop();
             m.selected = 0;
@@ -475,7 +475,7 @@ pub(super) fn filter_backspace(state: &mut AppState) {
 /// Move selection by `delta` in the current list/scrollable overlay.
 pub(super) fn nav(state: &mut AppState, delta: i32) {
     // Autocomplete takes precedence over (non-existent) overlay.
-    if state.ui.overlay.is_none()
+    if !state.ui.has_overlay()
         && let Some(ref mut sug) = state.ui.active_suggestions
     {
         if sug.items.is_empty() {
@@ -486,7 +486,7 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
         }
         return;
     }
-    match &mut state.ui.overlay {
+    match state.ui.active_overlay_mut() {
         Some(Overlay::ModelPicker(m)) => {
             let count = filtered_models(m).len() as i32;
             m.selected = (m.selected + delta).clamp(0, (count - 1).max(0));
@@ -611,16 +611,17 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
 pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     // Autocomplete popup takes precedence over (non-existent) overlay when
     // suggestions are active — pressing Tab/Enter accepts the selection.
-    if state.ui.overlay.is_none() && state.ui.active_suggestions.is_some() {
+    if !state.ui.has_overlay() && state.ui.active_suggestions.is_some() {
         accept_suggestion(state);
         return;
     }
-    let overlay = state.ui.overlay.take();
+    let overlay = state.ui.take_active_overlay();
+    let had_overlay = overlay.is_some();
     match overlay {
         Some(Overlay::ModelPicker(m)) => {
             if let Some(entry) = filtered_models(&m).get(m.selected as usize).copied() {
                 if let Some(summary) = unavailable_summary(&entry.unavailable_reasons) {
-                    state.ui.overlay = Some(Overlay::ModelPicker(m));
+                    state.ui.restore_active_overlay(Overlay::ModelPicker(m));
                     state.ui.add_toast(Toast::warning(format!(
                         "{} {summary}",
                         t!("dialog.model_picker_unavailable_label")
@@ -648,7 +649,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                 // Intercept /rewind and /checkpoint to open overlay instead
                 if cmd.name == "rewind" || cmd.name == "checkpoint" {
                     let overlay = update_rewind::build_rewind_overlay(state);
-                    state.ui.overlay = Some(Overlay::Rewind(overlay));
+                    state.ui.install_active_overlay(Overlay::Rewind(overlay));
                     return;
                 }
                 // /copy dispatches straight to the clipboard handler — no
@@ -682,7 +683,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                     // `MessageSelector.tsx:341-344`. `on_rewind_completed`
                     // dismisses the overlay when the engine notifies completion.
                     r.phase = crate::state::rewind::RewindPhase::Confirming;
-                    state.ui.overlay = Some(Overlay::Rewind(r));
+                    state.ui.restore_active_overlay(Overlay::Rewind(r));
                     let _ = command_tx
                         .send(UserCommand::Rewind {
                             message_id,
@@ -693,7 +694,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                 }
                 update_rewind::ConfirmOutcome::Phase => {
                     // Phase transition without dispatch — put overlay back.
-                    state.ui.overlay = Some(Overlay::Rewind(r));
+                    state.ui.restore_active_overlay(Overlay::Rewind(r));
                 }
                 update_rewind::ConfirmOutcome::Dismiss => {
                     // Synthetic `(current)` row or preselected-Nevermind:
@@ -748,7 +749,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                         // the take()).
                         let mut q = q;
                         q.focus = QuestionFocus::Question(idx + 1);
-                        state.ui.overlay = Some(Overlay::Question(q));
+                        state.ui.restore_active_overlay(Overlay::Question(q));
                         return;
                     }
                     let updated_input = build_answer_payload(&q);
@@ -838,7 +839,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             }
             // Keep settings open after selection — user may want to try
             // themes successively.
-            state.ui.overlay = Some(Overlay::Settings(s));
+            state.ui.restore_active_overlay(Overlay::Settings(s));
             return;
         }
         // /memory file picker: the TUI owns selection only. The CLI
@@ -854,7 +855,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                     state.ui.add_toast(Toast::warning(
                         t!("toast.memory_row_not_editable").to_string(),
                     ));
-                    state.ui.overlay = Some(Overlay::MemoryDialog(m));
+                    state.ui.restore_active_overlay(Overlay::MemoryDialog(m));
                 }
             }
             // File rows dismiss after select; non-file rows are restored above.
@@ -950,7 +951,9 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
         None => {}
     }
     // Next queued overlay
-    state.ui.overlay = state.ui.overlay_queue.pop_front();
+    if had_overlay {
+        state.ui.finish_taken_overlay();
+    }
 }
 
 /// Send `RequestDiffStats` for the selected message when a Rewind overlay
@@ -960,7 +963,7 @@ pub(super) async fn request_diff_stats_if_rewind(
     state: &AppState,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
-    if let Some(Overlay::Rewind(ref r)) = state.ui.overlay
+    if let Some(Overlay::Rewind(r)) = state.ui.active_overlay()
         && let Some(msg) = r.messages.get(r.selected as usize)
         && !msg.is_current_prompt
     {
@@ -980,7 +983,7 @@ pub(super) async fn request_diff_stats_if_rewind(
 /// Question overlay is active.
 pub(super) fn question_cycle_focus(state: &mut AppState, delta: i32) {
     use crate::state::QuestionFocus;
-    let Some(Overlay::Question(ref mut q)) = state.ui.overlay else {
+    let Some(Overlay::Question(q)) = state.ui.active_overlay_mut() else {
         return;
     };
     let q_count = q.questions.len() as i32;
@@ -1015,7 +1018,7 @@ pub(super) fn question_cycle_focus(state: &mut AppState, delta: i32) {
 /// `claude-code/src/components/permissions/AskUserQuestionPermissionRequest/QuestionView.tsx`.
 pub(super) fn question_toggle_checked(state: &mut AppState) {
     use crate::state::QuestionFocus;
-    let Some(Overlay::Question(ref mut q)) = state.ui.overlay else {
+    let Some(Overlay::Question(q)) = state.ui.active_overlay_mut() else {
         return;
     };
     let QuestionFocus::Question(qi_idx) = q.focus else {
@@ -1042,7 +1045,7 @@ pub(super) fn question_toggle_checked(state: &mut AppState) {
 /// returns `false`.
 pub(super) fn question_notes_input(state: &mut AppState, c: char) -> bool {
     use crate::state::QuestionFocus;
-    let Some(Overlay::Question(ref mut q)) = state.ui.overlay else {
+    let Some(Overlay::Question(q)) = state.ui.active_overlay_mut() else {
         return false;
     };
     let QuestionFocus::Question(qi_idx) = q.focus else {
@@ -1062,7 +1065,7 @@ pub(super) fn question_notes_input(state: &mut AppState, c: char) -> bool {
 /// if the keystroke was consumed.
 pub(super) fn question_notes_backspace(state: &mut AppState) -> bool {
     use crate::state::QuestionFocus;
-    let Some(Overlay::Question(ref mut q)) = state.ui.overlay else {
+    let Some(Overlay::Question(q)) = state.ui.active_overlay_mut() else {
         return false;
     };
     let QuestionFocus::Question(qi_idx) = q.focus else {
@@ -1171,7 +1174,7 @@ fn build_answer_payload(q: &crate::state::QuestionOverlay) -> serde_json::Value 
 /// Rewind Esc: go back a phase before dismissing. Returns `true` if overlay
 /// should be dismissed, `false` if a phase transition happened.
 pub(super) fn rewind_cancel(state: &mut AppState) -> bool {
-    if let Some(Overlay::Rewind(ref mut r)) = state.ui.overlay
+    if let Some(Overlay::Rewind(r)) = state.ui.active_overlay_mut()
         && !update_rewind::handle_rewind_cancel(r)
     {
         return false;
@@ -1187,7 +1190,7 @@ pub(super) fn rewind_cancel(state: &mut AppState) -> bool {
 /// capability — the renderer hides the footer in that case so this
 /// branch never triggers from the UI anyway.
 pub(super) fn cycle_model_effort(state: &mut AppState, delta: i32) {
-    let Some(Overlay::ModelPicker(m)) = &mut state.ui.overlay else {
+    let Some(Overlay::ModelPicker(m)) = state.ui.active_overlay_mut() else {
         return;
     };
     let filtered: Vec<&ModelEntry> = m

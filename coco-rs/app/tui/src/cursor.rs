@@ -48,8 +48,7 @@ pub fn compute_cursor(state: &AppState, input_area: Rect) -> Option<CursorClaim>
     }
     if state
         .ui
-        .overlay
-        .as_ref()
+        .active_overlay()
         .is_some_and(|overlay| !matches!(overlay, Overlay::CommandPalette(_)))
     {
         return None;
@@ -71,7 +70,7 @@ pub fn compute_cursor(state: &AppState, input_area: Rect) -> Option<CursorClaim>
 /// always has a defined home.
 fn compute_input_xy(state: &AppState, area: Rect) -> (u16, u16) {
     let is_streaming = state.is_streaming();
-    let command_palette_filter: Option<&str> = match state.ui.overlay.as_ref() {
+    let command_palette_filter: Option<&str> = match state.ui.active_overlay() {
         Some(Overlay::CommandPalette(cp)) => Some(cp.filter.as_str()),
         _ => None,
     };

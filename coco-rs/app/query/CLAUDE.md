@@ -169,3 +169,87 @@ byte-for-byte:
 
 The verbatim `SUGGESTION_PROMPT` (30 lines) lives at
 `prompt_suggestion_prompt.txt` and is `include_str!`'d.
+
+### Abnormal stop_reason → synthetic `api_error` assistant message
+
+When the LLM stream finishes with a non-clean `stop_reason`,
+`engine.rs::run_session_loop` synthesizes a typed-signal assistant
+message via `helpers::build_abnormal_stop_api_error_message` (TS parity:
+`services/api/claude.ts:2258-2292` + `services/api/errors.ts:1184-1207`
+`getErrorMessageIfRefusal`). The message has empty content and
+carries the human-readable explanation on `AssistantMessage.api_error.message`.
+
+Three abnormal-stop branches feed this synthesizer:
+
+1. **`StopReason::ContentFilter`** (multi-LLM unified bucket — Anthropic
+   `refusal`, OpenAI `content_filter`, Google `SAFETY` / `RECITATION`).
+   No recovery — retry won't change a policy decision. The engine
+   pushes the partial real response + synthetic api_error message
+   and falls through to the natural `tool_calls.is_empty()`
+   end-of-turn exit. Provider-agnostic message text — does not name
+   "Claude" / "Anthropic" / "OpenAI" since the unified bucket covers
+   all of them.
+
+2. **`StopReason::ContextWindowExceeded`** (Anthropic-only finish
+   reason on the extended-context beta — every other provider reports
+   this condition as an HTTP 400). Routes to
+   `QueryEngine::handle_context_overflow` (reactive compaction),
+   sharing the handler with the HTTP-400 stream-open and mid-stream
+   sites so all three context-window signals converge. Pushes the
+   partial assistant message + synthetic api_error first (transcript
+   provenance), then compacts and continues with
+   `ContinueReason::ReactiveCompactRetry`. **Never escalates
+   `max_output_tokens` to 64k** — raising the output budget cannot
+   help when the *input* already exceeds the window.
+
+3. **`StopReason::MaxTokens`** (output-token cap — Anthropic
+   `max_tokens`, OpenAI `length` / `max_output_tokens`, Google
+   `MAX_TOKENS`). Output-budget recovery: phase 1 escalates to 64k
+   and retries; phase 2 injects the resume-nudge meta message up to
+   `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` times; phase 3 falls through.
+   All three sub-branches push the synthetic message so transcripts
+   carry the explicit truncation marker — matches TS yielding
+   `createAssistantAPIErrorMessage` at the stream layer regardless of
+   subsequent recovery state.
+
+Layering: `coco-inference` is provider-agnostic and cannot construct
+`coco_messages::Message` — the typed `coco_inference::StopReason`
+(re-exported from extended `vercel_ai_provider::UnifiedFinishReason`,
+8 variants) flows through `StreamEvent::Finish` and `app/query` does
+the synthesis. The `coco_messages::StopReason` enum is a re-export of
+the same type — there is **one** stop_reason enum in the workspace,
+set once at the provider-adapter seam (Anthropic / OpenAI / Google /
+ByteDance / OpenAI-compat). No string parsing anywhere — the old
+`helpers::parse_stop_reason` was deleted as part of the unification.
+
+`ContextWindowExceeded` and `MaxTokens` are deliberately routed to
+distinct handlers (compaction vs. output-budget escalate). There is
+intentionally no `is_max_tokens_family` umbrella predicate — the two
+variants share neither recovery strategy nor the user-facing wording
+that `build_abnormal_stop_api_error_message` emits.
+
+### Tool-use-summary side-fork (`ModelRole::Fast`)
+
+After each tool batch `engine_finalize_turn::spawn_tool_use_summary`
+optionally spawns a blocking Fast-role call that produces a ≤30-char
+mobile-row label. Lives in `tool_use_summary.rs`; TS source
+`services/toolUseSummary/toolUseSummaryGenerator.ts`. Four gates, all
+enforced in `spawn_tool_use_summary`:
+
+1. `Feature::ToolUseSummary` enabled — **default off**. Mobile-row UX
+   polish; every tool-using turn costs an extra Fast-role blocking
+   call, and reasoning-class Fast models (DeepSeek V4, Gemini Flash
+   Thinking, …) exhaust the per-call budget on reasoning before any
+   visible text — the call returns `stop_reason=length` with empty
+   text. Users opt in via `settings.json` `features.tool_use_summary =
+   true` once their Fast role is wired to a non-reasoning model.
+2. `role_client_cache` wired (Fast role configured).
+3. `agent_id.is_none()` — subagents don't surface in the mobile UI
+   (TS `!toolUseContext.agentId` at `query.ts:1419`).
+4. Tool batch non-empty.
+
+`QueryParams.max_tokens` is intentionally `None` — defer to the Fast
+model's own `max_output_tokens` from `ModelInfo`. The TS port hard-coded
+`64` for Haiku; that cap is unsafe on reasoning models. Non-clean
+terminations propagate through `coco-inference`'s abnormal-stop_reason
+warn (see `services/inference/CLAUDE.md`).

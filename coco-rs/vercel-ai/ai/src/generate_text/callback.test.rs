@@ -37,7 +37,7 @@ fn test_on_finish_event() {
         0,
         "Hello".to_string(),
         Usage::default(),
-        FinishReason::stop(),
+        FinishReason::end_turn(),
     );
     let event = OnFinishEvent::new(step_result, Vec::new(), Usage::default());
     assert_eq!(event.text(), "Hello");
@@ -59,7 +59,7 @@ fn test_on_step_finish_is_step_result() {
         0,
         "test".to_string(),
         Usage::default(),
-        FinishReason::stop(),
+        FinishReason::end_turn(),
     );
     assert_eq!(step.step, 0);
     assert_eq!(step.text, "test");

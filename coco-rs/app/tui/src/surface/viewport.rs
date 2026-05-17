@@ -1,6 +1,4 @@
 //! Interactive viewport renderer for the native-scrollback surface.
-// S3 renderer lands before production `Tui` switches to `SurfaceTerminal`.
-#![allow(dead_code)]
 
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -13,6 +11,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
+use crate::FrameLayout;
 use crate::constants;
 use crate::presentation::activity::TurnActivityView;
 use crate::presentation::activity::inline_activity_height;
@@ -24,32 +23,32 @@ use crate::presentation::footer::footer_view;
 use crate::presentation::input::InlinePopupView;
 use crate::presentation::input::inline_popup_view;
 use crate::presentation::styles::UiStyles;
-use crate::render::FrameLayout;
 use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::state::Toast;
 use crate::state::ToastSeverity;
+use crate::surface::overlay::SurfaceFramePlan;
 use crate::surface::overlay::render_surface_overlay;
 use crate::surface::terminal::SurfaceFrame;
 use crate::widgets::SuggestionPopup;
 
 /// Render the retained native-scrollback viewport.
 ///
-/// Finalized transcript messages are intentionally excluded here: they are
-/// emitted above the viewport through `SurfaceHistoryDriver`. This renderer is
-/// only responsible for active work, composer chrome, inline popups, and local
-/// status surfaces.
+/// Finalized transcript messages normally live above the viewport in native
+/// scrollback. Compatibility fallback mode renders them inside the retained
+/// viewport instead so terminals without usable scrollback do not drop history.
 pub(crate) fn render_interactive_viewport(
     frame: &mut SurfaceFrame<'_>,
     state: &AppState,
+    plan: SurfaceFramePlan,
 ) -> FrameLayout {
     let mut layout = FrameLayout::default();
     let area = frame.area();
     let styles = UiStyles::new(&state.ui.theme);
 
-    render_live_viewport(frame, area, state, styles, &mut layout);
+    render_live_viewport(frame, area, state, styles, plan, &mut layout);
 
-    if let Some(overlay) = state.ui.overlay.as_ref() {
+    if let Some(overlay) = state.ui.active_overlay() {
         render_surface_overlay(frame, area, overlay, state, styles);
     }
 
@@ -64,13 +63,14 @@ pub(crate) fn interactive_viewport_desired_height(
     state: &AppState,
     width: u16,
     max_height: u16,
+    plan: SurfaceFramePlan,
 ) -> u16 {
     if width == 0 || max_height == 0 {
         return 0;
     }
 
     let styles = UiStyles::new(&state.ui.theme);
-    let live_content_height = build_live_tail_lines(state, styles, width).len() as u16;
+    let live_content_height = build_live_tail_lines(state, styles, width, plan).len() as u16;
     let activity = turn_activity_view(state, width);
     let activity_rows = inline_activity_height(&activity, max_height, width);
     let queue_rows: u16 =
@@ -112,6 +112,7 @@ fn render_live_viewport(
     area: Rect,
     state: &AppState,
     styles: UiStyles<'_>,
+    plan: SurfaceFramePlan,
     layout: &mut FrameLayout,
 ) {
     let input_height = 3.min(constants::MAX_INPUT_HEIGHT as u16);
@@ -130,7 +131,7 @@ fn render_live_viewport(
             0
         };
 
-    let live_lines = build_live_tail_lines(state, styles, area.width);
+    let live_lines = build_live_tail_lines(state, styles, area.width, plan);
     let live_content_height = live_lines.len() as u16;
     let inline_popup = inline_popup_view(state);
     let popup_items = inline_popup
@@ -212,8 +213,18 @@ fn render_live_viewport(
     }
 }
 
-fn build_live_tail_lines(state: &AppState, styles: UiStyles<'_>, width: u16) -> Vec<Line<'static>> {
-    let mut chat = crate::widgets::ChatWidget::new(&[], styles)
+fn build_live_tail_lines(
+    state: &AppState,
+    styles: UiStyles<'_>,
+    width: u16,
+    plan: SurfaceFramePlan,
+) -> Vec<Line<'static>> {
+    let committed_messages = if plan.finalized_history_in_viewport() {
+        state.session.messages.as_slice()
+    } else {
+        &[]
+    };
+    let mut chat = crate::widgets::ChatWidget::new(committed_messages, styles)
         .scroll(state.ui.scroll_offset)
         .streaming(state.ui.streaming.as_ref())
         .show_thinking(state.ui.show_thinking)
@@ -257,7 +268,7 @@ fn render_live_tail_lines(
 
 fn render_input(frame: &mut SurfaceFrame<'_>, state: &AppState, area: Rect, styles: UiStyles<'_>) {
     let is_focused = state.ui.focus == FocusTarget::Input;
-    let command_palette_filter: Option<&str> = match state.ui.overlay.as_ref() {
+    let command_palette_filter: Option<&str> = match state.ui.active_overlay() {
         Some(crate::state::Overlay::CommandPalette(cp)) => Some(cp.filter.as_str()),
         _ => None,
     };
@@ -323,10 +334,11 @@ fn render_toasts(
     styles: UiStyles<'_>,
 ) {
     let toast_width: u16 = 40;
-    let mut y = 1_u16;
+    let mut y = area.y.saturating_add(1);
+    let max_y = area.bottom().saturating_sub(2);
 
     for toast in toasts.iter() {
-        if y >= area.height - 2 {
+        if y >= max_y {
             break;
         }
 
@@ -337,7 +349,7 @@ fn render_toasts(
             ToastSeverity::Error => ("✗", styles.error()),
         };
 
-        let x = area.width.saturating_sub(toast_width + 1);
+        let x = area.x + area.width.saturating_sub(toast_width + 1);
         let toast_area = Rect::new(x, y, toast_width, 1);
 
         let text = format!(" {icon} {} ", toast.message);

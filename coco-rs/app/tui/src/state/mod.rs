@@ -139,7 +139,7 @@ impl AppState {
 
     /// Whether an overlay is currently active.
     pub fn has_overlay(&self) -> bool {
-        self.ui.overlay.is_some()
+        self.ui.has_overlay()
     }
 
     /// Whether the agent is actively streaming.
@@ -165,7 +165,7 @@ impl AppState {
     /// no overlay can be occluding the cursor. Mirrors TS
     /// `PromptInput.tsx:1955` (`doublePressEscFromEmpty`).
     pub fn rewind_available_from_input(&self) -> bool {
-        self.ui.input.is_empty() && !self.session.messages.is_empty() && self.ui.overlay.is_none()
+        self.ui.input.is_empty() && !self.session.messages.is_empty() && !self.ui.has_overlay()
     }
 
     /// Cycle permission mode (Shift+Tab).

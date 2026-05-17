@@ -1,4 +1,4 @@
-//! Tabbed settings panel overlay renderer.
+//! Tabbed settings panel overlay content builder.
 
 use ratatui::prelude::Color;
 

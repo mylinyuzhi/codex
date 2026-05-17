@@ -1,10 +1,13 @@
-//! Surface terminal substrate for the native-scrollback migration.
-// S1 substrate lands before production `Tui` switches over; keep the
-// unused-surface warnings scoped to this migration module.
-#![allow(dead_code)]
+//! Surface terminal substrate for the native-scrollback TUI.
 
+use crossterm::cursor::SetCursorStyle;
+use crossterm::queue;
+use crossterm::terminal::BeginSynchronizedUpdate;
+use crossterm::terminal::EndSynchronizedUpdate;
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
+use ratatui::backend::CrosstermBackend;
+use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Position;
@@ -12,18 +15,70 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
+use std::io::Write;
 
 use crate::cursor::CursorClaim;
 use crate::surface::history_insert::render_history_lines;
 
-/// A retained bottom viewport with explicit cursor and history accounting.
+pub(crate) trait SurfaceBackend: Backend {
+    fn clear_scrollback_and_screen(&mut self) -> Result<(), Self::Error> {
+        self.clear_region(ClearType::All)
+    }
+
+    fn set_cursor_style(&mut self, _style: SetCursorStyle) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn begin_synchronized_update(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn end_synchronized_update(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl<W> SurfaceBackend for CrosstermBackend<W>
+where
+    W: Write,
+{
+    fn clear_scrollback_and_screen(&mut self) -> Result<(), Self::Error> {
+        write!(self, "\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H")?;
+        Write::flush(self)
+    }
+
+    fn set_cursor_style(&mut self, style: SetCursorStyle) -> Result<(), Self::Error> {
+        queue!(self, style)?;
+        Ok(())
+    }
+
+    fn begin_synchronized_update(&mut self) -> Result<(), Self::Error> {
+        queue!(self, BeginSynchronizedUpdate)?;
+        Ok(())
+    }
+
+    fn end_synchronized_update(&mut self) -> Result<(), Self::Error> {
+        queue!(self, EndSynchronizedUpdate)?;
+        Write::flush(self)
+    }
+}
+
+impl SurfaceBackend for TestBackend {
+    fn clear_scrollback_and_screen(&mut self) -> Result<(), Self::Error> {
+        let size = self.size()?;
+        *self = TestBackend::new(size.width, size.height);
+        Ok(())
+    }
+}
+
+/// A retained inline viewport with explicit cursor and history accounting.
 ///
 /// This is intentionally smaller than the final native terminal contract. It
 /// proves the central ownership model on crates.io `ratatui 0.30`: coco owns
 /// viewport geometry, draw buffers, cursor policy application, and visible
 /// history row accounting instead of relying on stock `Viewport::Inline`.
 #[derive(Debug)]
-pub(crate) struct SurfaceTerminal<B: Backend> {
+pub(crate) struct SurfaceTerminal<B: SurfaceBackend> {
     backend: B,
     buffers: [Buffer; 2],
     current: usize,
@@ -60,13 +115,13 @@ impl<'a> SurfaceFrame<'a> {
 
 impl<B> SurfaceTerminal<B>
 where
-    B: Backend,
+    B: SurfaceBackend,
 {
     /// Create a surface terminal using the backend's current size as the
     /// initial viewport.
     pub(crate) fn new(backend: B) -> Result<Self, B::Error> {
         let screen_size = backend.size()?;
-        let viewport_area = Rect::new(0, 0, screen_size.width, screen_size.height);
+        let viewport_area = Rect::new(0, 0, screen_size.width, 0);
         Ok(Self {
             backend,
             buffers: [Buffer::empty(viewport_area), Buffer::empty(viewport_area)],
@@ -80,6 +135,7 @@ where
     }
 
     /// Immutable backend access for tests and future surface adapters.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn backend(&self) -> &B {
         &self.backend
     }
@@ -94,7 +150,13 @@ where
         self.viewport_area
     }
 
+    /// Row immediately after the finalized history owned by this surface.
+    pub(crate) fn history_bottom_y(&self) -> u16 {
+        self.history_bottom_y
+    }
+
     /// Last backend screen size observed by the surface terminal.
+    #[cfg(test)]
     pub(crate) fn last_known_screen_size(&self) -> Size {
         self.last_known_screen_size
     }
@@ -105,6 +167,7 @@ where
     }
 
     /// Rows of finalized history known to be visible above the viewport.
+    #[cfg(test)]
     pub(crate) fn visible_history_rows(&self) -> u16 {
         self.visible_history_rows
     }
@@ -146,7 +209,11 @@ where
             && previous.width == size.width
             && previous.height == size.height;
 
-        if scroll_history_on_growth && !initial_fullscreen && area.y < previous.y {
+        if scroll_history_on_growth
+            && !initial_fullscreen
+            && area.y < previous.y
+            && area.bottom() >= size.height
+        {
             let scroll_by = previous.y - area.y;
             if scroll_by > 0 && previous.y > 0 {
                 self.backend.scroll_region_up(0..previous.y, scroll_by)?;
@@ -165,6 +232,14 @@ where
             self.clear_after_position(Position { x: 0, y: clear_y })?;
         }
 
+        tracing::debug!(
+            target: "tui::surface",
+            previous = ?previous,
+            next = ?area,
+            history_bottom_y = self.history_bottom_y,
+            scroll_history_on_growth,
+            "apply viewport area"
+        );
         self.set_viewport_area(area);
         Ok(())
     }
@@ -177,6 +252,10 @@ where
 
     /// Record history rows inserted above the retained viewport.
     pub(crate) fn note_history_rows_inserted(&mut self, rows: u16) {
+        self.history_bottom_y = self
+            .history_bottom_y
+            .saturating_add(rows)
+            .min(self.viewport_area.top());
         self.visible_history_rows = self
             .visible_history_rows
             .saturating_add(rows)
@@ -184,18 +263,27 @@ where
     }
 
     /// Clear visible terminal content owned by the surface and reset history
-    /// accounting. Full scrollback purge is added by the native history
-    /// insertion slice; this method already gives callers a single surface
-    /// boundary for clear/replay decisions.
+    /// accounting.
     pub(crate) fn clear_owned_scrollback(&mut self) -> Result<(), B::Error> {
-        self.backend.clear_region(ClearType::All)?;
+        let previous = self.viewport_area;
+        self.backend.clear_scrollback_and_screen()?;
         self.visible_history_rows = 0;
-        self.history_bottom_y = self.viewport_area.top();
+        self.history_bottom_y = 0;
+        self.viewport_area.y = 0;
+        self.buffers[0].resize(self.viewport_area);
+        self.buffers[1].resize(self.viewport_area);
+        tracing::debug!(
+            target: "tui::surface",
+            previous = ?previous,
+            next = ?self.viewport_area,
+            "clear owned scrollback"
+        );
         self.invalidate_viewport();
         Ok(())
     }
 
     /// Clear the retained interactive viewport while preserving rows above it.
+    #[cfg(test)]
     pub(crate) fn clear_viewport_to_end(&mut self) -> Result<(), B::Error> {
         if self.viewport_area.width == 0 || self.viewport_area.height == 0 {
             return Ok(());
@@ -249,42 +337,102 @@ where
         I: IntoIterator<Item = Line<'static>>,
     {
         let lines = lines.into_iter().collect::<Vec<_>>();
-        if lines.is_empty() || self.viewport_area.width == 0 || self.viewport_area.top() == 0 {
+        if lines.is_empty() || self.viewport_area.width == 0 {
             return Ok(0);
         }
 
         let rendered = render_history_lines(lines, self.viewport_area.width);
-        let rows = rendered.area.height.min(self.viewport_area.top());
-        if rows == 0 {
+        let rows = rendered.area.height;
+        let previous = self.viewport_area;
+        self.move_viewport_down_for_history(rows)?;
+
+        let viewport_top = self.viewport_area.top();
+        if rows == 0 || viewport_top == 0 {
             return Ok(0);
         }
 
-        let history_bottom = self.history_bottom_y.min(self.viewport_area.top());
-        let gap_below_history = self.viewport_area.top().saturating_sub(history_bottom);
-        let overflow = rows.saturating_sub(gap_below_history);
-        if overflow > 0 {
-            self.backend.scroll_region_up(0..history_bottom, overflow)?;
+        let mut start_row = 0;
+        let gap_below_history = viewport_top.saturating_sub(self.history_bottom_y);
+        if gap_below_history > 0 {
+            let rows_to_draw = rows.min(gap_below_history);
+            let target_top = self.history_bottom_y;
+            let updates = rendered
+                .content
+                .iter()
+                .enumerate()
+                .filter_map(|(index, cell)| {
+                    let (x, y) = rendered.pos_of(index);
+                    (y < rows_to_draw).then_some((x, target_top + y, cell))
+                });
+            self.backend.draw(updates)?;
+            self.history_bottom_y = self.history_bottom_y.saturating_add(rows_to_draw);
+            start_row = rows_to_draw;
         }
 
-        let insertion_top = history_bottom.saturating_sub(overflow);
-
-        let updates = rendered
-            .content
-            .iter()
-            .enumerate()
-            .filter_map(|(index, cell)| {
-                let (x, y) = rendered.pos_of(index);
-                let target_y = insertion_top + y;
-                (target_y < self.viewport_area.top()).then_some((x, target_y, cell))
-            });
-        self.backend.draw(updates)?;
+        while start_row < rows {
+            let chunk_rows = (rows - start_row).min(viewport_top);
+            self.backend.scroll_region_up(0..viewport_top, chunk_rows)?;
+            let target_top = viewport_top - chunk_rows;
+            let updates = rendered
+                .content
+                .iter()
+                .enumerate()
+                .filter_map(|(index, cell)| {
+                    let (x, y) = rendered.pos_of(index);
+                    if y >= start_row && y < start_row + chunk_rows {
+                        Some((x, target_top + (y - start_row), cell))
+                    } else {
+                        None
+                    }
+                });
+            self.backend.draw(updates)?;
+            start_row += chunk_rows;
+        }
         self.backend.flush()?;
-        self.history_bottom_y = insertion_top
-            .saturating_add(rows)
-            .min(self.viewport_area.top());
+        self.history_bottom_y = viewport_top;
         self.note_history_rows_inserted(rows);
+        tracing::debug!(
+            target: "tui::surface",
+            rows,
+            previous_viewport = ?previous,
+            next_viewport = ?self.viewport_area,
+            history_bottom_y = self.history_bottom_y,
+            visible_history_rows = self.visible_history_rows,
+            "insert history lines"
+        );
         self.invalidate_viewport();
         Ok(rows)
+    }
+
+    fn move_viewport_down_for_history(&mut self, rows: u16) -> Result<(), B::Error> {
+        if rows == 0 {
+            return Ok(());
+        }
+        let screen_size = self.size()?;
+        let available_below = screen_size
+            .height
+            .saturating_sub(self.viewport_area.bottom());
+        let scroll_amount = rows.min(available_below);
+        if scroll_amount == 0 {
+            return Ok(());
+        }
+
+        let region_top = self.viewport_area.top();
+        self.backend
+            .scroll_region_down(region_top..screen_size.height, scroll_amount)?;
+        self.viewport_area.y = self.viewport_area.y.saturating_add(scroll_amount);
+        self.buffers[0].resize(self.viewport_area);
+        self.buffers[1].resize(self.viewport_area);
+        self.invalidate_viewport();
+        Ok(())
+    }
+
+    pub(crate) fn begin_synchronized_update(&mut self) -> Result<(), B::Error> {
+        self.backend.begin_synchronized_update()
+    }
+
+    pub(crate) fn end_synchronized_update(&mut self) -> Result<(), B::Error> {
+        self.backend.end_synchronized_update()
     }
 
     /// Draw one retained viewport frame and apply the frame's cursor claim.
@@ -325,6 +473,7 @@ where
 
     fn apply_cursor_claim(&mut self, claim: Option<CursorClaim>) -> Result<(), B::Error> {
         if let Some(claim) = claim {
+            self.backend.set_cursor_style(claim.style)?;
             self.backend.show_cursor()?;
             self.backend.set_cursor_position(claim.position)?;
         } else {

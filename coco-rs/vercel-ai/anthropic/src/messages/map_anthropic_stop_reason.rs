@@ -11,19 +11,21 @@ pub fn map_anthropic_stop_reason(
 ) -> FinishReason {
     let raw = reason.map(String::from);
     let unified = match reason {
-        Some("end_turn" | "stop_sequence" | "pause_turn") => {
-            vercel_ai_provider::UnifiedFinishReason::Stop
-        }
+        Some("end_turn" | "pause_turn") => vercel_ai_provider::UnifiedFinishReason::EndTurn,
+        // Refinement: stop_sequence is its own variant (post-extension).
+        Some("stop_sequence") => vercel_ai_provider::UnifiedFinishReason::StopSequence,
         Some("refusal") => vercel_ai_provider::UnifiedFinishReason::ContentFilter,
         Some("tool_use") => {
             if is_json_response_from_tool {
-                vercel_ai_provider::UnifiedFinishReason::Stop
+                vercel_ai_provider::UnifiedFinishReason::EndTurn
             } else {
-                vercel_ai_provider::UnifiedFinishReason::ToolCalls
+                vercel_ai_provider::UnifiedFinishReason::ToolUse
             }
         }
-        Some("max_tokens" | "model_context_window_exceeded") => {
-            vercel_ai_provider::UnifiedFinishReason::Length
+        Some("max_tokens") => vercel_ai_provider::UnifiedFinishReason::MaxTokens,
+        // Refinement: context_window_exceeded is its own variant (post-extension).
+        Some("model_context_window_exceeded") => {
+            vercel_ai_provider::UnifiedFinishReason::ContextWindowExceeded
         }
         Some("compaction") => vercel_ai_provider::UnifiedFinishReason::Other,
         _ => vercel_ai_provider::UnifiedFinishReason::Other,

@@ -219,7 +219,7 @@ impl MockLanguageModelBuilder {
                     args.clone(),
                 )],
                 usage: Usage::new(10, 5),
-                finish_reason: FinishReason::tool_calls(),
+                finish_reason: FinishReason::tool_use(),
                 warnings: Vec::new(),
                 provider_metadata: None,
                 request: None,
@@ -263,7 +263,7 @@ impl MockLanguageModelBuilder {
                     provider_metadata: None,
                 }),
                 Ok(LanguageModelV4StreamPart::Finish {
-                    finish_reason: FinishReason::stop(),
+                    finish_reason: FinishReason::end_turn(),
                     usage: Usage::new(10, 5),
                     provider_metadata: None,
                 }),
@@ -315,7 +315,7 @@ impl MockLanguageModelBuilder {
                 }),
                 Ok(LanguageModelV4StreamPart::ToolCall(tc)),
                 Ok(LanguageModelV4StreamPart::Finish {
-                    finish_reason: FinishReason::tool_calls(),
+                    finish_reason: FinishReason::tool_use(),
                     usage: Usage::new(10, 5),
                     provider_metadata: None,
                 }),
@@ -363,7 +363,7 @@ pub fn default_generate_result(text: &str) -> LanguageModelV4GenerateResult {
     LanguageModelV4GenerateResult {
         content: vec![AssistantContentPart::text(text)],
         usage: Usage::new(10, 5),
-        finish_reason: FinishReason::stop(),
+        finish_reason: FinishReason::end_turn(),
         warnings: Vec::new(),
         provider_metadata: None,
         request: None,

@@ -1,19 +1,20 @@
 # TUI Rendering Hardening And Rollback
 
-Status: current cursor/suspend invariants plus historical failure ledger for
+Status: historical cursor/suspend invariants plus rollback ledger for
 `terminal-surface-design.md`. Phase A + B landed and remain in force. Phase C
 (inline viewport + native scrollback) was attempted and rolled back after user
-testing showed duplicate rendering. The current implementation is alt-screen +
-ratatui fullscreen, matching the TS Ink-style model.
+testing showed duplicate rendering. The later native-surface migration replaced
+the old fullscreen renderer; this document remains as evidence for the cursor
+and suspend/resume invariants.
 
 The rollback history is evidence; the cursor and suspend/resume rules in this
-document are still production constraints until the native surface replaces
-their call sites with equivalent `surface::Frame` behavior.
+document remain production constraints and are now applied through
+`surface::terminal::SurfaceFrame` / `SurfaceTerminal`.
 
 ## Current Goal
 
-This hardening pass fixes two terminal-layer problems without changing the
-conversation rendering model:
+This hardening pass fixed two terminal-layer problems before the native-surface
+migration:
 
 1. **Cursor pin**: every draw produces an explicit cursor decision. Focus-gained
    redraws cannot leave the cursor at the status bar or another stale write
@@ -21,29 +22,24 @@ conversation rendering model:
 2. **Suspend / resume**: Ctrl+Z on Unix leaves TUI modes, yields to the shell,
    and re-enters the TUI after `fg`.
 
-Native terminal scrollback is not part of the landed implementation. It remains
-a separate backend decision because stock ratatui 0.30 inline viewport behavior
-does not provide the geometry control needed for this app.
-The target architecture for that separate backend lives in
-`native-scrollback-architecture.md`.
+Native terminal scrollback now uses the custom `surface/*` path documented in
+`native-scrollback-architecture.md`; the failed stock-ratatui inline attempt
+below should not be revived.
 
 ## Landed Architecture
 
-`Tui::draw` owns terminal side effects around a pure render pass:
+`Tui::draw` owns terminal side effects around native-surface drawing:
 
 ```rust
-self.tui.draw(|frame| {
-    let layout = render::render(frame, state);
-    cursor::compute_cursor(state, layout.input)
-})?;
+self.surface.draw(&mut self.terminal, state)?;
 ```
 
 Draw order:
 
 1. Apply a pending resume action, if Ctrl+Z recently returned.
-2. Render the fullscreen ratatui frame.
-3. Apply the cursor claim post-draw with crossterm:
-   `SetCursorStyle`, `MoveTo`, `Show` or `Hide`.
+2. Sync the retained viewport / alt-screen overlay placement.
+3. Emit finalized history and render the interactive viewport.
+4. Apply the cursor claim through `SurfaceTerminal`.
 
 The important constraint is that widgets no longer call
 `Frame::set_cursor_position`. Cursor ownership is centralized in
@@ -120,7 +116,8 @@ one explicit backend path:
    insertion.
 2. Use raw crossterm with a coco-owned buffer diff.
 3. Keep stock ratatui fullscreen and improve in-app transcript/pager UX instead
-   of native scrollback.
+   of native scrollback. This option was retired when the native-surface
+   migration deleted the fullscreen renderer.
 
 Do not reintroduce a partial stock-ratatui inline viewport implementation
 without a new design and PTY-level tests for streaming commit, resize, focus,
@@ -149,6 +146,6 @@ Manual:
 | Scenario | Current behavior |
 |---|---|
 | External `kill -TSTP $pid` / `kill -STOP $pid` | Not handled; needs a signal handler if required. |
-| Native terminal scrollback | Not available in the alt-screen model. Use transcript overlay for in-app review. |
+| Native terminal scrollback | Implemented through `surface::controller`, `history_driver`, and `SurfaceTerminal`; keep stock inline viewport disabled. |
 | Mouse wheel history | Not available because mouse capture remains disabled and alt-screen has no native transcript scrollback. |
 | Long sessions | `state.session.messages` grows linearly; compaction and rewind remain the current pressure valves. |

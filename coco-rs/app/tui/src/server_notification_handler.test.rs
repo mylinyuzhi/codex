@@ -155,7 +155,7 @@ fn test_permission_request_shows_overlay() {
     );
     assert!(state.has_overlay());
     assert!(matches!(
-        state.ui.overlay,
+        state.ui.active_overlay(),
         Some(crate::state::Overlay::Permission(_))
     ));
 }

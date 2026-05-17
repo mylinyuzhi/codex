@@ -1,18 +1,19 @@
 //! Native-scrollback draw orchestration.
-// S3 controller lands before production `Tui` switches to `SurfaceTerminal`.
-#![allow(dead_code)]
 
 use std::time::Instant;
 
-use ratatui::backend::Backend;
-
+use crate::FrameLayout;
 use crate::presentation::styles::UiStyles;
-use crate::render::FrameLayout;
 use crate::state::AppState;
+#[cfg(test)]
+use crate::surface::compatibility::TerminalCompatibility;
 use crate::surface::history_driver::SurfaceHistoryDriver;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
 use crate::surface::history_lines::HistoryLineRenderOptions;
-use crate::surface::overlay::history_emission_deferred;
+#[cfg(test)]
+use crate::surface::overlay::OverlaySurfaceState;
+use crate::surface::overlay::SurfaceFramePlan;
+use crate::surface::terminal::SurfaceBackend;
 use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::render_interactive_viewport;
 
@@ -23,26 +24,42 @@ pub(crate) struct NativeSurfaceController {
 
 #[derive(Debug, Clone)]
 pub(crate) struct NativeSurfaceDrawOutcome {
+    #[cfg(test)]
     pub(crate) history: HistoryEmissionOutcome,
     pub(crate) layout: FrameLayout,
 }
 
 impl NativeSurfaceController {
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
+    #[cfg(test)]
     pub(crate) fn draw<B>(
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
         state: &AppState,
     ) -> Result<NativeSurfaceDrawOutcome, B::Error>
     where
-        B: Backend,
+        B: SurfaceBackend,
     {
         self.draw_at(terminal, state, Instant::now())
     }
 
+    pub(crate) fn draw_with_plan<B>(
+        &mut self,
+        terminal: &mut SurfaceTerminal<B>,
+        state: &AppState,
+        plan: SurfaceFramePlan,
+    ) -> Result<NativeSurfaceDrawOutcome, B::Error>
+    where
+        B: SurfaceBackend,
+    {
+        self.draw_at_with_plan(terminal, state, Instant::now(), plan)
+    }
+
+    #[cfg(test)]
     pub(crate) fn draw_at<B>(
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
@@ -50,16 +67,51 @@ impl NativeSurfaceController {
         now: Instant,
     ) -> Result<NativeSurfaceDrawOutcome, B::Error>
     where
-        B: Backend,
+        B: SurfaceBackend,
+    {
+        let mut overlay_state = OverlaySurfaceState::default();
+        let plan = overlay_state.plan(state, TerminalCompatibility::NativeScrollback, now);
+        self.draw_at_with_plan(terminal, state, now, plan)
+    }
+
+    pub(crate) fn draw_at_with_plan<B>(
+        &mut self,
+        terminal: &mut SurfaceTerminal<B>,
+        state: &AppState,
+        now: Instant,
+        plan: SurfaceFramePlan,
+    ) -> Result<NativeSurfaceDrawOutcome, B::Error>
+    where
+        B: SurfaceBackend,
+    {
+        terminal.begin_synchronized_update()?;
+        let outcome = self.draw_at_inner(terminal, state, now, plan);
+        let end = terminal.end_synchronized_update();
+        match (outcome, end) {
+            (Ok(outcome), Ok(())) => Ok(outcome),
+            (Err(err), _) | (Ok(_), Err(err)) => Err(err),
+        }
+    }
+
+    fn draw_at_inner<B>(
+        &mut self,
+        terminal: &mut SurfaceTerminal<B>,
+        state: &AppState,
+        now: Instant,
+        plan: SurfaceFramePlan,
+    ) -> Result<NativeSurfaceDrawOutcome, B::Error>
+    where
+        B: SurfaceBackend,
     {
         let viewport = terminal.viewport_area();
         let width = viewport.width;
         let stream_active = state.is_streaming();
-        self.history.note_width(width, stream_active);
+        self.history
+            .note_viewport(width, viewport.height, stream_active);
 
         let options = history_options(state, width);
         let session_header = || session_header_lines(state, width);
-        let history = if history_emission_deferred(state.ui.overlay.as_ref()) {
+        let history = if !plan.native_history_enabled() {
             HistoryEmissionOutcome::Noop
         } else {
             let needs_stream_finish_replay =
@@ -95,22 +147,24 @@ impl NativeSurfaceController {
 
         let mut layout = FrameLayout::default();
         terminal.draw_viewport(|frame| {
-            layout = render_interactive_viewport(frame, state);
+            layout = render_interactive_viewport(frame, state, plan);
             if let Some(claim) = crate::cursor::compute_cursor(state, layout.input) {
                 frame.set_cursor_claim(claim);
             }
         })?;
 
-        Ok(NativeSurfaceDrawOutcome { history, layout })
+        #[cfg(not(test))]
+        let _ = history;
+
+        Ok(NativeSurfaceDrawOutcome {
+            #[cfg(test)]
+            history,
+            layout,
+        })
     }
 
     pub(crate) fn reset(&mut self) {
         self.history.reset();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn force_history_replay_due_for_test(&mut self) {
-        self.history.force_replay_due_for_test();
     }
 }
 

@@ -7,7 +7,7 @@ fn test_step_result_new() {
         0,
         "Hello".to_string(),
         Usage::default(),
-        FinishReason::stop(),
+        FinishReason::end_turn(),
     );
 
     assert_eq!(step.step, 0);
@@ -22,7 +22,7 @@ fn test_step_result_with_model() {
         0,
         "Hello".to_string(),
         Usage::default(),
-        FinishReason::stop(),
+        FinishReason::end_turn(),
     )
     .with_model(CallbackModelInfo::new("openai", "gpt-4"));
 
@@ -41,7 +41,7 @@ fn test_step_result_with_tools() {
         0,
         "".to_string(),
         Usage::default(),
-        FinishReason::tool_calls(),
+        FinishReason::tool_use(),
     )
     .with_tool_calls(vec![tool_call])
     .with_tool_results(vec![tool_result]);
@@ -66,7 +66,7 @@ fn test_step_result_from_content() {
         AssistantContentPart::text(" world"),
     ];
 
-    let step = StepResult::from_content(0, content, Usage::default(), FinishReason::stop());
+    let step = StepResult::from_content(0, content, Usage::default(), FinishReason::end_turn());
 
     assert_eq!(step.text, "Hello world");
 }
@@ -80,7 +80,7 @@ fn test_step_result_message_types() {
         0,
         "Result:".to_string(),
         Usage::default(),
-        FinishReason::tool_calls(),
+        FinishReason::tool_use(),
     )
     .with_tool_calls(vec![tool_call])
     .with_tool_results(vec![tool_result]);
@@ -100,7 +100,7 @@ fn test_step_result_telemetry_fields() {
         0,
         "Hello".to_string(),
         Usage::default(),
-        FinishReason::stop(),
+        FinishReason::end_turn(),
     )
     .with_function_id("my-function")
     .with_metadata(metadata.clone())
@@ -118,7 +118,7 @@ fn test_step_result_convenience_setters() {
         0,
         "Hello".to_string(),
         Usage::default(),
-        FinishReason::stop(),
+        FinishReason::end_turn(),
     )
     .with_model_id("gpt-4")
     .with_provider_id("openai");
@@ -133,7 +133,7 @@ fn test_step_result_experimental_context() {
         0,
         "Hello".to_string(),
         Usage::default(),
-        FinishReason::stop(),
+        FinishReason::end_turn(),
     )
     .with_experimental_context(json!({"key": "value"}));
 
@@ -146,7 +146,7 @@ fn test_step_result_no_experimental_context() {
         0,
         "Hello".to_string(),
         Usage::default(),
-        FinishReason::stop(),
+        FinishReason::end_turn(),
     );
 
     assert!(step.experimental_context.is_none());

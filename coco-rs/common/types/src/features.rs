@@ -141,6 +141,21 @@ pub enum Feature {
     /// `/run-skill-generator` skill.
     /// TS: `feature('RUN_SKILL_GENERATOR')` in `skills/bundled/index.ts:73`.
     RunSkillGenerator,
+    /// Tool-use-summary side-fork (`ModelRole::Fast`, ≤30-char "git
+    /// commit subject" label emitted after each tool batch).
+    ///
+    /// **Default off.** This is mobile-app UX polish — every tool-using
+    /// turn fires an extra Fast-role blocking call. On reasoning-class
+    /// Fast models (DeepSeek V4, Gemini Flash Thinking, …) the small
+    /// per-call token budget is consumed by reasoning before any
+    /// summary text is emitted, so the side-fork burns tokens for an
+    /// empty result. Users who want the mobile-row label opt in via
+    /// `settings.json` `features.tool_use_summary = true` once their
+    /// Fast role is wired to a non-reasoning model.
+    ///
+    /// TS: `config.gates.emitToolUseSummaries` in
+    /// `services/toolUseSummary/toolUseSummaryGenerator.ts`.
+    ToolUseSummary,
     /// Auto-detect Claude in Chrome installation.
     /// TS: `shouldAutoEnableClaudeInChrome()` in `skills/bundled/index.ts:70`.
     ClaudeInChrome,
@@ -411,6 +426,16 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RunSkillGenerator,
         key: "run_skill_generator",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ToolUseSummary,
+        key: "tool_use_summary",
+        // Mobile-row label — costs an extra Fast-role call per tool batch
+        // and silently degrades on reasoning Fast models. Keep
+        // UnderDevelopment + default-off; promote once the max-tokens /
+        // reasoning-model interaction is fixed.
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

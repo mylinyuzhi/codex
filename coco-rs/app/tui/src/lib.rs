@@ -23,6 +23,7 @@ pub mod cursor;
 pub mod display_settings;
 pub mod double_press;
 pub mod events;
+mod frame_layout;
 pub mod git_index_watcher;
 pub mod i18n;
 pub mod job_control;
@@ -31,10 +32,9 @@ pub mod keybinding_dispatch;
 pub mod keybinding_resolver;
 pub mod keybinding_setup;
 pub mod keymap;
+mod overlay_content;
 pub mod paste;
 mod presentation;
-pub mod render;
-mod render_overlays;
 pub mod server_notification_handler;
 pub mod state;
 pub mod streaming;
@@ -45,6 +45,9 @@ pub mod update;
 mod update_rewind;
 pub mod vim;
 pub mod widgets;
+
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 // Legacy model kept for backward compatibility with existing tests
 pub mod model;
@@ -59,6 +62,7 @@ pub use display_settings::DisplaySettings;
 pub use display_settings::SyntaxHighlighting;
 pub use events::TuiCommand;
 pub use events::TuiEvent;
+pub use frame_layout::FrameLayout;
 pub use paste::ImageData;
 pub use paste::PasteManager;
 pub use paste::ResolvedInput;

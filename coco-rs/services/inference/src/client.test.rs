@@ -46,7 +46,7 @@ impl LanguageModelV4 for MockModel {
                 provider_metadata: None,
             })],
             usage: Usage::new(10, 5),
-            finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+            finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
             warnings: vec![],
             provider_metadata: None,
             request: None,
@@ -186,4 +186,30 @@ async fn test_provider_error_includes_provider_and_model_attribution() {
         message.contains("simulated failure"),
         "missing original error: {message}"
     );
+}
+
+#[test]
+fn stop_reason_is_normal_covers_happy_path() {
+    for normal in [
+        crate::StopReason::EndTurn,
+        crate::StopReason::StopSequence,
+        crate::StopReason::ToolUse,
+    ] {
+        assert!(normal.is_normal(), "{normal:?} should be normal");
+        assert!(!normal.is_abnormal());
+    }
+}
+
+#[test]
+fn stop_reason_flags_truncation_and_filter() {
+    for abnormal in [
+        crate::StopReason::MaxTokens,
+        crate::StopReason::ContextWindowExceeded,
+        crate::StopReason::ContentFilter,
+        crate::StopReason::Error,
+        crate::StopReason::Other,
+    ] {
+        assert!(abnormal.is_abnormal(), "{abnormal:?} should be abnormal");
+        assert!(!abnormal.is_normal());
+    }
 }

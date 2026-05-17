@@ -685,7 +685,47 @@ impl QueryEngine {
 
         match self.client.query(&params).await {
             Ok(result) => {
-                let summary = extract_compact_summary_from_content(&result.content)?;
+                let stop = result.stop_reason;
+                let stop_abnormal = stop.is_some_and(coco_messages::StopReason::is_abnormal);
+                // TS parity (`services/compact/compact.ts:493-515`): a
+                // truncated / content-filtered / refused summary is
+                // unusable — it would silently contaminate every
+                // subsequent turn with partial XML. Match TS's
+                // `throw new Error('Failed to generate conversation
+                // summary…')` by returning an `Err` whose message
+                // carries the `compact_summary_aborted:` prefix; the
+                // upper layer at `coco_compact::compact.rs:898-902`
+                // routes this prefix into `CompactError::LlmCallFailed`,
+                // which the user sees as "Error compacting conversation".
+                // Multi-provider note: the Anthropic stream layer in TS
+                // (`services/api/claude.ts:2266`) already converts
+                // `max_tokens` into a synthetic API-error message —
+                // coco-rs runs across providers that don't do that
+                // transform, so the side-fork caller has to defend
+                // itself by inspecting `stop_reason` directly here.
+                if stop_abnormal {
+                    warn!(
+                        stop_reason = ?stop,
+                        tokens_out = result.usage.output_tokens,
+                        "compaction aborted: non-normal stop_reason — \
+                         dropping truncated summary to avoid contaminating future turns"
+                    );
+                    return Err(format!(
+                        "compact_summary_aborted: model stopped with stop_reason={} \
+                         (truncated or filtered summary discarded)",
+                        stop.map(coco_messages::StopReason::as_wire_str)
+                            .unwrap_or("unknown")
+                    ));
+                }
+                let summary_res = extract_compact_summary_from_content(&result.content);
+                if summary_res.is_err() {
+                    warn!(
+                        stop_reason = ?stop,
+                        tokens_out = result.usage.output_tokens,
+                        "compaction summary parse failed — XML extractor rejected response"
+                    );
+                }
+                let summary = summary_res?;
                 Ok(coco_compact::CompactSummaryResponse { summary })
             }
             Err(e) => Err(e.to_string()),

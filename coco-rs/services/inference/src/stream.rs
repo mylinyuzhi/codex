@@ -481,7 +481,17 @@ pub enum StreamEvent {
     /// share via Arc.
     Finish {
         usage: TokenUsage,
-        stop_reason: String,
+        /// Typed unified stop reason — the 8-variant
+        /// `UnifiedFinishReason` set at the vercel-ai-provider seam.
+        /// All multi-LLM refinements (`ContextWindowExceeded`,
+        /// `StopSequence`) are first-class variants; no separate raw
+        /// string is needed for behavioral decisions.
+        stop_reason: crate::StopReason,
+        /// Provider-original wire string preserved for diagnostics
+        /// only (e.g. Anthropic `"refusal"` flowing through with
+        /// `stop_reason: ContentFilter`). Not consulted for any
+        /// behavioral decision — those go through `stop_reason`.
+        raw_stop_reason: Option<String>,
         metrics: StreamMetrics,
         snapshot: Arc<AssistantTurnSnapshot>,
     },
@@ -602,14 +612,30 @@ pub async fn process_stream_with_config(
             ),
             StreamEvent::Finish {
                 stop_reason, usage, ..
-            } => debug!(
-                event = "finish",
-                stop_reason = %stop_reason,
-                tokens_in = usage.input_tokens,
-                tokens_out = usage.output_tokens,
-                emitted = emitted_events,
-                "stream event"
-            ),
+            } => {
+                debug!(
+                    event = "finish",
+                    stop_reason = %stop_reason,
+                    tokens_in = usage.input_tokens,
+                    tokens_out = usage.output_tokens,
+                    emitted = emitted_events,
+                    "stream event"
+                );
+                // Mirror the blocking path: abnormal terminations
+                // (MaxTokens / ContextWindowExceeded / ContentFilter /
+                // Error / Other) surface as `warn` so they're
+                // discoverable without a trace-level filter.
+                if stop_reason.is_abnormal() {
+                    warn!(
+                        event = "finish",
+                        stop_reason = %stop_reason,
+                        tokens_in = usage.input_tokens,
+                        tokens_out = usage.output_tokens,
+                        emitted = emitted_events,
+                        "stream ended on non-normal stop_reason"
+                    );
+                }
+            }
             StreamEvent::Error { message, .. } => warn!(
                 event = "error",
                 message = %message,
@@ -656,7 +682,8 @@ fn stream_event_from_part(
             let snapshot = Arc::new(std::mem::take(&mut turn_state.snapshot));
             Some(StreamEvent::Finish {
                 usage: token_usage_from_provider_usage(&usage),
-                stop_reason: finish_reason.unified.to_string(),
+                stop_reason: finish_reason.unified,
+                raw_stop_reason: finish_reason.raw,
                 metrics,
                 snapshot,
             })

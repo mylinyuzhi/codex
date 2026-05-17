@@ -556,6 +556,27 @@ async fn try_classify_in_auto_mode(
                             _ => {}
                         }
                     }
+                    // Stage 1 uses `["</block>"]` as a stop sequence, so a
+                    // `stop_sequence` stop_reason is expected and stays
+                    // in the happy-path set of `is_abnormal_stop_reason`.
+                    // The danger is `length` (verdict truncated mid-XML)
+                    // or `content-filter` — both yield a structurally
+                    // incomplete classifier output that downstream
+                    // permission parsing may silently mis-interpret as
+                    // "allow". Warn so the permission misroute is
+                    // discoverable.
+                    let stop = result.stop_reason;
+                    if stop.is_some_and(coco_messages::StopReason::is_abnormal) || chunks.is_empty()
+                    {
+                        tracing::warn!(
+                            stop_reason = ?stop,
+                            tokens_out = result.usage.output_tokens,
+                            chunks = chunks.len(),
+                            stage = req.stage,
+                            "auto-mode classifier unexpected outcome — \
+                             permission decision may use a truncated verdict"
+                        );
+                    }
                     Ok(chunks.join("\n"))
                 }
                 Err(e) => Err(e.to_string()),

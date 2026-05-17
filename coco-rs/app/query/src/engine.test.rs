@@ -53,13 +53,64 @@ impl LanguageModel for TextMock {
                 provider_metadata: None,
             })],
             usage: Usage::new(10, 5),
-            finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+            finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
             warnings: vec![],
             provider_metadata: None,
             request: None,
             response: None,
         })
     }
+    async fn do_stream(
+        &self,
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+struct TextThenErrorMock {
+    call_count: AtomicI32,
+    text: String,
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for TextThenErrorMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "mock-text-then-error"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        let call = self.call_count.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            Ok(LanguageModelGenerateResult {
+                content: vec![AssistantContentPart::Text(TextPart {
+                    text: self.text.clone(),
+                    provider_metadata: None,
+                })],
+                usage: Usage::new(10, 5),
+                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                warnings: vec![],
+                provider_metadata: None,
+                request: None,
+                response: None,
+            })
+        } else {
+            Err(AISdkError::new("second call should not complete"))
+        }
+    }
+
     async fn do_stream(
         &self,
         options: LanguageModelCallOptions,
@@ -111,7 +162,7 @@ impl LanguageModel for ToolCallThenTextMock {
                     }),
                 ],
                 usage: Usage::new(20, 15),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -125,7 +176,7 @@ impl LanguageModel for ToolCallThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(30, 10),
-                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -176,7 +227,7 @@ impl LanguageModel for ExitPlanModeThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(20, 15),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -189,7 +240,7 @@ impl LanguageModel for ExitPlanModeThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(10, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -252,7 +303,7 @@ impl LanguageModel for MultiToolMock {
                     }),
                 ],
                 usage: Usage::new(15, 10),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -265,7 +316,7 @@ impl LanguageModel for MultiToolMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(25, 8),
-                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -321,7 +372,7 @@ impl LanguageModel for OneToolThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -334,7 +385,7 @@ impl LanguageModel for OneToolThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -706,7 +757,7 @@ async fn test_tool_execution_with_real_tools() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(10, 5),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                    finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -719,7 +770,7 @@ async fn test_tool_execution_with_real_tools() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(10, 5),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                    finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -802,7 +853,7 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(8, 4),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                    finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -815,7 +866,7 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(5, 3),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                    finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -2574,7 +2625,7 @@ impl LanguageModel for AskingToolCallMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(10, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -2587,7 +2638,7 @@ impl LanguageModel for AskingToolCallMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 3),
-                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -2857,7 +2908,7 @@ impl LanguageModel for AskingToolThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -2870,7 +2921,7 @@ impl LanguageModel for AskingToolThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -3084,6 +3135,198 @@ async fn query_result_final_messages_contains_full_roundtrip() {
         .iter()
         .any(|m| matches!(m, coco_messages::Message::Assistant(_)));
     assert!(has_user && has_assistant);
+}
+
+#[tokio::test]
+async fn transcript_records_final_assistant_after_tool_roundtrip() {
+    let model = Arc::new(ToolCallThenTextMock {
+        call_count: AtomicI32::new(0),
+    });
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(ReadTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+    let session_id = "transcript-tool-final";
+    let tempdir = tempfile::tempdir().unwrap();
+    let paths = Arc::new(coco_paths::ProjectPaths::new(
+        tempdir.path().to_path_buf(),
+        std::path::Path::new("/test-project"),
+    ));
+    let store = Arc::new(coco_session::TranscriptStore::new(paths));
+    let seen = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+    let config = QueryEngineConfig {
+        session_id: session_id.into(),
+        ..Default::default()
+    };
+
+    let engine = QueryEngine::new(config, client, tools, cancel, None)
+        .with_transcript_store(store.clone(), session_id.into())
+        .with_transcript_dedup(seen);
+    let result = engine.run("read /tmp/nonexistent.txt").await.unwrap();
+
+    assert_eq!(
+        result.response_text,
+        "The file does not exist. Let me help you create it."
+    );
+    let entries = store.load_entries(session_id).unwrap();
+    let final_assistant_recorded = entries.iter().any(|entry| {
+        let coco_session::Entry::Transcript(entry) = entry else {
+            return false;
+        };
+        entry.entry_type == "assistant"
+            && entry
+                .message
+                .as_ref()
+                .is_some_and(|message| message.to_string().contains("The file does not exist"))
+    });
+    assert!(
+        final_assistant_recorded,
+        "final text-only assistant turn was not persisted: {entries:#?}"
+    );
+}
+
+#[tokio::test]
+async fn stop_hook_prevent_continuation_matches_ts_terminal_reason() {
+    let model = Arc::new(TextThenErrorMock {
+        call_count: AtomicI32::new(0),
+        text: "done".into(),
+    });
+    let model_for_client: Arc<dyn LanguageModel> = model.clone();
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model_for_client,
+        RetryConfig::default(),
+    ));
+    let hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::Stop,
+        matcher: None,
+        handler: coco_hooks::HookHandler::Command {
+            command: "printf '%s\\n' '{\"continue\":false,\"stopReason\":\"do not continue\"}'"
+                .into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+    });
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(ev) = event_rx.recv().await {
+            events.push(ev);
+        }
+        events
+    });
+
+    let result = engine
+        .run_with_events("finish and stop", event_tx)
+        .await
+        .expect("stop prevent should be a clean terminal result");
+    let events = collector.await.expect("collector should join");
+
+    assert_eq!(model.call_count.load(Ordering::SeqCst), 1);
+    assert_eq!(result.response_text, "done");
+    assert_eq!(result.stop_reason.as_deref(), Some("stop_hook_prevented"));
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            CoreEvent::Protocol(ServerNotification::TurnCompleted(_))
+        )),
+        "stop-hook prevent should still close the protocol turn"
+    );
+}
+
+#[tokio::test]
+async fn stop_hook_blocking_flushes_transcript_before_retry() {
+    let model = Arc::new(TextThenErrorMock {
+        call_count: AtomicI32::new(0),
+        text: "first answer".into(),
+    });
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+    let hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::Stop,
+        matcher: None,
+        handler: coco_hooks::HookHandler::Command {
+            command: "printf '%s\\n' 'tests failed'; exit 2".into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+    });
+    let session_id = "transcript-stop-blocking";
+    let tempdir = tempfile::tempdir().unwrap();
+    let paths = Arc::new(coco_paths::ProjectPaths::new(
+        tempdir.path().to_path_buf(),
+        std::path::Path::new("/test-project"),
+    ));
+    let store = Arc::new(coco_session::TranscriptStore::new(paths));
+    let seen = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+    let config = QueryEngineConfig {
+        session_id: session_id.into(),
+        ..Default::default()
+    };
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let engine = QueryEngine::new(config, client, tools, cancel, Some(Arc::new(hooks)))
+        .with_transcript_store(store.clone(), session_id.into())
+        .with_transcript_dedup(seen);
+
+    let err = engine
+        .run("finish then block")
+        .await
+        .expect_err("second model call should fail after stop-hook retry");
+    assert!(
+        err.to_string().contains("second call should not complete"),
+        "unexpected error: {err}"
+    );
+
+    let entries = store.load_entries(session_id).unwrap();
+    let transcript = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            coco_session::Entry::Transcript(entry) => entry.message.as_ref(),
+            _ => None,
+        })
+        .map(serde_json::Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        transcript.contains("first answer"),
+        "assistant response was not flushed before retry: {transcript}"
+    );
+    assert!(
+        transcript.contains("Stop hook feedback"),
+        "stop-hook feedback was not flushed before retry: {transcript}"
+    );
 }
 
 #[tokio::test]

@@ -3,9 +3,9 @@
 use ratatui::prelude::Color;
 
 use crate::i18n::t;
+use crate::presentation::footer::format_token_count;
 use crate::presentation::pager;
 use crate::presentation::styles::UiStyles;
-use crate::render;
 use crate::state::AppState;
 use crate::state::DiffViewOverlay;
 
@@ -63,20 +63,20 @@ pub(crate) fn context_viz_content(
         "{bar}\n\n{}\n{}\n{}\n\n{}",
         t!(
             "dialog.context_input",
-            count = render::format_token_count(tokens.input_tokens)
+            count = format_token_count(tokens.input_tokens)
         ),
         t!(
             "dialog.context_output",
-            count = render::format_token_count(tokens.output_tokens)
+            count = format_token_count(tokens.output_tokens)
         ),
         t!(
             "dialog.context_cache",
-            count = render::format_token_count(tokens.cache_read_tokens)
+            count = format_token_count(tokens.cache_read_tokens)
         ),
         t!(
             "dialog.context_used",
-            used = render::format_token_count(used as i64),
-            total = render::format_token_count(total as i64)
+            used = format_token_count(used as i64),
+            total = format_token_count(total as i64)
         ),
     );
 

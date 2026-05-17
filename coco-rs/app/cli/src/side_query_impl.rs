@@ -188,13 +188,25 @@ impl SideQuery for SideQueryAdapter {
             }
         }
 
-        let stop_reason = match result.stop_reason.as_deref() {
-            Some("end_turn") | Some("stop") => SideQueryStopReason::EndTurn,
-            Some("max_tokens") | Some("length") => SideQueryStopReason::MaxTokens,
-            Some("tool_use") | Some("tool_calls") => SideQueryStopReason::ToolUse,
-            Some("stop_sequence") => SideQueryStopReason::StopSequence,
-            Some(other) => SideQueryStopReason::Other(other.to_string()),
-            None => SideQueryStopReason::EndTurn,
+        // Direct enum-to-enum conversion now that QueryResult carries
+        // the typed StopReason (single source of truth at the
+        // vercel-ai-provider seam). `ContextWindowExceeded` folds into
+        // `MaxTokens` here because the SDK wire side-query type
+        // doesn't split them; `Error` / `Other` carry the wire
+        // string in the `Other(_)` payload for diagnostic surfacing.
+        let stop_reason = match result.stop_reason {
+            Some(coco_inference::StopReason::EndTurn) | None => SideQueryStopReason::EndTurn,
+            Some(coco_inference::StopReason::StopSequence) => SideQueryStopReason::StopSequence,
+            Some(coco_inference::StopReason::ToolUse) => SideQueryStopReason::ToolUse,
+            Some(coco_inference::StopReason::MaxTokens)
+            | Some(coco_inference::StopReason::ContextWindowExceeded) => {
+                SideQueryStopReason::MaxTokens
+            }
+            Some(other @ coco_inference::StopReason::ContentFilter)
+            | Some(other @ coco_inference::StopReason::Error)
+            | Some(other @ coco_inference::StopReason::Other) => {
+                SideQueryStopReason::Other(other.as_wire_str().to_string())
+            }
         };
 
         Ok(SideQueryResponse {

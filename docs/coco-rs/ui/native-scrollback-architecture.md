@@ -119,8 +119,7 @@ app/tui/src/surface/
 ### Surface Configuration
 
 Do not introduce a long-term `SurfaceMode` switch. `NativeScrollback` is the
-target surface. The current fullscreen renderer can exist only as pre-migration
-code and must be deleted before this architecture is considered complete.
+target surface, and the old fullscreen renderer has been deleted.
 
 Configuration should live under a TUI/display config block, not
 `coco_types::Feature`. These settings tune native scrollback behavior; they do
@@ -458,21 +457,17 @@ environment until a validated insertion strategy lands.
 
 ## Render Split
 
-Current `render::render(frame, state) -> FrameLayout` paints the legacy
-fullscreen UI: header, chat, input, right-side panels, overlays, toasts. The
-final native surface replaces that with explicit base-surface and overlay
-renderers:
+The final native surface uses explicit base-surface and overlay renderers.
+`FrameLayout` is a small shared output type for cursor arbitration:
 
 ```rust
 pub fn render_interactive_viewport(
-    frame: &mut Frame,
+    frame: &mut SurfaceFrame,
     state: &AppState,
 ) -> FrameLayout;
 
-pub fn render_alt_screen_overlay(
-    frame: &mut Frame,
-    state: &AppState,
-) -> FrameLayout;
+pub fn overlay_surface_placement(overlay: Option<&Overlay>)
+    -> Option<OverlaySurfacePlacement>;
 ```
 
 `render_interactive_viewport` draws only:

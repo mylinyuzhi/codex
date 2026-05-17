@@ -12,8 +12,8 @@
 //!   the numeric-arg branch in `try_local_command`.
 //! - `/rewind last` pre-selects the final row (the synthetic anchor).
 //!
-//! Verifies the slash command never reaches the engine and the overlay
-//! lives in `state.ui.overlay` after submission.
+//! Verifies the slash command never reaches the engine and the overlay is
+//! active after submission.
 
 use std::time::Duration;
 
@@ -46,7 +46,7 @@ pub async fn run() -> Result<()> {
         "rewind_overlay: setup expected 3 LLM calls, got {calls_before}",
     );
     assert!(
-        harness.state.ui.overlay.is_none(),
+        !harness.state.ui.has_overlay(),
         "rewind_overlay: overlay should be None before /rewind",
     );
 
@@ -54,7 +54,7 @@ pub async fn run() -> Result<()> {
     // synthetic anchor. Default selection is the synthetic anchor (so
     // Enter dismisses without rewinding — TS parity).
     harness.submit("/rewind").await;
-    let overlay = match &harness.state.ui.overlay {
+    let overlay = match harness.state.ui.active_overlay() {
         Some(Overlay::Rewind(r)) => r.clone(),
         other => panic!("rewind_overlay: /rewind should set Overlay::Rewind, found {other:?}"),
     };
@@ -103,9 +103,9 @@ pub async fn run() -> Result<()> {
     // Variant 2: /rewind 2 — pre-selects index 1 (the second user message).
     // Reset the overlay to a fresh state to exercise the arg branch in
     // isolation.
-    harness.state.ui.overlay = None;
+    harness.state.ui.clear_overlays();
     harness.submit("/rewind 2").await;
-    let overlay = match &harness.state.ui.overlay {
+    let overlay = match harness.state.ui.active_overlay() {
         Some(Overlay::Rewind(r)) => r.clone(),
         other => panic!("rewind_overlay: /rewind 2 should set Overlay::Rewind, found {other:?}"),
     };
@@ -116,9 +116,9 @@ pub async fn run() -> Result<()> {
     );
 
     // Variant 3: /rewind last — pre-selects the final row (synthetic anchor).
-    harness.state.ui.overlay = None;
+    harness.state.ui.clear_overlays();
     harness.submit("/rewind last").await;
-    let overlay = match &harness.state.ui.overlay {
+    let overlay = match harness.state.ui.active_overlay() {
         Some(Overlay::Rewind(r)) => r.clone(),
         other => panic!("rewind_overlay: /rewind last should set Overlay::Rewind, found {other:?}"),
     };

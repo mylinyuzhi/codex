@@ -32,6 +32,7 @@ use crate::git_index_watcher;
 use crate::keybinding_bridge;
 use crate::state::AppState;
 use crate::state::SuggestionKind;
+use crate::state::Toast;
 use crate::terminal::Tui;
 use crate::update::handle_command;
 
@@ -106,7 +107,8 @@ impl App {
     ) -> io::Result<Self> {
         crate::i18n::init();
         let tui = Tui::new()?;
-        let state = AppState::new();
+        let mut state = AppState::new();
+        apply_terminal_compatibility_status(&mut state, &tui);
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let index = create_shared_index(cwd.clone());
         // Pre-warm the file index so the first `@` keystroke gets results
@@ -148,9 +150,11 @@ impl App {
         let index = create_shared_index(cwd);
         let (file_tx, file_rx) = create_file_search_channel();
         let (sym_tx, sym_rx) = create_symbol_search_channel();
+        let mut state = AppState::new();
+        apply_terminal_compatibility_status(&mut state, &tui);
         Self {
             tui,
-            state: AppState::new(),
+            state,
             command_tx,
             notification_rx,
             file_search: FileSearchManager::new(index, file_tx),
@@ -309,8 +313,22 @@ impl App {
 
     /// Run a single draw cycle.
     fn redraw(&mut self) -> io::Result<()> {
-        self.tui.draw(&self.state)?;
+        let outcome = self.tui.draw(&self.state)?;
+        if outcome.retained_surface_visible && self.state.ui.terminal_focused {
+            self.state
+                .ui
+                .confirm_surface_visibility_after_draw(std::time::Instant::now());
+        }
+        if outcome.attention_requested {
+            self.handle_surface_attention_requested();
+        }
         Ok(())
+    }
+
+    fn handle_surface_attention_requested(&mut self) {
+        let message = crate::i18n::t!("notification.action_required").to_string();
+        crate::widgets::notification::notify(&crate::i18n::t!("notification.app_name"), &message);
+        self.state.ui.add_toast(Toast::warning(message));
     }
 
     async fn handle_core_event(&mut self, event: CoreEvent) -> io::Result<bool> {
@@ -459,7 +477,11 @@ impl App {
                 // last-interaction timestamp so the idle-prompt timer
                 // restarts from "now" rather than firing while the
                 // user is actively typing.
-                self.state.session.last_user_interaction_at = std::time::Instant::now();
+                let now = std::time::Instant::now();
+                self.state.session.last_user_interaction_at = now;
+                if self.tui.retained_surface_visible() {
+                    self.state.ui.record_surface_interaction(now);
+                }
                 // Delegate all key mapping to keybinding_bridge
                 if let Some(cmd) = keybinding_bridge::map_key(&self.state, key) {
                     handle_command(&mut self.state, cmd, &self.command_tx).await
@@ -502,7 +524,11 @@ impl App {
                 }
             }
             TuiEvent::Paste(text) => {
-                self.state.session.last_user_interaction_at = std::time::Instant::now();
+                let now = std::time::Instant::now();
+                self.state.session.last_user_interaction_at = now;
+                if self.tui.retained_surface_visible() {
+                    self.state.ui.record_surface_interaction(now);
+                }
                 // Batch insertion via TextArea is O(text.len()) and only
                 // recomputes the wrap cache once, vs N times for per-char insert.
                 self.state.ui.input.textarea.insert_str(&text);
@@ -529,6 +555,11 @@ impl App {
             TuiEvent::FocusChanged { focused } => {
                 // Track focus for turn-complete notification gating.
                 self.state.ui.terminal_focused = focused;
+                if focused {
+                    self.state.ui.request_surface_visibility_confirmation();
+                } else {
+                    self.state.ui.clear_surface_visibility_confirmation();
+                }
                 // Force a redraw so the post-draw cursor pin re-asserts
                 // the cursor position. Without this, terminals like
                 // iTerm2 / Terminal.app re-show the cursor at the last
@@ -540,10 +571,10 @@ impl App {
                 request_id,
                 matched_rule,
             } => {
-                if let Some(crate::state::Overlay::Permission(ref p)) = self.state.ui.overlay
+                if let Some(crate::state::Overlay::Permission(p)) = self.state.ui.active_overlay()
                     && p.request_id == request_id
-                    && let Some(crate::state::Overlay::Permission(ref mut p)) =
-                        self.state.ui.overlay
+                    && let Some(crate::state::Overlay::Permission(p)) =
+                        self.state.ui.active_overlay_mut()
                 {
                     p.classifier_checking = false;
                     p.classifier_auto_approved = Some(matched_rule.unwrap_or_default());
@@ -551,7 +582,9 @@ impl App {
                 true
             }
             TuiEvent::ClassifierDenied { .. } => {
-                if let Some(crate::state::Overlay::Permission(ref mut p)) = self.state.ui.overlay {
+                if let Some(crate::state::Overlay::Permission(p)) =
+                    self.state.ui.active_overlay_mut()
+                {
                     p.classifier_checking = false;
                 }
                 true
@@ -579,7 +612,7 @@ impl App {
         if session.is_busy() {
             return;
         }
-        if self.state.ui.overlay.is_some() {
+        if self.state.ui.has_overlay() {
             return;
         }
         if session.last_user_interaction_at > qct {
@@ -595,6 +628,14 @@ impl App {
             })
             .await;
         self.state.session.idle_prompt_fired = true;
+    }
+}
+
+fn apply_terminal_compatibility_status(state: &mut AppState, tui: &Tui) {
+    if let Some(message) = tui.native_scrollback_status_message() {
+        let message = message.to_string();
+        state.ui.terminal_compatibility_warning = Some(message.clone());
+        state.ui.add_toast(Toast::warning(message));
     }
 }
 

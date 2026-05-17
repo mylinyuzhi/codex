@@ -21,18 +21,61 @@ use tracing::warn;
 use coco_messages::MessageHistory;
 use coco_types::TokenUsage;
 
+use crate::ContinueReason;
 use crate::CoreEvent;
 use crate::ServerNotification;
+use crate::budget::BudgetTracker;
 use crate::command_queue::QueuePriority;
 use crate::emit::emit_protocol;
 use crate::engine::QueryEngine;
 use crate::helpers::drain_command_queue_into_history;
 
 impl QueryEngine {
+    /// Unified handler for "input + output won't fit in the model's context
+    /// window." Three distinct signals route here:
+    ///
+    /// 1. HTTP 400 [`coco_inference::InferenceError::ContextWindowExceeded`] —
+    ///    provider rejected the request outright (OpenAI / Google / ByteDance
+    ///    `context_length_exceeded`, defensive `prompt_too_long` body match).
+    /// 2. Mid-stream error string `prompt_too_long` / `context_length` — same
+    ///    signal arriving after `message_start` but before the response
+    ///    completes.
+    /// 3. Anthropic [`coco_messages::StopReason::ContextWindowExceeded`]
+    ///    finish reason (extended-context beta only) — request streamed
+    ///    cleanly to a finish event whose stop_reason reports window
+    ///    exhaustion.
+    ///
+    /// Always attempts reactive compaction; never escalates
+    /// `max_output_tokens`. Raising the output budget cannot help when the
+    /// *input* already exceeds the window — it only delays the next failure
+    /// by another round-trip and (on the Anthropic finish-reason path) makes
+    /// the next request trip the HTTP-400 sibling. Compaction shrinks the
+    /// actual culprit. `do_reactive_compact` carries its own 3-failure
+    /// circuit breaker, so repeated calls cannot spin.
+    ///
+    /// `site` is purely a tracing field for distinguishing the three call
+    /// sites in logs.
+    pub(crate) async fn handle_context_overflow(
+        &self,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+        budget: &mut BudgetTracker,
+        site: &'static str,
+    ) -> ContinueReason {
+        warn!(
+            site,
+            "context window exceeded, attempting reactive compaction"
+        );
+        self.do_reactive_compact(history, event_tx).await;
+        budget.reset_continuations();
+        ContinueReason::ReactiveCompactRetry
+    }
+
     /// Shrink `history` with a reactive microcompact and emit the paired
-    /// `CompactionStarted` → `ContextCompacted` notifications. Shared by both
-    /// `prompt_too_long` recovery sites (stream-open failure and mid-stream
-    /// failure) — keeps the two paths bit-identical.
+    /// `CompactionStarted` → `ContextCompacted` notifications. Shared by every
+    /// context-window-exceeded recovery site (stream-open 400, mid-stream
+    /// error, and Anthropic `model_context_window_exceeded` finish reason) —
+    /// keeps the three paths bit-identical.
     #[tracing::instrument(
         skip_all,
         name = "compaction",
@@ -271,6 +314,8 @@ impl QueryEngine {
         // we want to label.
         //
         // Gated on:
+        //   * `Feature::ToolUseSummary` enabled (default off — UX polish
+        //     that silently degrades on reasoning Fast models)
         //   * `role_client_cache` wired (Fast role configured)
         //   * `agent_id.is_none()` (subagent skip — TS query.ts:1419)
         //   * tool batch non-empty (handled inside the spawn helper)
@@ -603,13 +648,36 @@ impl QueryEngine {
             }
         }
 
+        self.finalize_successful_turn_tail(history, event_tx, turn_id, usage)
+            .await;
+    }
+
+    /// Shared successful model-turn tail. Branch-specific work (tool
+    /// execution, queue drain, auto-compaction, stop hooks) happens before
+    /// this point; every successful turn still needs the same cache snapshot,
+    /// transcript flush, and protocol completion event.
+    pub(crate) async fn finalize_successful_turn_tail(
+        &self,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+        turn_id: String,
+        usage: TokenUsage,
+    ) {
+        self.flush_successful_turn_state(history).await;
+        self.emit_turn_completed(event_tx, turn_id, usage, history.messages.len())
+            .await;
+    }
+
+    /// Persist successful-turn state that must be current before any
+    /// post-turn forks read the parent cache slot. Kept separate from
+    /// `TurnCompleted` emission so text-only exits can run promptSuggestion
+    /// after cache save but before closing the protocol turn.
+    pub(crate) async fn flush_successful_turn_state(&self, history: &mut MessageHistory) {
         // D8: snapshot post-turn cache-safe params for future
         // post-turn fork features (`/btw`, `promptSuggestion`,
         // `postTurnSummary`). TS parity: `handleStopHooks` calls
         // `saveCacheSafeParams` here. Helper handles the empty-history
-        // skip + serialisation; called from text-only exits in
-        // `engine.rs::run_session_loop` too so every successful turn
-        // updates the slot.
+        // skip + serialisation.
         self.save_post_turn_cache_params(history).await;
 
         // Per-turn JSONL transcript append. Walks `history` and writes
@@ -617,15 +685,23 @@ impl QueryEngine {
         // already in the cross-engine dedup set. Skips silently when
         // the store / session id / dedup set aren't all wired (e.g.
         // tests, headless runs without persistence). TS parity:
-        // `Project.recordTranscript` flushes the per-message queue at
-        // turn end.
+        // `Project.recordTranscript` flushes the message list through a
+        // single deduping writer instead of splitting by tool/text turns.
         self.record_transcript_tail(history).await;
+    }
 
+    pub(crate) async fn emit_turn_completed(
+        &self,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+        turn_id: String,
+        usage: TokenUsage,
+        history_len: usize,
+    ) {
         info!(
             turn_id = %turn_id,
             tokens_in = usage.input_tokens,
             tokens_out = usage.output_tokens,
-            history_len = history.messages.len(),
+            history_len,
             "turn completed"
         );
         let _ = emit_protocol(
@@ -699,6 +775,8 @@ impl QueryEngine {
     /// and stashes the Promise on `nextPendingToolUseSummary`.
     ///
     /// Silently no-ops when:
+    ///   * `Feature::ToolUseSummary` is disabled (default — see
+    ///     `coco_types::features` for the rationale)
     ///   * `role_client_cache` is `None` (no Fast role wired)
     ///   * `agent_id` is `Some` (subagent skip — mirrors TS
     ///     `!toolUseContext.agentId` at query.ts:1419)
@@ -709,6 +787,13 @@ impl QueryEngine {
     /// against orphan tasks if `run_session_loop` skipped its await
     /// (e.g. early cancel between turns).
     pub(crate) async fn spawn_tool_use_summary(&self, history: &MessageHistory) {
+        if !self
+            .config
+            .features
+            .enabled(coco_types::Feature::ToolUseSummary)
+        {
+            return;
+        }
         if self.config.agent_id.is_some() {
             return;
         }

@@ -94,7 +94,7 @@ impl coco_inference::LanguageModel for DummyModel {
             )],
             usage: coco_inference::Usage::new(0, 0),
             finish_reason: coco_inference::FinishReason::new(
-                coco_inference::UnifiedFinishReason::Stop,
+                coco_inference::UnifiedFinishReason::EndTurn,
             ),
             warnings: Vec::new(),
             provider_metadata: None,

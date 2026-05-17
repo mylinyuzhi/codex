@@ -114,7 +114,7 @@ impl LanguageModel for MockModel {
                 provider_metadata: None,
             })],
             usage: Usage::new(user_text.len() as u64 / 4, 50),
-            finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+            finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
             warnings: vec![],
             provider_metadata: None,
             request: None,

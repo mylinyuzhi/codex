@@ -79,10 +79,10 @@ Current `coco-rs/app/tui` anchors:
 |---|---|---|
 | App loop | `app.rs` | TEA event loop with `CoreEvent`, terminal events, search results, hot reloads, ticks. |
 | State | `state/session.rs`, `state/ui.rs`, `state/overlay.rs` | Split `SessionState` / `UiState`; typed overlay enum with priority queue. |
-| Rendering | `render.rs`, `render_overlays/*`, `widgets/*` | Fullscreen frame with header, banners, chat, input, status/popup, overlays, toasts. |
+| Rendering | `surface/*`, `overlay_content/*`, `presentation/*`, `widgets/*` | Native history projection plus retained bottom viewport with banners, live tail, input, status/popup, overlays, and toasts. |
 | Presentation | `presentation/*` | Emerging view-model layer for pickers, settings, transcript, help, confirmations. |
 | Streaming | `state/ui.rs::StreamingState`, `streaming/*` | Simple accumulated text/thinking plus display cursor/adaptive pacing. |
-| Terminal | `terminal.rs`, `cursor.rs`, `job_control.rs` | Stock fullscreen ratatui terminal with post-draw cursor policy. |
+| Terminal | `terminal.rs`, `surface/terminal.rs`, `cursor.rs`, `job_control.rs` | Custom native-scrollback terminal surface with centralized cursor policy. |
 
 ## High-Level Design Difference
 
@@ -277,10 +277,10 @@ Build direction:
 | No typed committed/live transcript cell boundary | `widgets/chat/mod.rs` renders directly from messages; `StreamingState` is UI-local text. | Native scrollback cannot safely know what is finalized, active, raw, or replayable. | P0 |
 | Streaming is not source-backed stable/tail | `StreamingState` stores `content`, `thinking`, `display_cursor`; no table holdback. | Tables and wrapped markdown can reshape after rows are emitted. | P0 |
 | Input and local prompts are split across input, suggestions, and central overlays | `UiState` has `input`, `active_suggestions`, and one `Overlay`. | Small blocking prompts become modal-heavy and can lose bottom-pane ergonomics. | P1 |
-| Overlay rendering still string-centric | `render_overlays/mod.rs` mostly maps variants to `(title, body, color)`. | Long diffs/status/transcripts are hard to navigate and test at row level. | P1/P2 |
+| Overlay rendering still string-centric | `overlay_content/mod.rs` mostly maps variants to `(title, body, color)`. | Long diffs/status/transcripts are hard to navigate and test at row level. | P1/P2 |
 | Activity is fragmented | Tool messages, banners, task panel, subagent panel, hook panel, status bar. | Users do not get one stable place to understand live work. | P1/P2 |
 | Picker scaffolding is partial | `presentation::picker` exists, but many surfaces still produce strings. | More duplicate key/focus/narrow-width logic as new surfaces are added. | P2 |
-| Terminal surface is still fullscreen stock ratatui | `terminal.rs` owns alt-screen `Terminal`; cursor policy is post-draw. | Native scrollback and precise cursor style need a custom surface. | P0 |
+| Terminal surface now uses native scrollback | `terminal.rs` drives `surface::terminal`; `surface::viewport` owns the retained bottom viewport and cursor policy. | Continue moving large dialogs toward typed pager/picker view models. | P0 complete |
 | Attachment and code-block display policy is incomplete | Paste/image support and markdown widgets exist, but final transcript cell policy was not explicit. | Implementers may add image or highlighting paths that bypass source-backed cells. | P2 |
 
 ## Recommended Build Dependencies

@@ -284,8 +284,8 @@ impl StepResult {
     pub fn is_final(&self) -> bool {
         matches!(
             self.finish_reason.unified,
-            vercel_ai_provider::UnifiedFinishReason::Stop
-                | vercel_ai_provider::UnifiedFinishReason::Length
+            vercel_ai_provider::UnifiedFinishReason::EndTurn
+                | vercel_ai_provider::UnifiedFinishReason::MaxTokens
                 | vercel_ai_provider::UnifiedFinishReason::ContentFilter
         )
     }
@@ -335,7 +335,7 @@ impl StepResult {
 
 impl Default for StepResult {
     fn default() -> Self {
-        Self::new(0, String::new(), Usage::default(), FinishReason::stop())
+        Self::new(0, String::new(), Usage::default(), FinishReason::end_turn())
     }
 }
 

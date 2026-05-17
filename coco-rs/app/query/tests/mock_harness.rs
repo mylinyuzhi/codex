@@ -97,7 +97,7 @@ impl MockResponse {
                     text,
                     provider_metadata: None,
                 })],
-                UnifiedFinishReason::Stop,
+                UnifiedFinishReason::EndTurn,
             ),
             Self::ToolCall { tool_name, input } => (
                 vec![AssistantContentPart::ToolCall(ToolCallPart {
@@ -107,7 +107,7 @@ impl MockResponse {
                     provider_executed: None,
                     provider_metadata: None,
                 })],
-                UnifiedFinishReason::ToolCalls,
+                UnifiedFinishReason::ToolUse,
             ),
             Self::TextAndToolCalls { text, tool_calls } => {
                 let mut parts = vec![AssistantContentPart::Text(TextPart {
@@ -123,7 +123,7 @@ impl MockResponse {
                         provider_metadata: None,
                     }));
                 }
-                (parts, UnifiedFinishReason::ToolCalls)
+                (parts, UnifiedFinishReason::ToolUse)
             }
             Self::MultiToolCall(calls) => {
                 let parts: Vec<_> = calls
@@ -139,7 +139,7 @@ impl MockResponse {
                         })
                     })
                     .collect();
-                (parts, UnifiedFinishReason::ToolCalls)
+                (parts, UnifiedFinishReason::ToolUse)
             }
         };
 

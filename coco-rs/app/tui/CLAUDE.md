@@ -54,7 +54,7 @@ coco-query → CoreEvent ─────→ handle_core_event (fold into AppStat
                                     ↓
                             update → AppState mutation + optional UserCommand
                                     ↓
-                            render (ratatui)
+                            native surface draw (ratatui)
                                     ↓
                             UserCommand → coco-query (via mpsc)
 ```

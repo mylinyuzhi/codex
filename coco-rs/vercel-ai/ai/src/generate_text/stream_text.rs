@@ -539,7 +539,7 @@ impl StreamTextResult {
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut tool_results: Vec<ToolResult> = Vec::new();
         let mut total_usage = Usage::default();
-        let mut finish_reason = FinishReason::stop();
+        let mut finish_reason = FinishReason::end_turn();
 
         while let Some(part) = self.stream.next().await {
             match part {
@@ -816,7 +816,7 @@ async fn stream_text_inner(
     let mut all_tool_calls: Vec<ToolCall> = Vec::new();
     let mut all_tool_results: Vec<ToolResult> = Vec::new();
     let mut all_warnings: Vec<Warning> = Vec::new();
-    let mut final_finish_reason = FinishReason::stop();
+    let mut final_finish_reason = FinishReason::end_turn();
 
     // Build retry config
     let retry_config = options
@@ -974,7 +974,7 @@ async fn stream_text_inner(
         let mut current_tool_input = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut usage = Usage::default();
-        let mut finish_reason = FinishReason::stop();
+        let mut finish_reason = FinishReason::end_turn();
         let mut raw_finish_reason: Option<String> = None;
         let mut content: Vec<AssistantContentPart> = Vec::new();
         let mut step_warnings: Vec<Warning> = Vec::new();
@@ -1422,7 +1422,7 @@ async fn stream_text_inner(
 
     let _ = tx
         .send(TextStreamPart::Finish {
-            finish_reason: FinishReason::stop(),
+            finish_reason: FinishReason::end_turn(),
             usage: total_usage.clone(),
             raw_finish_reason: None,
         })

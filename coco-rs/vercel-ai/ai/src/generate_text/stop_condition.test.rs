@@ -34,5 +34,10 @@ fn test_response_contains_description() {
 }
 
 fn make_step(step: u32) -> StepResult {
-    StepResult::new(step, String::new(), Usage::default(), FinishReason::stop())
+    StepResult::new(
+        step,
+        String::new(),
+        Usage::default(),
+        FinishReason::end_turn(),
+    )
 }
