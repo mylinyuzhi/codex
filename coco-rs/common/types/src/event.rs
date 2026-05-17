@@ -1343,17 +1343,22 @@ pub enum TuiOnlyEvent {
     /// the tool's `execute()` can branch on the choice. TS parity:
     /// `ExitPlanModePermissionRequest.tsx:691-704` option grid.
     ///
-    /// `original_input` carries the raw tool input so the TUI can
-    /// splice the picked `user_choice` into it verbatim before sending
-    /// the approval response — mirrors `QuestionAsked.input`. `None`
-    /// keeps the wire compact when no choices are present.
+    /// `original_input` carries the raw tool input so the TUI can splice
+    /// the picked `user_choice` into it verbatim and derive path-scoped
+    /// read permission updates for classic "always allow" approvals.
     ApprovalRequired {
         request_id: String,
         tool_name: String,
         description: String,
         input_preview: String,
+        /// Whether the UI may offer an "always allow" action. False
+        /// when managed policy restricts local/session rule changes.
+        #[serde(default)]
+        show_always_allow: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         choices: Option<Vec<crate::PermissionAskChoice>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        permission_suggestions: Vec<crate::PermissionUpdate>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         original_input: Option<serde_json::Value>,
     },

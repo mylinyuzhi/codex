@@ -1,6 +1,12 @@
 use crate::tools::write::WriteTool;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::PermissionBehavior;
+use coco_types::PermissionMode;
+use coco_types::PermissionRule;
+use coco_types::PermissionRuleSource;
+use coco_types::PermissionRuleValue;
+use coco_types::ToolCheckResult;
 use serde_json::json;
 
 // ── R7-T25: write description content check ──
@@ -20,6 +26,141 @@ fn test_write_description_includes_read_before_write_warning() {
         desc.contains("NEVER create documentation files"),
         "Write description should discourage docs files"
     );
+}
+
+#[tokio::test]
+async fn test_write_check_permissions_accept_edits_allows_cwd_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("new.txt");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(dir.path().to_path_buf());
+    ctx.permission_context.mode = PermissionMode::AcceptEdits;
+
+    let result = WriteTool
+        .check_permissions(
+            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+            &ctx,
+        )
+        .await;
+
+    assert!(matches!(result, ToolCheckResult::Allow { .. }));
+}
+
+#[tokio::test]
+async fn test_write_check_permissions_accept_edits_asks_outside_cwd() {
+    let cwd = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let file = outside.path().join("new.txt");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(cwd.path().to_path_buf());
+    ctx.permission_context.mode = PermissionMode::Default;
+    ctx.permission_context.mode = PermissionMode::AcceptEdits;
+
+    let result = WriteTool
+        .check_permissions(
+            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+            &ctx,
+        )
+        .await;
+
+    assert!(matches!(result, ToolCheckResult::Ask { .. }), "{result:?}");
+}
+
+#[tokio::test]
+async fn test_write_check_permissions_default_ask_includes_write_suggestions() {
+    let cwd = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let file = outside.path().join("new.txt");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(cwd.path().to_path_buf());
+    ctx.permission_context.mode = PermissionMode::Default;
+
+    let result = WriteTool
+        .check_permissions(
+            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+            &ctx,
+        )
+        .await;
+
+    let ToolCheckResult::Ask { suggestions, .. } = result else {
+        panic!("expected ask");
+    };
+    assert!(suggestions.iter().any(|update| {
+        matches!(
+            update,
+            coco_types::PermissionUpdate::SetMode {
+                mode: PermissionMode::AcceptEdits
+            }
+        )
+    }));
+    let outside = outside.path().to_string_lossy().to_string();
+    assert!(suggestions.iter().any(|update| {
+        matches!(
+            update,
+            coco_types::PermissionUpdate::AddDirectories { directories, .. }
+                if directories.iter().any(|dir| dir == &outside)
+        )
+    }));
+}
+
+#[tokio::test]
+async fn test_write_check_permissions_honors_tool_wide_allow_rule() {
+    let cwd = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let file = outside.path().join("new.txt");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(cwd.path().to_path_buf());
+    ctx.permission_context.mode = PermissionMode::Default;
+    ctx.permission_context.allow_rules.insert(
+        PermissionRuleSource::Session,
+        vec![PermissionRule {
+            source: PermissionRuleSource::Session,
+            behavior: PermissionBehavior::Allow,
+            value: PermissionRuleValue {
+                tool_pattern: "Write".to_string(),
+                rule_content: None,
+            },
+        }],
+    );
+
+    let result = WriteTool
+        .check_permissions(
+            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+            &ctx,
+        )
+        .await;
+
+    assert!(matches!(result, ToolCheckResult::Allow { .. }));
+}
+
+#[tokio::test]
+async fn test_write_check_permissions_ignores_path_scoped_write_rule() {
+    let cwd = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let file = outside.path().join("new.txt");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(cwd.path().to_path_buf());
+    ctx.permission_context.mode = PermissionMode::Default;
+    ctx.permission_context.allow_rules.insert(
+        PermissionRuleSource::Session,
+        vec![PermissionRule {
+            source: PermissionRuleSource::Session,
+            behavior: PermissionBehavior::Allow,
+            value: PermissionRuleValue {
+                tool_pattern: "Write".to_string(),
+                rule_content: Some(format!("//{}/*", outside.path().to_string_lossy())),
+            },
+        }],
+    );
+
+    let result = WriteTool
+        .check_permissions(
+            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+            &ctx,
+        )
+        .await;
+
+    assert!(matches!(result, ToolCheckResult::Ask { .. }), "{result:?}");
 }
 
 #[tokio::test]

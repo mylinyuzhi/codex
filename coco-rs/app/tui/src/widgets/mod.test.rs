@@ -115,6 +115,7 @@ fn test_snapshot_with_permission_overlay() {
         choices: None,
         selected_choice: 0,
         original_input: None,
+        permission_suggestions: vec![],
     }));
     mark_retained_surface_visible(&mut state);
 

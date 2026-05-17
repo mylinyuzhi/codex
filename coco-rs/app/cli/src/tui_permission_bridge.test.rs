@@ -9,6 +9,7 @@ fn dummy_request(id: &str) -> ToolPermissionRequest {
         tool_name: "Bash".into(),
         description: "ls".into(),
         input: serde_json::json!({"command": "ls"}),
+        suggestions: vec![],
         choices: None,
     }
 }
@@ -25,8 +26,15 @@ async fn approve_flow_sends_approved_decision() {
     // Bridge should emit ApprovalRequired before awaiting.
     let event = rx.recv().await.expect("bridge emits an event");
     match event {
-        CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired { request_id, .. }) => {
+        CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
+            request_id,
+            description,
+            show_always_allow,
+            ..
+        }) => {
             assert_eq!(request_id, "r1");
+            assert_eq!(description, "ls");
+            assert!(show_always_allow);
         }
         other => panic!("expected Tui(ApprovalRequired); got {other:?}"),
     }
@@ -70,6 +78,75 @@ async fn unknown_request_id_returns_false() {
     let pending = new_pending_map();
     let resolved = resolve_pending(&pending, "ghost", true, None, Vec::new(), None, None).await;
     assert!(!resolved);
+}
+
+#[tokio::test]
+async fn take_pending_removes_entry_before_resolution() {
+    let pending = new_pending_map();
+    let (tx, rx) = oneshot::channel();
+    pending.write().await.insert(
+        "r4".into(),
+        PendingApprovalEntry {
+            sender: tx,
+            _guard: None,
+        },
+    );
+
+    let entry = take_pending(&pending, "r4")
+        .await
+        .expect("pending entry exists");
+    assert!(take_pending(&pending, "r4").await.is_none());
+    assert!(send_resolution(entry, true, None, Vec::new(), None, None));
+
+    let resolution = rx.await.expect("resolution sent");
+    assert_eq!(resolution.decision, ToolPermissionDecision::Approved);
+}
+
+#[test]
+fn settings_allow_always_allow_options_defaults_to_true() {
+    let settings = coco_config::SettingsWithSource {
+        merged: coco_config::Settings::default(),
+        per_source: std::collections::HashMap::new(),
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    assert!(settings_allow_always_allow_options(&settings));
+}
+
+#[test]
+fn settings_allow_always_allow_options_respects_managed_policy_camel_case() {
+    let settings = coco_config::SettingsWithSource {
+        merged: coco_config::Settings::default(),
+        per_source: std::collections::HashMap::from([(
+            coco_config::SettingSource::Policy,
+            serde_json::json!({
+                "permissions": {
+                    "allowManagedPermissionRulesOnly": true
+                }
+            }),
+        )]),
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    assert!(!settings_allow_always_allow_options(&settings));
+}
+
+#[test]
+fn settings_allow_always_allow_options_respects_managed_policy_snake_case() {
+    let settings = coco_config::SettingsWithSource {
+        merged: coco_config::Settings::default(),
+        per_source: std::collections::HashMap::from([(
+            coco_config::SettingSource::Policy,
+            serde_json::json!({
+                "permissions": {
+                    "allow_managed_permission_rules_only": true
+                }
+            }),
+        )]),
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    assert!(!settings_allow_always_allow_options(&settings));
 }
 
 #[tokio::test]

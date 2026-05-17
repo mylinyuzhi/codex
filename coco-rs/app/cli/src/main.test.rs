@@ -17,6 +17,7 @@ fn runtime_for_model(selection: &str, home: &TempDir) -> RuntimeConfig {
             ..Default::default()
         },
         per_source: HashMap::new(),
+        source_paths: HashMap::new(),
     };
     coco_config::build_runtime_config_with(
         settings,

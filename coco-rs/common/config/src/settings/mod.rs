@@ -236,6 +236,7 @@ pub struct PermissionsConfig {
     /// When true, only rules from policy settings are respected.
     /// TS: allowManagedPermissionRulesOnly
     #[serde(default)]
+    #[serde(alias = "allowManagedPermissionRulesOnly")]
     pub allow_managed_permission_rules_only: bool,
 }
 
@@ -451,6 +452,7 @@ pub enum PlanPhase4Variant {
 pub struct SettingsWithSource {
     pub merged: Settings,
     pub per_source: HashMap<SettingSource, serde_json::Value>,
+    pub source_paths: HashMap<SettingSource, std::path::PathBuf>,
 }
 
 fn default_true() -> bool {
@@ -498,6 +500,7 @@ pub fn load_settings_with(
     use crate::global_config;
 
     let mut per_source = HashMap::new();
+    let mut source_paths = HashMap::new();
     let mut merged = serde_json::Value::Object(serde_json::Map::new());
 
     let user_pathbuf = user_path.to_path_buf();
@@ -515,7 +518,13 @@ pub fn load_settings_with(
 
     for (source, path) in &sources {
         if path.exists() {
-            load_and_merge(&mut per_source, &mut merged, *source, path)?;
+            load_and_merge(
+                &mut per_source,
+                &mut source_paths,
+                &mut merged,
+                *source,
+                path,
+            )?;
         }
     }
 
@@ -523,13 +532,20 @@ pub fn load_settings_with(
     if let Some(flag_path) = flag_settings
         && flag_path.exists()
     {
-        load_and_merge(&mut per_source, &mut merged, SettingSource::Flag, flag_path)?;
+        load_and_merge(
+            &mut per_source,
+            &mut source_paths,
+            &mut merged,
+            SettingSource::Flag,
+            flag_path,
+        )?;
     }
 
     // Policy / managed settings (highest precedence).
     if managed_path.exists() {
         load_and_merge(
             &mut per_source,
+            &mut source_paths,
             &mut merged,
             SettingSource::Policy,
             managed_path,
@@ -542,6 +558,7 @@ pub fn load_settings_with(
     Ok(SettingsWithSource {
         merged: settings,
         per_source,
+        source_paths,
     })
 }
 
@@ -551,6 +568,7 @@ pub fn load_settings_with(
 /// CLI fails fast at startup with a clear error.
 fn load_and_merge(
     per_source: &mut HashMap<SettingSource, serde_json::Value>,
+    source_paths: &mut HashMap<SettingSource, std::path::PathBuf>,
     merged: &mut serde_json::Value,
     source: SettingSource,
     path: &std::path::Path,
@@ -561,6 +579,7 @@ fn load_and_merge(
     let value = crate::jsonc::parse_value(&contents)
         .with_ctx_lazy(|| format!("failed to parse JSONC in settings file: {}", path.display()))?;
     per_source.insert(source, value.clone());
+    source_paths.insert(source, path.to_path_buf());
     merge::deep_merge(merged, &value);
     Ok(())
 }

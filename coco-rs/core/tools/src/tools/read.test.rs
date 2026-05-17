@@ -572,18 +572,21 @@ async fn test_read_utf16le_bom() {
 // R6-T20: file-read permission gate on check_permissions
 // ---------------------------------------------------------------------------
 
-/// When `file_path` has no matching ignore pattern, check_permissions
-/// returns `Passthrough` (defer to rule pipeline).
+/// `Read` performs its TS-style path permission check directly, so cwd paths
+/// are allowed without falling through to the generic rule pipeline.
 #[tokio::test]
-async fn test_read_check_permissions_passthrough_default() {
+async fn test_read_check_permissions_allows_cwd_path() {
     use coco_types::ToolCheckResult;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("ordinary.txt");
+    std::fs::write(&file, "ok").unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(dir.path().to_path_buf());
+
     let decision = ReadTool
-        .check_permissions(
-            &json!({"file_path": "/tmp/ordinary.txt"}),
-            &ToolUseContext::test_default(),
-        )
+        .check_permissions(&json!({"file_path": file.to_str().unwrap()}), &ctx)
         .await;
-    assert!(matches!(decision, ToolCheckResult::Passthrough));
+    assert!(matches!(decision, ToolCheckResult::Allow { .. }));
 }
 
 // ---------------------------------------------------------------------------

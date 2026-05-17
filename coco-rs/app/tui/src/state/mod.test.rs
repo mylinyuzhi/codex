@@ -335,6 +335,7 @@ fn test_permission_overlay() {
         choices: None,
         selected_choice: 0,
         original_input: None,
+        permission_suggestions: vec![],
     }));
 
     assert!(state.has_overlay());

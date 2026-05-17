@@ -86,6 +86,7 @@ fn test_permission_overlay_context() {
             choices: None,
             selected_choice: 0,
             original_input: None,
+            permission_suggestions: vec![],
         },
     ));
     assert_eq!(active_context(&state), KeybindingContext::Confirmation);
@@ -215,6 +216,7 @@ fn test_overlay_y_approves() {
             choices: None,
             selected_choice: 0,
             original_input: None,
+            permission_suggestions: vec![],
         },
     ));
     let cmd = map_key(&state, press(KeyCode::Char('y')));
@@ -239,6 +241,7 @@ fn test_overlay_n_denies() {
             choices: None,
             selected_choice: 0,
             original_input: None,
+            permission_suggestions: vec![],
         },
     ));
     let cmd = map_key(&state, press(KeyCode::Char('n')));

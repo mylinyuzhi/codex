@@ -19,6 +19,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
             ..Default::default()
         },
         per_source: std::collections::HashMap::new(),
+        source_paths: std::collections::HashMap::new(),
     };
     let runtime_config = coco_config::build_runtime_config_with(
         settings,

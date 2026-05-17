@@ -16,6 +16,7 @@ fn make_context_with_rules(rules: Vec<PermissionRule>) -> ToolPermissionContext 
     ToolPermissionContext {
         mode: coco_types::PermissionMode::Auto,
         additional_dirs: HashMap::new(),
+        permission_rule_source_roots: HashMap::new(),
         allow_rules,
         deny_rules: HashMap::new(),
         ask_rules: HashMap::new(),

@@ -1,4 +1,5 @@
 [workspace]
+default-members = ["app/cli"]
 members = [
     # ─── common/ (5) ───
     "common/error",
@@ -94,6 +95,11 @@ members = [
     "app/session",
     "app/tui",
     "app/cli",
+
+    # ─── hub (3) ───
+    "hub/protocol",
+    "hub/connector",
+    "hub/server",
 
     # ─── standalone (2) ───
     "bridge",
@@ -199,6 +205,11 @@ coco-session = { path = "app/session" }
 coco-tui = { path = "app/tui" }
 coco-cli = { path = "app/cli" }
 
+# Internal - hub
+coco-hub-protocol = { path = "hub/protocol" }
+coco-hub-connector = { path = "hub/connector" }
+coco-hub-server = { path = "hub/server" }
+
 # Internal - standalone
 coco-bridge = { path = "bridge" }
 coco-retrieval = { path = "retrieval" }
@@ -208,6 +219,7 @@ anyhow = "1"
 arc-swap = "1.7"
 assert_cmd = "2"
 assert_matches = "1.5.0"
+askama = "0.12"
 async-trait = "0.1.89"
 base64 = "0.22.1"
 bytes = "1.10.1"

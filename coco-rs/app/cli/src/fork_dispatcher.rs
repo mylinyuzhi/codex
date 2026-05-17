@@ -92,6 +92,11 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // re-resolve from the same layered settings the parent uses.
         let (allow_rules, deny_rules, ask_rules) =
             crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
+        let permission_rule_source_roots =
+            crate::permission_rule_loader::permission_rule_source_roots(
+                &runtime_config.settings,
+                &self.runtime.original_cwd,
+            );
 
         let engine_config = QueryEngineConfig {
             model_id: agent_config.model.clone(),
@@ -99,6 +104,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             allow_rules,
             deny_rules,
             ask_rules,
+            permission_rule_source_roots,
             context_window: agent_config.context_window.unwrap_or(200_000),
             max_output_tokens: agent_config.max_output_tokens.unwrap_or(16_384),
             max_turns: agent_config.max_turns.unwrap_or(1),

@@ -39,6 +39,10 @@ pub struct ToolPermissionRequest {
     pub description: String,
     /// Tool input as JSON.
     pub input: serde_json::Value,
+    /// Permission updates suggested by the evaluator for "always allow".
+    /// TS: `PermissionDecision.suggestions`, e.g. `Read(<dir>/**)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<coco_types::PermissionUpdate>,
     /// Optional multi-choice payload propagated from
     /// `PermissionDecision::Ask.choices`. When `Some`, the TUI / SDK
     /// client should render a choice list rather than yes/no; the picked

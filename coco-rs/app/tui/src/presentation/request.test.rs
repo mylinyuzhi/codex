@@ -22,6 +22,7 @@ fn permission_overlay(detail: PermissionDetail) -> PermissionOverlay {
         choices: None,
         selected_choice: 0,
         original_input: None,
+        permission_suggestions: vec![],
     }
 }
 
@@ -44,7 +45,7 @@ fn permission_content_uses_high_risk_border() {
     assert!(body.contains("rm -rf target/tmp"));
     assert!(body.contains("/repo"));
     assert!(body.contains("Deletes files"));
-    assert!(body.contains("Always"));
+    assert!(body.contains("always allow Edit for this session"));
 }
 
 #[test]

@@ -24,6 +24,7 @@ fn settings_with(merged: Settings) -> SettingsWithSource {
     SettingsWithSource {
         merged,
         per_source: HashMap::new(),
+        source_paths: HashMap::new(),
     }
 }
 

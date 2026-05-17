@@ -21,6 +21,20 @@ fn test_parse_settings_accepts_jsonc_comments_and_trailing_commas() {
 }
 
 #[test]
+fn test_parse_settings_accepts_ts_permission_policy_key() {
+    let settings = parse_settings(
+        r#"{
+            "permissions": {
+                "allowManagedPermissionRulesOnly": true
+            }
+        }"#,
+    )
+    .expect("parse settings");
+
+    assert!(settings.permissions.allow_managed_permission_rules_only);
+}
+
+#[test]
 fn test_load_settings_with_accepts_jsonc_layers() {
     let tmp = TempDir::new().expect("tempdir");
     let cwd = tmp.path().join("project");

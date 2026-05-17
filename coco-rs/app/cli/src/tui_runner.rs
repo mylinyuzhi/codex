@@ -1136,16 +1136,35 @@ async fn run_agent_driver(
                 always_allow,
                 feedback,
                 updated_input,
-                permission_updates,
+                mut permission_updates,
                 content_blocks,
             } => {
+                let pending_entry =
+                    coco_cli::tui_permission_bridge::take_pending(&pending_approvals, &request_id)
+                        .await;
+
+                let always_allow_options_allowed =
+                    coco_cli::tui_permission_bridge::settings_allow_always_allow_options(
+                        &runtime.runtime_config.settings,
+                    );
+                if pending_entry.is_some()
+                    && !always_allow_options_allowed
+                    && !permission_updates.is_empty()
+                {
+                    warn!(
+                        %request_id,
+                        "dropping permission updates because managed policy disables always-allow"
+                    );
+                    permission_updates.clear();
+                }
+
                 // Apply any rule additions the user authorized
                 // ("Always Allow" or future destination-picker
                 // selections) BEFORE resolving the bridge. Order
                 // matches TS `applyPermissionUpdate` →
                 // `persistPermissionUpdates` so subsequent same-tool
                 // calls within the turn pick up the rule.
-                if approved && !permission_updates.is_empty() {
+                if pending_entry.is_some() && approved && !permission_updates.is_empty() {
                     let updates_for_apply = permission_updates.clone();
                     runtime
                         .update_engine_config(move |cfg| {
@@ -1167,6 +1186,9 @@ async fn run_agent_driver(
                                 pre_plan_mode: None,
                                 stripped_dangerous_rules: None,
                                 session_plan_file: None,
+                                permission_rule_source_roots: cfg
+                                    .permission_rule_source_roots
+                                    .clone(),
                             };
                             let updated =
                                 coco_permissions::apply_permission_updates(ctx, &updates_for_apply);
@@ -1280,17 +1302,23 @@ async fn run_agent_driver(
                 // (already resolved or timed-out) are logged and
                 // dropped — TS does the same when an overlay closes
                 // after the engine moved on.
-                let resolved = coco_cli::tui_permission_bridge::resolve_pending(
-                    &pending_approvals,
-                    &request_id,
-                    approved,
-                    feedback,
-                    permission_updates,
-                    updated_input,
-                    content_blocks,
-                )
-                .await;
-                if !resolved {
+                if let Some(entry) = pending_entry {
+                    let resolved = coco_cli::tui_permission_bridge::send_resolution(
+                        entry,
+                        approved,
+                        feedback,
+                        permission_updates,
+                        updated_input,
+                        content_blocks,
+                    );
+                    if !resolved {
+                        info!(
+                            %request_id,
+                            approved,
+                            "ApprovalResponse receiver dropped after request was taken"
+                        );
+                    }
+                } else {
                     info!(
                         %request_id,
                         approved,
@@ -2480,10 +2508,11 @@ async fn dispatch_permissions_mutation(
                 })
                 .await;
             mailbox.put_command_permissions(
-                "Session permission rules reset (cleared all session-scope allow/deny entries)."
+                "Session permission rules reset. Built-in read-only allow is mode behavior."
                     .to_string(),
             );
-            "Session permission rules cleared. File-based rules \
+            "Session permission rules reset. Custom session allow/deny entries were cleared; \
+             built-in read-only tools remain allowed by the active permission mode. File-based rules \
              (.claude/settings.json, ~/.cocode/settings.json) are unchanged — \
              edit those files directly to modify persistent rules."
                 .to_string()

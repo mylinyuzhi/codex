@@ -307,11 +307,14 @@ pub fn is_scratchpad_dir(path: &str) -> bool {
 /// Normalize and resolve a path for permission checking.
 fn resolve_path(path: &str, cwd: &str) -> String {
     let expanded = expand_tilde(path);
-    if expanded.starts_with('/') {
-        expanded
+    let absolute = if expanded.starts_with('/') {
+        PathBuf::from(expanded)
     } else {
-        format!("{cwd}/{expanded}")
-    }
+        PathBuf::from(cwd).join(expanded)
+    };
+    coco_paths::normalize_lexical(&absolute)
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Normalize a path for comparison: lowercase, handle macOS /private/ symlinks.

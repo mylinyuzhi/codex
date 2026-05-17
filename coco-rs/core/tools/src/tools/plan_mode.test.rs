@@ -164,7 +164,9 @@ async fn exit_plan_mode_non_teammate_asks_for_confirmation() {
     let ctx = ctx_with_mode(PermissionMode::Plan);
     let decision = ExitPlanModeTool.check_permissions(&json!({}), &ctx).await;
     match decision {
-        coco_types::ToolCheckResult::Ask { message, choices } => {
+        coco_types::ToolCheckResult::Ask {
+            message, choices, ..
+        } => {
             assert!(message.contains("Exit plan mode"));
             // Default `show_clear_context_on_exit = false` → no choices.
             assert!(choices.is_none(), "no choices when setting is off");

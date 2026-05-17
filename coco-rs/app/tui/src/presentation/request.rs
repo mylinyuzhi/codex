@@ -13,6 +13,7 @@ use crate::state::QuestionFocus;
 use crate::state::QuestionItem;
 use crate::state::QuestionOverlay;
 use crate::state::RiskLevel;
+use crate::state::overlay::PermissionAction;
 
 pub(crate) fn permission_content(
     p: &PermissionOverlay,
@@ -51,10 +52,8 @@ pub(crate) fn permission_content(
         }
         lines.push_str(t!("dialog.hints_nav_select").as_ref());
         lines
-    } else if p.show_always_allow {
-        t!("dialog.actions_approve_deny_always").to_string()
     } else {
-        t!("dialog.actions_approve_deny").to_string()
+        classic_permission_actions(p)
     };
 
     let border = match p.risk_level {
@@ -70,6 +69,30 @@ pub(crate) fn permission_content(
         ),
         border,
     )
+}
+
+fn classic_permission_actions(p: &PermissionOverlay) -> String {
+    let selected = p
+        .selected_choice
+        .min(p.classic_action_count().saturating_sub(1));
+    let mut lines = format!("{}:\n", t!("dialog.actions_heading"));
+    for idx in 0..p.classic_action_count() {
+        let marker = if idx == selected { "▸ " } else { "  " };
+        let label = match p.classic_action_at(idx) {
+            PermissionAction::ApproveOnce => t!("dialog.action_approve_once").to_string(),
+            PermissionAction::AlwaysAllow => t!(
+                "dialog.action_always_allow_session",
+                tool = p.tool_name.as_str()
+            )
+            .to_string(),
+            PermissionAction::Deny => t!("dialog.action_deny").to_string(),
+        };
+        lines.push_str(&format!("{marker}{label}\n"));
+    }
+    lines.push_str(t!("dialog.hints_nav_select").as_ref());
+    lines.push_str("  ");
+    lines.push_str(t!("dialog.hints_permission_shortcuts").as_ref());
+    lines
 }
 
 pub(crate) fn question_content(

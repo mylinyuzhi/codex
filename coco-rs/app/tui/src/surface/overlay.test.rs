@@ -6,6 +6,7 @@ use crate::state::overlay::PermissionDetail;
 use crate::state::overlay::PermissionOverlay;
 use crate::state::overlay::TranscriptOverlay;
 use crate::surface::compatibility::TerminalCompatibility;
+use crate::theme::Theme;
 
 fn permission_overlay() -> Overlay {
     permission_overlay_with_id("p1")
@@ -26,6 +27,7 @@ fn permission_overlay_with_id(request_id: &str) -> Overlay {
         choices: None,
         selected_choice: 0,
         original_input: None,
+        permission_suggestions: vec![],
     })
 }
 
@@ -70,6 +72,37 @@ fn focused_recent_permission_uses_inline_decision_for_state() {
         Some(OverlaySurfacePlacement::InlineDecision)
     );
     assert!(history_emission_deferred_for_state(&state, now));
+}
+
+#[test]
+fn inline_permission_viewport_reserves_dialog_height() {
+    let mut state = AppState::new();
+    state.ui.set_overlay(permission_overlay());
+    let plan = SurfaceFramePlan {
+        overlay_placement: Some(OverlaySurfacePlacement::InlineDecision),
+        history_surface: HistorySurfaceMode::NativeScrollback,
+        attention_requested: false,
+    };
+
+    let height =
+        crate::surface::viewport::interactive_viewport_desired_height(&state, 80, 24, plan);
+
+    assert!(
+        height >= DECISION_OVERLAY_MIN_HEIGHT + 2,
+        "inline permission dialog should not be squeezed into the composer rows"
+    );
+}
+
+#[test]
+fn permission_overlay_uses_substantial_box_size() {
+    let state = AppState::new();
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let overlay = permission_overlay();
+
+    let height = required_overlay_height(&overlay, &state, styles, 80, 24);
+
+    assert!(height >= DECISION_OVERLAY_MIN_HEIGHT);
 }
 
 #[test]

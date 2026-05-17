@@ -9,6 +9,7 @@ fn make_context(mode: PermissionMode, bypass: bool) -> ToolPermissionContext {
     ToolPermissionContext {
         mode,
         additional_dirs: HashMap::new(),
+        permission_rule_source_roots: HashMap::new(),
         allow_rules: HashMap::new(),
         deny_rules: HashMap::new(),
         ask_rules: HashMap::new(),

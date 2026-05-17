@@ -274,6 +274,14 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `query` | Multi-turn agent loop driver (`QueryEngine`) + budget + command queue |
 | `state` | Central `AppState` tree + swarm orchestration modules |
 
+### Hub
+
+| Crate | Purpose |
+|-------|---------|
+| `protocol` | Event Hub wire types, subprotocol constants, and envelopes |
+| `connector` | Agent-side Event Hub boundary for future aggregation and WS sending |
+| `server` | Hub-side Axum server, `EventStore` read model, local JSONL adapter, and web UI |
+
 ### Standalone
 
 | Crate | Purpose |
@@ -493,6 +501,7 @@ Every crate in `coco-rs/` has its own `CLAUDE.md` (path = `coco-rs/<layer>/<crat
 - **Exec**: shell, sandbox, process-hardening, exec-server, apply-patch
 - **Root**: commands, skills, hooks, tasks, memory, plugins, keybindings, output-styles
 - **App**: cli, tui, query, state, session
+- **Hub**: protocol, connector, server. Design: [docs/coco-rs/event-hub/spec.md](docs/coco-rs/event-hub/spec.md)
 - **Standalone**: bridge, retrieval
 - **Utils**: each of the 26 utils/ crates has one
 - **User docs**: [docs/](docs/) — getting-started.md, config.md, sandbox.md

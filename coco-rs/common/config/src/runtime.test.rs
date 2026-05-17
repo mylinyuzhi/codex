@@ -20,6 +20,7 @@ fn settings_with(settings: Settings) -> SettingsWithSource {
     SettingsWithSource {
         merged: settings,
         per_source: HashMap::new(),
+        source_paths: HashMap::new(),
     }
 }
 

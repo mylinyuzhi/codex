@@ -227,6 +227,7 @@ impl Tool for ReadTool {
         crate::tools::read_permissions::check_read_permission_with_matcher(
             Path::new(file_path),
             &matcher,
+            ctx,
         )
     }
 

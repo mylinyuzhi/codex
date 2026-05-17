@@ -14,6 +14,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::error::ToolError;
+use coco_types::ToolCheckResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -61,6 +62,40 @@ impl Tool for ApplyPatchTool {
 
     fn is_read_only(&self, _: &Value) -> bool {
         false
+    }
+
+    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
+        let Some(patch) = input.get("patch").and_then(Value::as_str) else {
+            return ToolCheckResult::Passthrough;
+        };
+        let Ok(cwd) = apply_patch_cwd(ctx) else {
+            return ToolCheckResult::Passthrough;
+        };
+        let Ok(paths) = affected_paths_from_patch(patch, &cwd) else {
+            return ToolCheckResult::Passthrough;
+        };
+        if paths.is_empty() {
+            return ToolCheckResult::Passthrough;
+        }
+
+        let cwd_str = cwd.as_path().to_string_lossy().to_string();
+        let mut all_paths_to_check = Vec::new();
+        for path in &paths {
+            if let Some(message) = crate::check_write_root_fence(ctx, path.as_path()) {
+                return ToolCheckResult::Deny { message };
+            }
+            let path_str = path.to_string_lossy();
+            let paths_to_check =
+                coco_permissions::filesystem::get_paths_for_permission_check(&path_str, &cwd_str);
+            all_paths_to_check.extend(paths_to_check);
+        }
+        crate::tools::write_permissions::check_write_permission_for_paths(
+            &all_paths_to_check,
+            ctx,
+            ToolName::ApplyPatch.as_str(),
+            "apply a patch",
+            cwd.as_path(),
+        )
     }
 
     /// Render `{stdout, stderr}` by joining stdout + stderr with a
@@ -168,6 +203,31 @@ impl Tool for ApplyPatchTool {
             "stderr": err,
         })))
     }
+}
+
+fn apply_patch_cwd(ctx: &ToolUseContext) -> Result<AbsolutePathBuf, String> {
+    let cwd_path = ctx
+        .cwd_override
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| "no working directory available for apply_patch".to_string())?;
+    AbsolutePathBuf::from_absolute_path(&cwd_path)
+        .map_err(|e| format!("cwd `{}` is not absolute: {e}", cwd_path.display()))
+}
+
+fn affected_paths_from_patch(
+    patch: &str,
+    cwd: &AbsolutePathBuf,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    coco_apply_patch::parse_patch(patch)
+        .map(|parsed| {
+            parsed
+                .hunks
+                .iter()
+                .map(|hunk| hunk.resolve_path(cwd).as_path().to_path_buf())
+                .collect()
+        })
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -620,6 +620,8 @@ pub async fn run_chat_with_options(
     // settings.json deny/allow/ask rules as the TUI.
     let (allow_rules, deny_rules, ask_rules) =
         crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
+    let permission_rule_source_roots =
+        crate::permission_rule_loader::permission_rule_source_roots(&runtime_config.settings, &cwd);
 
     let config = QueryEngineConfig {
         model_id: model_id.clone(),
@@ -636,6 +638,7 @@ pub async fn run_chat_with_options(
         allow_rules,
         deny_rules,
         ask_rules,
+        permission_rule_source_roots,
         context_window: 200_000,
         max_output_tokens: 16_384,
         max_turns: cli

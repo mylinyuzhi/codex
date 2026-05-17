@@ -350,6 +350,7 @@ impl ToolContextFactory {
                 pre_plan_mode: live_pre_plan,
                 stripped_dangerous_rules: live_stripped,
                 session_plan_file,
+                permission_rule_source_roots: self.config.permission_rule_source_roots.clone(),
             },
             tool_use_id: None,
             user_message_id: overrides.user_message_id,
