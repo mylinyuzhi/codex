@@ -155,8 +155,8 @@ deletion plan.
 | Direct memory append | Removed. The input bar no longer appends directly to `CLAUDE.md`, and `/memory` open results are transcript-visible. | Keep memory file edits routed through `/memory` and the editor/opener service. | I1/I6 complete for current file-row flow; I7 payload shape complete | No input-bar file writes. |
 | Memory dialog payload | `OpenMemoryDialog` carries row-kind-aware file/folder/toggle rows; current command producer emits file rows. | Keep renderer and selection behavior keyed by row kind. | I7 complete for payload shape | Renderer consumes typed rows, not path/label/scope-only rows. |
 | Render reads runtime helper | Removed. Coordinator display mode is resolved into `UiState` by the CLI runner before render. | Display decisions are folded into state/view model before render. | I2/I9 complete for coordinator mode | Render is deterministic from state plus frame area. |
-| Input rendering duplication | Removed. `widgets/input.rs` owns `InputRenderModel` and composer rendering; `render.rs` only wires state into `InputWidget`. | One input view model and renderer owns composer presentation. | I10 complete for composer | Duplicate rendering path removed. |
-| Direct theme reads | Overlay frame/content helpers, composer, footer/toast/activity, lifecycle banners, stash/queue/suggestion widgets, teammate header, request/confirm/model/picker/settings presentation, rich transcript/chat, markdown/diff rendering, and specialist panels use semantic `UiStyles`. Direct `Theme` access is limited to theme loading/state and the top-level `UiStyles::new(&state.ui.theme)` adapter, plus tests that create default themes. | New and migrated surfaces depend on `UiStyles`; add semantic accessors instead of passing `Theme` into renderers. | I2/I3d cleanup complete for widget/render-overlay style coupling | No direct `theme.X` reads in production renderers. |
+| Input rendering duplication | Removed. `widgets/input.rs` owns `InputRenderModel` and composer rendering; `surface::viewport` only wires state into `InputWidget`. | One input view model and renderer owns composer presentation. | I10 complete for composer | Duplicate rendering path removed. |
+| Direct theme reads | Overlay frame/content helpers, composer, footer/toast/activity, lifecycle banners, stash/queue/suggestion widgets, teammate header, request/confirm/model/picker/settings presentation, rich transcript/chat, markdown/diff rendering, and specialist panels use semantic `UiStyles`. Direct `Theme` access is limited to theme loading/state and the top-level `UiStyles::new(&state.ui.theme)` adapter, plus tests that create default themes. | New and migrated surfaces depend on `UiStyles`; add semantic accessors instead of passing `Theme` into renderers. | I2/I3d cleanup complete for widget/overlay-content style coupling | No direct `theme.X` reads in production renderers. |
 | Chat display-collapse reducers | `transcript_presentation` handles source-backed committed cells plus active streaming/busy-tail cells. `presentation::streaming` owns active streaming-tail blocks from `StreamingState`. `transcript_projection` owns committed tool batches, same-hook lifecycle batches, parseable task-notification rendering, completed background-bash batches, and in-process teammate shutdown batches. Transcript/show-all mode keeps task notifications expanded. Read/search grouping still waits for structured read/search metadata in Rust messages. | Keep display-collapse reducers in presentation transcript cells, not widget render arms. | Projection switch complete for current Rust message shapes; active tail and streaming-tail block switch complete | Main chat consumes presentation cells and streaming blocks instead of owning reducer logic. |
 | Model fallback inference | Removed. `update/show.rs` reads `SessionState.model_catalog` and provider-status rows only. | Production uses session catalog; tests/pre-bootstrap mocks seed catalog entries explicitly. | I4 complete | Production path has no model-prefix provider inference. |
 | `/fast` TS command | `commands/CLAUDE.md` marks TS `/fast` deliberately not ported. TUI has `ToggleFastMode` and runtime `FastModeState`. | Do not add TS `/fast` account/product flow. Expose provider-neutral fast state only where runtime supports it. | I11 | Command audit marks omission or provider-neutral replacement. |
@@ -353,7 +353,7 @@ Touch points:
 - `common/types/src/event.rs`
 - `app/tui/src/state/session.rs`
 - `app/tui/src/widgets/chat/render_user.rs`
-- `app/tui/src/render_overlays/help.rs`
+- `app/tui/src/overlay_content/help.rs`
 - locale strings and companion tests
 
 Acceptance:
@@ -630,7 +630,7 @@ Acceptance:
 
 Current implementation status:
 
-- Complete for the fullscreen renderer. `presentation::activity::TurnActivityView`
+- Complete for the native viewport renderer. `presentation::activity::TurnActivityView`
   owns width-aware row capping, plan/agent/activity selection,
   stream/interrupt status, tool activity, subagent/coordinator rows, and
   plan/todo/background-task rows.

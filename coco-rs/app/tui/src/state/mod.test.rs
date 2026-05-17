@@ -133,13 +133,13 @@ fn test_overlay_queue_same_priority_fifo() {
 
     // A second Help queues behind (same priority keeps insertion order)
     state.ui.set_overlay(Overlay::Help);
-    assert!(matches!(state.ui.overlay, Some(Overlay::Help)));
-    assert_eq!(state.ui.overlay_queue.len(), 1);
+    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Help)));
+    assert_eq!(state.ui.overlay_queue_len(), 1);
 
     // Dismiss promotes the queued one
     state.ui.dismiss_overlay();
-    assert!(matches!(state.ui.overlay, Some(Overlay::Help)));
-    assert_eq!(state.ui.overlay_queue.len(), 0);
+    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Help)));
+    assert_eq!(state.ui.overlay_queue_len(), 0);
 
     state.ui.dismiss_overlay();
     assert!(!state.has_overlay());
@@ -153,17 +153,17 @@ fn test_overlay_higher_priority_displaces_current() {
     state.ui.set_overlay(Overlay::Help);
     // Error (priority 4) arriving should displace Help back into the queue
     state.ui.set_overlay(Overlay::Error("boom".to_string()));
-    assert!(matches!(state.ui.overlay, Some(Overlay::Error(_))));
-    assert_eq!(state.ui.overlay_queue.len(), 1);
+    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Error(_))));
+    assert_eq!(state.ui.overlay_queue_len(), 1);
     assert!(matches!(
-        state.ui.overlay_queue.front(),
+        state.ui.overlay_queue_front(),
         Some(Overlay::Help)
     ));
 
     // Dismissing Error restores Help
     state.ui.dismiss_overlay();
-    assert!(matches!(state.ui.overlay, Some(Overlay::Help)));
-    assert_eq!(state.ui.overlay_queue.len(), 0);
+    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Help)));
+    assert_eq!(state.ui.overlay_queue_len(), 0);
 }
 
 #[test]
@@ -174,10 +174,10 @@ fn test_overlay_lower_priority_queues_behind() {
     state.ui.set_overlay(Overlay::Error("boom".to_string()));
     // Help (priority 8) queues behind without displacing
     state.ui.set_overlay(Overlay::Help);
-    assert!(matches!(state.ui.overlay, Some(Overlay::Error(_))));
-    assert_eq!(state.ui.overlay_queue.len(), 1);
+    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Error(_))));
+    assert_eq!(state.ui.overlay_queue_len(), 1);
     assert!(matches!(
-        state.ui.overlay_queue.front(),
+        state.ui.overlay_queue_front(),
         Some(Overlay::Help)
     ));
 }
@@ -202,13 +202,16 @@ fn test_overlay_queue_priority_ordered() {
             description: "plan".into(),
         })); // priority 1
 
-    // Queue should be ordered by priority asc: PlanEntry (1), Error (4), Help (8).
-    let priorities: Vec<i32> = state
-        .ui
-        .overlay_queue
-        .iter()
-        .map(Overlay::priority)
-        .collect();
+    // Queue should be promoted by priority asc: PlanEntry (1), Error (4), Help (8).
+    let mut priorities = Vec::new();
+    for _ in 0..3 {
+        state.ui.dismiss_overlay();
+        let overlay = state
+            .ui
+            .active_overlay()
+            .expect("queued overlay should be promoted");
+        priorities.push(overlay.priority());
+    }
     assert_eq!(priorities, vec![1, 4, 8]);
 }
 
@@ -335,7 +338,10 @@ fn test_permission_overlay() {
     }));
 
     assert!(state.has_overlay());
-    assert!(matches!(state.ui.overlay, Some(Overlay::Permission(_))));
+    assert!(matches!(
+        state.ui.active_overlay(),
+        Some(Overlay::Permission(_))
+    ));
 }
 
 #[test]

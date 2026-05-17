@@ -207,7 +207,7 @@ async fn test_generate_object_warning_propagation() {
             Ok(LanguageModelV4GenerateResult {
                 content: vec![AssistantContentPart::text(r#"{"name":"W","age":1}"#)],
                 usage: Usage::new(10, 5),
-                finish_reason: FinishReason::stop(),
+                finish_reason: FinishReason::end_turn(),
                 warnings: vec![Warning::other("test warning")],
                 provider_metadata: None,
                 request: None,
@@ -239,7 +239,7 @@ async fn test_generate_object_response_metadata() {
             Ok(LanguageModelV4GenerateResult {
                 content: vec![AssistantContentPart::text(r#"{"name":"R","age":1}"#)],
                 usage: Usage::new(10, 5),
-                finish_reason: FinishReason::stop(),
+                finish_reason: FinishReason::end_turn(),
                 warnings: Vec::new(),
                 provider_metadata: None,
                 request: None,

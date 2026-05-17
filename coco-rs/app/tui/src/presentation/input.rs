@@ -26,7 +26,7 @@ pub(crate) fn inline_popup_view(state: &AppState) -> Option<InlinePopupView> {
         });
     }
 
-    let Overlay::CommandPalette(cp) = state.ui.overlay.as_ref()? else {
+    let Overlay::CommandPalette(cp) = state.ui.active_overlay()? else {
         return None;
     };
 

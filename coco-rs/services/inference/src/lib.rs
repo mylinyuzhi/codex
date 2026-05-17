@@ -42,7 +42,11 @@ pub use logging::ErrorLog;
 pub use logging::KnownGateway;
 pub use logging::RequestLog;
 pub use logging::ResponseLog;
-pub use logging::StopReason;
+// Canonical typed stop reason — re-exported from vercel-ai-provider's
+// extended UnifiedFinishReason (single source of truth). See
+// `vercel-ai/provider/src/language_model/v4/finish_reason.rs` for the
+// 8 variants + multi-LLM mapping table. The deprecated `inference`-
+// local enum that lived in `logging.rs` has been removed.
 pub use logging::detect_gateway;
 pub use logging::format_request_log;
 pub use logging::format_response_log;
@@ -86,6 +90,7 @@ pub use tool_schemas::filter_schemas_by_model;
 pub use tool_schemas::generate_tool_schemas;
 pub use tool_schemas::merge_tool_schemas;
 pub use usage::UsageAccumulator;
+pub use vercel_ai_provider::UnifiedFinishReason as StopReason;
 
 // ─── Vercel-ai re-export hub ──────────────────────────────────────────────
 //

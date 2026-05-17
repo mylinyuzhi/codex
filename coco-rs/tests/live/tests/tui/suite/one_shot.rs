@@ -71,7 +71,27 @@ pub async fn run() -> Result<()> {
         rendered.contains("ack from scripted model"),
         "one_shot: rendered buffer missing assistant reply:\n{rendered}"
     );
+    assert_no_large_gap_between_last_reply_and_input(&rendered);
 
     harness.shutdown().await;
     Ok(())
+}
+
+fn assert_no_large_gap_between_last_reply_and_input(rendered: &str) {
+    let lines: Vec<&str> = rendered.lines().collect();
+    let assistant_idx = lines
+        .iter()
+        .position(|line| line.contains("ack from scripted model"))
+        .unwrap_or_else(|| panic!("one_shot: assistant line missing:\n{rendered}"));
+    let input_idx = lines
+        .iter()
+        .enumerate()
+        .skip(assistant_idx + 1)
+        .find_map(|(index, line)| line.trim_start().starts_with("❯").then_some(index))
+        .unwrap_or_else(|| panic!("one_shot: input prompt after assistant missing:\n{rendered}"));
+    let gap = input_idx.saturating_sub(assistant_idx + 1);
+    assert!(
+        gap <= 3,
+        "one_shot: input viewport drifted {gap} rows below the final assistant reply:\n{rendered}"
+    );
 }

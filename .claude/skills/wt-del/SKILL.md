@@ -7,7 +7,7 @@ argument-hint: <branch-name>
 ## Context
 
 - Current branch: !`git branch --show-current`
-- Project directory: !`pwd | xargs basename`
+- Working directory: !`pwd`
 - Existing worktrees: !`git worktree list`
 - Branch to delete: $ARGUMENTS
 

@@ -104,7 +104,7 @@ fn test_tool_input_start_with_fields() {
 fn test_finish_part() {
     let part = LanguageModelV4StreamPart::Finish {
         usage: Usage::new(10, 5),
-        finish_reason: FinishReason::stop(),
+        finish_reason: FinishReason::end_turn(),
         provider_metadata: None,
     };
     let json = serde_json::to_string(&part).unwrap();

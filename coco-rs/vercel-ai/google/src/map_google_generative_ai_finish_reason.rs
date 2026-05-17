@@ -8,12 +8,12 @@ pub fn map_finish_reason(finish_reason: Option<&str>, has_tool_calls: bool) -> F
     match finish_reason {
         Some("STOP") => {
             if has_tool_calls {
-                FinishReason::with_raw(UnifiedFinishReason::ToolCalls, "STOP")
+                FinishReason::with_raw(UnifiedFinishReason::ToolUse, "STOP")
             } else {
-                FinishReason::with_raw(UnifiedFinishReason::Stop, "STOP")
+                FinishReason::with_raw(UnifiedFinishReason::EndTurn, "STOP")
             }
         }
-        Some("MAX_TOKENS") => FinishReason::with_raw(UnifiedFinishReason::Length, "MAX_TOKENS"),
+        Some("MAX_TOKENS") => FinishReason::with_raw(UnifiedFinishReason::MaxTokens, "MAX_TOKENS"),
         Some("SAFETY") | Some("BLOCKLIST") | Some("PROHIBITED_CONTENT") | Some("SPII") => {
             let raw = finish_reason.unwrap_or("SAFETY");
             FinishReason::with_raw(UnifiedFinishReason::ContentFilter, raw)

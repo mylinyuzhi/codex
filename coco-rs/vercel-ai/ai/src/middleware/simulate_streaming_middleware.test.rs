@@ -10,7 +10,7 @@ fn create_test_result() -> LanguageModelV4GenerateResult {
             text: "Hello world".to_string(),
             provider_metadata: None,
         })],
-        finish_reason: FinishReason::stop(),
+        finish_reason: FinishReason::end_turn(),
         usage: Usage::new(10, 5),
         request: Default::default(),
         response: Default::default(),

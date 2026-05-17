@@ -78,7 +78,7 @@ impl LanguageModelV4GenerateResult {
         Self::new(
             vec![AssistantContentPart::text(text)],
             usage,
-            FinishReason::stop(),
+            FinishReason::end_turn(),
         )
     }
 

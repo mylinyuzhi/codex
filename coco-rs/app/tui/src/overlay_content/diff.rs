@@ -1,4 +1,4 @@
-//! Full-screen diff view overlay renderer.
+//! Full-screen diff view overlay content builder.
 
 use ratatui::prelude::Color;
 

@@ -1,4 +1,4 @@
-//! Help overlay renderer.
+//! Help overlay content builder.
 
 use ratatui::prelude::Color;
 

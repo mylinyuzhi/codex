@@ -296,7 +296,7 @@ dialog.rewind_diff_files_changed_many: "%{count} 个文件变更"
 dialog.rewind_current_prompt: "（当前）"
 
 # 帮助覆盖层 — 仅描述文本（快捷键列由
-# `app/tui/src/render_overlays/help.rs` 动态渲染，
+# `app/tui/src/overlay_content/help.rs` 动态渲染，
 # 这样用户在 ~/.coco/keybindings.json 里改键时也能反映出来）。
 
 # 历史搜索
@@ -373,6 +373,7 @@ toast.summarize_complete: "总结完成"
 toast.summarize_failed_short: "总结失败: %{error}"
 notification.app_name: "coco"
 notification.turn_complete: "轮次完成"
+notification.action_required: "需要处理"
 toast.rewound_files: "已回退，恢复了 %{count} 个文件。"
 toast.conversation_rewound: "对话已回退。"
 toast.rewound_checkpoint: "已回退到检查点，恢复了 %{count} 个文件。"

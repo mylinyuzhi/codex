@@ -3,6 +3,7 @@
 //! Provides terminal initialization/restoration and the [`Tui`] wrapper
 //! that manages the native scrollback terminal surface.
 
+use std::fmt;
 use std::io::IsTerminal;
 use std::io::Stdout;
 use std::io::Write;
@@ -10,6 +11,7 @@ use std::io::{self};
 use std::panic;
 use std::sync::OnceLock;
 
+use crossterm::Command;
 use crossterm::cursor::MoveToNextLine;
 use crossterm::cursor::Show;
 use crossterm::event::DisableBracketedPaste;
@@ -21,16 +23,20 @@ use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::disable_raw_mode;
 use crossterm::terminal::enable_raw_mode;
+use ratatui::backend::Backend;
+use ratatui::backend::ClearType;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
 
+use crate::FrameLayout;
 use crate::job_control::SuspendContext;
-use crate::render::FrameLayout;
 use crate::state::AppState;
+use crate::surface::compatibility::TerminalCompatibility;
 use crate::surface::controller::NativeSurfaceController;
 use crate::surface::overlay::OverlaySurfacePlacement;
-use crate::surface::overlay::overlay_surface_placement;
+use crate::surface::overlay::OverlaySurfaceState;
+use crate::surface::overlay::SurfaceFramePlan;
 use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::interactive_viewport_desired_height;
 
@@ -40,8 +46,57 @@ pub type TerminalBackend = CrosstermBackend<Stdout>;
 /// Type alias for the native surface terminal.
 pub(crate) type NativeTerminal = SurfaceTerminal<TerminalBackend>;
 
-const NATIVE_VIEWPORT_MIN_HEIGHT: u16 = 4;
-const NATIVE_VIEWPORT_MAX_HEIGHT: u16 = 12;
+pub(crate) const NATIVE_VIEWPORT_MIN_HEIGHT: u16 = 4;
+pub(crate) const NATIVE_VIEWPORT_MAX_HEIGHT: u16 = 12;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EnableAlternateScroll;
+
+impl Command for EnableAlternateScroll {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[?1007h")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
+            "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DisableAlternateScroll;
+
+impl Command for DisableAlternateScroll {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[?1007l")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
+            "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TuiDrawOutcome {
+    pub layout: FrameLayout,
+    pub retained_surface_visible: bool,
+    pub attention_requested: bool,
+}
 
 /// Enable the TUI-private terminal modes (raw mode, bracketed paste, and
 /// focus-change reporting).
@@ -63,6 +118,7 @@ pub(crate) fn leave_tui_modes() -> io::Result<()> {
     disable_raw_mode()?;
     execute!(
         io::stdout(),
+        DisableAlternateScroll,
         LeaveAlternateScreen,
         DisableBracketedPaste,
         DisableFocusChange,
@@ -122,31 +178,55 @@ fn install_panic_hook_once() {
 pub struct Tui {
     terminal: NativeTerminal,
     surface: NativeSurfaceController,
+    overlay_surface: OverlaySurfaceState,
     suspend_context: SuspendContext,
+    compatibility: TerminalCompatibility,
     alt_screen_active: bool,
+    alt_saved_viewport: Option<Rect>,
 }
 
 impl Tui {
     /// Create a new Tui with a fresh terminal.
     pub fn new() -> io::Result<Self> {
         let terminal = setup_terminal()?;
+        let compatibility = TerminalCompatibility::detect();
         Ok(Self {
             terminal,
-            surface: NativeSurfaceController::new(),
+            surface: NativeSurfaceController::default(),
+            overlay_surface: OverlaySurfaceState::default(),
             suspend_context: SuspendContext::new(),
+            compatibility,
             alt_screen_active: false,
+            alt_saved_viewport: None,
         })
     }
 
+    pub(crate) fn native_scrollback_status_message(&self) -> Option<&'static str> {
+        self.compatibility.status_message()
+    }
+
+    pub(crate) fn retained_surface_visible(&self) -> bool {
+        !self.alt_screen_active
+    }
+
     /// Draw one native surface frame.
-    pub fn draw(&mut self, state: &AppState) -> io::Result<FrameLayout> {
+    pub fn draw(&mut self, state: &AppState) -> io::Result<TuiDrawOutcome> {
         if let Some(prepared) = self.suspend_context.prepare_resume_action() {
             prepared.apply(|| self.clear_surface_after_resume())?;
         }
 
-        self.sync_surface_area(state)?;
-        let outcome = self.surface.draw(&mut self.terminal, state)?;
-        Ok(outcome.layout)
+        let plan = self
+            .overlay_surface
+            .plan(state, self.compatibility, std::time::Instant::now());
+        self.sync_surface_area(state, plan)?;
+        let outcome = self
+            .surface
+            .draw_with_plan(&mut self.terminal, state, plan)?;
+        Ok(TuiDrawOutcome {
+            layout: outcome.layout,
+            retained_surface_visible: self.retained_surface_visible(),
+            attention_requested: plan.attention_requested,
+        })
     }
 
     /// Initiate the Ctrl+Z suspend dance. Blocks until SIGCONT delivered
@@ -156,8 +236,8 @@ impl Tui {
     ///
     /// No-op on non-Unix platforms.
     pub fn trigger_suspend(&mut self) -> io::Result<()> {
+        self.leave_overlay_alt_screen()?;
         self.suspend_context.suspend()?;
-        self.alt_screen_active = false;
         Ok(())
     }
 
@@ -165,8 +245,8 @@ impl Tui {
     /// child process such as `$EDITOR`.
     pub fn prepare_external_process(&mut self) -> io::Result<()> {
         let mut stdout = io::stdout();
+        self.leave_overlay_alt_screen()?;
         leave_tui_modes()?;
-        self.alt_screen_active = false;
         if let Err(err) = execute!(stdout, MoveToNextLine(1), Show) {
             let _ = enter_tui_modes(&mut stdout);
             return Err(err);
@@ -179,7 +259,7 @@ impl Tui {
     pub fn restore_after_external_process(&mut self) -> io::Result<()> {
         let mut stdout = io::stdout();
         enter_tui_modes(&mut stdout)?;
-        self.alt_screen_active = false;
+        self.leave_overlay_alt_screen()?;
         self.clear_surface_after_resume()
     }
 
@@ -202,46 +282,71 @@ impl Tui {
     }
 
     fn prepare_shell_prompt_after_exit(&mut self) -> io::Result<()> {
-        let size = self.terminal.size()?;
-        if self.alt_screen_active {
-            execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
-            self.alt_screen_active = false;
-            self.terminal
-                .set_viewport_area(native_viewport_area(size, NATIVE_VIEWPORT_MIN_HEIGHT));
-        }
-
+        self.leave_overlay_alt_screen()?;
         self.terminal.prepare_shell_prompt_after_exit()?;
         std::io::Write::flush(self.terminal.backend_mut())
     }
 
-    fn sync_surface_area(&mut self, state: &AppState) -> io::Result<()> {
+    fn sync_surface_area(&mut self, state: &AppState, plan: SurfaceFramePlan) -> io::Result<()> {
         let size = self.terminal.size()?;
         let wants_alt = matches!(
-            overlay_surface_placement(state.ui.overlay.as_ref()),
+            plan.overlay_placement,
             Some(OverlaySurfacePlacement::AltScreen)
         );
 
         if wants_alt && !self.alt_screen_active {
-            execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
+            self.alt_saved_viewport = Some(self.terminal.viewport_area());
+            execute!(
+                self.terminal.backend_mut(),
+                EnterAlternateScreen,
+                EnableAlternateScroll
+            )?;
             self.alt_screen_active = true;
-            self.terminal.clear_owned_scrollback()?;
+            self.terminal.backend_mut().clear_region(ClearType::All)?;
+            self.terminal.invalidate_viewport();
         } else if !wants_alt && self.alt_screen_active {
-            execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
-            self.alt_screen_active = false;
-            self.terminal.clear_owned_scrollback()?;
-            self.surface.reset();
+            self.leave_overlay_alt_screen()?;
         }
 
         let area = if self.alt_screen_active {
             Rect::new(0, 0, size.width, size.height)
         } else {
-            let desired_height =
-                interactive_viewport_desired_height(state, size.width, NATIVE_VIEWPORT_MAX_HEIGHT);
-            native_viewport_area(size, desired_height)
+            let desired_height = interactive_viewport_desired_height(
+                state,
+                size.width,
+                NATIVE_VIEWPORT_MAX_HEIGHT,
+                plan,
+            );
+            native_viewport_area(self.terminal.history_bottom_y(), size, desired_height)
         };
         if self.terminal.viewport_area() != area {
+            tracing::debug!(
+                target: "tui::surface",
+                previous = ?self.terminal.viewport_area(),
+                next = ?area,
+                viewport_height = area.height,
+                history_bottom_y = self.terminal.history_bottom_y(),
+                alt_screen_active = self.alt_screen_active,
+                "sync surface area"
+            );
             self.terminal
                 .apply_viewport_area(area, !self.alt_screen_active)?;
+        }
+        Ok(())
+    }
+
+    fn leave_overlay_alt_screen(&mut self) -> io::Result<()> {
+        if self.alt_screen_active {
+            execute!(
+                self.terminal.backend_mut(),
+                DisableAlternateScroll,
+                LeaveAlternateScreen
+            )?;
+            self.alt_screen_active = false;
+        }
+        if let Some(saved) = self.alt_saved_viewport.take() {
+            self.terminal.set_viewport_area(saved);
+            self.terminal.invalidate_viewport();
         }
         Ok(())
     }
@@ -255,18 +360,19 @@ impl Drop for Tui {
         // does not end in a newline. Terminal mode restore emits escape
         // sequences, so the newline must be the last best-effort write.
         let _ = self.terminal.backend_mut().write_all(b"\r\n");
-        let _ = self.terminal.backend_mut().flush();
+        let _ = std::io::Write::flush(self.terminal.backend_mut());
     }
 }
 
-fn native_viewport_area(size: Size, desired_height: u16) -> Rect {
+pub(crate) fn native_viewport_area(anchor_y: u16, size: Size, desired_height: u16) -> Rect {
     if size.height == 0 {
         return Rect::new(0, 0, size.width, 0);
     }
     let height = desired_height
         .clamp(NATIVE_VIEWPORT_MIN_HEIGHT, NATIVE_VIEWPORT_MAX_HEIGHT)
         .min(size.height);
-    Rect::new(0, size.height - height, size.width, height)
+    let y = anchor_y.min(size.height.saturating_sub(height));
+    Rect::new(0, y, size.width, height)
 }
 
 #[cfg(test)]

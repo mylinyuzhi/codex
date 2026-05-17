@@ -1,4 +1,4 @@
-//! Filterable-list picker overlay renderers.
+//! Filterable-list picker overlay content builders.
 
 use ratatui::prelude::*;
 
@@ -11,15 +11,6 @@ use crate::state::MemoryDialogOverlay;
 use crate::state::ModelPickerOverlay;
 use crate::state::QuickOpenOverlay;
 use crate::state::SessionBrowserOverlay;
-
-pub(super) fn render_model_picker(
-    frame: &mut Frame,
-    area: Rect,
-    m: &ModelPickerOverlay,
-    styles: UiStyles<'_>,
-) {
-    model_picker::render_model_picker(frame, area, m, styles);
-}
 
 pub(super) fn model_picker_content(
     m: &ModelPickerOverlay,

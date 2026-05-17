@@ -222,7 +222,22 @@ impl HookLlmHandle for QueryHookLlm {
             Ok(Err(e)) => HookEvaluationResult::NonBlockingError {
                 error: format!("hook prompt API error: {e}"),
             },
-            Ok(Ok(query_result)) => parse_hook_response(&query_result.content),
+            Ok(Ok(query_result)) => {
+                // Hook evaluation that silently `Cancelled`s on a
+                // truncated / content-filtered verdict would leave the
+                // user wondering why their hook didn't fire. Warn
+                // before parsing so the missing decision is traceable.
+                let stop = query_result.stop_reason;
+                if stop.is_some_and(coco_messages::StopReason::is_abnormal) {
+                    tracing::warn!(
+                        stop_reason = ?stop,
+                        tokens_out = query_result.usage.output_tokens,
+                        "hook prompt unexpected stop_reason — \
+                         decision may default to Cancelled"
+                    );
+                }
+                parse_hook_response(&query_result.content)
+            }
         }
     }
 

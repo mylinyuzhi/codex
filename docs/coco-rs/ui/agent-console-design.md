@@ -60,8 +60,8 @@ the others:
 - if widgets perform effects, tests become nondeterministic;
 - if `SurfaceTerminal` leaks upward, ordinary UI code starts writing terminal
   escape sequences;
-- if presentation models are skipped, `render.rs` grows into an untestable
-  mega-widget.
+- if presentation models are skipped, `surface::viewport` or overlay renderers
+  grow into untestable mega-widgets.
 
 The design below avoids those failure modes.
 
@@ -73,7 +73,7 @@ large UI rewrites or broad terminal integration land.
 | Gate | Question | Required evidence | Time-box / owner / kill switch | Decision if it fails |
 |---|---|---|---|---|
 | Terminal surface spike | Can the useful parts of `codex-rs/tui/src/custom_terminal.rs` compile against crates.io `ratatui 0.30` without the old fork's private affordances? | A small `SurfaceTerminal` proof that owns viewport area, cursor position/style, diff invalidation, visible-history row accounting, and can run with buffer snapshots plus VT100 byte tests. | 2 weeks. Owner: TUI architecture owner. Re-evaluate at 4 weeks. | Decide explicitly between a coco-owned ratatui fork, a narrower native-scrollback target, or deferring native scrollback. Do not discover this after presentation work depends on it. |
-| Source-backed stream controller | Can stable/tail streaming, table holdback, and width-change rerendering be implemented as pure logic over source text? | Unit tests for append, partial line, markdown/table holdback, resize, finalization, and emitted-stable accounting, independent of terminal rendering. | 2 weeks. Owner: streaming/presentation owner. Re-evaluate at 4 weeks. | Keep native history disabled; still reuse the markdown stable/tail layer to improve live-tail UX in the fullscreen renderer. Do not keep the history-emission layer without native history. |
+| Source-backed stream controller | Can stable/tail streaming, table holdback, and width-change rerendering be implemented as pure logic over source text? | Unit tests for append, partial line, markdown/table holdback, resize, finalization, and emitted-stable accounting, independent of terminal rendering. | 2 weeks. Owner: streaming/presentation owner. Re-evaluate at 4 weeks. | Keep history emission source-backed; do not reintroduce the deleted fullscreen fallback. |
 | Activity layout | Can `TurnActivityView` stay readable under real concurrency instead of becoming a new mega-widget? | `<=60`, narrow, normal, and wide snapshots for light and heavy turns, including subagents plus background tasks plus a long-running tool. | 2 weeks. Owner: console product owner plus TUI architecture owner. Re-evaluate at 4 weeks. | Split activity into typed groups and pager-backed detail before wiring more producers. |
 
 Terminal surface decision criteria:
@@ -92,9 +92,9 @@ native-scrollback integration work and ship the existing base surface with
 improved in-app transcript/pager UX while keeping the native design as a blocked
 target. This is a stop condition, not a second product mode.
 
-The current source size confirms this is necessary: `app/tui/src/render.rs` is
-already a large coordinator. New work should first carve typed presentation
-boundaries out of that file rather than appending more branching render logic.
+The deleted fullscreen `render.rs` proved why this is necessary. New work should
+enter typed presentation boundaries, `surface/*`, or focused widgets rather than
+adding branching render logic to the viewport or overlay coordinators.
 
 ## Design Comparison
 
@@ -827,9 +827,9 @@ Existing modules migrate gradually:
 
 - split large coordinator code before adding new surface families; new complex
   UI work should enter `presentation/*`, `surface/*`, or a small widget module,
-  not expand `render.rs`;
+  not expand `surface::viewport` or generic overlay coordinators;
 - `widgets/chat/*` -> `presentation::conversation` plus small widgets;
-- `render_overlays/*` -> `presentation::prompts`, `picker`, `pager`, `diff`;
+- `overlay_content/*` -> `presentation::prompts`, `picker`, `pager`, `diff`;
 - `streaming/*` -> source-backed stream controller;
 - `terminal.rs` -> `surface::terminal`;
 - side-panel-era widgets -> `presentation::activity`; final placement is inline

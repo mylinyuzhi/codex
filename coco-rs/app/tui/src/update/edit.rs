@@ -281,7 +281,7 @@ fn do_clear_conversation(state: &mut AppState, clear_plan_state: bool) {
     state.session.last_agent_markdown = None;
     // 2. Overlay + toast reset — avoid surfacing stale approval prompts
     // or lifecycle banners against a now-empty transcript.
-    state.ui.overlay = None;
+    state.ui.clear_overlays();
     state.ui.toasts.clear();
     // 3. Plan-state reset (only /clear all).
     if clear_plan_state {

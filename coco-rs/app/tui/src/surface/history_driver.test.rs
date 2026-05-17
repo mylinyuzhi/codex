@@ -100,19 +100,59 @@ fn driver_replay_all_replaces_owned_history_and_marks_stream_replay() {
         }
     );
     assert_eq!(terminal.visible_history_rows(), 3);
+    assert_eq!(terminal.viewport_area(), Rect::new(0, 3, 8, 1));
     assert_eq!(
         plain_buffer_lines(terminal.backend().buffer()),
         vec![
-            "        ",
-            "        ",
-            "        ",
             "header  ",
             "⏺ world ",
+            "        ",
+            "        ",
+            "        ",
             "        ",
             "        "
         ]
     );
     assert!(driver.stream_finish_replay_needed());
+}
+
+#[test]
+fn driver_replay_all_reanchors_viewport_to_replayed_history_bottom() {
+    let theme = Theme::default();
+    let backend = TestBackend::new(48, 30);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 26, 48, 4));
+    terminal.note_history_rows_inserted(26);
+    let messages = vec![
+        ChatMessage::user_text("u1", "hello"),
+        ChatMessage::assistant_text("a1", "short reply"),
+    ];
+    let mut driver = SurfaceHistoryDriver::new();
+
+    let outcome = driver
+        .replay_all(
+            &mut terminal,
+            header(),
+            &messages,
+            options(&theme, 48),
+            false,
+        )
+        .expect("replay");
+
+    let HistoryEmissionOutcome::Replayed { rows, .. } = outcome else {
+        panic!("expected replay outcome, got {outcome:?}");
+    };
+    assert_eq!(terminal.viewport_area().top(), rows);
+
+    let lines = plain_buffer_lines(terminal.backend().buffer());
+    let assistant = line_index(&lines, "⏺ short reply");
+    let input_top = terminal.viewport_area().top() as usize;
+    let gap = input_top.saturating_sub(assistant + 1);
+    assert!(
+        gap <= 3,
+        "replay left {gap} rows between assistant and viewport:\n{}",
+        lines.join("\n")
+    );
 }
 
 fn header() -> Vec<Line<'static>> {
@@ -134,4 +174,11 @@ fn plain_buffer_lines(buffer: &Buffer) -> Vec<String> {
         .chunks(buffer.area.width as usize)
         .map(|cells| cells.iter().map(ratatui::buffer::Cell::symbol).collect())
         .collect()
+}
+
+fn line_index(lines: &[String], needle: &str) -> usize {
+    lines
+        .iter()
+        .position(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("missing {needle:?} in {lines:#?}"))
 }

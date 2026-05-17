@@ -48,7 +48,7 @@ impl Reply {
     pub fn text(body: impl Into<String>) -> Self {
         Self {
             blocks: vec![AssistantContentPart::Text(TextPart::new(body))],
-            finish: UnifiedFinishReason::Stop,
+            finish: UnifiedFinishReason::EndTurn,
         }
     }
 
@@ -63,7 +63,7 @@ impl Reply {
             blocks: vec![AssistantContentPart::ToolCall(ToolCallPart::new(
                 call_id, tool_name, input,
             ))],
-            finish: UnifiedFinishReason::ToolCalls,
+            finish: UnifiedFinishReason::ToolUse,
         }
     }
 
@@ -71,7 +71,7 @@ impl Reply {
     pub fn stop() -> Self {
         Self {
             blocks: Vec::new(),
-            finish: UnifiedFinishReason::Stop,
+            finish: UnifiedFinishReason::EndTurn,
         }
     }
 }

@@ -2,15 +2,23 @@
 
 use coco_types::ModelRole;
 use ratatui::prelude::*;
+#[cfg(test)]
 use ratatui::widgets::Block;
+#[cfg(test)]
 use ratatui::widgets::Borders;
+#[cfg(test)]
 use ratatui::widgets::Clear;
+#[cfg(test)]
 use ratatui::widgets::Paragraph;
 
 use super::layout;
+#[cfg(test)]
 use super::picker;
+#[cfg(test)]
 use super::picker::PickerListView;
+#[cfg(test)]
 use super::picker::PickerRow;
+#[cfg(test)]
 use super::picker::SpanBgOpt;
 use super::styles::UiStyles;
 use crate::i18n::t;
@@ -31,15 +39,18 @@ const ROLE_ORDER: [ModelRole; 8] = [
     ModelRole::Subagent,
 ];
 
+#[cfg(test)]
 const MODEL_PICKER_BOUNDS: layout::OverlayBounds =
     layout::OverlayBounds::new(70, 80, 60, 112, 18, 32);
 
+#[cfg(test)]
 struct ModelPickerViewModel<'a> {
     filtered: Vec<&'a ModelEntry>,
     list: PickerListView<'a, ModelEntry>,
     selected: Option<usize>,
 }
 
+#[cfg(test)]
 pub(crate) fn render_model_picker(
     frame: &mut Frame,
     area: Rect,
@@ -88,6 +99,7 @@ pub(crate) fn content(m: &ModelPickerOverlay, styles: UiStyles<'_>) -> (String, 
     (title, body, styles.primary())
 }
 
+#[cfg(test)]
 fn build_view_model(m: &ModelPickerOverlay, list_height: usize) -> ModelPickerViewModel<'_> {
     let filtered = filtered_entries(m);
     let selected = layout::selected_in_bounds(m.selected, filtered.len());
@@ -101,6 +113,7 @@ fn build_view_model(m: &ModelPickerOverlay, list_height: usize) -> ModelPickerVi
     }
 }
 
+#[cfg(test)]
 fn render_model_picker_lines(
     m: &ModelPickerOverlay,
     styles: UiStyles<'_>,
@@ -177,6 +190,7 @@ fn filtered_entries(m: &ModelPickerOverlay) -> Vec<&ModelEntry> {
         .collect()
 }
 
+#[cfg(test)]
 fn render_role_tabs(active: ModelRole, styles: UiStyles<'_>) -> Line<'static> {
     let mut spans = vec![
         Span::raw(t!("dialog.model_picker_role_label").to_string()).fg(styles.dim()),
@@ -201,6 +215,7 @@ fn render_role_tabs(active: ModelRole, styles: UiStyles<'_>) -> Line<'static> {
     Line::from(spans)
 }
 
+#[cfg(test)]
 fn render_filter_line(m: &ModelPickerOverlay, styles: UiStyles<'_>) -> Line<'static> {
     if m.filter.is_empty() {
         Line::from(Span::raw(t!("dialog.model_picker_type_filter").to_string()).fg(styles.dim()))
@@ -212,6 +227,7 @@ fn render_filter_line(m: &ModelPickerOverlay, styles: UiStyles<'_>) -> Line<'sta
     }
 }
 
+#[cfg(test)]
 fn render_model_row(
     row: &PickerRow<'_, ModelEntry>,
     selected: Option<usize>,
@@ -284,6 +300,7 @@ fn render_model_row(
     }
 }
 
+#[cfg(test)]
 fn render_effort_line(
     m: &ModelPickerOverlay,
     view: &ModelPickerViewModel<'_>,

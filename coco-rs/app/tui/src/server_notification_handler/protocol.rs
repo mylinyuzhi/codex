@@ -846,7 +846,7 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
     if user_cancel
         && state.ui.input.is_empty()
         && state.session.queued_commands.is_empty()
-        && state.ui.overlay.is_none()
+        && !state.ui.has_overlay()
         && let Some(idx) =
             crate::update_rewind::find_last_user_message_index(&state.session.messages)
         && crate::update_rewind::messages_after_are_only_synthetic(&state.session.messages, idx)

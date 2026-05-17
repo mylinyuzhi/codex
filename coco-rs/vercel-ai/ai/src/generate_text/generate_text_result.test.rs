@@ -2,8 +2,11 @@ use super::*;
 
 #[test]
 fn test_generate_text_result_new() {
-    let result =
-        GenerateTextResult::new("Hello".to_string(), Usage::new(10, 5), FinishReason::stop());
+    let result = GenerateTextResult::new(
+        "Hello".to_string(),
+        Usage::new(10, 5),
+        FinishReason::end_turn(),
+    );
     assert_eq!(result.text, "Hello");
     assert_eq!(result.usage.total_input_tokens(), 10);
 }

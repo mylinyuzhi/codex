@@ -1,4 +1,4 @@
-//! Global search overlay (ripgrep streaming) renderer.
+//! Global search overlay content builder.
 
 use ratatui::prelude::Color;
 

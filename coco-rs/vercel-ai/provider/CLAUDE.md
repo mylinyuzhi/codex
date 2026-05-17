@@ -6,6 +6,12 @@ Standalone type definitions matching `@ai-sdk/provider` v4. Zero dependencies on
 
 Ports `@ai-sdk/provider` v4 spec (not from `claude-code/src/`).
 
+## Coco-rs-specific extensions (deviates from TS spec)
+
+- **`UnifiedFinishReason` is 8 variants, not 6.** Extended with `StopSequence` (refinement of TS `Stop`) and `ContextWindowExceeded` (refinement of TS `Length`). Both express provider information that the TS spec routes through `FinishReason.raw`; coco-rs folds them into the typed enum so the entire workspace can match on a single `coco_inference::StopReason` (re-exported from this crate) without anyone parsing wire strings. See `language_model/v4/finish_reason.rs` for the multi-LLM mapping table.
+- **Snake_case wire format**, not kebab-case. Variants serialize as `"end_turn"` / `"max_tokens"` / `"tool_use"` / `"stop_sequence"` / `"model_context_window_exceeded"` / `"content_filter"` / `"error"` / `"other"`. The renames from spec names (`stop` → `end_turn`, `length` → `max_tokens`, `tool-calls` → `tool_use`) align with coco-rs's SDK protocol and transcript JSON, which have always used those names. Backward-compat `FinishReason::stop()` / `length()` / `tool_calls()` constructors and `is_stop()` / `is_length()` / `is_tool_calls()` helpers are kept as aliases.
+- **`UnifiedFinishReason::is_normal` / `is_abnormal`** drive the abnormal-stop_reason warn path in `coco-inference`. Higher layers `match` on the variant directly — there is intentionally no `is_max_tokens_family` umbrella helper because `MaxTokens` and `ContextWindowExceeded` take different recovery paths (output-budget escalate + resume nudge vs. reactive compaction); a family predicate would invite recombining them.
+
 ## Key Types
 
 Model traits: `LanguageModelV4`, `EmbeddingModelV4`, `ImageModelV4`, `SpeechModelV4`, `TranscriptionModelV4`, `RerankingModelV4`, `VideoModelV4`, `ProviderV4`, `SimpleProvider`.

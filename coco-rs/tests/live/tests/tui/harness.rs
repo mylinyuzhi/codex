@@ -6,8 +6,8 @@
 //! - Real `coco_tools` builtin tools (Bash / Read / Write / Edit / Glob)
 //! - A real `coco_hooks::HookRegistry` (caller decides whether to install
 //!   any hook definitions)
-//! - A `Terminal<TestBackend>` that captures the rendered buffer so tests
-//!   can assert on what the user would see
+//! - Native-surface test rendering that captures the visible terminal buffer
+//!   so tests can assert on what the user would see
 //!
 //! What this is **not**:
 //! - It does not call `coco_tui::App::run`. `App::run` opens a crossterm
@@ -15,9 +15,9 @@
 //!   harness that needs to inject events programmatically. Instead, the
 //!   harness runs the same three building blocks `App::run` orchestrates
 //!   (`handle_core_event` for engine→TUI, `update::handle_command` /
-//!   `keybinding_bridge::map_key` for keystrokes, `render::render` for the
-//!   view) but drives them on its own clock. The pipeline under test is
-//!   identical; only the I/O edges are stubbed.
+//!   `keybinding_bridge::map_key` for keystrokes, and the native surface
+//!   test renderer for the view) but drives them on its own clock. The
+//!   pipeline under test is identical; only the I/O edges are stubbed.
 //!
 //! Lifecycle:
 //! 1. `TuiHarness::builder().build()` — wires channels, spawns the agent
@@ -27,8 +27,8 @@
 //! 3. `harness.pump_until_idle(timeout)` — drains every `CoreEvent` the
 //!    engine emits into AppState until the engine signals
 //!    `SessionResult` (or the timeout fires, which surfaces as an error).
-//! 4. `harness.render_to_string()` — paints AppState into the
-//!    TestBackend buffer and returns the screen as a newline-separated
+//! 4. `harness.render_to_string()` — paints AppState through the native
+//!    surface into a buffer and returns the screen as a newline-separated
 //!    string for substring assertions.
 //! 5. `harness.shutdown()` (drop runs the same path) — closes the
 //!    command channel so the driver task exits cleanly.
@@ -57,7 +57,6 @@ use coco_tui::AppState;
 use coco_tui::TuiCommand;
 use coco_tui::UserCommand;
 use coco_tui::keybinding_bridge;
-use coco_tui::render;
 use coco_tui::server_notification_handler::handle_core_event;
 use coco_tui::update::handle_command;
 use coco_types::AgentStreamEvent;
@@ -70,8 +69,6 @@ use coco_types::TuiOnlyEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -186,7 +183,8 @@ impl TuiHarnessBuilder {
 /// In-process TUI under test. See module docs.
 pub struct TuiHarness {
     pub state: AppState,
-    pub terminal: Terminal<TestBackend>,
+    terminal_width: u16,
+    terminal_height: u16,
     /// Sender into the agent driver task. Tests usually go through
     /// [`Self::submit`] / [`Self::press_key`] rather than touching this
     /// directly.
@@ -319,11 +317,9 @@ impl TuiHarness {
             event_tx_for_driver,
         ));
 
-        // Build the TestBackend-backed terminal. AppState starts empty —
-        // production fills it via `app.state_mut()` post-`new`; we don't
-        // need any of that bootstrapping for these scenarios.
-        let backend = TestBackend::new(cfg.width, cfg.height);
-        let terminal = Terminal::new(backend).context("build TestBackend terminal")?;
+        // AppState starts empty — production fills it via `app.state_mut()`
+        // post-`new`; we don't need any of that bootstrapping for these
+        // scenarios.
         let mut state = AppState::new();
         state.session.permission_mode = cfg.permission_mode;
         state.session.bypass_permissions_available =
@@ -332,7 +328,8 @@ impl TuiHarness {
 
         Ok(Self {
             state,
-            terminal,
+            terminal_width: cfg.width,
+            terminal_height: cfg.height,
             command_tx,
             event_rx,
             events: Vec::new(),
@@ -425,25 +422,15 @@ impl TuiHarness {
         }
     }
 
-    /// Render AppState through `coco_tui::render` and return the buffer
-    /// as a newline-separated string. Suitable for `assert!(s.contains
-    /// (...))` checks. Whitespace at end-of-line is preserved verbatim.
+    /// Render AppState through the native surface and return the buffer as a
+    /// newline-separated string. Suitable for `assert!(s.contains(...))`
+    /// checks. Whitespace at end-of-line is preserved verbatim.
     pub fn render_to_string(&mut self) -> Result<String> {
-        let state = &self.state;
-        self.terminal
-            .draw(|frame| {
-                let _layout = render::render(frame, state);
-            })
-            .context("render TUI to TestBackend")?;
-        let buf = self.terminal.backend().buffer().clone();
-        let mut out = String::new();
-        for y in 0..buf.area.height {
-            for x in 0..buf.area.width {
-                out.push_str(buf[(x, y)].symbol());
-            }
-            out.push('\n');
-        }
-        Ok(out)
+        Ok(coco_tui::testing::render_native_surface_to_string(
+            &self.state,
+            self.terminal_width,
+            self.terminal_height,
+        ))
     }
 
     /// Convenience: every tool-name that started executing during the

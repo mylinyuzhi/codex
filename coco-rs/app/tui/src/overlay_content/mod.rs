@@ -1,4 +1,4 @@
-//! Overlay rendering — one file per category to stay under the 800-LoC
+//! Overlay content builders — one file per category to stay under the 800-LoC
 //! module-size guideline.
 //!
 //! Each submodule produces `(title, body, border_color)` for the caller to
@@ -17,59 +17,11 @@ mod settings;
 mod transcript;
 
 use ratatui::prelude::*;
-use ratatui::widgets::Block;
-use ratatui::widgets::Borders;
-use ratatui::widgets::Clear;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
-use crate::presentation::layout;
 use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
 use crate::state::Overlay;
-
-/// Render a modal overlay centered on screen.
-pub(crate) fn render_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    overlay: &Overlay,
-    state: &AppState,
-    styles: UiStyles<'_>,
-) {
-    // CommandPalette renders inline above the input area as a borderless
-    // suggestion list (handled by the active viewport renderer).
-    // Mirrors TS `PromptInputFooterSuggestions` — no centered modal.
-    if matches!(overlay, Overlay::CommandPalette(_)) {
-        return;
-    }
-
-    if let Overlay::ModelPicker(m) = overlay {
-        pickers::render_model_picker(frame, area, m, styles);
-        return;
-    }
-
-    let (title, body, border_color) = overlay_content(overlay, state, styles);
-
-    let width = ((area.width as u32 * 70 / 100) as u16).clamp(40, 100);
-    let height = body
-        .lines()
-        .count()
-        .saturating_add(4)
-        .min(u16::MAX as usize) as u16;
-    let overlay_area = layout::centered_fixed_area(area, width, height);
-
-    frame.render_widget(Clear, overlay_area);
-
-    let content = Paragraph::new(body).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(Style::default().fg(border_color)),
-    );
-
-    frame.render_widget(content, overlay_area);
-}
 
 /// Produce (title, body, border_color) for every overlay variant.
 pub(crate) fn overlay_content(
@@ -117,9 +69,8 @@ pub(crate) fn overlay_content(
         Overlay::PlanApproval(p) => confirm::plan_approval_content(p, styles),
         Overlay::MemoryDialog(m) => pickers::memory_dialog_content(m, styles),
         Overlay::Transcript(t) => transcript::transcript_overlay_content(state, t, styles),
-        // CommandPalette renders inline (handled by the early-return in
-        // `render_overlay`). The match remains exhaustive but the arm is
-        // unreachable.
+        // CommandPalette is placed inline by `surface::overlay`; this content
+        // adapter remains exhaustive but the arm is unreachable.
         Overlay::CommandPalette(_) => unreachable!("CommandPalette renders inline above input"),
     }
 }

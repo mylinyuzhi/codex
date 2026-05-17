@@ -4,7 +4,8 @@ use super::*;
 fn test_generate_result_new() {
     let content = vec![AssistantContentPart::text("Hello")];
     let usage = Usage::new(10, 5);
-    let result = LanguageModelV4GenerateResult::new(content, usage.clone(), FinishReason::stop());
+    let result =
+        LanguageModelV4GenerateResult::new(content, usage.clone(), FinishReason::end_turn());
     assert_eq!(result.content.len(), 1);
     assert_eq!(result.usage, usage);
     assert!(result.finish_reason.is_stop());
@@ -60,7 +61,8 @@ fn test_generate_result_text_content_none() {
         AssistantContentPart::text("Hello"),
         AssistantContentPart::text("World"),
     ];
-    let result = LanguageModelV4GenerateResult::new(content, Usage::empty(), FinishReason::stop());
+    let result =
+        LanguageModelV4GenerateResult::new(content, Usage::empty(), FinishReason::end_turn());
     // text_content returns None when there's more than one part
     assert!(result.text_content().is_none());
 }

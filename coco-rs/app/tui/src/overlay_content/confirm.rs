@@ -1,4 +1,4 @@
-//! Confirmation dialog renderers.
+//! Confirmation dialog content builders.
 
 use ratatui::prelude::Color;
 

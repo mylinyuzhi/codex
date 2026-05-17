@@ -4,7 +4,6 @@
 
 use std::time::Instant;
 
-use ratatui::backend::Backend;
 use ratatui::text::Line;
 
 use crate::state::session::ChatMessage;
@@ -18,6 +17,7 @@ use crate::surface::history_lines::render_replay_history_lines;
 use crate::surface::history_reflow::HistoryReflowState;
 use crate::surface::history_reflow::HistoryViewportChange;
 use crate::surface::history_reflow::HistoryWidthChange;
+use crate::surface::terminal::SurfaceBackend;
 use crate::surface::terminal::SurfaceTerminal;
 
 #[derive(Debug, Default, Clone)]
@@ -66,7 +66,7 @@ impl SurfaceHistoryDriver {
         options: HistoryLineRenderOptions<'_>,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
-        B: Backend,
+        B: SurfaceBackend,
     {
         let header_fingerprint = line_fingerprint(&session_header);
         if self
@@ -114,7 +114,7 @@ impl SurfaceHistoryDriver {
         stream_active: bool,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
-        B: Backend,
+        B: SurfaceBackend,
     {
         let outcome = self.replay_lines(
             terminal,
@@ -137,7 +137,7 @@ impl SurfaceHistoryDriver {
         stream_active: bool,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
-        B: Backend,
+        B: SurfaceBackend,
     {
         let replay = render_replay_history_lines(messages, options, DEFAULT_MAX_REFLOW_ROWS).lines;
         let outcome = self.replay_lines(terminal, session_header, messages, replay)?;
@@ -165,7 +165,7 @@ impl SurfaceHistoryDriver {
         message_lines: Vec<Line<'static>>,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
-        B: Backend,
+        B: SurfaceBackend,
     {
         let header_fingerprint = line_fingerprint(&session_header);
         let mut lines = session_header;
@@ -178,11 +178,6 @@ impl SurfaceHistoryDriver {
             message_count: messages.len(),
             rows,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn force_replay_due_for_test(&mut self) {
-        self.reflow.force_due_for_test();
     }
 }
 

@@ -13,7 +13,7 @@ pub async fn run() -> Result<()> {
     let mut harness = TuiHarness::builder().build().await?;
 
     let rendered = harness.render_to_string()?;
-    // The buffer is the full TestBackend size — every line carries
+    // The buffer is the full native-surface test size — every line carries
     // `width` cells plus a trailing newline. Some glyphs (icons, box-
     // drawing characters, dim spinners) are multi-byte UTF-8, so the
     // raw byte length can exceed width*height. Assert on line count

@@ -11,34 +11,8 @@ use coco_types::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::StopReason;
 use crate::errors::InferenceError;
-
-// ---------------------------------------------------------------------------
-// Stop reason
-// ---------------------------------------------------------------------------
-
-/// Model stop reason.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StopReason {
-    EndTurn,
-    MaxTokens,
-    StopSequence,
-    ToolUse,
-    ContentFilter,
-}
-
-impl fmt::Display for StopReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EndTurn => write!(f, "end_turn"),
-            Self::MaxTokens => write!(f, "max_tokens"),
-            Self::StopSequence => write!(f, "stop_sequence"),
-            Self::ToolUse => write!(f, "tool_use"),
-            Self::ContentFilter => write!(f, "content_filter"),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Known gateways

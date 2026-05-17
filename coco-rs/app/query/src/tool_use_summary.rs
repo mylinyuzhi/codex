@@ -26,13 +26,24 @@
 //! # Gating
 //!
 //! The caller must enforce:
-//! 1. `settings.tool_use_summary.enabled` (TS `config.gates.emitToolUseSummaries`)
+//! 1. `Feature::ToolUseSummary` enabled (TS `config.gates.emitToolUseSummaries`)
 //! 2. `agent_id.is_none()` (TS `!toolUseContext.agentId` — subagents don't
 //!    surface in the mobile UI, so the Fast-tier call would burn tokens
 //!    for nothing)
 //! 3. tool batch non-empty
 //!
 //! If any gate fails, do not call `generate_tool_use_summary`.
+//!
+//! # Max-tokens policy
+//!
+//! This side-fork does **not** set `QueryParams.max_tokens`. The TS
+//! port hard-coded `64` to match Haiku's behavior, but on reasoning
+//! Fast models (DeepSeek V4, Gemini Flash Thinking, …) a 64-token cap
+//! is exhausted by reasoning before any visible text is emitted —
+//! the model returns `stop_reason=length` with empty text and the
+//! tokens are wasted. Falling back to the model-level `max_output_tokens`
+//! from `ModelInfo` lets reasoning models budget their own thinking,
+//! and lets `coco-config` cap costs per-role.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -242,7 +253,10 @@ pub async fn generate_tool_use_summary(
     let prompt = build_prompt(&input);
     let params = QueryParams {
         prompt,
-        max_tokens: Some(64),
+        // Intentionally `None`: defer to the Fast model's own
+        // `max_output_tokens` (resolved from `ModelInfo` via
+        // `coco-config`). See module docs "Max-tokens policy".
+        max_tokens: None,
         thinking_level: None,
         fast_mode: false,
         tools: None,
@@ -273,8 +287,28 @@ pub async fn generate_tool_use_summary(
     };
 
     let summary = extract_assistant_text(&query_result.content);
-    if summary.is_empty() {
-        tracing::debug!("tool_use_summary generation returned empty text");
+    let stop = query_result.stop_reason;
+    let stop_abnormal = stop.is_some_and(coco_messages::StopReason::is_abnormal);
+    let summary_empty = summary.is_empty();
+
+    // Any not-as-expected outcome surfaces as a single `warn` so the
+    // failure mode is obvious from the log without diffing two
+    // separate lines from the inference layer. Expected =
+    // non-empty text AND a normal stop_reason. Common abnormal cause
+    // on reasoning Fast models: `stop_reason=length` with empty text
+    // because the per-call token budget was consumed by reasoning.
+    if summary_empty || stop_abnormal {
+        tracing::warn!(
+            stop_reason = ?stop,
+            tokens_out = query_result.usage.output_tokens,
+            summary_chars = summary.len(),
+            empty = summary_empty,
+            "tool_use_summary unexpected outcome; check Fast role \
+             (reasoning models exhaust the per-call budget before emitting text)"
+        );
+    }
+
+    if summary_empty {
         return None;
     }
 

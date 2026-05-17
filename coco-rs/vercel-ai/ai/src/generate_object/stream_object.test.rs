@@ -38,7 +38,7 @@ fn make_stream_model(json_text: &str) -> Arc<MockLanguageModel> {
                         provider_metadata: None,
                     }),
                     Ok(LanguageModelV4StreamPart::Finish {
-                        finish_reason: FinishReason::stop(),
+                        finish_reason: FinishReason::end_turn(),
                         usage: Usage::new(10, 5),
                         provider_metadata: None,
                     }),
@@ -111,7 +111,7 @@ async fn test_stream_object_partial_object_stream() {
                         provider_metadata: None,
                     }),
                     Ok(LanguageModelV4StreamPart::Finish {
-                        finish_reason: FinishReason::stop(),
+                        finish_reason: FinishReason::end_turn(),
                         usage: Usage::new(10, 5),
                         provider_metadata: None,
                     }),
@@ -314,7 +314,7 @@ async fn test_stream_object_response_metadata() {
                         provider_metadata: None,
                     }),
                     Ok(LanguageModelV4StreamPart::Finish {
-                        finish_reason: FinishReason::stop(),
+                        finish_reason: FinishReason::end_turn(),
                         usage: Usage::new(10, 5),
                         provider_metadata: None,
                     }),
@@ -376,7 +376,7 @@ async fn test_stream_object_provider_metadata_from_finish() {
                         provider_metadata: None,
                     }),
                     Ok(LanguageModelV4StreamPart::Finish {
-                        finish_reason: FinishReason::stop(),
+                        finish_reason: FinishReason::end_turn(),
                         usage: Usage::new(10, 5),
                         provider_metadata: Some(pm),
                     }),

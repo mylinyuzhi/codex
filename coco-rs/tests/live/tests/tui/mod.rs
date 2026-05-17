@@ -19,14 +19,14 @@
 //!       ↓
 //!  AppState  ←  handle_core_event  (folds events into TUI model)
 //!       ↓
-//!  Terminal<TestBackend>  ←  render::render  (paints model into ratatui buffer)
+//!  native surface renderer  ←  AppState  (paints model into test buffer)
 //! ```
 //!
-//! The harness owns the `TestBackend`-backed terminal, the channels the TUI
-//! and engine use to talk, and a JoinHandle for the background driver. Tests
-//! call `submit("…")` to inject a user prompt, `pump_until_idle()` to drain
-//! the event stream into AppState, and `render_to_string()` to snapshot what
-//! the user would see on a real terminal.
+//! The harness owns the channels the TUI and engine use to talk plus a
+//! JoinHandle for the background driver. Tests call `submit("…")` to inject a
+//! user prompt, `pump_until_idle()` to drain the event stream into AppState,
+//! and `render_to_string()` to snapshot what the user would see on a real
+//! terminal.
 //!
 //! `ScriptedModel` returns a deterministic queue of canned LLM responses —
 //! no API key, no network. Hooks fire against real `coco-hooks` machinery

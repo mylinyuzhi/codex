@@ -1,4 +1,4 @@
-//! AskUserQuestion overlay renderer.
+//! AskUserQuestion overlay content builder.
 
 use ratatui::prelude::Color;
 

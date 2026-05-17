@@ -1,10 +1,6 @@
-//! Snapshot tests for TUI widgets using insta + ratatui TestBackend.
-
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
+//! Snapshot tests for TUI widgets using insta + native surface test rendering.
 
 use crate::i18n::locale_test_guard;
-use crate::render;
 use crate::state::AppState;
 use crate::state::Overlay;
 use crate::state::PermissionDetail;
@@ -15,26 +11,15 @@ use crate::state::session::ChatMessage;
 use crate::state::session::MessageContent;
 use crate::state::session::ToolUseStatus;
 
+fn mark_retained_surface_visible(state: &mut AppState) {
+    state
+        .ui
+        .record_surface_interaction(std::time::Instant::now());
+}
+
 fn render_to_string(state: &AppState, width: u16, height: u16) -> String {
     let _locale = locale_test_guard("en");
-    let backend = TestBackend::new(width, height);
-    let mut terminal = Terminal::new(backend).expect("terminal creation");
-    terminal
-        .draw(|frame| {
-            let _layout = render::render(frame, state);
-        })
-        .expect("render");
-    let buf = terminal.backend().buffer().clone();
-
-    let mut output = String::new();
-    for y in 0..buf.area.height {
-        for x in 0..buf.area.width {
-            let cell = &buf[(x, y)];
-            output.push_str(cell.symbol());
-        }
-        output.push('\n');
-    }
-    output
+    crate::testing::render_native_surface_to_string(state, width, height)
 }
 
 #[test]
@@ -131,6 +116,7 @@ fn test_snapshot_with_permission_overlay() {
         selected_choice: 0,
         original_input: None,
     }));
+    mark_retained_surface_visible(&mut state);
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("permission_overlay", output);
@@ -266,6 +252,7 @@ fn test_snapshot_with_error_overlay() {
         false,
     );
     state.ui.set_overlay(Overlay::Error(body));
+    mark_retained_surface_visible(&mut state);
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("error_overlay_non_retryable", output);

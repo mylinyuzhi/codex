@@ -47,7 +47,7 @@ fn test_no_object_generated_detailed() {
 fn test_no_object_generated_error_with_metadata() {
     let err = NoObjectGeneratedError::new()
         .with_text("partial output")
-        .with_finish_reason(vercel_ai_provider::FinishReason::stop())
+        .with_finish_reason(vercel_ai_provider::FinishReason::end_turn())
         .with_raw_response("raw");
 
     assert_eq!(err.text, Some("partial output".to_string()));

@@ -1,4 +1,4 @@
-//! Transcript overlay renderer.
+//! Transcript overlay content builder.
 
 use ratatui::prelude::Color;
 

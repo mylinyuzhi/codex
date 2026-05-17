@@ -33,7 +33,6 @@ use coco_types::ToolAppState;
 use crate::helpers::budget_pct_used;
 use crate::helpers::convert_to_assistant_content;
 use crate::helpers::extract_last_assistant_text;
-use crate::helpers::parse_stop_reason;
 use crate::helpers::should_continue_for_budget;
 
 use coco_inference::AssistantContentPart;
@@ -1168,10 +1167,15 @@ impl QueryEngine {
                     ) || err_msg.contains("prompt_too_long")
                         || err_msg.contains("context_length")
                     {
-                        warn!("prompt too long (stream open), attempting reactive compaction");
-                        self.do_reactive_compact(&mut *history, &event_tx).await;
-                        last_continue_reason = Some(ContinueReason::ReactiveCompactRetry);
-                        budget.reset_continuations();
+                        last_continue_reason = Some(
+                            self.handle_context_overflow(
+                                &mut *history,
+                                &event_tx,
+                                &mut budget,
+                                "stream_open",
+                            )
+                            .await,
+                        );
                         continue;
                     }
                     let is_capacity = matches!(
@@ -1293,7 +1297,11 @@ impl QueryEngine {
             let mut tool_buffers: std::collections::HashMap<String, StreamingToolCallBuffer> =
                 std::collections::HashMap::new();
             let mut stream_usage: Option<TokenUsage> = None;
-            let mut stream_stop_reason: Option<String> = None;
+            // Typed stop reason — set once by the provider-adapter
+            // seam (see `coco_inference::StopReason` = extended
+            // `UnifiedFinishReason`). The engine matches on the
+            // typed enum directly; no wire-string parsing.
+            let mut stream_stop_reason: Option<coco_messages::StopReason> = None;
             let mut stream_error: Option<String> = None;
             // Captured at `StreamEvent::Finish`; consumed to rebuild
             // `Vec<AssistantContentPart>` for history. `None` until Finish
@@ -1628,6 +1636,7 @@ impl QueryEngine {
                     StreamEvent::Finish {
                         usage,
                         stop_reason,
+                        raw_stop_reason,
                         snapshot,
                         ..
                     } => {
@@ -1636,6 +1645,7 @@ impl QueryEngine {
                             turn,
                             turn_id = %turn_id,
                             stop_reason = %stop_reason,
+                            raw_stop_reason = ?raw_stop_reason,
                             tokens_in = usage.input_tokens,
                             tokens_out = usage.output_tokens,
                             cache_read = usage.cache_read_input_tokens(),
@@ -1647,6 +1657,9 @@ impl QueryEngine {
                         );
                         stream_usage = Some(usage);
                         stream_stop_reason = Some(stop_reason);
+                        // raw_stop_reason is diagnostic only — already
+                        // captured in the debug log above. Drop it.
+                        let _ = raw_stop_reason;
                         break;
                     }
                     StreamEvent::Error { message, .. } => {
@@ -1771,10 +1784,15 @@ impl QueryEngine {
                     continue;
                 }
                 if err_msg.contains("prompt_too_long") || err_msg.contains("context_length") {
-                    warn!("prompt too long (stream), attempting reactive compaction");
-                    self.do_reactive_compact(&mut *history, &event_tx).await;
-                    last_continue_reason = Some(ContinueReason::ReactiveCompactRetry);
-                    budget.reset_continuations();
+                    last_continue_reason = Some(
+                        self.handle_context_overflow(
+                            &mut *history,
+                            &event_tx,
+                            &mut budget,
+                            "mid_stream",
+                        )
+                        .await,
+                    );
                     continue;
                 }
                 if is_capacity_error_message(&err_msg) {
@@ -1904,7 +1922,11 @@ impl QueryEngine {
                 },
             );
 
-            let parsed_stop_reason = stream_stop_reason.as_deref().and_then(parse_stop_reason);
+            // Typed StopReason flows straight from the stream — no
+            // wire-string parsing. `stream_stop_reason` carries the
+            // canonical UnifiedFinishReason set at the
+            // vercel-ai-provider seam.
+            let parsed_stop_reason = stream_stop_reason;
             let assistant_msg = Message::Assistant(coco_messages::AssistantMessage {
                 message: LlmMessage::Assistant {
                     content: content_parts
@@ -1922,14 +1944,87 @@ impl QueryEngine {
                 api_error: None,
             });
 
-            // Max-output-tokens recovery: the model hit `length` stop with no
-            // tool calls (otherwise it's mid-call and we proceed normally).
-            // Phase 1: escalate `max_output_tokens` to 64k and retry without
-            //          persisting the truncated response (TS: query.ts:1199-1221).
-            // Phase 2: if already escalated, keep the partial response and
-            //          inject a "resume" meta user message (TS: query.ts:1223-1249),
-            //          up to MAX_OUTPUT_TOKENS_RECOVERY_LIMIT times.
+            // Content-filter / refusal: no recovery — policy decision,
+            // retry won't change it. Push the partial real response
+            // (may contain a partial refusal explanation from the
+            // model), then synthesize an `api_error`-tagged assistant
+            // message carrying the user-facing explanation, and fall
+            // through to the natural `tool_calls.is_empty()` end-of-turn
+            // exit. TS parity: `services/api/claude.ts:2258-2264`
+            // (`getErrorMessageIfRefusal`) yields the synthetic message
+            // at the stream layer; `query.ts:1262-1265` then short-
+            // circuits stop-hooks when the last message is
+            // `isApiErrorMessage`. coco-rs synthesizes here at the
+            // engine layer because `coco-inference` is provider-agnostic
+            // and can't construct `coco_messages::Message`. Multi-LLM:
+            // every `vercel-ai-<provider>` adapter maps refusal /
+            // safety / recitation / content_filter → typed
+            // `StopReason::ContentFilter` at the seam, so this single
+            // branch covers Anthropic / OpenAI / Google.
             if tool_calls.is_empty()
+                && parsed_stop_reason == Some(coco_messages::StopReason::ContentFilter)
+            {
+                warn!(
+                    turn,
+                    turn_id = %turn_id,
+                    "content-filter / refusal — emitting api_error message and ending turn"
+                );
+                history.push(assistant_msg);
+                history.push(crate::helpers::build_abnormal_stop_api_error_message(
+                    coco_messages::StopReason::ContentFilter,
+                    max_tokens_override.or(self.config.max_tokens),
+                ));
+                // Skip the MaxTokens block below; fall through to the
+                // text-only end-of-turn path that emits TurnCompleted.
+                // No `continue` — we want the loop to exit naturally.
+            }
+            // Context-window-exceeded: input + output > model context window.
+            // Anthropic-only finish reason (extended-context beta); for other
+            // providers the same condition arrives as an HTTP 400 handled at
+            // the stream-open / mid-stream sites above. Always route to
+            // [`Self::handle_context_overflow`] — escalating
+            // `max_output_tokens` cannot help when the *input* already
+            // exceeds the window. Push the synthetic api_error first so the
+            // transcript records the precipitating event before compaction
+            // rewrites history; push the partial `assistant_msg` so the
+            // truncated content remains visible to the model post-compact.
+            else if tool_calls.is_empty()
+                && parsed_stop_reason == Some(coco_messages::StopReason::ContextWindowExceeded)
+            {
+                let effective_max = max_tokens_override.or(self.config.max_tokens);
+                history.push(assistant_msg);
+                history.push(crate::helpers::build_abnormal_stop_api_error_message(
+                    coco_messages::StopReason::ContextWindowExceeded,
+                    effective_max,
+                ));
+                last_continue_reason = Some(
+                    self.handle_context_overflow(
+                        &mut *history,
+                        &event_tx,
+                        &mut budget,
+                        "finish_reason",
+                    )
+                    .await,
+                );
+                continue;
+            }
+            // Max-output-tokens recovery: the model hit the output budget
+            // with no tool calls. Phase 1: escalate `max_output_tokens` to
+            // 64k and retry without persisting the truncated response (TS:
+            // query.ts:1199-1221). Phase 2: if already escalated, keep the
+            // partial response and inject a "resume" meta user message (TS:
+            // query.ts:1223-1249), up to `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT`
+            // times.
+            //
+            // **TS parity for the synthetic api_error message:** TS yields
+            // `createAssistantAPIErrorMessage` AT THE STREAM LAYER for every
+            // `max_tokens` event (`services/api/claude.ts:2266-2292`), even when
+            // the engine will escalate / recover. coco-rs mirrors this — each of
+            // the three sub-branches (escalate / recover / fall-through) pushes
+            // the synthetic message so transcripts and the UI carry the explicit
+            // truncation marker, not just a silently-rewritten "[No message
+            // content]" stub.
+            else if tool_calls.is_empty()
                 && parsed_stop_reason == Some(coco_messages::StopReason::MaxTokens)
             {
                 // Escalation only helps when the user's configured limit is
@@ -1940,11 +2035,20 @@ impl QueryEngine {
                     .config
                     .max_tokens
                     .is_some_and(|v| v >= ESCALATED_MAX_TOKENS);
+                let effective_max = max_tokens_override.or(self.config.max_tokens);
                 if max_tokens_override.is_none() && !user_already_at_escalated {
                     warn!(
                         escalated_to = ESCALATED_MAX_TOKENS,
                         "max_tokens hit, escalating"
                     );
+                    // TS parity: yield the synthetic api_error message even
+                    // though we're about to escalate — the user sees the
+                    // signal once, before the retry overwrites the
+                    // immediate UI state.
+                    history.push(crate::helpers::build_abnormal_stop_api_error_message(
+                        coco_messages::StopReason::MaxTokens,
+                        effective_max,
+                    ));
                     max_tokens_override = Some(ESCALATED_MAX_TOKENS);
                     last_continue_reason = Some(ContinueReason::MaxOutputTokensEscalate);
                     continue;
@@ -1955,6 +2059,10 @@ impl QueryEngine {
                         "max_tokens hit after escalation, injecting resume nudge"
                     );
                     history.push(assistant_msg);
+                    history.push(crate::helpers::build_abnormal_stop_api_error_message(
+                        coco_messages::StopReason::MaxTokens,
+                        effective_max,
+                    ));
                     history.push(coco_messages::create_meta_message(
                         "Output token limit hit. Resume directly — no apology, no recap of \
                          what you were doing. Pick up mid-thought if that is where the cut \
@@ -1968,10 +2076,28 @@ impl QueryEngine {
                     });
                     continue;
                 }
-                // Recovery exhausted — fall through and terminate the session normally.
+                // Recovery exhausted — push real + synthetic api_error and
+                // fall through to terminate the session normally.
+                history.push(assistant_msg);
+                history.push(crate::helpers::build_abnormal_stop_api_error_message(
+                    coco_messages::StopReason::MaxTokens,
+                    effective_max,
+                ));
+            } else {
+                history.push(assistant_msg);
             }
 
-            history.push(assistant_msg);
+            // Backward-compat: the ContentFilter branch above already pushed
+            // both `assistant_msg` and the synthetic message; the MaxTokens
+            // exhaust branch pushed both too; the MaxTokens escalate/recover
+            // branches pushed assistant_msg in some sub-cases. Normal-path
+            // (no abnormal stop_reason matched) takes the `else` arm above
+            // and pushes here. NB: do **not** push again here.
+            //
+            // (Earlier the line below was the only `history.push(assistant_msg)`
+            // call site; the refactor moved it into the branches above so the
+            // synthetic api_error message lands adjacent to its real
+            // counterpart.)
 
             // Streaming commit point: flush the StreamingHandle to
             // drain inflight safe tools, run queued unsafe tools
@@ -2038,6 +2164,15 @@ impl QueryEngine {
             // is enabled and we're well under budget: inject a nudge and loop.
             // TS: `query.ts:1308-1340` `feature('TOKEN_BUDGET')` path.
             if tool_calls.is_empty() {
+                // TS `handleStopHooks` saves cache-safe params and
+                // starts promptSuggestion before executing Stop hooks.
+                // Keep transcript flush in the same helper so any
+                // assistant text is resumable even if a Stop hook blocks
+                // and the process exits before the retry turn.
+                self.flush_successful_turn_state(&mut *history).await;
+                self.maybe_spawn_prompt_suggestion_after_stop(&event_tx)
+                    .await;
+
                 // Stop hooks: let external hooks block session completion and
                 // inject feedback into the conversation. If any Stop hook
                 // blocks, the loop continues with the feedback visible to the
@@ -2058,11 +2193,37 @@ impl QueryEngine {
                     )
                     .await
                     {
+                        Ok(agg) if agg.prevent_continuation => {
+                            info!("Stop hook prevented continuation");
+                            self.flush_successful_turn_state(&mut *history).await;
+                            self.emit_turn_completed(
+                                &event_tx,
+                                turn_id,
+                                usage,
+                                history.messages.len(),
+                            )
+                            .await;
+                            return Ok(make_query_result(
+                                response_text,
+                                turn,
+                                total_usage,
+                                cost_tracker,
+                                /*cancelled*/ false,
+                                /*budget_exhausted*/ false,
+                                last_continue_reason,
+                                start_time,
+                                api_time_ms,
+                                Some("stop_hook_prevented".into()),
+                                permission_denials,
+                                history.messages.clone(),
+                            ));
+                        }
                         Ok(agg) if agg.is_blocked() => {
                             if let Some(err) = &agg.blocking_error {
                                 let feedback = orchestration::format_stop_hook_message(err);
                                 warn!(%feedback, "Stop hook blocked session completion");
                                 history.push(coco_messages::create_meta_message(&feedback));
+                                self.flush_successful_turn_state(&mut *history).await;
                                 last_continue_reason = Some(ContinueReason::StopHookBlocking);
                                 // Mark the recursion so the next Stop
                                 // firing carries `stop_hook_active: true`
@@ -2097,26 +2258,8 @@ impl QueryEngine {
                     tokens_out = usage.output_tokens,
                     "no tool calls, conversation complete"
                 );
-                // D8: text-only end-of-turn — `finalize_turn_post_tools`
-                // never runs on this path, so save the cache-safe
-                // params here for post-turn fork features.
-                self.save_post_turn_cache_params(history).await;
-                self.maybe_spawn_prompt_suggestion_after_stop(&event_tx)
+                self.emit_turn_completed(&event_tx, turn_id, usage, history.messages.len())
                     .await;
-                // SDK protocol contract: every turn that emitted a
-                // `TurnStarted` must close with a terminal turn event.
-                // The tool-execution branches reach `TurnCompleted` via
-                // `finalize_turn_post_tools`; this text-only branch did
-                // not, leaving SDK clients waiting forever on streams
-                // that never produce a terminator. Emit it directly.
-                let _ = emit_protocol(
-                    &event_tx,
-                    crate::ServerNotification::TurnCompleted(coco_types::TurnCompletedParams {
-                        turn_id: Some(turn_id),
-                        usage,
-                    }),
-                )
-                .await;
                 return Ok(make_query_result(
                     response_text,
                     turn,

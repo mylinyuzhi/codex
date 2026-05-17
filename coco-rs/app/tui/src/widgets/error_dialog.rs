@@ -1,4 +1,4 @@
-//! Error dialog — renders the body text that `render_overlays.rs` wraps in
+//! Error dialog — renders the body text that `overlay_content` wraps in
 //! a centered modal for `Overlay::Error`.
 //!
 //! TS reference: src/components/ErrorBanner.tsx (inline) and the

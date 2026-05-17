@@ -1,9 +1,11 @@
 //! Shared picker view models and renderer helpers.
 
+#[cfg(test)]
 use std::ops::Range;
 
 use ratatui::prelude::*;
 
+#[cfg(test)]
 use super::layout;
 use super::styles::UiStyles;
 use crate::i18n::t;
@@ -17,6 +19,7 @@ use crate::state::QuickOpenOverlay;
 use crate::state::SessionBrowserOverlay;
 
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) enum PickerRow<'a, T> {
     Blank,
     Header(&'a str),
@@ -24,11 +27,13 @@ pub(crate) enum PickerRow<'a, T> {
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct PickerListView<'a, T> {
     pub(crate) rows: Vec<PickerRow<'a, T>>,
     pub(crate) visible: Range<usize>,
 }
 
+#[cfg(test)]
 pub(crate) fn grouped_list<'a, 'b, T, F>(
     entries: &'b [&'a T],
     selected: Option<usize>,
@@ -67,16 +72,19 @@ where
     PickerListView { rows, visible }
 }
 
+#[cfg(test)]
 pub(crate) trait SpanBgOpt<'a> {
     fn bg_opt(self, bg: Option<Color>) -> Span<'a>;
 }
 
+#[cfg(test)]
 impl<'a> SpanBgOpt<'a> for Span<'a> {
     fn bg_opt(self, bg: Option<Color>) -> Span<'a> {
         if let Some(bg) = bg { self.bg(bg) } else { self }
     }
 }
 
+#[cfg(test)]
 pub(crate) fn pad_line(mut line: Line<'static>, width: usize, bg: Option<Color>) -> Line<'static> {
     let used = line.width();
     if used < width {
@@ -91,10 +99,12 @@ pub(crate) fn pad_line(mut line: Line<'static>, width: usize, bg: Option<Color>)
     line
 }
 
+#[cfg(test)]
 pub(crate) fn blank_line(width: usize) -> Line<'static> {
     Line::from(Span::raw(" ".repeat(width)))
 }
 
+#[cfg(test)]
 pub(crate) fn collapse_hints(hints: &str, width: usize) -> String {
     let hints = hints.trim();
     if width == 0 {

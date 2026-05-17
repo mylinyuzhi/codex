@@ -65,12 +65,12 @@ fn cycle_effort_advances_through_supported_levels() {
         Some(ReasoningEffort::Low),
     );
     cycle_model_effort(&mut s, 1);
-    let Some(Overlay::ModelPicker(m)) = &s.ui.overlay else {
+    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(m.effort, Some(ReasoningEffort::Medium));
     cycle_model_effort(&mut s, 1);
-    let Some(Overlay::ModelPicker(m)) = &s.ui.overlay else {
+    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(m.effort, Some(ReasoningEffort::High));
@@ -90,13 +90,13 @@ fn cycle_effort_wraps_around_at_endpoints() {
     );
     // Wrap forward from High → Low.
     cycle_model_effort(&mut s, 1);
-    let Some(Overlay::ModelPicker(m)) = &s.ui.overlay else {
+    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(m.effort, Some(ReasoningEffort::Low));
     // Wrap back from Low → High.
     cycle_model_effort(&mut s, -1);
-    let Some(Overlay::ModelPicker(m)) = &s.ui.overlay else {
+    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(m.effort, Some(ReasoningEffort::High));
@@ -106,7 +106,7 @@ fn cycle_effort_wraps_around_at_endpoints() {
 fn cycle_effort_noops_when_no_supported_levels() {
     let mut s = picker(vec![entry("m", &[], None)], 0, None);
     cycle_model_effort(&mut s, 1);
-    let Some(Overlay::ModelPicker(m)) = &s.ui.overlay else {
+    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
         panic!()
     };
     assert!(m.effort.is_none());
@@ -117,7 +117,7 @@ fn cycle_effort_noops_outside_picker() {
     let mut s = AppState::new();
     // No overlay → cycle_effort should silently no-op (no panic).
     cycle_model_effort(&mut s, 1);
-    assert!(s.ui.overlay.is_none());
+    assert!(!s.ui.has_overlay());
 }
 
 #[tokio::test]
@@ -134,7 +134,10 @@ async fn confirm_model_picker_blocks_unavailable_provider() {
     confirm(&mut s, &tx).await;
 
     assert!(rx.try_recv().is_err(), "no model-change command sent");
-    assert!(matches!(s.ui.overlay, Some(Overlay::ModelPicker(_))));
+    assert!(matches!(
+        s.ui.active_overlay(),
+        Some(Overlay::ModelPicker(_))
+    ));
     assert_eq!(s.ui.toasts.len(), 1);
     assert_eq!(s.ui.toasts[0].severity, ToastSeverity::Warning);
     assert!(s.ui.toasts[0].message.contains("TEST_API_KEY"));
@@ -168,7 +171,7 @@ async fn confirm_memory_dialog_sends_open_memory_file_command() {
         panic!("expected OpenMemoryFile")
     };
     assert_eq!(sent_path, path);
-    assert!(state.ui.overlay.is_none(), "overlay dismissed after select");
+    assert!(!state.ui.has_overlay(), "overlay dismissed after select");
 }
 
 #[tokio::test]
@@ -191,7 +194,7 @@ async fn confirm_memory_dialog_keeps_non_file_rows_open() {
 
     assert!(rx.try_recv().is_err(), "no editor command for non-file row");
     assert!(
-        matches!(state.ui.overlay, Some(Overlay::MemoryDialog(_))),
+        matches!(state.ui.active_overlay(), Some(Overlay::MemoryDialog(_))),
         "overlay stays open"
     );
     assert_eq!(state.ui.toasts.len(), 1);
@@ -261,7 +264,7 @@ async fn confirm_with_choice_splices_user_choice_into_updated_input() {
     let payload = updated_input.expect("updated_input populated");
     assert_eq!(payload["plan"], "do the thing");
     assert_eq!(payload["user_choice"], "yes-clear-context");
-    assert!(s.ui.overlay.is_none(), "overlay dismissed after commit");
+    assert!(!s.ui.has_overlay(), "overlay dismissed after commit");
 }
 
 #[tokio::test]
@@ -338,7 +341,7 @@ async fn confirm_classic_yes_no_dismisses_without_response() {
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
 
-    assert!(s.ui.overlay.is_none(), "overlay dismissed");
+    assert!(!s.ui.has_overlay(), "overlay dismissed");
     assert!(rx.try_recv().is_err(), "no ApprovalResponse on Enter");
 }
 
@@ -346,17 +349,17 @@ async fn confirm_classic_yes_no_dismisses_without_response() {
 fn nav_advances_selected_choice_with_saturation() {
     let mut s = permission_with_choices(&["a", "b", "c"], 0);
     nav(&mut s, 1);
-    let Some(Overlay::Permission(p)) = &s.ui.overlay else {
+    let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(p.selected_choice, 1);
     nav(&mut s, 5); // saturates at last
-    let Some(Overlay::Permission(p)) = &s.ui.overlay else {
+    let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(p.selected_choice, 2);
     nav(&mut s, -10); // saturates at first
-    let Some(Overlay::Permission(p)) = &s.ui.overlay else {
+    let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(p.selected_choice, 0);

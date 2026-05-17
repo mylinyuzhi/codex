@@ -249,7 +249,7 @@ impl<T: Send + 'static> StreamObjectResult<T> {
                 // Sender dropped — return defaults
                 return StreamObjectFinishShared {
                     usage: Usage::default(),
-                    finish_reason: FinishReason::stop(),
+                    finish_reason: FinishReason::end_turn(),
                     warnings: Vec::new(),
                     response: None,
                     provider_metadata: None,
@@ -426,7 +426,7 @@ async fn stream_object_inner<T: DeserializeOwned + Send + 'static>(
     // Process the stream
     let mut full_text = String::new();
     let mut usage = Usage::default();
-    let mut finish_reason = FinishReason::stop();
+    let mut finish_reason = FinishReason::end_turn();
     let mut finish_provider_metadata: Option<ProviderMetadata> = None;
     let mut stream = stream_result.stream;
     let mut last_partial: Option<serde_json::Value> = None;

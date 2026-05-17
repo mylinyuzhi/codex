@@ -7,6 +7,9 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+testing = []
+
 [dependencies]
 coco-config.workspace = true
 coco-types.workspace = true
@@ -45,3 +48,4 @@ libc.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 insta.workspace = true
 pretty_assertions.workspace = true
+vt100.workspace = true

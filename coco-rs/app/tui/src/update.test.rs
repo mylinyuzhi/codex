@@ -75,13 +75,13 @@ fn try_local_command_intercepts_rewind_family() {
     assert!(try_local_command(&mut state, "/rewind"));
     // Rewind opens an overlay or surfaces a toast; either way the command
     // was handled locally (no agent round-trip).
-    let handled = state.ui.overlay.is_some() || !state.ui.toasts.is_empty();
+    let handled = state.ui.has_overlay() || !state.ui.toasts.is_empty();
     assert!(handled, "rewind should affect ui state");
 
-    state.ui.overlay = None;
+    state.ui.clear_overlays();
     state.ui.toasts.clear();
     assert!(try_local_command(&mut state, "/checkpoint last"));
-    let handled = state.ui.overlay.is_some() || !state.ui.toasts.is_empty();
+    let handled = state.ui.has_overlay() || !state.ui.toasts.is_empty();
     assert!(handled, "checkpoint last should affect ui state");
 }
 
@@ -248,7 +248,7 @@ async fn clear_screen_also_leaves_no_overlay() {
 
     assert!(state.session.messages.is_empty());
     // Overlay is intentionally preserved — ClearScreen scopes to transcript.
-    assert!(state.ui.overlay.is_some());
+    assert!(state.ui.has_overlay());
 }
 
 // ── /clear family ──
@@ -325,7 +325,7 @@ async fn slash_clear_dismisses_overlay_and_toasts() {
     let (tx, _rx) = drained_channel();
 
     assert!(super::edit::try_local_clear(&mut state, "/clear", &tx).await);
-    assert!(state.ui.overlay.is_none());
+    assert!(!state.ui.has_overlay());
     assert_eq!(state.ui.toasts.len(), 1);
 }
 
@@ -376,7 +376,7 @@ async fn plan_exit_deny_renders_rejection_and_keeps_plan_mode() {
     // Mode stays Plan (user chose to keep planning).
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
     // Overlay dismissed.
-    assert!(state.ui.overlay.is_none());
+    assert!(!state.ui.has_overlay());
     // A "User rejected Claude's plan" system message was injected.
     let last = state
         .session
@@ -408,7 +408,7 @@ async fn plan_exit_approve_accept_edits_switches_mode() {
     handle_command(&mut state, TuiCommand::Approve, &tx).await;
 
     assert_eq!(state.session.permission_mode, PermissionMode::AcceptEdits);
-    assert!(state.ui.overlay.is_none());
+    assert!(!state.ui.has_overlay());
     // The runner is notified via SetPermissionMode so the engine's
     // config is updated for the next turn.
     let cmd = rx.try_recv().expect("SetPermissionMode must be sent");
@@ -438,19 +438,19 @@ async fn plan_exit_tab_cycles_through_targets_with_bypass_gate() {
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(ref p)) = state.ui.overlay else {
+    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
         panic!("overlay should still be PlanExit")
     };
     assert_eq!(p.next_mode, PlanExitTarget::AcceptEdits);
 
     handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(ref p)) = state.ui.overlay else {
+    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(p.next_mode, PlanExitTarget::BypassPermissions);
 
     handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(ref p)) = state.ui.overlay else {
+    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(p.next_mode, PlanExitTarget::RestorePrePlan);
@@ -471,14 +471,14 @@ async fn plan_exit_tab_excludes_bypass_when_gate_off() {
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(ref p)) = state.ui.overlay else {
+    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(p.next_mode, PlanExitTarget::AcceptEdits);
 
     // Wraps back to Restore — Bypass is not offered.
     handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(ref p)) = state.ui.overlay else {
+    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(p.next_mode, PlanExitTarget::RestorePrePlan);
@@ -498,7 +498,10 @@ async fn cycle_into_bypass_shows_confirmation_overlay() {
     // Mode must NOT change until the user confirms.
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
     assert!(
-        matches!(state.ui.overlay, Some(Overlay::BypassPermissions(_))),
+        matches!(
+            state.ui.active_overlay(),
+            Some(Overlay::BypassPermissions(_))
+        ),
         "BypassPermissionsOverlay should be shown"
     );
     assert!(rx.try_recv().is_err(), "should not flip mode until approve");
@@ -524,7 +527,7 @@ async fn approve_bypass_overlay_flips_mode_and_toasts() {
         state.session.permission_mode,
         PermissionMode::BypassPermissions
     );
-    assert!(state.ui.overlay.is_none());
+    assert!(!state.ui.has_overlay());
     let toasted = state
         .ui
         .toasts
@@ -561,7 +564,7 @@ async fn deny_bypass_overlay_keeps_mode() {
     handle_command(&mut state, TuiCommand::Deny, &tx).await;
 
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
-    assert!(state.ui.overlay.is_none());
+    assert!(!state.ui.has_overlay());
     assert!(
         rx.try_recv().is_err(),
         "deny must not emit SetPermissionMode"
@@ -583,7 +586,7 @@ async fn cycle_into_auto_shows_opt_in() {
 
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
     assert!(
-        matches!(state.ui.overlay, Some(Overlay::AutoModeOptIn(_))),
+        matches!(state.ui.active_overlay(), Some(Overlay::AutoModeOptIn(_))),
         "AutoModeOptIn overlay should be shown"
     );
     assert!(rx.try_recv().is_err());
@@ -601,7 +604,7 @@ async fn cycle_into_safe_mode_applies_immediately() {
 
     // Default → AcceptEdits with no confirmation overlay.
     assert_eq!(state.session.permission_mode, PermissionMode::AcceptEdits);
-    assert!(state.ui.overlay.is_none());
+    assert!(!state.ui.has_overlay());
     let toasted = state
         .ui
         .toasts
@@ -739,7 +742,7 @@ async fn esc_on_memory_dialog_records_transcript_result() {
 
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
 
-    assert!(state.ui.overlay.is_none(), "memory dialog dismissed");
+    assert!(!state.ui.has_overlay(), "memory dialog dismissed");
     assert!(state.ui.toasts.iter().any(|t| {
         t.severity == ToastSeverity::Info && t.message.contains("Cancelled memory editing")
     }));

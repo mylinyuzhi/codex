@@ -1,8 +1,5 @@
-//! Header chrome shared by legacy frame rendering and the native surface.
+//! Header chrome shared by native history and overlay presentation.
 
-use ratatui::layout::Constraint;
-use ratatui::layout::Layout;
-use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -13,9 +10,6 @@ use crate::i18n::t;
 use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
 
-/// Total height of the header band (logo + info rows).
-pub(crate) const HEADER_HEIGHT: u16 = 3;
-
 /// Logo gutter width (9 logo cells + 2-space padding).
 const HEADER_LOGO_WIDTH: u16 = 11;
 
@@ -25,14 +19,6 @@ const COCO_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) struct HeaderBarView {
     pub(crate) logo_lines: Vec<Line<'static>>,
     pub(crate) info_lines: Vec<Line<'static>>,
-}
-
-pub(crate) fn header_areas(area: Rect) -> [Rect; 2] {
-    let logo_w = HEADER_LOGO_WIDTH.min(area.width);
-    area.layout(&Layout::horizontal([
-        Constraint::Length(logo_w),
-        Constraint::Min(0),
-    ]))
 }
 
 /// Header band: 3-row COCO mascot + 3 info rows.

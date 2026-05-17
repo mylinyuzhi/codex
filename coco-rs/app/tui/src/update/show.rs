@@ -155,10 +155,10 @@ fn current_model_for_role(state: &AppState, role: ModelRole) -> Option<(String, 
 /// Cycle the picker's target role by `delta`, rebuilding entries for
 /// the new role. Called from the keybind layer via Tab / Shift+Tab.
 pub(super) fn cycle_model_role(state: &mut AppState, delta: i32) {
-    if !matches!(state.ui.overlay, Some(Overlay::ModelPicker(_))) {
+    if !matches!(state.ui.active_overlay(), Some(Overlay::ModelPicker(_))) {
         return;
     }
-    let role = match &state.ui.overlay {
+    let role = match state.ui.active_overlay() {
         Some(Overlay::ModelPicker(m)) => m.role,
         _ => return,
     };
@@ -171,7 +171,7 @@ pub(super) fn cycle_model_role(state: &mut AppState, delta: i32) {
     let effort = entries
         .get(selected as usize)
         .and_then(|e| e.default_effort);
-    if let Some(Overlay::ModelPicker(m)) = &mut state.ui.overlay {
+    if let Some(Overlay::ModelPicker(m)) = state.ui.active_overlay_mut() {
         m.role = next;
         m.entries = entries;
         m.filter.clear();

@@ -2983,15 +2983,27 @@ fn spawn_auto_title_task(
         };
 
         let raw = match client.query(&params).await {
-            Ok(result) => result
-                .content
-                .iter()
-                .filter_map(|c| match c {
-                    AssistantContent::Text(t) => Some(t.text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(""),
+            Ok(result) => {
+                let text = result
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        AssistantContent::Text(t) => Some(t.text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                let stop = result.stop_reason;
+                if text.is_empty() || stop.is_some_and(coco_messages::StopReason::is_abnormal) {
+                    warn!(
+                        stop_reason = ?stop,
+                        tokens_out = result.usage.output_tokens,
+                        text_chars = text.len(),
+                        "title generation unexpected outcome — session keeps default title"
+                    );
+                }
+                text
+            }
             Err(_) => return,
         };
 

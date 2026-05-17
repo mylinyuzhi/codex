@@ -38,7 +38,7 @@ pub enum KeybindingContext {
 
 /// Determine the active keybinding context from state.
 pub fn active_context(state: &AppState) -> KeybindingContext {
-    if let Some(ref overlay) = state.ui.overlay {
+    if let Some(overlay) = state.ui.active_overlay() {
         return match overlay {
             // Filterable list overlays
             Overlay::ModelPicker(_) => KeybindingContext::ModelPicker,

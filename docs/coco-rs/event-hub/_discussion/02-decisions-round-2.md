@@ -13,7 +13,7 @@ These were confirmed by reading source before finalizing decisions below:
 |------|--------|
 | `/clear` **rotates `session_id`** — generates a fresh `Uuid::new_v4()` and propagates it to id-keyed subsystems so post-clear writes don't land in the old session's directory | `app/cli/src/session_runtime.rs:2706-2707` (`clear_conversation` → `adopt_session_id`) |
 | The session registry `~/.coco/sessions/<pid>.json` is written by `SessionRegistration` with fields: `pid`, `session_id`, `cwd`, `started_at`, `kind`, `entrypoint?`, `name?`, `bridge_session_id?`, `updated_at?`, `status?`, `waiting_for?`. **No `instance_id` field today.** | `app/session/src/concurrent_sessions.rs:94-116` |
-| TUI status bar (`render_status_bar`) already renders 8 indicator chips: model · thinking · permission · chord · tokens · ctx% · mcp · msgs | `app/tui/src/render.rs:861-1014` |
+| TUI status bar (`render_status_bar`) already renders 8 indicator chips: model · thinking · permission · chord · tokens · ctx% · mcp · msgs | `app/tui/src/surface/viewport.rs` + `app/tui/src/presentation/footer.rs` |
 
 **Implication for D2**: because `session_id` rotates on `/clear`, a single
 process lifetime can contain *multiple* `session_id` values in sequence. The
@@ -483,9 +483,9 @@ index both benefit by the same factor.
 
 ### B.1 What this would actually be
 
-A 9th chip on the existing TUI status bar (`app/tui/src/render.rs:861-1014`,
-which today shows model, thinking, permission, chord, tokens, ctx%, mcp,
-msgs). Probably one of:
+A 9th chip on the existing TUI status bar (`surface::viewport` plus
+`presentation::footer`, which today shows model, thinking, permission, chord,
+tokens, ctx%, mcp, msgs). Probably one of:
 
 - **Dot variant**: a small colored dot — `●` green / yellow / red — next
   to a label like `hub`.

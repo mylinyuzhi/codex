@@ -338,7 +338,7 @@ reject reason so it can be safely logged.
 | `forkedAgent.ts` post-turn cache slot | **closed (D8 + D1/D2)** | `CacheSafeParams` slot + `ForkDispatcher` trait + production CLI impl; `/btw` and `promptSuggestion` consume it |
 | Memory snapshot file IO bodies | **closed (E1)** | All snapshot IO + secret guard in `coco_memory::team_sync` |
 | Team-memory sync watcher | **out of scope (C2)** | Server-coupled to Anthropic backend; cross-machine sync delegated to git/S3/etc |
-| TUI components for coordinator/teammate | **closed (E4)** | `CoordinatorPanel`, `TeammateViewHeader`, `SubagentPanel`, `TeammateSpinner` all wired in `render.rs` |
+| TUI components for coordinator/teammate | **closed (E4)** | `CoordinatorPanel`, `TeammateViewHeader`, `SubagentPanel`, `TeammateSpinner` are wired through `presentation::activity`, `surface::viewport`, and focused widgets |
 | AgentSummary — one-shot at completion | **closed (E3)** | Via `SideQueryHandle`; populates `SubAgentState.last_message` |
 | AgentSummary — periodic (every 30 s) | **closed (bg path)** | The live `TaskOutputDelta` streaming infrastructure unblocked this — the bg AgentTool path now spawns a 30s timer per spawn that reads `AgentTaskRegistry::read_output(task_id)`, hands the recent tail to `side_query` for summarization, and writes the result onto `SubAgentState.last_message` so the panel updates while the agent is running. Cancellation observes the same token as the engine driver. Sync (foreground) AgentTool spawns block the parent loop and don't need periodic summarization — the one-shot at-completion summary (E3) covers them |
 | `<task-notification>` ingestion call site | **closed** | `runner_loop` emits via `render_task_notification` on worker terminate when coordinator mode is active |

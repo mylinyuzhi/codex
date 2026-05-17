@@ -1,10 +1,9 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
-assertion_line: 444
 expression: output
 ---
- ╭─╮ ╭─╮   COCO v0.0.0                                                          
- │●│ │●│   opus-4  *  auto                                                      
+ ╭─╮ ╭─╮  COCO v0.0.0                                                           
+ │●│ │●│  opus-4  *  auto                                                       
  ╰─╯ ╰─╯                                                                        
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────

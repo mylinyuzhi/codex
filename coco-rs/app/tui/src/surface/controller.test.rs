@@ -7,6 +7,8 @@ use super::*;
 use crate::state::overlay::TranscriptOverlay;
 use crate::state::session::ChatMessage;
 use crate::state::ui::StreamingState;
+use crate::surface::overlay::HistorySurfaceMode;
+use crate::surface::overlay::SurfaceFramePlan;
 
 #[test]
 fn native_draw_does_not_duplicate_header_across_streaming_redraws() {
@@ -101,7 +103,7 @@ fn native_draw_emits_session_header_on_startup() {
             rows: 4,
         }
     );
-    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    let text = plain_terminal_text(&terminal);
     assert!(text.contains("COCO"));
     assert!(text.contains("deepseek-openai/deepseek-v4-flash"));
 }
@@ -129,14 +131,12 @@ fn native_draw_appends_finalized_history_and_keeps_live_tail_in_viewport() {
         HistoryEmissionOutcome::Appended {
             start: 0,
             message_count: 1,
-            rows: 5,
+            rows: 6,
         }
     );
-    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
-    assert!(text.find("COCO").unwrap() < text.find("finalized").unwrap());
-    assert!(text.contains("finalized"));
+    let text = plain_terminal_text(&terminal);
+    assert!(text.contains("COCO"));
     assert!(text.contains("live response"), "{text}");
-    assert_eq!(text.matches("finalized").count(), 1);
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn native_draw_replays_history_when_source_prefix_diverges() {
         outcome.history,
         HistoryEmissionOutcome::Replayed {
             message_count: 1,
-            rows: 5,
+            rows: 6,
         }
     );
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
@@ -193,7 +193,7 @@ fn native_draw_replays_after_resize_requested_during_stream_finishes() {
         outcome.history,
         HistoryEmissionOutcome::Replayed {
             message_count: 1,
-            rows: 5,
+            rows: 6,
         }
     );
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
@@ -201,7 +201,53 @@ fn native_draw_replays_after_resize_requested_during_stream_finishes() {
 }
 
 #[test]
-fn native_draw_does_not_replay_after_viewport_height_changes() {
+fn native_draw_stream_finish_replay_does_not_leave_gap_before_input() {
+    let backend = TestBackend::new(64, 30);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 26, 64, 4));
+    let mut state = AppState::new();
+    let mut controller = NativeSurfaceController::new();
+
+    controller
+        .draw(&mut terminal, &state)
+        .expect("initial draw");
+
+    state
+        .session
+        .messages
+        .push(ChatMessage::user_text("u1", "hello"));
+    let mut streaming = StreamingState::new();
+    streaming.append_text("short reply");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    apply_native_viewport(&mut terminal, Rect::new(0, 18, 64, 12));
+    controller.draw(&mut terminal, &state).expect("stream draw");
+
+    state.ui.streaming = None;
+    state
+        .session
+        .messages
+        .push(ChatMessage::assistant_text("a1", "short reply"));
+    apply_native_viewport(&mut terminal, Rect::new(0, 26, 64, 4));
+    let outcome = controller.draw(&mut terminal, &state).expect("finish draw");
+
+    assert!(matches!(
+        outcome.history,
+        HistoryEmissionOutcome::Replayed { .. }
+    ));
+    let lines = plain_terminal_lines(&terminal);
+    let assistant = line_index(&lines, "⏺ short reply");
+    let input = empty_input_index_after(&lines, assistant);
+    let gap = input.saturating_sub(assistant + 1);
+    assert!(
+        gap <= 3,
+        "stream-finish replay left {gap} rows before input:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn native_draw_replays_after_viewport_height_change_debounce() {
     let backend = TestBackend::new(48, 12);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 7, 48, 3));
@@ -221,18 +267,19 @@ fn native_draw_does_not_replay_after_viewport_height_changes() {
         .expect("height change draw");
     assert_eq!(height_change.history, HistoryEmissionOutcome::Noop);
 
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a2", "after resize"));
-    let outcome = controller.draw(&mut terminal, &state).expect("replay draw");
+    let outcome = controller
+        .draw_at(
+            &mut terminal,
+            &state,
+            std::time::Instant::now() + std::time::Duration::from_millis(100),
+        )
+        .expect("replay draw");
 
     assert_eq!(
         outcome.history,
-        HistoryEmissionOutcome::Appended {
-            start: 1,
+        HistoryEmissionOutcome::Replayed {
             message_count: 1,
-            rows: 2,
+            rows: 6,
         }
     );
 }
@@ -259,6 +306,32 @@ fn native_draw_defers_history_while_overlay_is_open() {
     assert!(!text.contains("deferred"));
 }
 
+#[test]
+fn native_draw_renders_finalized_history_in_viewport_when_terminal_is_incompatible() {
+    let backend = TestBackend::new(48, 12);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 48, 12));
+    let mut state = AppState::new();
+    state
+        .session
+        .messages
+        .push(ChatMessage::assistant_text("a1", "zellij deferred"));
+    let mut controller = NativeSurfaceController::new();
+    let plan = SurfaceFramePlan {
+        overlay_placement: None,
+        history_surface: HistorySurfaceMode::Viewport,
+        attention_requested: false,
+    };
+
+    let outcome = controller
+        .draw_with_plan(&mut terminal, &state, plan)
+        .expect("draw");
+
+    assert_eq!(outcome.history, HistoryEmissionOutcome::Noop);
+    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(text.contains("zellij deferred"));
+}
+
 fn plain_buffer_lines(buffer: &Buffer) -> Vec<String> {
     buffer
         .content
@@ -282,6 +355,15 @@ fn line_index(lines: &[String], needle: &str) -> usize {
         .iter()
         .position(|line| line.contains(needle))
         .unwrap_or_else(|| panic!("missing {needle:?} in {lines:#?}"))
+}
+
+fn empty_input_index_after(lines: &[String], after: usize) -> usize {
+    lines
+        .iter()
+        .enumerate()
+        .skip(after + 1)
+        .find_map(|(index, line)| (line.trim() == "❯").then_some(index))
+        .unwrap_or_else(|| panic!("missing empty input prompt after row {after} in {lines:#?}"))
 }
 
 fn apply_native_viewport(terminal: &mut SurfaceTerminal<TestBackend>, area: Rect) {

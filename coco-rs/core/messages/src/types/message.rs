@@ -165,14 +165,12 @@ pub struct AssistantMessage {
     pub api_error: Option<ApiError>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StopReason {
-    EndTurn,
-    MaxTokens,
-    StopSequence,
-    ToolUse,
-}
+/// Canonical typed stop reason — re-exported from `coco-inference`'s
+/// extended `UnifiedFinishReason` (the single source of truth at the
+/// vercel-ai-provider seam). 8 variants; see
+/// `vercel-ai/provider/src/language_model/v4/finish_reason.rs` for
+/// the multi-LLM mapping table.
+pub use coco_inference::StopReason;
 
 /// API error attached to an assistant message.
 #[derive(Debug, Clone, Serialize, Deserialize)]

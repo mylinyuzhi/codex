@@ -4,20 +4,20 @@ use vercel_ai_provider::UnifiedFinishReason;
 #[test]
 fn maps_stop_without_tool_calls() {
     let reason = map_finish_reason(Some("STOP"), false);
-    assert_eq!(reason.unified, UnifiedFinishReason::Stop);
+    assert_eq!(reason.unified, UnifiedFinishReason::EndTurn);
     assert_eq!(reason.raw.as_deref(), Some("STOP"));
 }
 
 #[test]
 fn maps_stop_with_tool_calls() {
     let reason = map_finish_reason(Some("STOP"), true);
-    assert_eq!(reason.unified, UnifiedFinishReason::ToolCalls);
+    assert_eq!(reason.unified, UnifiedFinishReason::ToolUse);
 }
 
 #[test]
 fn maps_max_tokens() {
     let reason = map_finish_reason(Some("MAX_TOKENS"), false);
-    assert_eq!(reason.unified, UnifiedFinishReason::Length);
+    assert_eq!(reason.unified, UnifiedFinishReason::MaxTokens);
 }
 
 #[test]

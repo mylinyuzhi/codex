@@ -254,7 +254,7 @@ pub async fn handle_command(
             // Esc dismisses autocomplete first (so the user can escape out
             // of a trigger without losing their typed input) before
             // touching any overlay.
-            if state.ui.overlay.is_none() && state.ui.active_suggestions.is_some() {
+            if !state.ui.has_overlay() && state.ui.active_suggestions.is_some() {
                 state.ui.active_suggestions = None;
                 return true;
             }
@@ -262,7 +262,7 @@ pub async fn handle_command(
             // double-press clears input + saves to history. Mirrors TS
             // `useTextInput.ts:126-153`: single Esc shows a toast; second
             // Esc within `DOUBLE_PRESS_TIMEOUT` clears.
-            if state.ui.overlay.is_none()
+            if !state.ui.has_overlay()
                 && state.ui.active_suggestions.is_none()
                 && !state.ui.input.is_empty()
             {
@@ -297,7 +297,7 @@ pub async fn handle_command(
             // /memory cancel surfaces a toast (TS:
             // `commands/memory/memory.tsx::onCancel` → "Cancelled memory editing").
             if matches!(
-                state.ui.overlay,
+                state.ui.active_overlay(),
                 Some(crate::state::Overlay::MemoryDialog(_))
             ) {
                 let text = crate::i18n::t!("toast.memory_cancelled").to_string();
@@ -329,7 +329,7 @@ pub async fn handle_command(
             // Route into the rewind summarize-feedback box when that
             // overlay phase is active so typing builds the feedback
             // string instead of leaking to the input bar.
-            if let Some(crate::state::Overlay::Rewind(ref mut r)) = state.ui.overlay
+            if let Some(crate::state::Overlay::Rewind(r)) = state.ui.active_overlay_mut()
                 && r.phase == crate::state::rewind::RewindPhase::SummarizeFeedback
             {
                 r.summarize_feedback.push(c);
@@ -365,7 +365,7 @@ pub async fn handle_command(
             true
         }
         TuiCommand::DeleteBackward => {
-            if let Some(crate::state::Overlay::Rewind(ref mut r)) = state.ui.overlay
+            if let Some(crate::state::Overlay::Rewind(r)) = state.ui.active_overlay_mut()
                 && r.phase == crate::state::rewind::RewindPhase::SummarizeFeedback
             {
                 r.summarize_feedback.pop();
@@ -601,28 +601,34 @@ pub async fn handle_command(
             // Settings overlay → next tab. Question overlay → cycle focus
             // (questions → footer items). ModelPicker → cycle the
             // role pill. Other overlays ignore Tab.
-            match state.ui.overlay {
-                Some(crate::state::Overlay::Settings(ref mut s)) => s.next_tab(),
-                Some(crate::state::Overlay::Question(_)) => {
-                    overlay::question_cycle_focus(state, 1);
-                }
-                Some(crate::state::Overlay::ModelPicker(_)) => {
-                    show::cycle_model_role(state, 1);
-                }
-                _ => {}
+            if let Some(crate::state::Overlay::Settings(s)) = state.ui.active_overlay_mut() {
+                s.next_tab();
+            } else if matches!(
+                state.ui.active_overlay(),
+                Some(crate::state::Overlay::Question(_))
+            ) {
+                overlay::question_cycle_focus(state, 1);
+            } else if matches!(
+                state.ui.active_overlay(),
+                Some(crate::state::Overlay::ModelPicker(_))
+            ) {
+                show::cycle_model_role(state, 1);
             }
             true
         }
         TuiCommand::SettingsPrevTab => {
-            match state.ui.overlay {
-                Some(crate::state::Overlay::Settings(ref mut s)) => s.prev_tab(),
-                Some(crate::state::Overlay::Question(_)) => {
-                    overlay::question_cycle_focus(state, -1);
-                }
-                Some(crate::state::Overlay::ModelPicker(_)) => {
-                    show::cycle_model_role(state, -1);
-                }
-                _ => {}
+            if let Some(crate::state::Overlay::Settings(s)) = state.ui.active_overlay_mut() {
+                s.prev_tab();
+            } else if matches!(
+                state.ui.active_overlay(),
+                Some(crate::state::Overlay::Question(_))
+            ) {
+                overlay::question_cycle_focus(state, -1);
+            } else if matches!(
+                state.ui.active_overlay(),
+                Some(crate::state::Overlay::ModelPicker(_))
+            ) {
+                show::cycle_model_role(state, -1);
             }
             true
         }

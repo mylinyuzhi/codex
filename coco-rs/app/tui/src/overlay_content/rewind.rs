@@ -1,4 +1,4 @@
-//! Rewind overlay renderer.
+//! Rewind overlay content builder.
 
 use ratatui::prelude::Color;
 

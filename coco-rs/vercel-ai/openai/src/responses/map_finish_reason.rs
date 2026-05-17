@@ -12,11 +12,11 @@ pub fn map_openai_responses_finish_reason(
 ) -> FinishReason {
     let raw = finish_reason.map(String::from);
     let unified = match finish_reason {
-        None if has_function_call => UnifiedFinishReason::ToolCalls,
-        None => UnifiedFinishReason::Stop,
-        Some("max_output_tokens") => UnifiedFinishReason::Length,
+        None if has_function_call => UnifiedFinishReason::ToolUse,
+        None => UnifiedFinishReason::EndTurn,
+        Some("max_output_tokens") => UnifiedFinishReason::MaxTokens,
         Some("content_filter") => UnifiedFinishReason::ContentFilter,
-        _ if has_function_call => UnifiedFinishReason::ToolCalls,
+        _ if has_function_call => UnifiedFinishReason::ToolUse,
         _ => UnifiedFinishReason::Other,
     };
     FinishReason { unified, raw }

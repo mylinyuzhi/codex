@@ -94,7 +94,7 @@ impl LanguageModel for ScriptedCapacityMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(0, 0),
-                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,

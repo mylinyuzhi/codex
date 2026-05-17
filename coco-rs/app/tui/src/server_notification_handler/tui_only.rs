@@ -431,7 +431,7 @@ fn on_diff_stats_loaded(
         deletions,
         file_paths,
     };
-    if let Some(crate::state::Overlay::Rewind(ref mut r)) = state.ui.overlay {
+    if let Some(crate::state::Overlay::Rewind(r)) = state.ui.active_overlay_mut() {
         // Per-row metadata for the pick-list. TS: `fileHistoryMetadata`
         // map keyed by item index (`MessageSelector.tsx:285-312`).
         if let Some(row) = r

@@ -225,7 +225,7 @@ fn make_text_result(text: &str, _call_idx: i32) -> LanguageModelGenerateResult {
             provider_metadata: None,
         })],
         usage: Usage::new(50, 20),
-        finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+        finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
         warnings: vec![],
         provider_metadata: None,
         request: None,
@@ -251,7 +251,7 @@ fn make_tool_result(tool_calls: &[ResolvedToolCall], call_idx: i32) -> LanguageM
     LanguageModelGenerateResult {
         content,
         usage: Usage::new(50, 20),
-        finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+        finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
         warnings: vec![],
         provider_metadata: None,
         request: None,
@@ -281,7 +281,7 @@ fn make_text_and_tool_result(
     LanguageModelGenerateResult {
         content,
         usage: Usage::new(50, 20),
-        finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+        finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
         warnings: vec![],
         provider_metadata: None,
         request: None,

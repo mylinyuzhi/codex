@@ -4,6 +4,10 @@
 //! All functions here are pure or I/O-free (no awaits except for the queue
 //! drain), and easy to unit-test in isolation.
 
+#[cfg(test)]
+#[path = "helpers.test.rs"]
+mod tests;
+
 use coco_inference::AssistantContentPart;
 use coco_inference::FilePart;
 use coco_inference::UserContentPart;
@@ -155,13 +159,46 @@ pub(crate) fn budget_pct_used(budget: &BudgetTracker) -> i32 {
     }
 }
 
-pub(crate) fn parse_stop_reason(s: &str) -> Option<coco_messages::StopReason> {
-    match s {
-        "stop" => Some(coco_messages::StopReason::EndTurn),
-        "length" => Some(coco_messages::StopReason::MaxTokens),
-        "tool-calls" => Some(coco_messages::StopReason::ToolUse),
-        _ => None,
-    }
+/// Build the user-facing assistant message for an abnormal-stop_reason
+/// turn — mirrors TS `services/api/claude.ts:2258-2292` and
+/// `services/api/errors.ts:1184-1207` (`getErrorMessageIfRefusal`).
+///
+/// Returned message has empty content (the partial real response was
+/// already pushed) and `api_error.message` carrying the human-readable
+/// explanation. The typed [`coco_messages::StopReason`] is the
+/// canonical 8-variant `UnifiedFinishReason` — `ContextWindowExceeded`
+/// is a first-class variant (no raw-string sniffing needed). Message
+/// text stays provider-agnostic so it covers the multi-LLM unified
+/// bucket (Anthropic refusal, OpenAI content_filter, Google SAFETY /
+/// RECITATION → coco-rs `ContentFilter`).
+pub(crate) fn build_abnormal_stop_api_error_message(
+    parsed: coco_messages::StopReason,
+    effective_max_tokens: Option<i64>,
+) -> coco_messages::Message {
+    use coco_messages::StopReason;
+    const PREFIX: &str = "API Error";
+    let text = match parsed {
+        StopReason::ContextWindowExceeded => {
+            format!("{PREFIX}: The model has reached its context window limit.")
+        }
+        StopReason::MaxTokens => match effective_max_tokens {
+            Some(n) if n > 0 => format!(
+                "{PREFIX}: Model response exceeded the {n} output token maximum. \
+                 To increase, set `max_output_tokens` in settings.json or via `--max-tokens`."
+            ),
+            _ => format!("{PREFIX}: Model response exceeded the configured output token maximum."),
+        },
+        StopReason::ContentFilter => format!(
+            "{PREFIX}: Model declined to respond — the request appears to violate the \
+             provider's content policy or safety filter. Try rephrasing the request or \
+             start a new session."
+        ),
+        other => format!(
+            "{PREFIX}: Turn ended on stop_reason={}.",
+            other.as_wire_str()
+        ),
+    };
+    coco_messages::create_assistant_error_message(&text, None)
 }
 
 /// Map `HookOutcome` to the protocol-layer `HookOutcomeStatus`.

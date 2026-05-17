@@ -2,14 +2,14 @@
 source: app/tui/src/widgets/mod.test.rs
 expression: output
 ---
- ╭─╮ ╭─╮   COCO v0.0.0                                                          
- │●│ │●│   o┌ Help ────────────────────────────────────────────────┐            
- ╰─╯ ╰─╯    │Cursor & history                                      │            
+                                                                                
+            ┌ Help ────────────────────────────────────────────────┐            
+            │Cursor & history                                      │            
             │Ctrl+A             Move to beginning of line          │            
-────────────│Ctrl+E             Move to end of line                │────────────
-❯           │Ctrl+B             Move one character left            │            
-────────────│Ctrl+F             Move one character right           │────────────
- opus-4 * au│Alt+B              Move one word left                 │            
+            │Ctrl+E             Move to end of line                │            
+            │Ctrl+B             Move one character left            │            
+            │Ctrl+F             Move one character right           │            
+            │Alt+B              Move one word left                 │            
             │Alt+F              Move one word right                │            
             │↑                  Walk through prompt history (up /  │            
             │down)                                                 │            
@@ -22,6 +22,7 @@ expression: output
             │Ctrl+K             Kill text from cursor to end of    │            
             │line (Ctrl+Y to paste)                                │            
             │Ctrl+U             Kill text from beginning of line to│            
-            │cursor                                                │            
-            │Ctrl+Y             Paste the most recently killed text│            
-            └──────────────────────────────────────────────────────┘
+────────────│cursor                                                │────────────
+❯           │Ctrl+Y             Paste the most recently killed text│            
+────────────└──────────────────────────────────────────────────────┘────────────
+ opus-4 * auto | ↑0 ↓0 · cache 0% | ctx 0% | 0 msgs

@@ -64,14 +64,14 @@ fn test_default_context_is_chat() {
 #[test]
 fn test_help_overlay_context() {
     let mut state = AppState::new();
-    state.ui.overlay = Some(crate::state::Overlay::Help);
+    state.ui.set_overlay(crate::state::Overlay::Help);
     assert_eq!(active_context(&state), KeybindingContext::Scrollable);
 }
 
 #[test]
 fn test_permission_overlay_context() {
     let mut state = AppState::new();
-    state.ui.overlay = Some(crate::state::Overlay::Permission(
+    state.ui.set_overlay(crate::state::Overlay::Permission(
         crate::state::PermissionOverlay {
             request_id: "r1".into(),
             tool_name: "Bash".into(),
@@ -200,7 +200,7 @@ fn test_esc_cancels() {
 #[test]
 fn test_overlay_y_approves() {
     let mut state = AppState::new();
-    state.ui.overlay = Some(crate::state::Overlay::Permission(
+    state.ui.set_overlay(crate::state::Overlay::Permission(
         crate::state::PermissionOverlay {
             request_id: "r1".into(),
             tool_name: "Bash".into(),
@@ -224,7 +224,7 @@ fn test_overlay_y_approves() {
 #[test]
 fn test_overlay_n_denies() {
     let mut state = AppState::new();
-    state.ui.overlay = Some(crate::state::Overlay::Permission(
+    state.ui.set_overlay(crate::state::Overlay::Permission(
         crate::state::PermissionOverlay {
             request_id: "r1".into(),
             tool_name: "Bash".into(),
