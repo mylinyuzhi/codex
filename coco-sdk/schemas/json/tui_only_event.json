@@ -4,7 +4,7 @@
   "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive overlays, toasts, and UI-only state transitions that are not part of the protocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as owned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope enum defined in `coco-types`, the type itself must live in `coco-types` to avoid a cyclic dependency. The semantic contract (TUI-only, never sent to SDK) is preserved via consumer dispatch rules in `StreamAccumulator` and `handle_core_event()`.\n\n22 variants (20 from design §4.1 + 2 coco-rs extensions).",
   "oneOf": [
     {
-      "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice list (e.g. ExitPlanMode's keep/clear/cancel) instead of the default yes/no buttons. Picked `value` is echoed back via `UserCommand::ApprovalResponse.updated_input` as a `{ ..original_input, user_choice: \"<value>\" }` JSON object so the tool's `execute()` can branch on the choice. TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can splice the picked `user_choice` into it verbatim before sending the approval response — mirrors `QuestionAsked.input`. `None` keeps the wire compact when no choices are present.",
+      "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice list (e.g. ExitPlanMode's keep/clear/cancel) instead of the default yes/no buttons. Picked `value` is echoed back via `UserCommand::ApprovalResponse.updated_input` as a `{ ..original_input, user_choice: \"<value>\" }` JSON object so the tool's `execute()` can branch on the choice. TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can splice the picked `user_choice` into it verbatim and derive path-scoped read permission updates for classic \"always allow\" approvals.",
       "type": "object",
       "required": [
         "description",
@@ -30,8 +30,19 @@
           "type": "string"
         },
         "original_input": true,
+        "permission_suggestions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PermissionUpdate"
+          }
+        },
         "request_id": {
           "type": "string"
+        },
+        "show_always_allow": {
+          "description": "Whether the UI may offer an \"always allow\" action. False when managed policy restricts local/session rule changes.",
+          "default": false,
+          "type": "boolean"
         },
         "tool_name": {
           "type": "string"
@@ -967,6 +978,267 @@
           "type": "string"
         }
       }
+    },
+    "PermissionBehavior": {
+      "description": "Permission behavior for a rule.",
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ]
+    },
+    "PermissionMode": {
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "default",
+            "plan",
+            "bypassPermissions",
+            "dontAsk",
+            "acceptEdits"
+          ]
+        },
+        {
+          "description": "Feature-gated auto mode.",
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "description": "Internal: escalate to parent agent.",
+          "type": "string",
+          "enum": [
+            "bubble"
+          ]
+        }
+      ]
+    },
+    "PermissionRule": {
+      "description": "A single permission rule.",
+      "type": "object",
+      "required": [
+        "behavior",
+        "source",
+        "value"
+      ],
+      "properties": {
+        "behavior": {
+          "$ref": "#/definitions/PermissionBehavior"
+        },
+        "source": {
+          "$ref": "#/definitions/PermissionRuleSource"
+        },
+        "value": {
+          "$ref": "#/definitions/PermissionRuleValue"
+        }
+      }
+    },
+    "PermissionRuleSource": {
+      "description": "Source of a permission rule (ordered by priority: Session is most specific).",
+      "type": "string",
+      "enum": [
+        "user_settings",
+        "project_settings",
+        "local_settings",
+        "flag_settings",
+        "policy_settings",
+        "cli_arg",
+        "command",
+        "session"
+      ]
+    },
+    "PermissionRuleValue": {
+      "description": "Permission rule value — tool_pattern is a glob/wildcard expression. Examples: \"Read\", \"Bash(git *)\", \"mcp__slack__*\", \"*\"",
+      "type": "object",
+      "required": [
+        "tool_pattern"
+      ],
+      "properties": {
+        "rule_content": {
+          "description": "Command pattern within tool (e.g. \"git *\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_pattern": {
+          "type": "string"
+        }
+      }
+    },
+    "PermissionUpdate": {
+      "description": "A permission update action.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "rules",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "add_rules"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "rules",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "replace_rules"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "rules",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "remove_rules"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "mode",
+            "type"
+          ],
+          "properties": {
+            "mode": {
+              "$ref": "#/definitions/PermissionMode"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "set_mode"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "directories",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "add_directories"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "directories",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "remove_directories"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "PermissionUpdateDestination": {
+      "description": "Destination for persisting permission updates.\n\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to disk; in-memory destinations (`Session`/`CliArg`/`Command`) live only for the running session. TS parity: same split as `persistPermissionUpdates` in `PermissionUpdate.ts`.\n\n`Command` is reserved for rules contributed by an invoked command or skill's frontmatter (`allowed-tools:`). TS parity: `alwaysAllowRules.command` populated by `SkillTool` / `createGetAppStateWithAllowedTools`.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user_settings",
+            "project_settings",
+            "local_settings",
+            "session",
+            "cli_arg"
+          ]
+        },
+        {
+          "description": "Rules contributed by a command/skill frontmatter `allowed-tools`. In-memory only; cleared on session end.",
+          "type": "string",
+          "enum": [
+            "command"
+          ]
+        }
+      ]
     },
     "SlashCommandInfo": {
       "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of these at startup (and again after `/reload-plugins`) so the autocomplete popup and command palette can render and rank without reaching into [`CommandBase`] every time.\n\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a [`crate::TuiOnlyEvent`] variant — events are the only path between the agent driver and the TUI, and event payload types must be foundation-layer.",
