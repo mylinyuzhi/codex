@@ -88,6 +88,11 @@ impl PermissionEvaluator {
                         {
                             continue;
                         }
+                    } else if is_file_rule_for_tool(&rule.value.tool_pattern, &tool_str)
+                        && rule.value.rule_content.is_some()
+                        && !file_rule_matches_input(rule, &tool_str, input, context)
+                    {
+                        continue;
                     }
                     return PermissionDecision::Deny {
                         message: format!("denied by rule: {}", rule.value.tool_pattern),
@@ -116,10 +121,14 @@ impl PermissionEvaluator {
                         feedback,
                     };
                 }
-                ToolCheckResult::Ask { message, choices } => {
+                ToolCheckResult::Ask {
+                    message,
+                    suggestions,
+                    choices,
+                } => {
                     return PermissionDecision::Ask {
                         message,
-                        suggestions: vec![],
+                        suggestions,
                         choices,
                     };
                 }
@@ -148,6 +157,11 @@ impl PermissionEvaluator {
                                 }
                                 continue;
                             }
+                        } else if is_file_rule_for_tool(&rule.value.tool_pattern, &tool_str)
+                            && rule.value.rule_content.is_some()
+                            && !file_rule_matches_input(rule, &tool_str, input, context)
+                        {
+                            continue;
                         }
                         return PermissionDecision::Allow {
                             updated_input: None,
@@ -186,6 +200,24 @@ impl PermissionEvaluator {
                 suggestions: vec![],
                 choices: None,
             };
+        }
+
+        for rules in context.ask_rules.values() {
+            for rule in rules {
+                if is_file_rule_for_tool(&rule.value.tool_pattern, &tool_str)
+                    && rule.value.rule_content.is_some()
+                    && file_rule_matches_input(rule, &tool_str, input, context)
+                {
+                    return PermissionDecision::Ask {
+                        message: format!(
+                            "ask rule matched: {tool_str}({})",
+                            rule.value.rule_content.as_deref().unwrap_or("")
+                        ),
+                        suggestions: vec![],
+                        choices: None,
+                    };
+                }
+            }
         }
 
         // Step 6: Path safety checks for file-modifying tools
@@ -331,7 +363,8 @@ const RULE_PRIORITY_ORDER: &[PermissionRuleSource] = &[
 /// - `plan` with bypass_available → auto-allow (TS line 1268-1271)
 /// - `plan` without bypass_available → ask (TS falls through to prompt/classifier)
 /// - `acceptEdits` → auto-allow read-only + file edits; ask for rest
-/// - `default`, `auto`, `bubble` → ask
+/// - `default`, `auto` → auto-allow read-only; ask for rest
+/// - `bubble` → ask and delegate to the parent context
 fn mode_fallthrough(
     context: &ToolPermissionContext,
     tool_str: &str,
@@ -391,12 +424,22 @@ fn mode_fallthrough(
                 }
             }
         }
-        // Default, Auto, Bubble → ask
-        _ => PermissionDecision::Ask {
-            message: format!("approve {tool_str}?"),
-            suggestions: vec![],
-            choices: None,
-        },
+        // TS parity: safe read-only tools never need an approval prompt in
+        // ordinary interactive modes. Keep Bubble out of this fast path so
+        // the parent permission context remains authoritative.
+        PermissionMode::Default | PermissionMode::Auto if is_read_only_tool(tool_str) => {
+            PermissionDecision::Allow {
+                updated_input: None,
+                feedback: None,
+            }
+        }
+        PermissionMode::Default | PermissionMode::Auto | PermissionMode::Bubble => {
+            PermissionDecision::Ask {
+                message: format!("approve {tool_str}?"),
+                suggestions: vec![],
+                choices: None,
+            }
+        }
     }
 }
 
@@ -545,6 +588,36 @@ fn is_file_modifying_tool(tool_name: &str) -> bool {
     tool_name == ToolName::Write.as_str()
         || tool_name == ToolName::Edit.as_str()
         || tool_name == ToolName::NotebookEdit.as_str()
+        || tool_name == ToolName::ApplyPatch.as_str()
+}
+
+fn is_file_rule_for_tool(rule_tool_pattern: &str, tool_name: &str) -> bool {
+    is_file_modifying_tool(tool_name)
+        && (rule_tool_pattern == ToolName::Edit.as_str() || rule_tool_pattern == tool_name)
+}
+
+fn file_rule_matches_input(
+    rule: &PermissionRule,
+    tool_name: &str,
+    input: &Value,
+    context: &ToolPermissionContext,
+) -> bool {
+    let Some(path) = extract_file_modifying_path(tool_name, input) else {
+        return false;
+    };
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    let paths_to_check = filesystem::get_paths_for_permission_check(&path, &cwd);
+    let match_context = crate::file_rules::FileRuleMatchContext::new(&cwd)
+        .with_source_roots(&context.permission_rule_source_roots);
+    crate::file_rules::file_rule_matches_paths(
+        rule,
+        &paths_to_check,
+        crate::file_rules::FileRuleToolType::Edit,
+        &match_context,
+    )
 }
 
 fn extract_shell_command(input: &Value) -> Option<String> {

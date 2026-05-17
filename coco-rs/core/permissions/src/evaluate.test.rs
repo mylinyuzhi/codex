@@ -7,6 +7,7 @@ fn empty_context(mode: PermissionMode) -> ToolPermissionContext {
     ToolPermissionContext {
         mode,
         additional_dirs: HashMap::new(),
+        permission_rule_source_roots: HashMap::new(),
         allow_rules: HashMap::new(),
         deny_rules: HashMap::new(),
         ask_rules: HashMap::new(),
@@ -93,6 +94,57 @@ fn test_content_specific_deny() {
     let result =
         PermissionEvaluator::evaluate(&ToolId::Builtin(ToolName::Bash), &bash_input("ls"), &ctx);
     assert!(matches!(result, PermissionDecision::Ask { .. }));
+}
+
+#[test]
+fn test_path_scoped_edit_allow_does_not_allow_unmatched_path() {
+    let allowed = tempfile::tempdir().unwrap();
+    let denied = tempfile::tempdir().unwrap();
+    let denied_file = denied.path().join("data.txt");
+    std::fs::write(&denied_file, "data").unwrap();
+    let mut ctx = empty_context(PermissionMode::Default);
+    ctx.allow_rules.insert(
+        PermissionRuleSource::Session,
+        vec![make_rule(
+            "Edit",
+            Some(&format!("/{}/**", allowed.path().to_string_lossy())),
+            PermissionBehavior::Allow,
+            PermissionRuleSource::Session,
+        )],
+    );
+
+    let result = PermissionEvaluator::evaluate(
+        &ToolId::Builtin(ToolName::Edit),
+        &file_input(denied_file.to_str().unwrap()),
+        &ctx,
+    );
+
+    assert!(matches!(result, PermissionDecision::Ask { .. }));
+}
+
+#[test]
+fn test_path_scoped_edit_allow_allows_matched_path() {
+    let allowed = tempfile::tempdir().unwrap();
+    let file = allowed.path().join("data.txt");
+    std::fs::write(&file, "data").unwrap();
+    let mut ctx = empty_context(PermissionMode::Default);
+    ctx.allow_rules.insert(
+        PermissionRuleSource::Session,
+        vec![make_rule(
+            "Edit",
+            Some(&format!("/{}/**", allowed.path().to_string_lossy())),
+            PermissionBehavior::Allow,
+            PermissionRuleSource::Session,
+        )],
+    );
+
+    let result = PermissionEvaluator::evaluate(
+        &ToolId::Builtin(ToolName::Edit),
+        &file_input(file.to_str().unwrap()),
+        &ctx,
+    );
+
+    assert!(matches!(result, PermissionDecision::Allow { .. }));
 }
 
 // ── Step 2-3: Allow rules ──
@@ -218,6 +270,30 @@ fn test_write_to_safe_path_allowed_in_bypass() {
         &ctx,
     );
     assert!(matches!(result, PermissionDecision::Allow { .. }));
+}
+
+#[test]
+fn test_default_mode_allows_read_only_tools_without_rules() {
+    let ctx = empty_context(PermissionMode::Default);
+    let result = PermissionEvaluator::evaluate(
+        &ToolId::Builtin(ToolName::Glob),
+        &serde_json::json!({"pattern": "**/*.rs"}),
+        &ctx,
+    );
+
+    assert!(matches!(result, PermissionDecision::Allow { .. }));
+}
+
+#[test]
+fn test_bubble_mode_does_not_auto_allow_read_only_tools() {
+    let ctx = empty_context(PermissionMode::Bubble);
+    let result = PermissionEvaluator::evaluate(
+        &ToolId::Builtin(ToolName::Glob),
+        &serde_json::json!({"pattern": "**/*.rs"}),
+        &ctx,
+    );
+
+    assert!(matches!(result, PermissionDecision::Ask { .. }));
 }
 
 // ── Step 7: MCP rules ──

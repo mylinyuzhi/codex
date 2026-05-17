@@ -26,7 +26,9 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             tool_name,
             description,
             input_preview,
+            show_always_allow,
             choices,
+            permission_suggestions,
             original_input,
         } => {
             state.ui.set_overlay(crate::state::Overlay::Permission(
@@ -40,12 +42,13 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     // "Always Allow" affordance — the user is picking
                     // a one-shot action (e.g. keep/clear context), not
                     // declaring a durable rule.
-                    show_always_allow: choices.is_none(),
+                    show_always_allow: choices.is_none() && show_always_allow,
                     classifier_checking: false,
                     classifier_auto_approved: None,
                     choices,
                     selected_choice: 0,
                     original_input,
+                    permission_suggestions,
                 },
             ));
             true

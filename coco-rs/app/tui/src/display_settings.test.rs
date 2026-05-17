@@ -12,7 +12,11 @@ fn settings_with_source(
     merged: Settings,
     per_source: HashMap<SettingSource, serde_json::Value>,
 ) -> SettingsWithSource {
-    SettingsWithSource { merged, per_source }
+    SettingsWithSource {
+        merged,
+        per_source,
+        source_paths: HashMap::new(),
+    }
 }
 
 fn raw_syntax_highlighting(disabled: bool) -> serde_json::Value {

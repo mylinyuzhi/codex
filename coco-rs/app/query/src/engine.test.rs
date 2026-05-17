@@ -2583,6 +2583,7 @@ impl coco_tool_runtime::Tool for AskingTool {
     ) -> coco_types::ToolCheckResult {
         coco_types::ToolCheckResult::Ask {
             message: "please approve".into(),
+            suggestions: vec![],
             choices: None,
         }
     }
@@ -2830,6 +2831,7 @@ impl Tool for AskingMockTool {
     ) -> coco_types::ToolCheckResult {
         coco_types::ToolCheckResult::Ask {
             message: "Mock needs permission".into(),
+            suggestions: vec![],
             choices: None,
         }
     }

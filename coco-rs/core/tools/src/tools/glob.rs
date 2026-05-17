@@ -158,6 +158,7 @@ impl Tool for GlobTool {
         crate::tools::read_permissions::check_read_permission_with_matcher(
             Path::new(path),
             &matcher,
+            ctx,
         )
     }
 

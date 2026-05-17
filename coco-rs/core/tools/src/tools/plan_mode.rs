@@ -517,6 +517,7 @@ impl Tool for ExitPlanModeTool {
         };
         coco_types::ToolCheckResult::Ask {
             message: "Exit plan mode?".into(),
+            suggestions: vec![],
             choices,
         }
     }

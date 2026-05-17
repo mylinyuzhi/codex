@@ -120,6 +120,11 @@ impl TurnRunner for QueryEngineRunner {
             // before this wiring SDK turns ran with empty rule maps.
             let (allow_rules, deny_rules, ask_rules) =
                 crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
+            let permission_rule_source_roots =
+                crate::permission_rule_loader::permission_rule_source_roots(
+                    &runtime_config.settings,
+                    &runtime.original_cwd,
+                );
             let config = QueryEngineConfig {
                 model_id: handoff.model.clone(),
                 permission_mode,
@@ -127,6 +132,7 @@ impl TurnRunner for QueryEngineRunner {
                 allow_rules,
                 deny_rules,
                 ask_rules,
+                permission_rule_source_roots,
                 max_output_tokens,
                 max_turns: if max_turns > 0 {
                     max_turns

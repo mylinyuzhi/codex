@@ -32,6 +32,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::ToolCheckResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -82,6 +83,18 @@ impl Tool for NotebookEditTool {
     }
     fn search_hint(&self) -> Option<&str> {
         Some("edit a Jupyter notebook ipynb cell")
+    }
+
+    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
+        let Some(path) = input.get("notebook_path").and_then(Value::as_str) else {
+            return ToolCheckResult::Passthrough;
+        };
+        crate::tools::write_permissions::check_write_permission_for_path(
+            path,
+            ctx,
+            ToolName::NotebookEdit.as_str(),
+            "edit a notebook",
+        )
     }
 
     /// Render the edit envelope as the prebuilt `message` field so the

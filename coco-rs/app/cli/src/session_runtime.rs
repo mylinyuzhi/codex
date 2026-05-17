@@ -1011,6 +1011,11 @@ impl SessionRuntime {
         // consulted at evaluation time.
         let (allow_rules, deny_rules, ask_rules) =
             crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
+        let permission_rule_source_roots =
+            crate::permission_rule_loader::permission_rule_source_roots(
+                &runtime_config.settings,
+                &cwd,
+            );
 
         // ── Session-scoped CWD state ──
         //
@@ -1080,6 +1085,7 @@ impl SessionRuntime {
             allow_rules,
             deny_rules,
             ask_rules,
+            permission_rule_source_roots,
             context_window: 200_000,
             max_output_tokens: 16_384,
             max_turns: runtime_config.loop_config.max_turns.unwrap_or(30),

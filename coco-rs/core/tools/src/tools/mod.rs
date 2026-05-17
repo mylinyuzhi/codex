@@ -30,6 +30,7 @@ pub mod verify_plan_execution;
 pub mod web;
 pub mod worktree;
 pub mod write;
+pub(crate) mod write_permissions;
 
 // File I/O (8 — `ApplyPatchTool` is gated to gpt-5 family)
 pub use apply_patch::ApplyPatchTool;

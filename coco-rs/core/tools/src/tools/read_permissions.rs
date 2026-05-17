@@ -29,10 +29,12 @@
 //! hide sensitive files from the model, not a guarantee.
 
 use coco_types::ToolCheckResult;
+use coco_types::ToolName;
 use globset::Glob;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
 use std::path::Path;
+use std::path::PathBuf;
 
 /// Compile a `GlobSet` matcher from a list of patterns.
 ///
@@ -90,17 +92,17 @@ pub fn is_read_ignored_with_matcher(path: &Path, matcher: &GlobSet) -> bool {
     false
 }
 
-/// Build a `ToolCheckResult::Deny` when the target path matches the
-/// file-read ignore list, else `Passthrough` so the central evaluator
-/// continues with rule-based checks (TS step 2 onward).
+/// Apply the file-read ignore list, then run the read path permission
+/// pipeline for Read/Grep/Glob.
 ///
 /// R6-T20. Used by `Tool::check_permissions` overrides in Read/Grep/Glob.
-/// `Passthrough` (rather than `Allow`) is correct because path safety is
-/// a *negative* gate — passing the gate doesn't prove the operation is
-/// allowed; it just means rules + mode-fallthrough should run next.
-pub fn check_read_permission_with_matcher(path: &Path, matcher: &GlobSet) -> ToolCheckResult {
+pub fn check_read_permission_with_matcher(
+    path: &Path,
+    matcher: &GlobSet,
+    ctx: &coco_tool_runtime::ToolUseContext,
+) -> ToolCheckResult {
     if is_read_ignored_with_matcher(path, matcher) {
-        ToolCheckResult::Deny {
+        return ToolCheckResult::Deny {
             message: format!(
                 "Path `{}` is blocked by file-read ignore patterns. \
                  This is a session-level filter intended to keep \
@@ -109,9 +111,225 @@ pub fn check_read_permission_with_matcher(path: &Path, matcher: &GlobSet) -> Too
                  `COCO_FILE_READ_IGNORE_PATTERNS`) if you need access.",
                 path.display()
             ),
-        }
+        };
+    }
+
+    let path = path.to_string_lossy();
+    check_read_permission_for_path(&path, ctx)
+}
+
+/// TS parity for `checkReadPermissionForTool()`:
+/// read deny/ask rules win, then working-directory/internal paths are
+/// allowed, then explicit read allow rules are honored, otherwise prompt.
+pub fn check_read_permission_for_path(
+    path: &str,
+    ctx: &coco_tool_runtime::ToolUseContext,
+) -> ToolCheckResult {
+    let cwd = effective_cwd(ctx);
+    let cwd_str = cwd.to_string_lossy();
+    let paths_to_check =
+        coco_permissions::filesystem::get_paths_for_permission_check(path, &cwd_str);
+
+    if paths_to_check
+        .iter()
+        .any(|p| p.starts_with("//") || p.starts_with("\\\\"))
+    {
+        return ToolCheckResult::Ask {
+            message: format!(
+                "Claude requested permissions to read from {path}, which appears to be a UNC path that could access network resources."
+            ),
+            suggestions: vec![],
+            choices: None,
+        };
+    }
+
+    if paths_to_check
+        .iter()
+        .any(|p| coco_permissions::filesystem::has_suspicious_windows_pattern(p))
+    {
+        return ToolCheckResult::Ask {
+            message: format!(
+                "Claude requested permissions to read from {path}, which contains a suspicious Windows path pattern that requires manual approval."
+            ),
+            suggestions: vec![],
+            choices: None,
+        };
+    }
+
+    if let Some(rule) = matching_read_rule(
+        &ctx.permission_context.deny_rules,
+        &paths_to_check,
+        &cwd,
+        &ctx.permission_context,
+    ) {
+        return ToolCheckResult::Deny {
+            message: format!(
+                "Permission to read {path} has been denied by rule `{}`.",
+                rule.value.tool_pattern
+            ),
+        };
+    }
+
+    if matching_read_rule(
+        &ctx.permission_context.ask_rules,
+        &paths_to_check,
+        &cwd,
+        &ctx.permission_context,
+    )
+    .is_some()
+    {
+        return ToolCheckResult::Ask {
+            message: format!(
+                "Claude requested permissions to read from {path}, but you haven't granted it yet."
+            ),
+            suggestions: vec![],
+            choices: None,
+        };
+    }
+
+    if matching_edit_rule(
+        &ctx.permission_context.allow_rules,
+        &paths_to_check,
+        &cwd,
+        &ctx.permission_context,
+    )
+    .is_some()
+    {
+        return ToolCheckResult::Allow {
+            updated_input: None,
+            feedback: None,
+        };
+    }
+
+    if paths_to_check
+        .iter()
+        .all(|p| path_is_in_working_dirs(p, &cwd_str, ctx))
+        || paths_to_check
+            .iter()
+            .any(|p| coco_permissions::filesystem::is_readable_internal_path(p, &cwd_str))
+    {
+        return ToolCheckResult::Allow {
+            updated_input: None,
+            feedback: None,
+        };
+    }
+
+    if matching_read_rule(
+        &ctx.permission_context.allow_rules,
+        &paths_to_check,
+        &cwd,
+        &ctx.permission_context,
+    )
+    .is_some()
+    {
+        return ToolCheckResult::Allow {
+            updated_input: None,
+            feedback: None,
+        };
+    }
+
+    ToolCheckResult::Ask {
+        message: format!(
+            "Claude requested permissions to read from {path}, but you haven't granted it yet."
+        ),
+        suggestions: read_permission_suggestions(path, &cwd_str),
+        choices: None,
+    }
+}
+
+fn effective_cwd(ctx: &coco_tool_runtime::ToolUseContext) -> PathBuf {
+    ctx.cwd_override
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+fn path_is_in_working_dirs(path: &str, cwd: &str, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+    if coco_permissions::filesystem::path_in_working_path(path, cwd) {
+        return true;
+    }
+    ctx.permission_context
+        .additional_dirs
+        .values()
+        .any(|dir| coco_permissions::filesystem::path_in_working_path(path, &dir.path))
+}
+
+fn matching_read_rule<'a>(
+    rules: &'a coco_types::PermissionRulesBySource,
+    paths_to_check: &[String],
+    cwd: &Path,
+    permission_context: &coco_types::ToolPermissionContext,
+) -> Option<&'a coco_types::PermissionRule> {
+    let match_context = coco_permissions::FileRuleMatchContext::new(cwd)
+        .with_source_roots(&permission_context.permission_rule_source_roots);
+    coco_permissions::matching_file_rule(
+        rules,
+        paths_to_check,
+        coco_permissions::FileRuleToolType::Read,
+        &match_context,
+    )
+}
+
+pub(crate) fn matching_edit_rule<'a>(
+    rules: &'a coco_types::PermissionRulesBySource,
+    paths_to_check: &[String],
+    cwd: &Path,
+    permission_context: &coco_types::ToolPermissionContext,
+) -> Option<&'a coco_types::PermissionRule> {
+    let match_context = coco_permissions::FileRuleMatchContext::new(cwd)
+        .with_source_roots(&permission_context.permission_rule_source_roots);
+    coco_permissions::matching_file_rule(
+        rules,
+        paths_to_check,
+        coco_permissions::FileRuleToolType::Edit,
+        &match_context,
+    )
+}
+
+fn read_permission_suggestions(path: &str, cwd: &str) -> Vec<coco_types::PermissionUpdate> {
+    let Some(dir) = directory_for_path(path, cwd) else {
+        return vec![];
+    };
+    coco_permissions::filesystem::get_paths_for_permission_check(&dir.to_string_lossy(), cwd)
+        .into_iter()
+        .filter_map(|dir| {
+            let path = PathBuf::from(dir);
+            (path.parent().is_some()).then(|| coco_types::PermissionUpdate::AddRules {
+                rules: vec![coco_types::PermissionRule {
+                    source: coco_types::PermissionRuleSource::Session,
+                    behavior: coco_types::PermissionBehavior::Allow,
+                    value: coco_types::PermissionRuleValue {
+                        tool_pattern: ToolName::Read.as_str().to_string(),
+                        rule_content: Some(format!("{}/**", path_for_rule(&path))),
+                    },
+                }],
+                destination: coco_types::PermissionUpdateDestination::Session,
+            })
+        })
+        .collect()
+}
+
+fn directory_for_path(path: &str, cwd: &str) -> Option<PathBuf> {
+    let raw = PathBuf::from(path);
+    let absolute = if raw.is_absolute() {
+        raw
     } else {
-        ToolCheckResult::Passthrough
+        PathBuf::from(cwd).join(raw)
+    };
+    let dir = if absolute.is_dir() {
+        absolute
+    } else {
+        absolute.parent()?.to_path_buf()
+    };
+    Some(dir)
+}
+
+fn path_for_rule(path: &Path) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    if path.starts_with('/') {
+        format!("/{path}")
+    } else {
+        path
     }
 }
 

@@ -169,14 +169,44 @@ pub struct PermissionOverlay {
     /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option
     /// grid, gated on `settings.showClearContextOnPlanAccept`.
     pub choices: Option<Vec<coco_types::PermissionAskChoice>>,
-    /// Cursor position within `choices`. Meaningless when
-    /// `choices.is_none()`.
+    /// Cursor position within `choices`, or within the classic
+    /// approve / always-allow / deny action list when `choices.is_none()`.
     pub selected_choice: usize,
-    /// Raw tool input captured at dialog-open time. Used by the
-    /// approve path to splice `user_choice` in without losing other
-    /// fields the model originally supplied. Carried only when
-    /// `choices.is_some()`.
+    /// Raw tool input captured at dialog-open time. Choice dialogs splice
+    /// `user_choice` into it; classic read dialogs use it to build
+    /// path-scoped "always allow" updates.
     pub original_input: Option<serde_json::Value>,
+    /// Permission updates suggested by core for "always allow".
+    /// Prefer these over UI-side inference.
+    pub permission_suggestions: Vec<coco_types::PermissionUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionAction {
+    ApproveOnce,
+    AlwaysAllow,
+    Deny,
+}
+
+impl PermissionOverlay {
+    pub(crate) fn classic_action_count(&self) -> usize {
+        if self.show_always_allow { 3 } else { 2 }
+    }
+
+    pub(crate) fn classic_action_at(&self, index: usize) -> PermissionAction {
+        match (self.show_always_allow, index) {
+            (_, 0) => PermissionAction::ApproveOnce,
+            (true, 1) => PermissionAction::AlwaysAllow,
+            _ => PermissionAction::Deny,
+        }
+    }
+
+    pub(crate) fn selected_classic_action(&self) -> PermissionAction {
+        let index = self
+            .selected_choice
+            .min(self.classic_action_count().saturating_sub(1));
+        self.classic_action_at(index)
+    }
 }
 
 /// Risk level for permission explainer badge.

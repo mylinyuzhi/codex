@@ -149,7 +149,9 @@ fn test_permission_request_shows_overlay() {
             tool_name: "Bash".into(),
             description: "Execute command".into(),
             input_preview: "rm -rf /tmp/test".into(),
+            show_always_allow: true,
             choices: None,
+            permission_suggestions: vec![],
             original_input: None,
         }),
     );
@@ -158,6 +160,38 @@ fn test_permission_request_shows_overlay() {
         state.ui.active_overlay(),
         Some(crate::state::Overlay::Permission(_))
     ));
+    match state.ui.active_overlay() {
+        Some(crate::state::Overlay::Permission(overlay)) => {
+            assert!(overlay.show_always_allow);
+        }
+        other => panic!("expected permission overlay, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_permission_request_hides_always_allow_when_disabled() {
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Tui(coco_types::TuiOnlyEvent::ApprovalRequired {
+            request_id: "req-1".into(),
+            tool_name: "Bash".into(),
+            description: "Execute command".into(),
+            input_preview: "rm -rf /tmp/test".into(),
+            show_always_allow: false,
+            choices: None,
+            permission_suggestions: vec![],
+            original_input: None,
+        }),
+    );
+
+    match state.ui.active_overlay() {
+        Some(crate::state::Overlay::Permission(overlay)) => {
+            assert!(!overlay.show_always_allow);
+        }
+        other => panic!("expected permission overlay, got {other:?}"),
+    }
 }
 
 #[test]

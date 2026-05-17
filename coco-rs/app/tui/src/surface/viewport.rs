@@ -27,8 +27,10 @@ use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::state::Toast;
 use crate::state::ToastSeverity;
+use crate::surface::overlay::OverlaySurfacePlacement;
 use crate::surface::overlay::SurfaceFramePlan;
 use crate::surface::overlay::render_surface_overlay;
+use crate::surface::overlay::required_overlay_height;
 use crate::surface::terminal::SurfaceFrame;
 use crate::widgets::SuggestionPopup;
 
@@ -104,7 +106,20 @@ pub(crate) fn interactive_viewport_desired_height(
         status_height.min(avail_below_input)
     };
     let fixed_rows = other_fixed_rows + bottom_height;
-    (fixed_rows + live_content_height.min(max_height.saturating_sub(fixed_rows))).min(max_height)
+    let desired = fixed_rows + live_content_height.min(max_height.saturating_sub(fixed_rows));
+    let overlay_height = state
+        .ui
+        .active_overlay()
+        .filter(|_| {
+            plan.overlay_placement.is_some_and(|placement| {
+                matches!(placement, OverlaySurfacePlacement::InlineDecision)
+            })
+        })
+        .map(|overlay| required_overlay_height(overlay, state, styles, width, max_height))
+        .unwrap_or(0);
+    desired
+        .max(overlay_height.saturating_add(2))
+        .min(max_height)
 }
 
 fn render_live_viewport(

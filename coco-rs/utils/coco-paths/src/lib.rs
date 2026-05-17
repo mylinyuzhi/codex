@@ -31,6 +31,7 @@ pub mod djb2;
 pub mod nfc;
 pub mod project_paths;
 pub mod projects_root;
+pub mod relative;
 pub mod sanitize;
 pub mod slug;
 
@@ -38,5 +39,6 @@ pub use djb2::{djb2, simple_hash};
 pub use nfc::normalize_nfc;
 pub use project_paths::ProjectPaths;
 pub use projects_root::{find_project_dir, project_dir, projects_root};
+pub use relative::{normalize_lexical, path_to_posix, relative_posix_path};
 pub use sanitize::{MAX_SANITIZED_LENGTH, sanitize_agent_type_for_path, sanitize_path};
 pub use slug::ProjectSlug;

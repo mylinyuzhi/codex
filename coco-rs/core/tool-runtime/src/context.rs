@@ -774,6 +774,7 @@ impl ToolUseContext {
                 pre_plan_mode: None,
                 stripped_dangerous_rules: None,
                 session_plan_file: None,
+                permission_rule_source_roots: HashMap::new(),
             },
             tool_use_id: None,
             user_message_id: None,

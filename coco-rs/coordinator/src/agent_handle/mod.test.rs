@@ -18,6 +18,7 @@ fn build_test_runtime() -> coco_config::RuntimeConfig {
             ..Default::default()
         },
         per_source: std::collections::HashMap::new(),
+        source_paths: std::collections::HashMap::new(),
     };
     coco_config::build_runtime_config_with(
         settings,

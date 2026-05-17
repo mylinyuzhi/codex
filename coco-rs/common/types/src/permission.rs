@@ -241,6 +241,9 @@ pub enum ToolCheckResult {
     /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.
     Ask {
         message: String,
+        /// Permission updates the frontend may apply when the user picks
+        /// "always allow". Mirrors TS `PermissionDecision.suggestions`.
+        suggestions: Vec<PermissionUpdate>,
         choices: Option<Vec<PermissionAskChoice>>,
     },
     /// Tool denies this input.
@@ -390,6 +393,12 @@ pub struct ToolPermissionContext {
     pub mode: PermissionMode,
     #[serde(default)]
     pub additional_dirs: HashMap<String, AdditionalWorkingDir>,
+    /// Source-specific roots for path-scoped file permission rules.
+    ///
+    /// TS parity: `rootPathForSource()` in `utils/permissions/filesystem.ts`.
+    /// Empty falls back to cwd-derived roots for test contexts.
+    #[serde(default)]
+    pub permission_rule_source_roots: HashMap<PermissionRuleSource, std::path::PathBuf>,
     #[serde(default)]
     pub allow_rules: PermissionRulesBySource,
     #[serde(default)]

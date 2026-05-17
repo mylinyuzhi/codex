@@ -235,6 +235,7 @@ fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
         choices: Some(choices),
         selected_choice: selected,
         original_input: Some(serde_json::json!({"plan": "do the thing"})),
+        permission_suggestions: vec![],
     }));
     s
 }
@@ -316,10 +317,9 @@ async fn approve_with_choice_takes_same_path_as_confirm() {
 }
 
 #[tokio::test]
-async fn confirm_classic_yes_no_dismisses_without_response() {
-    // No choices → Enter falls into the dismiss catch-all (TS parity:
-    // y/n keys are the explicit commit path; Enter on a classic Y/N
-    // permission dialog is a no-op + dismiss).
+async fn confirm_classic_yes_no_approves_selected_action() {
+    // No choices → Enter commits the focused classic action, matching
+    // TS PermissionPrompt / codex-rs list-selection behavior.
     use crate::state::PermissionDetail;
     use crate::state::PermissionOverlay;
     let mut s = AppState::new();
@@ -337,12 +337,112 @@ async fn confirm_classic_yes_no_dismisses_without_response() {
         choices: None,
         selected_choice: 0,
         original_input: None,
+        permission_suggestions: vec![],
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
 
+    let UserCommand::ApprovalResponse {
+        approved,
+        always_allow,
+        permission_updates,
+        ..
+    } = rx.try_recv().expect("approval sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(approved);
+    assert!(!always_allow);
+    assert!(permission_updates.is_empty());
     assert!(!s.ui.has_overlay(), "overlay dismissed");
-    assert!(rx.try_recv().is_err(), "no ApprovalResponse on Enter");
+}
+
+#[tokio::test]
+async fn confirm_classic_always_allow_sends_session_update() {
+    use crate::state::PermissionDetail;
+    use crate::state::PermissionOverlay;
+    let mut s = AppState::new();
+    s.ui.set_overlay(Overlay::Permission(PermissionOverlay {
+        request_id: "req-1".into(),
+        tool_name: "Bash".into(),
+        description: "Run".into(),
+        detail: PermissionDetail::Generic {
+            input_preview: "ls".into(),
+        },
+        risk_level: None,
+        show_always_allow: true,
+        classifier_checking: false,
+        classifier_auto_approved: None,
+        choices: None,
+        selected_choice: 1,
+        original_input: None,
+        permission_suggestions: vec![],
+    }));
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    confirm(&mut s, &tx).await;
+
+    let UserCommand::ApprovalResponse {
+        approved,
+        always_allow,
+        permission_updates,
+        ..
+    } = rx.try_recv().expect("approval sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(approved);
+    assert!(always_allow);
+    assert_eq!(permission_updates.len(), 1);
+    assert!(!s.ui.has_overlay(), "overlay dismissed");
+}
+
+#[tokio::test]
+async fn confirm_classic_read_always_allow_sends_path_scoped_session_update() {
+    use crate::state::PermissionDetail;
+    use crate::state::PermissionOverlay;
+    let dir = std::env::temp_dir().join("coco-tui-read-permission-test");
+    let file = dir.join("notes.txt");
+    let mut s = AppState::new();
+    s.ui.set_overlay(Overlay::Permission(PermissionOverlay {
+        request_id: "req-1".into(),
+        tool_name: "Read".into(),
+        description: "Read outside cwd".into(),
+        detail: PermissionDetail::Generic {
+            input_preview: file.display().to_string(),
+        },
+        risk_level: None,
+        show_always_allow: true,
+        classifier_checking: false,
+        classifier_auto_approved: None,
+        choices: None,
+        selected_choice: 1,
+        original_input: Some(serde_json::json!({"file_path": file.to_string_lossy()})),
+        permission_suggestions: vec![],
+    }));
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    confirm(&mut s, &tx).await;
+
+    let UserCommand::ApprovalResponse {
+        permission_updates, ..
+    } = rx.try_recv().expect("approval sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    let [coco_types::PermissionUpdate::AddRules { rules, destination }] =
+        permission_updates.as_slice()
+    else {
+        panic!("expected AddRules update")
+    };
+    assert_eq!(
+        *destination,
+        coco_types::PermissionUpdateDestination::Session
+    );
+    assert_eq!(rules[0].value.tool_pattern, "Read");
+    let expected = format!("/{}/**", dir.to_string_lossy());
+    assert_eq!(
+        rules[0].value.rule_content.as_deref(),
+        Some(expected.as_str())
+    );
 }
 
 #[test]
@@ -389,6 +489,7 @@ fn build_choice_payload_merges_with_original_input() {
         }]),
         selected_choice: 0,
         original_input: Some(serde_json::json!({"existing": 42, "other": "v"})),
+        permission_suggestions: vec![],
     };
     let out = build_choice_payload(&p).expect("payload built");
     assert_eq!(out["existing"], 42);
@@ -415,6 +516,7 @@ fn build_choice_payload_none_when_cursor_out_of_range() {
         choices: Some(vec![]),
         selected_choice: 5,
         original_input: None,
+        permission_suggestions: vec![],
     };
     assert!(build_choice_payload(&p).is_none());
 }

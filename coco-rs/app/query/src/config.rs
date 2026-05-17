@@ -14,6 +14,7 @@ use coco_messages::CostTracker;
 use coco_messages::Message;
 use coco_types::Features;
 use coco_types::PermissionMode;
+use coco_types::PermissionRuleSource;
 use coco_types::PermissionRulesBySource;
 use coco_types::PromptCacheConfig;
 use coco_types::ThinkingLevel;
@@ -124,6 +125,14 @@ pub struct QueryEngineConfig {
     pub allow_rules: PermissionRulesBySource,
     pub deny_rules: PermissionRulesBySource,
     pub ask_rules: PermissionRulesBySource,
+    /// Root directories used to resolve leading-`/` path permission
+    /// patterns per rule source. TS:
+    /// `settings.ts::getSettingsRootPathForSource` + filesystem
+    /// `rootPathForSource`; user settings resolve at config home,
+    /// flag settings at the flag file dirname, and project/local/policy
+    /// at original cwd.
+    pub permission_rule_source_roots:
+        std::collections::HashMap<PermissionRuleSource, std::path::PathBuf>,
     /// Per-session working-directory allowlist, augmenting the cwd.
     /// Populated by the `/add-dir <path>` slash command via the
     /// runtime's `session_additional_dirs` and threaded into every
@@ -350,6 +359,7 @@ impl Default for QueryEngineConfig {
             allow_rules: Default::default(),
             deny_rules: Default::default(),
             ask_rules: Default::default(),
+            permission_rule_source_roots: Default::default(),
             session_additional_dirs: Default::default(),
             cwd_override: None,
             plans_directory: None,

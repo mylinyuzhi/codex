@@ -66,6 +66,7 @@ impl PermissionRulesByBehavior {
         let mut context = ToolPermissionContext {
             mode,
             additional_dirs: Default::default(),
+            permission_rule_source_roots: Default::default(),
             allow_rules: Default::default(),
             deny_rules: Default::default(),
             ask_rules: Default::default(),

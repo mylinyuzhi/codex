@@ -20,6 +20,7 @@ use crate::state::ProviderUnavailableReason;
 use crate::state::SessionBrowserOverlay;
 use crate::state::SessionOption;
 use crate::state::SuggestionKind;
+use crate::state::overlay::PermissionAction;
 use crate::state::ui::Toast;
 use crate::update_rewind;
 use crate::widgets::suggestion_popup::SuggestionMeta;
@@ -346,18 +347,6 @@ pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<
     if let Some(Overlay::Permission(p)) = state.ui.active_overlay()
         && p.show_always_allow
     {
-        let update = coco_types::PermissionUpdate::AddRules {
-            rules: vec![coco_types::PermissionRule {
-                source: coco_types::PermissionRuleSource::Session,
-                behavior: coco_types::PermissionBehavior::Allow,
-                value: coco_types::PermissionRuleValue {
-                    tool_pattern: p.tool_name.clone(),
-                    rule_content: None,
-                },
-            }],
-            destination: coco_types::PermissionUpdateDestination::Session,
-        };
-
         let _ = command_tx
             .send(UserCommand::ApprovalResponse {
                 request_id: p.request_id.clone(),
@@ -365,11 +354,103 @@ pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<
                 always_allow: true,
                 feedback: None,
                 updated_input: None,
-                permission_updates: vec![update],
+                permission_updates: always_allow_updates(
+                    &p.tool_name,
+                    p.original_input.as_ref(),
+                    &p.permission_suggestions,
+                ),
                 content_blocks: None,
             })
             .await;
         state.ui.dismiss_overlay();
+    }
+}
+
+fn always_allow_updates(
+    tool_name: &str,
+    original_input: Option<&serde_json::Value>,
+    permission_suggestions: &[coco_types::PermissionUpdate],
+) -> Vec<coco_types::PermissionUpdate> {
+    if !permission_suggestions.is_empty() {
+        return permission_suggestions.to_vec();
+    }
+    if let Some(update) = read_path_allow_update(tool_name, original_input) {
+        return vec![update];
+    }
+    vec![coco_types::PermissionUpdate::AddRules {
+        rules: vec![coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::Session,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: tool_name.to_string(),
+                rule_content: None,
+            },
+        }],
+        destination: coco_types::PermissionUpdateDestination::Session,
+    }]
+}
+
+fn read_path_allow_update(
+    tool_name: &str,
+    original_input: Option<&serde_json::Value>,
+) -> Option<coco_types::PermissionUpdate> {
+    if !matches!(tool_name, "Read" | "Grep" | "Glob") {
+        return None;
+    }
+    let input = original_input?;
+    let raw_path = match tool_name {
+        "Read" => input.get("file_path").and_then(|v| v.as_str())?,
+        "Grep" | "Glob" => input.get("path").and_then(|v| v.as_str())?,
+        _ => return None,
+    };
+    let dir = directory_for_permission_rule(raw_path)?;
+    let rule_content = format!("{}/**", path_for_permission_rule(&dir));
+    Some(coco_types::PermissionUpdate::AddRules {
+        rules: vec![coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::Session,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: "Read".to_string(),
+                rule_content: Some(rule_content),
+            },
+        }],
+        destination: coco_types::PermissionUpdateDestination::Session,
+    })
+}
+
+fn directory_for_permission_rule(raw_path: &str) -> Option<std::path::PathBuf> {
+    let path = shellexpand_read_path(raw_path);
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let dir = if absolute.is_dir() {
+        absolute
+    } else {
+        absolute.parent()?.to_path_buf()
+    };
+    (dir.parent().is_some()).then_some(dir)
+}
+
+fn shellexpand_read_path(raw_path: &str) -> std::path::PathBuf {
+    if raw_path == "~" {
+        return dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(raw_path));
+    }
+    if let Some(rest) = raw_path.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+    std::path::PathBuf::from(raw_path)
+}
+
+fn path_for_permission_rule(path: &std::path::Path) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    if path.starts_with('/') {
+        format!("/{path}")
+    } else {
+        path
     }
 }
 
@@ -557,14 +638,12 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
             p.next_mode = order[new_idx];
         }
         Some(Overlay::Permission(p)) => {
-            // Multi-choice mode (ExitPlanMode keep/clear/cancel etc.):
-            // Up/Down moves the selected choice with saturation. In
-            // classic yes/no mode this arm is a no-op — Approve / Deny
-            // map to dedicated keystrokes ('y' / 'n'), not the cursor.
-            if let Some(choices) = &p.choices
-                && !choices.is_empty()
-            {
-                let count = choices.len() as i32;
+            let count = p
+                .choices
+                .as_ref()
+                .map(Vec::len)
+                .unwrap_or_else(|| p.classic_action_count()) as i32;
+            if count > 0 {
                 let current = p.selected_choice as i32;
                 let next = (current + delta).clamp(0, count - 1);
                 p.selected_choice = next as usize;
@@ -889,31 +968,45 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             state.ui.dismiss_overlay();
             return;
         }
-        // Permission overlay in choice mode: Enter commits the
-        // currently-focused option (TS parity:
-        // `ExitPlanModePermissionRequest.tsx:691-704`). The chosen
-        // `value` is spliced into `updated_input` so the tool's
-        // `execute()` can branch on it (e.g. ExitPlanMode reads
-        // `user_choice == "yes-clear-context"` to flag history-clear).
-        // Classic yes/no mode (no choices) falls into the dismiss
-        // catch-all below — Enter is a no-op there, matching TS's
-        // y/n-only confirmation prompt.
-        Some(Overlay::Permission(ref p)) if p.choices.is_some() => {
-            let chosen_is_no = p
-                .choices
-                .as_ref()
-                .and_then(|cs| cs.get(p.selected_choice))
-                .map(|c| c.value.as_str())
-                == Some("no");
-            let updated_input = build_choice_payload(p);
+        // Permission overlay: Enter commits the currently-focused row,
+        // matching TS PermissionPrompt/codex-rs list-selection behavior.
+        // Tool-provided choices splice their `value` back into
+        // `updated_input`; classic requests use the focused
+        // approve / always-allow / deny action.
+        Some(Overlay::Permission(ref p)) => {
+            let (approved, always_allow, updated_input, permission_updates) = if p.choices.is_some()
+            {
+                let chosen_is_no = p
+                    .choices
+                    .as_ref()
+                    .and_then(|cs| cs.get(p.selected_choice))
+                    .map(|c| c.value.as_str())
+                    == Some("no");
+                (!chosen_is_no, false, build_choice_payload(p), vec![])
+            } else {
+                match p.selected_classic_action() {
+                    PermissionAction::ApproveOnce => (true, false, None, vec![]),
+                    PermissionAction::AlwaysAllow => (
+                        true,
+                        true,
+                        None,
+                        always_allow_updates(
+                            &p.tool_name,
+                            p.original_input.as_ref(),
+                            &p.permission_suggestions,
+                        ),
+                    ),
+                    PermissionAction::Deny => (false, false, None, vec![]),
+                }
+            };
             let _ = command_tx
                 .send(UserCommand::ApprovalResponse {
                     request_id: p.request_id.clone(),
-                    approved: !chosen_is_no,
-                    always_allow: false,
+                    approved,
+                    always_allow,
                     feedback: None,
                     updated_input,
-                    permission_updates: vec![],
+                    permission_updates,
                     content_blocks: None,
                 })
                 .await;
@@ -921,8 +1014,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
         }
         // All remaining overlays: confirm = dismiss
         Some(
-            Overlay::Permission(_)
-            | Overlay::Help
+            Overlay::Help
             | Overlay::Error(_)
             | Overlay::PlanEntry(_)
             | Overlay::CostWarning(_)

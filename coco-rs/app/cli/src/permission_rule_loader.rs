@@ -22,6 +22,9 @@ use coco_types::PermissionBehavior;
 use coco_types::PermissionRule;
 use coco_types::PermissionRuleSource;
 use coco_types::PermissionRulesBySource;
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Map a config-layer [`SettingSource`] to the matching
 /// permission-layer [`PermissionRuleSource`].
@@ -77,6 +80,54 @@ pub fn typed_permission_rules(
         build_rules_by_source(&deny, PermissionBehavior::Deny),
         build_rules_by_source(&ask, PermissionBehavior::Ask),
     )
+}
+
+/// Resolve the source root used for leading-`/` file permission rules.
+///
+/// TS evidence:
+/// - `settings.ts::getSettingsRootPathForSource`
+/// - `permissions/filesystem.ts::rootPathForSource`
+///
+/// `Read(/foo/**)` in user settings is rooted at the coco config home;
+/// the same rule in project/local/policy/session/command/CLI sources is
+/// rooted at the original cwd. Flag settings are rooted at the directory
+/// containing the flag settings file.
+pub fn permission_rule_source_roots(
+    settings: &SettingsWithSource,
+    original_cwd: &Path,
+) -> HashMap<PermissionRuleSource, PathBuf> {
+    let mut roots = HashMap::new();
+    let original_cwd = original_cwd.to_path_buf();
+
+    for source in [
+        PermissionRuleSource::Session,
+        PermissionRuleSource::Command,
+        PermissionRuleSource::CliArg,
+        PermissionRuleSource::ProjectSettings,
+        PermissionRuleSource::LocalSettings,
+        PermissionRuleSource::PolicySettings,
+    ] {
+        roots.insert(source, original_cwd.clone());
+    }
+
+    let user_root = settings
+        .source_paths
+        .get(&SettingSource::User)
+        .and_then(|path| path.parent())
+        .map(Path::to_path_buf)
+        .or_else(|| Some(coco_config::global_config::config_home()))
+        .unwrap_or_else(|| original_cwd.clone());
+    roots.insert(PermissionRuleSource::UserSettings, user_root);
+
+    let flag_root = settings
+        .source_paths
+        .get(&SettingSource::Flag)
+        .and_then(|path| path.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| original_cwd.clone());
+    roots.insert(PermissionRuleSource::FlagSettings, flag_root);
+
+    roots
 }
 
 #[cfg(test)]

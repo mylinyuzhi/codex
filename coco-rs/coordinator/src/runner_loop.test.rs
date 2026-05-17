@@ -401,6 +401,7 @@ async fn test_mailbox_permission_bridge_fails_closed_on_cancel() {
         tool_name: "Bash".into(),
         description: "rm -rf /tmp/test".into(),
         input: serde_json::json!({"command": "rm -rf /tmp/test"}),
+        suggestions: vec![],
         choices: None,
     };
     let result = bridge.request_permission(req).await;
@@ -451,6 +452,7 @@ async fn test_mailbox_permission_bridge_returns_resolution_on_response() {
         tool_name: "Read".into(),
         description: "read file".into(),
         input: serde_json::json!({"path": "/tmp/x"}),
+        suggestions: vec![],
         choices: None,
     };
     let resolution = tokio::time::timeout(Duration::from_secs(3), bridge.request_permission(req))

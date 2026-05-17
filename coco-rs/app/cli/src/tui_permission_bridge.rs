@@ -47,6 +47,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
+use coco_config::SettingSource;
 use coco_query::CoreEvent;
 use coco_tool_runtime::{
     ToolPermissionBridge, ToolPermissionDecision, ToolPermissionRequest, ToolPermissionResolution,
@@ -134,6 +135,31 @@ impl TuiPermissionBridge {
         let snap = runtime.app_state.read().await;
         Some(snap.pending_permission_count.clone())
     }
+
+    async fn show_always_allow_options(&self) -> bool {
+        let Some(runtime) = self
+            .notification_runtime
+            .read()
+            .await
+            .as_ref()
+            .and_then(Weak::upgrade)
+        else {
+            return true;
+        };
+        settings_allow_always_allow_options(&runtime.runtime_config.settings)
+    }
+}
+
+pub fn settings_allow_always_allow_options(settings: &coco_config::SettingsWithSource) -> bool {
+    !settings
+        .per_source
+        .get(&SettingSource::Policy)
+        .and_then(|raw| {
+            raw.pointer("/permissions/allowManagedPermissionRulesOnly")
+                .or_else(|| raw.pointer("/permissions/allow_managed_permission_rules_only"))
+        })
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 #[async_trait]
@@ -208,18 +234,20 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 input: request.input.clone(),
             })
         } else {
+            let show_always_allow = self.show_always_allow_options().await;
             CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
                 request_id: request.id.clone(),
                 tool_name: request.tool_name.clone(),
                 description: request.description.clone(),
                 input_preview: serde_json::to_string(&request.input)
                     .unwrap_or_else(|_| "<unrenderable input>".to_string()),
+                show_always_allow,
                 choices: request.choices.clone(),
-                // Carry the raw input only when there's a choice payload
-                // so the TUI can splice `user_choice` into a clone of it.
-                // For the legacy yes/no dialog the input_preview string
-                // is enough.
-                original_input: request.choices.as_ref().map(|_| request.input.clone()),
+                permission_suggestions: request.suggestions.clone(),
+                // Carry the raw input for both choice and classic dialogs:
+                // choices splice `user_choice`; classic read permissions
+                // derive TS-style path-scoped "always allow" updates.
+                original_input: Some(request.input.clone()),
             })
         };
         if let Err(e) = self.notification_tx.send(event).await {
@@ -280,16 +308,44 @@ pub async fn resolve_pending(
     updated_input: Option<serde_json::Value>,
     content_blocks: Option<Vec<serde_json::Value>>,
 ) -> bool {
-    // Removing the entry drops its `_guard` field, decrementing the
-    // pending_permission_count exactly once via `Drop`. Lock-free.
-    let entry = {
-        let mut map = pending.write().await;
-        map.remove(request_id)
-    };
+    let entry = take_pending(pending, request_id).await;
     let Some(entry) = entry else {
         warn!(%request_id, "ApprovalResponse for unknown request_id (stale or already resolved)");
         return false;
     };
+    send_resolution(
+        entry,
+        approved,
+        feedback,
+        permission_updates,
+        updated_input,
+        content_blocks,
+    )
+}
+
+/// Remove a pending approval without sending a resolution yet.
+///
+/// Callers that need side effects before unblocking the engine use this
+/// to validate the request id first, then apply updates, then call
+/// [`send_resolution`]. This prevents stale approval responses from
+/// mutating permission state after a request was cancelled.
+pub async fn take_pending(
+    pending: &PendingApprovals,
+    request_id: &str,
+) -> Option<PendingApprovalEntry> {
+    // Removing the entry drops its `_guard` when the returned entry is
+    // later consumed, decrementing pending_permission_count exactly once.
+    pending.write().await.remove(request_id)
+}
+
+pub fn send_resolution(
+    entry: PendingApprovalEntry,
+    approved: bool,
+    feedback: Option<String>,
+    permission_updates: Vec<coco_types::PermissionUpdate>,
+    updated_input: Option<serde_json::Value>,
+    content_blocks: Option<Vec<serde_json::Value>>,
+) -> bool {
     let resolution = ToolPermissionResolution {
         decision: if approved {
             ToolPermissionDecision::Approved

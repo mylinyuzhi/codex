@@ -98,9 +98,21 @@ impl<'a> PermissionController<'a> {
                 .await;
                 PermissionOutcome::Denied
             }
-            PermissionDecision::Ask { choices, .. } => {
-                self.resolve_ask(tool_call, tool_input, tool_id, choices)
-                    .await
+            PermissionDecision::Ask {
+                message,
+                suggestions,
+                choices,
+                ..
+            } => {
+                self.resolve_ask(
+                    tool_call,
+                    tool_input,
+                    tool_id,
+                    message,
+                    suggestions,
+                    choices,
+                )
+                .await
             }
         }
     }
@@ -110,6 +122,8 @@ impl<'a> PermissionController<'a> {
         tool_call: &ToolCallPart,
         tool_input: &serde_json::Value,
         tool_id: &ToolId,
+        message: String,
+        suggestions: Vec<coco_types::PermissionUpdate>,
         choices: Option<Vec<coco_types::PermissionAskChoice>>,
     ) -> PermissionOutcome {
         // TS reference: notifySessionStateChanged('requires_action') on
@@ -127,12 +141,13 @@ impl<'a> PermissionController<'a> {
         if let (Some(registry), Some(ctx)) = (self.hooks, self.orchestration_ctx)
             && !ctx.disable_all_hooks
         {
+            let permission_suggestions = serde_json::to_value(&suggestions).ok();
             match coco_hooks::orchestration::execute_permission_request(
                 registry,
                 ctx,
                 &tool_call.tool_name,
                 tool_input,
-                /*permission_suggestions*/ None,
+                permission_suggestions.as_ref(),
             )
             .await
             {
@@ -198,8 +213,9 @@ impl<'a> PermissionController<'a> {
             tool_use_id: tool_call.tool_call_id.clone(),
             agent_id: self.session_id.to_string(),
             tool_name: tool_call.tool_name.clone(),
-            description: format!("Approval required for {}", tool_call.tool_name),
+            description: message,
             input: tool_input.clone(),
+            suggestions,
             choices,
         };
 

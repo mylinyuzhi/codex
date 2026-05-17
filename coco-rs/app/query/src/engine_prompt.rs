@@ -307,6 +307,7 @@ impl QueryEngine {
             pre_plan_mode: app_state.pre_plan_mode,
             stripped_dangerous_rules: app_state.stripped_dangerous_rules.clone(),
             session_plan_file: None,
+            permission_rule_source_roots: self.config.permission_rule_source_roots.clone(),
         };
         // Round 7: thread the agent catalog + connected MCP servers
         // through to PromptOptions so AgentTool::prompt can render

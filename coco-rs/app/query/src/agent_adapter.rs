@@ -132,6 +132,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             allow_rules: build_initial_allow_rules(&config.extra_allow_rules),
             deny_rules: Default::default(),
             ask_rules: Default::default(),
+            permission_rule_source_roots: Default::default(),
             session_additional_dirs: Default::default(),
             // Propagate the subagent's cwd_override (set by worktree
             // isolation or explicit `cwd:` input) so the child

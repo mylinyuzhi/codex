@@ -617,6 +617,7 @@ fn test_sourced_permission_rules_pulls_per_source_arrays() {
     let swith = SettingsWithSource {
         merged: Settings::default(),
         per_source,
+        source_paths: std::collections::HashMap::new(),
     };
     let (allow, deny, ask) = swith.sourced_permission_rules();
 
@@ -661,6 +662,7 @@ fn test_sourced_filesystem_allow_read_groups_by_source() {
     let swith = SettingsWithSource {
         merged: Settings::default(),
         per_source,
+        source_paths: std::collections::HashMap::new(),
     };
     let groups = swith.sourced_filesystem_allow_read();
 
@@ -694,6 +696,7 @@ fn test_sourced_helpers_handle_missing_keys_gracefully() {
     let swith = SettingsWithSource {
         merged: Settings::default(),
         per_source,
+        source_paths: std::collections::HashMap::new(),
     };
 
     let (allow, deny, ask) = swith.sourced_permission_rules();

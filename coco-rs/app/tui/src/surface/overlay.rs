@@ -12,6 +12,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
 use crate::presentation::layout;
+use crate::presentation::layout::text_width;
 use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
 use crate::state::Overlay;
@@ -26,6 +27,37 @@ pub(crate) enum OverlaySurfacePlacement {
 }
 
 const INLINE_DECISION_RECENT_INTERACTION: Duration = Duration::from_secs(2);
+const DECISION_OVERLAY_MIN_WIDTH: u16 = 54;
+const DECISION_OVERLAY_MAX_WIDTH: u16 = 120;
+const DECISION_OVERLAY_MIN_HEIGHT: u16 = 12;
+const DECISION_OVERLAY_MAX_HEIGHT: u16 = 28;
+const DEFAULT_OVERLAY_MIN_WIDTH: u16 = 40;
+const DEFAULT_OVERLAY_MAX_WIDTH: u16 = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OverlayBoxPolicy {
+    width_percent: u16,
+    min_width: u16,
+    max_width: u16,
+    min_height: u16,
+    max_height: u16,
+}
+
+const DECISION_OVERLAY_POLICY: OverlayBoxPolicy = OverlayBoxPolicy {
+    width_percent: 84,
+    min_width: DECISION_OVERLAY_MIN_WIDTH,
+    max_width: DECISION_OVERLAY_MAX_WIDTH,
+    min_height: DECISION_OVERLAY_MIN_HEIGHT,
+    max_height: DECISION_OVERLAY_MAX_HEIGHT,
+};
+
+const DEFAULT_OVERLAY_POLICY: OverlayBoxPolicy = OverlayBoxPolicy {
+    width_percent: 70,
+    min_width: DEFAULT_OVERLAY_MIN_WIDTH,
+    max_width: DEFAULT_OVERLAY_MAX_WIDTH,
+    min_height: 1,
+    max_height: u16::MAX,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HistorySurfaceMode {
@@ -231,12 +263,7 @@ pub(crate) fn render_surface_overlay(
 
     let (title, body, border_color) =
         crate::overlay_content::overlay_content(overlay, state, styles);
-    let width = ((area.width as u32 * 70 / 100) as u16).clamp(40, 100);
-    let height = body
-        .lines()
-        .count()
-        .saturating_add(4)
-        .min(u16::MAX as usize) as u16;
+    let (width, height) = overlay_box_size(area, &body, overlay_box_policy(overlay));
     let overlay_area = layout::centered_fixed_area(area, width, height);
 
     frame.render_widget(Clear, overlay_area);
@@ -249,6 +276,54 @@ pub(crate) fn render_surface_overlay(
         ),
         overlay_area,
     );
+}
+
+pub(crate) fn required_overlay_height(
+    overlay: &Overlay,
+    state: &AppState,
+    styles: UiStyles<'_>,
+    width: u16,
+    max_height: u16,
+) -> u16 {
+    if width == 0 || max_height == 0 {
+        return 0;
+    }
+    let (_, body, _) = crate::overlay_content::overlay_content(overlay, state, styles);
+    let area = Rect::new(0, 0, width, max_height);
+    overlay_box_size(area, &body, overlay_box_policy(overlay)).1
+}
+
+fn overlay_box_policy(overlay: &Overlay) -> OverlayBoxPolicy {
+    match overlay_surface_placement(Some(overlay)) {
+        Some(OverlaySurfacePlacement::InlineDecision) => DECISION_OVERLAY_POLICY,
+        Some(OverlaySurfacePlacement::AltScreen | OverlaySurfacePlacement::ComposerInline)
+        | None => DEFAULT_OVERLAY_POLICY,
+    }
+}
+
+fn overlay_box_size(area: Rect, body: &str, policy: OverlayBoxPolicy) -> (u16, u16) {
+    let available_width = area.width.saturating_sub(2).max(1);
+    let width = ((area.width as u32 * u32::from(policy.width_percent) / 100) as u16)
+        .clamp(policy.min_width.min(available_width), policy.max_width)
+        .min(available_width);
+    let inner_width = width.saturating_sub(2).max(1) as usize;
+    let wrapped_body_rows = body
+        .lines()
+        .map(|line| {
+            let line_width = text_width(line);
+            line_width.saturating_add(inner_width - 1) / inner_width
+        })
+        .map(|rows| rows.max(1))
+        .sum::<usize>();
+    let content_height = wrapped_body_rows.saturating_add(4).min(u16::MAX as usize) as u16;
+    let available_height = area.height.saturating_sub(2).max(1);
+    let height = content_height
+        .clamp(
+            policy.min_height.min(available_height),
+            policy.max_height.min(available_height),
+        )
+        .min(available_height);
+    (width, height)
 }
 
 #[cfg(test)]

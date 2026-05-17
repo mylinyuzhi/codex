@@ -50,6 +50,7 @@ async fn request_permission_approved_round_trip() {
                 tool_name: "Bash".into(),
                 description: "Execute ls".into(),
                 input: serde_json::json!({ "command": "ls" }),
+                suggestions: vec![],
                 choices: None,
             })
             .await
@@ -103,6 +104,7 @@ async fn request_permission_denied_round_trip() {
                 tool_name: "Bash".into(),
                 description: "rm -rf /".into(),
                 input: serde_json::json!({ "command": "rm -rf /" }),
+                suggestions: vec![],
                 choices: None,
             })
             .await
@@ -147,6 +149,7 @@ async fn request_permission_client_error_is_treated_as_denial() {
                 tool_name: "Bash".into(),
                 description: "test".into(),
                 input: serde_json::json!({}),
+                suggestions: vec![],
                 choices: None,
             })
             .await
@@ -191,6 +194,7 @@ async fn request_permission_errors_if_transport_not_initialized() {
             tool_name: "Bash".into(),
             description: "x".into(),
             input: serde_json::json!({}),
+            suggestions: vec![],
             choices: None,
         })
         .await;

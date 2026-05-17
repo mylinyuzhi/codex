@@ -83,7 +83,11 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             blocked_path: None,
             decision_reason: None,
             agent_id: Some(request.agent_id.clone()),
-            permission_suggestions: Vec::new(),
+            permission_suggestions: request
+                .suggestions
+                .iter()
+                .filter_map(|s| serde_json::to_value(s).ok())
+                .collect(),
         };
         let params = serde_json::to_value(&params)
             .map_err(|e| format!("serialize ServerAskForApprovalParams: {e}"))?;

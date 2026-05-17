@@ -5,6 +5,7 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
+use coco_types::ToolCheckResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -116,6 +117,18 @@ impl Tool for EditTool {
             return ValidationResult::invalid("old_string and new_string must be different");
         }
         ValidationResult::Valid
+    }
+
+    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
+        let Some(path) = input.get("file_path").and_then(Value::as_str) else {
+            return ToolCheckResult::Passthrough;
+        };
+        crate::tools::write_permissions::check_write_permission_for_path(
+            path,
+            ctx,
+            ToolName::Edit.as_str(),
+            "edit a file",
+        )
     }
 
     /// Branch on `replaceAll` to emit the TS-shaped confirmation. TS
