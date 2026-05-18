@@ -17,6 +17,7 @@
 //! the renderer once it switches over (Phase 3b).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use coco_messages::Message;
 use coco_messages::SystemMessage;
@@ -59,9 +60,11 @@ impl TranscriptView {
     /// Append cells derived from `msg`. Multiple cells may be produced
     /// for one Message (e.g. assistant text + tool_use blocks); the
     /// UUID index records the first cell so consumers can find the
-    /// group head.
-    pub fn on_message_appended(&mut self, msg: &Message) {
-        let derived = message_to_cells(msg);
+    /// group head. The owned `Arc<Message>` is shared into each cell
+    /// so renderers can recover engine-side fields (`is_meta`,
+    /// `permission_mode`, timestamp, …) without re-serializing.
+    pub fn on_message_appended(&mut self, msg: Arc<Message>) {
+        let derived = message_to_cells(msg.clone());
         if derived.is_empty() {
             return;
         }
@@ -124,12 +127,16 @@ impl TranscriptView {
 }
 
 /// One render cell derived from a (possibly partial) engine `Message`.
-/// Layout / viewport-dependent fields are intentionally absent in
-/// Phase 3a — they'll be added when the renderer switches over.
+/// Carries an `Arc<Message>` back-pointer so renderers can extract
+/// engine-authoritative fields (`is_meta`, `permission_mode`,
+/// `timestamp`, `is_compact_summary`, …) without parallel storage.
+/// Layout / viewport-dependent fields are intentionally absent —
+/// layout caching lives in the renderer at draw time.
 #[derive(Debug, Clone)]
 pub struct RenderedCell {
     pub message_uuid: Uuid,
     pub kind: CellKind,
+    pub source: Arc<Message>,
 }
 
 /// TUI-internal classification used for render dispatch.

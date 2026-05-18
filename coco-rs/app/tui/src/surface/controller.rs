@@ -113,6 +113,15 @@ impl NativeSurfaceController {
 
         let options = history_options(state, width);
         let session_header = || session_header_lines(state, width);
+        // Phase 3c: feed the native history driver with the merged
+        // view (legacy session.messages + transcript-derived cells).
+        // Engine-pushed content (cancel marker, resume scrollback,
+        // etc.) flows through transcript and becomes visible without
+        // a parallel TUI add_message push.
+        let merged_messages = crate::state::derive::merged_chat_messages(
+            &state.session.messages,
+            state.session.transcript.cells(),
+        );
         let history = if !plan.native_history_enabled() {
             HistoryEmissionOutcome::Noop
         } else {
@@ -122,7 +131,7 @@ impl NativeSurfaceController {
                 self.history.replay_all_capped(
                     terminal,
                     session_header(),
-                    &state.session.messages,
+                    &merged_messages,
                     options,
                     stream_active,
                 )?
@@ -130,14 +139,14 @@ impl NativeSurfaceController {
                 let outcome = self.history.emit_append_only(
                     terminal,
                     session_header(),
-                    &state.session.messages,
+                    &merged_messages,
                     options,
                 )?;
                 if matches!(outcome, HistoryEmissionOutcome::ReplayRequired) {
                     self.history.replay_all_capped(
                         terminal,
                         session_header(),
-                        &state.session.messages,
+                        &merged_messages,
                         options,
                         stream_active,
                     )?

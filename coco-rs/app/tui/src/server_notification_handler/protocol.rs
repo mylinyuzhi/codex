@@ -28,7 +28,6 @@ use crate::state::session::SubagentStatus;
 use crate::state::session::TaskEntry;
 use crate::state::session::TaskEntryStatus;
 use crate::state::session::TokenUsage;
-use crate::state::session::ToolStatus;
 use crate::state::ui::Toast;
 
 pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
@@ -780,7 +779,13 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         ServerNotification::MessageAppended { message } => {
             match serde_json::from_value::<coco_messages::Message>(message) {
                 Ok(msg) => {
-                    state.session.transcript.on_message_appended(&msg);
+                    state
+                        .session
+                        .transcript
+                        .on_message_appended(std::sync::Arc::new(msg));
+                    // Engine-pushed content becomes visible via the
+                    // transcript-derived render path. Signal redraw.
+                    return true;
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -973,46 +978,14 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
     // mutate history anyway. Skipped when auto-restore truncated to
     // the last user prompt: the prompt is now back in the input and
     // adding "you interrupted yourself" would be noise.
-    if user_cancel && !auto_restored {
-        // Engine's `finalize_user_cancel` pushed a typed
-        // `SystemMessage::UserInterruption` with the authoritative
-        // `for_tool_use` computed at the cancel checkpoint; the
-        // matching MessageAppended event has already populated
-        // `transcript`. Read the value from there instead of
-        // recomputing from `tool_executions`, which is what caused
-        // the legacy engine ↔ TUI disagreement that motivated the
-        // unified-transcript refactor. Fallback to the TUI compute
-        // when no UserInterruption cell is present (rare; covers
-        // session-preempt edge cases that bypass finalize_user_cancel
-        // and legacy JSONL resumes where the engine push hadn't run).
-        let for_tool_use = state
-            .session
-            .transcript
-            .cells()
-            .iter()
-            .rev()
-            .find_map(|c| match &c.kind {
-                crate::state::CellKind::System(
-                    crate::state::SystemCellKind::UserInterruption { for_tool_use },
-                ) => Some(*for_tool_use),
-                _ => None,
-            })
-            .unwrap_or_else(|| {
-                state
-                    .session
-                    .tool_executions
-                    .iter()
-                    .any(|t| matches!(t.status, ToolStatus::Running | ToolStatus::Queued))
-            });
-        let id = format!(
-            "interrupt-{}-{}",
-            state.session.turn_count,
-            state.session.messages.len()
-        );
-        state
-            .session
-            .add_message(ChatMessage::interruption_marker(id, for_tool_use));
-    }
+    //
+    // Phase 3c: the engine's `finalize_user_cancel` already pushed a
+    // typed `SystemMessage::UserInterruption` with the authoritative
+    // `for_tool_use` and the MessageAppended event populated
+    // `transcript`. The merged-view renderer in `viewport.rs` renders
+    // it directly; no need for the TUI to push a parallel
+    // `ChatMessage::interruption_marker` here.
+    let _ = (user_cancel, auto_restored);
     true
 }
 

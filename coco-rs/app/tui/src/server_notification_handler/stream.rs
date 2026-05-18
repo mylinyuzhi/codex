@@ -16,10 +16,6 @@ use coco_types::MCP_TOOL_SEPARATOR;
 
 use super::projection::flush_streaming_to_messages;
 use crate::state::AppState;
-use crate::state::session::ChatMessage;
-use crate::state::session::MessageContent;
-use crate::state::session::ToolUseStatus;
-use crate::tool_display::tool_input_preview;
 
 pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
     match event {
@@ -47,26 +43,13 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
         AgentStreamEvent::ToolUseQueued {
             call_id,
             name,
-            input,
+            input: _,
         } => {
+            // Clear the live streaming overlay; the engine's
+            // Message::Assistant push (with ToolCall content blocks)
+            // will appear via transcript when the turn finalizes.
             flush_streaming_to_messages(state);
-            let input_preview = tool_input_preview(&name, &input);
-            state.session.start_tool(call_id.clone(), name.clone());
-            state.session.add_message(ChatMessage {
-                id: format!("tool-use-{call_id}"),
-                role: crate::state::ChatRole::Assistant,
-                content: MessageContent::ToolUse {
-                    tool_name: name,
-                    call_id,
-                    input_preview,
-                    status: ToolUseStatus::Queued,
-                },
-                is_meta: false,
-                created_at_ms: crate::state::session::now_ms(),
-                is_compact_summary: false,
-                is_visible_in_transcript_only: false,
-                permission_mode: None,
-            });
+            state.session.start_tool(call_id, name);
             true
         }
         AgentStreamEvent::ToolUseStarted { call_id, .. } => {
@@ -75,31 +58,15 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
         }
         AgentStreamEvent::ToolUseCompleted {
             call_id,
-            name,
-            output,
+            name: _,
+            output: _,
             is_error,
         } => {
             state.session.complete_tool(&call_id, is_error);
-            let tool_name_str = state
-                .session
-                .tool_executions
-                .iter()
-                .find(|t| t.call_id == call_id)
-                .map(|t| t.name.clone())
-                .unwrap_or(name);
-            if is_error {
-                state.session.add_message(ChatMessage::tool_error(
-                    format!("tool-{call_id}"),
-                    &tool_name_str,
-                    output,
-                ));
-            } else {
-                state.session.add_message(ChatMessage::tool_success(
-                    format!("tool-{call_id}"),
-                    &tool_name_str,
-                    output,
-                ));
-            }
+            // Engine pushes Message::ToolResult → MessageAppended →
+            // transcript; the viewport merge renders it. No
+            // separate `ChatMessage::tool_success` / `tool_error`
+            // push needed.
             true
         }
         AgentStreamEvent::McpToolCallBegin {

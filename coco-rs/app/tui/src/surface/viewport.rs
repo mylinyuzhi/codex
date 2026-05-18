@@ -267,11 +267,17 @@ fn build_live_tail_lines(
     width: u16,
     plan: SurfaceFramePlan,
 ) -> Vec<Line<'static>> {
-    let committed_messages = if plan.finalized_history_in_viewport() {
-        state.session.messages.as_slice()
-    } else {
-        &[]
-    };
+    let merged_owned;
+    let committed_messages: &[crate::state::session::ChatMessage] =
+        if plan.finalized_history_in_viewport() {
+            merged_owned = crate::state::derive::merged_chat_messages(
+                &state.session.messages,
+                state.session.transcript.cells(),
+            );
+            &merged_owned
+        } else {
+            &[]
+        };
     let mut chat = crate::widgets::ChatWidget::new(committed_messages, styles)
         .scroll(state.ui.scroll_offset)
         .streaming(state.ui.streaming.as_ref())

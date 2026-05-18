@@ -334,6 +334,35 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         runtime
             .seed_tool_result_replacement_state(&plan.prior_messages, &plan.session_id)
             .await;
+        // Phase 4: signal the TUI to reset its derived transcript view
+        // and replay every prior message as a normal `MessageAppended`
+        // event, so /resume scrollback flows through the same render
+        // path as live turns. SDK observers receive the same event
+        // stream. See `engine-tui-unified-transcript-plan.md` §7.3.
+        let _ = notification_tx
+            .send(CoreEvent::Protocol(
+                coco_types::ServerNotification::SessionResetForResume {
+                    session_id: plan.session_id.clone(),
+                },
+            ))
+            .await;
+        for msg in &plan.prior_messages {
+            match serde_json::to_value(msg) {
+                Ok(payload) => {
+                    let _ = notification_tx
+                        .send(CoreEvent::Protocol(
+                            coco_types::ServerNotification::MessageAppended { message: payload },
+                        ))
+                        .await;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "resume: failed to serialize prior message; transcript cell skipped",
+                    );
+                }
+            }
+        }
         eprintln!(
             "{} session {} ({} prior message(s))",
             if plan.is_fork { "Forked" } else { "Resumed" },
