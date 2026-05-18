@@ -137,13 +137,26 @@ pub(crate) fn now_ms() -> i64 {
 /// Agent-synchronized session state.
 #[derive(Debug)]
 pub struct SessionState {
-    /// Conversation messages.
+    /// Legacy TUI-local chat messages. Mostly vestigial after
+    /// `engine-tui-unified-transcript-plan.md` Commits 2/3 — the
+    /// engine `MessageHistory` is the source of truth and the TUI
+    /// derives cells from `MessageAppended` events into
+    /// [`Self::transcript`]. The few remaining direct writers
+    /// (`protocol.rs::apply_reasoning_tokens_to_response` synthesising
+    /// `MessageContent::Thinking` to carry duration / token metadata,
+    /// `update.rs` Ctrl+L clear, the rewind-picker truncate) are kept
+    /// for renderer-adapter convenience until a full `RenderedCell`
+    /// rewrite of the renderer chain (plan §4/§5) replaces
+    /// `ChatMessage` / `MessageContent` outright. All read paths
+    /// should source from [`Self::transcript_messages`] — that view
+    /// overlays engine cells on top of this slice.
     pub messages: Vec<ChatMessage>,
-    /// Derived view of engine `MessageHistory`. Populated by the
+    /// Engine-authoritative view of `MessageHistory`, populated by the
     /// `MessageAppended` / `MessageTruncated` / `SessionResetForResume`
-    /// protocol handlers. Phase 3a status: dual-write alongside
-    /// `messages` above; renderers still read `messages`. Phase 3b
-    /// will flip the read path and delete `messages`.
+    /// protocol handlers. Engines push every message through
+    /// `history_push_and_emit` so cells stay coherent with the
+    /// JSONL transcript on disk — this is the source of truth for
+    /// "what is in the conversation".
     pub transcript: super::transcript_view::TranscriptView,
     /// Message UUID set by `apply_auto_restore` when an auto-restore
     /// fires. The App loop drains this after each `handle_core_event`
@@ -154,6 +167,13 @@ pub struct SessionState {
     ///
     /// See `engine-tui-unified-transcript-plan.md` §7.4.
     pub pending_auto_restore_truncate: Option<String>,
+    /// TUI-originated system messages waiting to be dispatched as
+    /// `UserCommand::PushSystemMessage` after the current
+    /// `handle_core_event` returns. Notification handlers don't have a
+    /// `command_tx` (pure-fold signature), so they enqueue here and the
+    /// App loop drains the queue in `drain_pending_system_pushes`.
+    /// Mirrors the `pending_auto_restore_truncate` pattern.
+    pub pending_system_pushes: std::collections::VecDeque<crate::command::SystemPushKind>,
     /// Active model id (e.g. `claude-sonnet-4-6`, `gpt-5`, `gemini-2.5-pro`).
     pub model: String,
     /// Active provider id for [`Self::model`] (e.g. `anthropic`, `openai`,
@@ -448,6 +468,20 @@ impl SessionState {
         }
     }
 
+    /// Merged transcript view: legacy `session.messages` overlaid with
+    /// engine-derived cells from `session.transcript`. Engine-authoritative
+    /// entries supersede TUI optimistic ones on matching `id`; cells with
+    /// no `session.messages` counterpart append at the end. This is the
+    /// single source of truth for everything that wants to *render* the
+    /// chat (transcript modal, viewport, history_lines, …) — both
+    /// `session.messages` (which now receives almost no writes post
+    /// Commit 2) and `session.transcript` (engine-driven) on their own
+    /// are partial. Commit 4/5 will retire the legacy field and this
+    /// helper folds away.
+    pub fn transcript_messages(&self) -> Vec<ChatMessage> {
+        crate::state::derive::merged_chat_messages(&self.messages, self.transcript.cells())
+    }
+
     /// Count of connected MCP servers.
     pub fn connected_mcp_count(&self) -> i32 {
         self.mcp_servers.iter().filter(|s| s.connected).count() as i32
@@ -460,6 +494,7 @@ impl Default for SessionState {
             messages: Vec::new(),
             transcript: super::transcript_view::TranscriptView::new(),
             pending_auto_restore_truncate: None,
+            pending_system_pushes: std::collections::VecDeque::new(),
             model: String::new(),
             provider: String::new(),
             model_catalog: Vec::new(),

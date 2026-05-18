@@ -63,7 +63,19 @@ impl TranscriptView {
     /// group head. The owned `Arc<Message>` is shared into each cell
     /// so renderers can recover engine-side fields (`is_meta`,
     /// `permission_mode`, timestamp, …) without re-serializing.
+    ///
+    /// Re-emission of an already-seen UUID is a no-op. The engine
+    /// re-pushes the full prior history at the top of every turn
+    /// (`run_session_loop` walks `turn_messages` and fires
+    /// `history_push_and_emit` for each), so without this dedup
+    /// multi-turn sessions would accumulate one duplicate copy of
+    /// every prior cell per turn.
     pub fn on_message_appended(&mut self, msg: Arc<Message>) {
+        if let Some(uuid) = msg.uuid()
+            && self.by_uuid.contains_key(uuid)
+        {
+            return;
+        }
         let derived = message_to_cells(msg.clone());
         if derived.is_empty() {
             return;

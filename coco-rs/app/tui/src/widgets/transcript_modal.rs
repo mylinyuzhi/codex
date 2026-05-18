@@ -33,7 +33,7 @@ use crate::presentation::transcript::ToolOutputPreview;
 use crate::presentation::transcript::TranscriptCell;
 use crate::presentation::transcript::TranscriptSourceCell;
 use crate::presentation::transcript::tool_output_preview;
-use crate::presentation::transcript::transcript_presentation_for_state;
+use crate::presentation::transcript::transcript_presentation_with_messages;
 use crate::state::AppState;
 use crate::state::session::ChatMessage;
 use crate::state::session::MessageContent;
@@ -154,11 +154,18 @@ impl Widget for TranscriptStateWidget<'_> {
 
 impl TranscriptStateWidget<'_> {
     fn render_cells(&mut self, area: Rect, buf: &mut Buffer) {
-        let presentation = transcript_presentation_for_state(self.state);
+        // Derive the merged transcript view once and thread it through
+        // both the presentation projection and the renderer so cell
+        // indices line up. Engine-pushed cells are the authoritative
+        // source after Commit 2; legacy `session.messages` is the
+        // residual layer that the merged helper overlays.
+        let messages = self.state.session.transcript_messages();
+        let presentation = transcript_presentation_with_messages(self.state, &messages);
         self.layout_index.begin_frame(
-            transcript_layout_generation(self.state),
+            transcript_layout_generation(self.state, &messages),
             transcript_prefix_generation(
                 self.state,
+                &messages,
                 &presentation.cells,
                 area.width,
                 &self.transcript.collapsed_cell_ids,
@@ -171,11 +178,12 @@ impl TranscriptStateWidget<'_> {
             return;
         }
 
-        let mut renderer = TranscriptCellRenderer::new(self.state, self.styles, area.width);
+        let mut renderer =
+            TranscriptCellRenderer::new(&messages, self.state, self.styles, area.width);
         let visible = {
             let mut pager = TranscriptPager::new(
                 &presentation.cells,
-                &self.state.session.messages,
+                &messages,
                 &mut renderer,
                 &self.transcript.collapsed_cell_ids,
                 self.transcript.selected_cell_id.as_ref(),
@@ -202,7 +210,7 @@ impl TranscriptStateWidget<'_> {
                 continue;
             }
             let source = &presentation.cells[cell.index];
-            let id = source.cell_id(&self.state.session.messages);
+            let id = source.cell_id(&messages);
             let expanded = id
                 .as_ref()
                 .is_none_or(|id| !self.transcript.collapsed_cell_ids.contains(id));
@@ -243,9 +251,14 @@ struct TranscriptCellRenderer<'a> {
 }
 
 impl<'a> TranscriptCellRenderer<'a> {
-    fn new(state: &'a AppState, styles: UiStyles<'a>, width: u16) -> Self {
+    fn new(
+        messages: &'a [ChatMessage],
+        state: &'a AppState,
+        styles: UiStyles<'a>,
+        width: u16,
+    ) -> Self {
         Self {
-            messages: &state.session.messages,
+            messages,
             tool_executions: &state.session.tool_executions,
             width,
             styles,
@@ -993,10 +1006,10 @@ fn effective_scroll(
     }
 }
 
-fn transcript_layout_generation(state: &AppState) -> u64 {
+fn transcript_layout_generation(state: &AppState, messages: &[ChatMessage]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    hash = mix_u64(hash, state.session.messages.len() as u64);
-    if let Some(last) = state.session.messages.last() {
+    hash = mix_u64(hash, messages.len() as u64);
+    if let Some(last) = messages.last() {
         hash = mix_str(hash, &last.id);
         hash = mix_u64(hash, message_content_len(&last.content) as u64);
     }
@@ -1010,14 +1023,15 @@ fn transcript_layout_generation(state: &AppState) -> u64 {
 
 fn transcript_prefix_generation(
     state: &AppState,
+    messages: &[ChatMessage],
     cells: &[TranscriptSourceCell<'_>],
     width: u16,
     collapsed_cell_ids: &HashSet<TranscriptCellId>,
 ) -> u64 {
-    let mut hash = transcript_layout_generation(state);
+    let mut hash = transcript_layout_generation(state, messages);
     hash = mix_u64(hash, u64::from(width));
     for cell in cells {
-        let Some(id) = cell.cell_id(&state.session.messages) else {
+        let Some(id) = cell.cell_id(messages) else {
             continue;
         };
         if collapsed_cell_ids.contains(&id) {

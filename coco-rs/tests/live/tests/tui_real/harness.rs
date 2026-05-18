@@ -680,7 +680,7 @@ impl RealTuiHarness {
     /// Reminders inject as `Message::Attachment` entries here and are
     /// not surfaced via the wire-protocol notification stream.
     pub async fn history_snapshot(&self) -> Vec<coco_messages::Message> {
-        self.runtime.history.lock().await.clone()
+        self.runtime.history.lock().await.as_slice().to_vec()
     }
 
     /// The engine's response text, accumulated from streaming `TextDelta`
@@ -798,8 +798,10 @@ async fn run_real_agent_driver(
                     let new_msgs = build_user_turn_messages(user_uuid, &content);
                     let messages: Vec<coco_messages::Message> = {
                         let mut h = runtime_t.history.lock().await;
-                        h.extend(new_msgs.iter().cloned());
-                        h.clone()
+                        for m in new_msgs.iter().cloned() {
+                            h.push(m);
+                        }
+                        h.as_slice().to_vec()
                     };
 
                     let engine = runtime_t.build_engine(turn_cancel.clone()).await;
@@ -816,7 +818,10 @@ async fn run_real_agent_driver(
                     match engine.run_with_messages(messages, core_event_tx).await {
                         Ok(result) => {
                             let mut h = runtime_t.history.lock().await;
-                            *h = result.final_messages;
+                            h.clear();
+                            for m in result.final_messages {
+                                h.push(m);
+                            }
                         }
                         Err(e) => {
                             let _ = event_tx_t

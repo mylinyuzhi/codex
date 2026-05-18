@@ -304,25 +304,24 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
                 // chat transcript — TS parity: `RejectedPlanMessage`
                 // component renders the plan in a bordered block. Mode
                 // stays in `Plan` (no mutation); the user can keep
-                // refining or exit via the normal toggle.
+                // refining or exit via the normal toggle. Routed through
+                // engine round-trip (Commit 2) so the entry surfaces via
+                // `MessageAppended` like every other system row.
                 let plan = p.plan_content.clone().unwrap_or_default();
-                // Monotonic-ish id; TUI has no uuid dep and plan rejections
-                // are rare enough that nanos collisions are moot.
-                let id = format!(
-                    "plan-rejected-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or_default()
-                );
                 let body = if plan.trim().is_empty() {
                     crate::i18n::t!("plan.rejected_empty").to_string()
                 } else {
                     format!("{}\n\n{plan}", crate::i18n::t!("plan.rejected_header"),)
                 };
-                state
-                    .session
-                    .add_message(crate::state::session::ChatMessage::system_text(id, body));
+                let _ = command_tx
+                    .send(UserCommand::PushSystemMessage {
+                        kind: crate::command::SystemPushKind::Informational {
+                            level: coco_messages::SystemMessageLevel::Info,
+                            title: String::new(),
+                            message: body,
+                        },
+                    })
+                    .await;
                 state.ui.dismiss_prompt();
             }
             _ => state.ui.dismiss_prompt(),

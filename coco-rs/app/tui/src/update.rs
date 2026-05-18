@@ -316,14 +316,11 @@ pub async fn handle_command(
             }
             // /memory cancel surfaces a toast (TS:
             // `commands/memory/memory.tsx::onCancel` → "Cancelled memory editing").
+            // Transient confirmation only — the transcript line was a
+            // duplicate of the toast and was dropped as part of
+            // unified-transcript Commit 2.
             if matches!(state.ui.modal, Some(ModalState::MemoryDialog(_))) {
                 let text = crate::i18n::t!("toast.memory_cancelled").to_string();
-                state
-                    .session
-                    .add_message(crate::state::session::ChatMessage::system_text(
-                        uuid::Uuid::new_v4().to_string(),
-                        text.clone(),
-                    ));
                 state.ui.add_toast(crate::state::ui::Toast::info(text));
             }
             if state.has_active_surface() {

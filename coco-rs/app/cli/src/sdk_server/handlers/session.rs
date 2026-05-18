@@ -799,7 +799,10 @@ pub(super) async fn handle_session_resume(
         if let Some(rec) = &recovered {
             {
                 let mut h = runtime.history.lock().await;
-                *h = rec.messages.clone();
+                h.clear();
+                for m in rec.messages.iter().cloned() {
+                    h.push(m);
+                }
             }
             runtime
                 .seed_transcript_dedup(rec.messages.iter().filter_map(|m| m.uuid().copied()))

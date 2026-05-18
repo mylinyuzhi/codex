@@ -11,8 +11,10 @@
 //! TUI channel in the current architecture. See `event-system-design.md`
 //! §12 for the consumer routing matrix.
 
+use coco_messages::SystemMessageLevel;
 use coco_types::ServerNotification;
 
+use crate::command::SystemPushKind;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ModalState;
@@ -738,13 +740,19 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             true
         }
         ServerNotification::ToolUseSummary(p) => {
-            state.session.add_message(ChatMessage::system_text(
-                format!(
-                    "summary-{}",
-                    p.preceding_tool_use_ids.first().unwrap_or(&String::new())
-                ),
-                p.summary,
-            ));
+            // Route through engine `MessageHistory` like every other
+            // TUI-originated transcript line. The previous "summary-{id}"
+            // synthetic message id is no longer needed (cell uuid is
+            // engine-minted) — the rewind picker never targeted these
+            // rows anyway.
+            state
+                .session
+                .pending_system_pushes
+                .push_back(SystemPushKind::Informational {
+                    level: SystemMessageLevel::Info,
+                    title: String::new(),
+                    message: p.summary,
+                });
             true
         }
         ServerNotification::ToolProgress(p) => {
@@ -958,16 +966,26 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
     // - no state             → coco-rs analogue of "not viewing a
     //                            teammate task" + "no modal up"
     // - lossless tail          → TS `messagesAfterAreOnlySynthetic`
+    // Auto-restore reads from the *merged* view of legacy
+    // `session.messages` and engine-derived `transcript` cells so the
+    // predicates still find the last user message after Commit 2
+    // stopped writing optimistic user echoes into `session.messages`.
+    // Commit 5 deletes the legacy field outright; until then the
+    // merged view is the only source that contains both pre-cell
+    // entries (resume scrollback, hooks) and engine pushes.
+    let merged = crate::state::derive::merged_chat_messages(
+        &state.session.messages,
+        state.session.transcript.cells(),
+    );
     let mut auto_restored = false;
     if user_cancel
         && state.ui.input.is_empty()
         && state.session.queued_commands.is_empty()
         && !state.ui.has_active_surface()
-        && let Some(idx) =
-            crate::update_rewind::find_last_user_message_index(&state.session.messages)
-        && crate::update_rewind::messages_after_are_only_synthetic(&state.session.messages, idx)
+        && let Some(idx) = crate::update_rewind::find_last_user_message_index(&merged)
+        && crate::update_rewind::messages_after_are_only_synthetic(&merged, idx)
     {
-        apply_auto_restore(state, idx);
+        apply_auto_restore(state, &merged, idx);
         auto_restored = true;
     }
 
@@ -1001,11 +1019,22 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
 /// `ServerNotification::MessageTruncated`, keeping engine + TUI + SDK
 /// converged on the same truncation event (see
 /// `engine-tui-unified-transcript-plan.md` §7.4).
-fn apply_auto_restore(state: &mut AppState, idx: usize) {
-    let target_message_id = state.session.messages[idx].id.clone();
-    let input_text = state.session.messages[idx].text_content().to_string();
-    let perm = state.session.messages[idx].permission_mode;
-    state.session.messages.truncate(idx);
+fn apply_auto_restore(state: &mut AppState, merged: &[ChatMessage], idx: usize) {
+    let target_message_id = merged[idx].id.clone();
+    let input_text = merged[idx].text_content().to_string();
+    let perm = merged[idx].permission_mode;
+    // session.messages can still hold legacy entries (resume scrollback
+    // path, …); truncate at the matching id when present so the
+    // dual-write surface stays in sync with the engine. Falls back to
+    // a no-op when the id only lives in the cells view.
+    if let Some(local_idx) = state
+        .session
+        .messages
+        .iter()
+        .position(|m| m.id == target_message_id)
+    {
+        state.session.messages.truncate(local_idx);
+    }
     if let Some(mode) = perm {
         state.session.permission_mode = mode;
     }
@@ -1022,11 +1051,12 @@ fn apply_auto_restore(state: &mut AppState, idx: usize) {
     state.session.pending_auto_restore_truncate = Some(target_message_id);
 }
 
-/// Push a teammate-attributed message into `session.messages` so the
+/// Queue a teammate-attributed message for engine round-trip so the
 /// per-teammate spinner-line preview (`UiState::show_teammate_message_preview`)
 /// and the transcript state can surface it. Empty / whitespace-only
 /// content is dropped so progress pings without a body don't pollute
-/// the preview.
+/// the preview. Routed as `SystemMessage::Informational` with a
+/// `teammate:<agent>` title so the renderer can distinguish the row.
 fn push_teammate_message(state: &mut AppState, agent_id: &str, content: &str) {
     let trimmed = content.trim();
     if trimmed.is_empty() {
@@ -1034,7 +1064,12 @@ fn push_teammate_message(state: &mut AppState, agent_id: &str, content: &str) {
     }
     state
         .session
-        .add_message(ChatMessage::teammate_message(agent_id, trimmed));
+        .pending_system_pushes
+        .push_back(SystemPushKind::Informational {
+            level: SystemMessageLevel::Info,
+            title: format!("teammate:{agent_id}"),
+            message: trimmed.to_string(),
+        });
 }
 
 #[cfg(test)]

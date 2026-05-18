@@ -150,12 +150,18 @@ pub(crate) struct TranscriptProjection {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct TranscriptPresentationInput<'a> {
-    pub messages: &'a [ChatMessage],
+pub(crate) struct TranscriptPresentationInput<'msg, 'state> {
+    /// Source slice the projection walks. `'msg` is decoupled from
+    /// `'state` so callers can pass a freshly-derived `Vec<ChatMessage>`
+    /// (e.g. `state.session.transcript_messages()`) by reference without
+    /// pinning the resulting `TranscriptPresentation` to that
+    /// temporary's lifetime. Only the streaming view in the output
+    /// carries an inward borrow; cells themselves are owned.
+    pub messages: &'msg [ChatMessage],
     pub options: TranscriptProjectionOptions,
-    pub streaming: Option<&'a StreamingState>,
+    pub streaming: Option<&'state StreamingState>,
     pub show_thinking: bool,
-    pub tool_executions: &'a [ToolExecution],
+    pub tool_executions: &'state [ToolExecution],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,9 +251,9 @@ pub(crate) fn transcript_projection(
     TranscriptProjection { cells }
 }
 
-pub(crate) fn transcript_presentation(
-    input: TranscriptPresentationInput<'_>,
-) -> TranscriptPresentation<'_> {
+pub(crate) fn transcript_presentation<'msg, 'state>(
+    input: TranscriptPresentationInput<'msg, 'state>,
+) -> TranscriptPresentation<'state> {
     let mut cells = transcript_projection(input.messages, input.options)
         .cells
         .into_iter()
@@ -615,12 +621,26 @@ fn message_content_is_expandable(content: &MessageContent) -> bool {
 }
 
 pub(crate) fn transcript_expandable_cell_ids(state: &AppState) -> Vec<TranscriptCellId> {
-    transcript_presentation_for_state(state)
-        .cells
-        .into_iter()
-        .filter(|cell| cell.is_expandable(&state.session.messages))
-        .filter_map(|cell| cell.cell_id(&state.session.messages))
-        .collect()
+    // Source from the merged view so engine-derived cells (the bulk of
+    // the live transcript after Commit 2) participate in the
+    // expandable-cell list. Indices inside `TranscriptCell` are
+    // computed against the SAME messages slice that the caller uses
+    // for `cell_id` lookups — keep both in sync.
+    let messages = state.session.transcript_messages();
+    transcript_presentation(TranscriptPresentationInput {
+        messages: &messages,
+        options: TranscriptProjectionOptions {
+            show_system_reminders: true,
+        },
+        streaming: state.ui.streaming.as_ref(),
+        show_thinking: true,
+        tool_executions: &state.session.tool_executions,
+    })
+    .cells
+    .into_iter()
+    .filter(|cell| cell.is_expandable(&messages))
+    .filter_map(|cell| cell.cell_id(&messages))
+    .collect()
 }
 
 pub(crate) fn latest_expandable_cell_id(state: &AppState) -> Option<TranscriptCellId> {
@@ -629,9 +649,25 @@ pub(crate) fn latest_expandable_cell_id(state: &AppState) -> Option<TranscriptCe
         .next_back()
 }
 
-pub(crate) fn transcript_presentation_for_state(state: &AppState) -> TranscriptPresentation<'_> {
+/// Build a `TranscriptPresentation` from a caller-supplied messages
+/// slice — the entry point for everything that wants to render the
+/// chat transcript (typically the Ctrl+O modal). The caller is
+/// responsible for sourcing the slice from
+/// `state.session.transcript_messages()` (or an equivalent merged view)
+/// so engine-derived cells participate; passing `state.session.messages`
+/// directly works but is now mostly empty.
+///
+/// The `messages` lifetime is independent of `'state` so callers can
+/// pass a slice tied to a local `Vec<ChatMessage>`: the returned
+/// `TranscriptPresentation` only borrows from `state` (via the
+/// streaming-tail view) — cells themselves are owned, so they survive
+/// the messages slice being dropped.
+pub(crate) fn transcript_presentation_with_messages<'state>(
+    state: &'state AppState,
+    messages: &[ChatMessage],
+) -> TranscriptPresentation<'state> {
     transcript_presentation(TranscriptPresentationInput {
-        messages: &state.session.messages,
+        messages,
         options: TranscriptProjectionOptions {
             show_system_reminders: true,
         },

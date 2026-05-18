@@ -7,6 +7,75 @@ Phase 3c left off and completes the migration that finally allows
 deletion of `ChatMessage`, `MessageContent`, `session.messages`, and
 the `merged_chat_messages` back-adapter.
 
+## Landing Status (2026-05-19)
+
+Commits 1, 2, and 3 landed as documented below. Commits 4 and 5 were
+condensed into a "Pragmatic close-out" pass instead of the full
+renderer rewrite:
+
+- ✅ Commit 1 (Section 2.1) — `SessionRuntime.history: Arc<Mutex<MessageHistory>>`.
+- ✅ Commit 2 (Section 2.2) — `UserCommand::PushSystemMessage` + engine
+  round-trip for all TUI-originated transcript content. `SubmitInput`
+  and `run_prompt_mode_bash` now push through `history_push_and_emit`;
+  10 of 13 `add_message` sites converted, 3 removed (bash input,
+  user_text submit, memory cancel toast). Auto-restore predicates
+  switched to the merged view. `TranscriptView::on_message_appended`
+  dedups by UUID so multi-turn re-emission doesn't accumulate
+  duplicate cells.
+- ✅ Commit 3 (Section 2.3) — adapter variant. Instead of the
+  `TranscriptSource<'a> { Legacy | Cells }` dual-path rewrite of the
+  646-LoC `presentation::transcript` module,
+  `SessionState::transcript_messages()` builds the merged view
+  (legacy `session.messages` + engine cells) and every transcript-
+  pipeline caller threads the merged slice through.
+  `TranscriptPresentationInput` lifetime split into `<'msg, 'state>`
+  so the projection can be fed a temporary `Vec<ChatMessage>` without
+  pinning the output. `transcript_modal.rs` builds the merged view
+  once per render and passes it to projection / renderer / hash
+  helpers / `cell_id` lookups.
+- 🟡 Commits 4 + 5 condensed into "Pragmatic close-out" — every
+  remaining `&state.session.messages` reader on the rendering /
+  picker / status path was switched to
+  `state.session.transcript_messages()` (rewind picker, status bar,
+  footer, activity preview). `session.messages` was documented as
+  vestigial. The full `RenderedCell` rewrite of the 4 `render_*.rs`
+  files + `ChatWidget` was deferred; the renderer continues to
+  consume `&[ChatMessage]` via the merged adapter. `ChatMessage`,
+  `MessageContent`, and `merged_chat_messages` are retained as
+  render-time projection types — they no longer serve as the source
+  of truth but are kept because deleting them would require ~2000
+  LoC of mechanical match-arm replacement plus test-suite churn
+  that is out of scope for this phase.
+
+End-state invariants achieved:
+
+- **I-1 Authority** — engine `MessageHistory` is the single source of
+  truth for the conversation chain. `runtime.history` is the
+  authoritative live view; resume / clear / rewind all flow through
+  `MessageAppended` / `MessageTruncated` / `SessionResetForResume`.
+- **I-2 Derived view** — TUI cells are derived from `&Message` via
+  `derive::message_to_cells`. The merged-ChatMessage adapter
+  (`cells_to_chat_messages` + `merged_chat_messages`) is now a
+  rendering convenience layer, not a parallel state store.
+- **I-3 UI-only state stays UI-only** — `ui.streaming`,
+  `session.tool_executions`, transcript-modal collapse state, etc.
+
+Outstanding deltas vs the original plan §4/§5:
+
+- `chat::ChatWidget`, `render_user.rs`, `render_assistant.rs`,
+  `render_tool.rs`, `render_system.rs` continue to take
+  `messages: &[ChatMessage]`. Future rewrite to `&[RenderedCell]` is
+  isolated to these files and
+  `surface/{viewport,controller,history_lines}.rs`.
+- `session.messages` field still exists. Direct writers reduced to
+  the thinking-metadata synthesis path
+  (`apply_reasoning_tokens_to_response` in `protocol.rs`), the
+  Ctrl+L clear, and the rewind-picker truncate. All three are
+  candidates for full removal in the deferred §4/§5 rewrite.
+- `ChatMessage`, `MessageContent`, `cell_to_chat_message`,
+  `cells_to_chat_messages`, `merged_chat_messages` retained — see
+  the "Vestigial" doc on `SessionState::messages`.
+
 ## 0. Starting State
 
 After Phase 3c (commit `69a6a30f6`):

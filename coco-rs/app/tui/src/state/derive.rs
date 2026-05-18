@@ -216,6 +216,9 @@ pub fn cell_to_chat_message(cell: &RenderedCell) -> Option<ChatMessage> {
             SK::Informational => extract_informational(&cell.source)
                 .map(|c| (CR::System, c))
                 .unwrap_or((CR::System, MC::SystemText(String::new()))),
+            SK::LocalCommand => extract_local_command(&cell.source)
+                .map(|c| (CR::User, c))
+                .unwrap_or((CR::System, MC::SystemText(String::new()))),
             // The remaining SystemCellKind variants don't have a
             // dedicated MessageContent variant — render them as
             // SystemText with a generic body for now. Renderer
@@ -321,8 +324,31 @@ fn extract_informational(msg: &Message) -> Option<MessageContent> {
     let Message::System(SystemMessage::Informational(info)) = msg else {
         return None;
     };
-    Some(MessageContent::SystemText(format!(
-        "{}: {}",
-        info.title, info.message
-    )))
+    let text = if info.title.is_empty() {
+        info.message.clone()
+    } else {
+        format!("{}: {}", info.title, info.message)
+    };
+    Some(MessageContent::SystemText(text))
+}
+
+/// Project `SystemMessage::LocalCommand { command, output }` into the
+/// legacy `MessageContent::BashOutput` shape so the existing renderer
+/// surfaces both the input + output of `!cmd` from a single engine
+/// message. Mirrors what the TUI used to do via two separate
+/// `add_message(user_bash_input + user_bash_output)` calls prior to
+/// `engine-tui-unified-transcript-plan.md` Commit 2.
+fn extract_local_command(msg: &Message) -> Option<MessageContent> {
+    let Message::System(SystemMessage::LocalCommand(lc)) = msg else {
+        return None;
+    };
+    let body = if lc.output.is_empty() {
+        format!("$ {}", lc.command)
+    } else {
+        format!("$ {}\n{}", lc.command, lc.output)
+    };
+    Some(MessageContent::BashOutput {
+        output: body,
+        exit_code: 0,
+    })
 }

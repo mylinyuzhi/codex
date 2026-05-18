@@ -9,13 +9,34 @@
 //! extracted into named helpers — `on_diff_stats_loaded`,
 //! `on_rewind_completed` — so the match arms stay scannable.
 
+use coco_messages::SystemMessageLevel;
 use coco_types::TuiOnlyEvent;
 
+use crate::command::SystemPushKind;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::ui::Toast;
+
+/// Queue a TUI-originated system message for engine round-trip.
+/// The App loop drains `state.session.pending_system_pushes` after
+/// each `handle_core_event` and dispatches `UserCommand::PushSystemMessage`.
+fn enqueue_informational(
+    state: &mut AppState,
+    level: SystemMessageLevel,
+    title: &str,
+    message: String,
+) {
+    state
+        .session
+        .pending_system_pushes
+        .push_back(SystemPushKind::Informational {
+            level,
+            title: title.to_string(),
+            message,
+        });
+}
 
 #[cfg(test)]
 #[path = "tui_only.test.rs"]
@@ -248,17 +269,12 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
 
         // === Slash-command result (System role transcript line) ===
         TuiOnlyEvent::SlashCommandResult { name: _, text } => {
-            // `system_text` produces `MessageContent::SystemText`, which the
-            // chat widget routes to `render_system` (system styling, no `>`
-            // user-prefix). `is_meta` defaults to false so the body shows
-            // expanded — slash-command output is the answer the user asked
-            // for, not a collapsible reminder.
-            state
-                .session
-                .add_message(crate::state::session::ChatMessage::system_text(
-                    uuid::Uuid::new_v4().to_string(),
-                    text,
-                ));
+            // Round-trip through engine `MessageHistory` so the transcript
+            // view (and SDK consumers / JSONL transcript) see the slash
+            // output via the standard `MessageAppended` path. The
+            // renderer treats empty-title `Informational` as a bare
+            // SystemText body.
+            enqueue_informational(state, SystemMessageLevel::Info, "", text);
             true
         }
         // === Open the rewind picker state ===
@@ -294,45 +310,25 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         }
         TuiOnlyEvent::MemoryFileOpened { path } => {
             let text = t!("toast.memory_opened", path = path.as_str()).to_string();
-            state
-                .session
-                .add_message(crate::state::session::ChatMessage::system_text(
-                    uuid::Uuid::new_v4().to_string(),
-                    text.clone(),
-                ));
+            enqueue_informational(state, SystemMessageLevel::Info, "", text.clone());
             state.ui.add_toast(Toast::info(text));
             true
         }
         TuiOnlyEvent::MemoryFileOpenFailed { path: _, error } => {
             let text = t!("toast.memory_open_failed", error = error.as_str()).to_string();
-            state
-                .session
-                .add_message(crate::state::session::ChatMessage::system_text(
-                    uuid::Uuid::new_v4().to_string(),
-                    text.clone(),
-                ));
+            enqueue_informational(state, SystemMessageLevel::Warning, "", text.clone());
             state.ui.add_toast(Toast::warning(text));
             true
         }
         TuiOnlyEvent::PlanFileOpened { path } => {
             let text = t!("toast.plan_opened", path = path.as_str()).to_string();
-            state
-                .session
-                .add_message(crate::state::session::ChatMessage::system_text(
-                    uuid::Uuid::new_v4().to_string(),
-                    text.clone(),
-                ));
+            enqueue_informational(state, SystemMessageLevel::Info, "", text.clone());
             state.ui.add_toast(Toast::info(text));
             true
         }
         TuiOnlyEvent::PlanFileOpenFailed { path: _, error } => {
             let text = t!("toast.plan_open_failed", error = error.as_str()).to_string();
-            state
-                .session
-                .add_message(crate::state::session::ChatMessage::system_text(
-                    uuid::Uuid::new_v4().to_string(),
-                    text.clone(),
-                ));
+            enqueue_informational(state, SystemMessageLevel::Warning, "", text.clone());
             state.ui.add_toast(Toast::warning(text));
             true
         }
@@ -357,24 +353,18 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         }
         TuiOnlyEvent::BashCommandCompleted {
             user_message_id: _,
-            output,
-            exit_code,
+            output: _,
+            exit_code: _,
         } => {
-            // Fresh id for the output row — the rewind picker keys on
-            // message id, so reusing the input's id would surface two
-            // rows targeting the same checkpoint. The two messages are
-            // adjacent in history so visual pairing is preserved without
-            // sharing the id. (`user_message_id` stays in the event for
-            // future correlation needs, e.g. linking output-to-input in
-            // SDK transcripts.)
-            state
-                .session
-                .add_message(crate::state::session::ChatMessage::user_bash_output(
-                    uuid::Uuid::new_v4().to_string(),
-                    output,
-                    exit_code,
-                ));
-            true
+            // Visible bash output flows through the standard engine
+            // path: `run_prompt_mode_bash` pushes a single
+            // `SystemMessage::LocalCommand { command, output }` via
+            // `history_push_and_emit` before this event fires, so the
+            // transcript view already shows the result by the time we
+            // reach here. The event is kept for observability (the
+            // `emit.rs` event-name map still surfaces it on the wire)
+            // but no longer drives TUI transcript writes.
+            false
         }
         TuiOnlyEvent::OpenModelPicker => {
             crate::update::show::cycle_model(state);
@@ -382,38 +372,43 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         }
         TuiOnlyEvent::SlashCommandStatus { name, kind } => {
             use coco_types::SlashCommandStatusKind;
-            let text = match kind {
-                SlashCommandStatusKind::NoHandler => {
-                    t!("slash.status.no_handler", name = name.as_str()).to_string()
-                }
-                SlashCommandStatusKind::Failed { error } => t!(
-                    "slash.status.failed",
-                    name = name.as_str(),
-                    error = error.as_str()
-                )
-                .to_string(),
-                SlashCommandStatusKind::EmptyPrompt => {
-                    t!("slash.status.empty_prompt", name = name.as_str()).to_string()
-                }
-                SlashCommandStatusKind::DialogPending { dialog_kind } => t!(
-                    "slash.status.dialog_pending",
-                    name = name.as_str(),
-                    dialog_kind = dialog_kind.as_str()
-                )
-                .to_string(),
-                SlashCommandStatusKind::PermissionsUsageAllow => {
-                    t!("slash.permissions.usage_allow").to_string()
-                }
-                SlashCommandStatusKind::PermissionsUsageDeny => {
-                    t!("slash.permissions.usage_deny").to_string()
-                }
+            let (level, text) = match kind {
+                SlashCommandStatusKind::NoHandler => (
+                    SystemMessageLevel::Warning,
+                    t!("slash.status.no_handler", name = name.as_str()).to_string(),
+                ),
+                SlashCommandStatusKind::Failed { error } => (
+                    SystemMessageLevel::Error,
+                    t!(
+                        "slash.status.failed",
+                        name = name.as_str(),
+                        error = error.as_str()
+                    )
+                    .to_string(),
+                ),
+                SlashCommandStatusKind::EmptyPrompt => (
+                    SystemMessageLevel::Info,
+                    t!("slash.status.empty_prompt", name = name.as_str()).to_string(),
+                ),
+                SlashCommandStatusKind::DialogPending { dialog_kind } => (
+                    SystemMessageLevel::Info,
+                    t!(
+                        "slash.status.dialog_pending",
+                        name = name.as_str(),
+                        dialog_kind = dialog_kind.as_str()
+                    )
+                    .to_string(),
+                ),
+                SlashCommandStatusKind::PermissionsUsageAllow => (
+                    SystemMessageLevel::Info,
+                    t!("slash.permissions.usage_allow").to_string(),
+                ),
+                SlashCommandStatusKind::PermissionsUsageDeny => (
+                    SystemMessageLevel::Info,
+                    t!("slash.permissions.usage_deny").to_string(),
+                ),
             };
-            state
-                .session
-                .add_message(crate::state::session::ChatMessage::system_text(
-                    uuid::Uuid::new_v4().to_string(),
-                    text,
-                ));
+            enqueue_informational(state, level, "", text);
             true
         }
     }

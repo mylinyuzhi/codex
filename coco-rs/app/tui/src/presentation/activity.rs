@@ -380,7 +380,11 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         lines.push(ActivityLine { spans });
 
         if state.ui.show_teammate_message_preview {
-            for preview in last_preview_lines(&state.session.messages, &agent.agent_id, 3) {
+            // Source from merged view so engine-pushed teammate
+            // Informational entries (Commit 2 routes them via
+            // `UserCommand::PushSystemMessage`) appear in the preview.
+            let messages = state.session.transcript_messages();
+            for preview in last_preview_lines(&messages, &agent.agent_id, 3) {
                 lines.push(ActivityLine {
                     spans: vec![
                         ActivitySpan::raw("    "),

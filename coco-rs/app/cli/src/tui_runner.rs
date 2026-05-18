@@ -326,7 +326,10 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         runtime.start_new_session(plan.session_id.clone()).await;
         {
             let mut history = runtime.history.lock().await;
-            *history = plan.prior_messages.clone();
+            history.clear();
+            for m in plan.prior_messages.iter().cloned() {
+                history.push(m);
+            }
         }
         runtime
             .seed_transcript_dedup(plan.prior_messages.iter().filter_map(|m| m.uuid().copied()))
@@ -768,6 +771,7 @@ async fn run_agent_driver(
                 command,
             } => {
                 let event_tx_t = event_tx.clone();
+                let runtime_t = runtime.clone();
                 // Run from the process's current dir — shell prompt
                 // commands inherit the same cwd the agent is using.
                 // `runtime_config.paths.project_dir` is the explicit
@@ -780,7 +784,8 @@ async fn run_agent_driver(
                     .clone()
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 tokio::spawn(async move {
-                    run_prompt_mode_bash(&cwd, user_message_id, command, event_tx_t).await;
+                    run_prompt_mode_bash(&cwd, user_message_id, command, runtime_t, event_tx_t)
+                        .await;
                 });
             }
 
@@ -1495,6 +1500,20 @@ async fn run_agent_driver(
                 {
                     tracing::warn!(error = %e, "idle_prompt notification hook failed");
                 }
+            }
+
+            UserCommand::PushSystemMessage { kind } => {
+                // TUI-originated transcript content (slash output,
+                // file-open notices, plan-rejected body, …) round-trips
+                // through engine `MessageHistory` so every observer
+                // (TUI transcript view, SDK consumers, JSONL transcript)
+                // sees it via the same `MessageAppended` event stream as
+                // engine-pushed content. See
+                // `engine-tui-unified-transcript-plan.md` §3 Commit 2.
+                let msg = build_system_message_from_push_kind(kind);
+                let mut h = runtime.history.lock().await;
+                let event_tx_opt = Some(event_tx.clone());
+                coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
             }
 
             // Other commands: log and skip for now
@@ -2261,9 +2280,8 @@ async fn run_manual_compact(
     drain_active_turn(active_turn).await;
     let compact_cancel = CancellationToken::new();
     let engine = runtime.build_engine(compact_cancel).await;
-    let history_msgs = runtime.history.lock().await.clone();
     let mut history = coco_messages::MessageHistory::new();
-    for m in history_msgs {
+    for m in runtime.history.lock().await.as_slice().iter().cloned() {
         history.push(m);
     }
     let event_tx_opt = Some(event_tx.clone());
@@ -2272,7 +2290,7 @@ async fn run_manual_compact(
         .await;
     {
         let mut h = runtime.history.lock().await;
-        *h = history.messages;
+        *h = history;
     }
 }
 
@@ -2320,7 +2338,7 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
         info!("/summary: no MemoryRuntime; skipping");
         return;
     };
-    let history_msgs = runtime.history.lock().await.clone();
+    let history_msgs = runtime.history.lock().await.as_slice().to_vec();
     let tokens = coco_compact::estimate_tokens(&history_msgs);
     // TS parity (`sessionMemory.ts:441-442`): manual /summary still
     // walks history to decide whether to advance the safely-summarized
@@ -2721,12 +2739,25 @@ async fn process_submit_turn(
             .clone()
             .map(|r| format!("Operation stopped by hook: {r}"))
             .unwrap_or_else(|| "Operation stopped by hook".to_string());
-        // Persist the prompt + system warning so the user sees it in
-        // the transcript even though no LLM call follows.
+        // Persist the prompt + system warning via history_push_and_emit
+        // so the TUI transcript view picks them up — no LLM call follows
+        // this branch, so a silent h.push would leave the user without
+        // any visual record of their prompt.
         {
             let mut h = runtime.history.lock().await;
-            h.push(coco_messages::create_user_message(&content));
-            h.push(coco_messages::create_user_message(&stop_msg));
+            let event_tx_opt = Some(event_tx.clone());
+            coco_query::history_sync::history_push_and_emit(
+                &mut h,
+                coco_messages::create_user_message(&content),
+                &event_tx_opt,
+            )
+            .await;
+            coco_query::history_sync::history_push_and_emit(
+                &mut h,
+                coco_messages::create_user_message(&stop_msg),
+                &event_tx_opt,
+            )
+            .await;
         }
         return;
     }
@@ -2734,10 +2765,16 @@ async fn process_submit_turn(
     let new_turn_messages = coco_cli::at_mention_turn::build_messages_for_turn(&inputs);
 
     // Persist user message immediately so engine errors don't lose it.
+    // history_push_and_emit fires MessageAppended for each new turn
+    // message so the TUI transcript view surfaces them via the standard
+    // round-trip (replaces the legacy TUI-local optimistic add_message).
     let messages: Vec<coco_messages::Message> = {
         let mut h = runtime.history.lock().await;
-        h.extend(new_turn_messages.iter().cloned());
-        h.clone()
+        let event_tx_opt = Some(event_tx.clone());
+        for m in new_turn_messages.iter().cloned() {
+            coco_query::history_sync::history_push_and_emit(&mut h, m, &event_tx_opt).await;
+        }
+        h.as_slice().to_vec()
     };
 
     let engine = runtime.build_engine(turn_cancel.clone()).await;
@@ -2760,7 +2797,10 @@ async fn process_submit_turn(
     match engine.run_with_messages(messages, core_event_tx).await {
         Ok(result) => {
             let mut h = runtime.history.lock().await;
-            *h = result.final_messages;
+            h.clear();
+            for m in result.final_messages {
+                h.push(m);
+            }
         }
         Err(e) => {
             // User message stays in `runtime.history` from the
@@ -2873,7 +2913,7 @@ async fn handle_rewind(
     // `engine-tui-unified-transcript-plan.md` §7.4.
     if matches!(mode, RewindMode::AutoRestore) {
         let mut h = runtime.history.lock().await;
-        if let Some(idx) = h.iter().position(|m| match m {
+        if let Some(idx) = h.as_slice().iter().position(|m| match m {
             coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
             _ => false,
         }) {
@@ -2947,7 +2987,7 @@ async fn handle_rewind(
 
     if should_truncate {
         let mut h = runtime.history.lock().await;
-        if let Some(idx) = h.iter().position(|m| match m {
+        if let Some(idx) = h.as_slice().iter().position(|m| match m {
             coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
             _ => false,
         }) {
@@ -3021,7 +3061,7 @@ async fn handle_summarize_rewind(
 
     let messages = {
         let h = runtime.history.lock().await;
-        h.clone()
+        h.as_slice().to_vec()
     };
 
     // Pivot index: position of the picked user message in the
@@ -3070,7 +3110,7 @@ async fn handle_summarize_rewind(
         coco_compact::CompactOutcome::Applied => {
             {
                 let mut h = runtime.history.lock().await;
-                *h = history.messages;
+                *h = history;
             }
             // Emit a RewindCompleted with empty target so the TUI
             // dismisses the modal + shows a toast, but does NOT try
@@ -3224,6 +3264,35 @@ fn image_data_to_queued(images: &[coco_tui::paste::ImageData]) -> Vec<QueuedImag
         .collect()
 }
 
+/// Construct the engine `Message::System(...)` payload from a
+/// TUI-originated [`coco_tui::SystemPushKind`]. Centralises the
+/// kind → sub-variant mapping so every TUI-side push site agrees on
+/// shape, and so adding a new kind only touches one match arm.
+fn build_system_message_from_push_kind(kind: coco_tui::SystemPushKind) -> coco_messages::Message {
+    let sys = match kind {
+        coco_tui::SystemPushKind::Informational {
+            level,
+            title,
+            message,
+        } => {
+            coco_messages::SystemMessage::Informational(coco_messages::SystemInformationalMessage {
+                uuid: uuid::Uuid::new_v4(),
+                level,
+                title,
+                message,
+            })
+        }
+        coco_tui::SystemPushKind::LocalCommand { command, output } => {
+            coco_messages::SystemMessage::LocalCommand(coco_messages::SystemLocalCommandMessage {
+                uuid: uuid::Uuid::new_v4(),
+                command,
+                output,
+            })
+        }
+    };
+    coco_messages::Message::System(sys)
+}
+
 /// Run a prompt-mode bash submission (`!ls -la`). Mirrors TS's
 /// `LocalShellTask` semantics: the model loop is bypassed entirely;
 /// the command runs once in the session cwd via [`coco_shell::ShellExecutor`]
@@ -3238,6 +3307,7 @@ async fn run_prompt_mode_bash(
     cwd: &std::path::Path,
     user_message_id: String,
     command: String,
+    runtime: Arc<crate::session_runtime::SessionRuntime>,
     event_tx: mpsc::Sender<CoreEvent>,
 ) {
     const MAX_OUTPUT_BYTES: usize = 8 * 1024;
@@ -3264,6 +3334,25 @@ async fn run_prompt_mode_bash(
         }
         Err(err) => (format!("error: {err}"), -1),
     };
+
+    // Push a single SystemLocalCommandMessage into engine MessageHistory
+    // so the chat transcript (TUI + SDK consumers + JSONL) records the
+    // bash invocation via the standard `MessageAppended` event path.
+    // Pairs with Commit 2 deleting the TUI-local `add_message`
+    // optimistic echoes for both the `!cmd` input row and the matching
+    // output row.
+    {
+        let msg = coco_messages::Message::System(coco_messages::SystemMessage::LocalCommand(
+            coco_messages::SystemLocalCommandMessage {
+                uuid: uuid::Uuid::new_v4(),
+                command: command.clone(),
+                output: output.clone(),
+            },
+        ));
+        let mut h = runtime.history.lock().await;
+        let event_tx_opt = Some(event_tx.clone());
+        coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
+    }
 
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::BashCommandCompleted {

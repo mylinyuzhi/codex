@@ -40,6 +40,7 @@ use coco_hooks::HookRegistry;
 use coco_inference::ApiClient;
 use coco_memory::SessionMemoryService;
 use coco_messages::Message;
+use coco_messages::MessageHistory;
 use coco_query::CommandQueue;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
@@ -552,8 +553,11 @@ pub struct SessionRuntime {
     pub(crate) file_changed_watcher:
         Arc<RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>>,
     /// Multi-turn agent transcript. Each turn snapshots, appends, and
-    /// rewrites this on success.
-    pub history: Arc<Mutex<Vec<Message>>>,
+    /// rewrites this on success. Wrapped in `MessageHistory` (the same
+    /// type the engine loop uses internally) so TUI-initiated pushes
+    /// can call `history_push_and_emit` directly without converting at
+    /// the lock boundary.
+    pub history: Arc<Mutex<MessageHistory>>,
     /// Shared session id of the `TranscriptFileHistorySink` (when
     /// file_history is enabled). `clear_conversation` writes the
     /// regenerated session id here so the sink targets the new
@@ -1260,7 +1264,7 @@ impl SessionRuntime {
             sync_hook_buffer: coco_hooks::SyncHookEventBuffer::new(),
             async_hook_registry: Arc::new(coco_hooks::async_registry::AsyncHookRegistry::new()),
             file_changed_watcher: Arc::new(RwLock::new(None)),
-            history: Arc::new(Mutex::new(Vec::new())),
+            history: Arc::new(Mutex::new(MessageHistory::new())),
             file_history_sink_session_id,
             role_client_cache,
             // Late-bound — `attach_agent_handle()` installs after the

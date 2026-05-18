@@ -58,6 +58,7 @@ pub use animation::Animation;
 pub use app::App;
 pub use app::create_channels;
 pub use command::ClearScope;
+pub use command::SystemPushKind;
 pub use command::UserCommand;
 pub use display_settings::DisplaySettings;
 pub use display_settings::SyntaxHighlighting;

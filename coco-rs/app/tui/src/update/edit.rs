@@ -22,14 +22,13 @@ pub(super) fn parse_slash_input(trimmed: &str) -> Option<(SlashCommandName, Stri
 }
 
 /// Handle a submission whose leading character is a prompt-mode prefix
-/// (`!` bash). Pushes the appropriate local `ChatMessage` so the user
-/// sees the input echoed immediately, then dispatches a typed
-/// `UserCommand` for the engine bridge to execute.
-///
-/// The bridge in `tui_runner` is responsible for emitting the matching
-/// follow-up `BashOutput` message. The TUI never touches the shell
-/// directly — keeps the permission model and side-effect surface in one
-/// place.
+/// (`!` bash). Dispatches a typed `UserCommand` for the engine bridge
+/// to execute; the bridge's `run_prompt_mode_bash` pushes a single
+/// `SystemMessage::LocalCommand { command, output }` via
+/// `history_push_and_emit` after the shell call completes, so the
+/// transcript view shows the invocation through the standard
+/// `MessageAppended` path. The TUI never touches the shell directly —
+/// keeps the permission model and side-effect surface in one place.
 async fn submit_prefixed(
     state: &mut AppState,
     command_tx: &mpsc::Sender<UserCommand>,
@@ -50,13 +49,6 @@ async fn submit_prefixed(
     state.ui.input.add_to_history(text.to_string());
 
     let user_message_id = uuid::Uuid::new_v4().to_string();
-    state
-        .session
-        .add_message(crate::state::session::ChatMessage::user_bash_input(
-            user_message_id.clone(),
-            &payload,
-        ));
-
     let _ = command_tx
         .send(UserCommand::SubmitBash {
             user_message_id,
@@ -101,32 +93,13 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     state.ui.input.add_to_history(text.clone());
     let resolved = state.ui.paste_manager.resolve_structured(&text);
 
-    // Mint the user-message UUID once at submit time so the TUI's
-    // ChatMessage, the agent driver's Message::User, the file-history
-    // snapshot, and the JSONL transcript all key off the same id.
-    // TS: REPL.tsx onSubmit calls createUserMessage() which mints the
-    // UUID before the agent loop runs.
+    // Mint the user-message UUID once at submit time so the agent
+    // driver's `Message::User`, the file-history snapshot, and the
+    // JSONL transcript all key off the same id. Engine
+    // `history_push_and_emit` emits `MessageAppended` carrying this
+    // uuid, which the `TranscriptView` then renders — no TUI-side
+    // optimistic ChatMessage is needed any more (Commit 2).
     let user_message_id = uuid::Uuid::new_v4().to_string();
-
-    // Push the user's input into the displayed conversation immediately
-    // (TS REPL: setMessages(prev => [...prev, userMsg]) on submit).
-    // The same id then flows through UserCommand::SubmitInput so rewind
-    // selections target the very message the user sees in the chat.
-    state
-        .session
-        .add_message(crate::state::session::ChatMessage {
-            id: user_message_id.clone(),
-            role: crate::state::session::ChatRole::User,
-            content: crate::state::session::MessageContent::Text(text.clone()),
-            is_meta: false,
-            created_at_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: Some(state.session.permission_mode),
-        });
 
     let _ = command_tx
         .send(UserCommand::SubmitInput {

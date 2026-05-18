@@ -391,6 +391,7 @@ impl App {
                 server_notification_handler::handle_core_event(&mut self.state, deferred);
         }
         self.drain_pending_auto_restore_truncate().await;
+        self.drain_pending_system_pushes().await;
         Ok(needs_redraw)
     }
 
@@ -413,6 +414,21 @@ impl App {
                 mode: crate::state::rewind::RewindMode::AutoRestore,
             })
             .await;
+    }
+
+    /// Dispatch any TUI-originated system messages that notification
+    /// handlers queued during this `handle_core_event` cycle. Sends each
+    /// as a `UserCommand::PushSystemMessage` so the engine pushes via
+    /// `history_push_and_emit` and the transcript view sees the entry
+    /// via the standard round-trip. Mirrors
+    /// [`Self::drain_pending_auto_restore_truncate`].
+    async fn drain_pending_system_pushes(&mut self) {
+        while let Some(kind) = self.state.session.pending_system_pushes.pop_front() {
+            let _ = self
+                .command_tx
+                .send(UserCommand::PushSystemMessage { kind })
+                .await;
+        }
     }
 
     /// Fire a file/symbol search if the active trigger's (kind, query) pair

@@ -184,7 +184,11 @@ pub fn build_rewind_state_for(state: &AppState, preselect_message_id: Option<&st
 
 /// Build the initial RewindState from current session state.
 ///
-/// Extracts user messages from session.messages, builds RewindableMessage list.
+/// Sources from the merged transcript view (legacy `session.messages` +
+/// engine-derived cells) so engine-pushed user messages — the bulk of
+/// the live transcript after `engine-tui-unified-transcript-plan.md`
+/// Commit 2 — show up in the rewind picker. Prior to that, the picker
+/// only saw TUI optimistic echoes which no longer exist.
 /// TS: MessageSelector receives `messages` prop filtered by selectableUserMessagesFilter.
 pub fn build_rewind_state(state: &AppState) -> RewindState {
     build_rewind_state_internal(state)
@@ -199,7 +203,8 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    for (i, msg) in state.session.messages.iter().enumerate() {
+    let messages = state.session.transcript_messages();
+    for (i, msg) in messages.iter().enumerate() {
         if !is_selectable_user_message(msg) {
             continue;
         }

@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use coco_messages::SystemMessageLevel;
 use coco_types::PermissionMode;
 use coco_types::PermissionUpdate;
 
@@ -63,6 +64,27 @@ impl fmt::Display for ShutdownReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+/// Typed payload for [`UserCommand::PushSystemMessage`]. Each variant
+/// carries the fields the engine needs to construct the matching
+/// [`coco_messages::SystemMessage`] sub-variant before calling
+/// `history_push_and_emit`. Lets TUI-originated transcript content
+/// (slash output, file-open notices, bash command results, …) flow
+/// through the engine instead of writing directly to a TUI-local
+/// `ChatMessage` list. See
+/// `engine-tui-unified-transcript-plan.md` §3 Commit 2.
+#[derive(Debug, Clone)]
+pub enum SystemPushKind {
+    /// Plain notice → `SystemMessage::Informational { level, title, message }`.
+    /// Empty `title` renders without the `"<title>: "` prefix.
+    Informational {
+        level: SystemMessageLevel,
+        title: String,
+        message: String,
+    },
+    /// Bash-mode local command result → `SystemMessage::LocalCommand`.
+    LocalCommand { command: String, output: String },
 }
 
 /// Commands sent from TUI to the core agent loop.
@@ -263,4 +285,12 @@ pub enum UserCommand {
     /// this into a `coco_hooks::orchestration::execute_notification`
     /// call so registered `Notification` hooks can react.
     FireIdleNotification { message: String },
+    /// Push a TUI-originated system message into engine `MessageHistory`.
+    /// The engine handler constructs the matching
+    /// `coco_messages::SystemMessage::*` from `kind` and calls
+    /// `history_push_and_emit`, so the round-trip surfaces via the
+    /// normal `MessageAppended` → `TranscriptView` → render path.
+    /// Replaces direct `state.session.add_message(ChatMessage::*)`
+    /// writes that bypassed the engine in earlier phases.
+    PushSystemMessage { kind: SystemPushKind },
 }
