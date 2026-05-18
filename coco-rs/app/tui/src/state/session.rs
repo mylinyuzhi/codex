@@ -139,6 +139,12 @@ pub(crate) fn now_ms() -> i64 {
 pub struct SessionState {
     /// Conversation messages.
     pub messages: Vec<ChatMessage>,
+    /// Derived view of engine `MessageHistory`. Populated by the
+    /// `MessageAppended` / `MessageTruncated` / `SessionResetForResume`
+    /// protocol handlers. Phase 3a status: dual-write alongside
+    /// `messages` above; renderers still read `messages`. Phase 3b
+    /// will flip the read path and delete `messages`.
+    pub transcript: super::transcript_view::TranscriptView,
     /// Message UUID set by `apply_auto_restore` when an auto-restore
     /// fires. The App loop drains this after each `handle_core_event`
     /// and dispatches `UserCommand::Rewind { mode: AutoRestore }` so
@@ -452,6 +458,7 @@ impl Default for SessionState {
     fn default() -> Self {
         Self {
             messages: Vec::new(),
+            transcript: super::transcript_view::TranscriptView::new(),
             pending_auto_restore_truncate: None,
             model: String::new(),
             provider: String::new(),

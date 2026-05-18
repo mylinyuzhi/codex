@@ -4,12 +4,14 @@
 //! - [`SessionState`]: agent-synchronized data (model, messages, tools, subagents)
 //! - [`UiState`]: local TUI state (input, scroll, surfaces, streaming, theme)
 
+pub mod derive;
 pub mod interaction;
 pub mod modal;
 pub mod rewind;
 pub mod session;
 pub mod surface_payloads;
 pub mod transcript;
+pub mod transcript_view;
 pub mod ui;
 
 pub use crate::display_settings::DisplaySettings;
@@ -94,6 +96,10 @@ pub use surface_payloads::TaskDetailState;
 pub use surface_payloads::TrustState;
 pub use surface_payloads::WorktreeExitState;
 pub use transcript::TranscriptState;
+pub use transcript_view::CellKind;
+pub use transcript_view::RenderedCell;
+pub use transcript_view::SystemCellKind;
+pub use transcript_view::TranscriptView;
 pub use ui::ActiveSuggestions;
 pub use ui::ExitKey;
 pub use ui::FocusTarget;

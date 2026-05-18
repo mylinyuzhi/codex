@@ -771,16 +771,35 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
 
         // === History lifecycle ===
         //
-        // Engine MessageHistory authoritative-mutation events. TUI does
-        // not yet maintain a derived view — Phase 3 of
-        // `engine-tui-unified-transcript-plan.md` lands `TranscriptView`
-        // and wires these handlers. Until then, the TUI ignores these
-        // events; engine-side state remains consistent and SDK consumers
-        // already receive the typed wire payload for their own derived
-        // views.
-        ServerNotification::MessageAppended { .. }
-        | ServerNotification::MessageTruncated { .. }
-        | ServerNotification::SessionResetForResume { .. } => false,
+        // Engine MessageHistory authoritative-mutation events. Phase 3a
+        // populates the new `TranscriptView` alongside the legacy
+        // `session.messages`. Renderers still read the legacy field so
+        // these handlers return `false` (no redraw needed). Phase 3b
+        // will flip render path to consume `session.transcript` and
+        // delete `session.messages`.
+        ServerNotification::MessageAppended { message } => {
+            match serde_json::from_value::<coco_messages::Message>(message) {
+                Ok(msg) => {
+                    state.session.transcript.on_message_appended(&msg);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "MessageAppended deserialize failed; transcript skipped",
+                    );
+                }
+            }
+            false
+        }
+        ServerNotification::MessageTruncated { keep_count } => {
+            let n = keep_count.max(0) as usize;
+            state.session.transcript.on_message_truncated(n);
+            false
+        }
+        ServerNotification::SessionResetForResume { .. } => {
+            state.session.transcript.on_session_reset();
+            false
+        }
     }
 }
 
