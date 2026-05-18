@@ -3,11 +3,9 @@
 //!
 //! Three consumers read from the same [`KEYMAP`] table:
 //!
-//! 1. **`/help` slash command** (`crate::presentation::help_slash`) — renders
-//!    grouped markdown with i18n-resolved descriptions.
-//! 2. **Keyboard help overlay** (`crate::presentation::help`) — renders the
-//!    same data as an in-TUI overlay.
-//! 3. **Built-in subagent retrieval** — [`export_markdown`] and
+//! 1. **Keyboard help state** (`crate::presentation::help`) — renders the
+//!    same data as an in-TUI state.
+//! 2. **Built-in subagent retrieval** — [`export_markdown`] and
 //!    [`export_json`] dump the table for a future "what keys does coco
 //!    support?" tool. JSON resolves descriptions via the active locale so
 //!    agents answer in the user's language.
@@ -125,7 +123,7 @@ pub fn entries_for_group(group: KeymapGroup) -> impl Iterator<Item = &'static Ke
 }
 
 /// All groups in canonical display order. Stable order is part of the
-/// public contract — `/help` and the overlay both rely on it.
+/// public contract — `/help` and the state both rely on it.
 pub const GROUP_ORDER: &[KeymapGroup] = &[
     KeymapGroup::InputCursor,
     KeymapGroup::InputEdit,

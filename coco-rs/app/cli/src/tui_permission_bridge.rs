@@ -1,4 +1,4 @@
-//! TUI permission bridge — drives the permission overlay from a
+//! TUI permission bridge — drives the permission prompt from a
 //! `ToolPermissionBridge::request_permission` call.
 //!
 //! ## Why
@@ -15,7 +15,7 @@
 //!    │                              │                      │
 //!    │ request_permission()         │                      │
 //!    │ ─ insert oneshot in pending  │                      │
-//!    │ ─ emit ApprovalRequired ────>│ Overlay::Permission  │
+//!    │ ─ emit ApprovalRequired ────>│ Permission prompt    │
 //!    │   await oneshot              │ ─────────────────────│
 //!    │                              │ <── Approve / Deny ──│
 //!    │                              │ UserCommand::Approval
@@ -41,7 +41,7 @@
 //!
 //! Worker subagents (AgentTool spawns) inherit the leader's bridge
 //! via `wire_engine`. So a worker's tool deny in TUI mode prompts the
-//! leader's overlay automatically — no per-spawn install needed.
+//! leader's prompt automatically — no per-spawn install needed.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -53,8 +53,6 @@ use coco_tool_runtime::{
     ToolPermissionBridge, ToolPermissionDecision, ToolPermissionRequest, ToolPermissionResolution,
 };
 use coco_types::PendingPermissionGuard;
-use coco_types::PermissionDisplayInput;
-use coco_types::ToolName;
 use coco_types::TuiOnlyEvent;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::warn;
@@ -177,7 +175,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
         //
         // Acquire a `PendingPermissionGuard` here so the entry's
         // lifetime is the canonical signal for "is the user staring
-        // at a permission overlay?". The guard drops when the entry
+        // at a permission prompt?". The guard drops when the entry
         // is removed from the map (resolve_pending path) OR when the
         // bridge's cleanup branches below remove it on channel close.
         // Counter Arc is fetched via the late-bound Weak<SessionRuntime>
@@ -199,7 +197,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
 
         // TS `useNotifyAfterTimeout('Claude Code is waiting for your input',
         // 'permission_prompt')` (`PermissionRequest.tsx:190`): fire the
-        // Notification hook before the overlay is shown so user-defined
+        // Notification hook before the prompt is shown so user-defined
         // notifiers run in lockstep with TS. Best-effort — no runtime
         // installed (e.g. tests) leaves the hook unfired.
         if let Some(runtime) = self
@@ -219,12 +217,12 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 .await;
         }
 
-        // Step 2: emit the right overlay event onto the TUI channel.
+        // Step 2: emit the right prompt event onto the TUI channel.
         //
-        // AskUserQuestion gets a dedicated rich overlay (Question UI:
+        // AskUserQuestion gets a dedicated rich prompt (Question UI:
         // multi-question, multiSelect, preview, notes) — TS parity with
         // `AskUserQuestionPermissionRequest.tsx`. All other tools get
-        // the generic Allow / Deny `Permission` overlay.
+        // the generic Allow / Deny `Permission` prompt.
         //
         // Both paths land back here via the same `pending` oneshot
         // and `UserCommand::ApprovalResponse` channel — the only
@@ -241,7 +239,10 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 request_id: request.id.clone(),
                 tool_name: request.tool_name.clone(),
                 description: request.description.clone(),
-                display_input: permission_display_input(&request.tool_name, &request.input),
+                display_input: coco_tui::tool_display::permission_display_input(
+                    &request.tool_name,
+                    &request.input,
+                ),
                 show_always_allow,
                 choices: request.choices.clone(),
                 permission_suggestions: request.suggestions.clone(),
@@ -359,67 +360,6 @@ pub fn send_resolution(
         content_blocks,
     };
     entry.sender.send(resolution).is_ok()
-}
-
-const PERMISSION_DISPLAY_MAX_CHARS: usize = 1200;
-
-fn permission_display_input(tool_name: &str, input: &serde_json::Value) -> PermissionDisplayInput {
-    if is_shell_tool(tool_name)
-        && let Some(command) = input.get("command").and_then(serde_json::Value::as_str)
-    {
-        return PermissionDisplayInput::Command(single_line_capped(
-            command,
-            PERMISSION_DISPLAY_MAX_CHARS,
-        ));
-    }
-
-    match serde_json::to_string(input) {
-        Ok(serialized) if serialized != "null" => PermissionDisplayInput::Json(single_line_capped(
-            &serialized,
-            PERMISSION_DISPLAY_MAX_CHARS,
-        )),
-        _ => PermissionDisplayInput::Empty,
-    }
-}
-
-fn is_shell_tool(tool_name: &str) -> bool {
-    let normalized = tool_name
-        .rsplit(coco_types::MCP_TOOL_SEPARATOR)
-        .next()
-        .unwrap_or(tool_name);
-    normalized == ToolName::Bash.as_str() || normalized == ToolName::PowerShell.as_str()
-}
-
-fn single_line_capped(text: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    let mut pending_space = false;
-    let mut count = 0;
-    for chunk in text.split_whitespace() {
-        let space = if out.is_empty() || !pending_space {
-            0
-        } else {
-            1
-        };
-        let chunk_len = chunk.chars().count();
-        if count + space + chunk_len > max_chars {
-            if max_chars > 3 {
-                while count + 3 > max_chars {
-                    out.pop();
-                    count = count.saturating_sub(1);
-                }
-                out.push_str("...");
-            }
-            return out;
-        }
-        if space == 1 {
-            out.push(' ');
-            count += 1;
-        }
-        out.push_str(chunk);
-        count += chunk_len;
-        pending_space = true;
-    }
-    out
 }
 
 #[cfg(test)]

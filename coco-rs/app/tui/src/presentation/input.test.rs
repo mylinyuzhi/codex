@@ -2,9 +2,6 @@ use super::*;
 
 use crate::state::ActiveSuggestions;
 use crate::state::AppState;
-use crate::state::CommandOption;
-use crate::state::CommandPaletteOverlay;
-use crate::state::Overlay;
 use crate::state::SuggestionKind;
 use crate::widgets::suggestion_popup::SuggestionItem;
 
@@ -17,7 +14,7 @@ fn item(label: &str) -> SuggestionItem {
 }
 
 #[test]
-fn inline_popup_view_prefers_active_suggestions() {
+fn inline_popup_view_reads_interaction_popup() {
     let mut state = AppState::default();
     state.ui.active_suggestions = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
@@ -26,18 +23,9 @@ fn inline_popup_view_prefers_active_suggestions() {
         query: String::new(),
         trigger_pos: 0,
     });
-    state
-        .ui
-        .set_overlay(Overlay::CommandPalette(CommandPaletteOverlay {
-            commands: vec![CommandOption {
-                name: "model".into(),
-                description: None,
-            }],
-            filter: String::new(),
-            selected: 0,
-        }));
+    state.ui.sync_popup_from_active_suggestions();
 
-    let view = inline_popup_view(&state).expect("active suggestions should render");
+    let view = inline_popup_view(&state).expect("interaction popup should render");
 
     assert_eq!(view.selected, 2);
     assert_eq!(view.items.len(), 1);
@@ -47,22 +35,18 @@ fn inline_popup_view_prefers_active_suggestions() {
 #[test]
 fn inline_popup_view_filters_command_palette_items() {
     let mut state = AppState::default();
-    state
-        .ui
-        .set_overlay(Overlay::CommandPalette(CommandPaletteOverlay {
-            commands: vec![
-                CommandOption {
-                    name: "model".into(),
-                    description: Some("Set model".into()),
-                },
-                CommandOption {
-                    name: "clear".into(),
-                    description: Some("Clear chat".into()),
-                },
-            ],
-            filter: "cle".into(),
-            selected: -3,
-        }));
+    state.ui.active_suggestions = Some(ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: vec![SuggestionItem {
+            label: "/clear".into(),
+            description: Some("Clear chat".into()),
+            metadata: None,
+        }],
+        selected: 0,
+        query: "cle".into(),
+        trigger_pos: 0,
+    });
+    state.ui.sync_popup_from_active_suggestions();
 
     let view = inline_popup_view(&state).expect("matching command should render");
 
@@ -75,16 +59,14 @@ fn inline_popup_view_filters_command_palette_items() {
 #[test]
 fn inline_popup_view_returns_none_when_no_rows_match() {
     let mut state = AppState::default();
-    state
-        .ui
-        .set_overlay(Overlay::CommandPalette(CommandPaletteOverlay {
-            commands: vec![CommandOption {
-                name: "model".into(),
-                description: None,
-            }],
-            filter: "zzz".into(),
-            selected: 0,
-        }));
+    state.ui.active_suggestions = Some(ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: Vec::new(),
+        selected: 0,
+        query: "zzz".into(),
+        trigger_pos: 0,
+    });
+    state.ui.sync_popup_from_active_suggestions();
 
     assert!(inline_popup_view(&state).is_none());
 }

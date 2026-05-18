@@ -1,12 +1,12 @@
-//! Rewind overlay update logic — extracted to stay under 800 LoC in update.rs.
+//! Rewind state update logic — extracted to stay under 800 LoC in update.rs.
 //!
 //! TS: MessageSelector.tsx state management + restore option handling.
 
 use crate::state::AppState;
 use crate::state::ChatRole;
 use crate::state::rewind::RestoreType;
-use crate::state::rewind::RewindOverlay;
 use crate::state::rewind::RewindPhase;
+use crate::state::rewind::RewindState;
 use crate::state::rewind::RewindableMessage;
 use crate::state::rewind::build_restore_options;
 
@@ -148,52 +148,49 @@ fn is_selectable_user_message(msg: &crate::state::ChatMessage) -> bool {
     true
 }
 
-/// Build the initial RewindOverlay from current session state, optionally
+/// Build the initial RewindState from current session state, optionally
 /// pre-anchored to a specific message.
 ///
 /// When `preselect_message_id` matches a real (non-synthetic) row, the
-/// overlay opens directly in the `RestoreOptions` phase with that row
+/// state opens directly in the `RestoreOptions` phase with that row
 /// selected. TS: `preselectedMessage` (`MessageSelector.tsx:42-44`,
 /// 72-83). Used by the message-actions `edit` flow.
 ///
-/// `preselect_message_id = None` → identical to `build_rewind_overlay`.
-pub fn build_rewind_overlay_for(
-    state: &AppState,
-    preselect_message_id: Option<&str>,
-) -> RewindOverlay {
-    let mut overlay = build_rewind_overlay_internal(state);
+/// `preselect_message_id = None` → identical to `build_rewind_state`.
+pub fn build_rewind_state_for(state: &AppState, preselect_message_id: Option<&str>) -> RewindState {
+    let mut state = build_rewind_state_internal(state);
     let Some(target_id) = preselect_message_id else {
-        return overlay;
+        return state;
     };
-    let Some(row_idx) = overlay
+    let Some(row_idx) = state
         .messages
         .iter()
         .position(|m| !m.is_current_prompt && m.message_id == target_id)
     else {
         // Unknown id — fall back to the standard pick-list.
-        return overlay;
+        return state;
     };
-    overlay.selected = row_idx as i32;
-    overlay.preselected = true;
-    overlay.available_options = build_restore_options(
-        overlay.file_history_enabled,
-        overlay.has_file_changes,
-        overlay.allow_summarize_up_to,
+    state.selected = row_idx as i32;
+    state.preselected = true;
+    state.available_options = build_restore_options(
+        state.file_history_enabled,
+        state.has_file_changes,
+        state.allow_summarize_up_to,
     );
-    overlay.option_selected = 0;
-    overlay.phase = RewindPhase::RestoreOptions;
-    overlay
+    state.option_selected = 0;
+    state.phase = RewindPhase::RestoreOptions;
+    state
 }
 
-/// Build the initial RewindOverlay from current session state.
+/// Build the initial RewindState from current session state.
 ///
 /// Extracts user messages from session.messages, builds RewindableMessage list.
 /// TS: MessageSelector receives `messages` prop filtered by selectableUserMessagesFilter.
-pub fn build_rewind_overlay(state: &AppState) -> RewindOverlay {
-    build_rewind_overlay_internal(state)
+pub fn build_rewind_state(state: &AppState) -> RewindState {
+    build_rewind_state_internal(state)
 }
 
-fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
+fn build_rewind_state_internal(state: &AppState) -> RewindState {
     // TS: tengu_message_selector_opened
     tracing::info!(target: "rewind", event = "selector_opened");
     let mut rewindable: Vec<RewindableMessage> = Vec::new();
@@ -262,7 +259,7 @@ fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
     // TS: fileHistoryEnabled() in fileHistory.ts
     let file_history_enabled = state.session.file_history_enabled;
 
-    RewindOverlay {
+    RewindState {
         phase: RewindPhase::MessageSelect,
         messages: rewindable,
         selected,
@@ -284,20 +281,19 @@ fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
     }
 }
 
-/// Navigate up/down in the rewind overlay.
+/// Navigate up/down in the rewind state.
 ///
 /// In MessageSelect phase, navigates the message list.
 /// In RestoreOptions phase, navigates the option list.
-pub fn handle_rewind_nav(overlay: &mut RewindOverlay, delta: i32) {
-    match overlay.phase {
+pub fn handle_rewind_nav(state: &mut RewindState, delta: i32) {
+    match state.phase {
         RewindPhase::MessageSelect => {
-            let count = overlay.messages.len() as i32;
-            overlay.selected = (overlay.selected + delta).clamp(0, (count - 1).max(0));
+            let count = state.messages.len() as i32;
+            state.selected = (state.selected + delta).clamp(0, (count - 1).max(0));
         }
         RewindPhase::RestoreOptions => {
-            let count = overlay.available_options.len() as i32;
-            overlay.option_selected =
-                (overlay.option_selected + delta).clamp(0, (count - 1).max(0));
+            let count = state.available_options.len() as i32;
+            state.option_selected = (state.option_selected + delta).clamp(0, (count - 1).max(0));
         }
         // Feedback / confirming phases ignore arrow navigation.
         RewindPhase::SummarizeFeedback | RewindPhase::Confirming => {}
@@ -316,22 +312,22 @@ pub enum ConfirmOutcome {
     },
     /// Phase transition only (no dispatch yet).
     Phase,
-    /// Dismiss the overlay (synthetic current-prompt row, or cancel-on-confirm).
+    /// Dismiss the state (synthetic current-prompt row, or cancel-on-confirm).
     /// TS: `MessageSelector.tsx:165` — `if (!messages.includes(message_0)) onClose()`.
     Dismiss,
 }
 
-/// Handle Enter/confirm in the rewind overlay.
+/// Handle Enter/confirm in the rewind state.
 ///
 /// Returns `ConfirmOutcome` so the dispatcher knows whether to send the
-/// rewind, keep the overlay open in a new phase, or dismiss it.
+/// rewind, keep the state open in a new phase, or dismiss it.
 ///
 /// TS: MessageSelector onSelect -> onRestoreOptionSelect
-pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
+pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
     use crate::state::rewind::SummarizeDirection;
-    match overlay.phase {
+    match state.phase {
         RewindPhase::MessageSelect => {
-            let Some(msg) = overlay.messages.get(overlay.selected as usize) else {
+            let Some(msg) = state.messages.get(state.selected as usize) else {
                 return ConfirmOutcome::Phase;
             };
             // Synthetic `(current)` row — TS `MessageSelector.tsx:165`.
@@ -343,34 +339,34 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
             tracing::info!(
                 target: "rewind",
                 event = "message_selected",
-                index_from_end = overlay.messages.len() as i32 - overlay.selected - 1,
+                index_from_end = state.messages.len() as i32 - state.selected - 1,
             );
             // TS `MessageSelector.tsx:169-172`: when file history is
             // disabled the selector skips the option screen entirely
             // and dispatches `restoreConversationDirectly`. Mirror by
             // returning ConversationOnly straight away.
-            if !overlay.file_history_enabled {
+            if !state.file_history_enabled {
                 return ConfirmOutcome::Dispatch {
                     message_id: msg.message_id.clone(),
                     restore: RestoreType::ConversationOnly,
                 };
             }
-            overlay.available_options = build_restore_options(
-                overlay.file_history_enabled,
-                overlay.has_file_changes,
-                overlay.allow_summarize_up_to,
+            state.available_options = build_restore_options(
+                state.file_history_enabled,
+                state.has_file_changes,
+                state.allow_summarize_up_to,
             );
-            overlay.option_selected = 0;
-            overlay.phase = RewindPhase::RestoreOptions;
+            state.option_selected = 0;
+            state.phase = RewindPhase::RestoreOptions;
             ConfirmOutcome::Phase
         }
         RewindPhase::RestoreOptions => {
-            let Some(msg) = overlay.messages.get(overlay.selected as usize) else {
+            let Some(msg) = state.messages.get(state.selected as usize) else {
                 return ConfirmOutcome::Phase;
             };
-            let Some(opt) = overlay
+            let Some(opt) = state
                 .available_options
-                .get(overlay.option_selected as usize)
+                .get(state.option_selected as usize)
                 .cloned()
             else {
                 return ConfirmOutcome::Phase;
@@ -384,15 +380,15 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
             // Summarize variants need the optional feedback box first.
             match &opt {
                 RestoreType::SummarizeFrom { .. } => {
-                    overlay.pending_summarize = Some(SummarizeDirection::From);
-                    overlay.summarize_feedback.clear();
-                    overlay.phase = RewindPhase::SummarizeFeedback;
+                    state.pending_summarize = Some(SummarizeDirection::From);
+                    state.summarize_feedback.clear();
+                    state.phase = RewindPhase::SummarizeFeedback;
                     ConfirmOutcome::Phase
                 }
                 RestoreType::SummarizeUpTo { .. } => {
-                    overlay.pending_summarize = Some(SummarizeDirection::UpTo);
-                    overlay.summarize_feedback.clear();
-                    overlay.phase = RewindPhase::SummarizeFeedback;
+                    state.pending_summarize = Some(SummarizeDirection::UpTo);
+                    state.summarize_feedback.clear();
+                    state.phase = RewindPhase::SummarizeFeedback;
                     ConfirmOutcome::Phase
                 }
                 // TS `MessageSelector.tsx:185-188`: Nevermind cancels
@@ -400,13 +396,13 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
                 // no message list to fall back to, so it dismisses
                 // (TS line 186: `if (preselectedMessage) onClose()`).
                 RestoreType::Nevermind => {
-                    if overlay.preselected {
+                    if state.preselected {
                         ConfirmOutcome::Dismiss
                     } else {
-                        overlay.available_options.clear();
-                        overlay.diff_stats = None;
-                        overlay.option_selected = 0;
-                        overlay.phase = RewindPhase::MessageSelect;
+                        state.available_options.clear();
+                        state.diff_stats = None;
+                        state.option_selected = 0;
+                        state.phase = RewindPhase::MessageSelect;
                         ConfirmOutcome::Phase
                     }
                 }
@@ -417,21 +413,21 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
             }
         }
         RewindPhase::SummarizeFeedback => {
-            let Some(msg) = overlay.messages.get(overlay.selected as usize) else {
+            let Some(msg) = state.messages.get(state.selected as usize) else {
                 return ConfirmOutcome::Phase;
             };
             // TS `allowEmptySubmitToCancel: true` — empty submit cancels
             // the summarize choice and returns to the option list.
-            let fb = overlay.summarize_feedback.trim();
+            let fb = state.summarize_feedback.trim();
             if fb.is_empty() {
-                overlay.summarize_feedback.clear();
-                overlay.pending_summarize = None;
-                overlay.phase = RewindPhase::RestoreOptions;
+                state.summarize_feedback.clear();
+                state.pending_summarize = None;
+                state.phase = RewindPhase::RestoreOptions;
                 return ConfirmOutcome::Phase;
             }
             // Peek (don't take) — keep `pending_summarize` set so the
             // renderer's Confirming phase can show "Summarizing…".
-            let Some(dir) = overlay.pending_summarize else {
+            let Some(dir) = state.pending_summarize else {
                 return ConfirmOutcome::Phase;
             };
             let feedback = Some(fb.to_string());
@@ -448,14 +444,14 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
     }
 }
 
-/// Handle Esc/cancel in the rewind overlay.
+/// Handle Esc/cancel in the rewind state.
 ///
-/// Returns `true` if the overlay should be fully dismissed (was in MessageSelect).
+/// Returns `true` if the state should be fully dismissed (was in MessageSelect).
 /// Returns `false` if it went back to a previous phase (RestoreOptions -> MessageSelect).
 ///
 /// TS: Esc in restore options goes back to message list; Esc in message list closes.
-pub fn handle_rewind_cancel(overlay: &mut RewindOverlay) -> bool {
-    match overlay.phase {
+pub fn handle_rewind_cancel(state: &mut RewindState) -> bool {
+    match state.phase {
         RewindPhase::MessageSelect => {
             // TS: tengu_message_selector_cancelled
             tracing::info!(target: "rewind", event = "selector_cancelled");
@@ -464,23 +460,23 @@ pub fn handle_rewind_cancel(overlay: &mut RewindOverlay) -> bool {
         RewindPhase::RestoreOptions => {
             // TS `MessageSelector.tsx:248-253`: when launched preselected
             // there is no message list to fall back to — Esc closes the
-            // overlay entirely.
-            if overlay.preselected {
+            // state entirely.
+            if state.preselected {
                 tracing::info!(target: "rewind", event = "selector_cancelled_preselected");
                 return true;
             }
-            overlay.phase = RewindPhase::MessageSelect;
-            overlay.available_options.clear();
-            overlay.diff_stats = None;
+            state.phase = RewindPhase::MessageSelect;
+            state.available_options.clear();
+            state.diff_stats = None;
             false
         }
         RewindPhase::SummarizeFeedback => {
             // Esc in the feedback box goes back to the option list,
             // discarding the typed feedback. TS: SummarizeOption's
             // `allowEmptySubmitToCancel` plus Esc routing.
-            overlay.summarize_feedback.clear();
-            overlay.pending_summarize = None;
-            overlay.phase = RewindPhase::RestoreOptions;
+            state.summarize_feedback.clear();
+            state.pending_summarize = None;
+            state.phase = RewindPhase::RestoreOptions;
             false
         }
         RewindPhase::Confirming => true,

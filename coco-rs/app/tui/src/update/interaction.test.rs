@@ -10,12 +10,13 @@ use super::*;
 use crate::command::UserCommand;
 use crate::state::AppState;
 use crate::state::MemoryDialogEntry;
-use crate::state::MemoryDialogOverlay;
 use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
+use crate::state::MemoryDialogState;
+use crate::state::ModalState;
 use crate::state::ModelEntry;
-use crate::state::ModelPickerOverlay;
-use crate::state::Overlay;
+use crate::state::ModelPickerState;
+use crate::state::PanePromptState;
 use crate::state::ProviderUnavailableReason;
 use crate::state::ui::ToastSeverity;
 use coco_types::ModelRole;
@@ -24,7 +25,7 @@ use tokio::sync::mpsc;
 
 fn picker(entries: Vec<ModelEntry>, selected: i32, effort: Option<ReasoningEffort>) -> AppState {
     let mut s = AppState::new();
-    s.ui.set_overlay(Overlay::ModelPicker(ModelPickerOverlay {
+    s.ui.show_modal(ModalState::ModelPicker(ModelPickerState {
         role: ModelRole::Main,
         entries,
         filter: String::new(),
@@ -65,12 +66,12 @@ fn cycle_effort_advances_through_supported_levels() {
         Some(ReasoningEffort::Low),
     );
     cycle_model_effort(&mut s, 1);
-    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
+    let Some(ModalState::ModelPicker(m)) = s.ui.modal.as_ref() else {
         panic!()
     };
     assert_eq!(m.effort, Some(ReasoningEffort::Medium));
     cycle_model_effort(&mut s, 1);
-    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
+    let Some(ModalState::ModelPicker(m)) = s.ui.modal.as_ref() else {
         panic!()
     };
     assert_eq!(m.effort, Some(ReasoningEffort::High));
@@ -90,13 +91,13 @@ fn cycle_effort_wraps_around_at_endpoints() {
     );
     // Wrap forward from High → Low.
     cycle_model_effort(&mut s, 1);
-    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
+    let Some(ModalState::ModelPicker(m)) = s.ui.modal.as_ref() else {
         panic!()
     };
     assert_eq!(m.effort, Some(ReasoningEffort::Low));
     // Wrap back from Low → High.
     cycle_model_effort(&mut s, -1);
-    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
+    let Some(ModalState::ModelPicker(m)) = s.ui.modal.as_ref() else {
         panic!()
     };
     assert_eq!(m.effort, Some(ReasoningEffort::High));
@@ -106,7 +107,7 @@ fn cycle_effort_wraps_around_at_endpoints() {
 fn cycle_effort_noops_when_no_supported_levels() {
     let mut s = picker(vec![entry("m", &[], None)], 0, None);
     cycle_model_effort(&mut s, 1);
-    let Some(Overlay::ModelPicker(m)) = s.ui.active_overlay() else {
+    let Some(ModalState::ModelPicker(m)) = s.ui.modal.as_ref() else {
         panic!()
     };
     assert!(m.effort.is_none());
@@ -115,9 +116,9 @@ fn cycle_effort_noops_when_no_supported_levels() {
 #[test]
 fn cycle_effort_noops_outside_picker() {
     let mut s = AppState::new();
-    // No overlay → cycle_effort should silently no-op (no panic).
+    // No state → cycle_effort should silently no-op (no panic).
     cycle_model_effort(&mut s, 1);
-    assert!(!s.ui.has_overlay());
+    assert!(!s.ui.has_active_surface());
 }
 
 #[tokio::test]
@@ -135,8 +136,8 @@ async fn confirm_model_picker_blocks_unavailable_provider() {
 
     assert!(rx.try_recv().is_err(), "no model-change command sent");
     assert!(matches!(
-        s.ui.active_overlay(),
-        Some(Overlay::ModelPicker(_))
+        s.ui.modal.as_ref(),
+        Some(ModalState::ModelPicker(_))
     ));
     assert_eq!(s.ui.toasts.len(), 1);
     assert_eq!(s.ui.toasts[0].severity, ToastSeverity::Warning);
@@ -149,7 +150,7 @@ async fn confirm_memory_dialog_sends_open_memory_file_command() {
     let mut state = AppState::new();
     state
         .ui
-        .set_overlay(Overlay::MemoryDialog(MemoryDialogOverlay {
+        .show_modal(ModalState::MemoryDialog(MemoryDialogState {
             entries: vec![MemoryDialogEntry {
                 path: path.clone(),
                 label: "Project memory".to_string(),
@@ -171,7 +172,10 @@ async fn confirm_memory_dialog_sends_open_memory_file_command() {
         panic!("expected OpenMemoryFile")
     };
     assert_eq!(sent_path, path);
-    assert!(!state.ui.has_overlay(), "overlay dismissed after select");
+    assert!(
+        !state.ui.has_active_surface(),
+        "state dismissed after select"
+    );
 }
 
 #[tokio::test]
@@ -179,7 +183,7 @@ async fn confirm_memory_dialog_keeps_non_file_rows_open() {
     let mut state = AppState::new();
     state
         .ui
-        .set_overlay(Overlay::MemoryDialog(MemoryDialogOverlay {
+        .show_modal(ModalState::MemoryDialog(MemoryDialogState {
             entries: vec![MemoryDialogEntry {
                 path: std::path::PathBuf::from("/tmp/coco-memory-test"),
                 label: "Auto-memory folder".to_string(),
@@ -194,14 +198,14 @@ async fn confirm_memory_dialog_keeps_non_file_rows_open() {
 
     assert!(rx.try_recv().is_err(), "no editor command for non-file row");
     assert!(
-        matches!(state.ui.active_overlay(), Some(Overlay::MemoryDialog(_))),
-        "overlay stays open"
+        matches!(state.ui.modal.as_ref(), Some(ModalState::MemoryDialog(_))),
+        "state stays open"
     );
     assert_eq!(state.ui.toasts.len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
 }
 
-// ── Permission overlay: multi-choice commit path ──
+// ── Permission state: multi-choice commit path ──
 //
 // TS parity: `ExitPlanModePermissionRequest.tsx:691-704` — the
 // user picks via arrows and Enter; the chosen `value` is spliced
@@ -209,7 +213,7 @@ async fn confirm_memory_dialog_keeps_non_file_rows_open() {
 
 fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
     use crate::state::PermissionDetail;
-    use crate::state::PermissionOverlay;
+    use crate::state::PermissionPromptState;
     use coco_types::PermissionAskChoice;
 
     let mut s = AppState::new();
@@ -221,7 +225,7 @@ fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
             description: None,
         })
         .collect();
-    s.ui.set_overlay(Overlay::Permission(PermissionOverlay {
+    s.ui.push_prompt(PanePromptState::Permission(PermissionPromptState {
         request_id: "req-1".into(),
         tool_name: "ExitPlanMode".into(),
         description: "Exit plan mode?".into(),
@@ -266,7 +270,7 @@ async fn confirm_with_choice_splices_user_choice_into_updated_input() {
     let payload = updated_input.expect("updated_input populated");
     assert_eq!(payload["plan"], "do the thing");
     assert_eq!(payload["user_choice"], "yes-clear-context");
-    assert!(!s.ui.has_overlay(), "overlay dismissed after commit");
+    assert!(!s.ui.has_active_surface(), "state dismissed after commit");
 }
 
 #[tokio::test]
@@ -322,9 +326,9 @@ async fn confirm_classic_yes_no_approves_selected_action() {
     // No choices → Enter commits the focused classic action, matching
     // TS PermissionPrompt / codex-rs list-selection behavior.
     use crate::state::PermissionDetail;
-    use crate::state::PermissionOverlay;
+    use crate::state::PermissionPromptState;
     let mut s = AppState::new();
-    s.ui.set_overlay(Overlay::Permission(PermissionOverlay {
+    s.ui.push_prompt(PanePromptState::Permission(PermissionPromptState {
         request_id: "req-1".into(),
         tool_name: "Bash".into(),
         description: "Run".into(),
@@ -356,15 +360,15 @@ async fn confirm_classic_yes_no_approves_selected_action() {
     assert!(approved);
     assert!(!always_allow);
     assert!(permission_updates.is_empty());
-    assert!(!s.ui.has_overlay(), "overlay dismissed");
+    assert!(!s.ui.has_active_surface(), "state dismissed");
 }
 
 #[tokio::test]
 async fn confirm_classic_always_allow_sends_session_update() {
     use crate::state::PermissionDetail;
-    use crate::state::PermissionOverlay;
+    use crate::state::PermissionPromptState;
     let mut s = AppState::new();
-    s.ui.set_overlay(Overlay::Permission(PermissionOverlay {
+    s.ui.push_prompt(PanePromptState::Permission(PermissionPromptState {
         request_id: "req-1".into(),
         tool_name: "Bash".into(),
         description: "Run".into(),
@@ -396,17 +400,17 @@ async fn confirm_classic_always_allow_sends_session_update() {
     assert!(approved);
     assert!(always_allow);
     assert_eq!(permission_updates.len(), 1);
-    assert!(!s.ui.has_overlay(), "overlay dismissed");
+    assert!(!s.ui.has_active_surface(), "state dismissed");
 }
 
 #[tokio::test]
 async fn confirm_classic_read_always_allow_sends_path_scoped_session_update() {
     use crate::state::PermissionDetail;
-    use crate::state::PermissionOverlay;
+    use crate::state::PermissionPromptState;
     let dir = std::env::temp_dir().join("coco-tui-read-permission-test");
     let file = dir.join("notes.txt");
     let mut s = AppState::new();
-    s.ui.set_overlay(Overlay::Permission(PermissionOverlay {
+    s.ui.push_prompt(PanePromptState::Permission(PermissionPromptState {
         request_id: "req-1".into(),
         tool_name: "Read".into(),
         description: "Read outside cwd".into(),
@@ -453,17 +457,17 @@ async fn confirm_classic_read_always_allow_sends_path_scoped_session_update() {
 fn nav_advances_selected_choice_with_wraparound() {
     let mut s = permission_with_choices(&["a", "b", "c"], 0);
     nav(&mut s, 1);
-    let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
+    let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_ref() else {
         panic!()
     };
     assert_eq!(p.selected_choice, 1);
     nav(&mut s, 5);
-    let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
+    let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_ref() else {
         panic!()
     };
     assert_eq!(p.selected_choice, 0);
     nav(&mut s, -1);
-    let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
+    let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_ref() else {
         panic!()
     };
     assert_eq!(p.selected_choice, 2);
@@ -472,10 +476,10 @@ fn nav_advances_selected_choice_with_wraparound() {
 #[test]
 fn build_choice_payload_merges_with_original_input() {
     use crate::state::PermissionDetail;
-    use crate::state::PermissionOverlay;
+    use crate::state::PermissionPromptState;
     use coco_types::PermissionAskChoice;
 
-    let p = PermissionOverlay {
+    let p = PermissionPromptState {
         request_id: "req-1".into(),
         tool_name: "Foo".into(),
         description: String::new(),
@@ -505,9 +509,9 @@ fn build_choice_payload_merges_with_original_input() {
 #[test]
 fn build_choice_payload_none_when_cursor_out_of_range() {
     use crate::state::PermissionDetail;
-    use crate::state::PermissionOverlay;
+    use crate::state::PermissionPromptState;
 
-    let p = PermissionOverlay {
+    let p = PermissionPromptState {
         request_id: "req-1".into(),
         tool_name: "Foo".into(),
         description: String::new(),
@@ -553,7 +557,7 @@ fn filtered_models_matches_provider_display() {
             unavailable_reasons: Vec::new(),
         },
     ];
-    let m = ModelPickerOverlay {
+    let m = ModelPickerState {
         role: ModelRole::Main,
         entries,
         filter: "open".to_string(),

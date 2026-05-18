@@ -34,9 +34,9 @@ use crate::job_control::SuspendContext;
 use crate::state::AppState;
 use crate::surface::compatibility::TerminalCompatibility;
 use crate::surface::controller::NativeSurfaceController;
-use crate::surface::overlay::OverlaySurfacePlacement;
-use crate::surface::overlay::OverlaySurfaceState;
-use crate::surface::overlay::SurfaceFramePlan;
+use crate::surface::modal::ModalSurfacePlacement;
+use crate::surface::modal::ModalSurfaceState;
+use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::interactive_viewport_desired_height;
 
@@ -111,7 +111,7 @@ pub(crate) fn enter_tui_modes(stdout: &mut Stdout) -> io::Result<()> {
     Ok(())
 }
 
-/// Disable TUI-private terminal modes and leave alt-screen if an overlay had
+/// Disable TUI-private terminal modes and leave alt-screen if an state had
 /// entered it. `LeaveAlternateScreen` is intentionally idempotent here so panic
 /// cleanup and suspend/external-process paths share one terminal reset.
 pub(crate) fn leave_tui_modes() -> io::Result<()> {
@@ -130,7 +130,7 @@ pub(crate) fn leave_tui_modes() -> io::Result<()> {
 ///
 /// Enables raw mode, bracketed paste, and focus-change reporting. The normal
 /// surface stays in the main terminal buffer so finalized history can be
-/// inserted into native scrollback. Alt-screen is entered only for overlay
+/// inserted into native scrollback. Alt-screen is entered only for state
 /// surfaces that explicitly request it.
 ///
 /// Panic hook install is idempotent across repeated [`setup_terminal`]
@@ -178,7 +178,7 @@ fn install_panic_hook_once() {
 pub struct Tui {
     terminal: NativeTerminal,
     surface: NativeSurfaceController,
-    overlay_surface: OverlaySurfaceState,
+    modal_surface: ModalSurfaceState,
     suspend_context: SuspendContext,
     compatibility: TerminalCompatibility,
     alt_screen_active: bool,
@@ -193,7 +193,7 @@ impl Tui {
         Ok(Self {
             terminal,
             surface: NativeSurfaceController::default(),
-            overlay_surface: OverlaySurfaceState::default(),
+            modal_surface: ModalSurfaceState::default(),
             suspend_context: SuspendContext::new(),
             compatibility,
             alt_screen_active: false,
@@ -216,7 +216,7 @@ impl Tui {
         }
 
         let size = self.terminal.size()?;
-        let plan = self.overlay_surface.plan_for_native_viewport(
+        let plan = self.modal_surface.plan_for_native_viewport(
             state,
             self.compatibility,
             std::time::Instant::now(),
@@ -241,7 +241,7 @@ impl Tui {
     ///
     /// No-op on non-Unix platforms.
     pub fn trigger_suspend(&mut self) -> io::Result<()> {
-        self.leave_overlay_alt_screen()?;
+        self.leave_modal_alt_screen()?;
         self.suspend_context.suspend()?;
         Ok(())
     }
@@ -250,7 +250,7 @@ impl Tui {
     /// child process such as `$EDITOR`.
     pub fn prepare_external_process(&mut self) -> io::Result<()> {
         let mut stdout = io::stdout();
-        self.leave_overlay_alt_screen()?;
+        self.leave_modal_alt_screen()?;
         leave_tui_modes()?;
         if let Err(err) = execute!(stdout, MoveToNextLine(1), Show) {
             let _ = enter_tui_modes(&mut stdout);
@@ -264,7 +264,7 @@ impl Tui {
     pub fn restore_after_external_process(&mut self) -> io::Result<()> {
         let mut stdout = io::stdout();
         enter_tui_modes(&mut stdout)?;
-        self.leave_overlay_alt_screen()?;
+        self.leave_modal_alt_screen()?;
         self.clear_surface_after_resume()
     }
 
@@ -287,17 +287,14 @@ impl Tui {
     }
 
     fn prepare_shell_prompt_after_exit(&mut self) -> io::Result<()> {
-        self.leave_overlay_alt_screen()?;
+        self.leave_modal_alt_screen()?;
         self.terminal.prepare_shell_prompt_after_exit()?;
         std::io::Write::flush(self.terminal.backend_mut())
     }
 
     fn sync_surface_area(&mut self, state: &AppState, plan: SurfaceFramePlan) -> io::Result<()> {
         let size = self.terminal.size()?;
-        let wants_alt = matches!(
-            plan.overlay_placement,
-            Some(OverlaySurfacePlacement::AltScreen)
-        );
+        let wants_alt = matches!(plan.modal_placement, Some(ModalSurfacePlacement::AltScreen));
 
         if wants_alt && !self.alt_screen_active {
             self.alt_saved_viewport = Some(self.terminal.viewport_area());
@@ -310,7 +307,7 @@ impl Tui {
             self.terminal.backend_mut().clear_region(ClearType::All)?;
             self.terminal.invalidate_viewport();
         } else if !wants_alt && self.alt_screen_active {
-            self.leave_overlay_alt_screen()?;
+            self.leave_modal_alt_screen()?;
         }
 
         let area = if self.alt_screen_active {
@@ -345,7 +342,7 @@ impl Tui {
         Ok(())
     }
 
-    fn leave_overlay_alt_screen(&mut self) -> io::Result<()> {
+    fn leave_modal_alt_screen(&mut self) -> io::Result<()> {
         if self.alt_screen_active {
             execute!(
                 self.terminal.backend_mut(),

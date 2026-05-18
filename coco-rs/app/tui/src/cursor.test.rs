@@ -3,8 +3,6 @@ use ratatui::layout::Rect;
 
 use super::*;
 use crate::state::AppState;
-use crate::state::CommandPaletteOverlay;
-use crate::state::Overlay;
 
 /// Helper: build a minimal AppState with input focused and given text.
 fn make_state(text: &str) -> AppState {
@@ -43,27 +41,11 @@ fn compute_cursor_returns_some_for_empty_input_when_focused() {
 }
 
 #[test]
-fn compute_cursor_returns_none_when_modal_overlay_owns_focus() {
+fn compute_cursor_returns_none_when_modal_owns_focus() {
     let mut state = make_state("hello");
-    state.ui.set_overlay(Overlay::Help);
+    state.ui.show_modal(crate::state::ModalState::Help);
 
     assert!(compute_cursor(&state, INPUT_AREA).is_none());
-}
-
-#[test]
-fn compute_cursor_still_tracks_command_palette_filter() {
-    let mut state = make_state("");
-    state
-        .ui
-        .set_overlay(Overlay::CommandPalette(CommandPaletteOverlay {
-            commands: Vec::new(),
-            filter: "help".to_string(),
-            selected: 0,
-        }));
-
-    let claim = compute_cursor(&state, INPUT_AREA).expect("command palette uses input mirror");
-    assert_eq!(claim.position.x, INPUT_AREA.x + 2 + 1 + 4);
-    assert_eq!(claim.position.y, INPUT_AREA.y + 1);
 }
 
 #[test]

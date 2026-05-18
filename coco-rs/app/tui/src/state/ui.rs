@@ -1,8 +1,7 @@
 //! UI state — local TUI state, never sent to the agent.
 //!
-//! Overlay types live in `state::overlay`. This file keeps only the UiState
-//! plus the pieces tightly coupled to it: input + history, focus, streaming,
-//! and toasts.
+//! This file keeps the UiState plus the pieces tightly coupled to it: input +
+//! history, focus, streaming, interaction pane state, modal state, and toasts.
 
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -15,7 +14,15 @@ use crate::constants;
 use crate::display_settings::DisplaySettings;
 use crate::double_press::DoublePressTracker;
 use crate::keybinding_resolver::KeybindingHandle;
-use crate::state::overlay::Overlay;
+use crate::state::interaction::AgentPopupState;
+use crate::state::interaction::ComposerPopupState;
+use crate::state::interaction::FilePopupState;
+use crate::state::interaction::InteractionPaneState;
+use crate::state::interaction::PanePromptState;
+use crate::state::interaction::SlashPopupState;
+use crate::state::interaction::SymbolPopupState;
+use crate::state::modal::ModalQueue;
+use crate::state::modal::ModalState;
 use crate::theme::Theme;
 use crate::theme::ThemeRuntimeState;
 use crate::theme::ThemeSetting;
@@ -57,15 +64,17 @@ pub struct UiState {
     pub scroll_offset: i32,
     /// Current focus target.
     pub focus: FocusTarget,
-    /// Active modal overlay.
-    overlay: Option<Overlay>,
-    /// Queued overlays awaiting display.
-    overlay_queue: VecDeque<Overlay>,
-    /// Monotonic identity for the currently active overlay surface.
+    /// Bottom interaction pane: composer popups and prompt-class surfaces.
+    pub interaction: InteractionPaneState,
+    /// Active full-screen modal.
+    pub modal: Option<ModalState>,
+    /// Queued full-screen modals awaiting display.
+    pub modal_queue: ModalQueue,
+    /// Monotonic identity for the currently active blocking surface.
     ///
-    /// Incremented only when the active overlay instance changes, not when a
-    /// renderer mutates selection/filter state inside the same overlay.
-    overlay_generation: u64,
+    /// Incremented only when the active prompt/modal changes, not when a
+    /// renderer mutates selection/filter state inside the same surface.
+    surface_generation: u64,
     /// Active streaming content.
     pub streaming: Option<StreamingState>,
     /// Whether thinking content is visible.
@@ -86,7 +95,7 @@ pub struct UiState {
     pub terminal_compatibility_warning: Option<String>,
     /// IDs of collapsed tool calls.
     pub collapsed_tools: HashSet<String>,
-    /// Help overlay scroll position.
+    /// Help state scroll position.
     pub help_scroll: i32,
     /// Last terminal size reported by crossterm. Used by update logic for
     /// page-size decisions without reading render-derived metrics.
@@ -98,7 +107,7 @@ pub struct UiState {
     pub ctrl_c_tracker: DoublePressTracker<()>,
     /// Double-press tracker for Ctrl+D → exit. See [`ctrl_c_tracker`].
     pub ctrl_d_tracker: DoublePressTracker<()>,
-    /// Double-press tracker for Esc → Rewind overlay. The Esc keystroke
+    /// Double-press tracker for Esc → Rewind state. The Esc keystroke
     /// itself fires `TuiCommand::Cancel` on every press; this tracker
     /// only controls whether the second Esc opens the rewind picker.
     /// TS: `useDoublePress` inside `PromptInput.tsx`.
@@ -181,9 +190,10 @@ impl UiState {
             paste_manager: crate::paste::PasteManager::new(),
             scroll_offset: 0,
             focus: FocusTarget::Input,
-            overlay: None,
-            overlay_queue: VecDeque::new(),
-            overlay_generation: 0,
+            interaction: InteractionPaneState::new(),
+            modal: None,
+            modal_queue: ModalQueue::default(),
+            surface_generation: 0,
             streaming: None,
             show_thinking: false,
             show_system_reminders: false,
@@ -213,7 +223,7 @@ impl UiState {
 
     pub fn apply_theme_runtime(&mut self, theme_state: ThemeRuntimeState) {
         self.theme = theme_state.theme.clone();
-        if let Some(Overlay::Settings(settings)) = self.overlay.as_mut() {
+        if let Some(ModalState::Settings(settings)) = self.modal.as_mut() {
             settings.set_themes(theme_state.choices.clone(), theme_state.setting.clone());
         }
         self.theme_state = theme_state;
@@ -226,128 +236,146 @@ impl UiState {
     }
 
     pub fn apply_display_settings(&mut self, display_settings: DisplaySettings) {
+        let show_thinking_changed =
+            self.display_settings.show_thinking != display_settings.show_thinking;
         self.display_settings = display_settings;
-        self.show_thinking = display_settings.show_thinking;
-        if let Some(Overlay::Settings(settings)) = self.overlay.as_mut() {
+        if show_thinking_changed {
+            self.show_thinking = display_settings.show_thinking;
+        }
+        if let Some(ModalState::Settings(settings)) = self.modal.as_mut() {
             settings.set_display_settings(display_settings);
         }
     }
 
-    pub fn active_overlay(&self) -> Option<&Overlay> {
-        self.overlay.as_ref()
-    }
-
-    pub fn active_overlay_mut(&mut self) -> Option<&mut Overlay> {
-        self.overlay.as_mut()
-    }
-
-    pub fn has_overlay(&self) -> bool {
-        self.overlay.is_some()
-    }
-
-    pub fn overlay_generation(&self) -> u64 {
-        self.overlay_generation
-    }
-
-    #[cfg(test)]
-    pub fn overlay_queue_len(&self) -> usize {
-        self.overlay_queue.len()
-    }
-
-    #[cfg(test)]
-    pub fn overlay_queue_front(&self) -> Option<&Overlay> {
-        self.overlay_queue.front()
-    }
-
-    /// Set the active overlay using the [`Overlay::priority`] ranking.
-    ///
-    /// Rules (see `crate-coco-tui.md` §Overlay Priority):
-    /// - No active overlay: install directly.
-    /// - New overlay has strictly higher priority (lower number): displace
-    ///   the current overlay back into the queue and install the new one.
-    /// - Otherwise: insert into the queue at its priority position. Same
-    ///   priority keeps insertion order (stable within a tier).
-    ///
-    /// Queue overflow drops the lowest-priority tail entry to make room so a
-    /// security-critical overlay can still enqueue.
-    pub fn set_overlay(&mut self, overlay: Overlay) {
-        match self.overlay.take() {
+    pub fn show_modal(&mut self, modal: ModalState) {
+        match self.modal.take() {
             None => {
-                self.bump_overlay_generation();
-                self.overlay = Some(overlay);
+                self.modal = Some(modal);
+                self.bump_surface_generation();
+            }
+            Some(current) if modal.priority() < current.priority() => {
+                self.modal = Some(modal);
+                self.modal_queue.push(current);
+                self.bump_surface_generation();
             }
             Some(current) => {
-                if overlay.priority() < current.priority() {
-                    // New overlay has higher priority — displace current.
-                    self.bump_overlay_generation();
-                    self.overlay = Some(overlay);
-                    self.enqueue_overlay(current);
-                } else {
-                    // Same-or-lower priority: keep current, queue the new one.
-                    self.overlay = Some(current);
-                    self.enqueue_overlay(overlay);
-                }
+                self.modal = Some(current);
+                self.modal_queue.push(modal);
             }
         }
     }
 
-    /// Insert `overlay` into the priority-ordered queue. Drops the
-    /// lowest-priority entry on overflow to keep more important overlays in.
-    fn enqueue_overlay(&mut self, overlay: Overlay) {
-        let max = constants::MAX_OVERLAY_QUEUE as usize;
-        let prio = overlay.priority();
-        let pos = self
-            .overlay_queue
-            .iter()
-            .position(|o| o.priority() > prio)
-            .unwrap_or(self.overlay_queue.len());
-        self.overlay_queue.insert(pos, overlay);
-        while self.overlay_queue.len() > max {
-            self.overlay_queue.pop_back();
+    pub fn dismiss_modal(&mut self) {
+        if self.modal.is_some() || !self.modal_queue.is_empty() {
+            self.modal = self.modal_queue.pop_front();
+            self.bump_surface_generation();
         }
     }
 
-    /// Dismiss the current overlay and show the next queued one.
-    pub fn dismiss_overlay(&mut self) {
-        if self.overlay.is_some() || !self.overlay_queue.is_empty() {
-            self.overlay = self.overlay_queue.pop_front();
-            self.bump_overlay_generation();
+    pub fn push_prompt(&mut self, prompt: PanePromptState) {
+        let had_active = self.interaction.active_prompt.is_some();
+        self.active_suggestions = None;
+        self.interaction.popup = None;
+        self.interaction.push_prompt(prompt);
+        if !had_active {
+            self.bump_surface_generation();
         }
     }
 
-    /// Take the active overlay for in-place handling.
-    ///
-    /// Call [`Self::restore_active_overlay`] when putting back the same overlay,
-    /// [`Self::install_active_overlay`] when replacing it with a different
-    /// surface, or [`Self::finish_taken_overlay`] when dismissing it.
-    pub fn take_active_overlay(&mut self) -> Option<Overlay> {
-        self.overlay.take()
+    pub fn dismiss_prompt(&mut self) {
+        if self.interaction.active_prompt.is_some() || !self.interaction.prompt_queue.is_empty() {
+            self.interaction.dismiss_active_prompt();
+            self.bump_surface_generation();
+        }
     }
 
-    /// Restore the same active overlay after mutating its internal state.
-    pub fn restore_active_overlay(&mut self, overlay: Overlay) {
-        self.overlay = Some(overlay);
+    pub fn take_modal(&mut self) -> Option<ModalState> {
+        self.modal.take()
     }
 
-    /// Install a different active overlay surface.
-    pub fn install_active_overlay(&mut self, overlay: Overlay) {
-        self.overlay = Some(overlay);
-        self.bump_overlay_generation();
+    pub fn restore_modal(&mut self, modal: ModalState) {
+        self.modal = Some(modal);
     }
 
-    /// Complete a handler that took and dismissed the previous active overlay.
-    pub fn finish_taken_overlay(&mut self) {
-        self.overlay = self.overlay_queue.pop_front();
-        self.bump_overlay_generation();
+    pub fn finish_taken_modal(&mut self) {
+        self.modal = self.modal_queue.pop_front();
+        self.bump_surface_generation();
     }
 
-    /// Clear active and queued overlays.
-    pub fn clear_overlays(&mut self) {
-        let had_overlay = self.overlay.is_some() || !self.overlay_queue.is_empty();
-        self.overlay = None;
-        self.overlay_queue.clear();
-        if had_overlay {
-            self.bump_overlay_generation();
+    pub fn take_prompt(&mut self) -> Option<PanePromptState> {
+        self.interaction.active_prompt.take()
+    }
+
+    pub fn restore_prompt(&mut self, prompt: PanePromptState) {
+        self.interaction.active_prompt = Some(prompt);
+    }
+
+    pub fn finish_taken_prompt(&mut self) {
+        self.interaction.active_prompt = self.interaction.prompt_queue.pop_front();
+        self.bump_surface_generation();
+    }
+
+    pub fn has_active_surface(&self) -> bool {
+        self.modal.is_some()
+            || self.interaction.active_prompt.is_some()
+            || self.interaction.popup.is_some()
+    }
+
+    pub fn has_blocking_interaction(&self) -> bool {
+        self.modal.is_some() || self.interaction.active_prompt.is_some()
+    }
+
+    pub fn push_delayed_permission(
+        &mut self,
+        prompt: crate::state::PermissionPromptState,
+        now: Instant,
+    ) {
+        self.interaction.push_permission(prompt, now);
+    }
+
+    pub fn flush_delayed_permissions(&mut self, now: Instant) -> bool {
+        let mut changed = false;
+        while let Some(prompt) = self.interaction.pop_ready_permission(now) {
+            self.push_prompt(PanePromptState::Permission(prompt));
+            changed = true;
+        }
+        changed
+    }
+
+    pub fn sync_popup_from_active_suggestions(&mut self) {
+        self.interaction.popup = if self.interaction.active_prompt.is_some() {
+            None
+        } else {
+            self.active_suggestions
+                .as_ref()
+                .map(|suggestions| match suggestions.kind {
+                    SuggestionKind::SlashCommand => ComposerPopupState::Slash(SlashPopupState),
+                    SuggestionKind::File => ComposerPopupState::File(FilePopupState),
+                    SuggestionKind::Symbol => ComposerPopupState::Symbol(SymbolPopupState),
+                    SuggestionKind::Agent => ComposerPopupState::Agent(AgentPopupState),
+                })
+        };
+    }
+
+    pub fn surface_generation(&self) -> u64 {
+        self.surface_generation
+    }
+
+    /// Clear active and queued interaction surfaces.
+    pub fn clear_surfaces(&mut self) {
+        let had_surface = self.modal.is_some()
+            || !self.modal_queue.is_empty()
+            || self.interaction.active_prompt.is_some()
+            || !self.interaction.prompt_queue.is_empty()
+            || self.interaction.popup.is_some();
+        self.modal = None;
+        self.modal_queue.clear();
+        self.interaction.active_prompt = None;
+        self.interaction.prompt_queue.clear();
+        self.interaction.popup = None;
+        self.active_suggestions = None;
+        if had_surface {
+            self.bump_surface_generation();
         }
     }
 
@@ -373,8 +401,8 @@ impl UiState {
         }
     }
 
-    fn bump_overlay_generation(&mut self) {
-        self.overlay_generation = self.overlay_generation.wrapping_add(1);
+    fn bump_surface_generation(&mut self) {
+        self.surface_generation = self.surface_generation.wrapping_add(1);
     }
 
     /// Whether there are active toasts.

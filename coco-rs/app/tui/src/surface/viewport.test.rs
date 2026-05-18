@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::state::session::ChatMessage;
 use crate::state::ui::StreamingState;
-use crate::surface::overlay::HistorySurfaceMode;
+use crate::surface::modal::HistorySurfaceMode;
 use crate::surface::terminal::SurfaceTerminal;
 
 #[test]
@@ -140,9 +140,41 @@ fn interactive_viewport_reports_input_rect_for_cursor_policy() {
     assert_eq!(layout.input.width, 48);
 }
 
+#[test]
+fn compact_prompt_body_preserves_tail_action_block() {
+    let body = "\
+Execute shell command
+
+Command:
+  rm -rf /tmp/test
+
+Risk:
+  Removes files recursively
+
+Actions:
+▸ Yes, approve once
+  Yes, always allow Bash for this session
+  No, deny
+↑/↓ Navigate  Enter Select  Y/N/A shortcuts";
+
+    let compact = compact_prompt_body(body, 7);
+
+    assert_eq!(
+        compact,
+        "\
+Execute shell command
+...
+Actions:
+▸ Yes, approve once
+  Yes, always allow Bash for this session
+  No, deny
+↑/↓ Navigate  Enter Select  Y/N/A shortcuts"
+    );
+}
+
 fn native_plan() -> SurfaceFramePlan {
     SurfaceFramePlan {
-        overlay_placement: None,
+        modal_placement: None,
         history_surface: HistorySurfaceMode::NativeScrollback,
         attention_requested: false,
     }

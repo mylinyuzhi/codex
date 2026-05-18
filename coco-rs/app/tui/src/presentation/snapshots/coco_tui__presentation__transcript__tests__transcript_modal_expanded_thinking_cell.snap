@@ -1,6 +1,6 @@
 ---
 source: app/tui/src/presentation/transcript.test.rs
-expression: "render_transcript_text(&state, &overlay, 96, 12)"
+expression: "render_transcript_text(&app_state, &state, 96, 12)"
 ---
 ┌ Transcript ──────────────────────────────────────────────────────────────────────────────────┐
 │> bash ls                                                                                     │

@@ -8,8 +8,8 @@ use ratatui::layout::Size;
 use crate::state::AppState;
 use crate::surface::compatibility::TerminalCompatibility;
 use crate::surface::controller::NativeSurfaceController;
-use crate::surface::overlay::OverlaySurfacePlacement;
-use crate::surface::overlay::OverlaySurfaceState;
+use crate::surface::modal::ModalSurfacePlacement;
+use crate::surface::modal::ModalSurfaceState;
 use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::interactive_viewport_desired_height;
 use crate::terminal::NATIVE_VIEWPORT_MAX_HEIGHT;
@@ -17,7 +17,7 @@ use crate::terminal::native_viewport_area_with_max;
 
 #[derive(Debug, Default)]
 pub struct NativeSurfaceTestState {
-    overlay_surface: OverlaySurfaceState,
+    modal_surface: ModalSurfaceState,
 }
 
 /// Render `state` through the native-scrollback surface into a string.
@@ -30,7 +30,7 @@ pub fn render_native_surface_to_string(state: &AppState, width: u16, height: u16
     render_native_surface_to_string_with_surface_state(state, width, height, &mut surface_state)
 }
 
-/// Render with caller-owned overlay surface state so tests can exercise
+/// Render with caller-owned state surface state so tests can exercise
 /// production placement latching across multiple frames.
 pub fn render_native_surface_to_string_with_surface_state(
     state: &AppState,
@@ -41,15 +41,15 @@ pub fn render_native_surface_to_string_with_surface_state(
     let backend = TestBackend::new(width, height);
     let mut terminal = SurfaceTerminal::new(backend).expect("test backend is infallible");
     let size = Size { width, height };
-    let plan = surface_state.overlay_surface.plan_for_native_viewport(
+    let plan = surface_state.modal_surface.plan_for_native_viewport(
         state,
         TerminalCompatibility::NativeScrollback,
         std::time::Instant::now(),
         width,
         NATIVE_VIEWPORT_MAX_HEIGHT,
     );
-    let area = match plan.overlay_placement {
-        Some(OverlaySurfacePlacement::AltScreen) => Rect::new(0, 0, width, height),
+    let area = match plan.modal_placement {
+        Some(ModalSurfacePlacement::AltScreen) => Rect::new(0, 0, width, height),
         _ => {
             let desired_height =
                 interactive_viewport_desired_height(state, width, NATIVE_VIEWPORT_MAX_HEIGHT, plan);

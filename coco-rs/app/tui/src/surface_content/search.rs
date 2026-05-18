@@ -1,13 +1,13 @@
-//! Global search overlay content builder.
+//! Global search state content builder.
 
 use ratatui::prelude::Color;
 
 use crate::presentation::picker;
 use crate::presentation::styles::UiStyles;
-use crate::state::GlobalSearchOverlay;
+use crate::state::GlobalSearchState;
 
 pub(super) fn global_search_content(
-    g: &GlobalSearchOverlay,
+    g: &GlobalSearchState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::global_search_content(g, styles)

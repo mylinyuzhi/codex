@@ -9,12 +9,12 @@ use crate::widgets::settings_panel::SettingsPanelState;
 use crate::widgets::settings_panel::SettingsTab;
 
 #[test]
-fn settings_overlay_content_renders_theme_tab_and_syntax_row() {
+fn settings_surface_content_renders_theme_tab_and_syntax_row() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let state = SettingsPanelState::default();
 
-    let (title, body, border) = settings_overlay_content(&state, UiStyles::new(&theme));
+    let (title, body, border) = settings_surface_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Settings ");
     assert_eq!(border, theme.primary);
@@ -24,7 +24,7 @@ fn settings_overlay_content_renders_theme_tab_and_syntax_row() {
 }
 
 #[test]
-fn settings_overlay_content_marks_output_style_selection() {
+fn settings_surface_content_marks_output_style_selection() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut state = SettingsPanelState {
@@ -34,17 +34,17 @@ fn settings_overlay_content_marks_output_style_selection() {
         ..SettingsPanelState::default()
     };
 
-    let (_, body, _) = settings_overlay_content(&state, UiStyles::new(&theme));
+    let (_, body, _) = settings_surface_content(&state, UiStyles::new(&theme));
     assert!(body.contains("  Brief"));
     assert!(body.contains("▸ Detailed"));
 
     state.output_styles.clear();
-    let (_, empty_body, _) = settings_overlay_content(&state, UiStyles::new(&theme));
+    let (_, empty_body, _) = settings_surface_content(&state, UiStyles::new(&theme));
     assert!(empty_body.contains("(no custom output styles)"));
 }
 
 #[test]
-fn settings_overlay_content_lists_permission_rules() {
+fn settings_surface_content_lists_permission_rules() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let state = SettingsPanelState {
@@ -57,7 +57,7 @@ fn settings_overlay_content_lists_permission_rules() {
         ..SettingsPanelState::default()
     };
 
-    let (_, body, _) = settings_overlay_content(&state, UiStyles::new(&theme));
+    let (_, body, _) = settings_surface_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("[Permissions]"));
     assert!(body.contains("  Bash → allow (project)"));

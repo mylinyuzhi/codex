@@ -15,6 +15,8 @@ use coco_types::ServerNotification;
 
 use crate::i18n::t;
 use crate::state::AppState;
+use crate::state::ModalState;
+use crate::state::PanePromptState;
 use crate::state::session::ChatMessage;
 use crate::state::session::HookEntry;
 use crate::state::session::HookEntryStatus;
@@ -94,13 +96,13 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.streaming = None;
             // Keep the toast for session history / notification log, AND
             // raise a modal error dialog so users can't miss the failure
-            // (PR-F1 P0). The toast auto-expires; the overlay blocks input
+            // (PR-F1 P0). The toast auto-expires; the state blocks input
             // until dismissed.
             state.ui.add_toast(Toast::error(
                 t!("toast.turn_failed_short", error = p.error.as_str()).to_string(),
             ));
             let body = crate::widgets::error_dialog::turn_failed_body(&p);
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
         ServerNotification::TurnInterrupted(p) => on_turn_interrupted(state, p),
@@ -114,7 +116,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             // acknowledgement before the user sends another prompt so
             // they notice it isn't silently continuing.
             let body = crate::widgets::error_dialog::format_error_body(&msg, Some("limit"), false);
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
 
@@ -195,7 +197,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                 ));
                 // Push a TeammateMessage into session.messages so the
                 // teammate spinner-line preview (`showTeammateMessagePreview`)
-                // and the transcript overlay can pick it up. `is_meta=true`
+                // and the transcript state can pick it up. `is_meta=true`
                 // keeps it out of the regular chat scroll — it surfaces in
                 // the transcript and in the per-teammate preview only.
                 push_teammate_message(state, &p.agent_id, msg);
@@ -236,7 +238,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             // Mid-session prewarm completed (e.g. settings reload).
             // Flip the badge based on whether the new prewarm spawned
             // anything. SessionStarted carries the bootstrap value;
-            // this overlay handles subsequent state changes.
+            // this state handles subsequent state changes.
             state.session.lsp_active = !p.started.is_empty();
             true
         }
@@ -313,7 +315,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.add_toast(Toast::error(msg.clone()));
             let body =
                 crate::widgets::error_dialog::format_error_body(&msg, Some("compaction"), false);
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
         ServerNotification::ContextCleared(_) => {
@@ -368,15 +370,13 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             true
         }
         ServerNotification::PlanApprovalRequested(p) => {
-            let overlay = crate::state::PlanApprovalOverlay::new(
+            let prompt = crate::state::PlanApprovalPromptState::new(
                 p.request_id,
                 p.from,
                 p.plan_file_path,
                 p.plan_content,
             );
-            state
-                .ui
-                .set_overlay(crate::state::Overlay::PlanApproval(overlay));
+            state.ui.push_prompt(PanePromptState::PlanApproval(prompt));
             true
         }
         ServerNotification::AgentsKilled(p) => {
@@ -440,7 +440,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // === Permission ===
         ServerNotification::PermissionModeChanged(p) => {
             state.session.permission_mode = p.mode;
-            // Route the capability gate so the TUI overlay + Shift+Tab
+            // Route the capability gate so the TUI state + Shift+Tab
             // cycle reflect the session's current authorization state.
             // Without this, `session.bypass_permissions_available`
             // stayed at its init-time default and no client could ever
@@ -458,12 +458,12 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // === System ===
         ServerNotification::Error(p) => {
             // Retryable errors auto-recover; keep them as ephemeral toasts.
-            // Non-retryable errors escalate to a modal overlay so the user
+            // Non-retryable errors escalate to a modal state so the user
             // must acknowledge before continuing (PR-F1 P0).
             state.ui.add_toast(Toast::error(p.message.clone()));
             if !p.retryable {
                 let body = crate::widgets::error_dialog::error_body(&p);
-                state.ui.set_overlay(crate::state::Overlay::Error(body));
+                state.ui.show_modal(ModalState::Error(body));
             }
             true
         }
@@ -573,7 +573,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // === Cost ===
         ServerNotification::CostWarning(p) => {
             // Budget breach is a decision point — route through the modal
-            // `CostWarning` overlay (already defined) so users can stop
+            // `CostWarning` state (already defined) so users can stop
             // or continue explicitly. Keep the toast for the event log.
             let toast_msg = format!(
                 "Cost: ${:.2} / ${:.2} threshold",
@@ -581,8 +581,8 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                 p.threshold_cents as f64 / 100.0
             );
             state.ui.add_toast(Toast::warning(toast_msg));
-            state.ui.set_overlay(crate::state::Overlay::CostWarning(
-                crate::state::CostWarningOverlay {
+            state.ui.push_prompt(PanePromptState::CostWarning(
+                crate::state::CostWarningPromptState {
                     current_cost_cents: p.current_cost_cents,
                     threshold_cents: p.threshold_cents,
                 },
@@ -614,7 +614,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                 Some("sandbox"),
                 false,
             );
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
 
@@ -688,7 +688,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.add_toast(Toast::error(msg.clone()));
             let body =
                 crate::widgets::error_dialog::format_error_body(&msg, Some("summarize"), false);
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
 
@@ -739,7 +739,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             true
         }
         ServerNotification::ElicitationComplete(_) => {
-            state.ui.dismiss_overlay();
+            state.ui.dismiss_prompt();
             true
         }
         ServerNotification::ToolUseSummary(p) => {
@@ -924,14 +924,14 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
     //   (treat None/legacy senders as non-user-initiated — conservative)
     // - empty input            → TS `inputValueRef.current === ''`
     // - empty queue            → TS `getCommandQueueLength() === 0`
-    // - no overlay             → coco-rs analogue of "not viewing a
+    // - no state             → coco-rs analogue of "not viewing a
     //                            teammate task" + "no modal up"
     // - lossless tail          → TS `messagesAfterAreOnlySynthetic`
     let user_cancel = matches!(p.reason, Some(coco_types::CancelReason::UserCancel));
     if user_cancel
         && state.ui.input.is_empty()
         && state.session.queued_commands.is_empty()
-        && !state.ui.has_overlay()
+        && !state.ui.has_active_surface()
         && let Some(idx) =
             crate::update_rewind::find_last_user_message_index(&state.session.messages)
         && crate::update_rewind::messages_after_are_only_synthetic(&state.session.messages, idx)
@@ -948,7 +948,7 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
 /// longer corresponds to a real conversation tail.
 ///
 /// Does NOT round-trip through the backend (`UserCommand::Rewind` is
-/// the explicit-overlay path; this is the synchronous inline restore
+/// the explicit-state path; this is the synchronous inline restore
 /// for the user-cancel case).
 fn apply_auto_restore(state: &mut AppState, idx: usize) {
     let input_text = state.session.messages[idx].text_content().to_string();
@@ -971,7 +971,7 @@ fn apply_auto_restore(state: &mut AppState, idx: usize) {
 
 /// Push a teammate-attributed message into `session.messages` so the
 /// per-teammate spinner-line preview (`UiState::show_teammate_message_preview`)
-/// and the transcript overlay can surface it. Empty / whitespace-only
+/// and the transcript state can surface it. Empty / whitespace-only
 /// content is dropped so progress pings without a body don't pollute
 /// the preview.
 fn push_teammate_message(state: &mut AppState, agent_id: &str, content: &str) {

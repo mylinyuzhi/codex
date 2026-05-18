@@ -9,9 +9,9 @@ expression: output
 ❯ Investigate                                                                   
                                                                                 
   ‖ 3 in parallel                                                               
-• 🔨  Bash(ls -la)                                                               
-• 🔨  Read(src/main.rs)                                                          
-• 🔨  Grep(TODO)                                                                 
+🔨  Bash(ls -la)                                                                 
+🔨  Read(src/main.rs)                                                            
+🔨  Grep(TODO)                                                                   
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               

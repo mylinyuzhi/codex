@@ -1,9 +1,8 @@
-use super::Overlay;
-use super::PlanApprovalOverlay;
+use super::PlanApprovalPromptState;
 
 #[test]
 fn plan_approval_toggles_between_approve_and_deny() {
-    let mut o = PlanApprovalOverlay::new(
+    let mut o = PlanApprovalPromptState::new(
         "req-1".into(),
         "alice".into(),
         None,
@@ -17,8 +16,8 @@ fn plan_approval_toggles_between_approve_and_deny() {
 }
 
 #[test]
-fn plan_approval_overlay_gets_awaiting_input_priority() {
-    let overlay = Overlay::PlanApproval(PlanApprovalOverlay::new(
+fn plan_approval_prompt_gets_awaiting_input_priority() {
+    let prompt = crate::state::PanePromptState::PlanApproval(PlanApprovalPromptState::new(
         "req".into(),
         "alice".into(),
         None,
@@ -27,7 +26,7 @@ fn plan_approval_overlay_gets_awaiting_input_priority() {
     // Priority 2 — same as Question / Elicitation / McpServerApproval.
     // Plan approval blocks the teammate, so it can't be out-prioritized
     // by user-triggered pickers (priority 7+).
-    assert_eq!(overlay.priority(), 2);
+    assert_eq!(prompt.priority(), 2);
 }
 
 #[test]
@@ -35,7 +34,7 @@ fn plan_approval_preserves_from_field_for_response_routing() {
     // The teammate agent name carried in `from` must survive so the
     // UserCommand::PlanApprovalResponse handler in tui_runner knows
     // which inbox to write the response to.
-    let o = PlanApprovalOverlay::new(
+    let o = PlanApprovalPromptState::new(
         "req-42".into(),
         "teammate-delta".into(),
         Some("/plans/delta.md".into()),
@@ -57,7 +56,7 @@ mod question_feedback {
     use super::super::QuestionFocus;
     use super::super::QuestionItem;
     use super::super::QuestionOption;
-    use super::super::QuestionOverlay;
+    use super::super::QuestionPromptState;
 
     fn opt(label: &str) -> QuestionOption {
         QuestionOption {
@@ -80,8 +79,8 @@ mod question_feedback {
         }
     }
 
-    fn overlay(questions: Vec<QuestionItem>, plan_mode: bool) -> QuestionOverlay {
-        QuestionOverlay {
+    fn state(questions: Vec<QuestionItem>, plan_mode: bool) -> QuestionPromptState {
+        QuestionPromptState {
             request_id: "rid".into(),
             original_input: serde_json::json!({}),
             questions,
@@ -92,7 +91,7 @@ mod question_feedback {
 
     #[test]
     fn chat_about_this_matches_ts_with_partial_answers() {
-        let o = overlay(
+        let o = state(
             vec![
                 q("Which library?", 0, vec![opt("Tokio"), opt("Async-std")]),
                 q(
@@ -119,7 +118,7 @@ Questions asked:\n\
 
     #[test]
     fn skip_interview_matches_ts() {
-        let o = overlay(
+        let o = state(
             vec![q("Approach?", 0, vec![opt("Refactor"), opt("Rewrite")])],
             true,
         );
@@ -136,7 +135,7 @@ Questions asked and answers provided:\n\
 
     #[test]
     fn other_option_with_notes_uses_typed_text_as_answer() {
-        let mut o = overlay(
+        let mut o = state(
             vec![q(
                 "Pick:",
                 1, // focus on the OTHER sentinel
@@ -166,7 +165,7 @@ Questions asked and answers provided:\n\
         );
         item.multi_select = true;
         item.checked = vec![0, 2];
-        let o = overlay(vec![item], false);
+        let o = state(vec![item], false);
 
         let actual = o.chat_about_this_feedback();
         assert!(actual.contains("Answer: A, C"), "got: {actual}");
@@ -174,7 +173,7 @@ Questions asked and answers provided:\n\
 
     #[test]
     fn no_answer_when_other_focused_with_no_notes() {
-        let o = overlay(
+        let o = state(
             vec![q("Q?", 0, vec![opt(OTHER_OPTION_LABEL), opt("Skip")])],
             false,
         );

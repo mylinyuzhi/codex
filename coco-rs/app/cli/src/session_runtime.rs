@@ -2621,7 +2621,7 @@ impl SessionRuntime {
     ///   plugin hooks are both rebuilt.
     /// - `fired_once` set is **preserved** so a `once` hook that
     ///   already fired this session doesn't re-fire after reload.
-    /// - Per-agent `agent_scoped` overlay is **preserved** — those are
+    /// - Per-agent `agent_scoped` hook layer is **preserved** — those are
     ///   owned by the coordinator's spawn lifecycle, not by settings.
     /// - Slash commands run only at turn boundaries (the dispatch loop
     ///   in `tui_runner` `drain_active_turn`s before invoking them),

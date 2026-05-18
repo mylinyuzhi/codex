@@ -42,9 +42,10 @@ use crate::presentation::transcript::transcript_presentation;
 use crate::state::session::ChatMessage;
 use crate::state::session::MessageContent;
 use crate::state::session::ToolExecution;
-use crate::state::session::ToolStatus;
 use crate::state::session::ToolUseStatus;
 use crate::state::ui::StreamingState;
+use crate::tool_display::ToolNameTone;
+use crate::tool_display::tool_name_tone;
 pub(crate) const TOOL_OUTPUT_PREVIEW_ROWS: usize = 5;
 
 /// Chat history widget.
@@ -305,31 +306,28 @@ impl<'a> ChatWidget<'a> {
         tool_name: &str,
         call_id: &str,
         input_preview: &str,
-        status: ToolUseStatus,
+        _status: ToolUseStatus,
         lines: &mut Vec<Line<'a>>,
     ) {
         let execution = self
             .tool_executions
             .iter()
             .find(|tool| tool.call_id == call_id);
-        let status = execution
-            .map(|tool| tool_status_to_use_status(tool.status))
-            .unwrap_or(status);
-        let color = match status {
-            ToolUseStatus::Queued => self.styles.dim(),
-            ToolUseStatus::Running => self.styles.tool_running(),
-            ToolUseStatus::Completed => self.styles.tool_completed(),
-            ToolUseStatus::Failed => self.styles.tool_error(),
-        };
-        let label = compact_tool_label(tool_name, input_preview);
+        let preview = single_line_capped(input_preview, 96);
         let elapsed = execution
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
-        lines.push(Line::from(vec![
-            Span::raw("• ").fg(color),
-            Span::raw(label).fg(self.styles.text()),
-            Span::raw(elapsed).fg(self.styles.dim()).dim(),
-        ]));
+        let mut spans = vec![
+            Span::raw("🔨 ").fg(self.styles.dim()),
+            Span::raw(tool_name.to_string())
+                .fg(tool_tone_color(tool_name_tone(tool_name), self.styles))
+                .bold(),
+        ];
+        if !preview.is_empty() {
+            spans.push(Span::raw(format!("({preview})")).fg(self.styles.text()));
+        }
+        spans.push(Span::raw(elapsed).fg(self.styles.dim()).dim());
+        lines.push(Line::from(spans));
     }
 
     fn render_tool_result_summary(&self, content: &'a MessageContent, lines: &mut Vec<Line<'a>>) {
@@ -682,26 +680,22 @@ fn meta_category(content: &MessageContent) -> &'static str {
     }
 }
 
-fn tool_status_to_use_status(status: ToolStatus) -> ToolUseStatus {
-    match status {
-        ToolStatus::Queued => ToolUseStatus::Queued,
-        ToolStatus::Running => ToolUseStatus::Running,
-        ToolStatus::Completed => ToolUseStatus::Completed,
-        ToolStatus::Failed => ToolUseStatus::Failed,
-    }
-}
-
-fn compact_tool_label(tool_name: &str, input_preview: &str) -> String {
-    let preview = single_line_capped(input_preview, 96);
-    if preview.is_empty() {
-        format!("🔨 {tool_name}")
-    } else {
-        format!("🔨 {tool_name}({preview})")
-    }
-}
-
 fn result_line<'a>(text: String, color: ratatui::style::Color) -> Line<'a> {
     Line::from(vec![Span::raw("  └ ").fg(color), Span::raw(text).fg(color)])
+}
+
+fn tool_tone_color(
+    tone: ToolNameTone,
+    styles: crate::presentation::styles::UiStyles<'_>,
+) -> ratatui::style::Color {
+    match tone {
+        ToolNameTone::ReadOnly => styles.success(),
+        ToolNameTone::Shell => styles.primary(),
+        ToolNameTone::Write => styles.warning(),
+        ToolNameTone::Agent => styles.accent(),
+        ToolNameTone::Plan => styles.plan(),
+        ToolNameTone::Utility => styles.secondary(),
+    }
 }
 
 fn output_result_line<'a>(text: String, color: ratatui::style::Color, first: bool) -> Line<'a> {

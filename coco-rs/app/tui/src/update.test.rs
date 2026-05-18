@@ -1,12 +1,11 @@
 //! End-to-end tests for the update dispatcher. Focused on cross-module
-//! invariants that the per-submodule tests can't catch — in particular the
-//! shared local-command interception path used by both `submit` and
-//! `QueueInput`, and the clipboard-cache lifecycle around `ClearScreen`.
+//! invariants that the per-submodule tests can't catch — in particular typed
+//! slash-command routing from both `submit` and `QueueInput`, and the
+//! clipboard-cache lifecycle around `ClearScreen`.
 
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 
-use super::edit::try_local_command;
 use super::handle_command;
 use crate::command::ShutdownReason;
 use crate::command::UserCommand;
@@ -16,11 +15,13 @@ use crate::display_settings::SyntaxHighlighting;
 use crate::events::TuiCommand;
 use crate::state::AppState;
 use crate::state::MemoryDialogEntry;
-use crate::state::MemoryDialogOverlay;
 use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
+use crate::state::MemoryDialogState;
 use crate::state::MessageContent;
-use crate::state::Overlay;
+use crate::state::ModalState;
+use crate::state::PanePromptState;
+use crate::state::SlashCommandName;
 use crate::state::ui::ToastSeverity;
 
 fn drained_channel() -> (mpsc::Sender<UserCommand>, mpsc::Receiver<UserCommand>) {
@@ -57,53 +58,28 @@ async fn clear_screen_nulls_last_agent_markdown() {
 }
 
 #[test]
-fn try_local_command_intercepts_copy_slash() {
-    let mut state = AppState::new();
-    state.session.last_agent_markdown = Some("payload".to_string());
+fn parse_slash_input_validates_command_names() {
+    let (name, args) =
+        super::edit::parse_slash_input("/ask hello there").expect("valid slash command");
+    assert_eq!(name, "ask");
+    assert_eq!(args, "hello there");
 
-    assert!(try_local_command(&mut state, "/copy"));
-    // The copy handler surfaces a success toast — proof that it actually ran
-    // rather than being routed to the agent.
-    assert_eq!(state.ui.toasts.len(), 1);
-    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Success);
-}
-
-#[test]
-fn try_local_command_intercepts_rewind_family() {
-    let mut state = AppState::new();
-
-    assert!(try_local_command(&mut state, "/rewind"));
-    // Rewind opens an overlay or surfaces a toast; either way the command
-    // was handled locally (no agent round-trip).
-    let handled = state.ui.has_overlay() || !state.ui.toasts.is_empty();
-    assert!(handled, "rewind should affect ui state");
-
-    state.ui.clear_overlays();
-    state.ui.toasts.clear();
-    assert!(try_local_command(&mut state, "/checkpoint last"));
-    let handled = state.ui.has_overlay() || !state.ui.toasts.is_empty();
-    assert!(handled, "checkpoint last should affect ui state");
-}
-
-#[test]
-fn try_local_command_passes_through_non_local_slash() {
-    let mut state = AppState::new();
-
-    // `/ask` is not a TUI-only command — should fall through to the agent.
-    assert!(!try_local_command(&mut state, "/ask hello"));
-    // And plain text should never be intercepted.
-    assert!(!try_local_command(&mut state, "just some text"));
-    assert!(!try_local_command(&mut state, ""));
+    assert_eq!(super::edit::parse_slash_input("plain text"), None);
+    assert_eq!(super::edit::parse_slash_input("/"), None);
+    assert_eq!(super::edit::parse_slash_input("//bad"), None);
+    assert_eq!(
+        SlashCommandName::new("bad name"),
+        Err(crate::state::InvalidSlashCommandName)
+    );
 }
 
 #[tokio::test]
-async fn queue_input_of_copy_slash_dispatches_locally_not_to_agent() {
-    // Regression: typing `/copy` while the agent is streaming previously
-    // went through QueueInput → UserCommand::QueueCommand, leaking the
-    // slash into the agent transcript. It must intercept locally instead.
+async fn queue_input_of_slash_dispatches_typed_command_not_agent_queue() {
+    // Regression: slash input while the agent is streaming must not leak
+    // into the agent queue as plain text. The command layer owns all
+    // slash-command behavior, so the TUI only emits a typed name + args.
     let mut state = AppState::new();
-    state.session.last_agent_markdown = Some("cached reply".to_string());
-    state.ui.input.textarea.set_text("/copy");
+    state.ui.input.textarea.set_text("/copy now");
     state
         .ui
         .input
@@ -115,15 +91,42 @@ async fn queue_input_of_copy_slash_dispatches_locally_not_to_agent() {
 
     assert!(
         state.session.queued_commands.is_empty(),
-        "/copy must not enter the agent queue"
+        "slash commands must not enter the agent queue"
     );
-    assert!(
-        rx.try_recv().is_err(),
-        "/copy must not send a UserCommand to core"
-    );
-    assert_eq!(state.ui.toasts.len(), 1);
-    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Success);
+    match rx.try_recv() {
+        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+            assert_eq!(name, "copy");
+            assert_eq!(args, "now");
+        }
+        other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
     assert!(state.ui.input.is_empty(), "input should have been consumed");
+}
+
+#[tokio::test]
+async fn submit_slash_dispatches_typed_command_without_chat_echo() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("/rewind last");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    assert!(
+        state.session.messages.is_empty(),
+        "slash invocations are commands, not chat transcript entries"
+    );
+    match rx.try_recv() {
+        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+            assert_eq!(name, "rewind");
+            assert_eq!(args, "last");
+        }
+        other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -168,7 +171,7 @@ fn toggle_syntax_highlighting_does_not_mutate_when_higher_priority_setting_wins(
         show_thinking: false,
     };
 
-    super::overlay::toggle_syntax_highlighting(&mut state);
+    super::interaction::toggle_syntax_highlighting(&mut state);
 
     assert_eq!(
         state.ui.display_settings.syntax_highlighting,
@@ -267,146 +270,43 @@ async fn double_ctrl_c_shutdown_carries_reason() {
 }
 
 #[tokio::test]
-async fn clear_screen_also_leaves_no_overlay() {
-    // Defensive: ClearScreen should be safe to invoke with an overlay open;
-    // the overlay is user-owned and unrelated to chat content.
+async fn clear_screen_preserves_active_surface() {
+    // Defensive: ClearScreen should be safe to invoke with a surface open;
+    // the surface is user-owned and unrelated to chat content.
     let mut state = AppState::new();
-    state.ui.set_overlay(Overlay::Help);
+    state.ui.show_modal(crate::state::ModalState::Help);
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::ClearScreen, &tx).await;
 
     assert!(state.session.messages.is_empty());
-    // Overlay is intentionally preserved — ClearScreen scopes to transcript.
-    assert!(state.ui.has_overlay());
+    // Surface is intentionally preserved — ClearScreen scopes to transcript.
+    assert!(state.ui.has_active_surface());
 }
 
-// ── /clear family ──
-
-#[tokio::test]
-async fn slash_clear_wipes_transcript_and_surfaces_toast_and_signals_engine() {
-    let mut state = AppState::new();
-    state
-        .session
-        .messages
-        .push(crate::state::session::ChatMessage::user_text("m1", "hi"));
-    state
-        .session
-        .messages
-        .push(crate::state::session::ChatMessage::assistant_text(
-            "m2", "hello",
-        ));
-    state.session.last_agent_markdown = Some("hello".into());
-    let (tx, mut rx) = drained_channel();
-
-    assert!(super::edit::try_local_clear(&mut state, "/clear", &tx).await);
-    assert!(state.session.messages.is_empty());
-    assert_eq!(state.session.last_agent_markdown, None);
-    assert_eq!(state.ui.toasts.len(), 1);
-    // Engine is notified so it can reset app_state plan flags.
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UserCommand::ClearConversation {
-            scope: crate::command::ClearScope::Conversation
-        })
-    ));
-}
-
-#[tokio::test]
-async fn slash_clear_all_aliases_conversation_scope() {
-    // TS alignment: `/clear` and `/clear all` route to the same full
-    // reset. The `All` enum variant still exists for back-compat but
-    // isn't produced by either alias.
-    let mut state = AppState::new();
-    state.session.session_id = Some("test-clear-all".into());
-    state
-        .session
-        .messages
-        .push(crate::state::session::ChatMessage::user_text("m1", "hi"));
-    let (tx, mut rx) = drained_channel();
-
-    assert!(super::edit::try_local_clear(&mut state, "/clear all", &tx).await);
-    assert!(state.session.messages.is_empty());
-    let toast_text = state
-        .ui
-        .toasts
-        .front()
-        .map(|t| t.message.clone())
-        .unwrap_or_default();
-    assert!(
-        toast_text.contains("plan state") || toast_text.contains("计划状态"),
-        "expected /clear all toast; got: {toast_text}"
-    );
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UserCommand::ClearConversation {
-            scope: crate::command::ClearScope::Conversation
-        })
-    ));
-}
-
-#[tokio::test]
-async fn slash_clear_dismisses_overlay_and_toasts() {
-    let mut state = AppState::new();
-    state.ui.set_overlay(Overlay::Help);
-    state
-        .ui
-        .add_toast(crate::state::ui::Toast::info("stale".to_string()));
-    let (tx, _rx) = drained_channel();
-
-    assert!(super::edit::try_local_clear(&mut state, "/clear", &tx).await);
-    assert!(!state.ui.has_overlay());
-    assert_eq!(state.ui.toasts.len(), 1);
-}
-
-#[tokio::test]
-async fn slash_clear_history_signals_history_scope() {
-    let mut state = AppState::new();
-    state
-        .session
-        .messages
-        .push(crate::state::session::ChatMessage::user_text("m1", "hi"));
-    let (tx, mut rx) = drained_channel();
-
-    assert!(super::edit::try_local_clear(&mut state, "/clear history", &tx).await);
-    assert!(state.session.messages.is_empty());
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UserCommand::ClearConversation {
-            scope: crate::command::ClearScope::History
-        })
-    ));
-}
-
-#[tokio::test]
-async fn slash_clear_unknown_variant_passes_through() {
-    let mut state = AppState::new();
-    let (tx, _rx) = drained_channel();
-    // "/clear foo" is not a known variant — should NOT be intercepted.
-    assert!(!super::edit::try_local_clear(&mut state, "/clear foo", &tx).await);
-}
-
-// ── Plan mode overlay behavior ──
+// ── Plan mode state behavior ──
 
 #[tokio::test]
 async fn plan_exit_deny_renders_rejection_and_keeps_plan_mode() {
-    use crate::state::PlanExitOverlay;
+    use crate::state::PlanExitPromptState;
     use coco_types::PermissionMode;
 
     let mut state = AppState::new();
     state.session.permission_mode = PermissionMode::Plan;
-    state.ui.set_overlay(Overlay::PlanExit(PlanExitOverlay {
-        plan_content: Some("# Plan\n- do stuff".into()),
-        ..Default::default()
-    }));
+    state
+        .ui
+        .push_prompt(PanePromptState::PlanExit(PlanExitPromptState {
+            plan_content: Some("# Plan\n- do stuff".into()),
+            ..Default::default()
+        }));
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::Deny, &tx).await;
 
     // Mode stays Plan (user chose to keep planning).
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
-    // Overlay dismissed.
-    assert!(!state.ui.has_overlay());
+    // Surface dismissed.
+    assert!(!state.ui.has_active_surface());
     // A "User rejected Claude's plan" system message was injected.
     let last = state
         .session
@@ -423,22 +323,24 @@ async fn plan_exit_deny_renders_rejection_and_keeps_plan_mode() {
 
 #[tokio::test]
 async fn plan_exit_approve_accept_edits_switches_mode() {
-    use crate::state::PlanExitOverlay;
+    use crate::state::PlanExitPromptState;
     use crate::state::PlanExitTarget;
     use coco_types::PermissionMode;
 
     let mut state = AppState::new();
     state.session.permission_mode = PermissionMode::Plan;
-    state.ui.set_overlay(Overlay::PlanExit(PlanExitOverlay {
-        plan_content: Some("plan".into()),
-        next_mode: PlanExitTarget::AcceptEdits,
-    }));
+    state
+        .ui
+        .push_prompt(PanePromptState::PlanExit(PlanExitPromptState {
+            plan_content: Some("plan".into()),
+            next_mode: PlanExitTarget::AcceptEdits,
+        }));
     let (tx, mut rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::Approve, &tx).await;
 
     assert_eq!(state.session.permission_mode, PermissionMode::AcceptEdits);
-    assert!(!state.ui.has_overlay());
+    assert!(!state.ui.has_active_surface());
     // The runner is notified via SetPermissionMode so the engine's
     // config is updated for the next turn.
     let cmd = rx.try_recv().expect("SetPermissionMode must be sent");
@@ -455,32 +357,34 @@ async fn plan_exit_approve_accept_edits_switches_mode() {
 
 #[tokio::test]
 async fn plan_exit_tab_cycles_through_targets_with_bypass_gate() {
-    use crate::state::PlanExitOverlay;
+    use crate::state::PlanExitPromptState;
     use crate::state::PlanExitTarget;
 
     // Capability-gate ON → cycle includes BypassPermissions.
     let mut state = AppState::new();
     state.session.bypass_permissions_available = true;
-    state.ui.set_overlay(Overlay::PlanExit(PlanExitOverlay {
-        plan_content: Some("plan".into()),
-        next_mode: PlanExitTarget::RestorePrePlan,
-    }));
+    state
+        .ui
+        .push_prompt(PanePromptState::PlanExit(PlanExitPromptState {
+            plan_content: Some("plan".into()),
+            next_mode: PlanExitTarget::RestorePrePlan,
+        }));
     let (tx, _rx) = drained_channel();
 
-    handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
-        panic!("overlay should still be PlanExit")
+    handle_command(&mut state, TuiCommand::SurfaceNext, &tx).await;
+    let Some(PanePromptState::PlanExit(p)) = state.ui.interaction.active_prompt.as_ref() else {
+        panic!("state should still be PlanExit")
     };
     assert_eq!(p.next_mode, PlanExitTarget::AcceptEdits);
 
-    handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
+    handle_command(&mut state, TuiCommand::SurfaceNext, &tx).await;
+    let Some(PanePromptState::PlanExit(p)) = state.ui.interaction.active_prompt.as_ref() else {
         panic!()
     };
     assert_eq!(p.next_mode, PlanExitTarget::BypassPermissions);
 
-    handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
+    handle_command(&mut state, TuiCommand::SurfaceNext, &tx).await;
+    let Some(PanePromptState::PlanExit(p)) = state.ui.interaction.active_prompt.as_ref() else {
         panic!()
     };
     assert_eq!(p.next_mode, PlanExitTarget::RestorePrePlan);
@@ -488,34 +392,36 @@ async fn plan_exit_tab_cycles_through_targets_with_bypass_gate() {
 
 #[tokio::test]
 async fn plan_exit_tab_excludes_bypass_when_gate_off() {
-    use crate::state::PlanExitOverlay;
+    use crate::state::PlanExitPromptState;
     use crate::state::PlanExitTarget;
 
     // Capability-gate OFF → cycle skips BypassPermissions entirely.
     let mut state = AppState::new();
     state.session.bypass_permissions_available = false;
-    state.ui.set_overlay(Overlay::PlanExit(PlanExitOverlay {
-        plan_content: Some("plan".into()),
-        next_mode: PlanExitTarget::RestorePrePlan,
-    }));
+    state
+        .ui
+        .push_prompt(PanePromptState::PlanExit(PlanExitPromptState {
+            plan_content: Some("plan".into()),
+            next_mode: PlanExitTarget::RestorePrePlan,
+        }));
     let (tx, _rx) = drained_channel();
 
-    handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
+    handle_command(&mut state, TuiCommand::SurfaceNext, &tx).await;
+    let Some(PanePromptState::PlanExit(p)) = state.ui.interaction.active_prompt.as_ref() else {
         panic!()
     };
     assert_eq!(p.next_mode, PlanExitTarget::AcceptEdits);
 
     // Wraps back to Restore — Bypass is not offered.
-    handle_command(&mut state, TuiCommand::OverlayNext, &tx).await;
-    let Some(Overlay::PlanExit(p)) = state.ui.active_overlay() else {
+    handle_command(&mut state, TuiCommand::SurfaceNext, &tx).await;
+    let Some(PanePromptState::PlanExit(p)) = state.ui.interaction.active_prompt.as_ref() else {
         panic!()
     };
     assert_eq!(p.next_mode, PlanExitTarget::RestorePrePlan);
 }
 
 #[tokio::test]
-async fn cycle_into_bypass_shows_confirmation_overlay() {
+async fn cycle_into_bypass_shows_confirmation_modal() {
     use coco_types::PermissionMode;
 
     let mut state = AppState::new();
@@ -529,24 +435,24 @@ async fn cycle_into_bypass_shows_confirmation_overlay() {
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
     assert!(
         matches!(
-            state.ui.active_overlay(),
-            Some(Overlay::BypassPermissions(_))
+            state.ui.modal.as_ref(),
+            Some(ModalState::BypassPermissions(_))
         ),
-        "BypassPermissionsOverlay should be shown"
+        "BypassPermissionsState should be shown"
     );
     assert!(rx.try_recv().is_err(), "should not flip mode until approve");
 }
 
 #[tokio::test]
-async fn approve_bypass_overlay_flips_mode_and_toasts() {
-    use crate::state::BypassPermissionsOverlay;
+async fn approve_bypass_modal_flips_mode_and_toasts() {
+    use crate::state::BypassPermissionsState;
     use coco_types::PermissionMode;
 
     let mut state = AppState::new();
     state.session.bypass_permissions_available = true;
     state
         .ui
-        .set_overlay(Overlay::BypassPermissions(BypassPermissionsOverlay {
+        .show_modal(ModalState::BypassPermissions(BypassPermissionsState {
             current_mode: "Plan".into(),
         }));
     let (tx, mut rx) = drained_channel();
@@ -557,7 +463,7 @@ async fn approve_bypass_overlay_flips_mode_and_toasts() {
         state.session.permission_mode,
         PermissionMode::BypassPermissions
     );
-    assert!(!state.ui.has_overlay());
+    assert!(!state.ui.has_active_surface());
     let toasted = state
         .ui
         .toasts
@@ -577,8 +483,8 @@ async fn approve_bypass_overlay_flips_mode_and_toasts() {
 }
 
 #[tokio::test]
-async fn deny_bypass_overlay_keeps_mode() {
-    use crate::state::BypassPermissionsOverlay;
+async fn deny_bypass_modal_keeps_mode() {
+    use crate::state::BypassPermissionsState;
     use coco_types::PermissionMode;
 
     let mut state = AppState::new();
@@ -586,7 +492,7 @@ async fn deny_bypass_overlay_keeps_mode() {
     state.session.permission_mode = PermissionMode::Plan;
     state
         .ui
-        .set_overlay(Overlay::BypassPermissions(BypassPermissionsOverlay {
+        .show_modal(ModalState::BypassPermissions(BypassPermissionsState {
             current_mode: "Plan".into(),
         }));
     let (tx, mut rx) = drained_channel();
@@ -594,7 +500,7 @@ async fn deny_bypass_overlay_keeps_mode() {
     handle_command(&mut state, TuiCommand::Deny, &tx).await;
 
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
-    assert!(!state.ui.has_overlay());
+    assert!(!state.ui.has_active_surface());
     assert!(
         rx.try_recv().is_err(),
         "deny must not emit SetPermissionMode"
@@ -616,8 +522,8 @@ async fn cycle_into_auto_shows_opt_in() {
 
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
     assert!(
-        matches!(state.ui.active_overlay(), Some(Overlay::AutoModeOptIn(_))),
-        "AutoModeOptIn overlay should be shown"
+        matches!(state.ui.modal.as_ref(), Some(ModalState::AutoModeOptIn(_))),
+        "AutoModeOptIn state should be shown"
     );
     assert!(rx.try_recv().is_err());
 }
@@ -632,9 +538,9 @@ async fn cycle_into_safe_mode_applies_immediately() {
 
     handle_command(&mut state, TuiCommand::CyclePermissionMode, &tx).await;
 
-    // Default → AcceptEdits with no confirmation overlay.
+    // Default → AcceptEdits with no confirmation state.
     assert_eq!(state.session.permission_mode, PermissionMode::AcceptEdits);
-    assert!(!state.ui.has_overlay());
+    assert!(!state.ui.has_active_surface());
     let toasted = state
         .ui
         .toasts
@@ -756,7 +662,7 @@ async fn esc_on_memory_dialog_records_transcript_result() {
     let mut state = AppState::new();
     state
         .ui
-        .set_overlay(Overlay::MemoryDialog(MemoryDialogOverlay {
+        .show_modal(ModalState::MemoryDialog(MemoryDialogState {
             entries: vec![MemoryDialogEntry {
                 path: std::path::PathBuf::from("/tmp/coco-memory-test/CLAUDE.md"),
                 label: "Project memory".to_string(),
@@ -772,7 +678,7 @@ async fn esc_on_memory_dialog_records_transcript_result() {
 
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
 
-    assert!(!state.ui.has_overlay(), "memory dialog dismissed");
+    assert!(!state.ui.has_active_surface(), "memory dialog dismissed");
     assert!(state.ui.toasts.iter().any(|t| {
         t.severity == ToastSeverity::Info && t.message.contains("Cancelled memory editing")
     }));

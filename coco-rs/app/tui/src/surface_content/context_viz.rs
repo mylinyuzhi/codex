@@ -1,4 +1,4 @@
-//! Context window visualization overlay content builder.
+//! Context window visualization state content builder.
 
 use ratatui::prelude::Color;
 

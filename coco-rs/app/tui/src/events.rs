@@ -5,6 +5,8 @@
 
 use crossterm::event::KeyEvent;
 
+use crate::state::SlashCommandName;
+
 /// Low-level TUI events from all sources.
 ///
 /// The main event loop receives these via `tokio::select!` multiplexing.
@@ -52,7 +54,7 @@ pub enum TuiEvent {
     ///
     /// TS: interactiveHandler.ts races classifier with user input.
     /// When the classifier approves before the user responds, auto-dismiss
-    /// the overlay with this event.
+    /// the state with this event.
     ClassifierApproved {
         request_id: String,
         /// The matched rule name from the classifier.
@@ -67,6 +69,8 @@ pub enum TuiEvent {
 /// Each variant maps to a state mutation in `update.rs::handle_command()`.
 #[derive(Debug, Clone)]
 pub enum TuiCommand {
+    /// Intentionally do nothing.
+    Noop,
     // ── Mode toggles ──
     /// Toggle plan mode.
     TogglePlanMode,
@@ -88,7 +92,7 @@ pub enum TuiCommand {
     QueueInput,
     /// Interrupt current operation.
     Interrupt,
-    /// Cancel current action / close overlay.
+    /// Cancel current action / close state.
     Cancel,
     /// Clear screen.
     ClearScreen,
@@ -151,7 +155,7 @@ pub enum TuiCommand {
     /// Focus previous agent in the activity surface.
     FocusPrevAgent,
 
-    // ── Overlay actions ──
+    // ── Surface actions ──
     /// Approve (Y in permission dialog).
     Approve,
     /// Deny (N in permission dialog).
@@ -165,19 +169,19 @@ pub enum TuiCommand {
         matched_rule: Option<String>,
     },
 
-    // ── Commands & overlays ──
+    // ── Commands & surfaces ──
     /// Execute a skill.
     ExecuteSkill(String),
     /// Execute a slash command by name (no leading `/`). Triggered by
     /// a `command:foo` keybinding from the user's `keybindings.json`
     /// — fires through the same handler as if the user typed `/foo`
     /// and hit Enter.
-    ExecuteSlashCommand(String),
-    /// Show help overlay.
+    ExecuteSlashCommand(SlashCommandName),
+    /// Show help state.
     ShowHelp,
-    /// Show command palette overlay.
+    /// Show command palette state.
     ShowCommandPalette,
-    /// Show session browser overlay.
+    /// Show session browser state.
     ShowSessionBrowser,
     /// Show global search (Ctrl+Shift+F).
     ShowGlobalSearch,
@@ -187,10 +191,10 @@ pub enum TuiCommand {
     ShowExport,
     /// Show context visualization.
     ShowContextViz,
-    /// Show rewind overlay (message selector).
+    /// Show rewind state (message selector).
     /// TS: triggered by double-Esc or /rewind command.
     ShowRewind,
-    /// Open the rewind overlay pre-anchored to a specific message,
+    /// Open the rewind state pre-anchored to a specific message,
     /// jumping straight to the RestoreOptions confirm screen. TS:
     /// `preselectedMessage` flow (`MessageSelector.tsx:42-44`). Used
     /// by message-actions `edit` and by the non-lossless branch of
@@ -202,39 +206,39 @@ pub enum TuiCommand {
     ShowSettings,
     /// Toggle language-level syntax highlighting for markdown code blocks.
     ToggleSyntaxHighlighting,
-    /// Tab: cycle Settings tab forward (Settings overlay) OR cycle
-    /// question/footer focus (Question overlay). Handler in update.rs
-    /// dispatches per-overlay. TS Question parity:
+    /// Tab: cycle Settings tab forward (Settings state) OR cycle
+    /// question/footer focus (Question state). Handler in update.rs
+    /// dispatches per-state. TS Question parity:
     /// `handleTabNext` in `AskUserQuestionPermissionRequest.tsx`.
     SettingsNextTab,
     /// Shift+Tab variant of [`SettingsNextTab`].
     SettingsPrevTab,
 
-    // ── Overlay navigation ──
-    /// Filter text in active filterable overlay.
-    OverlayFilter(char),
-    /// Delete char from overlay filter.
-    OverlayFilterBackspace,
-    /// Select next item in overlay list.
-    OverlayNext,
-    /// Select previous item in overlay list.
-    OverlayPrev,
-    /// Jump selection to the first item in the overlay list. TS:
+    // ── Surface navigation ──
+    /// Filter text in active filterable state.
+    SurfaceFilter(char),
+    /// Delete char from state filter.
+    SurfaceFilterBackspace,
+    /// Select next item in state list.
+    SurfaceNext,
+    /// Select previous item in state list.
+    SurfacePrev,
+    /// Jump selection to the first item in the state list. TS:
     /// `messageSelector:top` (`Home` / `Shift+Up` / `Meta+Up` / `Shift+K`).
-    OverlayJumpStart,
-    /// Jump selection to the last item in the overlay list. TS:
+    SurfaceJumpStart,
+    /// Jump selection to the last item in the state list. TS:
     /// `messageSelector:bottom` (`End` / `Shift+Down` / `Meta+Down` / `Shift+J`).
-    OverlayJumpEnd,
-    /// Confirm selection in overlay.
-    OverlayConfirm,
-    /// Cycle thinking effort in the ModelPicker overlay by `delta`.
+    SurfaceJumpEnd,
+    /// Confirm selection in state.
+    SurfaceConfirm,
+    /// Cycle thinking effort in the ModelPicker state by `delta`.
     /// Bound to Left/Right via `modelPicker:decreaseEffort` /
-    /// `modelPicker:increaseEffort`. Distinct from `OverlayPrev/Next`
+    /// `modelPicker:increaseEffort`. Distinct from `SurfacePrev/Next`
     /// (Up/Down) because the picker has two orthogonal cursors —
     /// model row and effort level — TS solves this with the same
     /// `←/→` axis (`useEffortNavigation`).
     ModelPickerCycleEffort(i32),
-    /// Cycle the configured role in the ModelPicker overlay by `delta`.
+    /// Cycle the configured role in the ModelPicker state by `delta`.
     /// Tab → +1, Shift+Tab → -1. coco-rs-only extension to the TS
     /// picker (TS only ever drives the `main` model).
     ModelPickerCycleRole(i32),
@@ -296,7 +300,7 @@ pub enum TuiCommand {
     /// preview text. TS `app:toggleTeammatePreview`
     /// (`AppStateStore.ts::showTeammateMessagePreview`).
     ToggleTeammateMessagePreview,
-    /// Open / close the transcript overlay. TS `app:toggleTranscript`
+    /// Open / close the transcript state. TS `app:toggleTranscript`
     /// (`useGlobalKeybindings.tsx::handleToggleTranscript`) — verbose,
     /// scrollable, all-messages view.
     ToggleTranscript,

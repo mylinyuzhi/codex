@@ -2,10 +2,10 @@
 
 use crate::i18n::locale_test_guard;
 use crate::state::AppState;
-use crate::state::Overlay;
 use crate::state::PermissionDetail;
-use crate::state::PermissionOverlay;
+use crate::state::PermissionPromptState;
 use crate::state::StreamingState;
+use crate::state::SuggestionKind;
 use crate::state::Toast;
 use crate::state::session::ChatMessage;
 use crate::state::session::MessageContent;
@@ -271,32 +271,38 @@ fn assistant_text_after_tool_result_keeps_dot_and_full_body() {
 }
 
 #[test]
-fn test_snapshot_with_permission_overlay() {
+fn test_snapshot_with_permission_prompt() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state.ui.set_overlay(Overlay::Permission(PermissionOverlay {
-        request_id: "r1".to_string(),
-        tool_name: "Bash".to_string(),
-        description: "Execute shell command".to_string(),
-        detail: PermissionDetail::Bash {
-            command: "rm -rf /tmp/test".to_string(),
-            risk_description: Some("Removes files recursively".to_string()),
-            working_dir: Some("/home/user/project".to_string()),
-        },
-        risk_level: Some(crate::state::RiskLevel::High),
-        show_always_allow: true,
-        classifier_checking: false,
-        classifier_auto_approved: None,
-        choices: None,
-        selected_choice: 0,
-        display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
-        original_input: None,
-        permission_suggestions: vec![],
-    }));
+    state
+        .ui
+        .push_prompt(crate::state::PanePromptState::Permission(
+            PermissionPromptState {
+                request_id: "r1".to_string(),
+                tool_name: "Bash".to_string(),
+                description: "Execute shell command".to_string(),
+                detail: PermissionDetail::Bash {
+                    command: "rm -rf /tmp/test".to_string(),
+                    risk_description: Some("Removes files recursively".to_string()),
+                    working_dir: Some("/home/user/project".to_string()),
+                },
+                risk_level: Some(crate::state::RiskLevel::High),
+                show_always_allow: true,
+                classifier_checking: false,
+                classifier_auto_approved: None,
+                choices: None,
+                selected_choice: 0,
+                display_input: coco_types::PermissionDisplayInput::Command(
+                    "rm -rf /tmp/test".into(),
+                ),
+                original_input: None,
+                permission_suggestions: vec![],
+            },
+        ));
     mark_retained_surface_visible(&mut state);
 
     let output = render_to_string(&state, 80, 24);
-    insta::assert_snapshot!("permission_overlay", output);
+    insta::assert_snapshot!("permission_prompt", output);
 }
 
 #[test]
@@ -317,10 +323,10 @@ fn test_snapshot_with_streaming() {
 }
 
 #[test]
-fn test_snapshot_with_help_overlay() {
+fn test_snapshot_with_help_modal() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state.ui.set_overlay(Overlay::Help);
+    state.ui.show_modal(crate::state::ModalState::Help);
 
     let output = render_to_string(&state, 80, 24);
     // Modifier label depends on host OS (`opt` on macOS, `alt`
@@ -333,7 +339,7 @@ fn test_snapshot_with_help_overlay() {
         "linux"
     };
     insta::with_settings!({ snapshot_suffix => suffix }, {
-        insta::assert_snapshot!("help_overlay", output);
+        insta::assert_snapshot!("help_modal", output);
     });
 }
 
@@ -420,7 +426,7 @@ fn test_snapshot_with_model_fallback_banner() {
 }
 
 #[test]
-fn test_snapshot_with_error_overlay() {
+fn test_snapshot_with_error_modal() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
     let body = crate::widgets::error_dialog::format_error_body(
@@ -428,11 +434,11 @@ fn test_snapshot_with_error_overlay() {
         Some("network"),
         false,
     );
-    state.ui.set_overlay(Overlay::Error(body));
+    state.ui.show_modal(crate::state::ModalState::Error(body));
     mark_retained_surface_visible(&mut state);
 
     let output = render_to_string(&state, 80, 24);
-    insta::assert_snapshot!("error_overlay_non_retryable", output);
+    insta::assert_snapshot!("error_modal_non_retryable", output);
 }
 
 #[test]
@@ -618,26 +624,27 @@ fn test_snapshot_command_palette_inline_popup() {
     // user can see what they typed.
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state.ui.set_overlay(crate::state::Overlay::CommandPalette(
-        crate::state::CommandPaletteOverlay {
-            commands: vec![
-                crate::state::CommandOption {
-                    name: "model".into(),
-                    description: Some("Set the AI model".into()),
-                },
-                crate::state::CommandOption {
-                    name: "clear".into(),
-                    description: Some("Clear conversation".into()),
-                },
-                crate::state::CommandOption {
-                    name: "compact".into(),
-                    description: Some("Compact conversation".into()),
-                },
-            ],
-            filter: "c".to_string(),
-            selected: 0,
-        },
-    ));
+    state.ui.input.textarea.set_text("/c");
+    state.ui.input.textarea.set_cursor(2);
+    state.ui.active_suggestions = Some(crate::state::ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: vec![
+            crate::widgets::suggestion_popup::SuggestionItem {
+                label: "/clear".into(),
+                description: Some("Clear conversation".into()),
+                metadata: None,
+            },
+            crate::widgets::suggestion_popup::SuggestionItem {
+                label: "/compact".into(),
+                description: Some("Compact conversation".into()),
+                metadata: None,
+            },
+        ],
+        selected: 0,
+        query: "c".into(),
+        trigger_pos: 0,
+    });
+    state.ui.sync_popup_from_active_suggestions();
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("command_palette_inline", output);

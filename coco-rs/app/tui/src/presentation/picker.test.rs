@@ -2,17 +2,17 @@ use super::*;
 use crate::i18n::locale_test_guard;
 use crate::presentation::styles::UiStyles;
 use crate::state::ExportFormat;
-use crate::state::ExportOverlay;
-use crate::state::GlobalSearchOverlay;
+use crate::state::ExportState;
+use crate::state::GlobalSearchState;
 use crate::state::McpServerOption;
-use crate::state::McpServerSelectOverlay;
+use crate::state::McpServerSelectState;
 use crate::state::MemoryDialogEntry;
-use crate::state::MemoryDialogOverlay;
 use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
-use crate::state::QuickOpenOverlay;
+use crate::state::MemoryDialogState;
+use crate::state::QuickOpenState;
 use crate::state::SearchResult;
-use crate::state::SessionBrowserOverlay;
+use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
 use crate::theme::Theme;
 
@@ -54,7 +54,7 @@ fn collapse_hints_keeps_output_within_width() {
 fn session_browser_content_handles_empty_and_populated_states() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let empty = SessionBrowserOverlay {
+    let empty = SessionBrowserState {
         sessions: Vec::new(),
         filter: String::new(),
         selected: 0,
@@ -63,7 +63,7 @@ fn session_browser_content_handles_empty_and_populated_states() {
     let (_, empty_body, _) = session_browser_content(&empty, UiStyles::new(&theme));
     assert_eq!(empty_body, "No saved sessions");
 
-    let populated = SessionBrowserOverlay {
+    let populated = SessionBrowserState {
         sessions: vec![SessionOption {
             id: "s1".to_string(),
             label: "Morning".to_string(),
@@ -86,13 +86,13 @@ fn session_browser_content_handles_empty_and_populated_states() {
 fn quick_open_content_caps_visible_files_at_fifteen() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = QuickOpenOverlay {
+    let state = QuickOpenState {
         filter: "src".to_string(),
         files: (0..20).map(|i| format!("file-{i}.rs")).collect(),
         selected: 2,
     };
 
-    let (title, body, border) = quick_open_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = quick_open_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Quick Open ");
     assert_eq!(border, theme.primary);
@@ -106,7 +106,7 @@ fn quick_open_content_caps_visible_files_at_fifteen() {
 fn global_search_content_caps_results_and_marks_selection() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = GlobalSearchOverlay {
+    let state = GlobalSearchState {
         query: "needle".to_string(),
         results: (0..25)
             .map(|i| SearchResult {
@@ -119,7 +119,7 @@ fn global_search_content_caps_results_and_marks_selection() {
         is_searching: false,
     };
 
-    let (title, body, border) = global_search_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = global_search_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Global Search ");
     assert_eq!(border, theme.primary);
@@ -133,7 +133,7 @@ fn global_search_content_caps_results_and_marks_selection() {
 fn global_search_content_reports_searching_and_empty_states() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let searching = GlobalSearchOverlay {
+    let searching = GlobalSearchState {
         query: "needle".to_string(),
         results: Vec::new(),
         selected: 0,
@@ -144,7 +144,7 @@ fn global_search_content_reports_searching_and_empty_states() {
     assert!(searching_body.contains("Searching..."));
     assert!(!searching_body.contains("No results"));
 
-    let empty = GlobalSearchOverlay {
+    let empty = GlobalSearchState {
         is_searching: false,
         ..searching
     };
@@ -156,7 +156,7 @@ fn global_search_content_reports_searching_and_empty_states() {
 fn export_content_marks_selected_format() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = ExportOverlay {
+    let state = ExportState {
         formats: vec![
             ExportFormat::Markdown,
             ExportFormat::Json,
@@ -165,7 +165,7 @@ fn export_content_marks_selected_format() {
         selected: 1,
     };
 
-    let (title, body, border) = export_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = export_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Export Transcript ");
     assert_eq!(border, theme.primary);
@@ -179,7 +179,7 @@ fn export_content_marks_selected_format() {
 fn memory_dialog_content_renders_scope_tags_and_empty_state() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let empty = MemoryDialogOverlay {
+    let empty = MemoryDialogState {
         entries: Vec::new(),
         selected: 0,
     };
@@ -189,7 +189,7 @@ fn memory_dialog_content_renders_scope_tags_and_empty_state() {
     assert_eq!(border, theme.primary);
     assert_eq!(empty_body, "No memory locations resolved.");
 
-    let populated = MemoryDialogOverlay {
+    let populated = MemoryDialogState {
         entries: vec![
             MemoryDialogEntry {
                 path: "CLAUDE.md".into(),
@@ -223,7 +223,7 @@ fn memory_dialog_content_renders_scope_tags_and_empty_state() {
 fn mcp_server_select_content_preserves_checkbox_rows() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = McpServerSelectOverlay {
+    let state = McpServerSelectState {
         servers: vec![
             McpServerOption {
                 name: "docs".to_string(),
@@ -239,7 +239,7 @@ fn mcp_server_select_content_preserves_checkbox_rows() {
         filter: "d".to_string(),
     };
 
-    let (title, body, border) = mcp_server_select_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = mcp_server_select_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Select MCP Servers ");
     assert_eq!(border, theme.accent);

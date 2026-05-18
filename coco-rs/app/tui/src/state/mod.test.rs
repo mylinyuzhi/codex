@@ -3,9 +3,10 @@
 use coco_types::PermissionMode;
 
 use crate::state::AppState;
-use crate::state::Overlay;
+use crate::state::ModalState;
+use crate::state::PanePromptState;
 use crate::state::PermissionDetail;
-use crate::state::PermissionOverlay;
+use crate::state::PermissionPromptState;
 use crate::state::session::ChatMessage;
 use crate::state::session::ChatRole;
 use crate::state::session::TokenUsage;
@@ -114,7 +115,7 @@ fn test_plan_exit_target_default_is_restore_pre_plan() {
 fn test_new_state_defaults() {
     let state = AppState::new();
     assert!(!state.should_exit());
-    assert!(!state.has_overlay());
+    assert!(!state.has_active_surface());
     assert!(!state.is_streaming());
     assert!(!state.should_show_spinner());
     assert!(!state.is_plan_mode());
@@ -139,95 +140,119 @@ fn test_apply_display_settings_updates_show_thinking_default() {
 }
 
 #[test]
-fn test_overlay_queue_same_priority_fifo() {
+fn test_apply_display_settings_keeps_runtime_show_thinking_toggle_when_default_unchanged() {
+    let mut state = AppState::new();
+    state.ui.apply_display_settings(crate::DisplaySettings {
+        show_thinking: false,
+        ..crate::DisplaySettings::default()
+    });
+
+    state.ui.show_thinking = true;
+    state.ui.apply_display_settings(crate::DisplaySettings {
+        show_thinking: false,
+        ..crate::DisplaySettings::default()
+    });
+
+    assert!(state.ui.show_thinking);
+}
+
+#[test]
+fn test_modal_queue_same_priority_fifo() {
     let mut state = AppState::new();
 
     // Help (priority 8) installed
-    state.ui.set_overlay(Overlay::Help);
-    assert!(state.has_overlay());
+    state.ui.show_modal(ModalState::Help);
+    assert!(state.has_active_surface());
 
     // A second Help queues behind (same priority keeps insertion order)
-    state.ui.set_overlay(Overlay::Help);
-    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Help)));
-    assert_eq!(state.ui.overlay_queue_len(), 1);
+    state.ui.show_modal(ModalState::Help);
+    assert!(matches!(state.ui.modal, Some(ModalState::Help)));
+    assert_eq!(state.ui.modal_queue.len(), 1);
 
     // Dismiss promotes the queued one
-    state.ui.dismiss_overlay();
-    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Help)));
-    assert_eq!(state.ui.overlay_queue_len(), 0);
+    state.ui.dismiss_modal();
+    assert!(matches!(state.ui.modal, Some(ModalState::Help)));
+    assert_eq!(state.ui.modal_queue.len(), 0);
 
-    state.ui.dismiss_overlay();
-    assert!(!state.has_overlay());
+    state.ui.dismiss_modal();
+    assert!(!state.has_active_surface());
 }
 
 #[test]
-fn test_overlay_higher_priority_displaces_current() {
+fn test_modal_higher_priority_displaces_current() {
     let mut state = AppState::new();
 
     // Help is the weakest priority (8)
-    state.ui.set_overlay(Overlay::Help);
+    state.ui.show_modal(ModalState::Help);
     // Error (priority 4) arriving should displace Help back into the queue
-    state.ui.set_overlay(Overlay::Error("boom".to_string()));
-    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Error(_))));
-    assert_eq!(state.ui.overlay_queue_len(), 1);
-    assert!(matches!(
-        state.ui.overlay_queue_front(),
-        Some(Overlay::Help)
-    ));
+    state.ui.show_modal(ModalState::Error("boom".to_string()));
+    assert!(matches!(state.ui.modal, Some(ModalState::Error(_))));
+    assert_eq!(state.ui.modal_queue.len(), 1);
 
     // Dismissing Error restores Help
-    state.ui.dismiss_overlay();
-    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Help)));
-    assert_eq!(state.ui.overlay_queue_len(), 0);
+    state.ui.dismiss_modal();
+    assert!(matches!(state.ui.modal, Some(ModalState::Help)));
+    assert_eq!(state.ui.modal_queue.len(), 0);
 }
 
 #[test]
-fn test_overlay_lower_priority_queues_behind() {
+fn test_surface_lower_priority_queues_behind() {
     let mut state = AppState::new();
 
     // Error (priority 4) is current
-    state.ui.set_overlay(Overlay::Error("boom".to_string()));
+    state.ui.show_modal(ModalState::Error("boom".to_string()));
     // Help (priority 8) queues behind without displacing
-    state.ui.set_overlay(Overlay::Help);
-    assert!(matches!(state.ui.active_overlay(), Some(Overlay::Error(_))));
-    assert_eq!(state.ui.overlay_queue_len(), 1);
-    assert!(matches!(
-        state.ui.overlay_queue_front(),
-        Some(Overlay::Help)
-    ));
+    state.ui.show_modal(ModalState::Help);
+    assert!(matches!(state.ui.modal, Some(ModalState::Error(_))));
+    assert_eq!(state.ui.modal_queue.len(), 1);
+
+    state.ui.dismiss_modal();
+    assert!(matches!(state.ui.modal, Some(ModalState::Help)));
 }
 
 #[test]
-fn test_overlay_queue_priority_ordered() {
+fn test_prompt_queue_priority_ordered() {
     let mut state = AppState::new();
-    // Install highest-priority overlay so queue fills with strictly lower ones.
-    state.ui.set_overlay(Overlay::SandboxPermission(
-        crate::state::SandboxPermissionOverlay {
+    // Install highest-priority prompt so queue fills with strictly lower ones.
+    state.ui.push_prompt(PanePromptState::SandboxPermission(
+        crate::state::SandboxPermissionPromptState {
             request_id: "r0".into(),
             description: "sandbox".into(),
         },
     ));
 
     // Enqueue in reverse priority order; insertion should re-sort.
-    state.ui.set_overlay(Overlay::Help); // priority 8
-    state.ui.set_overlay(Overlay::Error("boom".into())); // priority 4
+    state.ui.push_prompt(PanePromptState::Question(
+        crate::state::QuestionPromptState {
+            request_id: "question-1".into(),
+            original_input: serde_json::json!({}),
+            questions: vec![],
+            focus: crate::state::QuestionFocus::Question(0),
+            is_in_plan_mode: false,
+        },
+    )); // priority 2
     state
         .ui
-        .set_overlay(Overlay::PlanEntry(crate::state::PlanEntryOverlay {
+        .push_prompt(PanePromptState::PlanExit(Default::default())); // priority 1
+    state.ui.push_prompt(PanePromptState::PlanEntry(
+        crate::state::PlanEntryPromptState {
             description: "plan".into(),
-        })); // priority 1
+        },
+    )); // priority 1
 
-    // Queue should be promoted by priority asc: PlanEntry (1), Error (4), Help (8).
+    // Queue promotes by priority asc after the active sandbox prompt is dismissed.
     let mut priorities = Vec::new();
     for _ in 0..3 {
-        state.ui.dismiss_overlay();
-        let overlay = state
+        state.ui.dismiss_prompt();
+        let prompt = state
             .ui
-            .active_overlay()
-            .expect("queued overlay should be promoted");
-        priorities.push(overlay.priority());
+            .interaction
+            .active_prompt
+            .as_ref()
+            .expect("queued prompt should be promoted");
+        priorities.push(prompt.priority());
     }
-    assert_eq!(priorities, vec![1, 4, 8]);
+    assert_eq!(priorities, vec![1, 1, 2]);
 }
 
 #[test]
@@ -331,33 +356,35 @@ fn test_input_history_frecency() {
 }
 
 #[test]
-fn test_permission_overlay() {
+fn test_permission_prompt() {
     let mut state = AppState::new();
 
-    state.ui.set_overlay(Overlay::Permission(PermissionOverlay {
-        request_id: "req-1".to_string(),
-        tool_name: "Bash".to_string(),
-        description: "Run command".to_string(),
-        detail: PermissionDetail::Bash {
-            command: "ls -la".to_string(),
-            risk_description: None,
-            working_dir: None,
-        },
-        risk_level: None,
-        show_always_allow: true,
-        classifier_checking: false,
-        classifier_auto_approved: None,
-        choices: None,
-        selected_choice: 0,
-        display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
-        original_input: None,
-        permission_suggestions: vec![],
-    }));
+    state
+        .ui
+        .push_prompt(PanePromptState::Permission(PermissionPromptState {
+            request_id: "req-1".to_string(),
+            tool_name: "Bash".to_string(),
+            description: "Run command".to_string(),
+            detail: PermissionDetail::Bash {
+                command: "ls -la".to_string(),
+                risk_description: None,
+                working_dir: None,
+            },
+            risk_level: None,
+            show_always_allow: true,
+            classifier_checking: false,
+            classifier_auto_approved: None,
+            choices: None,
+            selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
+            original_input: None,
+            permission_suggestions: vec![],
+        }));
 
-    assert!(state.has_overlay());
+    assert!(state.has_active_surface());
     assert!(matches!(
-        state.ui.active_overlay(),
-        Some(Overlay::Permission(_))
+        state.ui.interaction.active_prompt,
+        Some(PanePromptState::Permission(_))
     ));
 }
 

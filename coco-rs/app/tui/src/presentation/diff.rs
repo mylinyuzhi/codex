@@ -2,7 +2,7 @@
 //!
 //! The widget layer owns ratatui spans and theme colors. This module owns
 //! parsing, row classification, and old/new line-number progression so chat
-//! cells and full-screen diff overlays share one source-backed model.
+//! cells and full-screen diff modals share one source-backed model.
 
 /// Parsed line numbers from a unified diff hunk header.
 #[derive(Debug, Clone, PartialEq, Eq)]

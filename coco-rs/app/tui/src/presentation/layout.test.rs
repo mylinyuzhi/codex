@@ -1,18 +1,18 @@
 use super::*;
 
 #[test]
-fn centered_overlay_area_handles_zero_and_narrow_areas() {
-    let bounds = OverlayBounds::new(70, 80, 60, 112, 18, 32);
+fn centered_modal_area_handles_zero_and_narrow_areas() {
+    let bounds = ModalBounds::new(70, 80, 60, 112, 18, 32);
     assert_eq!(
-        centered_overlay_area(Rect::new(0, 0, 0, 0), bounds),
+        centered_modal_area(Rect::new(0, 0, 0, 0), bounds),
         Rect::new(0, 0, 0, 0)
     );
 
-    let area = centered_overlay_area(Rect::new(0, 0, 1, 1), bounds);
+    let area = centered_modal_area(Rect::new(0, 0, 1, 1), bounds);
     assert_eq!(area.width, 1);
     assert_eq!(area.height, 1);
 
-    let area = centered_overlay_area(Rect::new(0, 0, 40, 10), bounds);
+    let area = centered_modal_area(Rect::new(0, 0, 40, 10), bounds);
     assert!(area.width <= 38);
     assert!(area.height <= 8);
 }

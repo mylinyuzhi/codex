@@ -19,8 +19,7 @@ use crate::state::AppState;
 use crate::state::session::ChatMessage;
 use crate::state::session::MessageContent;
 use crate::state::session::ToolUseStatus;
-
-const TOOL_INPUT_PREVIEW_MAX_CHARS: usize = 512;
+use crate::tool_display::tool_input_preview;
 
 pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
     match event {
@@ -130,46 +129,4 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
             true
         }
     }
-}
-
-fn tool_input_preview(tool_name: &str, input: &serde_json::Value) -> String {
-    let normalized = tool_name
-        .rsplit(MCP_TOOL_SEPARATOR)
-        .next()
-        .unwrap_or(tool_name)
-        .to_ascii_lowercase();
-    if matches!(normalized.as_str(), "bash" | "powershell")
-        && let Some(command) = input.get("command").and_then(serde_json::Value::as_str)
-    {
-        return single_line_capped(command, TOOL_INPUT_PREVIEW_MAX_CHARS);
-    }
-    serde_json::to_string(input)
-        .map(|s| single_line_capped(&s, TOOL_INPUT_PREVIEW_MAX_CHARS))
-        .unwrap_or_default()
-}
-
-fn single_line_capped(text: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    let mut count = 0;
-    for chunk in text.split_whitespace() {
-        let space = usize::from(!out.is_empty());
-        let chunk_len = chunk.chars().count();
-        if count + space + chunk_len > max_chars {
-            if max_chars > 3 {
-                while count + 3 > max_chars {
-                    out.pop();
-                    count = count.saturating_sub(1);
-                }
-                out.push_str("...");
-            }
-            return out;
-        }
-        if space == 1 {
-            out.push(' ');
-            count += 1;
-        }
-        out.push_str(chunk);
-        count += chunk_len;
-    }
-    out
 }

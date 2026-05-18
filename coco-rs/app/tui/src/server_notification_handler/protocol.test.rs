@@ -14,7 +14,7 @@ use coco_types::TurnInterruptedParams;
 use super::on_turn_interrupted;
 use crate::state::AppState;
 use crate::state::ChatMessage;
-use crate::state::Overlay;
+use crate::state::ModalState;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -57,12 +57,6 @@ fn idle_with_meaningful_tail() -> AppState {
     s.session
         .add_message(ChatMessage::assistant_text("a1", "actual reply text"));
     s
-}
-
-/// Any overlay variant is sufficient — the guard checks `is_none()`,
-/// not the specific overlay kind. `Help` is the simplest unit variant.
-fn mk_blocking_overlay() -> Overlay {
-    Overlay::Help
 }
 
 // ── Auto-restore matrix ─────────────────────────────────────────
@@ -117,9 +111,9 @@ fn user_cancel_with_nonempty_input_does_not_restore() {
 }
 
 #[test]
-fn user_cancel_with_active_overlay_does_not_restore() {
+fn user_cancel_with_active_surface_does_not_restore() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
-    state.ui.set_overlay(mk_blocking_overlay());
+    state.ui.show_modal(ModalState::Help);
     let before_len = state.session.messages.len();
 
     on_turn_interrupted(&mut state, user_cancel());

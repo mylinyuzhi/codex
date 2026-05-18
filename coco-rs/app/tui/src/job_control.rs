@@ -11,7 +11,7 @@
 //! Flow (Unix):
 //!
 //! 1. [`crate::terminal::leave_tui_modes`] — turn off raw mode, leave any
-//!    overlay alt-screen, and disable bracketed paste / focus change reporting.
+//!    state alt-screen, and disable bracketed paste / focus change reporting.
 //! 2. Show the cursor on a fresh normal-buffer row so the shell sees its
 //!    prompt.
 //! 3. Record a pending [`ResumeAction`] for the next draw.
@@ -23,8 +23,8 @@
 //! 6. [`SuspendContext::prepare_resume_action`] is consumed inside
 //!    [`crate::terminal::Tui::draw`] on the next frame, where
 //!    [`PreparedResumeAction::apply`] clears the native surface and forces a
-//!    full repaint. If a large overlay is still active, `Tui` re-enters
-//!    alt-screen through normal overlay placement.
+//!    full repaint. If a large state is still active, `Tui` re-enters
+//!    alt-screen through normal state placement.
 //!
 //! Windows: no `SIGTSTP`; all entry points become no-ops.
 //!

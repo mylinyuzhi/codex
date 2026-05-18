@@ -1,4 +1,4 @@
-//! Task list widget — background task management overlay.
+//! Task list widget — background task management state.
 //!
 //! TS: src/components/tasks/ (12 files, 4K LOC)
 //! Shows running/completed/failed tasks with progress, output preview, and controls.
@@ -46,7 +46,7 @@ pub enum TaskDisplayType {
     Remote,
 }
 
-/// Task list widget for the overlay.
+/// Task list widget for the state.
 pub struct TaskListWidget<'a> {
     tasks: &'a [TaskEntry],
     selected: i32,

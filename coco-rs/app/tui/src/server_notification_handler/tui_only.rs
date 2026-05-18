@@ -1,9 +1,9 @@
 //! TUI-only handler.
 //!
-//! Handles [`TuiOnlyEvent`] — overlays (permission, question, elicitation,
-//! sandbox), picker data-ready signals, compaction/speculation/cron toasts,
-//! and TUI-specific rewind metadata. SDK and bridge consumers drop these
-//! events; only the TUI acts on them.
+//! Handles [`TuiOnlyEvent`] — pane prompts, modals, picker data-ready
+//! signals, compaction/speculation/cron toasts, and TUI-specific rewind
+//! metadata. SDK and bridge consumers drop these events; only the TUI acts
+//! on them.
 //!
 //! Complex event-specific logic (`DiffStatsReady`, `RewindCompleted`) is
 //! extracted into named helpers — `on_diff_stats_loaded`,
@@ -13,6 +13,8 @@ use coco_types::TuiOnlyEvent;
 
 use crate::i18n::t;
 use crate::state::AppState;
+use crate::state::ModalState;
+use crate::state::PanePromptState;
 use crate::state::ui::Toast;
 
 #[cfg(test)]
@@ -31,8 +33,8 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             permission_suggestions,
             original_input,
         } => {
-            state.ui.set_overlay(crate::state::Overlay::Permission(
-                crate::state::PermissionOverlay {
+            state.ui.push_delayed_permission(
+                crate::state::PermissionPromptState {
                     request_id,
                     tool_name,
                     description,
@@ -53,7 +55,8 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     original_input,
                     permission_suggestions,
                 },
-            ));
+                std::time::Instant::now(),
+            );
             true
         }
         TuiOnlyEvent::DiffStatsReady {
@@ -75,17 +78,17 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             files_changed,
         } => on_rewind_completed(state, target_message_id, files_changed),
 
-        // === Question / elicitation / sandbox overlays ===
+        // === Question / elicitation / sandbox prompts ===
         TuiOnlyEvent::QuestionAsked { request_id, input } => {
             let questions = parse_question_items(&input);
             // Plan-mode gate for the Skip-interview footer item — TS:
             // `isInPlanMode` from `getPermissionMode()` at
-            // `AskUserQuestionPermissionRequest.tsx`. Captured at overlay
-            // construction so a mid-overlay mode flip doesn't change the
+            // `AskUserQuestionPermissionRequest.tsx`. Captured at state
+            // construction so a mid-state mode flip doesn't change the
             // available footer items mid-flight.
             let is_in_plan_mode = state.session.permission_mode == coco_types::PermissionMode::Plan;
-            state.ui.set_overlay(crate::state::Overlay::Question(
-                crate::state::QuestionOverlay {
+            state.ui.push_prompt(PanePromptState::Question(
+                crate::state::QuestionPromptState {
                     request_id,
                     original_input: input,
                     questions,
@@ -96,18 +99,15 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             true
         }
         TuiOnlyEvent::ElicitationRequested {
-            request_id,
-            server,
-            schema,
+            request_id, server, ..
         } => {
-            let fields = parse_elicitation_fields(&schema);
-            state.ui.set_overlay(crate::state::Overlay::Elicitation(
-                crate::state::ElicitationOverlay {
-                    request_id,
-                    server_name: server,
-                    message: String::new(),
-                    fields,
-                },
+            tracing::warn!(
+                %request_id,
+                %server,
+                "dropping unsupported TUI elicitation request"
+            );
+            state.ui.add_toast(Toast::error(
+                t!("toast.elicitation_unsupported", server = server.as_str()).to_string(),
             ));
             true
         }
@@ -115,14 +115,12 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             request_id,
             operation,
         } => {
-            state
-                .ui
-                .set_overlay(crate::state::Overlay::SandboxPermission(
-                    crate::state::SandboxPermissionOverlay {
-                        request_id,
-                        description: operation,
-                    },
-                ));
+            state.ui.push_prompt(PanePromptState::SandboxPermission(
+                crate::state::SandboxPermissionPromptState {
+                    request_id,
+                    description: operation,
+                },
+            ));
             true
         }
 
@@ -146,7 +144,7 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             crate::autocomplete::refresh_suggestions(state);
             true
         }
-        // No-op: checkpoint data consumed by ShowRewind overlay, not stored.
+        // No-op: checkpoint data consumed by ShowRewind state, not stored.
         TuiOnlyEvent::RewindCheckpointsReady { .. } => false,
 
         // === Compaction / speculation toasts ===
@@ -263,22 +261,21 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                 ));
             true
         }
-        // === Open the rewind picker overlay (palette path) ===
-        // Typed `/rewind` is intercepted earlier in `update/edit.rs::try_local_command`
-        // and never round-trips through CoreEvent. The palette path lacks
-        // direct AppState access, so we route through this event.
+        // === Open the rewind picker state ===
+        // The command layer lacks direct AppState access, so it routes
+        // through this event.
         TuiOnlyEvent::OpenRewindPicker => {
-            let overlay = crate::update_rewind::build_rewind_overlay(state);
-            if overlay.messages.is_empty() {
+            let rewind = crate::update_rewind::build_rewind_state(state);
+            if rewind.messages.is_empty() {
                 state
                     .ui
                     .add_toast(Toast::info(t!("toast.no_rewind_messages").to_string()));
             } else {
-                state.ui.set_overlay(crate::state::Overlay::Rewind(overlay));
+                state.ui.show_modal(ModalState::Rewind(rewind));
             }
             true
         }
-        // === Open the /memory file picker overlay ===
+        // === Open the /memory file picker state ===
         // Entries are pre-built by the slash dispatcher (no extra state
         // lookup needed here). On select the TUI sends a command to the
         // CLI bridge; on cancel it emits a transcript line + toast.
@@ -289,8 +286,8 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     .ui
                     .add_toast(Toast::warning(t!("dialog.memory_no_files").to_string()));
             } else {
-                state.ui.set_overlay(crate::state::Overlay::MemoryDialog(
-                    crate::state::MemoryDialogOverlay::from_wire(entries),
+                state.ui.show_modal(ModalState::MemoryDialog(
+                    crate::state::MemoryDialogState::from_wire(entries),
                 ));
             }
             true
@@ -437,7 +434,7 @@ fn on_diff_stats_loaded(
         deletions,
         file_paths,
     };
-    if let Some(crate::state::Overlay::Rewind(r)) = state.ui.active_overlay_mut() {
+    if let Some(ModalState::Rewind(r)) = state.ui.modal.as_mut() {
         // Per-row metadata for the pick-list. TS: `fileHistoryMetadata`
         // map keyed by item index (`MessageSelector.tsx:285-312`).
         if let Some(row) = r
@@ -543,7 +540,7 @@ fn on_rewind_completed(
 
     state.ui.scroll_offset = 0;
     state.ui.user_scrolled = false;
-    state.ui.dismiss_overlay();
+    state.ui.dismiss_modal();
 
     let msg = if files_changed > 0 {
         t!("toast.rewound_checkpoint", count = files_changed).to_string()
@@ -555,10 +552,10 @@ fn on_rewind_completed(
 }
 
 /// Parse the AskUserQuestion tool input dict into rich
-/// `QuestionItem`s the overlay can render.
+/// `QuestionItem`s the state can render.
 ///
 /// Tolerant parser — missing/optional fields use defaults so a
-/// model that emits a partial schema still produces a usable overlay
+/// model that emits a partial schema still produces a usable state
 /// rather than a blank screen.
 ///
 /// TS: `AskUserQuestionPermissionRequest.tsx` reads the same shape.
@@ -620,22 +617,4 @@ fn parse_question_items(input: &serde_json::Value) -> Vec<crate::state::Question
 
 fn str_field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
     v.get(key).and_then(serde_json::Value::as_str).unwrap_or("")
-}
-
-/// Extract elicitation fields from a JSON Schema object.
-fn parse_elicitation_fields(schema: &serde_json::Value) -> Vec<crate::state::ElicitationField> {
-    let Some(props) = schema.get("properties").and_then(|p| p.as_object()) else {
-        return Vec::new();
-    };
-    props
-        .iter()
-        .map(|(name, prop)| crate::state::ElicitationField {
-            name: name.clone(),
-            description: prop
-                .get("description")
-                .and_then(|d| d.as_str())
-                .map(String::from),
-            value: String::new(),
-        })
-        .collect()
 }

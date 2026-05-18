@@ -6,8 +6,8 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::state::session::ChatMessage;
 use crate::state::ui::StreamingState;
-use crate::surface::overlay::HistorySurfaceMode;
-use crate::surface::overlay::SurfaceFramePlan;
+use crate::surface::modal::HistorySurfaceMode;
+use crate::surface::modal::SurfaceFramePlan;
 
 #[test]
 fn native_draw_does_not_duplicate_header_across_streaming_redraws() {
@@ -284,7 +284,7 @@ fn native_draw_replays_after_viewport_height_change_debounce() {
 }
 
 #[test]
-fn native_draw_defers_history_while_overlay_is_open() {
+fn native_draw_defers_history_while_modal_is_open() {
     let backend = TestBackend::new(48, 8);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 5, 48, 3));
@@ -293,7 +293,7 @@ fn native_draw_defers_history_while_overlay_is_open() {
         .session
         .messages
         .push(ChatMessage::assistant_text("a1", "deferred"));
-    state.ui.set_overlay(crate::state::Overlay::Help);
+    state.ui.show_modal(crate::state::ModalState::Help);
     let mut controller = NativeSurfaceController::new();
 
     let outcome = controller.draw(&mut terminal, &state).expect("draw");
@@ -315,7 +315,7 @@ fn native_draw_renders_finalized_history_in_viewport_when_terminal_is_incompatib
         .push(ChatMessage::assistant_text("a1", "zellij deferred"));
     let mut controller = NativeSurfaceController::new();
     let plan = SurfaceFramePlan {
-        overlay_placement: None,
+        modal_placement: None,
         history_surface: HistorySurfaceMode::Viewport,
         attention_requested: false,
     };

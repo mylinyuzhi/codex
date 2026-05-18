@@ -1,6 +1,6 @@
 ---
 source: app/tui/src/presentation/transcript.test.rs
-expression: "render_transcript_text(&state, &overlay, 72, 8)"
+expression: "render_transcript_text(&app_state, &state, 72, 8)"
 ---
 ┌ Transcript ──────────────────────────────────────────────────────────┐
 │No messages yet.                                                      │

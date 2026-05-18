@@ -1,149 +1,17 @@
-//! Modal overlay types.
+//! Prompt and modal payload types.
 //!
-//! Split from `state/ui.rs` to keep that file under the 800-LoC module-size
-//! guidance. See `crate-coco-tui.md` §Overlay System for the taxonomy and
-//! `state/ui.rs::UiState::set_overlay` for displacement semantics.
+//! The active surface state lives in `InteractionPaneState` and `ModalState`.
+//! This module keeps the concrete payload structs shared by those enums and
+//! their render/update code.
 
 use super::session::ProviderUnavailableReason;
 
-/// Modal overlay variants.
-#[derive(Debug, Clone)]
-pub enum Overlay {
-    /// Tool permission approval (Y/N/A).
-    Permission(PermissionOverlay),
-    /// Help display (keyboard shortcuts).
-    Help,
-    /// Error message.
-    Error(String),
-    /// Plan mode exit approval.
-    PlanExit(PlanExitOverlay),
-    /// Plan mode entry approval.
-    PlanEntry(PlanEntryOverlay),
-    /// Cost warning.
-    CostWarning(CostWarningOverlay),
-    /// Model picker (Ctrl+M).
-    ModelPicker(ModelPickerOverlay),
-    /// Command palette (Ctrl+P).
-    CommandPalette(CommandPaletteOverlay),
-    /// Session browser (Ctrl+S).
-    SessionBrowser(SessionBrowserOverlay),
-    /// Question from agent (AskUserQuestion tool).
-    Question(QuestionOverlay),
-    /// MCP elicitation form.
-    Elicitation(ElicitationOverlay),
-    /// Sandbox permission.
-    SandboxPermission(SandboxPermissionOverlay),
-    /// Global search (ripgrep streaming).
-    GlobalSearch(GlobalSearchOverlay),
-    /// Quick file open (Ctrl+O).
-    QuickOpen(QuickOpenOverlay),
-    /// Transcript export.
-    Export(ExportOverlay),
-    /// Full-screen diff view.
-    DiffView(DiffViewOverlay),
-    /// MCP server approval.
-    McpServerApproval(McpServerApprovalOverlay),
-    /// Worktree exit confirmation.
-    WorktreeExit(WorktreeExitOverlay),
-    /// Doctor/diagnostics.
-    Doctor(DoctorOverlay),
-    /// Bridge dialog (IDE/REPL).
-    Bridge(BridgeOverlay),
-    /// Invalid config warning.
-    InvalidConfig(InvalidConfigOverlay),
-    /// Idle return confirmation.
-    IdleReturn(IdleReturnOverlay),
-    /// Trust dialog.
-    Trust(TrustOverlay),
-    /// Auto mode opt-in.
-    AutoModeOptIn(AutoModeOptInOverlay),
-    /// Bypass permissions confirmation.
-    BypassPermissions(BypassPermissionsOverlay),
-    /// Background task detail.
-    TaskDetail(TaskDetailOverlay),
-    /// Feedback survey.
-    Feedback(FeedbackOverlay),
-    /// MCP server multi-select.
-    McpServerSelect(McpServerSelectOverlay),
-    /// Context window visualization.
-    ContextVisualization,
-    /// Rewind overlay (message selector + restore options).
-    /// TS: MessageSelector component.
-    Rewind(crate::state::rewind::RewindOverlay),
-    /// Tabbed settings panel (theme, output style, permissions, about).
-    /// TS: src/components/Settings/.
-    Settings(crate::widgets::settings_panel::SettingsPanelState),
-    /// Team lead approval for a teammate's plan (received via mailbox).
-    /// TS: `planApprovalOverlay` + `PlanApprovalRequest` flow in
-    /// `tools/ExitPlanModeTool/ExitPlanModeV2Tool.ts`.
-    PlanApproval(PlanApprovalOverlay),
-    /// `/memory` file-picker — list managed/user/project/local CLAUDE.md
-    /// entries and open the chosen file in `$VISUAL || $EDITOR`.
-    /// TS: `commands/memory/memory.tsx::Dialog<MemoryFileSelector>`.
-    MemoryDialog(MemoryDialogOverlay),
-    /// Verbose, scrollable view of the entire conversation including
-    /// hidden meta messages. TS `app:toggleTranscript` (`screen ===
-    /// 'transcript'` branch in `screens/REPL.tsx:4392`). coco-rs ports
-    /// the read-only essentials: full message dump with no truncation,
-    /// scrollable, dismissed via Esc / Ctrl+O.
-    Transcript(crate::state::transcript::TranscriptOverlay),
-}
-
-impl Overlay {
-    /// Priority ranking — lower number wins. See `crate-coco-tui.md` §Overlay
-    /// Priority System. Used by `UiState::set_overlay` for displacement and
-    /// queue ordering. Agent-driven overlays arriving while a lower-priority
-    /// one is active will displace it; user-triggered overlays on top of a
-    /// higher-priority agent overlay queue behind it.
-    pub fn priority(&self) -> i32 {
-        match self {
-            // 0 — security-critical
-            Self::SandboxPermission(_) => 0,
-            // 1 — blocks agent execution (needs approval to continue)
-            Self::Permission(_) | Self::PlanExit(_) | Self::PlanEntry(_) => 1,
-            // 2 — tool or agent awaiting structured input
-            Self::Question(_)
-            | Self::Elicitation(_)
-            | Self::McpServerApproval(_)
-            | Self::IdleReturn(_)
-            | Self::PlanApproval(_) => 2,
-            // 3 — high-stakes confirmation
-            Self::CostWarning(_) | Self::BypassPermissions(_) | Self::WorktreeExit(_) => 3,
-            // 4 — error surface
-            Self::Error(_) | Self::InvalidConfig(_) => 4,
-            // 5 — content review
-            Self::Rewind(_) | Self::DiffView(_) => 5,
-            // 6 — settings confirmation
-            Self::AutoModeOptIn(_)
-            | Self::Trust(_)
-            | Self::Bridge(_)
-            | Self::McpServerSelect(_) => 6,
-            // 7 — user-triggered pickers, visualizations, settings
-            Self::ModelPicker(_)
-            | Self::CommandPalette(_)
-            | Self::SessionBrowser(_)
-            | Self::GlobalSearch(_)
-            | Self::QuickOpen(_)
-            | Self::Export(_)
-            | Self::Feedback(_)
-            | Self::TaskDetail(_)
-            | Self::Doctor(_)
-            | Self::ContextVisualization
-            | Self::Settings(_)
-            | Self::Transcript(_)
-            | Self::MemoryDialog(_) => 7,
-            // 8 — help (read-only reference)
-            Self::Help => 8,
-        }
-    }
-}
-
-/// Permission approval overlay with tool-specific detail.
+/// Permission approval state with tool-specific detail.
 ///
 /// TS: src/components/permissions/ (51 files, 12K LOC)
 /// Each tool type has a specialized review UI.
 #[derive(Debug, Clone)]
-pub struct PermissionOverlay {
+pub struct PermissionPromptState {
     pub request_id: String,
     pub tool_name: String,
     pub description: String,
@@ -162,7 +30,7 @@ pub struct PermissionOverlay {
     pub classifier_auto_approved: Option<String>,
     /// Optional multi-choice payload. `None` means render the classic
     /// yes/no/always dialog. `Some` switches the renderer into a
-    /// choice-list mode (mirrors `QuestionOverlay`): Up/Down moves
+    /// choice-list mode (mirrors `QuestionPromptState`): Up/Down moves
     /// `selected_choice`, Enter (approve) echoes the picked value back
     /// to the tool via `UserCommand::ApprovalResponse.updated_input`.
     ///
@@ -192,7 +60,7 @@ pub(crate) enum PermissionAction {
     Deny,
 }
 
-impl PermissionOverlay {
+impl PermissionPromptState {
     pub(crate) fn classic_action_count(&self) -> usize {
         if self.show_always_allow { 3 } else { 2 }
     }
@@ -289,9 +157,9 @@ pub enum PermissionDetail {
     Generic { input_preview: String },
 }
 
-/// Plan mode exit overlay.
+/// Plan mode exit state.
 #[derive(Debug, Clone, Default)]
-pub struct PlanExitOverlay {
+pub struct PlanExitPromptState {
     pub plan_content: Option<String>,
     /// The mode to switch INTO after ExitPlanMode is approved. Set by
     /// the user via the approval options (TS parity: "Yes, Accept Edits"
@@ -347,14 +215,14 @@ impl PlanExitTarget {
     }
 }
 
-/// Cost warning overlay.
+/// Cost warning state.
 #[derive(Debug, Clone)]
-pub struct CostWarningOverlay {
+pub struct CostWarningPromptState {
     pub current_cost_cents: i64,
     pub threshold_cents: i64,
 }
 
-/// Model picker overlay — provider-grouped list of `(provider, model_id)`
+/// Model picker state — provider-grouped list of `(provider, model_id)`
 /// candidates plus an inline thinking-effort selector. Tab cycles the
 /// target role (Main / Fast / Plan / …); the confirm path persists
 /// to that role's slot in `~/.coco.json::model_roles`.
@@ -364,7 +232,7 @@ pub struct CostWarningOverlay {
 /// every `ModelRole` from the same surface — TS only ever drives the
 /// `main` model.
 #[derive(Debug, Clone)]
-pub struct ModelPickerOverlay {
+pub struct ModelPickerState {
     /// Which role we're configuring. Defaults to `Main` when launched
     /// by `Ctrl+M` / `/model`; Tab cycles forward, Shift+Tab back.
     pub role: coco_types::ModelRole,
@@ -379,7 +247,7 @@ pub struct ModelPickerOverlay {
     /// because they aren't selectable rows).
     pub selected: i32,
     /// Currently-chosen effort for the focused model. Re-derived from
-    /// `default_effort` on every selection change (see `update::overlay`).
+    /// `default_effort` on every selection change (see `update::interaction`).
     /// `None` when the focused model declares no thinking levels.
     pub effort: Option<coco_types::ReasoningEffort>,
 }
@@ -410,24 +278,9 @@ pub struct ModelEntry {
     pub unavailable_reasons: Vec<ProviderUnavailableReason>,
 }
 
-/// Command palette overlay (filterable list of /commands).
+/// Session browser state (list of saved sessions).
 #[derive(Debug, Clone)]
-pub struct CommandPaletteOverlay {
-    pub commands: Vec<CommandOption>,
-    pub filter: String,
-    pub selected: i32,
-}
-
-/// A selectable command option.
-#[derive(Debug, Clone)]
-pub struct CommandOption {
-    pub name: String,
-    pub description: Option<String>,
-}
-
-/// Session browser overlay (list of saved sessions).
-#[derive(Debug, Clone)]
-pub struct SessionBrowserOverlay {
+pub struct SessionBrowserState {
     pub sessions: Vec<SessionOption>,
     pub filter: String,
     pub selected: i32,
@@ -442,7 +295,7 @@ pub struct SessionOption {
     pub created_at: String,
 }
 
-/// Question overlay (AskUserQuestion tool).
+/// Question state (AskUserQuestion tool).
 ///
 /// Mirrors the TS `AskUserQuestionPermissionRequest.tsx` data model:
 /// up to 4 questions per call, each with 2-4 options, optional preview
@@ -468,12 +321,12 @@ pub struct SessionOption {
 ///   prose. TS: `handleFinishPlanInterview`. Only reachable when
 ///   `is_in_plan_mode`.
 #[derive(Debug, Clone)]
-pub struct QuestionOverlay {
+pub struct QuestionPromptState {
     pub request_id: String,
     /// Original tool input dict, stored verbatim so the answer payload
     /// can re-emit fields the model supplied that the TUI doesn't render
     /// (e.g. `metadata.source`). Stored AND re-emitted because the
-    /// splice protocol in `update/overlay.rs` rebuilds the input as
+    /// splice protocol in `update/state.rs` rebuilds the input as
     /// `{...original_input, answers, annotations}` — dropping the
     /// `original_input` spread would silently strip those fields.
     pub original_input: serde_json::Value,
@@ -483,11 +336,11 @@ pub struct QuestionOverlay {
     pub focus: QuestionFocus,
     /// Plan-mode gate for the Skip-interview footer item. Set from
     /// `state.session.permission_mode == PermissionMode::Plan` when the
-    /// overlay is constructed.
+    /// state is constructed.
     pub is_in_plan_mode: bool,
 }
 
-/// What the user is currently focused on in the question overlay.
+/// What the user is currently focused on in the question state.
 ///
 /// TS reference: `AskUserQuestionPermissionRequest.tsx` tracks
 /// `currentQuestionIndex` + `isFooterFocused` + `footerIndex`. Coco
@@ -501,11 +354,11 @@ pub enum QuestionFocus {
     /// Footer "Chat about this" item — always available.
     ChatAboutThis,
     /// Footer "Skip interview and plan immediately" item — only
-    /// reachable when `QuestionOverlay.is_in_plan_mode`.
+    /// reachable when `QuestionPromptState.is_in_plan_mode`.
     SkipInterview,
 }
 
-/// One question in the AskUserQuestion overlay.
+/// One question in the AskUserQuestion state.
 #[derive(Debug, Clone)]
 pub struct QuestionItem {
     /// Short label rendered as a chip — e.g. "Auth method".
@@ -523,7 +376,7 @@ pub struct QuestionItem {
     /// Free-form text typed by the user. Used both as "notes" annotation
     /// (TS `questionStates[q].textInputValue`) AND as the answer body
     /// when the focused option is the injected "Other" option. The
-    /// answer-build logic in `update/overlay.rs` differentiates by
+    /// answer-build logic in `update/state.rs` differentiates by
     /// inspecting the focused option's label.
     pub notes: String,
     /// `true` while typed characters route to `notes` instead of moving
@@ -557,7 +410,7 @@ pub const OTHER_OPTION_LABEL: &str = "__other__";
 /// sentinel — TS shows "Other" in the dropdown.
 pub const OTHER_OPTION_DISPLAY: &str = "Other";
 
-impl QuestionOverlay {
+impl QuestionPromptState {
     /// Build the "Chat about this" rejection-feedback prose.
     ///
     /// Byte-for-byte mirror of TS `handleRespondToClaude` at
@@ -638,42 +491,25 @@ impl QuestionOverlay {
 }
 
 #[cfg(test)]
-#[path = "overlay.test.rs"]
-mod overlay_tests;
+#[path = "surface_payloads.test.rs"]
+mod surface_payload_tests;
 
-/// MCP elicitation form overlay.
+/// Sandbox permission state.
 #[derive(Debug, Clone)]
-pub struct ElicitationOverlay {
-    pub request_id: String,
-    pub server_name: String,
-    pub message: String,
-    pub fields: Vec<ElicitationField>,
-}
-
-/// A field in an elicitation form.
-#[derive(Debug, Clone)]
-pub struct ElicitationField {
-    pub name: String,
-    pub description: Option<String>,
-    pub value: String,
-}
-
-/// Sandbox permission overlay.
-#[derive(Debug, Clone)]
-pub struct SandboxPermissionOverlay {
+pub struct SandboxPermissionPromptState {
     pub request_id: String,
     pub description: String,
 }
 
-/// Plan mode entry overlay.
+/// Plan mode entry state.
 #[derive(Debug, Clone)]
-pub struct PlanEntryOverlay {
+pub struct PlanEntryPromptState {
     pub description: String,
 }
 
-/// Global search overlay (ripgrep streaming).
+/// Global search state (ripgrep streaming).
 #[derive(Debug, Clone)]
-pub struct GlobalSearchOverlay {
+pub struct GlobalSearchState {
     pub query: String,
     pub results: Vec<SearchResult>,
     pub selected: i32,
@@ -688,17 +524,17 @@ pub struct SearchResult {
     pub content: String,
 }
 
-/// Quick file open overlay.
+/// Quick file open state.
 #[derive(Debug, Clone)]
-pub struct QuickOpenOverlay {
+pub struct QuickOpenState {
     pub filter: String,
     pub files: Vec<String>,
     pub selected: i32,
 }
 
-/// Export dialog overlay.
+/// Export dialog state.
 #[derive(Debug, Clone)]
-pub struct ExportOverlay {
+pub struct ExportState {
     pub formats: Vec<ExportFormat>,
     pub selected: i32,
 }
@@ -721,34 +557,34 @@ impl ExportFormat {
     }
 }
 
-/// Full-screen diff view overlay.
+/// Full-screen diff view state.
 #[derive(Debug, Clone)]
-pub struct DiffViewOverlay {
+pub struct DiffViewState {
     pub path: String,
     pub diff: String,
     pub scroll: i32,
 }
 
-/// MCP server approval overlay.
+/// MCP server approval state.
 #[derive(Debug, Clone)]
-pub struct McpServerApprovalOverlay {
+pub struct McpServerApprovalPromptState {
     pub server_name: String,
     pub server_url: Option<String>,
     pub tools: Vec<String>,
     pub request_id: String,
 }
 
-/// Worktree exit confirmation overlay.
+/// Worktree exit confirmation state.
 #[derive(Debug, Clone)]
-pub struct WorktreeExitOverlay {
+pub struct WorktreeExitState {
     pub branch: String,
     pub has_uncommitted: bool,
     pub changed_files: Vec<String>,
 }
 
-/// Doctor/diagnostics overlay.
+/// Doctor/diagnostics state.
 #[derive(Debug, Clone)]
-pub struct DoctorOverlay {
+pub struct DoctorState {
     pub checks: Vec<DoctorCheck>,
 }
 
@@ -760,48 +596,48 @@ pub struct DoctorCheck {
     pub message: String,
 }
 
-/// Bridge dialog overlay (IDE/REPL).
+/// Bridge dialog state (IDE/REPL).
 #[derive(Debug, Clone)]
-pub struct BridgeOverlay {
+pub struct BridgeState {
     pub bridge_type: String,
     pub status: String,
     pub details: String,
 }
 
-/// Invalid config warning overlay.
+/// Invalid config warning state.
 #[derive(Debug, Clone)]
-pub struct InvalidConfigOverlay {
+pub struct InvalidConfigState {
     pub errors: Vec<String>,
 }
 
-/// Idle return confirmation overlay.
+/// Idle return confirmation state.
 #[derive(Debug, Clone)]
-pub struct IdleReturnOverlay {
+pub struct IdleReturnState {
     pub idle_duration_secs: i64,
 }
 
-/// Trust dialog overlay.
+/// Trust dialog state.
 #[derive(Debug, Clone)]
-pub struct TrustOverlay {
+pub struct TrustState {
     pub path: String,
     pub description: String,
 }
 
-/// Auto mode opt-in overlay.
+/// Auto mode opt-in state.
 #[derive(Debug, Clone)]
-pub struct AutoModeOptInOverlay {
+pub struct AutoModeOptInState {
     pub description: String,
 }
 
-/// Bypass permissions confirmation overlay.
+/// Bypass permissions confirmation state.
 #[derive(Debug, Clone)]
-pub struct BypassPermissionsOverlay {
+pub struct BypassPermissionsState {
     pub current_mode: String,
 }
 
-/// Background task detail overlay.
+/// Background task detail state.
 #[derive(Debug, Clone)]
-pub struct TaskDetailOverlay {
+pub struct TaskDetailState {
     pub task_id: String,
     pub task_type: String,
     pub description: String,
@@ -810,17 +646,17 @@ pub struct TaskDetailOverlay {
     pub scroll: i32,
 }
 
-/// Feedback survey overlay.
+/// Feedback survey state.
 #[derive(Debug, Clone)]
-pub struct FeedbackOverlay {
+pub struct FeedbackState {
     pub prompt: String,
     pub options: Vec<String>,
     pub selected: i32,
 }
 
-/// MCP server multi-select overlay.
+/// MCP server multi-select state.
 #[derive(Debug, Clone)]
-pub struct McpServerSelectOverlay {
+pub struct McpServerSelectState {
     pub servers: Vec<McpServerOption>,
     pub filter: String,
 }
@@ -833,7 +669,7 @@ pub struct McpServerOption {
     pub tool_count: i32,
 }
 
-/// Plan-approval overlay shown to the team lead when a teammate sends
+/// Plan-approval state shown to the team lead when a teammate sends
 /// a `plan_approval_request` via mailbox. The leader picks approve /
 /// deny (+ optional feedback); the TUI dispatches
 /// `UserCommand::PlanApprovalResponse` which the engine writes back to
@@ -842,7 +678,7 @@ pub struct McpServerOption {
 /// TS source: `tools/ExitPlanModeTool/ExitPlanModeV2Tool.ts:137-141`
 /// builds the request; leader side surfaces via an ink modal.
 #[derive(Debug, Clone)]
-pub struct PlanApprovalOverlay {
+pub struct PlanApprovalPromptState {
     /// Correlation id that will travel back in the response.
     pub request_id: String,
     /// Teammate agent name (who sent the request).
@@ -857,7 +693,7 @@ pub struct PlanApprovalOverlay {
     pub focused: u8,
 }
 
-impl PlanApprovalOverlay {
+impl PlanApprovalPromptState {
     pub fn new(
         request_id: String,
         from: String,
@@ -882,18 +718,18 @@ impl PlanApprovalOverlay {
     }
 }
 
-/// `/memory` file-picker overlay state. Built from the
+/// `/memory` file-picker state state. Built from the
 /// `TuiOnlyEvent::OpenMemoryDialog` payload; entries are pre-resolved
 /// paths plus a label and scope tag. Selection is a simple index — there
 /// is no filter (the entry count is small and fixed per session).
 #[derive(Debug, Clone)]
-pub struct MemoryDialogOverlay {
+pub struct MemoryDialogState {
     pub entries: Vec<MemoryDialogEntry>,
     pub selected: i32,
 }
 
 /// A single row in the memory picker — TUI-side mirror of
-/// `coco_types::MemoryDialogEntry` so the overlay struct stays free of
+/// `coco_types::MemoryDialogEntry` so the state struct stays free of
 /// the coco-types dependency at the field level.
 #[derive(Debug, Clone)]
 pub struct MemoryDialogEntry {
@@ -951,7 +787,7 @@ impl MemoryDialogRowKind {
     }
 }
 
-impl MemoryDialogOverlay {
+impl MemoryDialogState {
     /// Build from the wire payload (`TuiOnlyEvent::OpenMemoryDialog`).
     pub fn from_wire(entries: Vec<coco_types::MemoryDialogEntry>) -> Self {
         Self {

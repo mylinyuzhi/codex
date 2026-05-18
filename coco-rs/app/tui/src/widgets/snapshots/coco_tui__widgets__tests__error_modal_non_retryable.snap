@@ -6,19 +6,19 @@ expression: output
                                                                                 
                                                                                 
                                                                                 
-       ┌ Error ──────────────────────────────────────────────────────────┐      
-       │Connection refused after 3 retries                               │      
-       │                                                                 │      
-       │Category: network                                                │      
-       │Non-retryable — this turn cannot be resumed.                     │      
-       │                                                                 │      
-       │Press Esc to dismiss.                                            │      
-       │                                                                 │      
-       │                                                                 │      
-       │                                                                 │      
-       │                                                                 │      
-       └─────────────────────────────────────────────────────────────────┘      
                                                                                 
+                                                                                
+                                                                                
+            ┌ Error ───────────────────────────────────────────────┐            
+            │Connection refused after 3 retries                    │            
+            │                                                      │            
+            │Category: network                                     │            
+            │Non-retryable — this turn cannot be resumed.          │            
+            │                                                      │            
+            │Press Esc to dismiss.                                 │            
+            │                                                      │            
+            │                                                      │            
+            └──────────────────────────────────────────────────────┘            
                                                                                 
                                                                                 
                                                                                 

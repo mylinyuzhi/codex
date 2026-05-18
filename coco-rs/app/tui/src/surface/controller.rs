@@ -11,8 +11,8 @@ use crate::surface::history_driver::SurfaceHistoryDriver;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
 use crate::surface::history_lines::HistoryLineRenderOptions;
 #[cfg(test)]
-use crate::surface::overlay::OverlaySurfaceState;
-use crate::surface::overlay::SurfaceFramePlan;
+use crate::surface::modal::ModalSurfaceState;
+use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::terminal::SurfaceBackend;
 use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::render_interactive_viewport;
@@ -71,8 +71,8 @@ impl NativeSurfaceController {
     where
         B: SurfaceBackend,
     {
-        let mut overlay_state = OverlaySurfaceState::default();
-        let plan = overlay_state.plan(state, TerminalCompatibility::NativeScrollback, now);
+        let mut modal_state = ModalSurfaceState::default();
+        let plan = modal_state.plan(state, TerminalCompatibility::NativeScrollback, now);
         self.draw_at_with_plan(terminal, state, now, plan)
     }
 

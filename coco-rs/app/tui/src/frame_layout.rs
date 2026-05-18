@@ -11,6 +11,6 @@ pub struct FrameLayout {
     /// Bordered input widget rect.
     ///
     /// `Rect::default()` when rendering did not reach the input, such as when
-    /// a full-screen overlay owns the frame.
+    /// a full-screen state owns the frame.
     pub input: Rect,
 }

@@ -5,22 +5,22 @@
 
 use std::collections::HashSet;
 
-/// Transcript overlay — cell-level reader for `Ctrl+O`.
+/// Transcript state — cell-level reader for `Ctrl+O`.
 #[derive(Debug, Clone, Default)]
-pub struct TranscriptOverlay {
+pub struct TranscriptState {
     /// Logical scroll intent. The renderer resolves it against the current
     /// layout without writing derived metrics back into state.
     pub(crate) scroll: TranscriptScrollPosition,
     /// Expandable cell currently selected for actions such as collapse/expand.
     pub(crate) selected_cell_id: Option<TranscriptCellId>,
-    /// Cell ids explicitly collapsed in this overlay session only.
+    /// Cell ids explicitly collapsed in this state session only.
     ///
     /// Transcript opens expanded by default; this set records opt-in
     /// collapses instead of opt-in expansion.
     pub(crate) collapsed_cell_ids: HashSet<TranscriptCellId>,
 }
 
-impl TranscriptOverlay {
+impl TranscriptState {
     /// Open with default state — scrolled to top with no expanded cells.
     #[cfg(test)]
     pub(crate) fn new() -> Self {

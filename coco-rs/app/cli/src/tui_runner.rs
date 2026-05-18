@@ -380,12 +380,12 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     }
 
     // Wire file_history_enabled into TUI session state so the rewind
-    // overlay knows whether to show code restore options.
+    // modal knows whether to show code restore options.
     app.state_mut().session.file_history_enabled = runtime.file_history.is_some();
 
     // Seed the capability gate that controls both Shift+Tab cycle
     // (`PermissionMode::next_in_cycle`) and the plan-mode exit
-    // overlay's "Bypass" option. Matches engine_config below so the
+    // modal's "Bypass" option. Matches engine_config below so the
     // engine and TUI share one truth. Static for session lifetime.
     app.state_mut().session.bypass_permissions_available = bypass_permissions_available;
     app.state_mut().session.permission_mode = permission_mode;
@@ -599,7 +599,7 @@ async fn run_agent_driver(
     // Active-turn tracker. SubmitInput spawns the engine work into a
     // dedicated task and stores its `JoinHandle` + `CancellationToken`
     // here; the dispatch loop continues to `recv()` so interrupting
-    // commands (`Interrupt`, `ClearConversation`, `Compact`, `Rewind`,
+    // commands (`Interrupt`, `Compact`, `Rewind`,
     // `Shutdown`) reach their arms without waiting for the engine to
     // finish. TS parity: REPL.tsx's `query()` runs in the same single-
     // threaded React event loop, so its keyboard `useInput` hook fires
@@ -836,7 +836,7 @@ async fn run_agent_driver(
             }
 
             UserCommand::ExecuteSkill { name, args } => {
-                // Command-palette dispatch (`update/overlay.rs::Submit`).
+                // Command-palette dispatch.
                 // Same registry lookup as the typed path, but with no
                 // user-supplied chat message — for `Prompt` outcomes we
                 // mint a fresh user-message UUID so file-history /
@@ -877,6 +877,89 @@ async fn run_agent_driver(
                     }
                     SlashOutcome::NotFound => {
                         warn!(%name, "ExecuteSkill: command not registered");
+                    }
+                    SlashOutcome::TriggerCompact {
+                        custom_instructions,
+                    } => {
+                        run_manual_compact(&runtime, &event_tx, custom_instructions, &active_turn)
+                            .await;
+                    }
+                    SlashOutcome::TriggerClear { scope } => {
+                        run_clear_conversation(&runtime, scope, &active_turn).await;
+                    }
+                    SlashOutcome::TriggerDream => {
+                        run_dream_consolidation(&runtime).await;
+                    }
+                    SlashOutcome::TriggerSummary => {
+                        run_session_memory_force(&runtime).await;
+                    }
+                    SlashOutcome::TriggerRename { name } => {
+                        run_session_rename(&runtime, &event_tx, &name).await;
+                    }
+                    SlashOutcome::TriggerTag { tag } => {
+                        run_session_tag(&runtime, &event_tx, &tag).await;
+                    }
+                    SlashOutcome::TriggerAddDir { path } => {
+                        run_add_working_dir(&runtime, &path).await;
+                    }
+                    SlashOutcome::TriggerOpenPlanEditor { path } => {
+                        prepare_external_editor_request(
+                            &mut pending_editor_requests,
+                            PendingEditorRequest::Plan { path },
+                            &event_tx,
+                        )
+                        .await;
+                    }
+                    SlashOutcome::TriggerReloadPlugins => {
+                        run_reload_plugins(&runtime, &event_tx).await;
+                    }
+                    SlashOutcome::TriggerReloadHooks => {
+                        run_reload_hooks(&runtime, &event_tx).await;
+                    }
+                }
+            }
+
+            UserCommand::ExecuteSlashCommand { name, args } => {
+                match dispatch_slash_command(name.as_str(), &args, &runtime, &event_tx).await {
+                    SlashOutcome::Handled => {}
+                    SlashOutcome::RunEngine { content } => {
+                        drain_active_turn(&active_turn).await;
+                        let turn_cancel = CancellationToken::new();
+                        let cancel_for_state = turn_cancel.clone();
+                        let cancel_reason: Arc<OnceLock<CancelReason>> = Arc::new(OnceLock::new());
+                        let cancel_reason_for_state = cancel_reason.clone();
+                        let runtime_t = runtime.clone();
+                        let event_tx_t = event_tx.clone();
+                        let title_gen_attempted_t = title_gen_attempted.clone();
+                        let session_id_t = session_id.clone();
+                        let synth_id = uuid::Uuid::new_v4().to_string();
+                        let task = tokio::spawn(async move {
+                            process_submit_turn(
+                                synth_id,
+                                content,
+                                Vec::new(),
+                                runtime_t,
+                                event_tx_t,
+                                title_gen_attempted_t,
+                                session_id_t,
+                                turn_cancel,
+                                cancel_reason,
+                            )
+                            .await;
+                        });
+                        *active_turn.lock().await = Some(ActiveTurn {
+                            task,
+                            cancel: cancel_for_state,
+                            cancel_reason: cancel_reason_for_state,
+                        });
+                    }
+                    SlashOutcome::NotFound => {
+                        emit_slash_status(
+                            &event_tx,
+                            name.as_str(),
+                            SlashCommandStatusKind::NoHandler,
+                        )
+                        .await;
                     }
                     SlashOutcome::TriggerCompact {
                         custom_instructions,
@@ -1088,10 +1171,6 @@ async fn run_agent_driver(
                 );
             }
 
-            UserCommand::ClearConversation { scope } => {
-                run_clear_conversation(&runtime, scope, &active_turn).await;
-            }
-
             UserCommand::PlanApprovalResponse {
                 request_id,
                 teammate_agent,
@@ -1301,8 +1380,8 @@ async fn run_agent_driver(
 
                 // Always-allow with empty `permission_updates` is the
                 // legacy path (pre-Phase A). Treat as one-shot approve
-                // — the rule plumbing the dialog produced was lost
-                // somewhere between overlay and runner. Log and move
+                // — the rule plumbing the prompt produced was lost
+                // somewhere between TUI and runner. Log and move
                 // on rather than failing.
                 if always_allow && permission_updates.is_empty() {
                     debug!(
@@ -1316,7 +1395,7 @@ async fn run_agent_driver(
                 // `applied_updates` are forwarded so audit/logging
                 // downstream sees the user's intent. Stale request_ids
                 // (already resolved or timed-out) are logged and
-                // dropped — TS does the same when an overlay closes
+                // dropped — TS does the same when a prompt closes
                 // after the engine moved on.
                 if let Some(entry) = pending_entry {
                     let resolved = coco_cli::tui_permission_bridge::send_resolution(
@@ -1424,7 +1503,7 @@ async fn drain_pending_memory_extraction(runtime: &Arc<crate::session_runtime::S
 /// Body of `UserCommand::SubmitInput` extracted into an async fn so
 /// it can be `tokio::spawn`ed. The dispatch loop stores the
 /// `JoinHandle` in `active_turn` and continues to recv the next
-/// command — letting `Interrupt` / `ClearConversation` / `Compact` /
+/// command — letting `Interrupt` / `Compact` /
 /// `Rewind` / `Shutdown` reach their arms while the engine runs.
 ///
 /// All session-scoped Arcs are read out of `runtime` inside the body —
@@ -1456,8 +1535,7 @@ enum SlashOutcome {
     /// driver runs `engine.run_manual_compact` so the model actually
     /// summarizes — not just print "Compacting…".
     TriggerCompact { custom_instructions: Option<String> },
-    /// Trigger the same flow as `UserCommand::ClearConversation`.
-    /// Emitted for the palette path of `/clear` / `/clear all` /
+    /// Trigger the clear flow for `/clear` / `/clear all` /
     /// `/clear history`. The agent driver calls
     /// `runtime.clear_conversation(scope)` which actually wipes
     /// transcript, plan slugs, file caches, etc.
@@ -1704,11 +1782,9 @@ async fn dispatch_slash_command(
     {
         return outcome;
     }
-    // `/clear` from the palette: typed `/clear` is intercepted in
-    // `update/edit.rs::try_local_clear`, but ExecuteSkill flows
-    // through here. Without this short-circuit the registry handler's
-    // text — which says "Conversation cleared" — would print without
-    // any actual clearing.
+    // `/clear` mutates runtime state. Keep it in the command layer so
+    // typed and palette dispatch both run the real clear flow instead
+    // of letting a registry text handler print without clearing.
     if name == "clear" {
         return match parse_clear_scope(args) {
             Some(scope) => SlashOutcome::TriggerClear { scope },
@@ -1730,9 +1806,8 @@ async fn dispatch_slash_command(
             }
         };
     }
-    // `/rewind` / `/checkpoint` from the palette: emit a TuiOnlyEvent
-    // so the TUI builds the picker overlay from current session state.
-    // Typed paths are intercepted earlier in the TUI.
+    // `/rewind` / `/checkpoint` need current TUI session state for the
+    // picker, so the command layer asks the TUI to open the modal.
     if matches!(name, "rewind" | "checkpoint") {
         let _ = event_tx
             .send(CoreEvent::Tui(TuiOnlyEvent::OpenRewindPicker))
@@ -1856,10 +1931,7 @@ async fn dispatch_slash_command(
         }
         CommandResult::OpenDialog(spec) => {
             // Wired dialogs route to TuiOnlyEvent so the TUI opens the
-            // overlay; unwired dialogs emit a localized breadcrumb.
-            // Typed `/rewind` etc. are intercepted earlier in
-            // `update/edit.rs::try_local_command`; this path covers the
-            // command-palette (ExecuteSkill) flow.
+            // modal; unwired dialogs emit a localized breadcrumb.
             match spec {
                 DialogSpec::MessageSelector => {
                     let _ = event_tx
@@ -2173,9 +2245,8 @@ async fn run_manual_compact(
     }
 }
 
-/// Run the same clear flow as `UserCommand::ClearConversation`. Drains
-/// any active turn first since clear mutates session_id + resets several
-/// per-session caches. TS: `clearConversation()`.
+/// Run the clear flow. Drains any active turn first since clear mutates
+/// session_id + resets several per-session caches. TS: `clearConversation()`.
 async fn run_clear_conversation(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     scope: ClearScope,
@@ -2932,7 +3003,7 @@ async fn handle_summarize_rewind(
                 *h = history.messages;
             }
             // Emit a RewindCompleted with empty target so the TUI
-            // dismisses the overlay + shows a toast, but does NOT try
+            // dismisses the modal + shows a toast, but does NOT try
             // to truncate by message_id (the message is gone after
             // summarization).
             let _ = event_tx

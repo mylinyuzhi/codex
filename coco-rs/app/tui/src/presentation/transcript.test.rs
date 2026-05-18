@@ -15,10 +15,10 @@ use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
 use crate::state::session::ToolUseStatus;
 use crate::state::transcript::TranscriptCellId;
-use crate::state::transcript::TranscriptOverlay;
+use crate::state::transcript::TranscriptState;
 use crate::state::ui::StreamingState;
 use crate::theme::Theme;
-use crate::widgets::TranscriptOverlayWidget;
+use crate::widgets::TranscriptStateWidget;
 
 #[test]
 fn test_tool_output_preview_empty_output() {
@@ -58,11 +58,11 @@ fn test_tool_output_preview_one_row_budget_reports_omitted_lines() {
 }
 
 #[test]
-fn transcript_overlay_widget_renders_empty_state_and_footer_without_show_all() {
+fn transcript_modal_widget_renders_empty_state_and_footer_without_show_all() {
     let _locale = locale_test_guard("en");
-    let state = AppState::default();
-    let overlay = TranscriptOverlay::new();
-    let body = render_transcript_text(&state, &overlay, 72, 8);
+    let app_state = AppState::default();
+    let state = TranscriptState::new();
+    let body = render_transcript_text(&app_state, &state, 72, 8);
 
     assert!(body.contains("No messages yet."));
     assert!(body.contains("ctrl+o toggle"));
@@ -73,26 +73,26 @@ fn transcript_overlay_widget_renders_empty_state_and_footer_without_show_all() {
 }
 
 #[test]
-fn snapshot_transcript_overlay_empty_footer() {
+fn snapshot_transcript_modal_empty_footer() {
     let _locale = locale_test_guard("en");
-    let state = AppState::default();
-    let overlay = TranscriptOverlay::new();
+    let app_state = AppState::default();
+    let state = TranscriptState::new();
 
     insta::assert_snapshot!(
-        "transcript_overlay_empty_footer",
-        render_transcript_text(&state, &overlay, 72, 8)
+        "transcript_modal_empty_footer",
+        render_transcript_text(&app_state, &state, 72, 8)
     );
 }
 
 #[test]
-fn snapshot_transcript_overlay_selected_tool_preview() {
+fn snapshot_transcript_modal_selected_tool_preview() {
     let _locale = locale_test_guard("en");
-    let mut state = AppState::default();
-    state
+    let mut app_state = AppState::default();
+    app_state
         .session
         .add_message(ChatMessage::user_text("user", "inspect src/lib.rs"));
-    state.session.add_message(tool_use_message("call-1"));
-    state.session.add_message(ChatMessage::tool_success(
+    app_state.session.add_message(tool_use_message("call-1"));
+    app_state.session.add_message(ChatMessage::tool_success(
         "tool-call-1",
         "Read",
         "pub fn alpha() {}\n\
@@ -102,26 +102,26 @@ fn snapshot_transcript_overlay_selected_tool_preview() {
          pub fn epsilon() {}\n\
          pub fn zeta() {}",
     ));
-    state.session.add_message(ChatMessage::assistant_text(
+    app_state.session.add_message(ChatMessage::assistant_text(
         "assistant",
         "Found the helpers.",
     ));
-    let overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+    let state = TranscriptState::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
 
     insta::assert_snapshot!(
-        "transcript_overlay_selected_tool_preview",
-        render_transcript_text(&state, &overlay, 84, 14)
+        "transcript_modal_selected_tool_preview",
+        render_transcript_text(&app_state, &state, 84, 14)
     );
 }
 
 #[test]
-fn snapshot_transcript_overlay_expanded_thinking_cell() {
+fn snapshot_transcript_modal_expanded_thinking_cell() {
     let _locale = locale_test_guard("en");
-    let mut state = AppState::default();
-    state
+    let mut app_state = AppState::default();
+    app_state
         .session
         .add_message(ChatMessage::user_text("user", "bash ls"));
-    state.session.add_message(ChatMessage {
+    app_state.session.add_message(ChatMessage {
         id: "thinking".into(),
         role: ChatRole::Assistant,
         content: MessageContent::Thinking {
@@ -137,24 +137,23 @@ fn snapshot_transcript_overlay_expanded_thinking_cell() {
         is_visible_in_transcript_only: false,
         permission_mode: None,
     });
-    state.session.add_message(ChatMessage::assistant_text(
+    app_state.session.add_message(ChatMessage::assistant_text(
         "assistant",
         "I'll list the current directory.",
     ));
-    let overlay =
-        TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::message(1, "thinking")));
+    let state = TranscriptState::new_with_anchor(Some(TranscriptCellId::message(1, "thinking")));
 
     insta::assert_snapshot!(
-        "transcript_overlay_expanded_thinking_cell",
-        render_transcript_text(&state, &overlay, 96, 12)
+        "transcript_modal_expanded_thinking_cell",
+        render_transcript_text(&app_state, &state, 96, 12)
     );
 }
 
 #[test]
-fn transcript_overlay_collapsed_tool_keeps_header_and_head_tail_preview() {
+fn transcript_modal_collapsed_tool_keeps_header_and_head_tail_preview() {
     let _locale = locale_test_guard("en");
-    let mut state = AppState::default();
-    state.session.add_message(ChatMessage::tool_success(
+    let mut app_state = AppState::default();
+    app_state.session.add_message(ChatMessage::tool_success(
         "tool-call-1",
         "Glob",
         "common/error/README.md\n\
@@ -171,12 +170,12 @@ fn transcript_overlay_collapsed_tool_keeps_header_and_head_tail_preview() {
          vercel-ai/README.md\n\
          core/system-reminder/README.md",
     ));
-    let mut overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
-    overlay
+    let mut state = TranscriptState::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+    state
         .collapsed_cell_ids
         .insert(TranscriptCellId::tool("call-1"));
 
-    let body = render_transcript_text(&state, &overlay, 96, 14);
+    let body = render_transcript_text(&app_state, &state, 96, 14);
 
     assert!(body.contains("● Glob"));
     assert!(body.contains("└ common/error/README.md"));
@@ -191,28 +190,28 @@ fn transcript_overlay_collapsed_tool_keeps_header_and_head_tail_preview() {
 fn transcript_text_messages_are_full_and_not_expandable() {
     let _locale = locale_test_guard("en");
     let repeated = "one\ntwo\nthree\nfour\nfive\nsix";
-    let mut state = AppState::default();
-    state
+    let mut app_state = AppState::default();
+    app_state
         .session
         .add_message(ChatMessage::assistant_text("duplicate", repeated));
-    state
+    app_state
         .session
         .add_message(ChatMessage::assistant_text("duplicate", repeated));
-    let overlay = TranscriptOverlay::new();
+    let state = TranscriptState::new();
 
-    let body = render_transcript_text(&state, &overlay, 84, 18);
+    let body = render_transcript_text(&app_state, &state, 84, 18);
 
     assert!(body.contains("six"));
     assert!(!body.contains(TRANSCRIPT_TRUNCATED_HINT));
-    assert!(transcript_expandable_cell_ids(&state).is_empty());
+    assert!(transcript_expandable_cell_ids(&app_state).is_empty());
 }
 
 #[test]
-fn snapshot_transcript_overlay_expanded_truncation_tail() {
+fn snapshot_transcript_modal_expanded_truncation_tail() {
     let _locale = locale_test_guard("en");
-    let mut state = AppState::default();
-    state.session.add_message(tool_use_message("call-1"));
-    state.session.add_message(ChatMessage::tool_success(
+    let mut app_state = AppState::default();
+    app_state.session.add_message(tool_use_message("call-1"));
+    app_state.session.add_message(ChatMessage::tool_success(
         "tool-call-1",
         "Read",
         (0..=TRANSCRIPT_EXPANDED_CELL_LINE_CAP)
@@ -220,39 +219,39 @@ fn snapshot_transcript_overlay_expanded_truncation_tail() {
             .collect::<Vec<_>>()
             .join("\n"),
     ));
-    let mut overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
-    overlay.scroll = crate::state::transcript::TranscriptScrollPosition::Absolute(
+    let mut state = TranscriptState::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+    state.scroll = crate::state::transcript::TranscriptScrollPosition::Absolute(
         TRANSCRIPT_EXPANDED_CELL_LINE_CAP.saturating_sub(4),
     );
 
     insta::assert_snapshot!(
-        "transcript_overlay_expanded_truncation_tail",
-        render_transcript_text(&state, &overlay, 84, 12)
+        "transcript_modal_expanded_truncation_tail",
+        render_transcript_text(&app_state, &state, 84, 12)
     );
 }
 
 #[test]
-fn snapshot_transcript_overlay_streaming_tail() {
+fn snapshot_transcript_modal_streaming_tail() {
     let _locale = locale_test_guard("en");
-    let mut state = AppState::default();
-    state
+    let mut app_state = AppState::default();
+    app_state
         .session
         .add_message(ChatMessage::user_text("user", "summarize status"));
     let mut streaming = StreamingState::new();
     streaming.append_text("Working through the transcript pager changes.");
     streaming.reveal_all();
-    state.ui.streaming = Some(streaming);
-    let overlay = TranscriptOverlay::new();
+    app_state.ui.streaming = Some(streaming);
+    let state = TranscriptState::new();
 
     insta::assert_snapshot!(
-        "transcript_overlay_streaming_tail",
-        render_transcript_text(&state, &overlay, 84, 12)
+        "transcript_modal_streaming_tail",
+        render_transcript_text(&app_state, &state, 84, 12)
     );
 }
 
 fn render_transcript_text(
     state: &AppState,
-    overlay: &TranscriptOverlay,
+    transcript: &TranscriptState,
     width: u16,
     height: u16,
 ) -> String {
@@ -260,7 +259,7 @@ fn render_transcript_text(
     let area = Rect::new(0, 0, width, height);
     let mut buffer = Buffer::empty(area);
     let mut layout = crate::widgets::TranscriptLayoutIndex::default();
-    TranscriptOverlayWidget::new(state, overlay, &mut layout, UiStyles::new(&theme))
+    TranscriptStateWidget::new(state, transcript, &mut layout, UiStyles::new(&theme))
         .render(area, &mut buffer);
     buffer
         .content
@@ -350,19 +349,19 @@ fn transcript_projection_pairs_tool_use_with_result_by_call_id() {
 }
 
 #[test]
-fn transcript_overlay_widget_highlights_anchor_cell_and_keeps_it_expanded() {
-    let mut state = AppState::default();
-    state
+fn transcript_modal_widget_highlights_anchor_cell_and_keeps_it_expanded() {
+    let mut app_state = AppState::default();
+    app_state
         .session
         .add_message(ChatMessage::user_text("user", "list"));
-    state.session.add_message(tool_use_message("call-1"));
-    state.session.add_message(ChatMessage::tool_success(
+    app_state.session.add_message(tool_use_message("call-1"));
+    app_state.session.add_message(ChatMessage::tool_success(
         "tool-call-1",
         "Read",
         "alpha\nbeta",
     ));
-    let overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
-    let body = render_transcript_text(&state, &overlay, 80, 12);
+    let state = TranscriptState::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+    let body = render_transcript_text(&app_state, &state, 80, 12);
 
     assert!(body.contains("▶"));
     assert!(body.contains("Read"));
@@ -370,23 +369,23 @@ fn transcript_overlay_widget_highlights_anchor_cell_and_keeps_it_expanded() {
 }
 
 #[test]
-fn transcript_overlay_expands_tool_cells_by_default() {
+fn transcript_modal_expands_tool_cells_by_default() {
     let _locale = locale_test_guard("en");
-    let mut state = AppState::default();
-    state.session.add_message(tool_use_message("old-call"));
-    state.session.add_message(ChatMessage::tool_success(
+    let mut app_state = AppState::default();
+    app_state.session.add_message(tool_use_message("old-call"));
+    app_state.session.add_message(ChatMessage::tool_success(
         "tool-old-call",
         "Read",
         "old-alpha\nold-beta\nold-gamma\nold-delta\nold-epsilon\nold-zeta",
     ));
-    state.session.add_message(tool_use_message("new-call"));
-    state.session.add_message(ChatMessage::tool_success(
+    app_state.session.add_message(tool_use_message("new-call"));
+    app_state.session.add_message(ChatMessage::tool_success(
         "tool-new-call",
         "Read",
         "new-alpha\nnew-beta\nnew-gamma\nnew-delta\nnew-epsilon\nnew-zeta",
     ));
-    let overlay = TranscriptOverlay::new();
-    let body = render_transcript_text(&state, &overlay, 80, 24);
+    let state = TranscriptState::new();
+    let body = render_transcript_text(&app_state, &state, 80, 24);
 
     assert!(body.contains("old-alpha"));
     assert!(body.contains("new-alpha"));
@@ -396,11 +395,11 @@ fn transcript_overlay_expands_tool_cells_by_default() {
 }
 
 #[test]
-fn transcript_overlay_caps_expanded_tool_result_lines() {
+fn transcript_modal_caps_expanded_tool_result_lines() {
     let _locale = locale_test_guard("en");
-    let mut state = AppState::default();
-    state.session.add_message(tool_use_message("call-1"));
-    state.session.add_message(ChatMessage::tool_success(
+    let mut app_state = AppState::default();
+    app_state.session.add_message(tool_use_message("call-1"));
+    app_state.session.add_message(ChatMessage::tool_success(
         "tool-call-1",
         "Read",
         (0..=TRANSCRIPT_EXPANDED_CELL_LINE_CAP)
@@ -408,11 +407,11 @@ fn transcript_overlay_caps_expanded_tool_result_lines() {
             .collect::<Vec<_>>()
             .join("\n"),
     ));
-    let overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+    let state = TranscriptState::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
 
     let body = render_transcript_text(
+        &app_state,
         &state,
-        &overlay,
         80,
         (TRANSCRIPT_EXPANDED_CELL_LINE_CAP + 8) as u16,
     );

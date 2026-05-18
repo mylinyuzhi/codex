@@ -38,11 +38,12 @@ use crate::state::AppState;
 use crate::state::session::ChatMessage;
 use crate::state::session::MessageContent;
 use crate::state::session::ToolExecution;
-use crate::state::session::ToolStatus;
 use crate::state::session::ToolUseStatus;
 use crate::state::transcript::TranscriptCellId;
-use crate::state::transcript::TranscriptOverlay;
 use crate::state::transcript::TranscriptScrollPosition;
+use crate::state::transcript::TranscriptState;
+use crate::tool_display::ToolNameTone;
+use crate::tool_display::tool_name_tone;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TranscriptHeightCacheKey {
@@ -88,30 +89,30 @@ impl TranscriptLayoutIndex {
     }
 }
 
-pub(crate) struct TranscriptOverlayWidget<'a> {
+pub(crate) struct TranscriptStateWidget<'a> {
     state: &'a AppState,
-    overlay: &'a TranscriptOverlay,
+    transcript: &'a TranscriptState,
     layout_index: &'a mut TranscriptLayoutIndex,
     styles: UiStyles<'a>,
 }
 
-impl<'a> TranscriptOverlayWidget<'a> {
+impl<'a> TranscriptStateWidget<'a> {
     pub(crate) fn new(
         state: &'a AppState,
-        overlay: &'a TranscriptOverlay,
+        transcript: &'a TranscriptState,
         layout_index: &'a mut TranscriptLayoutIndex,
         styles: UiStyles<'a>,
     ) -> Self {
         Self {
             state,
-            overlay,
+            transcript,
             layout_index,
             styles,
         }
     }
 }
 
-impl Widget for TranscriptOverlayWidget<'_> {
+impl Widget for TranscriptStateWidget<'_> {
     fn render(mut self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
@@ -151,7 +152,7 @@ impl Widget for TranscriptOverlayWidget<'_> {
     }
 }
 
-impl TranscriptOverlayWidget<'_> {
+impl TranscriptStateWidget<'_> {
     fn render_cells(&mut self, area: Rect, buf: &mut Buffer) {
         let presentation = transcript_presentation_for_state(self.state);
         self.layout_index.begin_frame(
@@ -160,7 +161,7 @@ impl TranscriptOverlayWidget<'_> {
                 self.state,
                 &presentation.cells,
                 area.width,
-                &self.overlay.collapsed_cell_ids,
+                &self.transcript.collapsed_cell_ids,
             ),
             presentation.cells.len(),
         );
@@ -176,11 +177,12 @@ impl TranscriptOverlayWidget<'_> {
                 &presentation.cells,
                 &self.state.session.messages,
                 &mut renderer,
-                &self.overlay.collapsed_cell_ids,
-                self.overlay.selected_cell_id.as_ref(),
+                &self.transcript.collapsed_cell_ids,
+                self.transcript.selected_cell_id.as_ref(),
                 self.layout_index,
             );
-            let scroll = effective_scroll(&self.overlay.scroll, &mut pager, area.height as usize);
+            let scroll =
+                effective_scroll(&self.transcript.scroll, &mut pager, area.height as usize);
             let visible = pager.visible_cells(scroll, area.height as usize);
             visible.cells
         };
@@ -203,8 +205,8 @@ impl TranscriptOverlayWidget<'_> {
             let id = source.cell_id(&self.state.session.messages);
             let expanded = id
                 .as_ref()
-                .is_none_or(|id| !self.overlay.collapsed_cell_ids.contains(id));
-            let selected = id.as_ref() == self.overlay.selected_cell_id.as_ref();
+                .is_none_or(|id| !self.transcript.collapsed_cell_ids.contains(id));
+            let selected = id.as_ref() == self.transcript.selected_cell_id.as_ref();
             renderer.render_window(source, cell_area, cell.skip, expanded, selected, buf);
             y = y.saturating_add(cell_area.height);
         }
@@ -494,30 +496,28 @@ impl<'a> TranscriptCellRenderer<'a> {
         tool_name: &str,
         call_id: &str,
         input_preview: &str,
-        status: ToolUseStatus,
+        _status: ToolUseStatus,
         lines: &mut Vec<Line<'static>>,
     ) {
         let execution = self
             .tool_executions
             .iter()
             .find(|tool| tool.call_id == call_id);
-        let status = execution
-            .map(|tool| tool_status_to_use_status(tool.status))
-            .unwrap_or(status);
-        let color = match status {
-            ToolUseStatus::Queued => self.styles.dim(),
-            ToolUseStatus::Running => self.styles.tool_running(),
-            ToolUseStatus::Completed => self.styles.tool_completed(),
-            ToolUseStatus::Failed => self.styles.tool_error(),
-        };
+        let preview = single_line_capped(input_preview, 96);
         let elapsed = execution
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
-        lines.push(Line::from(vec![
-            Span::raw("• ").fg(color),
-            Span::raw(compact_tool_label(tool_name, input_preview)).fg(self.styles.text()),
-            Span::raw(elapsed).fg(self.styles.dim()).dim(),
-        ]));
+        let mut spans = vec![
+            Span::raw("🔨 ").fg(self.styles.dim()),
+            Span::raw(tool_name.to_string())
+                .fg(tool_tone_color(tool_name_tone(tool_name), self.styles))
+                .bold(),
+        ];
+        if !preview.is_empty() {
+            spans.push(Span::raw(format!("({preview})")).fg(self.styles.text()));
+        }
+        spans.push(Span::raw(elapsed).fg(self.styles.dim()).dim());
+        lines.push(Line::from(spans));
     }
 
     fn render_tool_result_summary(&self, content: &MessageContent, lines: &mut Vec<Line<'static>>) {
@@ -1088,27 +1088,23 @@ fn result_line(text: String, color: ratatui::style::Color) -> Line<'static> {
     output_result_line(text, color, true)
 }
 
+fn tool_tone_color(
+    tone: ToolNameTone,
+    styles: crate::presentation::styles::UiStyles<'_>,
+) -> ratatui::style::Color {
+    match tone {
+        ToolNameTone::ReadOnly => styles.success(),
+        ToolNameTone::Shell => styles.primary(),
+        ToolNameTone::Write => styles.warning(),
+        ToolNameTone::Agent => styles.accent(),
+        ToolNameTone::Plan => styles.plan(),
+        ToolNameTone::Utility => styles.secondary(),
+    }
+}
+
 fn output_result_line(text: String, color: ratatui::style::Color, first: bool) -> Line<'static> {
     let prefix = if first { "    └ " } else { "      " };
     Line::from(vec![Span::raw(prefix).fg(color), Span::raw(text).fg(color)])
-}
-
-fn compact_tool_label(tool_name: &str, input_preview: &str) -> String {
-    let preview = single_line_capped(input_preview, 96);
-    if preview.is_empty() {
-        format!("🔨 {tool_name}")
-    } else {
-        format!("🔨 {tool_name}({preview})")
-    }
-}
-
-fn tool_status_to_use_status(status: ToolStatus) -> ToolUseStatus {
-    match status {
-        ToolStatus::Queued => ToolUseStatus::Queued,
-        ToolStatus::Running => ToolUseStatus::Running,
-        ToolStatus::Completed => ToolUseStatus::Completed,
-        ToolStatus::Failed => ToolUseStatus::Failed,
-    }
 }
 
 fn single_line_capped(text: &str, max_chars: usize) -> String {

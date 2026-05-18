@@ -1,4 +1,4 @@
-//! Transcript overlay presentation.
+//! Transcript state presentation.
 
 use std::collections::VecDeque;
 

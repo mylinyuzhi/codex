@@ -1,7 +1,9 @@
-//! Overlay action handlers — approve/deny/filter/navigate/confirm.
+//! Interaction action handlers — approve/deny/filter/navigate/confirm.
 //!
 //! Factored out of `update.rs` to keep the top-level dispatch under 500 LoC.
 //! All helpers are internal to the update module.
+
+use std::str::FromStr;
 
 use coco_types::PermissionMode;
 use tokio::sync::mpsc;
@@ -10,17 +12,16 @@ use crate::command::UserCommand;
 use crate::constants;
 use crate::i18n::t;
 use crate::state::AppState;
-use crate::state::CommandOption;
-use crate::state::CommandPaletteOverlay;
 use crate::state::ExportFormat;
+use crate::state::ModalState;
 use crate::state::ModelEntry;
-use crate::state::ModelPickerOverlay;
-use crate::state::Overlay;
+use crate::state::ModelPickerState;
+use crate::state::PanePromptState;
 use crate::state::ProviderUnavailableReason;
-use crate::state::SessionBrowserOverlay;
+use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
 use crate::state::SuggestionKind;
-use crate::state::overlay::PermissionAction;
+use crate::state::surface_payloads::PermissionAction;
 use crate::state::ui::Toast;
 use crate::update_rewind;
 use crate::widgets::suggestion_popup::SuggestionMeta;
@@ -43,6 +44,7 @@ fn accept_suggestion(state: &mut AppState) {
     };
     let Some(item) = sug.items.get(sug.selected).cloned() else {
         state.ui.active_suggestions = None;
+        state.ui.sync_popup_from_active_suggestions();
         return;
     };
 
@@ -91,115 +93,124 @@ fn accept_suggestion(state: &mut AppState) {
     // fresh popup keyed off the new query.
     if keep_popup {
         crate::autocomplete::refresh_suggestions(state);
+    } else {
+        state.ui.sync_popup_from_active_suggestions();
     }
 }
 
-/// Handle `Approve` for the current overlay.
+/// Handle `Approve` for the current prompt/modal.
 pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    match state.ui.active_overlay() {
-        Some(Overlay::Permission(p)) => {
-            // Multi-choice mode: 'y' commits the currently-focused
-            // choice (Enter takes the same path via confirm()). The
-            // chosen `value` is spliced into `updated_input` so the
-            // tool's execute() can branch on it. A choice whose value
-            // is "no" denies; everything else approves. Classic yes/no
-            // mode (`choices.is_none()`) keeps the unconditional
-            // `approved: true` path.
-            let (approved, updated_input) = if p.choices.is_some() {
-                let chosen_is_no = p
-                    .choices
-                    .as_ref()
-                    .and_then(|cs| cs.get(p.selected_choice))
-                    .map(|c| c.value.as_str())
-                    == Some("no");
-                (!chosen_is_no, build_choice_payload(p))
-            } else {
-                (true, None)
-            };
-            let _ = command_tx
-                .send(UserCommand::ApprovalResponse {
-                    request_id: p.request_id.clone(),
-                    approved,
-                    always_allow: false,
-                    feedback: None,
-                    updated_input,
-                    permission_updates: vec![],
-                    content_blocks: None,
-                })
-                .await;
-            state.ui.dismiss_overlay();
-        }
-        Some(Overlay::SandboxPermission(s)) => {
-            let _ = command_tx
-                .send(UserCommand::ApprovalResponse {
-                    request_id: s.request_id.clone(),
-                    approved: true,
-                    always_allow: false,
-                    feedback: None,
-                    updated_input: None,
-                    permission_updates: vec![],
-                    content_blocks: None,
-                })
-                .await;
-            state.ui.dismiss_overlay();
-        }
-        Some(Overlay::McpServerApproval(m)) => {
-            let _ = command_tx
-                .send(UserCommand::ApprovalResponse {
-                    request_id: m.request_id.clone(),
-                    approved: true,
-                    always_allow: false,
-                    feedback: None,
-                    updated_input: None,
-                    permission_updates: vec![],
-                    content_blocks: None,
-                })
-                .await;
-            state.ui.dismiss_overlay();
-        }
-        Some(Overlay::PlanEntry(_)) => {
-            // Entry: flip into Plan.
-            state.toggle_plan_mode();
-            let _ = command_tx
-                .send(UserCommand::SetPermissionMode {
-                    mode: state.session.permission_mode,
-                })
-                .await;
-            state.ui.dismiss_overlay();
-        }
-        Some(Overlay::PlanExit(p)) => {
-            // Exit: target mode depends on which approval option the
-            // user picked. `RestorePrePlan` defers the mode switch to
-            // `ExitPlanModeTool::execute`, which writes the restored
-            // mode onto `app_state.permission_mode` (source of truth);
-            // the other variants explicitly set the target mode via
-            // `SetPermissionMode` because the user's pick overrides
-            // the stashed `pre_plan_mode`.
-            //
-            // Defense in depth: if the overlay somehow holds
-            // `BypassPermissions` but the capability gate is off,
-            // down-shift to `AcceptEdits` rather than silently
-            // escalating. Normal paths can't reach this (the renderer
-            // and cycle honor the gate) but a stale overlay is cheap
-            // to defend against.
-            let mut next = p.next_mode;
-            if next == crate::state::PlanExitTarget::BypassPermissions
-                && !state.session.bypass_permissions_available
-            {
-                next = crate::state::PlanExitTarget::AcceptEdits;
+    if let Some(prompt) = state.ui.interaction.active_prompt.as_ref() {
+        match prompt {
+            PanePromptState::Permission(p) => {
+                // Multi-choice mode: 'y' commits the currently-focused
+                // choice (Enter takes the same path via confirm()). The
+                // chosen `value` is spliced into `updated_input` so the
+                // tool's execute() can branch on it. A choice whose value
+                // is "no" denies; everything else approves. Classic yes/no
+                // mode (`choices.is_none()`) keeps the unconditional
+                // `approved: true` path.
+                let (approved, updated_input) = if p.choices.is_some() {
+                    let chosen_is_no = p
+                        .choices
+                        .as_ref()
+                        .and_then(|cs| cs.get(p.selected_choice))
+                        .map(|c| c.value.as_str())
+                        == Some("no");
+                    (!chosen_is_no, build_choice_payload(p))
+                } else {
+                    (true, None)
+                };
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id: p.request_id.clone(),
+                        approved,
+                        always_allow: false,
+                        feedback: None,
+                        updated_input,
+                        permission_updates: vec![],
+                        content_blocks: None,
+                    })
+                    .await;
+                state.ui.dismiss_prompt();
             }
-            let target = next.resolve().unwrap_or(PermissionMode::Default);
-            state.session.permission_mode = target;
-            let _ = command_tx
-                .send(UserCommand::SetPermissionMode { mode: target })
-                .await;
-            state.ui.dismiss_overlay();
+            PanePromptState::SandboxPermission(s) => {
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id: s.request_id.clone(),
+                        approved: true,
+                        always_allow: false,
+                        feedback: None,
+                        updated_input: None,
+                        permission_updates: vec![],
+                        content_blocks: None,
+                    })
+                    .await;
+                state.ui.dismiss_prompt();
+            }
+            PanePromptState::McpServerApproval(m) => {
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id: m.request_id.clone(),
+                        approved: true,
+                        always_allow: false,
+                        feedback: None,
+                        updated_input: None,
+                        permission_updates: vec![],
+                        content_blocks: None,
+                    })
+                    .await;
+                state.ui.dismiss_prompt();
+            }
+            PanePromptState::PlanEntry(_) => {
+                // Entry: flip into Plan.
+                state.toggle_plan_mode();
+                let _ = command_tx
+                    .send(UserCommand::SetPermissionMode {
+                        mode: state.session.permission_mode,
+                    })
+                    .await;
+                state.ui.dismiss_prompt();
+            }
+            PanePromptState::PlanExit(p) => {
+                // Exit: target mode depends on which approval option the
+                // user picked. `RestorePrePlan` defers the mode switch to
+                // `ExitPlanModeTool::execute`, which writes the restored
+                // mode onto `app_state.permission_mode` (source of truth);
+                // the other variants explicitly set the target mode via
+                // `SetPermissionMode` because the user's pick overrides
+                // the stashed `pre_plan_mode`.
+                //
+                // Defense in depth: if the state somehow holds
+                // `BypassPermissions` but the capability gate is off,
+                // down-shift to `AcceptEdits` rather than silently
+                // escalating. Normal paths can't reach this (the renderer
+                // and cycle honor the gate) but a stale state is cheap
+                // to defend against.
+                let mut next = p.next_mode;
+                if next == crate::state::PlanExitTarget::BypassPermissions
+                    && !state.session.bypass_permissions_available
+                {
+                    next = crate::state::PlanExitTarget::AcceptEdits;
+                }
+                let target = next.resolve().unwrap_or(PermissionMode::Default);
+                state.session.permission_mode = target;
+                let _ = command_tx
+                    .send(UserCommand::SetPermissionMode { mode: target })
+                    .await;
+                state.ui.dismiss_prompt();
+            }
+            _ => state.ui.dismiss_prompt(),
         }
-        Some(Overlay::BypassPermissions(_)) => {
+        return;
+    }
+
+    match state.ui.modal.as_ref() {
+        Some(ModalState::BypassPermissions(_)) => {
             // Defense in depth: even after the user clicks Approve we
             // re-check the capability gate before flipping. The cycle
             // path already filters Bypass when the gate is off, but a
-            // stale overlay (e.g. opened earlier in the session, gate
+            // stale state (e.g. opened earlier in the session, gate
             // toggled since) shouldn't be able to escalate. Drops
             // through to a no-op + neutral toast so the user knows the
             // click was acknowledged without surprise.
@@ -207,7 +218,7 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                 state.ui.add_toast(crate::state::ui::Toast::warning(
                     t!("toast.bypass_unavailable").to_string(),
                 ));
-                state.ui.dismiss_overlay();
+                state.ui.dismiss_modal();
                 return;
             }
             state.session.permission_mode = PermissionMode::BypassPermissions;
@@ -219,9 +230,9 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
             state.ui.add_toast(crate::state::ui::Toast::warning(
                 t!("toast.bypass_enabled").to_string(),
             ));
-            state.ui.dismiss_overlay();
+            state.ui.dismiss_modal();
         }
-        Some(Overlay::AutoModeOptIn(_)) => {
+        Some(ModalState::AutoModeOptIn(_)) => {
             state.session.permission_mode = PermissionMode::Auto;
             let _ = command_tx
                 .send(UserCommand::SetPermissionMode {
@@ -231,89 +242,96 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
             state.ui.add_toast(crate::state::ui::Toast::info(
                 t!("toast.auto_mode_enabled").to_string(),
             ));
-            state.ui.dismiss_overlay();
+            state.ui.dismiss_modal();
         }
-        Some(Overlay::Trust(_) | Overlay::WorktreeExit(_)) => {
-            state.ui.dismiss_overlay();
+        Some(ModalState::Trust(_) | ModalState::WorktreeExit(_)) => {
+            state.ui.dismiss_modal();
         }
         _ => {
-            state.ui.dismiss_overlay();
+            state.ui.dismiss_modal();
         }
     }
 }
 
-/// Handle `Deny` for the current overlay.
+/// Handle `Deny` for the current prompt/modal.
 pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    match state.ui.active_overlay() {
-        Some(Overlay::Permission(p)) => {
-            let _ = command_tx
-                .send(UserCommand::ApprovalResponse {
-                    request_id: p.request_id.clone(),
-                    approved: false,
-                    always_allow: false,
-                    feedback: None,
-                    updated_input: None,
-                    permission_updates: vec![],
-                    content_blocks: None,
-                })
-                .await;
-            state.ui.dismiss_overlay();
+    if let Some(prompt) = state.ui.interaction.active_prompt.as_ref() {
+        match prompt {
+            PanePromptState::Permission(p) => {
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id: p.request_id.clone(),
+                        approved: false,
+                        always_allow: false,
+                        feedback: None,
+                        updated_input: None,
+                        permission_updates: vec![],
+                        content_blocks: None,
+                    })
+                    .await;
+                state.ui.dismiss_prompt();
+            }
+            PanePromptState::SandboxPermission(s) => {
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id: s.request_id.clone(),
+                        approved: false,
+                        always_allow: false,
+                        feedback: None,
+                        updated_input: None,
+                        permission_updates: vec![],
+                        content_blocks: None,
+                    })
+                    .await;
+                state.ui.dismiss_prompt();
+            }
+            PanePromptState::McpServerApproval(m) => {
+                let _ = command_tx
+                    .send(UserCommand::ApprovalResponse {
+                        request_id: m.request_id.clone(),
+                        approved: false,
+                        always_allow: false,
+                        feedback: None,
+                        updated_input: None,
+                        permission_updates: vec![],
+                        content_blocks: None,
+                    })
+                    .await;
+                state.ui.dismiss_prompt();
+            }
+            PanePromptState::PlanExit(p) => {
+                // User rejected the plan. Surface a visible record in the
+                // chat transcript — TS parity: `RejectedPlanMessage`
+                // component renders the plan in a bordered block. Mode
+                // stays in `Plan` (no mutation); the user can keep
+                // refining or exit via the normal toggle.
+                let plan = p.plan_content.clone().unwrap_or_default();
+                // Monotonic-ish id; TUI has no uuid dep and plan rejections
+                // are rare enough that nanos collisions are moot.
+                let id = format!(
+                    "plan-rejected-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or_default()
+                );
+                let body = if plan.trim().is_empty() {
+                    crate::i18n::t!("plan.rejected_empty").to_string()
+                } else {
+                    format!("{}\n\n{plan}", crate::i18n::t!("plan.rejected_header"),)
+                };
+                state
+                    .session
+                    .add_message(crate::state::session::ChatMessage::system_text(id, body));
+                state.ui.dismiss_prompt();
+            }
+            _ => state.ui.dismiss_prompt(),
         }
-        Some(Overlay::SandboxPermission(s)) => {
-            let _ = command_tx
-                .send(UserCommand::ApprovalResponse {
-                    request_id: s.request_id.clone(),
-                    approved: false,
-                    always_allow: false,
-                    feedback: None,
-                    updated_input: None,
-                    permission_updates: vec![],
-                    content_blocks: None,
-                })
-                .await;
-            state.ui.dismiss_overlay();
-        }
-        Some(Overlay::McpServerApproval(m)) => {
-            let _ = command_tx
-                .send(UserCommand::ApprovalResponse {
-                    request_id: m.request_id.clone(),
-                    approved: false,
-                    always_allow: false,
-                    feedback: None,
-                    updated_input: None,
-                    permission_updates: vec![],
-                    content_blocks: None,
-                })
-                .await;
-            state.ui.dismiss_overlay();
-        }
-        Some(Overlay::PlanExit(p)) => {
-            // User rejected the plan. Surface a visible record in the
-            // chat transcript — TS parity: `RejectedPlanMessage`
-            // component renders the plan in a bordered block. Mode
-            // stays in `Plan` (no mutation); the user can keep
-            // refining or exit via the normal toggle.
-            let plan = p.plan_content.clone().unwrap_or_default();
-            // Monotonic-ish id; TUI has no uuid dep and plan rejections
-            // are rare enough that nanos collisions are moot.
-            let id = format!(
-                "plan-rejected-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or_default()
-            );
-            let body = if plan.trim().is_empty() {
-                crate::i18n::t!("plan.rejected_empty").to_string()
-            } else {
-                format!("{}\n\n{plan}", crate::i18n::t!("plan.rejected_header"),)
-            };
-            state
-                .session
-                .add_message(crate::state::session::ChatMessage::system_text(id, body));
-            state.ui.dismiss_overlay();
-        }
-        Some(Overlay::BypassPermissions(_)) | Some(Overlay::AutoModeOptIn(_)) => {
+        return;
+    }
+
+    match state.ui.modal.as_ref() {
+        Some(ModalState::BypassPermissions(_)) | Some(ModalState::AutoModeOptIn(_)) => {
             // Declining bypass / auto opt-in keeps the current mode.
             // A toast confirms the cancel so the user doesn't doubt
             // whether the Shift+Tab landed silently.
@@ -322,15 +340,15 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
                 crate::i18n::t!("toast.permission_mode_unchanged", mode = current.as_str())
                     .to_string(),
             ));
-            state.ui.dismiss_overlay();
+            state.ui.dismiss_modal();
         }
         _ => {
-            state.ui.dismiss_overlay();
+            state.ui.dismiss_modal();
         }
     }
 }
 
-/// Handle `ApproveAll` (always-allow) for permission overlays.
+/// Handle `ApproveAll` (always-allow) for permission prompts.
 ///
 /// Phase A: builds a Session-scoped allow rule for the tool. `tui_runner`
 /// consumes the update via `coco_permissions::apply_permission_updates`
@@ -344,7 +362,7 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
 /// let the user pick User / Project / Local; the runner already calls
 /// `SettingsPermissionStore::persist_update` for those destinations.
 pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    if let Some(Overlay::Permission(p)) = state.ui.active_overlay()
+    if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref()
         && p.show_always_allow
     {
         let _ = command_tx
@@ -362,7 +380,7 @@ pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<
                 content_blocks: None,
             })
             .await;
-        state.ui.dismiss_overlay();
+        state.ui.dismiss_prompt();
     }
 }
 
@@ -394,13 +412,19 @@ fn read_path_allow_update(
     tool_name: &str,
     original_input: Option<&serde_json::Value>,
 ) -> Option<coco_types::PermissionUpdate> {
-    if !matches!(tool_name, "Read" | "Grep" | "Glob") {
+    let tool = coco_types::ToolName::from_str(tool_name).ok()?;
+    if !matches!(
+        tool,
+        coco_types::ToolName::Read | coco_types::ToolName::Grep | coco_types::ToolName::Glob
+    ) {
         return None;
     }
     let input = original_input?;
-    let raw_path = match tool_name {
-        "Read" => input.get("file_path").and_then(|v| v.as_str())?,
-        "Grep" | "Glob" => input.get("path").and_then(|v| v.as_str())?,
+    let raw_path = match tool {
+        coco_types::ToolName::Read => input.get("file_path").and_then(|v| v.as_str())?,
+        coco_types::ToolName::Grep | coco_types::ToolName::Glob => {
+            input.get("path").and_then(|v| v.as_str())?
+        }
         _ => return None,
     };
     let dir = directory_for_permission_rule(raw_path)?;
@@ -410,7 +434,7 @@ fn read_path_allow_update(
             source: coco_types::PermissionRuleSource::Session,
             behavior: coco_types::PermissionBehavior::Allow,
             value: coco_types::PermissionRuleValue {
-                tool_pattern: "Read".to_string(),
+                tool_pattern: coco_types::ToolName::Read.as_str().to_string(),
                 rule_content: Some(rule_content),
             },
         }],
@@ -461,7 +485,7 @@ pub(super) async fn classifier_auto_approve(
     command_tx: &mpsc::Sender<UserCommand>,
     request_id: String,
 ) {
-    if let Some(Overlay::Permission(p)) = state.ui.active_overlay()
+    if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref()
         && p.request_id == request_id
     {
         let _ = command_tx
@@ -475,17 +499,20 @@ pub(super) async fn classifier_auto_approve(
                 content_blocks: None,
             })
             .await;
-        state.ui.dismiss_overlay();
+        state.ui.dismiss_prompt();
     }
 }
 
-/// Push `c` into the current filterable overlay's filter string.
+/// Push `c` into the current filterable state's filter string.
 pub(super) fn filter(state: &mut AppState, c: char) {
-    // Question overlay specializes the keystroke routing: Space toggles
+    // Question state specializes the keystroke routing: Space toggles
     // multi-select; printable chars edit the "Other" notes textarea
     // when that option is focused. Both consume the keystroke before
     // any filter logic. TS: `QuestionView.tsx` `onKeyDown` priority.
-    if matches!(state.ui.active_overlay(), Some(Overlay::Question(_))) {
+    if matches!(
+        state.ui.interaction.active_prompt,
+        Some(PanePromptState::Question(_))
+    ) {
         if c == ' ' {
             question_toggle_checked(state);
             return;
@@ -493,26 +520,22 @@ pub(super) fn filter(state: &mut AppState, c: char) {
         if question_notes_input(state, c) {
             return;
         }
-        return; // Question overlay has no filter — silently swallow.
+        return; // Question state has no filter — silently swallow.
     }
-    match state.ui.active_overlay_mut() {
-        Some(Overlay::ModelPicker(m)) => {
+    match state.ui.modal.as_mut() {
+        Some(ModalState::ModelPicker(m)) => {
             m.filter.push(c);
             m.selected = 0;
         }
-        Some(Overlay::CommandPalette(cp)) => {
-            cp.filter.push(c);
-            cp.selected = 0;
-        }
-        Some(Overlay::SessionBrowser(s)) => {
+        Some(ModalState::SessionBrowser(s)) => {
             s.filter.push(c);
             s.selected = 0;
         }
-        Some(Overlay::GlobalSearch(g)) => {
+        Some(ModalState::GlobalSearch(g)) => {
             g.query.push(c);
             g.selected = 0;
         }
-        Some(Overlay::QuickOpen(q)) => {
+        Some(ModalState::QuickOpen(q)) => {
             q.filter.push(c);
             q.selected = 0;
         }
@@ -520,32 +543,31 @@ pub(super) fn filter(state: &mut AppState, c: char) {
     }
 }
 
-/// Pop the last char from the current filterable overlay's filter string.
+/// Pop the last char from the current filterable state's filter string.
 pub(super) fn filter_backspace(state: &mut AppState) {
-    // Question overlay: when "Other" is focused, Backspace edits the
+    // Question state: when "Other" is focused, Backspace edits the
     // notes textarea. Otherwise no-op (Question has no filter).
-    if matches!(state.ui.active_overlay(), Some(Overlay::Question(_))) {
+    if matches!(
+        state.ui.interaction.active_prompt,
+        Some(PanePromptState::Question(_))
+    ) {
         question_notes_backspace(state);
         return;
     }
-    match state.ui.active_overlay_mut() {
-        Some(Overlay::ModelPicker(m)) => {
+    match state.ui.modal.as_mut() {
+        Some(ModalState::ModelPicker(m)) => {
             m.filter.pop();
             m.selected = 0;
         }
-        Some(Overlay::CommandPalette(cp)) => {
-            cp.filter.pop();
-            cp.selected = 0;
-        }
-        Some(Overlay::SessionBrowser(s)) => {
+        Some(ModalState::SessionBrowser(s)) => {
             s.filter.pop();
             s.selected = 0;
         }
-        Some(Overlay::GlobalSearch(g)) => {
+        Some(ModalState::GlobalSearch(g)) => {
             g.query.pop();
             g.selected = 0;
         }
-        Some(Overlay::QuickOpen(q)) => {
+        Some(ModalState::QuickOpen(q)) => {
             q.filter.pop();
             q.selected = 0;
         }
@@ -553,10 +575,10 @@ pub(super) fn filter_backspace(state: &mut AppState) {
     }
 }
 
-/// Move selection by `delta` in the current list/scrollable overlay.
+/// Move selection by `delta` in the current list/scrollable state.
 pub(super) fn nav(state: &mut AppState, delta: i32) {
-    // Autocomplete takes precedence over (non-existent) overlay.
-    if !state.ui.has_overlay()
+    // Autocomplete takes precedence over (non-existent) state.
+    if !state.ui.has_blocking_interaction()
         && let Some(ref mut sug) = state.ui.active_suggestions
     {
         if sug.items.is_empty() {
@@ -567,8 +589,55 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
         }
         return;
     }
-    match state.ui.active_overlay_mut() {
-        Some(Overlay::ModelPicker(m)) => {
+    if let Some(prompt) = state.ui.interaction.active_prompt.as_mut() {
+        match prompt {
+            PanePromptState::Question(q) => {
+                if let crate::state::QuestionFocus::Question(idx) = q.focus
+                    && let Some(qi) = q.questions.get_mut(idx as usize)
+                {
+                    let count = qi.options.len() as i32;
+                    let next = (qi.selected + delta).clamp(0, (count - 1).max(0));
+                    qi.selected = next;
+                    qi.editing_notes = qi
+                        .options
+                        .get(next as usize)
+                        .map(|o| o.label == crate::state::OTHER_OPTION_LABEL)
+                        .unwrap_or(false);
+                }
+            }
+            PanePromptState::PlanExit(p) => {
+                let order = crate::state::PlanExitTarget::available(
+                    state.session.bypass_permissions_available,
+                );
+                let current_idx = order.iter().position(|t| *t == p.next_mode).unwrap_or(0) as i32;
+                let len = order.len() as i32;
+                let new_idx = ((current_idx + delta).rem_euclid(len)) as usize;
+                p.next_mode = order[new_idx];
+            }
+            PanePromptState::Permission(p) => {
+                let count = p
+                    .choices
+                    .as_ref()
+                    .map(Vec::len)
+                    .unwrap_or_else(|| p.classic_action_count()) as i32;
+                if count > 0 {
+                    let current = p.selected_choice as i32;
+                    let next = (current + delta).rem_euclid(count);
+                    p.selected_choice = next as usize;
+                }
+            }
+            PanePromptState::PlanApproval(p) => {
+                if delta != 0 {
+                    p.toggle_focus();
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match state.ui.modal.as_mut() {
+        Some(ModalState::ModelPicker(m)) => {
             let count = filtered_models(m).len() as i32;
             m.selected = (m.selected + delta).clamp(0, (count - 1).max(0));
             // Re-derive effort from the newly-focused model's default
@@ -578,106 +647,49 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
                 .get(m.selected as usize)
                 .and_then(|e| e.default_effort);
         }
-        Some(Overlay::CommandPalette(cp)) => {
-            let count = filtered_commands(cp).len() as i32;
-            cp.selected = (cp.selected + delta).clamp(0, (count - 1).max(0));
-        }
-        Some(Overlay::SessionBrowser(s)) => {
+        Some(ModalState::SessionBrowser(s)) => {
             let count = filtered_sessions(s).len() as i32;
             s.selected = (s.selected + delta).clamp(0, (count - 1).max(0));
         }
-        Some(Overlay::GlobalSearch(g)) => {
+        Some(ModalState::GlobalSearch(g)) => {
             let count = g.results.len() as i32;
             g.selected = (g.selected + delta).clamp(0, (count - 1).max(0));
         }
-        Some(Overlay::QuickOpen(q)) => {
+        Some(ModalState::QuickOpen(q)) => {
             let count = q.files.len() as i32;
             q.selected = (q.selected + delta).clamp(0, (count - 1).max(0));
         }
-        Some(Overlay::Export(e)) => {
+        Some(ModalState::Export(e)) => {
             let count = e.formats.len() as i32;
             e.selected = (e.selected + delta).clamp(0, (count - 1).max(0));
         }
-        Some(Overlay::Question(q)) => {
-            // Up/Down moves the focused option within the *focused* question.
-            // No-op when focus is on a footer item (Chat-about-this /
-            // Skip-interview) — Tab/Shift+Tab cycle the focus between
-            // questions and footer items, handled by `OverlayTabsNext`.
-            if let crate::state::QuestionFocus::Question(idx) = q.focus
-                && let Some(qi) = q.questions.get_mut(idx as usize)
-            {
-                let count = qi.options.len() as i32;
-                let next = (qi.selected + delta).clamp(0, (count - 1).max(0));
-                qi.selected = next;
-                // TS `QuestionView.tsx:85-87`: focusing the `__other__`
-                // option flips into text-input mode. Drop out when
-                // moving away.
-                qi.editing_notes = qi
-                    .options
-                    .get(next as usize)
-                    .map(|o| o.label == crate::state::OTHER_OPTION_LABEL)
-                    .unwrap_or(false);
-            }
-        }
-        Some(Overlay::Feedback(f)) => {
+        Some(ModalState::Feedback(f)) => {
             let count = f.options.len() as i32;
             f.selected = (f.selected + delta).clamp(0, (count - 1).max(0));
         }
-        Some(Overlay::PlanExit(p)) => {
-            // Cycle the exit target on Up/Down (or Tab — keybind layer
-            // maps Tab to OverlayNext here). Bypass is conditional on
-            // the capability gate; when gated off we stay on the
-            // Restore/AcceptEdits two-way cycle. TS parity:
-            // `buildPlanApprovalOptions` with
-            // `isBypassPermissionsModeAvailable`.
-            let order =
-                crate::state::PlanExitTarget::available(state.session.bypass_permissions_available);
-            let current_idx = order.iter().position(|t| *t == p.next_mode).unwrap_or(0) as i32;
-            let len = order.len() as i32;
-            let new_idx = ((current_idx + delta).rem_euclid(len)) as usize;
-            p.next_mode = order[new_idx];
-        }
-        Some(Overlay::Permission(p)) => {
-            let count = p
-                .choices
-                .as_ref()
-                .map(Vec::len)
-                .unwrap_or_else(|| p.classic_action_count()) as i32;
-            if count > 0 {
-                let current = p.selected_choice as i32;
-                let next = (current + delta).rem_euclid(count);
-                p.selected_choice = next as usize;
-            }
-        }
-        Some(Overlay::Rewind(r)) => {
+        Some(ModalState::Rewind(r)) => {
             update_rewind::handle_rewind_nav(r, delta);
         }
-        Some(Overlay::DiffView(d)) => {
+        Some(ModalState::DiffView(d)) => {
             d.scroll = (d.scroll + delta * constants::SCROLL_LINE_STEP).max(0);
         }
-        Some(Overlay::TaskDetail(t)) => {
+        Some(ModalState::TaskDetail(t)) => {
             t.scroll = (t.scroll + delta * constants::SCROLL_LINE_STEP).max(0);
         }
-        Some(Overlay::PlanApproval(p)) => {
-            // Left/right (nav delta) toggles between Approve and Deny.
-            if delta != 0 {
-                p.toggle_focus();
-            }
-        }
-        Some(Overlay::Settings(s)) => {
+        Some(ModalState::Settings(s)) => {
             let count = settings_item_count(s) as i32;
             s.selected = (s.selected + delta).clamp(0, (count - 1).max(0));
         }
-        Some(Overlay::MemoryDialog(m)) => {
+        Some(ModalState::MemoryDialog(m)) => {
             let count = m.entries.len() as i32;
             m.selected = (m.selected + delta).clamp(0, (count - 1).max(0));
         }
         Some(
-            Overlay::Help
-            | Overlay::Doctor(_)
-            | Overlay::ContextVisualization
-            | Overlay::Bridge(_)
-            | Overlay::InvalidConfig(_),
+            ModalState::Help
+            | ModalState::Doctor(_)
+            | ModalState::ContextVisualization
+            | ModalState::Bridge(_)
+            | ModalState::InvalidConfig(_),
         ) => {
             state.ui.help_scroll =
                 (state.ui.help_scroll + delta * constants::SCROLL_LINE_STEP).max(0);
@@ -686,149 +698,186 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
     }
 }
 
-/// Confirm the currently selected item in a list overlay.
+/// Confirm the currently selected item in the active prompt/modal.
 pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    // Autocomplete popup takes precedence over (non-existent) overlay when
-    // suggestions are active — pressing Tab/Enter accepts the selection.
-    if !state.ui.has_overlay() && state.ui.active_suggestions.is_some() {
+    if !state.ui.has_blocking_interaction() && state.ui.active_suggestions.is_some() {
         accept_suggestion(state);
         return;
     }
-    let overlay = state.ui.take_active_overlay();
-    let had_overlay = overlay.is_some();
-    match overlay {
-        Some(Overlay::ModelPicker(m)) => {
-            if let Some(entry) = filtered_models(&m).get(m.selected as usize).copied() {
-                if let Some(summary) = unavailable_summary(&entry.unavailable_reasons) {
-                    state.ui.restore_active_overlay(Overlay::ModelPicker(m));
-                    state.ui.add_toast(Toast::warning(format!(
-                        "{} {summary}",
-                        t!("dialog.model_picker_unavailable_label")
-                    )));
-                    return;
-                }
-                let _ = command_tx
-                    .send(UserCommand::SetModelRole {
-                        role: m.role,
-                        provider: entry.provider.clone(),
-                        model_id: entry.model_id.clone(),
-                        effort: m.effort,
-                    })
-                    .await;
-                // Optimistic local update for Main — non-Main roles
-                // have no live mirror in `SessionState`, so the engine
-                // is the source of truth there.
-                if matches!(m.role, coco_types::ModelRole::Main) {
-                    state.session.model = entry.model_id.clone();
-                }
-            }
-        }
-        Some(Overlay::CommandPalette(cp)) => {
-            if let Some(cmd) = filtered_commands(&cp).get(cp.selected as usize) {
-                // Intercept /rewind and /checkpoint to open overlay instead
-                if cmd.name == "rewind" || cmd.name == "checkpoint" {
-                    let overlay = update_rewind::build_rewind_overlay(state);
-                    state.ui.install_active_overlay(Overlay::Rewind(overlay));
-                    return;
-                }
-                // /copy dispatches straight to the clipboard handler — no
-                // round-trip through the agent. Mirrors codex-rs's
-                // SlashCommand::Copy path.
-                if cmd.name == "copy" {
-                    super::clipboard::copy_last_message(state);
-                    return;
-                }
-                let _ = command_tx
-                    .send(UserCommand::ExecuteSkill {
-                        name: cmd.name.clone(),
-                        args: None,
-                    })
-                    .await;
-            }
-        }
-        Some(Overlay::Rewind(mut r)) => {
-            // Capture the 1-based turn number for the protocol-level
-            // `rewind/completed` notification before handle_rewind_confirm
-            // mutates the overlay phase. `selected` is 0-based against the
-            // filtered messages vec, so +1 yields the user-visible label.
-            let rewound_turn = r.selected + 1;
-            match update_rewind::handle_rewind_confirm(&mut r) {
-                update_rewind::ConfirmOutcome::Dispatch {
-                    message_id,
-                    restore,
-                } => {
-                    // Keep the overlay open in `Confirming` phase while
-                    // the rewind/summarize is in flight. TS:
-                    // `MessageSelector.tsx:341-344`. `on_rewind_completed`
-                    // dismisses the overlay when the engine notifies completion.
-                    r.phase = crate::state::rewind::RewindPhase::Confirming;
-                    state.ui.restore_active_overlay(Overlay::Rewind(r));
+
+    if let Some(modal) = state.ui.take_modal() {
+        match modal {
+            ModalState::ModelPicker(m) => {
+                if let Some(entry) = filtered_models(&m).get(m.selected as usize).copied() {
+                    if let Some(summary) = unavailable_summary(&entry.unavailable_reasons) {
+                        state.ui.restore_modal(ModalState::ModelPicker(m));
+                        state.ui.add_toast(Toast::warning(format!(
+                            "{} {summary}",
+                            t!("dialog.model_picker_unavailable_label")
+                        )));
+                        return;
+                    }
                     let _ = command_tx
-                        .send(UserCommand::Rewind {
-                            message_id,
-                            restore_type: restore,
-                            rewound_turn,
+                        .send(UserCommand::SetModelRole {
+                            role: m.role,
+                            provider: entry.provider.clone(),
+                            model_id: entry.model_id.clone(),
+                            effort: m.effort,
+                        })
+                        .await;
+                    // Optimistic local update for Main — non-Main roles
+                    // have no live mirror in `SessionState`, so the engine
+                    // is the source of truth there.
+                    if matches!(m.role, coco_types::ModelRole::Main) {
+                        state.session.model = entry.model_id.clone();
+                    }
+                }
+            }
+            ModalState::Rewind(mut r) => {
+                // Capture the 1-based turn number for the protocol-level
+                // `rewind/completed` notification before handle_rewind_confirm
+                // mutates the state phase. `selected` is 0-based against the
+                // filtered messages vec, so +1 yields the user-visible label.
+                let rewound_turn = r.selected + 1;
+                match update_rewind::handle_rewind_confirm(&mut r) {
+                    update_rewind::ConfirmOutcome::Dispatch {
+                        message_id,
+                        restore,
+                    } => {
+                        // Keep the state open in `Confirming` phase while
+                        // the rewind/summarize is in flight. TS:
+                        // `MessageSelector.tsx:341-344`. `on_rewind_completed`
+                        // dismisses the state when the engine notifies completion.
+                        r.phase = crate::state::rewind::RewindPhase::Confirming;
+                        state.ui.restore_modal(ModalState::Rewind(r));
+                        let _ = command_tx
+                            .send(UserCommand::Rewind {
+                                message_id,
+                                restore_type: restore,
+                                rewound_turn,
+                            })
+                            .await;
+                    }
+                    update_rewind::ConfirmOutcome::Phase => {
+                        // Phase transition without dispatch — put state back.
+                        state.ui.restore_modal(ModalState::Rewind(r));
+                    }
+                    update_rewind::ConfirmOutcome::Dismiss => {
+                        // Synthetic `(current)` row or preselected-Nevermind:
+                        // close state (TS `MessageSelector.tsx:165` /
+                        // line 186).
+                        // (state already taken; do not put back.)
+                    }
+                }
+                return;
+            }
+            ModalState::SessionBrowser(s) => {
+                if let Some(session) = filtered_sessions(&s).get(s.selected as usize) {
+                    let _ = command_tx
+                        .send(UserCommand::SubmitInput {
+                            user_message_id: uuid::Uuid::new_v4().to_string(),
+                            content: format!("/resume {}", session.id),
+                            display_text: None,
+                            images: Vec::new(),
                         })
                         .await;
                 }
-                update_rewind::ConfirmOutcome::Phase => {
-                    // Phase transition without dispatch — put overlay back.
-                    state.ui.restore_active_overlay(Overlay::Rewind(r));
+            }
+            ModalState::Export(e) => {
+                if let Some(fmt) = e.formats.get(e.selected as usize) {
+                    let cmd = match fmt {
+                        ExportFormat::Markdown => "/export markdown",
+                        ExportFormat::Json => "/export json",
+                        ExportFormat::Text => "/export text",
+                    };
+                    let _ = command_tx
+                        .send(UserCommand::SubmitInput {
+                            user_message_id: uuid::Uuid::new_v4().to_string(),
+                            content: cmd.to_string(),
+                            display_text: None,
+                            images: Vec::new(),
+                        })
+                        .await;
                 }
-                update_rewind::ConfirmOutcome::Dismiss => {
-                    // Synthetic `(current)` row or preselected-Nevermind:
-                    // close overlay (TS `MessageSelector.tsx:165` /
-                    // line 186).
-                    // (overlay already taken; do not put back.)
+            }
+            ModalState::Settings(s) => {
+                // Only the Theme tab applies changes on Enter. Other tabs are
+                // read-only (About) or populated asynchronously (OutputStyle,
+                // Permissions). On Theme tab, theme rows persist to
+                // ~/.coco/theme.json and the syntax row persists to settings.json.
+                let mut s = s;
+                if let crate::widgets::settings_panel::SettingsTab::Theme = s.active_tab {
+                    if let Some(choice) = s.selected_theme_choice().cloned() {
+                        match state.ui.apply_theme_setting(choice.setting.clone()) {
+                            Ok(()) => {
+                                s.active_theme = choice.setting.clone();
+                                match crate::theme::save_theme_setting(&choice.setting) {
+                                    Ok(path) => {
+                                        state.ui.add_toast(crate::state::ui::Toast::success(
+                                            format!("Theme saved to {}", path.display()),
+                                        ))
+                                    }
+                                    Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(
+                                        format!("Failed to save theme: {err}"),
+                                    )),
+                                }
+                            }
+                            Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(
+                                format!("Failed to apply theme: {err}"),
+                            )),
+                        }
+                    } else if s.is_syntax_highlighting_selected() {
+                        toggle_syntax_highlighting(state);
+                        s.set_display_settings(state.ui.display_settings);
+                    }
                 }
+                // Keep settings open after selection — user may want to try
+                // themes successively.
+                state.ui.restore_modal(ModalState::Settings(s));
+                return;
             }
-            return;
-        }
-        Some(Overlay::SessionBrowser(s)) => {
-            if let Some(session) = filtered_sessions(&s).get(s.selected as usize) {
-                let _ = command_tx
-                    .send(UserCommand::SubmitInput {
-                        user_message_id: uuid::Uuid::new_v4().to_string(),
-                        content: format!("/resume {}", session.id),
-                        display_text: None,
-                        images: Vec::new(),
-                    })
-                    .await;
+            // /memory file picker: the TUI owns selection only. The CLI
+            // bridge owns filesystem/editor effects and reports the result
+            // through a TUI event so it can be rendered into transcript.
+            ModalState::MemoryDialog(m) => {
+                if let Some(entry) = m.entries.get(m.selected as usize).cloned() {
+                    if entry.row_kind.is_file() {
+                        let _ = command_tx
+                            .send(UserCommand::OpenMemoryFile { path: entry.path })
+                            .await;
+                    } else {
+                        state.ui.add_toast(Toast::warning(
+                            t!("toast.memory_row_not_editable").to_string(),
+                        ));
+                        state.ui.restore_modal(ModalState::MemoryDialog(m));
+                    }
+                }
+                // File rows dismiss after select; non-file rows are restored above.
+                return;
             }
-        }
-        Some(Overlay::Export(e)) => {
-            if let Some(fmt) = e.formats.get(e.selected as usize) {
-                let cmd = match fmt {
-                    ExportFormat::Markdown => "/export markdown",
-                    ExportFormat::Json => "/export json",
-                    ExportFormat::Text => "/export text",
-                };
-                let _ = command_tx
-                    .send(UserCommand::SubmitInput {
-                        user_message_id: uuid::Uuid::new_v4().to_string(),
-                        content: cmd.to_string(),
-                        display_text: None,
-                        images: Vec::new(),
-                    })
-                    .await;
+            ModalState::Transcript(t) => {
+                state.ui.restore_modal(ModalState::Transcript(t));
+                return;
             }
+            _ => {}
         }
-        Some(Overlay::Question(q)) => {
+        state.ui.finish_taken_modal();
+        return;
+    }
+
+    let Some(prompt) = state.ui.take_prompt() else {
+        return;
+    };
+    match prompt {
+        PanePromptState::Question(q) => {
             use crate::state::QuestionFocus;
             match q.focus {
                 QuestionFocus::Question(idx) => {
-                    // Intermediate question → advance to the next.
-                    // Last question → submit all answers via the
-                    // updated_input splice. TS `nextQuestion` /
-                    // `submitAnswers` at
-                    // `AskUserQuestionPermissionRequest.tsx:407,565`.
                     let last_idx = (q.questions.len() as i32).saturating_sub(1);
                     if idx < last_idx {
-                        // Re-set into the overlay (we own `q` here after
-                        // the take()).
                         let mut q = q;
                         q.focus = QuestionFocus::Question(idx + 1);
-                        state.ui.restore_active_overlay(Overlay::Question(q));
+                        state.ui.restore_prompt(PanePromptState::Question(q));
                         return;
                     }
                     let updated_input = build_answer_payload(&q);
@@ -845,10 +894,6 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                         .await;
                 }
                 QuestionFocus::ChatAboutThis => {
-                    // TS `handleRespondToClaude`: rejection with the
-                    // synthesized clarification prose. The model
-                    // receives this as the rejection feedback and
-                    // re-asks / clarifies.
                     let feedback = q.chat_about_this_feedback();
                     let _ = command_tx
                         .send(UserCommand::ApprovalResponse {
@@ -863,13 +908,8 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                         .await;
                 }
                 QuestionFocus::SkipInterview => {
-                    // Plan-mode-only. The renderer hides this footer
-                    // item when `!is_in_plan_mode`, but Tab navigation
-                    // also skips it — the focus enum should never carry
-                    // SkipInterview when plan-mode is off. Defensive
-                    // gate here in case future changes reach this arm
-                    // outside plan mode.
                     if !q.is_in_plan_mode {
+                        state.ui.restore_prompt(PanePromptState::Question(q));
                         return;
                     }
                     let feedback = q.skip_interview_feedback();
@@ -887,65 +927,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                 }
             }
         }
-        Some(Overlay::Settings(s)) => {
-            // Only the Theme tab applies changes on Enter. Other tabs are
-            // read-only (About) or populated asynchronously (OutputStyle,
-            // Permissions). On Theme tab, theme rows persist to
-            // ~/.coco/theme.json and the syntax row persists to settings.json.
-            let mut s = s;
-            if let crate::widgets::settings_panel::SettingsTab::Theme = s.active_tab {
-                if let Some(choice) = s.selected_theme_choice().cloned() {
-                    match state.ui.apply_theme_setting(choice.setting.clone()) {
-                        Ok(()) => {
-                            s.active_theme = choice.setting.clone();
-                            match crate::theme::save_theme_setting(&choice.setting) {
-                                Ok(path) => state.ui.add_toast(crate::state::ui::Toast::success(
-                                    format!("Theme saved to {}", path.display()),
-                                )),
-                                Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(
-                                    format!("Failed to save theme: {err}"),
-                                )),
-                            }
-                        }
-                        Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(format!(
-                            "Failed to apply theme: {err}"
-                        ))),
-                    }
-                } else if s.is_syntax_highlighting_selected() {
-                    toggle_syntax_highlighting(state);
-                    s.set_display_settings(state.ui.display_settings);
-                }
-            }
-            // Keep settings open after selection — user may want to try
-            // themes successively.
-            state.ui.restore_active_overlay(Overlay::Settings(s));
-            return;
-        }
-        // /memory file picker: the TUI owns selection only. The CLI
-        // bridge owns filesystem/editor effects and reports the result
-        // through a TUI event so it can be rendered into transcript.
-        Some(Overlay::MemoryDialog(m)) => {
-            if let Some(entry) = m.entries.get(m.selected as usize).cloned() {
-                if entry.row_kind.is_file() {
-                    let _ = command_tx
-                        .send(UserCommand::OpenMemoryFile { path: entry.path })
-                        .await;
-                } else {
-                    state.ui.add_toast(Toast::warning(
-                        t!("toast.memory_row_not_editable").to_string(),
-                    ));
-                    state.ui.restore_active_overlay(Overlay::MemoryDialog(m));
-                }
-            }
-            // File rows dismiss after select; non-file rows are restored above.
-            return;
-        }
-        // Plan-approval (team-lead side): Enter sends the response
-        // keyed to the currently-focused button (Approve / Deny). The
-        // engine translates this into a mailbox envelope back to the
-        // teammate. TS parity: `ExitPlanModeV2Tool.ts:137-141` request
-        // flow, leader-end resolution.
-        Some(Overlay::PlanApproval(p)) => {
+        PanePromptState::PlanApproval(p) => {
             let _ = command_tx
                 .send(UserCommand::PlanApprovalResponse {
                     request_id: p.request_id.clone(),
@@ -954,26 +936,15 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                     feedback: None,
                 })
                 .await;
-            state.ui.dismiss_overlay();
-            return;
         }
-        // PlanExit confirm delegates to the approval handler so Enter
-        // and Y take the same path (including the `next_mode` target).
-        Some(Overlay::PlanExit(p)) => {
+        PanePromptState::PlanExit(p) => {
             let target = p.next_mode.resolve().unwrap_or(PermissionMode::Default);
             state.session.permission_mode = target;
             let _ = command_tx
                 .send(UserCommand::SetPermissionMode { mode: target })
                 .await;
-            state.ui.dismiss_overlay();
-            return;
         }
-        // Permission overlay: Enter commits the currently-focused row,
-        // matching TS PermissionPrompt/codex-rs list-selection behavior.
-        // Tool-provided choices splice their `value` back into
-        // `updated_input`; classic requests use the focused
-        // approve / always-allow / deny action.
-        Some(Overlay::Permission(ref p)) => {
+        PanePromptState::Permission(ref p) => {
             let (approved, always_allow, updated_input, permission_updates) = if p.choices.is_some()
             {
                 let chosen_is_no = p
@@ -1010,55 +981,20 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                     content_blocks: None,
                 })
                 .await;
-            // Fall through to the queue-pop at end of fn.
         }
-        // All remaining overlays: confirm = dismiss
-        Some(
-            Overlay::Help
-            | Overlay::Error(_)
-            | Overlay::PlanEntry(_)
-            | Overlay::CostWarning(_)
-            | Overlay::Elicitation(_)
-            | Overlay::SandboxPermission(_)
-            | Overlay::GlobalSearch(_)
-            | Overlay::QuickOpen(_)
-            | Overlay::DiffView(_)
-            | Overlay::McpServerApproval(_)
-            | Overlay::WorktreeExit(_)
-            | Overlay::Doctor(_)
-            | Overlay::Bridge(_)
-            | Overlay::InvalidConfig(_)
-            | Overlay::IdleReturn(_)
-            | Overlay::Trust(_)
-            | Overlay::AutoModeOptIn(_)
-            | Overlay::BypassPermissions(_)
-            | Overlay::TaskDetail(_)
-            | Overlay::Feedback(_)
-            | Overlay::McpServerSelect(_)
-            | Overlay::ContextVisualization,
-        ) => {
-            // Dismiss on confirm (Enter/Esc)
-        }
-        Some(Overlay::Transcript(t)) => {
-            state.ui.restore_active_overlay(Overlay::Transcript(t));
-            return;
-        }
-        None => {}
+        _ => {}
     }
-    // Next queued overlay
-    if had_overlay {
-        state.ui.finish_taken_overlay();
-    }
+    state.ui.finish_taken_prompt();
 }
 
-/// Send `RequestDiffStats` for the selected message when a Rewind overlay
+/// Send `RequestDiffStats` for the selected message when a Rewind state
 /// is active — TS: MessageSelector useEffect recomputes on index change.
 /// Skips the synthetic current-prompt row (no snapshot exists for "now").
 pub(super) async fn request_diff_stats_if_rewind(
     state: &AppState,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
-    if let Some(Overlay::Rewind(r)) = state.ui.active_overlay()
+    if let Some(ModalState::Rewind(r)) = state.ui.modal.as_ref()
         && let Some(msg) = r.messages.get(r.selected as usize)
         && !msg.is_current_prompt
     {
@@ -1070,15 +1006,15 @@ pub(super) async fn request_diff_stats_if_rewind(
     }
 }
 
-/// Cycle the focus within the Question overlay (Tab / Shift+Tab).
+/// Cycle the focus within the Question state (Tab / Shift+Tab).
 ///
 /// Order (TS `AskUserQuestionPermissionRequest.tsx`): Q0 → Q1 → … →
 /// QN-1 → ChatAboutThis → SkipInterview (only when in plan mode) →
 /// Q0 (wrap). `delta` is +1 for Tab, -1 for Shift+Tab. No-op when no
-/// Question overlay is active.
+/// Question state is active.
 pub(super) fn question_cycle_focus(state: &mut AppState, delta: i32) {
     use crate::state::QuestionFocus;
-    let Some(Overlay::Question(q)) = state.ui.active_overlay_mut() else {
+    let Some(PanePromptState::Question(q)) = state.ui.interaction.active_prompt.as_mut() else {
         return;
     };
     let q_count = q.questions.len() as i32;
@@ -1113,7 +1049,7 @@ pub(super) fn question_cycle_focus(state: &mut AppState, delta: i32) {
 /// `claude-code/src/components/permissions/AskUserQuestionPermissionRequest/QuestionView.tsx`.
 pub(super) fn question_toggle_checked(state: &mut AppState) {
     use crate::state::QuestionFocus;
-    let Some(Overlay::Question(q)) = state.ui.active_overlay_mut() else {
+    let Some(PanePromptState::Question(q)) = state.ui.interaction.active_prompt.as_mut() else {
         return;
     };
     let QuestionFocus::Question(qi_idx) = q.focus else {
@@ -1140,7 +1076,7 @@ pub(super) fn question_toggle_checked(state: &mut AppState) {
 /// returns `false`.
 pub(super) fn question_notes_input(state: &mut AppState, c: char) -> bool {
     use crate::state::QuestionFocus;
-    let Some(Overlay::Question(q)) = state.ui.active_overlay_mut() else {
+    let Some(PanePromptState::Question(q)) = state.ui.interaction.active_prompt.as_mut() else {
         return false;
     };
     let QuestionFocus::Question(qi_idx) = q.focus else {
@@ -1160,7 +1096,7 @@ pub(super) fn question_notes_input(state: &mut AppState, c: char) -> bool {
 /// if the keystroke was consumed.
 pub(super) fn question_notes_backspace(state: &mut AppState) -> bool {
     use crate::state::QuestionFocus;
-    let Some(Overlay::Question(q)) = state.ui.active_overlay_mut() else {
+    let Some(PanePromptState::Question(q)) = state.ui.interaction.active_prompt.as_mut() else {
         return false;
     };
     let QuestionFocus::Question(qi_idx) = q.focus else {
@@ -1181,12 +1117,12 @@ pub(super) fn question_notes_backspace(state: &mut AppState) -> bool {
 /// a multi-choice permission selection. Carries every field the tool
 /// originally supplied so its `execute()` can read both the new
 /// `user_choice` field and the original args. Returns `None` when the
-/// overlay has no choices or the cursor is out of range — caller falls
+/// state has no choices or the cursor is out of range — caller falls
 /// back to `updated_input: None`.
 ///
 /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` — the
 /// option's `value` is merged into the original tool input on commit.
-fn build_choice_payload(p: &crate::state::PermissionOverlay) -> Option<serde_json::Value> {
+fn build_choice_payload(p: &crate::state::PermissionPromptState) -> Option<serde_json::Value> {
     let choice = p.choices.as_ref()?.get(p.selected_choice)?;
     let mut payload = p
         .original_input
@@ -1203,7 +1139,7 @@ fn build_choice_payload(p: &crate::state::PermissionOverlay) -> Option<serde_jso
 /// Build the `{...original_input, answers, annotations}` payload shipped
 /// via `UserCommand::ApprovalResponse.updated_input`. Mirrors TS
 /// `submitAnswers` at `AskUserQuestionPermissionRequest.tsx:407`.
-fn build_answer_payload(q: &crate::state::QuestionOverlay) -> serde_json::Value {
+fn build_answer_payload(q: &crate::state::QuestionPromptState) -> serde_json::Value {
     let mut answers = serde_json::Map::new();
     let mut annotations = serde_json::Map::new();
 
@@ -1266,10 +1202,10 @@ fn build_answer_payload(q: &crate::state::QuestionOverlay) -> serde_json::Value 
     serde_json::Value::Object(payload)
 }
 
-/// Rewind Esc: go back a phase before dismissing. Returns `true` if overlay
+/// Rewind Esc: go back a phase before dismissing. Returns `true` if state
 /// should be dismissed, `false` if a phase transition happened.
 pub(super) fn rewind_cancel(state: &mut AppState) -> bool {
-    if let Some(Overlay::Rewind(r)) = state.ui.active_overlay_mut()
+    if let Some(ModalState::Rewind(r)) = state.ui.modal.as_mut()
         && !update_rewind::handle_rewind_cancel(r)
     {
         return false;
@@ -1280,12 +1216,12 @@ pub(super) fn rewind_cancel(state: &mut AppState) -> bool {
 // ── filter helpers ──
 
 /// Cycle the effort axis of the model picker by `delta`, clamped to
-/// the focused entry's `supported_efforts`. No-op when the overlay
+/// the focused entry's `supported_efforts`. No-op when the state
 /// isn't a `ModelPicker` or when the focused model has no thinking
 /// capability — the renderer hides the footer in that case so this
 /// branch never triggers from the UI anyway.
 pub(super) fn cycle_model_effort(state: &mut AppState, delta: i32) {
-    let Some(Overlay::ModelPicker(m)) = state.ui.active_overlay_mut() else {
+    let Some(ModalState::ModelPicker(m)) = state.ui.modal.as_mut() else {
         return;
     };
     let filtered: Vec<&ModelEntry> = m
@@ -1319,7 +1255,7 @@ pub(super) fn cycle_model_effort(state: &mut AppState, delta: i32) {
     m.effort = Some(entry.supported_efforts[next_idx]);
 }
 
-fn filtered_models(m: &ModelPickerOverlay) -> Vec<&ModelEntry> {
+fn filtered_models(m: &ModelPickerState) -> Vec<&ModelEntry> {
     let filter_lower = m.filter.to_lowercase();
     m.entries
         .iter()
@@ -1360,15 +1296,7 @@ fn unavailable_reason_label(reason: &ProviderUnavailableReason) -> String {
     }
 }
 
-fn filtered_commands(cp: &CommandPaletteOverlay) -> Vec<&CommandOption> {
-    let filter_lower = cp.filter.to_lowercase();
-    cp.commands
-        .iter()
-        .filter(|cmd| filter_lower.is_empty() || cmd.name.to_lowercase().contains(&filter_lower))
-        .collect()
-}
-
-fn filtered_sessions(s: &SessionBrowserOverlay) -> Vec<&SessionOption> {
+fn filtered_sessions(s: &SessionBrowserState) -> Vec<&SessionOption> {
     let filter_lower = s.filter.to_lowercase();
     s.sessions
         .iter()
@@ -1440,5 +1368,5 @@ fn settings_item_count(s: &crate::widgets::settings_panel::SettingsPanelState) -
 }
 
 #[cfg(test)]
-#[path = "overlay.test.rs"]
+#[path = "interaction.test.rs"]
 mod tests;

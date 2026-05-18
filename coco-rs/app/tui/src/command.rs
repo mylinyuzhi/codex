@@ -101,7 +101,7 @@ pub enum UserCommand {
     /// bridge resolves the concrete plan-file path from the current
     /// session id and runtime config before launching the editor.
     OpenPlanEditor,
-    /// The TUI has left raw mode and any active overlay alt-screen, so
+    /// The TUI has left raw mode and any active state alt-screen, so
     /// the CLI runner may now start the editor process for `request_id`.
     ExternalEditorTerminalReady {
         /// Opaque id from `TuiOnlyEvent::ExternalEditorPrepare`.
@@ -188,6 +188,12 @@ pub enum UserCommand {
     },
     /// Execute a skill by name.
     ExecuteSkill { name: String, args: Option<String> },
+    /// Execute a registered slash command without echoing the raw slash
+    /// invocation into chat history.
+    ExecuteSlashCommand {
+        name: crate::state::SlashCommandName,
+        args: String,
+    },
     /// Queue a command for mid-turn injection.
     ///
     /// Sent by [`crate::update::QueueInput`] when the user presses
@@ -226,11 +232,6 @@ pub enum UserCommand {
     /// Request diff stats for a message (async, response via ServerNotification).
     /// TS: fileHistoryGetDiffStats() called from MessageSelector useEffect.
     RequestDiffStats { message_id: String },
-    /// Clear conversation state — TUI has already wiped its local
-    /// transcript; this tells the engine to reset its matching
-    /// in-process state (plan-mode flags, attachment counters, slug
-    /// cache) so the next turn starts clean. TS: `clearConversation()`.
-    ClearConversation { scope: ClearScope },
     /// Team lead responding to a teammate's plan-approval request.
     /// The engine routes this to the teammate's mailbox as a
     /// `plan_approval_response` envelope. TS: the response side of
@@ -238,7 +239,7 @@ pub enum UserCommand {
     PlanApprovalResponse {
         request_id: String,
         /// Teammate agent name to address the response envelope to —
-        /// carried in from `PlanApprovalOverlay.from` so we don't have
+        /// carried in from `PlanApprovalPromptState.from` so we don't have
         /// to re-scan mailbox state to correlate the request_id.
         teammate_agent: String,
         approved: bool,

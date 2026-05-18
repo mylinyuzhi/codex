@@ -1,51 +1,51 @@
-//! Filterable-list picker overlay content builders.
+//! Filterable-list picker state content builders.
 
 use ratatui::prelude::*;
 
 use crate::presentation::model_picker;
 use crate::presentation::picker;
 use crate::presentation::styles::UiStyles;
-use crate::state::ExportOverlay;
-use crate::state::McpServerSelectOverlay;
-use crate::state::MemoryDialogOverlay;
-use crate::state::ModelPickerOverlay;
-use crate::state::QuickOpenOverlay;
-use crate::state::SessionBrowserOverlay;
+use crate::state::ExportState;
+use crate::state::McpServerSelectState;
+use crate::state::MemoryDialogState;
+use crate::state::ModelPickerState;
+use crate::state::QuickOpenState;
+use crate::state::SessionBrowserState;
 
 pub(super) fn model_picker_content(
-    m: &ModelPickerOverlay,
+    m: &ModelPickerState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     model_picker::content(m, styles)
 }
 
 pub(super) fn session_browser_content(
-    s: &SessionBrowserOverlay,
+    s: &SessionBrowserState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::session_browser_content(s, styles)
 }
 
 pub(super) fn quick_open_content(
-    q: &QuickOpenOverlay,
+    q: &QuickOpenState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::quick_open_content(q, styles)
 }
 
-pub(super) fn export_content(e: &ExportOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
+pub(super) fn export_content(e: &ExportState, styles: UiStyles<'_>) -> (String, String, Color) {
     picker::export_content(e, styles)
 }
 
 pub(super) fn memory_dialog_content(
-    m: &MemoryDialogOverlay,
+    m: &MemoryDialogState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::memory_dialog_content(m, styles)
 }
 
 pub(super) fn mcp_server_select_content(
-    ms: &McpServerSelectOverlay,
+    ms: &McpServerSelectState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::mcp_server_select_content(ms, styles)

@@ -14,7 +14,8 @@ use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::format_duration_seconds;
 use crate::presentation::thinking::render_thinking_block;
 use crate::state::session::MessageContent;
-use crate::state::session::ToolUseStatus;
+use crate::tool_display::ToolNameTone;
+use crate::tool_display::tool_name_tone;
 
 /// Turn-boundary glyph at the start of each assistant text response.
 /// TS `BLACK_CIRCLE` from `constants/figures.ts` picks `⏺` on macOS for
@@ -115,22 +116,8 @@ pub(super) fn try_render<'a>(
             tool_name,
             call_id,
             input_preview,
-            status,
+            status: _,
         } => {
-            // TS parity: `AssistantToolUseMessage.tsx` + `ToolUseLoader`.
-            // The dot is the same glyph (`●`) across all states; only
-            // the colour varies. This is intentional — different
-            // glyphs for queued/running/done created visual churn
-            // when a long turn cycled through them, and the colour
-            // alone is enough to distinguish status at a glance. The
-            // `bold` tool name plus the inline preview match the TS
-            // layout `<dot> <bold name>(<preview>)`.
-            let color = match status {
-                ToolUseStatus::Queued => w.styles.dim(),
-                ToolUseStatus::Running => w.styles.tool_running(),
-                ToolUseStatus::Completed => w.styles.tool_completed(),
-                ToolUseStatus::Failed => w.styles.tool_error(),
-            };
             let preview = if input_preview.len() > constants::TOOL_DESCRIPTION_MAX_CHARS as usize {
                 format!(
                     "{}…",
@@ -138,11 +125,6 @@ pub(super) fn try_render<'a>(
                 )
             } else {
                 input_preview.clone()
-            };
-            let label = if preview.is_empty() {
-                format!("🔨 {tool_name}")
-            } else {
-                format!("🔨 {tool_name}({preview})")
             };
             // Elapsed time badge: `(250ms)` / `(1.2s)` / `(3m 4s)`
             // tail-aligned after the preview. Sourced from the
@@ -155,11 +137,17 @@ pub(super) fn try_render<'a>(
                 .find(|t| t.call_id == *call_id)
                 .map(|t| format!(" ({})", format_duration_seconds(t.elapsed())))
                 .unwrap_or_default();
-            lines.push(Line::from(vec![
-                Span::raw("• ").fg(color),
-                Span::raw(label).fg(w.styles.text()),
-                Span::raw(elapsed_badge).fg(w.styles.dim()).dim(),
-            ]));
+            let mut spans = vec![
+                Span::raw("🔨 ").fg(w.styles.dim()),
+                Span::raw(tool_name.clone())
+                    .fg(tool_tone_color(tool_name_tone(tool_name), w.styles))
+                    .bold(),
+            ];
+            if !preview.is_empty() {
+                spans.push(Span::raw(format!("({preview})")).fg(w.styles.text()));
+            }
+            spans.push(Span::raw(elapsed_badge).fg(w.styles.dim()).dim());
+            lines.push(Line::from(spans));
             Some(())
         }
         MessageContent::Advisor {
@@ -182,5 +170,19 @@ pub(super) fn try_render<'a>(
             Some(())
         }
         _ => None,
+    }
+}
+
+fn tool_tone_color(
+    tone: ToolNameTone,
+    styles: crate::presentation::styles::UiStyles<'_>,
+) -> ratatui::style::Color {
+    match tone {
+        ToolNameTone::ReadOnly => styles.success(),
+        ToolNameTone::Shell => styles.primary(),
+        ToolNameTone::Write => styles.warning(),
+        ToolNameTone::Agent => styles.accent(),
+        ToolNameTone::Plan => styles.plan(),
+        ToolNameTone::Utility => styles.secondary(),
     }
 }

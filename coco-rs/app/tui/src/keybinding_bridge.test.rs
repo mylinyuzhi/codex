@@ -11,7 +11,7 @@ use crate::keybinding_bridge::KeybindingContext;
 use crate::keybinding_bridge::active_context;
 use crate::keybinding_bridge::map_key;
 use crate::state::AppState;
-use crate::state::Overlay;
+use crate::state::PanePromptState;
 
 fn press(code: KeyCode) -> KeyEvent {
     KeyEvent {
@@ -33,8 +33,8 @@ fn ctrl(code: KeyCode) -> KeyEvent {
 
 fn model_picker_state() -> AppState {
     let mut state = AppState::new();
-    state.ui.set_overlay(crate::state::Overlay::ModelPicker(
-        crate::state::ModelPickerOverlay {
+    state.ui.show_modal(crate::state::ModalState::ModelPicker(
+        crate::state::ModelPickerState {
             role: coco_types::ModelRole::Main,
             entries: vec![crate::state::ModelEntry {
                 provider: "openai".into(),
@@ -55,6 +55,28 @@ fn model_picker_state() -> AppState {
     state
 }
 
+fn install_permission_prompt(state: &mut AppState) {
+    state.ui.push_prompt(PanePromptState::Permission(
+        crate::state::PermissionPromptState {
+            request_id: "r1".into(),
+            tool_name: "Bash".into(),
+            description: "run".into(),
+            detail: crate::state::PermissionDetail::Generic {
+                input_preview: "ls".into(),
+            },
+            risk_level: None,
+            show_always_allow: true,
+            classifier_checking: false,
+            classifier_auto_approved: None,
+            choices: None,
+            selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
+            original_input: None,
+            permission_suggestions: vec![],
+        },
+    ));
+}
+
 #[test]
 fn test_default_context_is_chat() {
     let state = AppState::new();
@@ -62,26 +84,26 @@ fn test_default_context_is_chat() {
 }
 
 #[test]
-fn test_help_overlay_context() {
+fn test_help_modal_context() {
     let mut state = AppState::new();
-    state.ui.set_overlay(crate::state::Overlay::Help);
+    state.ui.show_modal(crate::state::ModalState::Help);
     assert_eq!(active_context(&state), KeybindingContext::Scrollable);
 }
 
 #[test]
-fn test_transcript_overlay_context() {
+fn test_transcript_modal_context() {
     let mut state = AppState::new();
-    state.ui.set_overlay(crate::state::Overlay::Transcript(
-        crate::state::transcript::TranscriptOverlay::new(),
+    state.ui.show_modal(crate::state::ModalState::Transcript(
+        crate::state::transcript::TranscriptState::new(),
     ));
     assert_eq!(active_context(&state), KeybindingContext::Transcript);
 }
 
 #[test]
-fn test_transcript_overlay_uses_pager_controls() {
+fn test_transcript_modal_uses_pager_controls() {
     let mut state = AppState::new();
-    state.ui.set_overlay(crate::state::Overlay::Transcript(
-        crate::state::transcript::TranscriptOverlay::new(),
+    state.ui.show_modal(crate::state::ModalState::Transcript(
+        crate::state::transcript::TranscriptState::new(),
     ));
 
     assert!(matches!(
@@ -120,27 +142,9 @@ fn test_transcript_overlay_uses_pager_controls() {
 }
 
 #[test]
-fn test_permission_overlay_context() {
+fn test_permission_prompt_context() {
     let mut state = AppState::new();
-    state.ui.set_overlay(crate::state::Overlay::Permission(
-        crate::state::PermissionOverlay {
-            request_id: "r1".into(),
-            tool_name: "Bash".into(),
-            description: "run".into(),
-            detail: crate::state::PermissionDetail::Generic {
-                input_preview: "ls".into(),
-            },
-            risk_level: None,
-            show_always_allow: true,
-            classifier_checking: false,
-            classifier_auto_approved: None,
-            choices: None,
-            selected_choice: 0,
-            display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
-            original_input: None,
-            permission_suggestions: vec![],
-        },
-    ));
+    install_permission_prompt(&mut state);
     assert_eq!(active_context(&state), KeybindingContext::Confirmation);
 }
 
@@ -153,7 +157,7 @@ fn test_model_picker_context() {
 #[test]
 fn test_settings_theme_tab_uses_theme_picker_context() {
     let mut state = AppState::new();
-    state.ui.set_overlay(Overlay::Settings(
+    state.ui.show_modal(crate::state::ModalState::Settings(
         crate::widgets::settings_panel::SettingsPanelState::new(
             &state.ui.theme_state,
             state.ui.display_settings,
@@ -165,7 +169,7 @@ fn test_settings_theme_tab_uses_theme_picker_context() {
 #[test]
 fn test_theme_picker_ctrl_t_toggles_syntax_highlighting() {
     let mut state = AppState::new();
-    state.ui.set_overlay(Overlay::Settings(
+    state.ui.show_modal(crate::state::ModalState::Settings(
         crate::widgets::settings_panel::SettingsPanelState::new(
             &state.ui.theme_state,
             state.ui.display_settings,
@@ -251,53 +255,17 @@ fn test_esc_cancels() {
 }
 
 #[test]
-fn test_overlay_y_approves() {
+fn test_prompt_y_approves() {
     let mut state = AppState::new();
-    state.ui.set_overlay(crate::state::Overlay::Permission(
-        crate::state::PermissionOverlay {
-            request_id: "r1".into(),
-            tool_name: "Bash".into(),
-            description: "run".into(),
-            detail: crate::state::PermissionDetail::Generic {
-                input_preview: "ls".into(),
-            },
-            risk_level: None,
-            show_always_allow: true,
-            classifier_checking: false,
-            classifier_auto_approved: None,
-            choices: None,
-            selected_choice: 0,
-            display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
-            original_input: None,
-            permission_suggestions: vec![],
-        },
-    ));
+    install_permission_prompt(&mut state);
     let cmd = map_key(&state, press(KeyCode::Char('y')));
     assert!(matches!(cmd, Some(TuiCommand::Approve)));
 }
 
 #[test]
-fn test_overlay_n_denies() {
+fn test_prompt_n_denies() {
     let mut state = AppState::new();
-    state.ui.set_overlay(crate::state::Overlay::Permission(
-        crate::state::PermissionOverlay {
-            request_id: "r1".into(),
-            tool_name: "Bash".into(),
-            description: "run".into(),
-            detail: crate::state::PermissionDetail::Generic {
-                input_preview: "ls".into(),
-            },
-            risk_level: None,
-            show_always_allow: true,
-            classifier_checking: false,
-            classifier_auto_approved: None,
-            choices: None,
-            selected_choice: 0,
-            display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
-            original_input: None,
-            permission_suggestions: vec![],
-        },
-    ));
+    install_permission_prompt(&mut state);
     let cmd = map_key(&state, press(KeyCode::Char('n')));
     assert!(matches!(cmd, Some(TuiCommand::Deny)));
 }
@@ -389,10 +357,10 @@ fn test_autocomplete_context_when_suggestions_active() {
     assert_eq!(active_context(&state), KeybindingContext::Autocomplete);
 
     let tab = map_key(&state, press(KeyCode::Tab));
-    assert!(matches!(tab, Some(TuiCommand::OverlayConfirm)));
+    assert!(matches!(tab, Some(TuiCommand::SurfaceConfirm)));
 
     let up = map_key(&state, press(KeyCode::Up));
-    assert!(matches!(up, Some(TuiCommand::OverlayPrev)));
+    assert!(matches!(up, Some(TuiCommand::SurfacePrev)));
 
     // Typing a character should fall through to input editing, not be
     // swallowed by the autocomplete context.

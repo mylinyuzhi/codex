@@ -1,13 +1,13 @@
-//! AskUserQuestion overlay content builder.
+//! AskUserQuestion state content builder.
 
 use ratatui::prelude::Color;
 
 use crate::presentation::request;
 use crate::presentation::styles::UiStyles;
-use crate::state::QuestionOverlay;
+use crate::state::QuestionPromptState;
 
 pub(super) fn question_content(
-    q: &QuestionOverlay,
+    q: &QuestionPromptState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     request::question_content(q, styles)

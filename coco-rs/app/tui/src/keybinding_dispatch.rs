@@ -15,6 +15,7 @@ use coco_keybindings::KeybindingAction;
 
 use crate::events::TuiCommand;
 use crate::state::AppState;
+use crate::state::SlashCommandName;
 
 /// Map a resolved [`KeybindingAction`] to the TUI-side command.
 ///
@@ -44,8 +45,8 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // `update::handle_command` does the cycle math.
         AppToggleTodos => TuiCommand::ToggleExpandedTasksView,
         // TS `app:toggleTranscript` (Ctrl+O) — open the verbose,
-        // scrollable transcript overlay. Pressing it again from inside
-        // the overlay closes it (handled in the overlay branch below).
+        // scrollable transcript state. Pressing it again from inside
+        // the state closes it (handled in the state branch below).
         AppToggleTranscript => TuiCommand::ToggleTranscript,
         // TS `app:toggleTeammatePreview` (Ctrl+Shift+O) — toggle
         // teammate spinner-line message previews on/off.
@@ -67,7 +68,7 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // ── Chat input ──────────────────────────────────────────────
         ChatCancel => {
             // Esc → Cancel always; the *second* Esc within
-            // `DOUBLE_PRESS_TIMEOUT` (and only with no overlay + empty
+            // `DOUBLE_PRESS_TIMEOUT` (and only with no state + empty
             // input + history) opens the rewind picker. The poll is
             // here because dispatch reads + mutates the tracker
             // atomically — putting the arm in `app.rs` ahead of
@@ -117,24 +118,24 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         ChatUndo => return None,
         // `chat:messageActions` is the entry into the message-actions
         // cursor (Shift+↑ in TS). Gated on TS `MESSAGE_ACTIONS` feature;
-        // coco-rs doesn't ship that overlay so we silently no-op.
+        // coco-rs doesn't ship that state so we silently no-op.
         ChatMessageActions => return None,
 
         // ── Autocomplete ────────────────────────────────────────────
-        AutocompleteAccept => TuiCommand::OverlayConfirm,
+        AutocompleteAccept => TuiCommand::SurfaceConfirm,
         AutocompleteDismiss => TuiCommand::Cancel,
-        AutocompletePrevious => TuiCommand::OverlayPrev,
-        AutocompleteNext => TuiCommand::OverlayNext,
+        AutocompletePrevious => TuiCommand::SurfacePrev,
+        AutocompleteNext => TuiCommand::SurfaceNext,
 
         // ── Confirmation ────────────────────────────────────────────
         ConfirmYes => TuiCommand::Approve,
         ConfirmNo => TuiCommand::Deny,
-        ConfirmPrevious => TuiCommand::OverlayPrev,
-        ConfirmNext => TuiCommand::OverlayNext,
-        ConfirmNextField => TuiCommand::OverlayNext,
-        ConfirmPreviousField => TuiCommand::OverlayPrev,
+        ConfirmPrevious => TuiCommand::SurfacePrev,
+        ConfirmNext => TuiCommand::SurfaceNext,
+        ConfirmNextField => TuiCommand::SurfaceNext,
+        ConfirmPreviousField => TuiCommand::SurfacePrev,
         ConfirmCycleMode => TuiCommand::CyclePermissionMode,
-        ConfirmToggle => TuiCommand::OverlayConfirm,
+        ConfirmToggle => TuiCommand::SurfaceConfirm,
         ConfirmToggleExplanation => TuiCommand::ToggleSystemReminders,
         // TS dev-only debug toggle (`PermissionToggleDebug`); coco-rs
         // has no equivalent debug surface.
@@ -151,8 +152,8 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         HelpDismiss => TuiCommand::Cancel,
 
         // ── HistorySearch ───────────────────────────────────────────
-        HistorySearchNext => TuiCommand::OverlayNext,
-        HistorySearchAccept | HistorySearchExecute => TuiCommand::OverlayConfirm,
+        HistorySearchNext => TuiCommand::SurfaceNext,
+        HistorySearchAccept | HistorySearchExecute => TuiCommand::SurfaceConfirm,
         HistorySearchCancel => TuiCommand::Cancel,
 
         // ── Task ────────────────────────────────────────────────────
@@ -162,66 +163,66 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         ThemeToggleSyntaxHighlighting => TuiCommand::ToggleSyntaxHighlighting,
 
         // ── Attachments ─────────────────────────────────────────────
-        AttachmentsNext => TuiCommand::OverlayNext,
-        AttachmentsPrevious => TuiCommand::OverlayPrev,
+        AttachmentsNext => TuiCommand::SurfaceNext,
+        AttachmentsPrevious => TuiCommand::SurfacePrev,
         AttachmentsExit => TuiCommand::Cancel,
         // No remove-attachment surface yet; user-bound keys silently
         // no-op until the attachments panel lands.
         AttachmentsRemove => return None,
 
         // ── Footer ──────────────────────────────────────────────────
-        FooterUp => TuiCommand::OverlayPrev,
-        FooterDown => TuiCommand::OverlayNext,
-        FooterNext => TuiCommand::OverlayNext,
-        FooterPrevious => TuiCommand::OverlayPrev,
-        FooterOpenSelected => TuiCommand::OverlayConfirm,
+        FooterUp => TuiCommand::SurfacePrev,
+        FooterDown => TuiCommand::SurfaceNext,
+        FooterNext => TuiCommand::SurfaceNext,
+        FooterPrevious => TuiCommand::SurfacePrev,
+        FooterOpenSelected => TuiCommand::SurfaceConfirm,
         FooterClearSelection | FooterClose => TuiCommand::Cancel,
 
         // ── MessageSelector ─────────────────────────────────────────
-        MessageSelectorUp => TuiCommand::OverlayPrev,
-        MessageSelectorDown => TuiCommand::OverlayNext,
-        MessageSelectorTop => TuiCommand::OverlayJumpStart,
-        MessageSelectorBottom => TuiCommand::OverlayJumpEnd,
-        MessageSelectorSelect => TuiCommand::OverlayConfirm,
+        MessageSelectorUp => TuiCommand::SurfacePrev,
+        MessageSelectorDown => TuiCommand::SurfaceNext,
+        MessageSelectorTop => TuiCommand::SurfaceJumpStart,
+        MessageSelectorBottom => TuiCommand::SurfaceJumpEnd,
+        MessageSelectorSelect => TuiCommand::SurfaceConfirm,
 
         // ── Diff ────────────────────────────────────────────────────
         DiffDismiss => TuiCommand::Cancel,
-        DiffPreviousFile => TuiCommand::OverlayPrev,
-        DiffNextFile => TuiCommand::OverlayNext,
-        DiffPreviousSource => TuiCommand::OverlayPrev,
-        DiffNextSource => TuiCommand::OverlayNext,
+        DiffPreviousFile => TuiCommand::SurfacePrev,
+        DiffNextFile => TuiCommand::SurfaceNext,
+        DiffPreviousSource => TuiCommand::SurfacePrev,
+        DiffNextSource => TuiCommand::SurfaceNext,
         DiffBack => TuiCommand::Cancel,
-        DiffViewDetails => TuiCommand::OverlayConfirm,
+        DiffViewDetails => TuiCommand::SurfaceConfirm,
 
         // ── ModelPicker ─────────────────────────────────────────────
         // Left/Right cycle the *effort axis* — separate from Up/Down
         // (`SelectPrevious` / `SelectNext`) which move between models.
-        // Previously both pairs routed to OverlayPrev/OverlayNext, so
+        // Previously both pairs routed to SurfacePrev/SurfaceNext, so
         // ←/→ silently scrolled the list (latent TS-parity gap).
         ModelPickerDecreaseEffort => TuiCommand::ModelPickerCycleEffort(-1),
         ModelPickerIncreaseEffort => TuiCommand::ModelPickerCycleEffort(1),
 
         // ── Select ──────────────────────────────────────────────────
-        SelectNext => TuiCommand::OverlayNext,
-        SelectPrevious => TuiCommand::OverlayPrev,
-        SelectAccept => TuiCommand::OverlayConfirm,
+        SelectNext => TuiCommand::SurfaceNext,
+        SelectPrevious => TuiCommand::SurfacePrev,
+        SelectAccept => TuiCommand::SurfaceConfirm,
         SelectCancel => TuiCommand::Cancel,
 
         // ── Plugin ──────────────────────────────────────────────────
-        // Plugin overlay actions (`space` toggle / `i` install) bound
+        // Plugin state actions (`space` toggle / `i` install) bound
         // in the `Plugin` context. coco-rs doesn't open a Plugin
-        // overlay so the context never activates from defaults; if a
+        // state so the context never activates from defaults; if a
         // user re-binds one of these to a global context we silently
-        // no-op until the overlay lands.
+        // no-op until the state lands.
         PluginToggle | PluginInstall => return None,
 
         // ── Settings ────────────────────────────────────────────────
-        SettingsClose => TuiCommand::OverlayConfirm,
-        // SettingsSearch / SettingsRetry are inside-overlay state
+        SettingsClose => TuiCommand::SurfaceConfirm,
+        // SettingsSearch / SettingsRetry are inside-state state
         // machine actions (not application-level TuiCommands). The
-        // Settings overlay reads them directly from the resolver
+        // Settings state reads them directly from the resolver
         // when it owns key dispatch — they intentionally route through
-        // None here. Once the overlay state machine ports them,
+        // None here. Once the state state machine ports them,
         // promote to actual TuiCommand variants.
         SettingsSearch | SettingsRetry => return None,
 
@@ -239,9 +240,9 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         ScrollLineDown if transcript_active(state) => TuiCommand::TranscriptScrollLines(1),
         ScrollLineDown => TuiCommand::ScrollDown,
         ScrollTop if transcript_active(state) => TuiCommand::TranscriptJumpStart,
-        ScrollTop => TuiCommand::OverlayJumpStart,
+        ScrollTop => TuiCommand::SurfaceJumpStart,
         ScrollBottom if transcript_active(state) => TuiCommand::TranscriptJumpEnd,
-        ScrollBottom => TuiCommand::OverlayJumpEnd,
+        ScrollBottom => TuiCommand::SurfaceJumpEnd,
 
         // ── Selection ───────────────────────────────────────────────
         SelectionCopy => TuiCommand::CopyLastMessage,
@@ -250,7 +251,9 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // `command:foo` user binding from `keybindings.json` →
         // synthesize a `/foo` submit. The agent driver's existing
         // slash-command runner handles the dispatch.
-        Command(name) => TuiCommand::ExecuteSlashCommand(name.clone()),
+        Command(name) => SlashCommandName::new(name.clone())
+            .map(TuiCommand::ExecuteSlashCommand)
+            .unwrap_or(TuiCommand::Noop),
 
         // ── MessageActions:* (11 variants) ───────────────────────────
         // Internal context; the validator rejects user bindings into it,
@@ -258,7 +261,7 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // ported, so no defaults emit them. Match arm exists purely so
         // the match is exhaustive without a wildcard. Returning None
         // matches TS, where the cursor handlers are only registered
-        // while the message-actions overlay is mounted.
+        // while the message-actions state is mounted.
         MessageActionsPrev
         | MessageActionsNext
         | MessageActionsTop
@@ -275,8 +278,8 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
 
 fn transcript_active(state: &AppState) -> bool {
     matches!(
-        state.ui.active_overlay(),
-        Some(crate::state::Overlay::Transcript(_))
+        state.ui.modal,
+        Some(crate::state::ModalState::Transcript(_))
     )
 }
 

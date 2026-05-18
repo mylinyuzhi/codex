@@ -3,6 +3,9 @@
 //! Post WS-2: tests use CoreEvent directly instead of the deleted
 //! TuiNotification bridge type.
 
+use std::time::Duration;
+use std::time::Instant;
+
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
@@ -129,7 +132,7 @@ fn test_tool_use_completed_uses_event_name_when_execution_missing() {
 }
 
 #[test]
-fn test_tool_use_queued_stores_bounded_input_preview() {
+fn test_tool_use_queued_formats_write_preview_without_content_json() {
     let mut state = AppState::new();
     let large_text = "x".repeat(2_000);
 
@@ -144,8 +147,30 @@ fn test_tool_use_queued_stores_bounded_input_preview() {
 
     assert!(matches!(
         &state.session.messages[0].content,
+        MessageContent::ToolUse { input_preview, .. } if input_preview == "/tmp/out.txt"
+    ));
+}
+
+#[test]
+fn test_tool_use_queued_formats_glob_preview_without_json() {
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
+            call_id: "c1".into(),
+            name: coco_types::ToolName::Glob.as_str().into(),
+            input: serde_json::json!({
+                "path": "/Users/linyuzhi/codespace/myagent/codex",
+                "pattern": "**/README.md"
+            }),
+        }),
+    );
+
+    assert!(matches!(
+        &state.session.messages[0].content,
         MessageContent::ToolUse { input_preview, .. }
-            if input_preview.chars().count() <= 512 && input_preview.ends_with("...")
+            if input_preview == "**/README.md in /Users/linyuzhi/codespace/myagent/codex"
     ));
 }
 
@@ -391,8 +416,9 @@ fn test_subagent_lifecycle() {
 }
 
 #[test]
-fn test_permission_request_shows_overlay() {
+fn test_permission_request_shows_prompt() {
     let mut state = AppState::new();
+    let ready_at = Instant::now() + Duration::from_secs(2);
 
     handle_core_event(
         &mut state,
@@ -407,22 +433,26 @@ fn test_permission_request_shows_overlay() {
             original_input: None,
         }),
     );
-    assert!(state.has_overlay());
+    assert!(!state.has_active_surface());
+    assert!(state.ui.flush_delayed_permissions(ready_at));
+
+    assert!(state.has_active_surface());
     assert!(matches!(
-        state.ui.active_overlay(),
-        Some(crate::state::Overlay::Permission(_))
+        state.ui.interaction.active_prompt,
+        Some(crate::state::PanePromptState::Permission(_))
     ));
-    match state.ui.active_overlay() {
-        Some(crate::state::Overlay::Permission(overlay)) => {
-            assert!(overlay.show_always_allow);
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(state)) => {
+            assert!(state.show_always_allow);
         }
-        other => panic!("expected permission overlay, got {other:?}"),
+        other => panic!("expected permission state, got {other:?}"),
     }
 }
 
 #[test]
 fn test_permission_request_hides_always_allow_when_disabled() {
     let mut state = AppState::new();
+    let ready_at = Instant::now() + Duration::from_secs(2);
 
     handle_core_event(
         &mut state,
@@ -437,12 +467,13 @@ fn test_permission_request_hides_always_allow_when_disabled() {
             original_input: None,
         }),
     );
+    assert!(state.ui.flush_delayed_permissions(ready_at));
 
-    match state.ui.active_overlay() {
-        Some(crate::state::Overlay::Permission(overlay)) => {
-            assert!(!overlay.show_always_allow);
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(state)) => {
+            assert!(!state.show_always_allow);
         }
-        other => panic!("expected permission overlay, got {other:?}"),
+        other => panic!("expected permission state, got {other:?}"),
     }
 }
 

@@ -9,14 +9,14 @@ use ratatui::prelude::*;
 use super::layout;
 use super::styles::UiStyles;
 use crate::i18n::t;
-use crate::state::ExportOverlay;
-use crate::state::GlobalSearchOverlay;
-use crate::state::McpServerSelectOverlay;
-use crate::state::MemoryDialogOverlay;
+use crate::state::ExportState;
+use crate::state::GlobalSearchState;
+use crate::state::McpServerSelectState;
 use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
-use crate::state::QuickOpenOverlay;
-use crate::state::SessionBrowserOverlay;
+use crate::state::MemoryDialogState;
+use crate::state::QuickOpenState;
+use crate::state::SessionBrowserState;
 
 #[derive(Debug)]
 #[cfg(test)]
@@ -135,7 +135,7 @@ pub(crate) fn collapse_hints(hints: &str, width: usize) -> String {
 }
 
 pub(crate) fn session_browser_content(
-    s: &SessionBrowserOverlay,
+    s: &SessionBrowserState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let filter_lower = s.filter.to_lowercase();
@@ -179,7 +179,7 @@ pub(crate) fn session_browser_content(
 }
 
 pub(crate) fn quick_open_content(
-    q: &QuickOpenOverlay,
+    q: &QuickOpenState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let items: Vec<String> = q
@@ -207,7 +207,7 @@ pub(crate) fn quick_open_content(
 }
 
 pub(crate) fn global_search_content(
-    g: &GlobalSearchOverlay,
+    g: &GlobalSearchState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let query_line = if g.query.is_empty() {
@@ -246,7 +246,7 @@ pub(crate) fn global_search_content(
     )
 }
 
-pub(crate) fn export_content(e: &ExportOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
+pub(crate) fn export_content(e: &ExportState, styles: UiStyles<'_>) -> (String, String, Color) {
     let items: Vec<String> = e
         .formats
         .iter()
@@ -267,7 +267,7 @@ pub(crate) fn export_content(e: &ExportOverlay, styles: UiStyles<'_>) -> (String
 }
 
 pub(crate) fn memory_dialog_content(
-    m: &MemoryDialogOverlay,
+    m: &MemoryDialogState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let items: Vec<String> = m
@@ -304,7 +304,7 @@ pub(crate) fn memory_dialog_content(
 }
 
 pub(crate) fn mcp_server_select_content(
-    ms: &McpServerSelectOverlay,
+    ms: &McpServerSelectState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let items: Vec<String> = ms

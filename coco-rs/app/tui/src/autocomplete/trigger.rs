@@ -105,6 +105,7 @@ pub fn refresh_suggestions(state: &mut AppState) {
     let cursor = state.ui.input.textarea.cursor();
     let Some(trigger) = detect(&text, cursor) else {
         state.ui.active_suggestions = None;
+        state.ui.sync_popup_from_active_suggestions();
         return;
     };
 
@@ -144,6 +145,7 @@ pub fn refresh_suggestions(state: &mut AppState) {
         query: trigger.query,
         trigger_pos: trigger.pos,
     });
+    state.ui.sync_popup_from_active_suggestions();
 }
 
 fn agent_items(state: &AppState, query: &str) -> Vec<SuggestionItem> {
@@ -180,6 +182,7 @@ pub fn apply_async_result(
     } else {
         sug.selected.min(sug.items.len() - 1)
     };
+    state.ui.sync_popup_from_active_suggestions();
     true
 }
 

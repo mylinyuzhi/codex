@@ -1,4 +1,4 @@
-//! Header chrome shared by native history and overlay presentation.
+//! Header chrome shared by native history and state presentation.
 
 use ratatui::style::Style;
 use ratatui::text::Line;

@@ -7,6 +7,8 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
@@ -25,14 +27,12 @@ use crate::presentation::input::inline_popup_view;
 use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
 use crate::state::FocusTarget;
-use crate::state::Toast;
-use crate::state::ToastSeverity;
-use crate::surface::overlay::OverlaySurfacePlacement;
-use crate::surface::overlay::SurfaceFramePlan;
-use crate::surface::overlay::render_surface_overlay;
-use crate::surface::overlay::required_overlay_height;
+use crate::surface::modal::SurfaceFramePlan;
+use crate::surface::modal::render_modal_surface;
+use crate::surface::modal::required_text_surface_height;
 use crate::surface::terminal::SurfaceFrame;
 use crate::widgets::SuggestionPopup;
+use crate::widgets::ToastWidget;
 use crate::widgets::TranscriptLayoutIndex;
 
 /// Render the retained native-scrollback viewport.
@@ -52,20 +52,20 @@ pub(crate) fn render_interactive_viewport(
 
     render_live_viewport(frame, area, state, styles, plan, &mut layout);
 
-    if let Some(overlay) = state.ui.active_overlay() {
-        render_surface_overlay(
+    if state.ui.has_toasts() {
+        render_toasts(frame, area, &state.ui.toasts, styles);
+    }
+
+    if let Some(modal) = state.ui.modal.as_ref() {
+        render_modal_surface(
             frame,
             area,
             Some(layout.input),
-            overlay,
+            modal,
             state,
             transcript_layout,
             styles,
         );
-    }
-
-    if state.ui.has_toasts() {
-        render_toasts(frame, area, &state.ui.toasts, styles);
     }
 
     layout
@@ -92,61 +92,31 @@ pub(crate) fn interactive_viewport_desired_height(
             0
         };
     let bottom =
-        inline_decision_bottom_reservation(state, width, max_height, activity_rows, queue_rows);
+        interaction_pane_bottom_reservation(state, width, max_height, activity_rows, queue_rows);
+    let prompt_rows = interaction_prompt_height(state, width, max_height);
     let input_height = bottom.input_height;
     let stash_rows = bottom.stash_rows;
     let bottom_height = bottom.bottom_height;
-    let other_fixed_rows = activity_rows + queue_rows + input_height + stash_rows;
+    let other_fixed_rows = activity_rows + queue_rows + prompt_rows + input_height + stash_rows;
     let fixed_rows = other_fixed_rows + bottom_height;
     let desired = fixed_rows + live_content_height.min(max_height.saturating_sub(fixed_rows));
-    let overlay_height = state
-        .ui
-        .active_overlay()
-        .filter(|_| {
-            plan.overlay_placement.is_some_and(|placement| {
-                matches!(placement, OverlaySurfacePlacement::InlineDecision)
-            })
-        })
-        .map(|overlay| required_overlay_height(overlay, state, styles, width, max_height))
-        .unwrap_or(0);
-    let protected_bottom_rows = input_height + stash_rows + bottom_height;
-    desired
-        .max(overlay_height.saturating_add(protected_bottom_rows))
-        .min(max_height)
-}
-
-pub(crate) fn inline_decision_protected_bottom_rows(
-    state: &AppState,
-    width: u16,
-    max_height: u16,
-) -> u16 {
-    let activity = turn_activity_view(state, width);
-    let activity_rows = inline_activity_height(&activity, max_height, width);
-    let queue_rows: u16 =
-        if crate::widgets::QueueStatusWidget::should_display(&state.session.queued_commands) {
-            1
-        } else {
-            0
-        };
-    let bottom =
-        inline_decision_bottom_reservation(state, width, max_height, activity_rows, queue_rows);
-    bottom.input_height + bottom.stash_rows + bottom.bottom_height
+    desired.min(max_height)
 }
 
 #[derive(Debug, Clone, Copy)]
-struct InlineDecisionBottomReservation {
+struct InteractionPaneBottomReservation {
     input_height: u16,
     stash_rows: u16,
     bottom_height: u16,
 }
 
-fn inline_decision_bottom_reservation(
+fn interaction_pane_bottom_reservation(
     state: &AppState,
     _width: u16,
     max_height: u16,
     activity_rows: u16,
     queue_rows: u16,
-) -> InlineDecisionBottomReservation {
+) -> InteractionPaneBottomReservation {
     let stash_rows: u16 =
         if crate::widgets::StashNotice::should_display(state.ui.stashed_input.as_ref()) {
             1
@@ -161,7 +131,8 @@ fn inline_decision_bottom_reservation(
         .unwrap_or(0);
     let popup_active = popup_items > 0;
     let status_height: u16 = 1;
-    let other_fixed_rows = activity_rows + queue_rows + input_height + stash_rows;
+    let prompt_rows = interaction_prompt_height(state, _width, max_height);
+    let other_fixed_rows = activity_rows + queue_rows + prompt_rows + input_height + stash_rows;
     let avail_below_input = max_height.saturating_sub(other_fixed_rows);
     let bottom_height: u16 = if popup_active {
         (popup_items as u16)
@@ -171,7 +142,7 @@ fn inline_decision_bottom_reservation(
     } else {
         status_height.min(avail_below_input)
     };
-    InlineDecisionBottomReservation {
+    InteractionPaneBottomReservation {
         input_height,
         stash_rows,
         bottom_height,
@@ -201,6 +172,7 @@ fn render_live_viewport(
         } else {
             0
         };
+    let prompt_rows = interaction_prompt_height(state, area.width, area.height);
 
     let live_lines = build_live_tail_lines(state, styles, area.width, plan);
     let live_content_height = live_lines.len() as u16;
@@ -211,7 +183,7 @@ fn render_live_viewport(
         .unwrap_or(0);
     let popup_active = popup_items > 0;
     let status_height: u16 = 1;
-    let other_fixed_rows = activity_rows + queue_rows + input_height + stash_rows;
+    let other_fixed_rows = activity_rows + queue_rows + prompt_rows + input_height + stash_rows;
     let avail_below_input = area.height.saturating_sub(other_fixed_rows);
     let bottom_height: u16 = if popup_active {
         (popup_items as u16)
@@ -229,6 +201,7 @@ fn render_live_viewport(
         live_tail,
         activity_area,
         queue,
+        prompt,
         input,
         stash,
         bottom,
@@ -237,6 +210,7 @@ fn render_live_viewport(
         Constraint::Length(live_tail_height),
         Constraint::Length(activity_rows),
         Constraint::Length(queue_rows),
+        Constraint::Length(prompt_rows),
         Constraint::Length(input_height),
         Constraint::Length(stash_rows),
         Constraint::Length(bottom_height),
@@ -263,6 +237,9 @@ fn render_live_viewport(
             crate::widgets::QueueStatusWidget::new(&state.session.queued_commands, styles),
             queue,
         );
+    }
+    if prompt_rows > 0 {
+        render_interaction_prompt(frame, prompt, state, styles);
     }
     render_input(frame, state, input, styles);
     if stash_rows > 0
@@ -339,19 +316,94 @@ fn render_live_tail_lines(
 
 fn render_input(frame: &mut SurfaceFrame<'_>, state: &AppState, area: Rect, styles: UiStyles<'_>) {
     let is_focused = state.ui.focus == FocusTarget::Input;
-    let command_palette_filter: Option<&str> = match state.ui.active_overlay() {
-        Some(crate::state::Overlay::CommandPalette(cp)) => Some(cp.filter.as_str()),
-        _ => None,
-    };
     let input = crate::widgets::InputWidget::new(&state.ui.input, styles)
         .focused(is_focused)
         .plan_mode(state.is_plan_mode())
         .is_streaming(state.is_streaming())
         .prompt_suggestion(state.session.prompt_suggestions.last().map(String::as_str))
         .has_editable_queue(!state.session.queued_commands.is_empty())
-        .command_palette_filter(command_palette_filter);
+        .command_palette_filter(None);
 
     frame.render_widget(input, area);
+}
+
+fn interaction_prompt_height(state: &AppState, width: u16, max_height: u16) -> u16 {
+    let Some(prompt) = state.ui.interaction.active_prompt.as_ref() else {
+        return 0;
+    };
+    let styles = UiStyles::new(&state.ui.theme);
+    let text_surface = crate::surface_content::prompt_text_surface(prompt);
+    required_text_surface_height(text_surface, state, styles, width, max_height)
+        .min(max_height.saturating_sub(4))
+        .max(3)
+}
+
+fn render_interaction_prompt(
+    frame: &mut SurfaceFrame<'_>,
+    area: Rect,
+    state: &AppState,
+    styles: UiStyles<'_>,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let Some(prompt) = state.ui.interaction.active_prompt.as_ref() else {
+        return;
+    };
+    let text_surface = crate::surface_content::prompt_text_surface(prompt);
+    let (title, body, border_color) =
+        crate::surface_content::surface_content(text_surface, state, styles);
+    let body = compact_prompt_body(&body, area.height.saturating_sub(2) as usize);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(body).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(border_color)),
+        ),
+        area,
+    );
+}
+
+fn compact_prompt_body(body: &str, max_lines: usize) -> String {
+    let lines = body.lines().collect::<Vec<_>>();
+    if max_lines == 0 || lines.len() <= max_lines {
+        return body.to_string();
+    }
+    if max_lines == 1 {
+        return lines.last().copied().unwrap_or_default().to_string();
+    }
+    if max_lines == 2 {
+        return format!(
+            "{}\n{}",
+            lines.first().copied().unwrap_or_default(),
+            lines.last().copied().unwrap_or_default()
+        );
+    }
+    if let Some(blank_idx) = lines.iter().rposition(|line| line.trim().is_empty()) {
+        let tail = &lines[blank_idx.saturating_add(1)..];
+        if !tail.is_empty() {
+            if tail.len() < max_lines {
+                let head_count = max_lines.saturating_sub(tail.len() + 1);
+                let mut compact = Vec::new();
+                compact.extend(lines.iter().take(head_count).copied());
+                compact.push("...");
+                compact.extend(tail.iter().copied());
+                return compact.join("\n");
+            }
+            if tail.len() == max_lines {
+                return tail.join("\n");
+            }
+        }
+    }
+    let tail_count = (max_lines / 2).max(1);
+    let head_count = max_lines.saturating_sub(tail_count + 1).max(1);
+    let mut compact = Vec::new();
+    compact.extend(lines.iter().take(head_count).copied());
+    compact.push("...");
+    compact.extend(lines.iter().rev().take(tail_count).rev().copied());
+    compact.join("\n")
 }
 
 fn render_status_bar(
@@ -401,35 +453,11 @@ fn footer_span(span: &FooterSpan, styles: UiStyles<'_>) -> Span<'static> {
 fn render_toasts(
     frame: &mut SurfaceFrame<'_>,
     area: Rect,
-    toasts: &std::collections::VecDeque<Toast>,
+    toasts: &std::collections::VecDeque<crate::state::Toast>,
     styles: UiStyles<'_>,
 ) {
-    let toast_width: u16 = 40;
-    let mut y = area.y.saturating_add(1);
-    let max_y = area.bottom().saturating_sub(2);
-
-    for toast in toasts.iter() {
-        if y >= max_y {
-            break;
-        }
-
-        let (icon, color) = match toast.severity {
-            ToastSeverity::Info => ("ℹ", styles.dim()),
-            ToastSeverity::Success => ("✓", styles.success()),
-            ToastSeverity::Warning => ("⚠", styles.warning()),
-            ToastSeverity::Error => ("✗", styles.error()),
-        };
-
-        let x = area.x + area.width.saturating_sub(toast_width + 1);
-        let toast_area = Rect::new(x, y, toast_width, 1);
-
-        let text = format!(" {icon} {} ", toast.message);
-        let span = Span::styled(text, Style::default().fg(color));
-        frame.render_widget(Clear, toast_area);
-        frame.render_widget(Paragraph::new(span), toast_area);
-
-        y += 1;
-    }
+    let owned = toasts.iter().cloned().collect::<Vec<_>>();
+    frame.render_widget(ToastWidget::new(&owned, styles), area);
 }
 
 #[cfg(test)]

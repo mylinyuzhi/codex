@@ -122,7 +122,7 @@ impl Default for HistorySearchState {
     }
 }
 
-/// History search overlay widget.
+/// History search state widget.
 pub struct HistorySearchWidget<'a> {
     state: &'a HistorySearchState,
     styles: UiStyles<'a>,

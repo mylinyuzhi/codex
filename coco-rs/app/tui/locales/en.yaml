@@ -57,7 +57,7 @@ status.cache_suffix: " (%{tokens}cached)"
 # ─── Chat transcript ─────────────────────────────────────────
 chat.hook_batch: "%{count} hook events"
 
-# ─── Dialogs / overlays ──────────────────────────────────────
+# ─── Dialogs / surfaces ──────────────────────────────────────
 dialog.permission_required: "Permission Required"
 dialog.approve: "[Y] Approve"
 dialog.deny: "[N] Deny"
@@ -89,7 +89,7 @@ dialog.esc_close: "Esc Close"
 dialog.esc_cancel: "Esc Cancel"
 dialog.enter_continue: "Enter Continue"
 
-# Overlay titles (with leading/trailing spaces for Block border)
+# Surface titles (with leading/trailing spaces for Block border)
 dialog.title_error: " Error "
 dialog.title_exit_plan: " Exit Plan Mode "
 dialog.title_enter_plan: " Enter Plan Mode "
@@ -263,7 +263,7 @@ dialog.context_output: "Output: %{count}"
 dialog.context_cache: "Cache:  %{count}"
 dialog.context_used: "Used: %{used} / %{total}"
 
-# Settings overlay
+# Settings modal
 dialog.settings_tab_theme: "Theme"
 dialog.settings_tab_output: "Output"
 dialog.settings_tab_permissions: "Permissions"
@@ -274,7 +274,7 @@ dialog.settings_about_title: "  coco-rs — Terminal UI"
 dialog.settings_about_arch: "  Architecture: The Elm Architecture (TEA)"
 dialog.settings_about_built: "  Built with ratatui + crossterm"
 
-# Rewind overlay
+# Rewind modal
 dialog.rewind_select_with_files: "Restore the code and/or conversation to the point before…"
 dialog.rewind_select_no_files: "Restore and fork the conversation to the point before…"
 dialog.rewind_confirm_prompt: "Confirm you want to restore to the point before you sent this message:"
@@ -309,14 +309,14 @@ dialog.rewind_diff_files_changed_many: "%{count} files changed"
 # Virtual current-prompt row label (MessageSelector.tsx:594).
 dialog.rewind_current_prompt: "(current)"
 
-# Help overlay — description-only entries.
+# Help modal — description-only entries.
 #
 # The shortcut column is rendered dynamically by
-# `app/tui/src/overlay_content/help.rs` so user customizations in
+# `app/tui/src/presentation/help.rs` so user customizations in
 # ~/.coco/keybindings.json show through when an action has a live
 # binding; TUI-only shortcuts (Ctrl+S session browser, F6 focus,
 # F1 help, etc.) fall back to the static `entries()` table in
-# `app/tui/src/overlay_content/help.rs`.
+# `app/tui/src/keymap/entries.rs`.
 
 # History search
 history_search.type_to_search: "Type to search..."
@@ -406,6 +406,7 @@ toast.memory_extract_failed_full: "Memory extraction failed: %{error}"
 toast.cron_disabled_full: "Cron job disabled: %{reason}"
 toast.cron_missed_count: "%{count} cron jobs missed"
 toast.tool_aborted_full: "Tool aborted: %{reason}"
+toast.elicitation_unsupported: "MCP elicitation from %{server} is not available in the TUI"
 toast.conversation_rewound_checkpoint: "Conversation rewound to checkpoint."
 toast.no_image_clipboard: "No image on clipboard — use terminal paste for text"
 
@@ -619,7 +620,7 @@ ide.available_tools: "Available IDE tools:"
 ide.dialog_title: " IDE Connection "
 ide.hint_close: "[Esc] Close"
 
-# ─── Help overlay ────────────────────────────────────────────
+# ─── Help modal ──────────────────────────────────────────────
 help.title: " Help "
 transcript.title: " Transcript "
 transcript.empty: "No messages yet."
@@ -642,63 +643,9 @@ help.ctrl_s: "Session browser"
 help.ctrl_q: "Quit"
 help.enter: "Submit message"
 help.shift_enter: "New line"
-help.esc: "Close overlay"
+help.esc: "Close modal"
 help.f1: "Show this help"
 help.pageup_down: "Scroll"
-
-# ─────────────── /help slash command (i18n-aware) ───────────────
-help.slash.title: "coco Help"
-help.slash.tagline: "Commands, shortcuts, and editing modes."
-help.slash.section.commands: "Commands"
-help.slash.section.shortcuts: "Keyboard shortcuts"
-help.slash.footer.hint: "Type /help <command> for details, or press F1 for the keyboard overlay."
-help.slash.not_found: "No command found: %{name}. Type /help to list everything available."
-help.slash.field.usage: "Usage:"
-help.slash.field.aliases: "Aliases:"
-help.slash.cat.core: "Core"
-help.slash.cat.config: "Configuration"
-help.slash.cat.session: "Session"
-help.slash.cat.dev: "Development"
-help.slash.cat.tools: "Tools & extensions"
-help.slash.cmd.help: "Show this help"
-help.slash.cmd.clear: "Clear conversation history and start fresh"
-help.slash.cmd.compact: "Compact conversation to reduce context usage"
-help.slash.cmd.status: "Show current session status and model info"
-help.slash.cmd.exit: "Exit coco"
-help.slash.cmd.version: "Show version info"
-help.slash.cmd.config: "Show or modify configuration"
-help.slash.cmd.model: "Switch the current model"
-help.slash.cmd.effort: "Set reasoning effort level"
-help.slash.cmd.permissions: "Manage allow / deny tool permission rules"
-help.slash.cmd.theme: "Change the color theme"
-help.slash.cmd.vim: "Toggle Vim editing mode"
-help.slash.cmd.keybindings: "Open keybindings configuration"
-help.slash.cmd.output-style: "Switch or inspect output style"
-help.slash.cmd.sandbox: "Show or toggle sandbox mode"
-help.slash.cmd.fast: "Toggle fast mode (smaller model)"
-help.slash.cmd.cost: "Show cost and duration of this session"
-help.slash.cmd.context: "Show context window usage breakdown"
-help.slash.cmd.resume: "Resume a previous conversation"
-help.slash.cmd.session: "Manage saved sessions"
-help.slash.cmd.rewind: "Restore the code and conversation to a previous point"
-help.slash.cmd.copy: "Copy last assistant response to clipboard"
-help.slash.cmd.export: "Export conversation to a file or clipboard"
-help.slash.cmd.usage: "Show local usage statistics"
-help.slash.cmd.diff: "Show git diff of current changes"
-help.slash.cmd.commit: "Create a git commit with staged changes"
-help.slash.cmd.pr: "Create a pull request from current branch"
-help.slash.cmd.review: "Review a pull request"
-help.slash.cmd.init: "Initialize project with CLAUDE.md"
-help.slash.cmd.add-dir: "Add a directory to the workspace"
-help.slash.cmd.doctor: "Run installation and settings diagnostics"
-help.slash.cmd.mcp: "Manage MCP server connections"
-help.slash.cmd.plugin: "Manage installed plugins"
-help.slash.cmd.agents: "List and manage agent definitions"
-help.slash.cmd.tasks: "List and manage active tasks"
-help.slash.cmd.skills: "List available skills"
-help.slash.cmd.hooks: "Inspect configured lifecycle hooks"
-help.slash.cmd.memory: "View and manage memory files (CLAUDE.md)"
-help.slash.cmd.plan: "Toggle plan mode or view current plan"
 
 # ─────────────── keymap source-of-truth (keymap/entries.rs) ───────────────
 keymap.group.input_cursor: "Cursor & history"
@@ -724,7 +671,7 @@ keymap.input.yank: "Paste the most recently killed text"
 keymap.input.newline: "Insert a newline (multi-line input)"
 keymap.input.escape_newline: "Trailing backslash + Enter inserts a newline instead of submitting"
 keymap.input.submit: "Submit the current prompt"
-keymap.input.cancel: "Dismiss popup, suggestion, or overlay"
+keymap.input.cancel: "Dismiss popup, suggestion, prompt, or modal"
 keymap.input.clear_input: "Clear current input (press twice within 1 s) and save to history"
 keymap.input.interrupt: "Interrupt the running turn (twice in a row exits when idle)"
 keymap.input.exit: "Exit coco"
@@ -739,7 +686,7 @@ keymap.global.command_palette: "Open command palette"
 keymap.global.stash: "Stash / restore input draft"
 keymap.global.kill_agents: "Kill all running agents"
 keymap.global.quit: "Quit immediately"
-keymap.global.help_overlay: "Open the keyboard shortcut overlay"
+keymap.global.help_modal: "Open the keyboard shortcut modal"
 keymap.prefix.bash: "Run a shell command inline (skips the model)"
 keymap.prefix.memory: "Append a note to project CLAUDE.md"
 keymap.prefix.file: "Autocomplete a file path or @agent-name"

@@ -23,7 +23,7 @@ use super::picker::SpanBgOpt;
 use super::styles::UiStyles;
 use crate::i18n::t;
 use crate::state::ModelEntry;
-use crate::state::ModelPickerOverlay;
+use crate::state::ModelPickerState;
 use crate::state::ProviderUnavailableReason;
 
 /// Canonical role order — must mirror `update::show::next_role` so the
@@ -40,8 +40,7 @@ const ROLE_ORDER: [ModelRole; 8] = [
 ];
 
 #[cfg(test)]
-const MODEL_PICKER_BOUNDS: layout::OverlayBounds =
-    layout::OverlayBounds::new(70, 80, 60, 112, 18, 32);
+const MODEL_PICKER_BOUNDS: layout::ModalBounds = layout::ModalBounds::new(70, 80, 60, 112, 18, 32);
 
 #[cfg(test)]
 struct ModelPickerViewModel<'a> {
@@ -54,16 +53,16 @@ struct ModelPickerViewModel<'a> {
 pub(crate) fn render_model_picker(
     frame: &mut Frame,
     area: Rect,
-    m: &ModelPickerOverlay,
+    m: &ModelPickerState,
     styles: UiStyles<'_>,
 ) {
     let role_label = role_display(m.role);
     let title = t!("dialog.model_picker_title", role = role_label.as_str()).to_string();
-    let overlay_area = layout::centered_overlay_area(area, MODEL_PICKER_BOUNDS);
+    let modal_area = layout::centered_modal_area(area, MODEL_PICKER_BOUNDS);
 
-    frame.render_widget(Clear, overlay_area);
+    frame.render_widget(Clear, modal_area);
 
-    let (inner_width, inner_height) = layout::inner_size(overlay_area);
+    let (inner_width, inner_height) = layout::inner_size(modal_area);
     let lines = render_model_picker_lines(m, styles, inner_width, inner_height);
     let content = Paragraph::new(Text::from(lines)).block(
         Block::default()
@@ -72,10 +71,10 @@ pub(crate) fn render_model_picker(
             .border_style(styles.primary_border()),
     );
 
-    frame.render_widget(content, overlay_area);
+    frame.render_widget(content, modal_area);
 }
 
-pub(crate) fn content(m: &ModelPickerOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
+pub(crate) fn content(m: &ModelPickerState, styles: UiStyles<'_>) -> (String, String, Color) {
     let filtered = filtered_entries(m);
     let role_line = render_role_pill(m.role);
     let filter_line = if m.filter.is_empty() {
@@ -100,7 +99,7 @@ pub(crate) fn content(m: &ModelPickerOverlay, styles: UiStyles<'_>) -> (String, 
 }
 
 #[cfg(test)]
-fn build_view_model(m: &ModelPickerOverlay, list_height: usize) -> ModelPickerViewModel<'_> {
+fn build_view_model(m: &ModelPickerState, list_height: usize) -> ModelPickerViewModel<'_> {
     let filtered = filtered_entries(m);
     let selected = layout::selected_in_bounds(m.selected, filtered.len());
     let list = picker::grouped_list(&filtered, selected, list_height, |entry| {
@@ -115,7 +114,7 @@ fn build_view_model(m: &ModelPickerOverlay, list_height: usize) -> ModelPickerVi
 
 #[cfg(test)]
 fn render_model_picker_lines(
-    m: &ModelPickerOverlay,
+    m: &ModelPickerState,
     styles: UiStyles<'_>,
     width: usize,
     height: usize,
@@ -178,7 +177,7 @@ fn render_model_picker_lines(
     lines
 }
 
-fn filtered_entries(m: &ModelPickerOverlay) -> Vec<&ModelEntry> {
+fn filtered_entries(m: &ModelPickerState) -> Vec<&ModelEntry> {
     let filter_lower = m.filter.to_lowercase();
     m.entries
         .iter()
@@ -216,7 +215,7 @@ fn render_role_tabs(active: ModelRole, styles: UiStyles<'_>) -> Line<'static> {
 }
 
 #[cfg(test)]
-fn render_filter_line(m: &ModelPickerOverlay, styles: UiStyles<'_>) -> Line<'static> {
+fn render_filter_line(m: &ModelPickerState, styles: UiStyles<'_>) -> Line<'static> {
     if m.filter.is_empty() {
         Line::from(Span::raw(t!("dialog.model_picker_type_filter").to_string()).fg(styles.dim()))
     } else {
@@ -302,7 +301,7 @@ fn render_model_row(
 
 #[cfg(test)]
 fn render_effort_line(
-    m: &ModelPickerOverlay,
+    m: &ModelPickerState,
     view: &ModelPickerViewModel<'_>,
     styles: UiStyles<'_>,
 ) -> Line<'static> {
@@ -435,7 +434,7 @@ fn format_context_window(tokens: i64) -> String {
 }
 
 /// Render the thinking-effort footer for the focused model.
-fn render_effort_footer(m: &ModelPickerOverlay, filtered: &[&ModelEntry]) -> String {
+fn render_effort_footer(m: &ModelPickerState, filtered: &[&ModelEntry]) -> String {
     let Some(entry) =
         layout::selected_in_bounds(m.selected, filtered.len()).and_then(|idx| filtered.get(idx))
     else {

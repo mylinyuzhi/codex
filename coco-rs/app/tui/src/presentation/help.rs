@@ -1,4 +1,4 @@
-//! Help overlay presentation.
+//! Help state presentation.
 //!
 //! Reads from [`crate::keymap::KEYMAP`] (the structured source of truth)
 //! and renders one row per entry, grouped by `KeymapGroup`. For entries
