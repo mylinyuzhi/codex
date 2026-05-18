@@ -134,7 +134,7 @@ pub(crate) fn turn_activity_view(state: &AppState, width: u16) -> TurnActivityVi
 
     if has_subagents {
         TurnActivityView::Surface(limit_surface_rows(agent_surface(state), width))
-    } else if has_tool_activity || state.session.stream_stall || state.session.was_interrupted {
+    } else if has_tool_activity || state.session.stream_stall {
         TurnActivityView::Surface(limit_surface_rows(activity_surface(state), width))
     } else {
         TurnActivityView::None
@@ -247,14 +247,6 @@ fn status_activity_lines(state: &AppState) -> Vec<ActivityLine> {
                     t!("toast.stream_stall_detected").to_string(),
                     ActivityTone::Warning,
                 ),
-            ],
-        });
-    }
-    if state.session.was_interrupted {
-        lines.push(ActivityLine {
-            spans: vec![
-                ActivitySpan::tone("  ! ", ActivityTone::Warning),
-                ActivitySpan::tone(t!("toast.interrupted").to_string(), ActivityTone::Warning),
             ],
         });
     }

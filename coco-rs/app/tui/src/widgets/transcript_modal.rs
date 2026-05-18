@@ -487,6 +487,11 @@ impl<'a> TranscriptCellRenderer<'a> {
                         .italic(),
                 ));
             }
+            MessageContent::InterruptionMarker { .. } => {
+                lines.push(Line::from(
+                    Span::raw(t!("chat.interrupted_marker").to_string()).fg(self.styles.dim()),
+                ));
+            }
             _ => self.render_text_block("•", msg.text_content(), lines),
         }
     }

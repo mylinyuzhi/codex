@@ -249,19 +249,33 @@ fn modal_placement_area(area: Rect, input_area: Option<Rect>, modal: &ModalState
     area
 }
 
-pub(crate) fn required_text_surface_height(
+/// Required height to render `text_surface` inside a `Borders::ALL` box of
+/// exactly `box_width` columns (no modal width-policy reapplied). Used by
+/// the inline interaction-prompt pane where the box width is already chosen
+/// by the caller.
+pub(crate) fn required_text_surface_height_for_box(
     text_surface: crate::surface_content::TextSurfaceContent<'_>,
     state: &AppState,
     styles: UiStyles<'_>,
-    width: u16,
+    box_width: u16,
     max_height: u16,
 ) -> u16 {
-    if width == 0 || max_height == 0 {
+    if box_width == 0 || max_height == 0 {
         return 0;
     }
     let (_, body, _) = crate::surface_content::surface_content(text_surface, state, styles);
-    let area = Rect::new(0, 0, width, max_height);
-    modal_box_size(area, &body, DEFAULT_MODAL_POLICY).1
+    let inner_width = box_width.saturating_sub(2).max(1) as usize;
+    let wrapped_body_rows = body
+        .lines()
+        .map(|line| {
+            let line_width = text_width(line);
+            line_width.saturating_add(inner_width - 1) / inner_width
+        })
+        .map(|rows| rows.max(1))
+        .sum::<usize>();
+    // +2 for top/bottom border. Title sits on the top border, so no extra
+    // row is needed for it.
+    wrapped_body_rows.saturating_add(2).min(max_height as usize) as u16
 }
 
 fn modal_box_policy(modal: &ModalState) -> ModalBoxPolicy {

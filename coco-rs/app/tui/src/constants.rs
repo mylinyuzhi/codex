@@ -10,6 +10,11 @@ use std::time::Duration;
 /// Maximum height (rows) for the multi-line input box, including borders.
 pub const MAX_INPUT_HEIGHT: i32 = 10;
 
+/// Maximum width (cols) for the inline interaction prompt box, including
+/// borders. The box is left-anchored inside the available area so wide
+/// terminals don't stretch its border all the way across.
+pub const MAX_INTERACTION_PROMPT_WIDTH: u16 = 100;
+
 // ========== Display Limits ==========
 
 /// Maximum active toast notifications at once.

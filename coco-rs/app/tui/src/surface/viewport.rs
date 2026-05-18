@@ -29,7 +29,7 @@ use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::modal::render_modal_surface;
-use crate::surface::modal::required_text_surface_height;
+use crate::surface::modal::required_text_surface_height_for_box;
 use crate::surface::terminal::SurfaceFrame;
 use crate::widgets::SuggestionPopup;
 use crate::widgets::ToastWidget;
@@ -327,13 +327,27 @@ fn render_input(frame: &mut SurfaceFrame<'_>, state: &AppState, area: Rect, styl
     frame.render_widget(input, area);
 }
 
+fn interaction_prompt_box_width(area_width: u16) -> u16 {
+    area_width.min(constants::MAX_INTERACTION_PROMPT_WIDTH)
+}
+
+/// Center a fixed-width strip inside `area`, preserving full height. Unlike
+/// `layout::centered_fixed_area` (which subtracts 2 from height for modal
+/// margins), this keeps every row available for the prompt body.
+fn center_horizontally(area: Rect, box_width: u16) -> Rect {
+    let width = box_width.min(area.width);
+    let x_offset = area.width.saturating_sub(width) / 2;
+    Rect::new(area.x + x_offset, area.y, width, area.height)
+}
+
 fn interaction_prompt_height(state: &AppState, width: u16, max_height: u16) -> u16 {
     let Some(prompt) = state.ui.interaction.active_prompt.as_ref() else {
         return 0;
     };
     let styles = UiStyles::new(&state.ui.theme);
     let text_surface = crate::surface_content::prompt_text_surface(prompt);
-    required_text_surface_height(text_surface, state, styles, width, max_height)
+    let box_width = interaction_prompt_box_width(width);
+    required_text_surface_height_for_box(text_surface, state, styles, box_width, max_height)
         .min(max_height.saturating_sub(4))
         .max(3)
 }
@@ -354,7 +368,8 @@ fn render_interaction_prompt(
     let (title, body, border_color) =
         crate::surface_content::surface_content(text_surface, state, styles);
     let body = compact_prompt_body(&body, area.height.saturating_sub(2) as usize);
-    frame.render_widget(Clear, area);
+    let box_area = center_horizontally(area, interaction_prompt_box_width(area.width));
+    frame.render_widget(Clear, box_area);
     frame.render_widget(
         Paragraph::new(body).wrap(Wrap { trim: false }).block(
             Block::default()
@@ -362,7 +377,7 @@ fn render_interaction_prompt(
                 .title(title)
                 .border_style(Style::default().fg(border_color)),
         ),
-        area,
+        box_area,
     );
 }
 

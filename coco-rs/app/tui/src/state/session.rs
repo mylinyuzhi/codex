@@ -248,9 +248,6 @@ pub struct SessionState {
     /// TS gates this behind `'external' === 'ant'`; we surface it via
     /// `settings.json` (`rewind.allow_summarize_up_to`, default false).
     pub allow_summarize_up_to: bool,
-    /// Whether the last turn was user-interrupted (for auto-restore).
-    /// TS: abortController.signal.reason === 'user-cancel'
-    pub was_interrupted: bool,
     /// Available slash commands for `/` autocomplete and `/help` palette.
     /// Snapshotted from `CommandRegistry::visible()` at session start
     /// (see `app/cli/src/tui_runner.rs`). Filtered + ranked by
@@ -480,7 +477,6 @@ impl Default for SessionState {
             available_models: Vec::new(),
             file_history_enabled: false,
             allow_summarize_up_to: false,
-            was_interrupted: false,
             available_commands: Vec::new(),
             available_agents: Vec::new(),
             saved_sessions: Vec::new(),
@@ -697,6 +693,16 @@ pub enum MessageContent {
         assignee: String,
         description: String,
     },
+    /// Synthetic marker rendered after a Ctrl+C cancellation.
+    ///
+    /// TS parity: `[Request interrupted by user]` user message rendered
+    /// as `<InterruptedByUser />` (see `InterruptedByUser.tsx`). The
+    /// engine pushes the literal text to `MessageHistory` for next-turn
+    /// model context; the TUI's `on_turn_interrupted` handler appends
+    /// this variant for the visible chat row. `for_tool_use=true` mirrors
+    /// `createUserInterruptionMessage({toolUse: true})` and is set when
+    /// in-flight tool calls were interrupted.
+    InterruptionMarker { for_tool_use: bool },
 }
 
 /// Plan mode action.
@@ -803,6 +809,22 @@ impl ChatMessage {
             id: id.into(),
             role: ChatRole::System,
             content: MessageContent::SystemText(text.into()),
+            is_meta: false,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
+            permission_mode: None,
+        }
+    }
+
+    /// Create the synthetic interrupt marker chat row. Mirrors TS
+    /// `<InterruptedByUser />`. `for_tool_use=true` when the cancel
+    /// happened while tools were running.
+    pub fn interruption_marker(id: impl Into<String>, for_tool_use: bool) -> Self {
+        Self {
+            id: id.into(),
+            role: ChatRole::User,
+            content: MessageContent::InterruptionMarker { for_tool_use },
             is_meta: false,
             created_at_ms: now_ms(),
             is_compact_summary: false,
@@ -923,6 +945,7 @@ impl ChatMessage {
             MessageContent::TaskAssignment { description, .. } => description,
             MessageContent::ChannelMessage { content, .. } => content,
             MessageContent::ResourceUpdate { target, .. } => target,
+            MessageContent::InterruptionMarker { .. } => "",
         }
     }
 }

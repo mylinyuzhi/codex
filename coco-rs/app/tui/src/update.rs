@@ -844,7 +844,6 @@ async fn apply_exit_effect(
                 exit_case = "interrupt_active_turn",
                 "exit key interrupted active turn"
             );
-            state.session.was_interrupted = true;
             let _ = command_tx.send(UserCommand::Interrupt).await;
         }
         ExitEffect::ClearInput => {

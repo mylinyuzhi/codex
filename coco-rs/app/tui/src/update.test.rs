@@ -198,10 +198,6 @@ async fn idle_ctrl_c_arms_exit_hint_without_interrupting() {
         Some(crate::state::ExitKey::CtrlC)
     );
     assert!(
-        !state.session.was_interrupted,
-        "idle Ctrl+C should not show the interrupt banner"
-    );
-    assert!(
         rx.try_recv().is_err(),
         "idle Ctrl+C should not send UserCommand::Interrupt"
     );
@@ -216,7 +212,10 @@ async fn busy_ctrl_c_interrupts_without_exit_hint() {
     handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
 
     assert_eq!(state.ui.pending_exit_hint(), None);
-    assert!(state.session.was_interrupted);
+    // The interrupt visual is now an InterruptionMarker chat row
+    // appended by `on_turn_interrupted` once `TurnInterrupted` arrives —
+    // not a session-state boolean. This handler's only job here is to
+    // forward the cancel signal.
     match rx.try_recv() {
         Ok(UserCommand::Interrupt) => {}
         other => panic!("expected Interrupt on the wire, got {other:?}"),
@@ -614,7 +613,6 @@ async fn ctrl_c_idle_empty_arms_exit_then_quits() {
 
     handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
     assert!(state.ui.ctrl_c_tracker.pending().is_some());
-    assert!(!state.session.was_interrupted);
     // Second press within the window should request shutdown.
     handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
     // Quit drives `state.quit()`; we can't see process exit from a unit

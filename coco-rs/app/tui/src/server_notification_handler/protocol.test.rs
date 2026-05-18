@@ -66,22 +66,30 @@ fn user_cancel_with_lossless_tail_restores() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
     on_turn_interrupted(&mut state, user_cancel());
 
-    // Banner flag stays on until the next TurnStarted.
-    assert!(state.session.was_interrupted);
     // Synthetic assistant tail truncated; user message also removed
     // because `truncate(idx)` drops the user message itself — its text
-    // is what gets popped back into the input.
+    // is what gets popped back into the input. No InterruptionMarker
+    // is appended here because auto-restore already pulled the prompt
+    // back into the input (TS parity).
     assert!(state.session.messages.is_empty());
     assert_eq!(state.ui.input.text(), "original prompt");
     // Fresh conversation_id assigned so next turn's cache key is new.
     assert!(state.session.conversation_id.is_some());
 }
 
-/// Returns true if `on_turn_interrupted` mutated the session's
-/// message list. The state's `was_interrupted` banner flag is
-/// always set, so we don't use it as the "did restore happen" probe.
+/// Returns true if `on_turn_interrupted` resulted in a different
+/// message count than before. Used as the "did restore happen?" probe
+/// alongside checking for an InterruptionMarker tail.
 fn restored(before_len: usize, state: &AppState) -> bool {
     state.session.messages.len() != before_len
+}
+
+/// Returns true if the message list ends with an `InterruptionMarker`.
+fn ends_with_interrupt_marker(state: &AppState) -> bool {
+    matches!(
+        state.session.messages.last().map(|m| &m.content),
+        Some(crate::state::session::MessageContent::InterruptionMarker { .. })
+    )
 }
 
 #[test]
@@ -90,7 +98,10 @@ fn user_cancel_with_meaningful_tail_does_not_restore() {
     let before_len = state.session.messages.len();
     on_turn_interrupted(&mut state, user_cancel());
 
-    assert!(!restored(before_len, &state), "messages unchanged");
+    // Auto-restore suppressed (meaningful tail), so the marker is
+    // appended instead — TS InterruptedByUser path.
+    assert!(restored(before_len, &state));
+    assert!(ends_with_interrupt_marker(&state));
     assert_eq!(state.ui.input.text(), "", "input unchanged");
 }
 
@@ -102,7 +113,9 @@ fn user_cancel_with_nonempty_input_does_not_restore() {
 
     on_turn_interrupted(&mut state, user_cancel());
 
-    assert!(!restored(before_len, &state));
+    // No restore: nonempty input gates it off. Marker still appended.
+    assert!(restored(before_len, &state));
+    assert!(ends_with_interrupt_marker(&state));
     assert_eq!(
         state.ui.input.text(),
         "user typed during cancel",
@@ -118,7 +131,8 @@ fn user_cancel_with_active_surface_does_not_restore() {
 
     on_turn_interrupted(&mut state, user_cancel());
 
-    assert!(!restored(before_len, &state));
+    assert!(restored(before_len, &state));
+    assert!(ends_with_interrupt_marker(&state));
     assert_eq!(state.ui.input.text(), "");
 }
 
@@ -137,7 +151,8 @@ fn user_cancel_with_queued_command_does_not_restore() {
 
     on_turn_interrupted(&mut state, user_cancel());
 
-    assert!(!restored(before_len, &state));
+    assert!(restored(before_len, &state));
+    assert!(ends_with_interrupt_marker(&state));
     assert_eq!(state.ui.input.text(), "");
 }
 
@@ -152,10 +167,11 @@ fn system_preempt_never_restores() {
         !restored(before_len, &state),
         "Clear/Compact/Rewind/Shutdown drains must not auto-restore",
     );
+    // SystemPreempt does NOT append the marker either — the
+    // preempting op (Clear/Compact/Rewind/Shutdown) owns whatever
+    // gets written next.
+    assert!(!ends_with_interrupt_marker(&state));
     assert_eq!(state.ui.input.text(), "");
-    // Banner still flips on so the user notices the underlying turn
-    // got cut — even though we suppress the restore.
-    assert!(state.session.was_interrupted);
 }
 
 #[test]

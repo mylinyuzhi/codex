@@ -221,14 +221,44 @@ pub fn create_progress_message(tool_use_id: &str, data: serde_json::Value) -> Me
     })
 }
 
-/// Create a system informational message about operation cancellation.
-pub fn create_cancellation_message() -> Message {
-    Message::System(SystemMessage::Informational(SystemInformationalMessage {
+/// Literal text content for a Ctrl+C cancellation marker that lives in
+/// the message history.
+///
+/// TS: `utils/messages.ts:207` — `INTERRUPT_MESSAGE = '[Request interrupted by user]'`.
+/// Rendered specially by `UserTextMessage.tsx:83` as the dim
+/// "Interrupted · What should Claude do instead?" row.
+pub const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
+
+/// Variant of [`INTERRUPT_MESSAGE`] used when the cancel happened while a
+/// tool was running. Carries slightly different model-facing context so
+/// the model knows the prior turn's tool calls were interrupted, not
+/// "the user typed a question and then cancelled".
+///
+/// TS: `utils/messages.ts:208`.
+pub const INTERRUPT_MESSAGE_FOR_TOOL_USE: &str = "[Request interrupted by user for tool use]";
+
+/// Create the synthetic user message appended to history after a
+/// Ctrl+C cancellation. Text matches one of [`INTERRUPT_MESSAGE`] /
+/// [`INTERRUPT_MESSAGE_FOR_TOOL_USE`] depending on whether tools were
+/// in flight. TS parity: `createUserInterruptionMessage` in
+/// `utils/messages.ts:545`.
+pub fn create_user_interruption_message(for_tool_use: bool) -> Message {
+    let text = if for_tool_use {
+        INTERRUPT_MESSAGE_FOR_TOOL_USE
+    } else {
+        INTERRUPT_MESSAGE
+    };
+    Message::User(UserMessage {
+        message: LlmMessage::user_text(text),
         uuid: Uuid::new_v4(),
-        level: SystemMessageLevel::Warning,
-        title: "Cancelled".to_string(),
-        message: "Operation was cancelled by the user.".to_string(),
-    }))
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: Some(MessageOrigin::UserInput),
+        parent_tool_use_id: None,
+    })
 }
 
 /// Create a system message about a tool permission denial.

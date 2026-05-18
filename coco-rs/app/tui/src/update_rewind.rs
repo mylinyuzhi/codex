@@ -485,23 +485,41 @@ pub fn handle_rewind_cancel(state: &mut RewindState) -> bool {
 
 /// Check if all messages after `from_index` are synthetic/non-meaningful.
 ///
-/// TS: messagesAfterAreOnlySynthetic() in MessageSelector.tsx.
-/// Returns true if it's safe to auto-restore without losing meaningful work.
+/// TS: `messagesAfterAreOnlySynthetic` in `MessageSelector.tsx:799`. We
+/// mirror its 6 skip predicates and 2 "meaningful → return false" arms
+/// byte-by-byte so auto-restore behavior matches across providers:
+/// - synthetic interrupt markers and user-meta rows are skipped
+/// - tool results / system / attachment / progress rows are skipped
+/// - assistant messages count as meaningful when they contain text OR
+///   any `tool_use` block (the latter mirrors TS's
+///   `block.type === 'tool_use'` short-circuit)
+/// - any other user message is meaningful → not safe to truncate
 pub fn messages_after_are_only_synthetic(
     messages: &[crate::state::ChatMessage],
     from_index: usize,
 ) -> bool {
+    use crate::state::MessageContent;
     for msg in messages.iter().skip(from_index + 1) {
         match msg.role {
             ChatRole::User => {
                 if msg.is_meta {
                     continue;
                 }
+                // Synthetic interruption marker — TS `isSyntheticMessage`
+                // matches text against `INTERRUPT_MESSAGE` /
+                // `INTERRUPT_MESSAGE_FOR_TOOL_USE` (utils/messages.ts:302).
+                if matches!(msg.content, MessageContent::InterruptionMarker { .. }) {
+                    continue;
+                }
                 // Real user message — not synthetic
                 return false;
             }
             crate::state::ChatRole::Assistant => {
-                // Assistant message with actual text content is meaningful
+                // Tool calls count as meaningful even with empty text
+                // (TS: `block.type === 'tool_use'`).
+                if matches!(msg.content, MessageContent::ToolUse { .. }) {
+                    return false;
+                }
                 let text = msg.text_content();
                 if !text.is_empty() && text != "[redacted]" {
                     return false;

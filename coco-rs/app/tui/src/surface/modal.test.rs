@@ -80,7 +80,7 @@ fn permission_prompt_uses_substantial_box_size() {
     let styles = UiStyles::new(&theme);
     let prompt = permission_prompt();
 
-    let height = required_text_surface_height(
+    let height = required_text_surface_height_for_box(
         TextSurfaceContent::Permission(&prompt),
         &state,
         styles,

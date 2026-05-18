@@ -706,6 +706,17 @@ impl QueryEngine {
 
         loop {
             if self.cancel.is_cancelled() {
+                // TS parity: append `[Request interrupted by user]`
+                // unless the mid-stream cancel branch (line ~1702)
+                // already appended it for this turn. Detection: the
+                // last message is a User whose text matches one of
+                // the interrupt markers — mirrors TS's idempotent
+                // `createUserInterruptionMessage` placement.
+                if !last_message_is_interrupt_marker(history) {
+                    history.push(coco_messages::create_user_interruption_message(
+                        /*for_tool_use*/ false,
+                    ));
+                }
                 return Ok(make_query_result(
                     String::new(),
                     turn,
@@ -1700,6 +1711,7 @@ impl QueryEngine {
             // `query.ts:1015-1028` (`yieldMissingToolResultBlocks`
             // after abort).
             if self.cancel.is_cancelled() {
+                let mut had_tool_use = false;
                 if let Some(handle) = streaming_handle.take() {
                     let discarded = handle.discard().await;
                     let early: Vec<_> = discarded
@@ -1707,6 +1719,7 @@ impl QueryEngine {
                         .filter(|o| !o.ordered_messages.is_empty())
                         .collect();
                     if !early.is_empty() {
+                        had_tool_use = true;
                         let kept_ids: std::collections::HashSet<&String> =
                             early.iter().map(|o| &o.tool_use_id).collect();
                         let synth_parts: Vec<coco_inference::TurnPart> = tool_order
@@ -1765,6 +1778,15 @@ impl QueryEngine {
                         }
                     }
                 }
+                // TS parity: `query.ts:1046-1049` — append the synthetic
+                // `[Request interrupted by user]` user message so the
+                // model sees on the next turn that the prior turn was
+                // cut short. `for_tool_use = true` when in-flight tool
+                // calls were synthesized into history above, matching
+                // TS's `toolUse` flag on `createUserInterruptionMessage`.
+                history.push(coco_messages::create_user_interruption_message(
+                    had_tool_use,
+                ));
                 continue;
             }
 
@@ -2527,6 +2549,24 @@ fn assistant_content_from_snapshot(
     }
 
     (content_parts, tool_calls)
+}
+
+/// Returns true if the message history's tail is already a
+/// `[Request interrupted by user]` user message (either variant). Used
+/// by the cancel exit to dedupe the marker when the mid-stream branch
+/// has already appended one for this turn.
+fn last_message_is_interrupt_marker(history: &MessageHistory) -> bool {
+    let Some(Message::User(user)) = history.messages.last() else {
+        return false;
+    };
+    let coco_messages::LlmMessage::User { content, .. } = &user.message else {
+        return false;
+    };
+    let [coco_inference::UserContentPart::Text(text_part)] = content.as_slice() else {
+        return false;
+    };
+    text_part.text == coco_messages::INTERRUPT_MESSAGE
+        || text_part.text == coco_messages::INTERRUPT_MESSAGE_FOR_TOOL_USE
 }
 
 /// Pure constructor for [`QueryResult`], factored out of `run_session_loop`.

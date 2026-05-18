@@ -28,6 +28,7 @@ use crate::state::session::SubagentStatus;
 use crate::state::session::TaskEntry;
 use crate::state::session::TaskEntryStatus;
 use crate::state::session::TokenUsage;
+use crate::state::session::ToolStatus;
 use crate::state::ui::Toast;
 
 pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
@@ -81,11 +82,6 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.session.current_turn_message_start = Some(state.session.messages.len());
             state.session.current_turn_started_at = Some(std::time::Instant::now());
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
-            // Clear any leftover interrupt banner from the prior turn —
-            // the banner is "this turn was interrupted", not "ever was".
-            // TS parity: REPL.tsx resets the cancelled marker on the
-            // next turn boundary.
-            state.session.was_interrupted = false;
             true
         }
         ServerNotification::TurnCompleted(p) => on_turn_completed(state, p),
@@ -914,10 +910,8 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
     state.session.current_turn_message_start = None;
     state.session.current_turn_started_at = None;
     state.ui.streaming = None;
-    state.session.was_interrupted = true;
-    state
-        .ui
-        .add_toast(Toast::warning(t!("toast.turn_interrupted").to_string()));
+
+    let user_cancel = matches!(p.reason, Some(coco_types::CancelReason::UserCancel));
 
     // Auto-restore is gated on:
     // - reason == UserCancel  → TS `signal.reason === 'user-cancel'`
@@ -927,7 +921,7 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
     // - no state             → coco-rs analogue of "not viewing a
     //                            teammate task" + "no modal up"
     // - lossless tail          → TS `messagesAfterAreOnlySynthetic`
-    let user_cancel = matches!(p.reason, Some(coco_types::CancelReason::UserCancel));
+    let mut auto_restored = false;
     if user_cancel
         && state.ui.input.is_empty()
         && state.session.queued_commands.is_empty()
@@ -937,6 +931,30 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
         && crate::update_rewind::messages_after_are_only_synthetic(&state.session.messages, idx)
     {
         apply_auto_restore(state, idx);
+        auto_restored = true;
+    }
+
+    // TS parity: `createUserInterruptionMessage` rendered as the dim
+    // `Interrupted · What should Claude do instead?` chat row
+    // (InterruptedByUser.tsx). Only fires for UserCancel — SystemPreempt
+    // means a sibling op (Clear/Compact/Rewind/Shutdown) is about to
+    // mutate history anyway. Skipped when auto-restore truncated to
+    // the last user prompt: the prompt is now back in the input and
+    // adding "you interrupted yourself" would be noise.
+    if user_cancel && !auto_restored {
+        let for_tool_use = state
+            .session
+            .tool_executions
+            .iter()
+            .any(|t| matches!(t.status, ToolStatus::Running | ToolStatus::Queued));
+        let id = format!(
+            "interrupt-{}-{}",
+            state.session.turn_count,
+            state.session.messages.len()
+        );
+        state
+            .session
+            .add_message(ChatMessage::interruption_marker(id, for_tool_use));
     }
     true
 }

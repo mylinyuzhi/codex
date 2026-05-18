@@ -170,6 +170,19 @@ pub(super) fn try_render<'a>(
             ));
             Some(())
         }
+        MessageContent::InterruptionMarker { for_tool_use: _ } => {
+            // TS `InterruptedByUser.tsx`: two dim-color text fragments
+            // rendered inside a `<MessageResponse height={1}>`. The
+            // wrapper is the assistant-row container (gives the row a
+            // shaped indent), but the text itself is bare and dim. We
+            // mirror that: no `❯` user-bubble prefix, no bg tint, just
+            // a single dim line. `for_tool_use` is informational only —
+            // TS uses the same component for both variants.
+            lines.push(Line::from(
+                Span::raw(t!("chat.interrupted_marker").to_string()).fg(w.styles.dim()),
+            ));
+            Some(())
+        }
         MessageContent::ResourceUpdate {
             kind,
             server,
