@@ -75,6 +75,16 @@ impl PermissionEvaluator {
     ) -> PermissionDecision {
         let tool_str = tool_id.to_string();
 
+        tracing::trace!(
+            tool_name = %tool_str,
+            mode = ?context.mode,
+            deny_rule_sources = context.deny_rules.len(),
+            allow_rule_sources = context.allow_rules.len(),
+            ask_rule_sources = context.ask_rules.len(),
+            has_tool_check = tool_check.is_some(),
+            "permission_eval: enter",
+        );
+
         // Step 1: Deny rules (deny always wins)
         for rules in context.deny_rules.values() {
             for rule in rules {
@@ -94,6 +104,13 @@ impl PermissionEvaluator {
                     {
                         continue;
                     }
+                    tracing::debug!(
+                        tool_name = %tool_str,
+                        permission_decision = "deny",
+                        rule_pattern = %rule.value.tool_pattern,
+                        rule_content = ?rule.value.rule_content,
+                        "permission_eval: deny rule matched",
+                    );
                     return PermissionDecision::Deny {
                         message: format!("denied by rule: {}", rule.value.tool_pattern),
                         reason: PermissionDecisionReason::Rule { rule: rule.clone() },
@@ -107,6 +124,11 @@ impl PermissionEvaluator {
         if let Some(check_fn) = tool_check {
             match check_fn(tool_id, input, context) {
                 ToolCheckResult::Deny { message } => {
+                    tracing::debug!(
+                        tool_name = %tool_str,
+                        permission_decision = "deny",
+                        "permission_eval: tool.check_permissions returned deny",
+                    );
                     return PermissionDecision::Deny {
                         message,
                         reason: PermissionDecisionReason::Mode { mode: context.mode },
@@ -116,6 +138,12 @@ impl PermissionEvaluator {
                     updated_input,
                     feedback,
                 } => {
+                    tracing::debug!(
+                        tool_name = %tool_str,
+                        permission_decision = "allow",
+                        rewritten_input = updated_input.is_some(),
+                        "permission_eval: tool.check_permissions returned allow",
+                    );
                     return PermissionDecision::Allow {
                         updated_input,
                         feedback,
@@ -126,6 +154,12 @@ impl PermissionEvaluator {
                     suggestions,
                     choices,
                 } => {
+                    tracing::debug!(
+                        tool_name = %tool_str,
+                        permission_decision = "ask",
+                        suggestion_count = suggestions.len(),
+                        "permission_eval: tool.check_permissions returned ask",
+                    );
                     return PermissionDecision::Ask {
                         message,
                         suggestions,
@@ -133,6 +167,10 @@ impl PermissionEvaluator {
                     };
                 }
                 ToolCheckResult::Passthrough => {
+                    tracing::trace!(
+                        tool_name = %tool_str,
+                        "permission_eval: tool.check_permissions passthrough",
+                    );
                     // Tool has no opinion — continue pipeline
                 }
             }
@@ -150,6 +188,14 @@ impl PermissionEvaluator {
                             let content = rule.value.rule_content.as_deref().unwrap_or("");
                             if let Some(command) = extract_shell_command(input) {
                                 if shell_rules::matches_bash_rule(content, &command) {
+                                    tracing::debug!(
+                                        tool_name = %tool_str,
+                                        permission_decision = "allow",
+                                        rule_source = ?source,
+                                        rule_pattern = %rule.value.tool_pattern,
+                                        rule_content = %content,
+                                        "permission_eval: shell allow rule matched",
+                                    );
                                     return PermissionDecision::Allow {
                                         updated_input: None,
                                         feedback: None,
@@ -163,6 +209,14 @@ impl PermissionEvaluator {
                         {
                             continue;
                         }
+                        tracing::debug!(
+                            tool_name = %tool_str,
+                            permission_decision = "allow",
+                            rule_source = ?source,
+                            rule_pattern = %rule.value.tool_pattern,
+                            rule_content = ?rule.value.rule_content,
+                            "permission_eval: tool-wide allow rule matched",
+                        );
                         return PermissionDecision::Allow {
                             updated_input: None,
                             feedback: None,
@@ -185,6 +239,13 @@ impl PermissionEvaluator {
                             && let Some(content) = &rule.value.rule_content
                             && shell_rules::matches_bash_rule(content, &command)
                         {
+                            tracing::debug!(
+                                tool_name = %tool_str,
+                                permission_decision = "ask",
+                                rule_pattern = %rule.value.tool_pattern,
+                                rule_content = %content,
+                                "permission_eval: shell ask rule matched",
+                            );
                             return PermissionDecision::Ask {
                                 message: format!("ask rule matched: {tool_str}({content})"),
                                 suggestions: vec![],
@@ -195,6 +256,12 @@ impl PermissionEvaluator {
                 }
             }
 
+            tracing::debug!(
+                tool_name = %tool_str,
+                permission_decision = "ask",
+                rule_pattern = %ask_rule.value.tool_pattern,
+                "permission_eval: tool-wide ask rule matched",
+            );
             return PermissionDecision::Ask {
                 message: format!("tool-wide ask rule for {tool_str}"),
                 suggestions: vec![],
@@ -208,6 +275,13 @@ impl PermissionEvaluator {
                     && rule.value.rule_content.is_some()
                     && file_rule_matches_input(rule, &tool_str, input, context)
                 {
+                    tracing::debug!(
+                        tool_name = %tool_str,
+                        permission_decision = "ask",
+                        rule_pattern = %rule.value.tool_pattern,
+                        rule_content = ?rule.value.rule_content,
+                        "permission_eval: file ask rule matched",
+                    );
                     return PermissionDecision::Ask {
                         message: format!(
                             "ask rule matched: {tool_str}({})",
@@ -230,6 +304,12 @@ impl PermissionEvaluator {
                 classifier_approvable: _,
             } = safety
             {
+                tracing::debug!(
+                    tool_name = %tool_str,
+                    permission_decision = "ask",
+                    path = %path,
+                    "permission_eval: path safety check blocked",
+                );
                 return PermissionDecision::Ask {
                     message,
                     suggestions: vec![],
@@ -247,6 +327,13 @@ impl PermissionEvaluator {
                     if rule.value.tool_pattern == server_pattern
                         || matches_tool_pattern(&rule.value.tool_pattern, &tool_str)
                     {
+                        tracing::debug!(
+                            tool_name = %tool_str,
+                            permission_decision = "allow",
+                            mcp_server = %server,
+                            rule_pattern = %rule.value.tool_pattern,
+                            "permission_eval: MCP server-level allow rule matched",
+                        );
                         return PermissionDecision::Allow {
                             updated_input: None,
                             feedback: None,
@@ -259,6 +346,12 @@ impl PermissionEvaluator {
             for rules in context.ask_rules.values() {
                 for rule in rules {
                     if rule.value.tool_pattern == server_pattern {
+                        tracing::debug!(
+                            tool_name = %tool_str,
+                            permission_decision = "ask",
+                            mcp_server = %server,
+                            "permission_eval: MCP server-level ask rule matched",
+                        );
                         return PermissionDecision::Ask {
                             message: format!("MCP server {server} requires approval"),
                             suggestions: vec![],
@@ -270,7 +363,24 @@ impl PermissionEvaluator {
         }
 
         // Step 8: Mode-based fallthrough
-        mode_fallthrough(context, &tool_str, input)
+        let decision = mode_fallthrough(context, &tool_str, input);
+        tracing::debug!(
+            tool_name = %tool_str,
+            permission_decision = decision_label(&decision),
+            mode = ?context.mode,
+            "permission_eval: fell through to mode-based decision",
+        );
+        decision
+    }
+}
+
+/// Short tag for a `PermissionDecision` suitable for the
+/// `permission_decision` tracing field.
+fn decision_label(decision: &PermissionDecision) -> &'static str {
+    match decision {
+        PermissionDecision::Allow { .. } => "allow",
+        PermissionDecision::Deny { .. } => "deny",
+        PermissionDecision::Ask { .. } => "ask",
     }
 }
 

@@ -121,6 +121,13 @@ pub fn check_read_permission_with_matcher(
 /// TS parity for `checkReadPermissionForTool()`:
 /// read deny/ask rules win, then working-directory/internal paths are
 /// allowed, then explicit read allow rules are honored, otherwise prompt.
+///
+/// Permanent logging surface (enable with
+/// `COCO_LOG=coco_tools::tools::read_permissions=debug` for decisions
+/// or `=trace` for the full path / context dump). Every `return`
+/// emits one `debug!` line carrying `permission_decision` and `step`
+/// so support sessions can grep the log to find why a given read
+/// was allowed or asked.
 pub fn check_read_permission_for_path(
     path: &str,
     ctx: &coco_tool_runtime::ToolUseContext,
@@ -130,10 +137,31 @@ pub fn check_read_permission_for_path(
     let paths_to_check =
         coco_permissions::filesystem::get_paths_for_permission_check(path, &cwd_str);
 
+    tracing::trace!(
+        path = %path,
+        cwd = %cwd_str,
+        paths_to_check = ?paths_to_check,
+        additional_dirs = ?ctx
+            .permission_context
+            .additional_dirs
+            .values()
+            .map(|d| d.path.as_str())
+            .collect::<Vec<_>>(),
+        deny_rule_sources = ctx.permission_context.deny_rules.len(),
+        ask_rule_sources = ctx.permission_context.ask_rules.len(),
+        allow_rule_sources = ctx.permission_context.allow_rules.len(),
+        "read_permission: evaluate",
+    );
+
     if paths_to_check
         .iter()
         .any(|p| p.starts_with("//") || p.starts_with("\\\\"))
     {
+        tracing::debug!(
+            path = %path,
+            permission_decision = "ask",
+            "read_permission: UNC path requires manual approval",
+        );
         return ToolCheckResult::Ask {
             message: format!(
                 "Coco requested permissions to read from {path}, which appears to be a UNC path that could access network resources."
@@ -147,6 +175,11 @@ pub fn check_read_permission_for_path(
         .iter()
         .any(|p| coco_permissions::filesystem::has_suspicious_windows_pattern(p))
     {
+        tracing::debug!(
+            path = %path,
+            permission_decision = "ask",
+            "read_permission: suspicious Windows path requires manual approval",
+        );
         return ToolCheckResult::Ask {
             message: format!(
                 "Coco requested permissions to read from {path}, which contains a suspicious Windows path pattern that requires manual approval."
@@ -162,6 +195,13 @@ pub fn check_read_permission_for_path(
         &cwd,
         &ctx.permission_context,
     ) {
+        tracing::debug!(
+            path = %path,
+            permission_decision = "deny",
+            rule_pattern = %rule.value.tool_pattern,
+            rule_content = ?rule.value.rule_content,
+            "read_permission: matched deny rule",
+        );
         return ToolCheckResult::Deny {
             message: format!(
                 "Permission to read {path} has been denied by rule `{}`.",
@@ -170,14 +210,19 @@ pub fn check_read_permission_for_path(
         };
     }
 
-    if matching_read_rule(
+    if let Some(rule) = matching_read_rule(
         &ctx.permission_context.ask_rules,
         &paths_to_check,
         &cwd,
         &ctx.permission_context,
-    )
-    .is_some()
-    {
+    ) {
+        tracing::debug!(
+            path = %path,
+            permission_decision = "ask",
+            rule_pattern = %rule.value.tool_pattern,
+            rule_content = ?rule.value.rule_content,
+            "read_permission: matched ask rule",
+        );
         return ToolCheckResult::Ask {
             message: format!(
                 "Coco requested permissions to read from {path}, but you haven't granted it yet."
@@ -187,47 +232,72 @@ pub fn check_read_permission_for_path(
         };
     }
 
-    if matching_edit_rule(
+    if let Some(rule) = matching_edit_rule(
         &ctx.permission_context.allow_rules,
         &paths_to_check,
         &cwd,
         &ctx.permission_context,
-    )
-    .is_some()
-    {
+    ) {
+        tracing::debug!(
+            path = %path,
+            permission_decision = "allow",
+            rule_pattern = %rule.value.tool_pattern,
+            rule_content = ?rule.value.rule_content,
+            "read_permission: edit-allow rule grants read",
+        );
         return ToolCheckResult::Allow {
             updated_input: None,
             feedback: None,
         };
     }
 
-    if paths_to_check
+    let in_working_dirs = paths_to_check
         .iter()
-        .all(|p| path_is_in_working_dirs(p, &cwd_str, ctx))
-        || paths_to_check
-            .iter()
-            .any(|p| coco_permissions::filesystem::is_readable_internal_path(p, &cwd_str))
-    {
+        .all(|p| path_is_in_working_dirs(p, &cwd_str, ctx));
+    let internal_readable = paths_to_check
+        .iter()
+        .any(|p| coco_permissions::filesystem::is_readable_internal_path(p, &cwd_str));
+
+    if in_working_dirs || internal_readable {
+        tracing::debug!(
+            path = %path,
+            permission_decision = "allow",
+            in_working_dirs,
+            internal_readable,
+            "read_permission: path inside allowed scope",
+        );
         return ToolCheckResult::Allow {
             updated_input: None,
             feedback: None,
         };
     }
 
-    if matching_read_rule(
+    if let Some(rule) = matching_read_rule(
         &ctx.permission_context.allow_rules,
         &paths_to_check,
         &cwd,
         &ctx.permission_context,
-    )
-    .is_some()
-    {
+    ) {
+        tracing::debug!(
+            path = %path,
+            permission_decision = "allow",
+            rule_pattern = %rule.value.tool_pattern,
+            rule_content = ?rule.value.rule_content,
+            "read_permission: matched read-allow rule",
+        );
         return ToolCheckResult::Allow {
             updated_input: None,
             feedback: None,
         };
     }
 
+    tracing::debug!(
+        path = %path,
+        permission_decision = "ask",
+        cwd = %cwd_str,
+        paths_to_check = ?paths_to_check,
+        "read_permission: no rule matched and path outside working dirs",
+    );
     ToolCheckResult::Ask {
         message: format!(
             "Coco requested permissions to read from {path}, but you haven't granted it yet."
@@ -246,12 +316,36 @@ fn effective_cwd(ctx: &coco_tool_runtime::ToolUseContext) -> PathBuf {
 
 fn path_is_in_working_dirs(path: &str, cwd: &str, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
     if coco_permissions::filesystem::path_in_working_path(path, cwd) {
+        tracing::trace!(
+            path = %path,
+            cwd = %cwd,
+            scope = "cwd",
+            "read_permission: path matched cwd",
+        );
         return true;
     }
-    ctx.permission_context
+    let additional_match = ctx
+        .permission_context
         .additional_dirs
         .values()
-        .any(|dir| coco_permissions::filesystem::path_in_working_path(path, &dir.path))
+        .find(|dir| coco_permissions::filesystem::path_in_working_path(path, &dir.path));
+    if let Some(dir) = additional_match {
+        tracing::trace!(
+            path = %path,
+            cwd = %cwd,
+            scope = "additional_dir",
+            matched_dir = %dir.path,
+            "read_permission: path matched additional working dir",
+        );
+        return true;
+    }
+    tracing::trace!(
+        path = %path,
+        cwd = %cwd,
+        additional_dir_count = ctx.permission_context.additional_dirs.len(),
+        "read_permission: path outside cwd and additional dirs",
+    );
+    false
 }
 
 fn matching_read_rule<'a>(
