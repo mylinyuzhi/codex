@@ -269,9 +269,10 @@ reference `NotificationMethod::SessionStarted` rather than compare against \
 raw wire strings.",
     tagged_doc = "\
 Protocol-level notifications visible to all consumers.\n\n\
-66 variants across 20 categories. See `event-system-design.md` Section 2. \
-Each variant's wire method is generated together with the matching \
-`NotificationMethod` discriminant.",
+69 variants across 21 categories. See `event-system-design.md` Section 2 \
+and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle \
+category. Each variant's wire method is generated together with the \
+matching `NotificationMethod` discriminant.",
     variants = {
     // === Session lifecycle (3) ===
 
@@ -281,6 +282,31 @@ Each variant's wire method is generated together with the matching \
     "session/result" => SessionResult(Box<SessionResultParams>),
     /// Session ended.
     "session/ended" => SessionEnded(SessionEndedParams),
+
+    // === History lifecycle (3) ===
+    //
+    // Engine MessageHistory is single source of truth. These events let
+    // TUI / SDK consumers maintain derived views without recomputing
+    // engine-side state. Payloads use `serde_json::Value` for the Message
+    // body because `coco-types` stays provider-agnostic and cannot
+    // reference `coco_messages::Message` (which embeds `LlmMessage`).
+    // Helpers in `coco-messages::event_helpers` bridge (de)serialization.
+    //
+    // See `engine-tui-unified-transcript-plan.md` §4.1.
+
+    /// One Message appended to engine MessageHistory. The `message`
+    /// field is the JSON-serialized `coco_messages::Message` body —
+    /// consumers deserialize via `coco_messages::event_helpers::try_appended_message`.
+    "history/messageAppended" => MessageAppended { message: serde_json::Value },
+    /// MessageHistory truncated to `keep_count` entries (indices
+    /// >= keep_count discarded). Emitted by explicit-rewind and
+    /// auto-restore both, so SDK + TUI converge on engine truncation
+    /// without separate private paths.
+    "history/messageTruncated" => MessageTruncated { keep_count: i64 },
+    /// Session reset for resume. TUI clears derived transcript view
+    /// in preparation for a burst of `MessageAppended` that replays
+    /// the loaded JSONL transcript.
+    "history/resetForResume" => SessionResetForResume { session_id: String },
 
     // === Turn lifecycle (4) ===
 

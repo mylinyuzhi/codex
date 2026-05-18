@@ -71,7 +71,12 @@ pub async fn drain_command_queue_into_history(
     }
     let ids_to_remove: Vec<uuid::Uuid> = queued.iter().map(|c| c.id).collect();
     for cmd in &queued {
-        history.push(queued_command_to_attachment(cmd));
+        crate::history_sync::history_push_and_emit(
+            history,
+            queued_command_to_attachment(cmd),
+            event_tx,
+        )
+        .await;
     }
     queue.remove_by_ids(&ids_to_remove).await;
     for id in &ids_to_remove {
@@ -275,12 +280,12 @@ pub(crate) async fn complete_tool_call_with_error_mode(
         )
         .await;
     }
-    history.push(create_error_tool_result(
-        tool_call_id,
-        tool_name,
-        tool_id.clone(),
-        output,
-    ));
+    crate::history_sync::history_push_and_emit(
+        history,
+        create_error_tool_result(tool_call_id, tool_name, tool_id.clone(), output),
+        event_tx,
+    )
+    .await;
 }
 
 /// Wrap a captured synthetic-error `tool_result` row into an

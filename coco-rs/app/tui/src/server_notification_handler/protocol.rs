@@ -768,6 +768,19 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             ));
             true
         }
+
+        // === History lifecycle ===
+        //
+        // Engine MessageHistory authoritative-mutation events. TUI does
+        // not yet maintain a derived view — Phase 3 of
+        // `engine-tui-unified-transcript-plan.md` lands `TranscriptView`
+        // and wires these handlers. Until then, the TUI ignores these
+        // events; engine-side state remains consistent and SDK consumers
+        // already receive the typed wire payload for their own derived
+        // views.
+        ServerNotification::MessageAppended { .. }
+        | ServerNotification::MessageTruncated { .. }
+        | ServerNotification::SessionResetForResume { .. } => false,
     }
 }
 
@@ -965,10 +978,14 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
 /// next turn starts a fresh cache key, and clears UI state that no
 /// longer corresponds to a real conversation tail.
 ///
-/// Does NOT round-trip through the backend (`UserCommand::Rewind` is
-/// the explicit-state path; this is the synchronous inline restore
-/// for the user-cancel case).
+/// Sets `pending_auto_restore_truncate` so the App loop can dispatch
+/// `UserCommand::Rewind { mode: AutoRestore }` after the handler
+/// returns. The engine truncates its authoritative history and emits
+/// `ServerNotification::MessageTruncated`, keeping engine + TUI + SDK
+/// converged on the same truncation event (see
+/// `engine-tui-unified-transcript-plan.md` §7.4).
 fn apply_auto_restore(state: &mut AppState, idx: usize) {
+    let target_message_id = state.session.messages[idx].id.clone();
     let input_text = state.session.messages[idx].text_content().to_string();
     let perm = state.session.messages[idx].permission_mode;
     state.session.messages.truncate(idx);
@@ -985,6 +1002,7 @@ fn apply_auto_restore(state: &mut AppState, idx: usize) {
     state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;
     state.ui.user_scrolled = false;
+    state.session.pending_auto_restore_truncate = Some(target_message_id);
 }
 
 /// Push a teammate-attributed message into `session.messages` so the

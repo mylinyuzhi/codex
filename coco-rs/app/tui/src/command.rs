@@ -228,6 +228,11 @@ pub enum UserCommand {
         /// (renders on the React side); coco-rs threads it through so
         /// SDK consumers see it without a second query.
         rewound_turn: i32,
+        /// Trigger source: explicit `/rewind` picker vs TUI auto-restore
+        /// on cancel. Both end with `MessageTruncated` emission; only
+        /// `Explicit` may also restore files and emit modal overlay
+        /// events. See `engine-tui-unified-transcript-plan.md` §4.2.
+        mode: crate::state::rewind::RewindMode,
     },
     /// Request diff stats for a message (async, response via ServerNotification).
     /// TS: fileHistoryGetDiffStats() called from MessageSelector useEffect.

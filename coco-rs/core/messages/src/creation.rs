@@ -9,6 +9,7 @@ use crate::SystemCompactBoundaryMessage;
 use crate::SystemInformationalMessage;
 use crate::SystemMessage;
 use crate::SystemMessageLevel;
+use crate::SystemUserInterruptionMessage;
 use crate::ToolContent;
 use crate::ToolResultMessage;
 use crate::UserMessage;
@@ -237,11 +238,26 @@ pub const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
 /// TS: `utils/messages.ts:208`.
 pub const INTERRUPT_MESSAGE_FOR_TOOL_USE: &str = "[Request interrupted by user for tool use]";
 
-/// Create the synthetic user message appended to history after a
-/// Ctrl+C cancellation. Text matches one of [`INTERRUPT_MESSAGE`] /
-/// [`INTERRUPT_MESSAGE_FOR_TOOL_USE`] depending on whether tools were
-/// in flight. TS parity: `createUserInterruptionMessage` in
-/// `utils/messages.ts:545`.
+/// Create the typed user-interruption SystemMessage variant. The
+/// engine cancel finalizer is the single writer; downstream consumers
+/// (TUI render, SDK observers) read `for_tool_use` from this struct
+/// rather than recomputing it. See
+/// `engine-tui-unified-transcript-plan.md` §7.1.
+pub fn create_user_interruption_system_message(for_tool_use: bool) -> Message {
+    Message::System(SystemMessage::UserInterruption(
+        SystemUserInterruptionMessage {
+            uuid: Uuid::new_v4(),
+            for_tool_use,
+        },
+    ))
+}
+
+/// Legacy text-based interruption marker (User-role with literal
+/// `INTERRUPT_MESSAGE*` text). Retained for backward read-compat with
+/// older JSONL transcripts; new engine writes use
+/// [`create_user_interruption_system_message`].
+///
+/// TS parity: `createUserInterruptionMessage` in `utils/messages.ts:545`.
 pub fn create_user_interruption_message(for_tool_use: bool) -> Message {
     let text = if for_tool_use {
         INTERRUPT_MESSAGE_FOR_TOOL_USE

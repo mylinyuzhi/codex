@@ -390,7 +390,29 @@ impl App {
             needs_redraw |=
                 server_notification_handler::handle_core_event(&mut self.state, deferred);
         }
+        self.drain_pending_auto_restore_truncate().await;
         Ok(needs_redraw)
+    }
+
+    /// Dispatch any pending auto-restore truncation as
+    /// `UserCommand::Rewind { mode: AutoRestore }`. Called once per
+    /// `handle_core_event` invocation so the engine truncation lags
+    /// the TUI in-place restore by at most one event cycle.
+    ///
+    /// See `engine-tui-unified-transcript-plan.md` §7.4.
+    async fn drain_pending_auto_restore_truncate(&mut self) {
+        let Some(message_id) = self.state.session.pending_auto_restore_truncate.take() else {
+            return;
+        };
+        let _ = self
+            .command_tx
+            .send(UserCommand::Rewind {
+                message_id,
+                restore_type: crate::state::rewind::RestoreType::ConversationOnly,
+                rewound_turn: 0,
+                mode: crate::state::rewind::RewindMode::AutoRestore,
+            })
+            .await;
     }
 
     /// Fire a file/symbol search if the active trigger's (kind, query) pair

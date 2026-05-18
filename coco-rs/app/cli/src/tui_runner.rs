@@ -1006,6 +1006,7 @@ async fn run_agent_driver(
                 message_id,
                 restore_type,
                 rewound_turn,
+                mode,
             } => {
                 // Drain first — rewind reads file_history snapshots
                 // and rewrites runtime.history; an in-flight turn that
@@ -1015,6 +1016,7 @@ async fn run_agent_driver(
                     &restore_type,
                     &message_id,
                     rewound_turn,
+                    mode,
                     &runtime.file_history,
                     &runtime.config_home,
                     &session_id,
@@ -2822,6 +2824,7 @@ async fn handle_rewind(
     restore_type: &coco_tui::state::RestoreType,
     message_id: &str,
     rewound_turn: i32,
+    mode: coco_tui::state::rewind::RewindMode,
     file_history: &Option<Arc<RwLock<FileHistoryState>>>,
     config_home: &std::path::Path,
     session_id: &str,
@@ -2829,9 +2832,39 @@ async fn handle_rewind(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
 ) {
     use coco_tui::state::RestoreType;
+    use coco_tui::state::rewind::RewindMode;
 
     let mut files_changed = 0i32;
     let mut messages_removed = 0i32;
+
+    // AutoRestore is the synchronous TUI-cancel cleanup path. It
+    // never touches the workspace and never emits the modal
+    // `RewindCompleted` overlay — only the authoritative
+    // `MessageTruncated` event so SDK + TUI converge. See
+    // `engine-tui-unified-transcript-plan.md` §7.4.
+    if matches!(mode, RewindMode::AutoRestore) {
+        let mut h = runtime.history.lock().await;
+        if let Some(idx) = h.iter().position(|m| match m {
+            coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
+            _ => false,
+        }) {
+            let pre_count = h.len() as i32;
+            let removed = (pre_count - idx as i32).max(0);
+            h.truncate(idx);
+            coco_otel::events::emit_conversation_rewind(
+                pre_count as i64,
+                h.len() as i64,
+                removed as i64,
+                idx as i64,
+            );
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
+                    keep_count: idx as i64,
+                }))
+                .await;
+        }
+        return;
+    }
 
     // Summarize variants: dispatch to partial_compact_conversation
     // and replace the history with the resulting messages. TS:
@@ -2899,6 +2932,14 @@ async fn handle_rewind(
                 messages_removed as i64,
                 idx as i64,
             );
+            // Explicit-rewind converges on the same `MessageTruncated`
+            // event the AutoRestore path emits, so SDK consumers see
+            // one authoritative truncation signal regardless of trigger.
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
+                    keep_count: idx as i64,
+                }))
+                .await;
         }
     }
 

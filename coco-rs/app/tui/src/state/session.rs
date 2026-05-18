@@ -139,6 +139,15 @@ pub(crate) fn now_ms() -> i64 {
 pub struct SessionState {
     /// Conversation messages.
     pub messages: Vec<ChatMessage>,
+    /// Message UUID set by `apply_auto_restore` when an auto-restore
+    /// fires. The App loop drains this after each `handle_core_event`
+    /// and dispatches `UserCommand::Rewind { mode: AutoRestore }` so
+    /// the engine truncates its authoritative history and emits
+    /// `ServerNotification::MessageTruncated`. Keeps engine ↔ TUI ↔
+    /// SDK converged on a single truncation signal.
+    ///
+    /// See `engine-tui-unified-transcript-plan.md` §7.4.
+    pub pending_auto_restore_truncate: Option<String>,
     /// Active model id (e.g. `claude-sonnet-4-6`, `gpt-5`, `gemini-2.5-pro`).
     pub model: String,
     /// Active provider id for [`Self::model`] (e.g. `anthropic`, `openai`,
@@ -443,6 +452,7 @@ impl Default for SessionState {
     fn default() -> Self {
         Self {
             messages: Vec::new(),
+            pending_auto_restore_truncate: None,
             model: String::new(),
             provider: String::new(),
             model_catalog: Vec::new(),

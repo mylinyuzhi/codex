@@ -562,7 +562,7 @@ impl QueryEngine {
             })
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         for msg in turn_messages {
-            history.push(msg);
+            crate::history_sync::history_push_and_emit(history, msg, &event_tx).await;
         }
 
         // NOTE: `SessionStarted` + `SessionStateChanged(Running)` + the
@@ -706,17 +706,17 @@ impl QueryEngine {
 
         loop {
             if self.cancel.is_cancelled() {
-                // TS parity: append `[Request interrupted by user]`
-                // unless the mid-stream cancel branch (line ~1702)
-                // already appended it for this turn. Detection: the
-                // last message is a User whose text matches one of
-                // the interrupt markers — mirrors TS's idempotent
-                // `createUserInterruptionMessage` placement.
-                if !last_message_is_interrupt_marker(history) {
-                    history.push(coco_messages::create_user_interruption_message(
-                        /*for_tool_use*/ false,
-                    ));
-                }
+                // Single writer for the user-cancel marker (dedup +
+                // typed `SystemMessage::UserInterruption` + emit
+                // `MessageAppended`). `in_flight_tool_calls = false`
+                // here because this branch fires before any tool
+                // execution started for the current turn. See
+                // `engine-tui-unified-transcript-plan.md` §7.1 /
+                // `history_sync::finalize_user_cancel`.
+                crate::history_sync::finalize_user_cancel(
+                    history, /*in_flight_tool_calls*/ false, &event_tx,
+                )
+                .await;
                 return Ok(make_query_result(
                     String::new(),
                     turn,
@@ -1584,8 +1584,9 @@ impl QueryEngine {
                                         }
                                         content_parts
                                             .push(AssistantContentPart::ToolCall(tcp.clone()));
-                                        history.push(Message::Assistant(
-                                            coco_messages::AssistantMessage {
+                                        crate::history_sync::history_push_and_emit(
+                                            history,
+                                            Message::Assistant(coco_messages::AssistantMessage {
                                                 message: LlmMessage::Assistant {
                                                     content: content_parts
                                                         .into_iter()
@@ -1602,10 +1603,15 @@ impl QueryEngine {
                                                 cost_usd: None,
                                                 request_id: None,
                                                 api_error: None,
-                                            },
-                                        ));
+                                            }),
+                                            &event_tx,
+                                        )
+                                        .await;
                                         for msg in captured {
-                                            history.push(msg);
+                                            crate::history_sync::history_push_and_emit(
+                                                history, msg, &event_tx,
+                                            )
+                                            .await;
                                         }
                                     } else {
                                         // Re-wrap and feed as EarlyOutcome
@@ -1769,24 +1775,35 @@ impl QueryEngine {
                                     request_id: None,
                                     api_error: None,
                                 });
-                            history.push(assistant_msg);
+                            crate::history_sync::history_push_and_emit(
+                                history,
+                                assistant_msg,
+                                &event_tx,
+                            )
+                            .await;
                         }
                         for outcome in early {
                             for msg in outcome.ordered_messages {
-                                history.push(msg);
+                                crate::history_sync::history_push_and_emit(history, msg, &event_tx)
+                                    .await;
                             }
                         }
                     }
                 }
-                // TS parity: `query.ts:1046-1049` — append the synthetic
-                // `[Request interrupted by user]` user message so the
-                // model sees on the next turn that the prior turn was
-                // cut short. `for_tool_use = true` when in-flight tool
-                // calls were synthesized into history above, matching
-                // TS's `toolUse` flag on `createUserInterruptionMessage`.
-                history.push(coco_messages::create_user_interruption_message(
-                    had_tool_use,
-                ));
+                // Mid-stream cancel: tool calls may have been
+                // synthesized into history above (`had_tool_use`
+                // tracks the engine's authoritative view), so
+                // `for_tool_use` is decided once here and stored on
+                // the typed marker — downstream renders read the
+                // field rather than recomputing from running-tool
+                // state. See `engine-tui-unified-transcript-plan.md`
+                // §7.2.
+                crate::history_sync::finalize_user_cancel(
+                    history,
+                    /*in_flight_tool_calls*/ had_tool_use,
+                    &event_tx,
+                )
+                .await;
                 continue;
             }
 
@@ -1993,11 +2010,16 @@ impl QueryEngine {
                     turn_id = %turn_id,
                     "content-filter / refusal — emitting api_error message and ending turn"
                 );
-                history.push(assistant_msg);
-                history.push(crate::helpers::build_abnormal_stop_api_error_message(
-                    coco_messages::StopReason::ContentFilter,
-                    max_tokens_override.or(self.config.max_tokens),
-                ));
+                crate::history_sync::history_push_and_emit(history, assistant_msg, &event_tx).await;
+                crate::history_sync::history_push_and_emit(
+                    history,
+                    crate::helpers::build_abnormal_stop_api_error_message(
+                        coco_messages::StopReason::ContentFilter,
+                        max_tokens_override.or(self.config.max_tokens),
+                    ),
+                    &event_tx,
+                )
+                .await;
                 // Skip the MaxTokens block below; fall through to the
                 // text-only end-of-turn path that emits TurnCompleted.
                 // No `continue` — we want the loop to exit naturally.
@@ -2016,11 +2038,16 @@ impl QueryEngine {
                 && parsed_stop_reason == Some(coco_messages::StopReason::ContextWindowExceeded)
             {
                 let effective_max = max_tokens_override.or(self.config.max_tokens);
-                history.push(assistant_msg);
-                history.push(crate::helpers::build_abnormal_stop_api_error_message(
-                    coco_messages::StopReason::ContextWindowExceeded,
-                    effective_max,
-                ));
+                crate::history_sync::history_push_and_emit(history, assistant_msg, &event_tx).await;
+                crate::history_sync::history_push_and_emit(
+                    history,
+                    crate::helpers::build_abnormal_stop_api_error_message(
+                        coco_messages::StopReason::ContextWindowExceeded,
+                        effective_max,
+                    ),
+                    &event_tx,
+                )
+                .await;
                 last_continue_reason = Some(
                     self.handle_context_overflow(
                         &mut *history,
@@ -2069,10 +2096,15 @@ impl QueryEngine {
                     // though we're about to escalate — the user sees the
                     // signal once, before the retry overwrites the
                     // immediate UI state.
-                    history.push(crate::helpers::build_abnormal_stop_api_error_message(
-                        coco_messages::StopReason::MaxTokens,
-                        effective_max,
-                    ));
+                    crate::history_sync::history_push_and_emit(
+                        history,
+                        crate::helpers::build_abnormal_stop_api_error_message(
+                            coco_messages::StopReason::MaxTokens,
+                            effective_max,
+                        ),
+                        &event_tx,
+                    )
+                    .await;
                     max_tokens_override = Some(ESCALATED_MAX_TOKENS);
                     last_continue_reason = Some(ContinueReason::MaxOutputTokensEscalate);
                     continue;
@@ -2082,16 +2114,27 @@ impl QueryEngine {
                         attempt = max_tokens_recovery_count,
                         "max_tokens hit after escalation, injecting resume nudge"
                     );
-                    history.push(assistant_msg);
-                    history.push(crate::helpers::build_abnormal_stop_api_error_message(
-                        coco_messages::StopReason::MaxTokens,
-                        effective_max,
-                    ));
-                    history.push(coco_messages::create_meta_message(
-                        "Output token limit hit. Resume directly — no apology, no recap of \
-                         what you were doing. Pick up mid-thought if that is where the cut \
-                         happened. Break remaining work into smaller pieces.",
-                    ));
+                    crate::history_sync::history_push_and_emit(history, assistant_msg, &event_tx)
+                        .await;
+                    crate::history_sync::history_push_and_emit(
+                        history,
+                        crate::helpers::build_abnormal_stop_api_error_message(
+                            coco_messages::StopReason::MaxTokens,
+                            effective_max,
+                        ),
+                        &event_tx,
+                    )
+                    .await;
+                    crate::history_sync::history_push_and_emit(
+                        history,
+                        coco_messages::create_meta_message(
+                            "Output token limit hit. Resume directly — no apology, no recap of \
+                             what you were doing. Pick up mid-thought if that is where the cut \
+                             happened. Break remaining work into smaller pieces.",
+                        ),
+                        &event_tx,
+                    )
+                    .await;
                     // Reset override so next call uses the provider default again;
                     // TS does the same (query.ts:1241 `maxOutputTokensOverride: undefined`).
                     max_tokens_override = None;
@@ -2102,13 +2145,18 @@ impl QueryEngine {
                 }
                 // Recovery exhausted — push real + synthetic api_error and
                 // fall through to terminate the session normally.
-                history.push(assistant_msg);
-                history.push(crate::helpers::build_abnormal_stop_api_error_message(
-                    coco_messages::StopReason::MaxTokens,
-                    effective_max,
-                ));
+                crate::history_sync::history_push_and_emit(history, assistant_msg, &event_tx).await;
+                crate::history_sync::history_push_and_emit(
+                    history,
+                    crate::helpers::build_abnormal_stop_api_error_message(
+                        coco_messages::StopReason::MaxTokens,
+                        effective_max,
+                    ),
+                    &event_tx,
+                )
+                .await;
             } else {
-                history.push(assistant_msg);
+                crate::history_sync::history_push_and_emit(history, assistant_msg, &event_tx).await;
             }
 
             // Backward-compat: the ContentFilter branch above already pushed
@@ -2246,7 +2294,12 @@ impl QueryEngine {
                             if let Some(err) = &agg.blocking_error {
                                 let feedback = orchestration::format_stop_hook_message(err);
                                 warn!(%feedback, "Stop hook blocked session completion");
-                                history.push(coco_messages::create_meta_message(&feedback));
+                                crate::history_sync::history_push_and_emit(
+                                    history,
+                                    coco_messages::create_meta_message(&feedback),
+                                    &event_tx,
+                                )
+                                .await;
                                 self.flush_successful_turn_state(&mut *history).await;
                                 last_continue_reason = Some(ContinueReason::StopHookBlocking);
                                 // Mark the recursion so the next Stop
@@ -2269,7 +2322,12 @@ impl QueryEngine {
                         "Token budget continuation: you've used {pct}% of the turn budget. \
                          Keep going — don't summarize or recap, just continue the work."
                     );
-                    history.push(coco_messages::create_meta_message(&nudge));
+                    crate::history_sync::history_push_and_emit(
+                        history,
+                        coco_messages::create_meta_message(&nudge),
+                        &event_tx,
+                    )
+                    .await;
                     budget.record_continuation();
                     last_continue_reason = Some(ContinueReason::TokenBudgetContinuation);
                     info!(turn, pct, "token budget continuation");
@@ -2549,24 +2607,6 @@ fn assistant_content_from_snapshot(
     }
 
     (content_parts, tool_calls)
-}
-
-/// Returns true if the message history's tail is already a
-/// `[Request interrupted by user]` user message (either variant). Used
-/// by the cancel exit to dedupe the marker when the mid-stream branch
-/// has already appended one for this turn.
-fn last_message_is_interrupt_marker(history: &MessageHistory) -> bool {
-    let Some(Message::User(user)) = history.messages.last() else {
-        return false;
-    };
-    let coco_messages::LlmMessage::User { content, .. } = &user.message else {
-        return false;
-    };
-    let [coco_inference::UserContentPart::Text(text_part)] = content.as_slice() else {
-        return false;
-    };
-    text_part.text == coco_messages::INTERRUPT_MESSAGE
-        || text_part.text == coco_messages::INTERRUPT_MESSAGE_FOR_TOOL_USE
 }
 
 /// Pure constructor for [`QueryResult`], factored out of `run_session_loop`.

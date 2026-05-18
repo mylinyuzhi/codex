@@ -31,6 +31,7 @@ mod engine_turn_reminders;
 pub mod fork_context;
 pub mod forked_agent;
 mod helpers;
+pub mod history_sync;
 mod hook_adapter;
 mod hook_controller;
 pub mod hook_llm;

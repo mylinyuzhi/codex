@@ -52,6 +52,27 @@ pub enum RestoreType {
     Nevermind,
 }
 
+/// How a `UserCommand::Rewind` was triggered. Engine reads this to
+/// decide whether to run the modal explicit-rewind flow (which may
+/// restore files, emit overlay events, and run a confirmation step)
+/// or the synchronous auto-restore truncation path used when the user
+/// hits Ctrl+C on an empty input at a lossless tail boundary.
+///
+/// Both modes converge on the same final emission of
+/// `ServerNotification::MessageTruncated`, so SDK observers and TUI
+/// see one authoritative truncation signal regardless of trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewindMode {
+    /// User-initiated `/rewind` flow. May restore files (per
+    /// `RestoreType`), emit `TuiOnlyEvent::RewindCompleted` overlay,
+    /// and run the picker confirmation.
+    Explicit,
+    /// TUI auto-restore on user cancel. Synchronous truncation only;
+    /// no file restoration, no modal overlay. See
+    /// `engine-tui-unified-transcript-plan.md` §7.4.
+    AutoRestore,
+}
+
 impl RestoreType {
     /// Localized label resolved against the active locale at render time.
     pub fn label(&self) -> std::borrow::Cow<'static, str> {

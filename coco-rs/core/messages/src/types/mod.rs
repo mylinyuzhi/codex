@@ -73,6 +73,7 @@ pub use message::SystemPermissionRetryMessage;
 pub use message::SystemScheduledTaskFireMessage;
 pub use message::SystemStopHookSummaryMessage;
 pub use message::SystemTurnDurationMessage;
+pub use message::SystemUserInterruptionMessage;
 pub use message::TombstoneMessage;
 pub use message::ToolResultMessage;
 pub use message::ToolUseSummaryMessage;

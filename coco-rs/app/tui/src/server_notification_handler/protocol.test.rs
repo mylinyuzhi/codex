@@ -75,6 +75,23 @@ fn user_cancel_with_lossless_tail_restores() {
     assert_eq!(state.ui.input.text(), "original prompt");
     // Fresh conversation_id assigned so next turn's cache key is new.
     assert!(state.session.conversation_id.is_some());
+    // Engine round-trip signal queued so the App loop dispatches
+    // `UserCommand::Rewind { mode: AutoRestore }`, keeping engine
+    // history and SDK observers consistent with the TUI truncate
+    // (Phase 5 of engine-tui-unified-transcript-plan.md).
+    assert_eq!(
+        state.session.pending_auto_restore_truncate.as_deref(),
+        Some("u1"),
+    );
+}
+
+#[test]
+fn user_cancel_without_auto_restore_leaves_pending_none() {
+    // Meaningful tail → no auto-restore → no engine truncation
+    // expected → pending field stays None.
+    let mut state = idle_with_meaningful_tail();
+    on_turn_interrupted(&mut state, user_cancel());
+    assert!(state.session.pending_auto_restore_truncate.is_none());
 }
 
 /// Returns true if `on_turn_interrupted` resulted in a different

@@ -426,6 +426,12 @@ pub enum SystemMessage {
     StopHookSummary(SystemStopHookSummaryMessage),
     TurnDuration(SystemTurnDurationMessage),
     ScheduledTaskFire(SystemScheduledTaskFireMessage),
+    /// User cancellation marker. Replaces the legacy text-based
+    /// `INTERRUPT_MESSAGE` / `INTERRUPT_MESSAGE_FOR_TOOL_USE` User
+    /// messages with a typed variant. `for_tool_use` is computed once
+    /// by the engine cancel finalizer and never recomputed downstream;
+    /// see `engine-tui-unified-transcript-plan.md` §7.1.
+    UserInterruption(SystemUserInterruptionMessage),
 }
 
 impl SystemMessage {
@@ -445,6 +451,7 @@ impl SystemMessage {
             Self::StopHookSummary(m) => &m.uuid,
             Self::TurnDuration(m) => &m.uuid,
             Self::ScheduledTaskFire(m) => &m.uuid,
+            Self::UserInterruption(m) => &m.uuid,
         }
     }
 }
@@ -610,6 +617,17 @@ pub struct SystemScheduledTaskFireMessage {
     pub uuid: Uuid,
     pub task_id: String,
     pub schedule: String,
+}
+
+/// Authoritative cancel marker. `for_tool_use` is computed by the engine
+/// cancel finalizer (which sees the in-flight tool-call state) and stored
+/// here; every other consumer reads the field. This eliminates the
+/// engine ↔ TUI recomputation race that the legacy text-based interrupt
+/// markers exhibited.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemUserInterruptionMessage {
+    pub uuid: Uuid,
+    pub for_tool_use: bool,
 }
 
 /// Where a message originated.

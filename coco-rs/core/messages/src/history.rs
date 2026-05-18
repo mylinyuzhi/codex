@@ -121,6 +121,25 @@ impl MessageHistory {
         self.index.clear();
     }
 
+    /// Truncate the history to the first `keep_count` messages.
+    /// Indices `>= keep_count` are discarded and the UUID index
+    /// rebuilt.
+    ///
+    /// Used by the engine `Rewind` handler (both explicit and
+    /// auto-restore modes per
+    /// `engine-tui-unified-transcript-plan.md` §4.2) — the resulting
+    /// length is the new authoritative history size that the engine
+    /// then broadcasts via `ServerNotification::MessageTruncated`.
+    ///
+    /// No-op when `keep_count >= len()`.
+    pub fn truncate(&mut self, keep_count: usize) {
+        if keep_count >= self.messages.len() {
+            return;
+        }
+        self.messages.truncate(keep_count);
+        self.rebuild_index();
+    }
+
     /// Truncate to keep only the last `n` messages.
     ///
     /// Rebuilds the UUID index after truncation.

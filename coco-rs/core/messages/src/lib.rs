@@ -4,6 +4,7 @@
 
 pub mod cost;
 pub mod creation;
+pub mod event_helpers;
 pub mod filtering;
 pub mod history;
 pub mod lookups;
@@ -34,10 +35,13 @@ pub use creation::create_progress_message;
 pub use creation::create_tool_result_message;
 pub use creation::create_tool_result_message_with_parts;
 pub use creation::create_user_interruption_message;
+pub use creation::create_user_interruption_system_message;
 pub use creation::create_user_message;
 pub use creation::create_user_message_with_parts;
 pub use creation::create_user_message_with_parts_and_uuid;
 pub use creation::create_user_message_with_uuid;
+pub use event_helpers::message_appended;
+pub use event_helpers::try_appended_message;
 pub use history::MessageHistory;
 pub use lookups::MessageLookups;
 pub use lookups::build_message_lookups;
