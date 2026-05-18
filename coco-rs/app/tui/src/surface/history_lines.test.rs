@@ -1,6 +1,7 @@
 use pretty_assertions::assert_eq;
 
 use super::*;
+use crate::state::session::MessageContent;
 use crate::theme::Theme;
 
 #[test]
@@ -15,6 +16,8 @@ fn finalized_history_lines_render_committed_assistant_message() {
             width: 40,
             syntax_highlighting: SyntaxHighlighting::Disabled,
             show_system_reminders: false,
+            show_thinking: false,
+            kb_handle: None,
         },
     );
 
@@ -33,6 +36,8 @@ fn finalized_history_lines_do_not_emit_active_busy_tail() {
             width: 40,
             syntax_highlighting: SyntaxHighlighting::Disabled,
             show_system_reminders: false,
+            show_thinking: false,
+            kb_handle: None,
         },
     );
 
@@ -52,10 +57,49 @@ fn finalized_history_lines_collapse_meta_by_default() {
             width: 40,
             syntax_highlighting: SyntaxHighlighting::Disabled,
             show_system_reminders: false,
+            show_thinking: false,
+            kb_handle: None,
         },
     );
 
     assert_eq!(plain_lines(&lines), vec!["  # [system] system reminder"]);
+}
+
+#[test]
+fn finalized_history_lines_show_collapsed_thinking_without_per_item_toggle_hint() {
+    let theme = Theme::default();
+    let kb_handle = crate::keybinding_resolver::KeybindingHandle::from_defaults();
+    let messages = vec![ChatMessage {
+        id: "t1".into(),
+        role: crate::state::ChatRole::Assistant,
+        content: MessageContent::Thinking {
+            content: "Need to inspect files.".into(),
+            duration_ms: Some(1300),
+            reasoning_tokens: Some(15),
+        },
+        is_meta: false,
+        created_at_ms: crate::state::session::now_ms(),
+        is_compact_summary: false,
+        is_visible_in_transcript_only: false,
+        permission_mode: None,
+    }];
+
+    let lines = render_finalized_history_lines(
+        &messages,
+        HistoryLineRenderOptions {
+            styles: UiStyles::new(&theme),
+            width: 80,
+            syntax_highlighting: SyntaxHighlighting::Disabled,
+            show_system_reminders: false,
+            show_thinking: false,
+            kb_handle: Some(&kb_handle),
+        },
+    );
+
+    assert_eq!(
+        plain_lines(&lines),
+        vec!["⏺ Thinking · 1.3s · 15 reasoning tokens", "",]
+    );
 }
 
 #[test]
@@ -99,6 +143,8 @@ fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
         width,
         syntax_highlighting: SyntaxHighlighting::Disabled,
         show_system_reminders: false,
+        show_thinking: false,
+        kb_handle: None,
     }
 }
 

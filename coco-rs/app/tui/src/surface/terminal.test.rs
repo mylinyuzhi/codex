@@ -39,6 +39,26 @@ fn surface_terminal_draws_inside_configured_viewport() {
 }
 
 #[test]
+fn surface_terminal_skips_hidden_cells_after_wide_chars() {
+    let backend = TestBackend::new(20, 2);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
+    terminal
+        .current_buffer_mut()
+        .set_string(0, 0, "❯ 你是什么模型", Style::default());
+
+    let updates = terminal.buffer_updates();
+
+    assert!(updates.iter().all(|(_, _, cell)| !cell.skip));
+    let symbols = updates
+        .iter()
+        .map(|(_, _, cell)| cell.symbol())
+        .collect::<String>();
+    assert!(symbols.contains("你是"), "got {symbols:?}");
+    assert!(!symbols.contains("你 "), "got {symbols:?}");
+}
+
+#[test]
 fn surface_terminal_applies_cursor_claim() {
     let backend = TestBackend::new(8, 4);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");

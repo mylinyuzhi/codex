@@ -47,6 +47,7 @@ async fn main() -> Result<()> {
             Commands::Status => {
                 let cwd = std::env::current_dir()?;
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
+                coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
                 let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
                 let (client, provider_api, model_id) = create_api_client(&runtime_config, retry);
                 let mode = provider_api.map_or("mock", |api| api.as_str());
@@ -92,6 +93,7 @@ async fn main() -> Result<()> {
                 println!("[ok] Config: loaded");
                 let cwd = std::env::current_dir()?;
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
+                coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
                 let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
                 let (_client, provider_api, model_id) = create_api_client(&runtime_config, retry);
                 let mode = provider_api.map_or("mock", |api| api.as_str());
@@ -339,6 +341,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         "sdk mode starting"
     );
     let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
+    coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
 
     let resources = build_engine_resources(cli, &runtime_config, &cwd)?;
     let is_real_anthropic = resources.provider_api == Some(coco_types::ProviderApi::Anthropic);

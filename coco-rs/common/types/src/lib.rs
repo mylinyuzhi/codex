@@ -129,6 +129,7 @@ pub use event::ModelFallbackParams;
 pub use event::ModelRoleChangedParams;
 pub use event::NotificationMethod;
 pub use event::PermissionDenialInfo;
+pub use event::PermissionDisplayInput;
 pub use event::PermissionModeChangedParams;
 pub use event::PersistedFileError;
 pub use event::PersistedFileInfo;
@@ -170,6 +171,7 @@ pub use event::WorktreeEnteredParams;
 pub use event::WorktreeExitedParams;
 
 // Client request types (Phase 2 — SDK control protocol, SDK → agent)
+pub use client_request::AgentInterruptCurrentWorkParams;
 pub use client_request::ApprovalDecision;
 pub use client_request::ApprovalResolveParams;
 pub use client_request::CancelRequestParams;
@@ -317,9 +319,11 @@ pub use plugin::BuiltinPluginDefinition;
 pub use provider::ApplyPatchToolType;
 pub use provider::Capability;
 pub use provider::CapabilitySet;
+pub use provider::LlmModelSelection;
 pub use provider::ModelRole;
 pub use provider::ModelSpec;
 pub use provider::ProviderApi;
+pub use provider::ProviderModelSelection;
 pub use provider::WireApi;
 
 // Sandbox types

@@ -1,4 +1,3 @@
-use coco_types::PermissionMode;
 use tokio::sync::mpsc;
 
 use super::*;
@@ -167,50 +166,6 @@ async fn test_team_manager_register_and_remove() {
     // Remove the member
     assert!(manager.remove_member("worker-1").await);
     assert_eq!(manager.member_count().await, 0);
-}
-
-#[tokio::test]
-async fn test_team_manager_set_member_mode() {
-    let team_file = TeamFile {
-        name: "mode-test".into(),
-        description: None,
-        created_at: 1000,
-        lead_agent_id: "lead-1".into(),
-        lead_session_id: None,
-        hidden_pane_ids: Vec::new(),
-        team_allowed_paths: Vec::new(),
-        members: vec![TeamMember {
-            agent_id: "w1".into(),
-            name: "alice".into(),
-            agent_type: None,
-            model: None,
-            prompt: None,
-            color: None,
-            plan_mode_required: false,
-            joined_at: 1000,
-            tmux_pane_id: String::new(),
-            cwd: "/tmp".into(),
-            worktree_path: None,
-            session_id: None,
-            subscriptions: Vec::new(),
-            backend_type: None,
-            is_active: true,
-            mode: None,
-        }],
-    };
-
-    let manager = TeamManager::new("mode-test".into(), team_file);
-
-    assert!(
-        manager
-            .set_member_mode("alice", PermissionMode::AcceptEdits)
-            .await
-    );
-    let tf = manager.team_file().await;
-    assert_eq!(tf.members[0].mode, Some(PermissionMode::AcceptEdits));
-
-    // Non-existent member
-    assert!(!manager.set_member_mode("bob", PermissionMode::Plan).await);
 }
 
 #[tokio::test]

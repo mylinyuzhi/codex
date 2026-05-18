@@ -16,6 +16,7 @@ use ratatui::layout::Size;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use std::io::Write;
+use unicode_width::UnicodeWidthStr;
 
 use crate::cursor::CursorClaim;
 use crate::surface::history_insert::render_history_lines;
@@ -356,11 +357,10 @@ where
         if gap_below_history > 0 {
             let rows_to_draw = rows.min(gap_below_history);
             let target_top = self.history_bottom_y;
-            let updates = rendered
-                .content
-                .iter()
-                .enumerate()
-                .filter_map(|(index, cell)| {
+            let updates = drawable_cell_indices(&rendered)
+                .into_iter()
+                .filter_map(|index| {
+                    let cell = &rendered.content[index];
                     let (x, y) = rendered.pos_of(index);
                     (y < rows_to_draw).then_some((x, target_top + y, cell))
                 });
@@ -373,11 +373,10 @@ where
             let chunk_rows = (rows - start_row).min(viewport_top);
             self.backend.scroll_region_up(0..viewport_top, chunk_rows)?;
             let target_top = viewport_top - chunk_rows;
-            let updates = rendered
-                .content
-                .iter()
-                .enumerate()
-                .filter_map(|(index, cell)| {
+            let updates = drawable_cell_indices(&rendered)
+                .into_iter()
+                .filter_map(|index| {
+                    let cell = &rendered.content[index];
                     let (x, y) = rendered.pos_of(index);
                     if y >= start_row && y < start_row + chunk_rows {
                         Some((x, target_top + (y - start_row), cell))
@@ -486,20 +485,28 @@ where
     fn buffer_updates(&self) -> Vec<(u16, u16, Cell)> {
         let current = self.current_buffer();
         let previous = self.previous_buffer();
-        current
-            .content
-            .iter()
-            .zip(previous.content.iter())
-            .enumerate()
-            .filter_map(|(index, (next, prev))| {
-                if self.invalidated || next != prev {
+        let mut updates = Vec::new();
+        for y in current.area.y..current.area.bottom() {
+            let mut invalidated = 0usize;
+            let mut to_skip = 0usize;
+            for x in current.area.x..current.area.right() {
+                let index = current.index_of(x, y);
+                let next = &current.content[index];
+                let prev = &previous.content[index];
+                if !next.skip
+                    && to_skip == 0
+                    && (self.invalidated || next != prev || invalidated > 0)
+                {
                     let (x, y) = current.pos_of(index);
-                    Some((x, y, next.clone()))
-                } else {
-                    None
+                    updates.push((x, y, next.clone()));
                 }
-            })
-            .collect()
+
+                to_skip = display_width(next.symbol()).saturating_sub(1);
+                let affected_width = display_width(next.symbol()).max(display_width(prev.symbol()));
+                invalidated = affected_width.max(invalidated).saturating_sub(1);
+            }
+        }
+        updates
     }
 
     fn current_buffer(&self) -> &Buffer {
@@ -522,6 +529,26 @@ where
         self.current = 1 - self.current;
         self.current_buffer_mut().reset();
     }
+}
+
+fn drawable_cell_indices(buffer: &Buffer) -> Vec<usize> {
+    let mut indices = Vec::new();
+    for y in buffer.area.y..buffer.area.bottom() {
+        let mut to_skip = 0usize;
+        for x in buffer.area.x..buffer.area.right() {
+            let index = buffer.index_of(x, y);
+            let cell = &buffer.content[index];
+            if !cell.skip && to_skip == 0 {
+                indices.push(index);
+            }
+            to_skip = display_width(cell.symbol()).saturating_sub(1);
+        }
+    }
+    indices
+}
+
+fn display_width(symbol: &str) -> usize {
+    UnicodeWidthStr::width(symbol).max(1)
 }
 
 #[cfg(test)]

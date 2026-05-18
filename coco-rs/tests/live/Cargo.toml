@@ -38,6 +38,7 @@ coco-messages.workspace = true
 coco-context.workspace = true
 coco-permissions.workspace = true
 coco-hooks.workspace = true
+coco-coordinator.workspace = true
 
 # coco-cli suite (coco_cli_deepseek): full `coco -p` headless path,
 # including system-prompt assembly, fallback chain, permission resolution,

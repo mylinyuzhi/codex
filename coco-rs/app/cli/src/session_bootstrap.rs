@@ -278,6 +278,16 @@ pub async fn install_session_late_binds(
         task_session_dir,
     ));
     runtime.attach_task_runtime(task_runtime).await;
+    let task_list_id = coco_tasks::resolve_task_list_id(None, None, &task_session_id);
+    let task_list_root = coco_config::global_config::config_home().join("tasks");
+    let task_list_router =
+        crate::team_task_list_router::RoutedTaskList::open(task_list_root, task_list_id)?;
+    runtime
+        .attach_task_list(task_list_router.clone() as coco_tool_runtime::TaskListHandleRef)
+        .await;
+    runtime
+        .attach_team_task_list_router(task_list_router as coco_tool_runtime::TeamTaskListRouterRef)
+        .await;
 
     // Per-agent transcript persistence (TS-faithful resume). The
     // project paths match the runtime's transcript path so

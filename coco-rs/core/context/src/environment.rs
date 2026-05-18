@@ -95,15 +95,9 @@ impl ShellKind {
 
 /// Per-model knowledge cutoff date. Delegates to
 /// [`coco_model_card::knowledge_cutoff`] — exact-id lookup against the
-/// static vendor-fact catalog in `common/model-card`. Returns `None`
-/// for unknown model IDs so the env block omits the line rather than
-/// render a wrong date.
-///
-/// To add a new model's cutoff, add a `ModelCard` entry in
-/// `coco-model-card::cards`, not here. This function is a thin shim
-/// kept so `EnvironmentInfo` doesn't depend on `coco-model-card`
-/// directly.
-pub fn knowledge_cutoff_for_model(model_id: &str) -> Option<&'static str> {
+/// process-global model-card catalog. Returns `None` for unknown model IDs so
+/// the env block omits the line rather than render a wrong date.
+pub fn knowledge_cutoff_for_model(model_id: &str) -> Option<String> {
     coco_model_card::knowledge_cutoff(model_id)
 }
 
@@ -143,9 +137,7 @@ pub fn get_environment_info(cwd: &Path, model: &str) -> EnvironmentInfo {
     };
 
     let os_version = get_os_version();
-    let knowledge_cutoff = knowledge_cutoff_for_model(model)
-        .map(str::to_string)
-        .unwrap_or_default();
+    let knowledge_cutoff = knowledge_cutoff_for_model(model).unwrap_or_default();
 
     EnvironmentInfo {
         cwd: cwd.to_string_lossy().to_string(),

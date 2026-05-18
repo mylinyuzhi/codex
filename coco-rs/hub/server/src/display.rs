@@ -141,6 +141,15 @@ fn text_from_content_block(block: &serde_json::Value) -> Option<String> {
 }
 
 fn tool_result_text(block: &serde_json::Value) -> Option<String> {
+    if let Some(output) = block.get("output")
+        && let Some(text) = output
+            .get("value")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| output.as_str())
+    {
+        return Some(text.to_string());
+    }
+
     let content = block.get("content")?;
     if let Some(text) = content.as_str() {
         return Some(text.to_string());

@@ -27,7 +27,8 @@ pub(super) fn try_render<'a>(
             // backgroundColor="userMessageBackground">`, which paints the
             // full row width rather than just the glyphs — the bg must
             // therefore live on the `Line`, not on individual spans.
-            for line in text.lines() {
+            let mut iter = text.lines();
+            for line in iter.by_ref() {
                 let span = Span::raw(format!("❯ {line}")).fg(w.styles.user_message());
                 let mut chat_line = Line::from(span);
                 if let Some(bg) = w.styles.user_message_bg() {
@@ -61,10 +62,11 @@ pub(super) fn try_render<'a>(
             } else {
                 w.styles.error()
             };
-            for line in output.lines().take(20) {
+            let mut iter = output.lines();
+            for line in iter.by_ref().take(20) {
                 lines.push(Line::from(Span::raw(format!("  {line}")).fg(color)));
             }
-            if output.lines().count() > 20 {
+            if iter.next().is_some() {
                 lines.push(Line::from(
                     Span::raw(t!("chat.truncated").to_string())
                         .fg(w.styles.dim())

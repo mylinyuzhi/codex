@@ -44,6 +44,7 @@ fn bundled(
         aliases: vec![],
         allowed_tools: Some(allowed_tools.into_iter().map(String::from).collect()),
         model: None,
+        model_role: None,
         when_to_use: None,
         argument_names: vec![],
         paths: vec![],

@@ -46,7 +46,10 @@ async fn check_permissions_accept_edits_allows_cwd_patch() {
 
 #[tokio::test]
 async fn check_permissions_path_scoped_edit_rule_allows_patch() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("apply-patch-perms-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
     let mut ctx = ToolUseContext::test_default();
     ctx.cwd_override = Some(dir.path().to_path_buf());
     ctx.permission_context.allow_rules.insert(

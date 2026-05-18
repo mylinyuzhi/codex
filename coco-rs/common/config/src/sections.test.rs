@@ -6,6 +6,73 @@ use crate::EnvSnapshot;
 use crate::settings::Settings;
 
 #[test]
+fn test_agent_teams_config_defaults_to_main_model_role() {
+    let missing = AgentTeamsConfig::resolve(&Settings::default()).unwrap();
+    assert_eq!(missing.default_model_role, coco_types::ModelRole::Main);
+    assert!(missing.agent_type_model_roles.is_empty());
+    assert_eq!(missing.default_model, None);
+}
+
+#[test]
+fn test_agent_teams_config_resolves_role_overrides() {
+    let config = AgentTeamsConfig::resolve(&Settings {
+        agent_teams: PartialAgentTeamsSettings {
+            default_model_role: Some(coco_types::ModelRole::Fast),
+            agent_type_model_roles: Some(
+                [("reviewer".to_string(), coco_types::ModelRole::Review)]
+                    .into_iter()
+                    .collect(),
+            ),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(config.default_model_role, coco_types::ModelRole::Fast);
+    assert_eq!(
+        config.agent_type_model_roles.get("reviewer"),
+        Some(&coco_types::ModelRole::Review)
+    );
+}
+
+#[test]
+fn test_agent_teams_config_resolves_concrete_default_model() {
+    let config = AgentTeamsConfig::resolve(&Settings {
+        agent_teams: PartialAgentTeamsSettings {
+            default_model: Some(crate::ModelSelection {
+                provider: "openai".into(),
+                model_id: "gpt-5-5".into(),
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(
+        config.default_model,
+        Some(crate::ModelSelection {
+            provider: "openai".into(),
+            model_id: "gpt-5-5".into(),
+        })
+    );
+}
+
+#[test]
+fn test_agent_teams_config_rejects_removed_teammate_role() {
+    let err = serde_json::from_value::<Settings>(serde_json::json!({
+        "agent_teams": {
+            "default_model_role": "teammate"
+        }
+    }))
+    .expect_err("teammate role must not parse");
+    assert!(
+        err.to_string().contains("unknown variant")
+            || err.to_string().contains("unknown model role"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn test_bash_config_finalize_clamps_max_output_bytes() {
     let settings = Settings {
         tool: PartialToolSettings {

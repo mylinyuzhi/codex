@@ -4,7 +4,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::*;
-use crate::state::overlay::TranscriptOverlay;
 use crate::state::session::ChatMessage;
 use crate::state::ui::StreamingState;
 use crate::surface::overlay::HistorySurfaceMode;
@@ -294,9 +293,7 @@ fn native_draw_defers_history_while_overlay_is_open() {
         .session
         .messages
         .push(ChatMessage::assistant_text("a1", "deferred"));
-    state
-        .ui
-        .set_overlay(crate::state::Overlay::Transcript(TranscriptOverlay::new()));
+    state.ui.set_overlay(crate::state::Overlay::Help);
     let mut controller = NativeSurfaceController::new();
 
     let outcome = controller.draw(&mut terminal, &state).expect("draw");

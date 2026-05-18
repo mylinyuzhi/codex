@@ -14,7 +14,6 @@ Plugin system: PLUGIN.toml manifests, bundled/user/project/repository sources, c
 - `utils/plugins/headlessPluginInstall.ts`, `pluginAutoupdate.ts`, `pluginStartupCheck.ts`, `performStartupChecks.tsx` — headless/CCR + startup
 - `utils/plugins/schemas.ts`, `pluginVersioning.ts`, `pluginIdentifier.ts`, `pluginDirectories.ts`, `walkPluginMarkdown.ts` — support
 
-Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
 
 ## Key Types
 - `PluginManifest` — name, version, description, skills (names), hooks (raw JSON map), mcp_servers (raw JSON map)

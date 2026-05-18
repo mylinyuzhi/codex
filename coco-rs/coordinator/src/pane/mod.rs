@@ -192,6 +192,26 @@ pub struct BackendRegistry {
     in_process_backend: RwLock<Option<Arc<dyn TeammateExecutor>>>,
     pane_backend: RwLock<Option<Arc<dyn PaneBackend>>>,
     in_process_fallback_active: RwLock<bool>,
+    startup_env: StartupPaneEnv,
+}
+
+#[derive(Debug, Clone)]
+struct StartupPaneEnv {
+    tmux: Option<String>,
+    tmux_pane: Option<String>,
+    term_program: Option<String>,
+    iterm_session_id: Option<String>,
+}
+
+impl StartupPaneEnv {
+    fn capture() -> Self {
+        Self {
+            tmux: coco_config::env::env_opt(coco_config::EnvKey::Tmux),
+            tmux_pane: coco_config::env::env_opt(coco_config::EnvKey::TmuxPane),
+            term_program: coco_config::env::env_opt(coco_config::EnvKey::TermProgram),
+            iterm_session_id: coco_config::env::env_opt(coco_config::EnvKey::ItermSessionId),
+        }
+    }
 }
 
 impl BackendRegistry {
@@ -201,6 +221,7 @@ impl BackendRegistry {
             in_process_backend: RwLock::new(None),
             pane_backend: RwLock::new(None),
             in_process_fallback_active: RwLock::new(false),
+            startup_env: StartupPaneEnv::capture(),
         }
     }
 
@@ -221,7 +242,7 @@ impl BackendRegistry {
             }
         }
 
-        let result = detect_backend_impl().await;
+        let result = detect_backend_impl(&self.startup_env).await;
         *self.detection_result.write().await = Some(result.clone());
         result
     }
@@ -274,6 +295,62 @@ impl BackendRegistry {
         self.in_process_backend.read().await.clone()
     }
 
+    /// Select a teammate executor using the resolved AgentTeams mode.
+    ///
+    /// TS parity:
+    /// - `in-process` always returns the in-process executor.
+    /// - explicit `tmux` / `iterm2` fail loudly when that backend is
+    ///   unavailable or not registered.
+    /// - `auto` prefers the detected pane backend, then falls back to
+    ///   in-process when no pane executor exists.
+    pub async fn select_teammate_executor(
+        &self,
+        mode: coco_config::TeammateMode,
+        is_non_interactive: bool,
+    ) -> Result<Arc<dyn TeammateExecutor>, String> {
+        let in_process = || async {
+            self.in_process_backend
+                .read()
+                .await
+                .clone()
+                .ok_or_else(|| "in-process teammate executor is not registered".to_string())
+        };
+
+        if is_non_interactive {
+            return in_process().await;
+        }
+
+        match mode {
+            coco_config::TeammateMode::InProcess => in_process().await,
+            coco_config::TeammateMode::Tmux => {
+                let expected = BackendType::Tmux;
+                let pane = self.pane_backend.read().await.clone().ok_or_else(|| {
+                    format!("{} teammate backend is not registered", mode.as_str())
+                })?;
+                if pane.backend_type() != expected || !pane.is_available().await {
+                    return Err(format!("{} teammate backend is unavailable", mode.as_str()));
+                }
+                Ok(Arc::new(
+                    crate::pane::pane_executor::PaneBackendExecutor::new(pane),
+                ))
+            }
+            coco_config::TeammateMode::Auto => {
+                let detected = self.detect_backend().await;
+                if detected.backend_type.is_pane_backend()
+                    && let Some(pane) = self.pane_backend.read().await.clone()
+                    && pane.backend_type() == detected.backend_type
+                    && pane.is_available().await
+                {
+                    return Ok(Arc::new(
+                        crate::pane::pane_executor::PaneBackendExecutor::new(pane),
+                    ));
+                }
+                self.mark_in_process_fallback().await;
+                in_process().await
+            }
+        }
+    }
+
     /// Get the resolved teammate mode string.
     ///
     /// TS: `getResolvedTeammateMode()`
@@ -308,14 +385,14 @@ impl Default for BackendRegistry {
 ///
 /// TS: `isInsideTmuxSync()` — checks TMUX env var captured at load.
 pub fn is_inside_tmux() -> bool {
-    coco_config::env::env_opt(coco_config::EnvKey::Tmux).is_some_and(|v| !v.is_empty())
+    StartupPaneEnv::capture().is_inside_tmux()
 }
 
 /// Get the leader's tmux pane ID.
 ///
 /// TS: `getLeaderPaneId()` — returns TMUX_PANE env var.
 pub fn get_leader_pane_id() -> Option<String> {
-    coco_config::env::env_opt(coco_config::EnvKey::TmuxPane)
+    StartupPaneEnv::capture().tmux_pane
 }
 
 /// Check if tmux is available on the system.
@@ -333,8 +410,7 @@ pub async fn is_tmux_available() -> bool {
 ///
 /// TS: `isInITerm2()`
 pub fn is_in_iterm2() -> bool {
-    coco_config::env::env_opt(coco_config::EnvKey::TermProgram).is_some_and(|v| v == "iTerm.app")
-        || coco_config::env::env_opt(coco_config::EnvKey::ItermSessionId).is_some()
+    StartupPaneEnv::capture().is_in_iterm2()
 }
 
 /// Check if the it2 CLI is available.
@@ -350,9 +426,19 @@ pub async fn is_it2_cli_available() -> bool {
 }
 
 /// Run backend detection.
-async fn detect_backend_impl() -> BackendDetectionResult {
+impl StartupPaneEnv {
+    fn is_inside_tmux(&self) -> bool {
+        self.tmux.as_deref().is_some_and(|v| !v.is_empty())
+    }
+
+    fn is_in_iterm2(&self) -> bool {
+        self.term_program.as_deref() == Some("iTerm.app") || self.iterm_session_id.is_some()
+    }
+}
+
+async fn detect_backend_impl(startup_env: &StartupPaneEnv) -> BackendDetectionResult {
     // Priority 1: Inside tmux
-    if is_inside_tmux() {
+    if startup_env.is_inside_tmux() {
         return BackendDetectionResult {
             backend_type: BackendType::Tmux,
             is_native: true,
@@ -361,7 +447,7 @@ async fn detect_backend_impl() -> BackendDetectionResult {
     }
 
     // Priority 2: iTerm2 with it2 CLI
-    if is_in_iterm2() && is_it2_cli_available().await {
+    if startup_env.is_in_iterm2() && is_it2_cli_available().await {
         return BackendDetectionResult {
             backend_type: BackendType::Iterm2,
             is_native: true,
@@ -370,7 +456,7 @@ async fn detect_backend_impl() -> BackendDetectionResult {
     }
 
     // Priority 3: iTerm2 without it2, but tmux available
-    if is_in_iterm2() && is_tmux_available().await {
+    if startup_env.is_in_iterm2() && is_tmux_available().await {
         return BackendDetectionResult {
             backend_type: BackendType::Tmux,
             is_native: false,

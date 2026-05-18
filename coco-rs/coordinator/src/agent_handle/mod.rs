@@ -41,9 +41,12 @@ use crate::identity::get_agent_name;
 use crate::identity::get_team_name;
 use crate::mailbox::TeammateMessage;
 use crate::mailbox::write_to_mailbox;
+use crate::roster_store::CommitMemberRequest;
+use crate::roster_store::DeleteTeamRequest;
+use crate::roster_store::SpawnMemberRequest;
+use crate::roster_store::TeamRosterStore;
 use crate::runner::InProcessAgentRunner;
 use crate::runner::SpawnConfig;
-use crate::team_file::write_team_file;
 use crate::teammate::resolve_teammate_model;
 use crate::types::TeamManager;
 
@@ -54,7 +57,9 @@ use crate::types::TeamManager;
 /// (in-process, tmux, iTerm2) and manages agent lifecycle.
 pub struct SwarmAgentHandle {
     runner: Arc<InProcessAgentRunner>,
+    backend_registry: Option<Arc<crate::pane::BackendRegistry>>,
     team_manager: Arc<RwLock<Option<TeamManager>>>,
+    roster_store: TeamRosterStore,
     agents: Arc<RwLock<Vec<SubAgentState>>>,
     /// Drives the LLM loop for sync subagents. `None` ⇒ sync spawn fails
     /// fast with a "no engine configured" error rather than silently
@@ -74,6 +79,11 @@ pub struct SwarmAgentHandle {
     /// is addressable through `Task*` tools the model invokes later.
     /// `None` ⇒ bg spawns still run but aren't model-addressable.
     task_registry: Option<coco_tool_runtime::AgentTaskRegistryRef>,
+    /// Durable task-list handle shared with the leader engine. In-process
+    /// teammates poll this after mailbox messages so unclaimed team tasks
+    /// become work prompts without going through a separate mirror.
+    task_list: Option<coco_tool_runtime::TaskListHandleRef>,
+    task_list_router: Option<coco_tool_runtime::TeamTaskListRouterRef>,
     /// Per-agent transcript persistence. When installed, bg AgentTool
     /// spawns write `AgentSpawnMetadata` at registration and the full
     /// message history to `agent-<id>.jsonl` on completion. `resume_agent`
@@ -159,14 +169,19 @@ impl SwarmAgentHandle {
         cwd: String,
         runtime_config: Arc<coco_config::RuntimeConfig>,
     ) -> Self {
+        let roster_store = TeamRosterStore::new(team_manager.clone());
         Self {
             runner,
+            backend_registry: None,
             team_manager,
+            roster_store,
             agents: Arc::new(RwLock::new(Vec::new())),
             execution_engine: None,
             worktree_manager: None,
             side_query: None,
             task_registry: None,
+            task_list: None,
+            task_list_router: None,
             transcript_store: None,
             cwd,
             runtime_config,
@@ -183,6 +198,18 @@ impl SwarmAgentHandle {
                 std::collections::HashMap::new(),
             )),
         }
+    }
+
+    pub fn set_backend_registry(&mut self, registry: Arc<crate::pane::BackendRegistry>) {
+        self.backend_registry = Some(registry);
+    }
+
+    pub fn set_task_list(&mut self, handle: coco_tool_runtime::TaskListHandleRef) {
+        self.task_list = Some(handle);
+    }
+
+    pub fn set_team_task_list_router(&mut self, router: coco_tool_runtime::TeamTaskListRouterRef) {
+        self.task_list_router = Some(router);
     }
 
     /// Install the MCP handle used for per-agent dynamic server
@@ -267,6 +294,22 @@ impl SwarmAgentHandle {
             .cloned()
     }
 
+    /// Interrupt an in-process teammate's active turn without killing
+    /// the teammate lifecycle. Mirrors TS `currentWorkAbortController`:
+    /// Escape in a teammate transcript aborts the current runAgent()
+    /// iteration, then the teammate returns to idle and can receive more
+    /// prompts.
+    pub async fn interrupt_teammate_current_work(&self, agent_id: &str) -> Result<bool, String> {
+        let state = self
+            .teammate_task_states
+            .read()
+            .await
+            .get(agent_id)
+            .cloned()
+            .ok_or_else(|| format!("Teammate '{agent_id}' not found"))?;
+        Ok(state.read().await.interrupt_current_work())
+    }
+
     pub fn set_runtime_config(&mut self, runtime_config: Arc<coco_config::RuntimeConfig>) {
         self.runtime_config = runtime_config;
     }
@@ -346,7 +389,7 @@ impl SwarmAgentHandle {
         &self,
         request: &AgentSpawnRequest,
     ) -> Result<AgentSpawnResponse, String> {
-        let name = request
+        let requested_name = request
             .name
             .as_deref()
             .ok_or("name required for teammate")?;
@@ -356,7 +399,18 @@ impl SwarmAgentHandle {
             .ok_or("team_name required for teammate")?;
 
         let main_model_id = self.current_main_model_id();
-        let model = resolve_teammate_model(request.model.as_deref(), Some(&main_model_id), None);
+        let resolved_model = resolve_teammate_model(
+            request.model.as_deref(),
+            &main_model_id,
+            &self.runtime_config.agent_teams,
+            request.subagent_type.as_deref(),
+            |role| {
+                self.runtime_config
+                    .model_roles
+                    .get(role)
+                    .map(|spec| spec.model_id.clone())
+            },
+        );
 
         // Prefer per-spawn `initial_prompt` override; otherwise fall back to
         // the leader's full system prompt so the teammate sees the same
@@ -375,8 +429,35 @@ impl SwarmAgentHandle {
         // the same color across spawns within a session (TS
         // `teammateLayoutManager.ts:assignTeammateColor`). The agent_id
         // namespacing keeps the assignment scoped per teammate identity.
-        let agent_id_for_color = format!("{name}@{team_name}");
+        let reservation = self
+            .roster_store
+            .reserve_member(SpawnMemberRequest {
+                desired_name: requested_name.to_string(),
+                team_name: team_name.to_string(),
+                agent_type: request.subagent_type.clone(),
+                model: Some(resolved_model.model.clone()),
+                prompt: request.prompt.clone(),
+                color: None,
+                plan_mode_required: request.mode.as_deref().is_some_and(|m| m == "plan"),
+                cwd: request
+                    .cwd
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| self.cwd.clone()),
+                worktree_path: None,
+                mode: request
+                    .mode
+                    .as_deref()
+                    .and_then(|m| serde_json::from_value(serde_json::json!(m)).ok()),
+            })
+            .await?;
+        let name = reservation.name.as_str();
+
+        let agent_id_for_color = reservation.agent_id.clone();
         let color = crate::pane::layout::assign_teammate_color(&agent_id_for_color);
+        self.roster_store
+            .set_member_color(team_name, &reservation.agent_id, color.as_str().to_string())
+            .await?;
 
         let config = SpawnConfig {
             name: name.to_string(),
@@ -384,7 +465,7 @@ impl SwarmAgentHandle {
             prompt: request.prompt.clone(),
             color: Some(color.as_str().to_string()),
             plan_mode_required: request.mode.as_deref().is_some_and(|m| m == "plan"),
-            model: Some(model.clone()),
+            model: Some(resolved_model.model.clone()),
             working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
             system_prompt: teammate_system_prompt,
             allowed_tools: Vec::new(),
@@ -398,9 +479,62 @@ impl SwarmAgentHandle {
             max_turns: request.max_turns,
         };
 
-        let spawn_result = self.runner.register_agent(config.clone()).await;
+        let mut launched_executor: Option<Arc<dyn crate::pane::TeammateExecutor>> = None;
+        let selected_backend = if let Some(registry) = self.backend_registry.as_ref() {
+            let executor = registry
+                .select_teammate_executor(
+                    self.runtime_config.agent_teams.teammate_mode,
+                    request.is_non_interactive,
+                )
+                .await?;
+            launched_executor = Some(executor.clone());
+            let spawn = executor
+                .spawn(crate::pane::TeammateSpawnConfig {
+                    name: name.to_string(),
+                    team_name: team_name.to_string(),
+                    color: Some(color),
+                    plan_mode_required: config.plan_mode_required,
+                    prompt: request.prompt.clone(),
+                    cwd: request
+                        .cwd
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| self.cwd.clone()),
+                    model: config.model.clone(),
+                    system_prompt: config.system_prompt.clone(),
+                    system_prompt_mode: crate::pane::SystemPromptMode::Default,
+                    worktree_path: None,
+                    parent_session_id: request.session_id.clone(),
+                    permissions: config.allowed_tools.clone(),
+                    allow_permission_prompts: config.allow_permission_prompts,
+                    effort: request.effort.clone(),
+                    use_exact_tools: request.use_exact_tools,
+                    mcp_servers: request.mcp_servers.clone(),
+                    disallowed_tools: request.disallowed_tools.clone(),
+                    max_turns: request.max_turns,
+                })
+                .await;
+            (executor.backend_type(), spawn)
+        } else {
+            let spawn = self.runner.register_agent(config.clone()).await;
+            (
+                crate::types::BackendType::InProcess,
+                crate::pane::TeammateSpawnResult {
+                    success: spawn.success,
+                    agent_id: spawn.agent_id,
+                    error: spawn.error,
+                    task_id: None,
+                    pane_id: None,
+                },
+            )
+        };
+        let (spawn_backend_type, spawn_result) = selected_backend;
 
         if !spawn_result.success {
+            let _ = self
+                .roster_store
+                .rollback_member(team_name, &reservation.agent_id)
+                .await;
             return Ok(AgentSpawnResponse {
                 status: AgentSpawnStatus::Failed,
                 agent_id: Some(spawn_result.agent_id),
@@ -422,11 +556,67 @@ impl SwarmAgentHandle {
             name: name.to_string(),
             status: SubAgentStatus::Running,
             turns: 0,
-            model: Some(model.clone()),
+            model: Some(resolved_model.model.clone()),
             working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
             last_message: None,
         };
         self.agents.write().await.push(state);
+        let _team_member = match self
+            .roster_store
+            .commit_member(CommitMemberRequest {
+                team_name: team_name.to_string(),
+                agent_id: reservation.agent_id.clone(),
+                backend_type: spawn_backend_type,
+                pane_id: spawn_result.pane_id.clone(),
+                // The parent session id is not the teammate session id.
+                // Pane/in-process children fill this on reconnect/report.
+                session_id: None,
+            })
+            .await
+        {
+            Ok(member) => member,
+            Err(e) => {
+                if let Some(executor) = launched_executor.as_ref() {
+                    let _ = executor.kill(&spawn_result.agent_id).await;
+                } else {
+                    let _ = self.runner.cancel_agent(&spawn_result.agent_id).await;
+                }
+                let _ = self
+                    .roster_store
+                    .rollback_member(team_name, &reservation.agent_id)
+                    .await;
+                return Ok(AgentSpawnResponse {
+                    status: AgentSpawnStatus::Failed,
+                    agent_id: Some(spawn_result.agent_id),
+                    result: None,
+                    error: Some(e),
+                    total_tool_use_count: 0,
+                    total_tokens: 0,
+                    duration_ms: 0,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    output_file: None,
+                    prompt: None,
+                    ..Default::default()
+                });
+            }
+        };
+        {
+            let tm = self.team_manager.read().await;
+            if let Some(manager) = tm.as_ref() {
+                manager
+                    .register_agent(SubAgentState {
+                        agent_id: spawn_result.agent_id.clone(),
+                        name: name.to_string(),
+                        status: SubAgentStatus::Running,
+                        turns: 0,
+                        model: Some(resolved_model.model.clone()),
+                        working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
+                        last_message: None,
+                    })
+                    .await;
+            }
+        }
 
         // ── Gap C fix — actually start the teammate's LLM loop ──
         //
@@ -440,7 +630,9 @@ impl SwarmAgentHandle {
         // runner config + task-state mirror, kick off the runner_loop
         // in a detached task, and wire its JoinHandle into the runner
         // so `wait_for_completion` / `cancel_agent` work.
-        if let Some(engine) = self.teammate_engine.clone() {
+        if spawn_backend_type == crate::types::BackendType::InProcess
+            && let Some(engine) = self.teammate_engine.clone()
+        {
             let cancelled = self
                 .runner
                 .get_context(&spawn_result.agent_id)
@@ -498,6 +690,14 @@ impl SwarmAgentHandle {
                 features: request.features.clone(),
                 tool_overrides: request.tool_overrides.clone(),
                 parent_tool_filter: request.parent_tool_filter.clone(),
+                effort: request.effort.clone(),
+                use_exact_tools: request.use_exact_tools,
+                mcp_servers: request.mcp_servers.clone(),
+                disallowed_tools: request.disallowed_tools.clone(),
+                model_role: resolved_model.model_role,
+                model_selection: resolved_model.model_selection.clone(),
+                task_list: self.task_list.clone(),
+                roster_store: Some(self.roster_store.clone()),
                 plan_mode_required: config.plan_mode_required,
                 hooks: self.hook_registry().cloned(),
                 orchestration_ctx: teammate_orchestration_ctx,
@@ -506,7 +706,7 @@ impl SwarmAgentHandle {
             let join =
                 crate::runner_loop::start_in_process_teammate(runner_config, engine, task_state);
             self.runner.start_agent(&spawn_result.agent_id, join).await;
-        } else {
+        } else if spawn_backend_type == crate::types::BackendType::InProcess {
             tracing::warn!(
                 agent_id = %spawn_result.agent_id,
                 "teammate registered without execution engine — no LLM turns will run; \
@@ -565,18 +765,7 @@ impl AgentHandle for SwarmAgentHandle {
         let from = get_agent_name().unwrap_or_else(|| TEAM_LEAD_NAME.to_string());
 
         if to == "*" {
-            let tm = self.team_manager.read().await;
-            let members = if let Some(manager) = tm.as_ref() {
-                let agents = manager.running_agents().await;
-                agents
-                    .iter()
-                    .filter(|a| a.name != from)
-                    .map(|a| a.name.clone())
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
-            drop(tm);
+            let members = self.roster_store.broadcast_recipients(&from).await;
 
             let mut sent = Vec::new();
             for recipient in &members {
@@ -615,93 +804,34 @@ impl AgentHandle for SwarmAgentHandle {
         Ok(format!("Message sent from '{from}' to '{to}'"))
     }
 
-    async fn create_team(&self, name: &str) -> Result<String, String> {
-        use crate::types::TeamFile;
-        use crate::types::TeamMember;
-
-        let lead_agent_id = format!("{TEAM_LEAD_NAME}@{name}");
-
-        let team_file = TeamFile {
-            name: name.to_string(),
-            description: None,
-            created_at: chrono::Utc::now().timestamp(),
-            lead_agent_id: lead_agent_id.clone(),
-            lead_session_id: None,
-            hidden_pane_ids: Vec::new(),
-            team_allowed_paths: Vec::new(),
-            members: vec![TeamMember {
-                agent_id: lead_agent_id.clone(),
-                name: TEAM_LEAD_NAME.to_string(),
-                agent_type: Some("team-lead".to_string()),
-                model: Some(self.current_main_model_id()),
-                prompt: None,
-                color: None,
-                plan_mode_required: false,
-                joined_at: chrono::Utc::now().timestamp(),
-                tmux_pane_id: String::new(),
-                cwd: self.cwd.clone(),
-                worktree_path: None,
-                session_id: None,
-                subscriptions: Vec::new(),
-                backend_type: Some(crate::types::BackendType::InProcess),
-                is_active: true,
-                mode: None,
-            }],
-        };
-
-        write_team_file(name, &team_file)
-            .map_err(|e| format!("Failed to create team '{name}': {e}"))?;
-
-        {
-            let mut tm = self.team_manager.write().await;
-            *tm = Some(TeamManager::new(name.to_string(), team_file.clone()));
-        }
-
-        Ok(format!("Team '{name}' created with lead '{lead_agent_id}'"))
+    async fn create_team(
+        &self,
+        request: coco_tool_runtime::CreateTeamRequest,
+    ) -> Result<coco_tool_runtime::CreateTeamResult, String> {
+        let result = self.roster_store.create_team(request).await?;
+        Ok(coco_tool_runtime::CreateTeamResult {
+            team_name: result.team_name,
+            lead_agent_id: result.lead_agent_id,
+            task_list_id: result.task_list_id,
+        })
     }
 
     async fn delete_team(&self) -> Result<String, String> {
         // TS `TeamDeleteTool.ts:74` reads `appState.teamContext?.teamName`
         // — when no team is active it returns success with a "nothing to
         // clean up" message. Mirror that idempotency.
-        let name = {
-            let tm = self.team_manager.read().await;
-            tm.as_ref().map(|m| m.team_name().to_string())
-        };
-
-        let Some(name) = name else {
+        let result = self.roster_store.delete_team(DeleteTeamRequest).await?;
+        if result.deleted
+            && let Some(router) = &self.task_list_router
+        {
+            router
+                .clear_team_task_list_route()
+                .await
+                .map_err(|e| format!("Failed to restore session task list: {e}"))?;
+        }
+        let Some(name) = result.team_name else {
             return Ok("No team name found, nothing to clean up".into());
         };
-
-        {
-            let tm = self.team_manager.read().await;
-            if let Some(manager) = tm.as_ref() {
-                let active = manager.running_agents().await;
-                let non_lead: Vec<_> = active.iter().filter(|a| a.name != TEAM_LEAD_NAME).collect();
-                if !non_lead.is_empty() {
-                    let names: Vec<_> = non_lead.iter().map(|a| a.name.as_str()).collect();
-                    return Err(format!(
-                        "Cannot delete team: active members: {}",
-                        names.join(", ")
-                    ));
-                }
-            }
-        }
-
-        // TS: `cleanupTeamDirectories(teamName)`.
-        crate::team_file::cleanup_team_directories(&name)
-            .map_err(|e| format!("Failed to delete team '{name}': {e}"))?;
-
-        // TS: `unregisterTeamForSessionCleanup(teamName)`.
-        crate::team_file::unregister_team_for_session_cleanup(&name);
-
-        // TS: `clearTeammateColors()`.
-        crate::pane::layout::clear_teammate_colors();
-
-        {
-            let mut tm = self.team_manager.write().await;
-            *tm = None;
-        }
 
         // TS parity gap: `clearLeaderTeamName()` and the app-state reset
         // (`teamContext: undefined`, `inbox.messages: []`) live outside the
@@ -767,6 +897,10 @@ impl AgentHandle for SwarmAgentHandle {
 
         agent.status = SubAgentStatus::Backgrounded;
         Ok(())
+    }
+
+    async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {
+        self.interrupt_teammate_current_work(agent_id).await
     }
 }
 

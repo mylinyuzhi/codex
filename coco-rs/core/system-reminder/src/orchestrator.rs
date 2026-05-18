@@ -29,14 +29,19 @@ use std::time::Duration;
 
 use futures::future;
 use tracing::debug;
+use tracing::trace;
 
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
 use crate::throttle::ThrottleManager;
+use crate::types::ContentBlock;
+use crate::types::ReminderOutput;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
 use coco_config::SYSTEM_REMINDER_DEFAULT_TIMEOUT_MS as DEFAULT_TIMEOUT_MS;
 use coco_config::SystemReminderConfig;
+
+const REMINDER_LOG_PREVIEW_CHARS: usize = 40;
 
 /// The orchestrator owns the generator registry + throttle state for one
 /// session. It's constructed once and reused across turns.
@@ -177,6 +182,12 @@ impl SystemReminderOrchestrator {
         // Silent reminder-native attachments: display/transcript only.
         self.add_generator(Arc::new(AlreadyReadFileGenerator));
         self.add_generator(Arc::new(EditedImageFileGenerator));
+
+        debug!(
+            count = self.generators.len(),
+            generators = %self.generator_names().join(","),
+            "system-reminder generators registered"
+        );
     }
 
     /// Borrow the throttle manager. Exposed so the engine can inject external
@@ -258,15 +269,18 @@ impl SystemReminderOrchestrator {
             .collect();
 
         if applicable.is_empty() {
-            debug!(turn = ctx.turn_number, "no applicable generators this turn");
+            debug!(
+                human_turn = ctx.turn_number,
+                "no applicable generators this turn"
+            );
             return Vec::new();
         }
 
         debug!(
-            count = applicable.len(),
-            turn = ctx.turn_number,
-            generators = %applicable.iter().map(|g| g.name()).collect::<Vec<_>>().join(","),
-            "running generators"
+            candidate_count = applicable.len(),
+            registered_count = self.generators.len(),
+            human_turn = ctx.turn_number,
+            "system-reminder generation start"
         );
 
         let ctx_ref = &ctx;
@@ -290,7 +304,7 @@ impl SystemReminderOrchestrator {
                 Err(_) => {
                     tracing::warn!(
                         timeout_ms = batch_timeout.as_millis() as u64,
-                        turn = ctx.turn_number,
+                        human_turn = ctx.turn_number,
                         "system-reminder batch timed out; dropping in-flight generators"
                     );
                     Vec::new()
@@ -305,7 +319,12 @@ impl SystemReminderOrchestrator {
 
         debug!(
             produced = reminders.len(),
-            turn = ctx.turn_number,
+            produced_types = %reminders
+                .iter()
+                .map(|r| r.attachment_type.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            human_turn = ctx.turn_number,
             "orchestrator.generate_all done"
         );
         reminders
@@ -335,9 +354,9 @@ impl SystemReminderOrchestrator {
             .throttle
             .should_generate(g.attachment_type(), &throttle_cfg, ctx.turn_number)
         {
-            debug!(
+            trace!(
                 generator = g.name(),
-                turn = ctx.turn_number,
+                human_turn = ctx.turn_number,
                 "generator throttled"
             );
             return false;
@@ -361,9 +380,15 @@ async fn run_one_generator(
     let attachment_type = generator.attachment_type();
     match tokio::time::timeout(timeout_duration, generator.generate(ctx)).await {
         Ok(Ok(Some(reminder))) => {
-            tracing::trace!(
+            let (content_chars, content_preview, content_truncated) =
+                reminder_log_content(&reminder);
+            tracing::debug!(
                 generator = %name,
-                chars = reminder.content().map_or(0, str::len),
+                attachment_type = %attachment_type,
+                content_chars,
+                content_preview = %content_preview,
+                content_truncated,
+                silent = reminder.is_effectively_silent(),
                 "reminder produced"
             );
             Some((attachment_type, reminder))
@@ -382,6 +407,61 @@ async fn run_one_generator(
             None
         }
     }
+}
+
+fn reminder_log_content(reminder: &SystemReminder) -> (usize, String, bool) {
+    let content = reminder_log_text(reminder);
+    let content_chars = content.chars().count();
+    let compact = compact_whitespace(&content);
+    let mut chars = compact.chars();
+    let preview = chars.by_ref().take(REMINDER_LOG_PREVIEW_CHARS).collect();
+    let truncated = chars.next().is_some();
+    (content_chars, preview, truncated)
+}
+
+fn reminder_log_text(reminder: &SystemReminder) -> String {
+    match &reminder.output {
+        ReminderOutput::Text(text) => text.clone(),
+        ReminderOutput::Messages(messages) => {
+            let mut out = String::new();
+            for message in messages {
+                for block in &message.blocks {
+                    match block {
+                        ContentBlock::Text { text } => append_log_part(&mut out, text),
+                        ContentBlock::Image { media_type, .. } => {
+                            append_log_part(&mut out, &format!("[image:{media_type}]"));
+                        }
+                        ContentBlock::ToolUse { name, .. } => {
+                            append_log_part(&mut out, &format!("[tool_use:{name}]"));
+                        }
+                        ContentBlock::ToolResult { content, .. } => {
+                            append_log_part(&mut out, content);
+                        }
+                    }
+                }
+            }
+            out
+        }
+        ReminderOutput::ModelAttachment { payload }
+        | ReminderOutput::SilentAttachment { payload } => {
+            serde_json::to_string(payload).unwrap_or_else(|_| "<unserializable>".to_string())
+        }
+    }
+}
+
+fn append_log_part(out: &mut String, part: &str) {
+    if !out.is_empty() {
+        out.push(' ');
+    }
+    out.push_str(part);
+}
+
+fn compact_whitespace(text: &str) -> String {
+    let mut out = String::new();
+    for part in text.split_whitespace() {
+        append_log_part(&mut out, part);
+    }
+    out
 }
 
 #[cfg(test)]

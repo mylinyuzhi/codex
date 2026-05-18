@@ -12,6 +12,7 @@ fn test_skill(name: &str, description: &str, prompt: &str, source: SkillSource) 
         aliases: vec![],
         allowed_tools: None,
         model: None,
+        model_role: None,
         when_to_use: None,
         argument_names: vec![],
         paths: vec![],
@@ -70,12 +71,12 @@ fn test_skill_from_project() {
             path: "/project/.claude/skills/deploy.md".into(),
         },
     );
-    skill.model = Some("opus".into());
+    skill.model = Some("anthropic/claude-opus-4-7".into());
     mgr.register(skill);
 
     let skill = mgr.get("deploy").unwrap();
     assert!(matches!(skill.source, SkillSource::Project { .. }));
-    assert_eq!(skill.model.as_deref(), Some("opus"));
+    assert_eq!(skill.model.as_deref(), Some("anthropic/claude-opus-4-7"));
 }
 
 #[test]
@@ -120,7 +121,8 @@ fn test_load_from_markdown_with_frontmatter() {
 ---
 description: Review a pull request
 allowed-tools: Bash, Read, Grep
-model: opus
+model: anthropic/claude-opus-4-7
+model_role: review
 ---
 
 Carefully review the PR for correctness and style.
@@ -138,7 +140,8 @@ Check for bugs, security issues, and performance.
             "Grep".to_string(),
         ])
     );
-    assert_eq!(skill.model.as_deref(), Some("opus"));
+    assert_eq!(skill.model.as_deref(), Some("anthropic/claude-opus-4-7"));
+    assert_eq!(skill.model_role, Some(coco_types::ModelRole::Review));
     assert!(skill.prompt.contains("Carefully review the PR"));
     assert!(skill.prompt.contains("security issues"));
 }

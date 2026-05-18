@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Repo-tracked git pre-commit hook for the coco-rs workspace.
 #
-# Activate with (run from repo root, /lyz/codespace/codex):
+# Activate with (run from repo root):
 #   git config core.hooksPath coco-rs/scripts/git-hooks
 #
 # What this enforces (in order, fast checks first):

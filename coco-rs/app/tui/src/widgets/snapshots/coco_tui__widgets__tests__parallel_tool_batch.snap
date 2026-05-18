@@ -9,11 +9,11 @@ expression: output
 ❯ Investigate                                                                   
                                                                                 
   ‖ 3 in parallel                                                               
-  ● Bash(ls -la)                                                                
-  ● Read(src/main.rs)                                                           
-  ● Grep(TODO)                                                                  
+• 🔨  Bash(ls -la)                                                               
+• 🔨  Read(src/main.rs)                                                          
+• 🔨  Grep(TODO)                                                                 
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
- opus-4 * auto | ↑0 ↓0 · cache 0% | ctx 0% | 4 msgs
+ opus-4 * auto | show thinking(F2):off | ↑0 ↓0 · cache 0% | ctx 0% | 4 msgs

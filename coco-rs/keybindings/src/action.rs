@@ -85,7 +85,6 @@ pub enum KeybindingAction {
     TabsPrevious,
 
     // ── Transcript viewer — schema.ts:113-114 ─────────────────────────
-    TranscriptToggleShowAll,
     TranscriptExit,
 
     // ── History search — schema.ts:116-119 ────────────────────────────
@@ -245,7 +244,6 @@ impl KeybindingAction {
             Self::TabsNext => Cow::Borrowed("tabs:next"),
             Self::TabsPrevious => Cow::Borrowed("tabs:previous"),
 
-            Self::TranscriptToggleShowAll => Cow::Borrowed("transcript:toggleShowAll"),
             Self::TranscriptExit => Cow::Borrowed("transcript:exit"),
 
             Self::HistorySearchNext => Cow::Borrowed("historySearch:next"),
@@ -449,7 +447,6 @@ impl FromStr for KeybindingAction {
             "tabs:next" => Self::TabsNext,
             "tabs:previous" => Self::TabsPrevious,
 
-            "transcript:toggleShowAll" => Self::TranscriptToggleShowAll,
             "transcript:exit" => Self::TranscriptExit,
 
             "historySearch:next" => Self::HistorySearchNext,

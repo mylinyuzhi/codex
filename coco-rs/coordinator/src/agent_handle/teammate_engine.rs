@@ -45,14 +45,24 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
             max_turns: config.max_turns,
             allowed_tools: config.allowed_tools,
             disallowed_tools: config.disallowed_tools,
-            extra_allow_rules: Vec::new(),
+            extra_permission_rules: config.extra_permission_rules,
+            live_permission_rules: config.live_permission_rules,
+            live_permission_mode: config.live_permission_mode,
             tool_overrides: config.tool_overrides,
             features: config.features,
             parent_tool_filter: config.parent_tool_filter,
             preserve_tool_use_results: config.preserve_tool_use_results,
+            permission_mode: config.permission_mode,
+            cancel: config.cancel,
             bypass_permissions_available: config.bypass_permissions_available,
             fork_context_messages: config.fork_context_messages,
             is_teammate: true,
+            is_in_process_teammate: true,
+            effort: config.effort,
+            use_exact_tools: config.use_exact_tools,
+            mcp_servers: config.mcp_servers,
+            model_role: config.model_role,
+            model_selection: config.model_selection,
             ..Default::default()
         };
 
@@ -144,6 +154,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
                     // not re-flatten history into a legacy string.
                     allowed_tools: vec![String::new()],
                     is_teammate: true,
+                    is_in_process_teammate: true,
                     ..Default::default()
                 };
                 match engine.execute_query(&attempt.summary_request, cfg).await {

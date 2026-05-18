@@ -1,5 +1,8 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::widgets::Widget;
 
 use crate::i18n::locale_test_guard;
 use crate::presentation::streaming::StreamingTailBlock;
@@ -11,25 +14,260 @@ use crate::state::session::MessageContent;
 use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
 use crate::state::session::ToolUseStatus;
+use crate::state::transcript::TranscriptCellId;
+use crate::state::transcript::TranscriptOverlay;
 use crate::state::ui::StreamingState;
 use crate::theme::Theme;
+use crate::widgets::TranscriptOverlayWidget;
 
 #[test]
-fn transcript_overlay_content_renders_empty_state_and_show_all_footer() {
+fn test_tool_output_preview_empty_output() {
+    assert_eq!(tool_output_preview("", 5), ToolOutputPreview::Empty);
+}
+
+#[test]
+fn test_tool_output_preview_short_output_keeps_all_lines() {
+    assert_eq!(
+        tool_output_preview("one\ntwo\nthree", 5),
+        ToolOutputPreview::Full(vec!["one", "two", "three"])
+    );
+}
+
+#[test]
+fn test_tool_output_preview_long_output_keeps_head_and_tail() {
+    assert_eq!(
+        tool_output_preview("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight", 5),
+        ToolOutputPreview::Truncated {
+            head: vec!["one", "two"],
+            omitted: 4,
+            tail: vec!["seven", "eight"],
+        }
+    );
+}
+
+#[test]
+fn test_tool_output_preview_one_row_budget_reports_omitted_lines() {
+    assert_eq!(
+        tool_output_preview("one\ntwo\nthree", 1),
+        ToolOutputPreview::Truncated {
+            head: vec![],
+            omitted: 3,
+            tail: vec![],
+        }
+    );
+}
+
+#[test]
+fn transcript_overlay_widget_renders_empty_state_and_footer_without_show_all() {
     let _locale = locale_test_guard("en");
     let state = AppState::default();
-    let theme = Theme::default();
-    let mut overlay = TranscriptOverlay::new();
-    overlay.show_all = false;
-    overlay.scroll = -5;
+    let overlay = TranscriptOverlay::new();
+    let body = render_transcript_text(&state, &overlay, 72, 8);
 
-    let (title, body, border) = transcript_overlay_content(&state, &overlay, UiStyles::new(&theme));
-
-    assert_eq!(title, " Transcript ");
-    assert_eq!(border, theme.primary);
     assert!(body.contains("No messages yet."));
-    assert!(body.contains("ctrl+o to toggle"));
-    assert!(body.contains("show all"));
+    assert!(body.contains("ctrl+o toggle"));
+    assert!(body.contains("PgUp/PgDn page"));
+    assert!(body.contains("Esc/q quit"));
+    assert!(!body.contains("ctrl+e"));
+    assert!(!body.contains("show all"));
+}
+
+#[test]
+fn snapshot_transcript_overlay_empty_footer() {
+    let _locale = locale_test_guard("en");
+    let state = AppState::default();
+    let overlay = TranscriptOverlay::new();
+
+    insta::assert_snapshot!(
+        "transcript_overlay_empty_footer",
+        render_transcript_text(&state, &overlay, 72, 8)
+    );
+}
+
+#[test]
+fn snapshot_transcript_overlay_selected_tool_preview() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state
+        .session
+        .add_message(ChatMessage::user_text("user", "inspect src/lib.rs"));
+    state.session.add_message(tool_use_message("call-1"));
+    state.session.add_message(ChatMessage::tool_success(
+        "tool-call-1",
+        "Read",
+        "pub fn alpha() {}\n\
+         pub fn beta() {}\n\
+         pub fn gamma() {}\n\
+         pub fn delta() {}\n\
+         pub fn epsilon() {}\n\
+         pub fn zeta() {}",
+    ));
+    state.session.add_message(ChatMessage::assistant_text(
+        "assistant",
+        "Found the helpers.",
+    ));
+    let overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+
+    insta::assert_snapshot!(
+        "transcript_overlay_selected_tool_preview",
+        render_transcript_text(&state, &overlay, 84, 14)
+    );
+}
+
+#[test]
+fn snapshot_transcript_overlay_expanded_thinking_cell() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state
+        .session
+        .add_message(ChatMessage::user_text("user", "bash ls"));
+    state.session.add_message(ChatMessage {
+        id: "thinking".into(),
+        role: ChatRole::Assistant,
+        content: MessageContent::Thinking {
+            content: "The user wants me to run `ls` in the current working directory.\n\
+                I should call the Bash tool and then summarize the result."
+                .into(),
+            duration_ms: Some(1300),
+            reasoning_tokens: Some(15),
+        },
+        is_meta: false,
+        created_at_ms: 0,
+        is_compact_summary: false,
+        is_visible_in_transcript_only: false,
+        permission_mode: None,
+    });
+    state.session.add_message(ChatMessage::assistant_text(
+        "assistant",
+        "I'll list the current directory.",
+    ));
+    let overlay =
+        TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::message(1, "thinking")));
+
+    insta::assert_snapshot!(
+        "transcript_overlay_expanded_thinking_cell",
+        render_transcript_text(&state, &overlay, 96, 12)
+    );
+}
+
+#[test]
+fn transcript_overlay_collapsed_tool_keeps_header_and_head_tail_preview() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.add_message(ChatMessage::tool_success(
+        "tool-call-1",
+        "Glob",
+        "common/error/README.md\n\
+         common/otel/README.md\n\
+         retrieval/README.md\n\
+         services/lsp/README.md\n\
+         services/mcp-types/README.md\n\
+         utils/file-search/README.md\n\
+         utils/git/README.md\n\
+         utils/shell-parser/README.md\n\
+         utils/stdio-to-uds/README.md\n\
+         utils/stream-parser/README.md\n\
+         exec/apply-patch/tests/fixtures/scenarios/README.md\n\
+         vercel-ai/README.md\n\
+         core/system-reminder/README.md",
+    ));
+    let mut overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+    overlay
+        .collapsed_cell_ids
+        .insert(TranscriptCellId::tool("call-1"));
+
+    let body = render_transcript_text(&state, &overlay, 96, 14);
+
+    assert!(body.contains("● Glob"));
+    assert!(body.contains("└ common/error/README.md"));
+    assert!(body.contains("common/otel/README.md"));
+    assert!(body.contains("… +9 lines (ctrl+o to expand)"));
+    assert!(body.contains("vercel-ai/README.md"));
+    assert!(body.contains("core/system-reminder/README.md"));
+    assert!(!body.contains("retrieval/README.md"));
+}
+
+#[test]
+fn transcript_text_messages_are_full_and_not_expandable() {
+    let _locale = locale_test_guard("en");
+    let repeated = "one\ntwo\nthree\nfour\nfive\nsix";
+    let mut state = AppState::default();
+    state
+        .session
+        .add_message(ChatMessage::assistant_text("duplicate", repeated));
+    state
+        .session
+        .add_message(ChatMessage::assistant_text("duplicate", repeated));
+    let overlay = TranscriptOverlay::new();
+
+    let body = render_transcript_text(&state, &overlay, 84, 18);
+
+    assert!(body.contains("six"));
+    assert!(!body.contains(TRANSCRIPT_TRUNCATED_HINT));
+    assert!(transcript_expandable_cell_ids(&state).is_empty());
+}
+
+#[test]
+fn snapshot_transcript_overlay_expanded_truncation_tail() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.add_message(tool_use_message("call-1"));
+    state.session.add_message(ChatMessage::tool_success(
+        "tool-call-1",
+        "Read",
+        (0..=TRANSCRIPT_EXPANDED_CELL_LINE_CAP)
+            .map(|i| format!("expanded-line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    ));
+    let mut overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+    overlay.scroll = crate::state::transcript::TranscriptScrollPosition::Absolute(
+        TRANSCRIPT_EXPANDED_CELL_LINE_CAP.saturating_sub(4),
+    );
+
+    insta::assert_snapshot!(
+        "transcript_overlay_expanded_truncation_tail",
+        render_transcript_text(&state, &overlay, 84, 12)
+    );
+}
+
+#[test]
+fn snapshot_transcript_overlay_streaming_tail() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state
+        .session
+        .add_message(ChatMessage::user_text("user", "summarize status"));
+    let mut streaming = StreamingState::new();
+    streaming.append_text("Working through the transcript pager changes.");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    let overlay = TranscriptOverlay::new();
+
+    insta::assert_snapshot!(
+        "transcript_overlay_streaming_tail",
+        render_transcript_text(&state, &overlay, 84, 12)
+    );
+}
+
+fn render_transcript_text(
+    state: &AppState,
+    overlay: &TranscriptOverlay,
+    width: u16,
+    height: u16,
+) -> String {
+    let theme = Theme::default();
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    let mut layout = crate::widgets::TranscriptLayoutIndex::default();
+    TranscriptOverlayWidget::new(state, overlay, &mut layout, UiStyles::new(&theme))
+        .render(area, &mut buffer);
+    buffer
+        .content
+        .chunks(width as usize)
+        .map(|cells| cells.iter().map(ratatui::buffer::Cell::symbol).collect())
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 fn projection_cells(messages: &[ChatMessage], show_system_reminders: bool) -> Vec<TranscriptCell> {
@@ -86,6 +324,102 @@ fn transcript_projection_groups_parallel_tool_runs() {
             TranscriptCell::Message { index: 3 },
         ]
     );
+}
+
+#[test]
+fn transcript_projection_pairs_tool_use_with_result_by_call_id() {
+    let messages = vec![
+        ChatMessage::user_text("user", "list files"),
+        tool_use_message("call-1"),
+        ChatMessage::assistant_text("between", "checking"),
+        ChatMessage::tool_success("tool-call-1", "Read", "alpha\nbeta"),
+    ];
+
+    assert_eq!(
+        projection_cells(&messages, false),
+        vec![
+            TranscriptCell::Message { index: 0 },
+            TranscriptCell::ToolCall {
+                invocation: Some(1),
+                result: Some(3),
+                call_id: Some("call-1".to_string()),
+            },
+            TranscriptCell::Message { index: 2 },
+        ]
+    );
+}
+
+#[test]
+fn transcript_overlay_widget_highlights_anchor_cell_and_keeps_it_expanded() {
+    let mut state = AppState::default();
+    state
+        .session
+        .add_message(ChatMessage::user_text("user", "list"));
+    state.session.add_message(tool_use_message("call-1"));
+    state.session.add_message(ChatMessage::tool_success(
+        "tool-call-1",
+        "Read",
+        "alpha\nbeta",
+    ));
+    let overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+    let body = render_transcript_text(&state, &overlay, 80, 12);
+
+    assert!(body.contains("▶"));
+    assert!(body.contains("Read"));
+    assert!(body.contains("alpha"));
+}
+
+#[test]
+fn transcript_overlay_expands_tool_cells_by_default() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.add_message(tool_use_message("old-call"));
+    state.session.add_message(ChatMessage::tool_success(
+        "tool-old-call",
+        "Read",
+        "old-alpha\nold-beta\nold-gamma\nold-delta\nold-epsilon\nold-zeta",
+    ));
+    state.session.add_message(tool_use_message("new-call"));
+    state.session.add_message(ChatMessage::tool_success(
+        "tool-new-call",
+        "Read",
+        "new-alpha\nnew-beta\nnew-gamma\nnew-delta\nnew-epsilon\nnew-zeta",
+    ));
+    let overlay = TranscriptOverlay::new();
+    let body = render_transcript_text(&state, &overlay, 80, 24);
+
+    assert!(body.contains("old-alpha"));
+    assert!(body.contains("new-alpha"));
+    assert!(body.contains("old-zeta"));
+    assert!(body.contains("new-zeta"));
+    assert!(!body.contains(TRANSCRIPT_TRUNCATED_HINT));
+}
+
+#[test]
+fn transcript_overlay_caps_expanded_tool_result_lines() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.add_message(tool_use_message("call-1"));
+    state.session.add_message(ChatMessage::tool_success(
+        "tool-call-1",
+        "Read",
+        (0..=TRANSCRIPT_EXPANDED_CELL_LINE_CAP)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    ));
+    let overlay = TranscriptOverlay::new_with_anchor(Some(TranscriptCellId::tool("call-1")));
+
+    let body = render_transcript_text(
+        &state,
+        &overlay,
+        80,
+        (TRANSCRIPT_EXPANDED_CELL_LINE_CAP + 8) as u16,
+    );
+
+    assert!(body.contains("line-0"));
+    assert!(!body.contains(&format!("line-{TRANSCRIPT_EXPANDED_CELL_LINE_CAP}")));
+    assert!(body.contains("output truncated in UI"));
 }
 
 #[test]

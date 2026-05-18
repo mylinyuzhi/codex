@@ -17,7 +17,6 @@ V1 (`TodoWrite`) and V2 (`Task*` tools) are gated by `is_todo_v2_enabled()` at t
 - `utils/todo/types.ts` — `TodoItem` V1 schema
 - `tasks/LocalShellTask/`, `LocalAgentTask/`, `RemoteAgentTask/`, `DreamTask/` — running-task variants
 
-Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
 
 ## Key Types
 

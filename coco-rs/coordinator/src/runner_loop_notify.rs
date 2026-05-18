@@ -54,7 +54,7 @@ pub fn send_idle_notification(
 ///
 /// TS: `formatTaskAsPrompt(task)`.
 pub fn format_task_as_prompt(task_id: &str, subject: &str, description: &str) -> String {
-    let mut prompt = format!("Task #{task_id}: {subject}");
+    let mut prompt = format!("Complete all open tasks. Start with task #{task_id}: \n\n {subject}");
     if !description.is_empty() {
         prompt.push_str(&format!("\n\n{description}"));
     }

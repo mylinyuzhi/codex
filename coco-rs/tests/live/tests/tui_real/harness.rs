@@ -566,14 +566,14 @@ impl RealTuiHarness {
             } else if let CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
                 request_id,
                 tool_name,
-                input_preview,
+                display_input,
                 ..
             }) = &next
             {
                 Some(ApprovalRequest {
                     request_id: request_id.clone(),
                     tool_name: tool_name.clone(),
-                    input_preview: input_preview.clone(),
+                    input_preview: display_input.as_display_str().to_string(),
                 })
             } else {
                 None

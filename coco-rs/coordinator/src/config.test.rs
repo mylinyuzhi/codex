@@ -10,7 +10,6 @@ fn test_teammate_mode_as_str() {
     assert_eq!(TeammateMode::Auto.as_str(), "auto");
     assert_eq!(TeammateMode::Tmux.as_str(), "tmux");
     assert_eq!(TeammateMode::InProcess.as_str(), "in-process");
-    assert_eq!(TeammateMode::Iterm2.as_str(), "iterm2");
 }
 
 #[test]
@@ -25,7 +24,8 @@ fn test_teammate_mode_serde() {
 fn test_team_config_default() {
     let config = TeamConfig::default();
     assert_eq!(config.teammate_mode, TeammateMode::Auto);
-    assert!(config.teammate_default_model.is_none());
+    assert_eq!(config.default_model_role, coco_types::ModelRole::Main);
+    assert!(config.agent_type_model_roles.is_empty());
     assert!(config.show_spinner_tree);
     assert_eq!(config.max_agents, 8);
 }

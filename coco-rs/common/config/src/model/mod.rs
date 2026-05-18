@@ -22,6 +22,7 @@ use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 use coco_types::ToolOverrides;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -272,8 +273,7 @@ impl ModelRoles {
 }
 
 /// JSON-facing role model selection.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct ModelSelection {
     pub provider: String,
     pub model_id: String,
@@ -301,6 +301,25 @@ impl ModelSelection {
             api,
             display_name: self.model_id.clone(),
             model_id: self.model_id,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ModelSelection {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Slash(String),
+            Object { provider: String, model_id: String },
+        }
+
+        match Wire::deserialize(deserializer)? {
+            Wire::Slash(s) => Self::from_slash_str(&s).map_err(serde::de::Error::custom),
+            Wire::Object { provider, model_id } => Ok(Self { provider, model_id }),
         }
     }
 }

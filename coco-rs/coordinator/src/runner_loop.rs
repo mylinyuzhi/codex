@@ -27,11 +27,16 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use coco_tool_runtime::TaskListHandleRef;
+use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 use crate::constants::TEAM_LEAD_NAME;
 use crate::mailbox;
 use crate::pane::SystemPromptMode;
 use crate::prompt;
+use crate::roster_store::SetMemberActiveRequest;
+use crate::roster_store::TeamRosterStore;
 use crate::task::InProcessTeammateTaskState;
 use crate::task::TaskMessage;
 use crate::teammate;
@@ -81,6 +86,16 @@ pub struct AgentQueryConfig {
     /// so the teammate's own allow/deny gets intersected via
     /// `ToolFilter::narrow_with`.
     pub parent_tool_filter: Option<coco_types::ToolFilter>,
+    pub effort: Option<String>,
+    pub use_exact_tools: bool,
+    pub mcp_servers: Vec<String>,
+    pub model_role: Option<coco_types::ModelRole>,
+    pub model_selection: coco_types::LlmModelSelection,
+    pub permission_mode: Option<String>,
+    pub extra_permission_rules: Vec<coco_types::PermissionRule>,
+    pub live_permission_rules: Option<Arc<RwLock<Vec<coco_types::PermissionRule>>>>,
+    pub live_permission_mode: Option<Arc<RwLock<coco_types::PermissionMode>>>,
+    pub cancel: Option<CancellationToken>,
 }
 
 /// Result from running a single query/turn.
@@ -181,6 +196,14 @@ pub struct InProcessRunnerConfig {
     pub tool_overrides: Option<std::sync::Arc<coco_types::ToolOverrides>>,
     /// Parent session's Layer 4 tool filter — see `AgentQueryConfig`.
     pub parent_tool_filter: Option<coco_types::ToolFilter>,
+    pub effort: Option<String>,
+    pub use_exact_tools: bool,
+    pub mcp_servers: Vec<String>,
+    pub disallowed_tools: Vec<String>,
+    pub model_role: Option<coco_types::ModelRole>,
+    pub model_selection: coco_types::LlmModelSelection,
+    pub task_list: Option<TaskListHandleRef>,
+    pub roster_store: Option<TeamRosterStore>,
     /// Whether the leader must approve the teammate's plan before any
     /// implementation turn runs. When `true`, after the first turn (the
     /// plan-write turn) the runner sends a
@@ -202,6 +225,12 @@ pub struct InProcessRunnerConfig {
     /// Hook orchestration context, paired with `hooks`. Cloned for
     /// each TeammateIdle firing.
     pub orchestration_ctx: Option<coco_hooks::orchestration::OrchestrationContext>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TeammateControlState {
+    permission_mode: Arc<RwLock<coco_types::PermissionMode>>,
+    team_permission_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>>,
 }
 
 /// Result from running an in-process teammate to completion.
@@ -264,7 +293,34 @@ pub async fn run_in_process_teammate(
     );
 
     let mut all_messages: Vec<serde_json::Value> = Vec::new();
-    let mut current_prompt = config.prompt.clone();
+    let mut current_prompt = teammate::format_as_teammate_message(
+        TEAM_LEAD_NAME,
+        &config.prompt,
+        None,
+        Some("initial prompt"),
+    );
+    let initial_permission_mode = if config.plan_mode_required {
+        coco_types::PermissionMode::Plan
+    } else {
+        coco_types::PermissionMode::Default
+    };
+    let live_permission_mode = Arc::new(RwLock::new(initial_permission_mode));
+    let live_permission_rules = Arc::new(RwLock::new(load_team_allowed_path_rules(
+        &config.identity.team_name,
+    )));
+    let control_state = RwLock::new(TeammateControlState {
+        permission_mode: live_permission_mode.clone(),
+        team_permission_rules: live_permission_rules.clone(),
+    });
+    {
+        let mut state = task_state.write().await;
+        state.permission_mode = initial_permission_mode;
+        state.append_message(TaskMessage {
+            role: "user".to_string(),
+            content: current_prompt.clone(),
+            tool_name: None,
+        });
+    }
     let mut total_turns = 0i32;
     let mut total_input_tokens = 0i64;
     let mut total_output_tokens = 0i64;
@@ -306,25 +362,68 @@ pub async fn run_in_process_teammate(
             state.spinner_verb = Some("Working".to_string());
         }
 
+        let mut last_turn_interrupted = false;
+        let current_turn_cancel = CancellationToken::new();
+        let (permission_mode, live_permission_mode, live_permission_rules) = {
+            let state = control_state.read().await;
+            (
+                *state.permission_mode.read().await,
+                state.permission_mode.clone(),
+                state.team_permission_rules.clone(),
+            )
+        };
+        {
+            let mut state = task_state.write().await;
+            state.set_current_work_cancel(current_turn_cancel.clone());
+        }
         // Build query config
         let query_config = AgentQueryConfig {
             system_prompt: system_prompt.clone(),
             model: config.model.clone(),
             max_turns: config.max_turns,
             allowed_tools: config.allowed_tools.clone(),
-            disallowed_tools: Vec::new(),
+            disallowed_tools: config.disallowed_tools.clone(),
             fork_context_messages: all_messages.clone(),
             preserve_tool_use_results: true,
             bypass_permissions_available: config.bypass_permissions_available,
             features: config.features.clone(),
             tool_overrides: config.tool_overrides.clone(),
             parent_tool_filter: config.parent_tool_filter.clone(),
+            effort: config.effort.clone(),
+            use_exact_tools: config.use_exact_tools,
+            mcp_servers: config.mcp_servers.clone(),
+            model_role: config.model_role,
+            model_selection: config.model_selection.clone(),
+            permission_mode: Some(permission_mode_wire(permission_mode)),
+            extra_permission_rules: Vec::new(),
+            live_permission_rules: Some(live_permission_rules),
+            live_permission_mode: Some(live_permission_mode),
+            cancel: Some(current_turn_cancel.clone()),
         };
 
         // Run query
-        let query_result = match engine.run_query(&current_prompt, query_config).await {
+        let query_result_result = {
+            let prompt_for_query = current_prompt.clone();
+            let mut control_poll_interval =
+                tokio::time::interval(Duration::from_millis(POLL_INTERVAL_MS));
+            let query_future = engine.run_query(&prompt_for_query, query_config);
+            tokio::pin!(query_future);
+            loop {
+                tokio::select! {
+                    result = &mut query_future => break result,
+                    _ = control_poll_interval.tick() => {
+                        drain_control_messages(&config.identity, task_state, &control_state).await;
+                    }
+                }
+            }
+        };
+        let query_result = match query_result_result {
             Ok(result) => result,
             Err(e) => {
+                {
+                    let mut state = task_state.write().await;
+                    state.clear_current_work_cancel();
+                }
                 // Stash the error and break out so the unified cleanup at
                 // the bottom of the function runs `on_teammate_stop` AND
                 // the coordinator-mode `<task-notification>` send. Earlier
@@ -340,6 +439,10 @@ pub async fn run_in_process_teammate(
                 break;
             }
         };
+        {
+            let mut state = task_state.write().await;
+            state.clear_current_work_cancel();
+        }
 
         // Accumulate results
         total_turns += query_result.turns;
@@ -369,8 +472,22 @@ pub async fn run_in_process_teammate(
         }
 
         // Check cancellation after query
-        if config.cancelled.load(Ordering::Relaxed) || query_result.cancelled {
+        if query_result.cancelled && !config.cancelled.load(Ordering::Relaxed) {
+            last_turn_interrupted = true;
+            let mut state = task_state.write().await;
+            state.append_message(TaskMessage {
+                role: "assistant".to_string(),
+                content: "Interrupted by user.".to_string(),
+                tool_name: None,
+            });
+        }
+
+        if config.cancelled.load(Ordering::Relaxed) {
             break;
+        }
+
+        if query_result.cancelled {
+            current_turn_cancel.cancel();
         }
 
         // Compaction check (D1) — runs at tail-of-turn, before idle
@@ -512,7 +629,11 @@ pub async fn run_in_process_teammate(
             // Send idle notification to leader
             let idle_text = mailbox::create_idle_notification(
                 &config.identity.agent_name,
-                Some("available"),
+                Some(if last_turn_interrupted {
+                    "interrupted"
+                } else {
+                    "available"
+                }),
                 None,
             );
             let message = mailbox::TeammateMessage {
@@ -542,8 +663,14 @@ pub async fn run_in_process_teammate(
         let _ = was_idle;
 
         // Wait for next prompt or shutdown
-        let wait_result =
-            wait_for_next_prompt_or_shutdown(&config.identity, &config.cancelled).await;
+        let wait_result = wait_for_next_prompt_or_shutdown(
+            &config.identity,
+            &config.cancelled,
+            config.task_list.as_ref(),
+            task_state,
+            &control_state,
+        )
+        .await;
 
         match wait_result {
             WaitResult::Aborted => break,
@@ -621,6 +748,17 @@ pub async fn run_in_process_teammate(
         config.identity.color.as_ref().map(|c| c.as_str()),
         stop_reason.as_deref(),
     );
+    if let Some(store) = &config.roster_store
+        && let Err(e) = store
+            .set_member_active(SetMemberActiveRequest {
+                team_name: config.identity.team_name.clone(),
+                member_name: config.identity.agent_name.clone(),
+                is_active: false,
+            })
+            .await
+    {
+        tracing::warn!(error = %e, "failed to mark teammate inactive");
+    }
 
     // Coordinator-mode notification: when the leader is operating as a
     // coordinator (`COCO_COORDINATOR_MODE=1` + `Feature::AgentTeams`),
@@ -710,9 +848,12 @@ const POLL_INTERVAL_MS: u64 = 500;
 /// `mpsc::UnboundedReceiver<String>` registered per-`agent_id` on
 /// `InProcessAgentRunner`, drained at the top of this loop above the
 /// abort check.
-pub async fn wait_for_next_prompt_or_shutdown(
+pub(crate) async fn wait_for_next_prompt_or_shutdown(
     identity: &TeammateIdentity,
     cancelled: &AtomicBool,
+    task_list: Option<&TaskListHandleRef>,
+    task_state: &RwLock<InProcessTeammateTaskState>,
+    control_state: &RwLock<TeammateControlState>,
 ) -> WaitResult {
     let mut poll_count = 0u64;
 
@@ -732,7 +873,11 @@ pub async fn wait_for_next_prompt_or_shutdown(
         let messages =
             mailbox::read_mailbox(&identity.agent_name, &identity.team_name).unwrap_or_default();
 
-        // 2a: Shutdown requests (highest mailbox priority)
+        // 2a: Control messages that update local teammate state and
+        // should not become model prompts.
+        drain_control_messages(identity, task_state, control_state).await;
+
+        // 2b: Shutdown requests (highest prompt-bearing mailbox priority)
         for (i, msg) in messages.iter().enumerate() {
             if msg.read {
                 continue;
@@ -752,11 +897,11 @@ pub async fn wait_for_next_prompt_or_shutdown(
             }
         }
 
-        // 2b: Team-lead messages (second priority)
+        // 2c: Team-lead messages (second priority)
         if let Some((i, msg)) = messages
             .iter()
             .enumerate()
-            .find(|(_, m)| !m.read && m.from == TEAM_LEAD_NAME)
+            .find(|(_, m)| !m.read && m.from == TEAM_LEAD_NAME && !is_non_prompt_control(&m.text))
         {
             let _ = mailbox::mark_message_as_read_by_index(
                 &identity.agent_name,
@@ -771,8 +916,12 @@ pub async fn wait_for_next_prompt_or_shutdown(
             };
         }
 
-        // 2c: Any unread message (peer FIFO, third priority)
-        if let Some((i, msg)) = messages.iter().enumerate().find(|(_, m)| !m.read) {
+        // 2d: Any unread message (peer FIFO, third priority)
+        if let Some((i, msg)) = messages
+            .iter()
+            .enumerate()
+            .find(|(_, m)| !m.read && !is_non_prompt_control(&m.text))
+        {
             let _ = mailbox::mark_message_as_read_by_index(
                 &identity.agent_name,
                 &identity.team_name,
@@ -787,12 +936,197 @@ pub async fn wait_for_next_prompt_or_shutdown(
         }
 
         // Priority 3: Unclaimed tasks (lowest)
-        // Task list polling would go here if task list crate were available.
-        // For now, tasks are delivered via mailbox messages.
+        if let Some(task_list) = task_list
+            && let Some(task) = claim_first_available_task(task_list, &identity.agent_name).await
+        {
+            return WaitResult::NewMessage {
+                message: crate::runner_loop_notify::format_task_as_prompt(
+                    &task.id,
+                    task.active_form.as_deref().unwrap_or(&task.subject),
+                    &task.description,
+                ),
+                from: TEAM_LEAD_NAME.to_string(),
+                color: None,
+                summary: Some("task list assignment".to_string()),
+            };
+        }
+    }
+}
+
+async fn drain_control_messages(
+    identity: &TeammateIdentity,
+    task_state: &RwLock<InProcessTeammateTaskState>,
+    control_state: &RwLock<TeammateControlState>,
+) {
+    let messages =
+        mailbox::read_mailbox(&identity.agent_name, &identity.team_name).unwrap_or_default();
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.read || msg.from != TEAM_LEAD_NAME {
+            continue;
+        }
+        if !mailbox::is_structured_protocol_message(&msg.text) {
+            continue;
+        }
+        let Some(protocol) = mailbox::parse_protocol_message(&msg.text) else {
+            continue;
+        };
+        match protocol {
+            mailbox::ProtocolMessage::ModeSetRequest { mode, .. } => {
+                let mode_store = {
+                    let state = control_state.read().await;
+                    state.permission_mode.clone()
+                };
+                *mode_store.write().await = mode;
+                {
+                    let mut state = task_state.write().await;
+                    state.permission_mode = mode;
+                }
+                let _ = mailbox::mark_message_as_read_by_index(
+                    &identity.agent_name,
+                    &identity.team_name,
+                    i,
+                );
+            }
+            mailbox::ProtocolMessage::TeamPermissionUpdate {
+                permission_update, ..
+            } => {
+                let rules = permission_update.into_permission_rules();
+                if !rules.is_empty() {
+                    let rule_store = {
+                        let state = control_state.read().await;
+                        state.team_permission_rules.clone()
+                    };
+                    rule_store.write().await.extend(rules);
+                }
+                let _ = mailbox::mark_message_as_read_by_index(
+                    &identity.agent_name,
+                    &identity.team_name,
+                    i,
+                );
+            }
+            _ => {}
+        }
     }
 }
 
 // ── Task Management Helpers ──
+
+async fn claim_first_available_task(
+    task_list: &TaskListHandleRef,
+    claimant: &str,
+) -> Option<coco_types::TaskRecord> {
+    let tasks = match task_list.list_tasks().await {
+        Ok(tasks) => tasks,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to list team tasks");
+            return None;
+        }
+    };
+
+    let unresolved_task_ids = tasks
+        .iter()
+        .filter(|task| task.status != coco_types::TaskListStatus::Completed)
+        .map(|task| task.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+
+    for task in tasks {
+        if task.status != coco_types::TaskListStatus::Pending
+            || task.owner.is_some()
+            || task
+                .blocked_by
+                .iter()
+                .any(|id| unresolved_task_ids.contains(id))
+        {
+            continue;
+        }
+
+        let claimed = match task_list.claim_task(&task.id, claimant, true).await {
+            Ok(coco_types::TaskClaimOutcome::Success(task)) => task,
+            Ok(_) => continue,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to claim team task");
+                continue;
+            }
+        };
+
+        match task_list
+            .update_task(
+                &claimed.id,
+                coco_types::TaskRecordUpdate {
+                    status: Some(coco_types::TaskListStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(Some(task)) => return Some(task),
+            Ok(None) => return Some(claimed),
+            Err(e) => {
+                tracing::warn!(task_id = %claimed.id, error = %e, "failed to mark team task in progress");
+                return Some(claimed);
+            }
+        }
+    }
+
+    None
+}
+
+fn permission_mode_wire(mode: coco_types::PermissionMode) -> String {
+    serde_json::to_value(mode)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn is_non_prompt_control(text: &str) -> bool {
+    matches!(
+        mailbox::parse_protocol_message(text),
+        Some(
+            mailbox::ProtocolMessage::ModeSetRequest { .. }
+                | mailbox::ProtocolMessage::TeamPermissionUpdate { .. }
+        )
+    )
+}
+
+fn load_team_allowed_path_rules(team_name: &str) -> Vec<coco_types::PermissionRule> {
+    let Ok(Some(team_file)) = crate::team_file::read_team_file(team_name) else {
+        return Vec::new();
+    };
+    team_file
+        .team_allowed_paths
+        .iter()
+        .map(|allowed| {
+            permission_rule(
+                &allowed.tool_name,
+                Some(team_allowed_path_rule_content(&allowed.path)),
+                coco_types::PermissionBehavior::Allow,
+            )
+        })
+        .collect()
+}
+
+fn team_allowed_path_rule_content(path: &str) -> String {
+    if path.starts_with('/') {
+        format!("/{path}/**")
+    } else {
+        format!("{path}/**")
+    }
+}
+
+fn permission_rule(
+    tool_name: &str,
+    rule_content: Option<String>,
+    behavior: coco_types::PermissionBehavior,
+) -> coco_types::PermissionRule {
+    coco_types::PermissionRule {
+        source: coco_types::PermissionRuleSource::Session,
+        behavior,
+        value: coco_types::PermissionRuleValue {
+            tool_pattern: tool_name.to_string(),
+            rule_content,
+        },
+    }
+}
 
 /// Send a message to the team leader's mailbox.
 ///

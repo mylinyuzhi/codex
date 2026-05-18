@@ -114,8 +114,7 @@ impl Tool for AgentTool {
             "model".into(),
             serde_json::json!({
                 "type": "string",
-                "description": "Optional model override for this agent",
-                "enum": ["sonnet", "opus", "haiku"]
+                "description": "Optional concrete model override in provider/model_id format"
             }),
         );
         p.insert(
@@ -403,14 +402,33 @@ impl Tool for AgentTool {
             .ok()
             .and_then(|v| v.as_str().map(String::from));
 
-        let subagent_type = input
+        let explicit_subagent_type = input
             .get("subagent_type")
             .and_then(|v| v.as_str())
             .map(String::from);
+        let resolved_team_name = input
+            .get("team_name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .or_else(|| ctx.team_name.clone());
+        let requested_name = input
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        let is_team_spawn = resolved_team_name.is_some() && requested_name.is_some();
+
+        if ctx.is_teammate && is_team_spawn {
+            return Err(ToolError::ExecutionFailed {
+                message: "Teammates cannot spawn other teammates into a team.".into(),
+                source: None,
+            });
+        }
         // Snapshot for use after `subagent_type` moves into `request`
         // — needed by the result-rendering branch which gates the
         // `oneShot` flag on `ONE_SHOT_BUILTIN_AGENT_TYPES`.
-        let subagent_type_for_render = subagent_type.clone();
+        let subagent_type_for_render = explicit_subagent_type.clone();
 
         // Fork-mode dispatch (TS `forkSubagent.ts`): when the env gate
         // is on, agent-teams is enabled, the session is interactive,
@@ -422,7 +440,7 @@ impl Tool for AgentTool {
         // directive in `<fork-boilerplate>` so the worker receives
         // its rules and a downstream recursion guard
         // (`is_in_fork_child`) can detect fork-of-fork.
-        let spawn_mode = if subagent_type.is_none()
+        let spawn_mode = if explicit_subagent_type.is_none()
             && coco_subagent::is_fork_subagent_active(&ctx.features, ctx.is_non_interactive)
         {
             let Some(rendered_system_prompt) = ctx.rendered_system_prompt.clone() else {
@@ -475,17 +493,45 @@ impl Tool for AgentTool {
         } else {
             coco_tool_runtime::SpawnMode::Fresh
         };
+        let is_fork = matches!(spawn_mode, coco_tool_runtime::SpawnMode::Fork { .. });
+
+        let effective_subagent_type = explicit_subagent_type
+            .clone()
+            .unwrap_or_else(|| "general-purpose".to_string());
 
         // Resolve the AgentDefinition once at the boundary. Both the
         // `AgentSpawnRequest` and the `run_in_background` derivation
         // need it; keeping the lookup here avoids racing the catalog
         // twice.
+        let definition_lookup_type = if is_team_spawn {
+            explicit_subagent_type.as_deref()
+        } else {
+            Some(effective_subagent_type.as_str())
+        };
         let resolved_definition = ctx
             .agent_catalog
             .as_deref()
-            .zip(subagent_type_for_render.as_deref())
+            .zip(definition_lookup_type)
             .and_then(|(cat, name)| cat.find_active(name).cloned())
             .map(std::sync::Arc::new);
+        if let Some(def) = resolved_definition.as_ref() {
+            let servers_with_tools = mcp_servers_with_tools(ctx).await;
+            if !coco_subagent::has_required_mcp_servers(def, &servers_with_tools) {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!(
+                        "Agent '{}' requires MCP server(s) {:?}, but MCP servers with tools are: {}",
+                        def.agent_type,
+                        def.required_mcp_servers,
+                        if servers_with_tools.is_empty() {
+                            "none".to_string()
+                        } else {
+                            servers_with_tools.join(", ")
+                        },
+                    ),
+                    source: None,
+                });
+            }
+        }
 
         // D5 / P1' parity with TS `AgentTool.tsx:567 shouldRunAsync`:
         //   shouldRunAsync = (run_in_background
@@ -515,15 +561,14 @@ impl Tool for AgentTool {
         // background sub-agents — their lifecycle is parent-bound and
         // a background child would outlive its supervisor. Both the
         // request flag AND the definition flag trigger the guard.
-        let is_in_process_teammate = ctx.is_teammate;
+        let is_in_process_teammate = ctx.is_in_process_teammate;
         if is_in_process_teammate && (run_in_background_input || definition_forces_background) {
             return Err(ToolError::ExecutionFailed {
                 message: format!(
                     "In-process teammates cannot spawn background sub-agents. \
                      Use run_in_background=false (and an agent definition \
                      without `background: true`) for synchronous spawn from \
-                     within a teammate. Tried agent_type='{}'.",
-                    subagent_type.as_deref().unwrap_or("general-purpose"),
+                     within a teammate. Tried agent_type='{effective_subagent_type}'.",
                 ),
                 source: None,
             });
@@ -549,18 +594,24 @@ impl Tool for AgentTool {
         // parity. Honoring a caller-supplied `model` in fork mode silently
         // busts the cache (different cache key → full re-tokenize), which
         // defeats the entire reason fork exists. Strip it here.
-        let is_fork = matches!(spawn_mode, coco_tool_runtime::SpawnMode::Fork { .. });
         let caller_model = input
             .get("model")
             .and_then(|v| v.as_str())
             .map(String::from);
+        let request_subagent_type = if is_team_spawn {
+            explicit_subagent_type.clone()
+        } else if is_fork && explicit_subagent_type.is_none() {
+            None
+        } else {
+            Some(effective_subagent_type.clone())
+        };
         let request = AgentSpawnRequest {
             prompt: prompt.to_string(),
             description: input
                 .get("description")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            subagent_type,
+            subagent_type: request_subagent_type,
             model: if is_fork { None } else { caller_model },
             run_in_background,
             enable_summarization,
@@ -569,11 +620,8 @@ impl Tool for AgentTool {
                 .get("isolation")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            name: input.get("name").and_then(|v| v.as_str()).map(String::from),
-            team_name: input
-                .get("team_name")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            name: requested_name,
+            team_name: resolved_team_name.clone(),
             mode: effective_mode_str,
             cwd: input
                 .get("cwd")
@@ -648,9 +696,12 @@ impl Tool for AgentTool {
             can_use_tool: None,
             require_can_use_tool: false,
             fork_label: None,
+            is_non_interactive: ctx.is_non_interactive,
         };
 
         let request_description = request.description.clone();
+        let request_name_for_render = request.name.clone();
+        let request_team_for_render = request.team_name.clone();
 
         let response =
             ctx.agent
@@ -709,6 +760,13 @@ impl Tool for AgentTool {
                 });
                 if let Some(of) = &response.output_file {
                     result["outputFile"] = serde_json::json!(of);
+                    result["canReadOutputFile"] = serde_json::json!(
+                        ctx.tool_filter
+                            .allows_name(coco_types::ToolName::Read.as_str())
+                            || ctx
+                                .tool_filter
+                                .allows_name(coco_types::ToolName::Bash.as_str())
+                    );
                 }
                 result
             }
@@ -721,14 +779,10 @@ impl Tool for AgentTool {
                     "status": "teammate_spawned",
                     "agentId": response.agent_id,
                 });
-                if let Some(name) = input.get("name").and_then(|v| v.as_str())
-                    && !name.is_empty()
-                {
+                if let Some(name) = request_name_for_render.as_deref() {
                     spawn["name"] = serde_json::json!(name);
                 }
-                if let Some(team_name) = input.get("team_name").and_then(|v| v.as_str())
-                    && !team_name.is_empty()
-                {
+                if let Some(team_name) = request_team_for_render.as_deref() {
                     spawn["team_name"] = serde_json::json!(team_name);
                 }
                 spawn
@@ -761,13 +815,10 @@ impl Tool for AgentTool {
 /// "no MCP layer wired" and lets the spawn through, so this guard only
 /// fires in production sessions where the MCP layer is live.
 async fn check_mcp_ready(servers: &[&str], ctx: &ToolUseContext) -> Result<(), ToolError> {
-    let connected = ctx.mcp.connected_servers().await;
-    if connected.is_empty() {
-        return Ok(());
-    }
+    let servers_with_tools = mcp_servers_with_tools(ctx).await;
     let missing: Vec<String> = servers
         .iter()
-        .filter(|name| !connected.iter().any(|c| c == *name))
+        .filter(|name| !servers_with_tools.iter().any(|c| c == *name))
         .map(|s| (*s).to_string())
         .collect();
     if missing.is_empty() {
@@ -775,12 +826,26 @@ async fn check_mcp_ready(servers: &[&str], ctx: &ToolUseContext) -> Result<(), T
     }
     Err(ToolError::ExecutionFailed {
         message: format!(
-            "Requested MCP server(s) are not connected: {missing}. Connected servers: \
-             {connected}. Either drop the declaration from `mcp_servers` or wait for \
-             the server's bootstrap to complete.",
+            "Requested MCP server(s) do not have ready tools: {missing}. MCP servers with tools: \
+             {servers_with_tools}. Either drop the declaration from `mcp_servers` or wait for \
+             authentication/bootstrap to complete.",
             missing = missing.join(", "),
-            connected = connected.join(", "),
+            servers_with_tools = if servers_with_tools.is_empty() {
+                "none".to_string()
+            } else {
+                servers_with_tools.join(", ")
+            },
         ),
         source: None,
     })
+}
+
+async fn mcp_servers_with_tools(ctx: &ToolUseContext) -> Vec<String> {
+    let mut servers = Vec::new();
+    for tool in ctx.mcp.list_tools().await {
+        if !servers.iter().any(|s| s == &tool.server_name) {
+            servers.push(tool.server_name);
+        }
+    }
+    servers
 }

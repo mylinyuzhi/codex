@@ -287,6 +287,21 @@ surface state first, autocomplete next, then global/input commands.
 Keybinding configuration is hot-reloaded by the CLI runner and surfaced as
 toasts through the TUI event loop.
 
+## Transcript Reader
+
+`Ctrl+O` / `app:toggleTranscript` opens the transcript overlay as a cell-level
+reader. The projection keeps lightweight `TranscriptCell` metadata for the full
+message list, and the overlay renderer uses the viewport height plus
+`TranscriptOverlay.scroll` to locate and render only visible cells.
+
+Expansion is selected-cell UI state only. `Tab` / `Shift+Tab` moves among
+expandable cells, and `Enter` expands or collapses the selected cell. Expansion
+state is not persisted into the session transcript.
+
+There is no user-facing transcript expansion budget and no `Ctrl+E` show-all
+mode. Large expanded cells use an internal fixed line cap and show a truncation
+hint in the UI.
+
 ## Model Picker Baseline
 
 Current model picker state lives in `ModelPickerOverlay`:
@@ -420,7 +435,8 @@ TUI theme state is separate from `RuntimeConfig`:
 - invalid reloads surface warning toasts and keep the prior palette.
 
 Display settings come from `settings.json` via the CLI runner and hot-reload
-into `UiState.display_settings`.
+into `UiState.display_settings`; TUI behavior belongs in the existing settings
+pipeline rather than a separate TUI-specific config file.
 
 `UiStyles` is the semantic facade over the active `Theme`. It is used by
 overlay frame/content helpers, composer chrome, footer/toast/activity,

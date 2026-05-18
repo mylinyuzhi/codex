@@ -38,6 +38,7 @@ fn test_snapshot_status_bar_full() {
     state.session.token_usage = TokenUsage {
         input_tokens: 12_300,
         output_tokens: 16_500,
+        reasoning_tokens: 0,
         cache_read_tokens: 10_700,
         cache_creation_tokens: 0,
     };
@@ -61,6 +62,67 @@ fn test_snapshot_with_messages() {
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("with_messages", output);
+}
+
+#[test]
+fn test_snapshot_thinking_collapsed() {
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    state
+        .session
+        .add_message(ChatMessage::user_text("1", "hello"));
+    state.session.add_message(thinking_message(
+        "2",
+        "The user just said hello, so respond briefly.",
+        Some(1600),
+        Some(22),
+    ));
+    state
+        .session
+        .add_message(ChatMessage::assistant_text("3", "Hello! How can I help?"));
+
+    let output = render_to_string(&state, 96, 18);
+    insta::assert_snapshot!("thinking_collapsed", output);
+}
+
+#[test]
+fn test_snapshot_thinking_expanded_show_thinking_on() {
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    state.ui.show_thinking = true;
+    state
+        .session
+        .add_message(ChatMessage::user_text("1", "bash ls"));
+    state.session.add_message(thinking_message(
+        "2",
+        "The user wants me to run `ls` in the current working directory.\n\
+         I should call the Bash tool and then summarize the result.",
+        Some(1300),
+        Some(15),
+    ));
+    state.session.add_message(ChatMessage {
+        id: "3".to_string(),
+        role: crate::state::ChatRole::Assistant,
+        content: MessageContent::ToolUse {
+            tool_name: "Bash".to_string(),
+            call_id: "call-1".to_string(),
+            input_preview: "ls".to_string(),
+            status: ToolUseStatus::Completed,
+        },
+        is_meta: false,
+        is_compact_summary: false,
+        is_visible_in_transcript_only: false,
+        created_at_ms: 0,
+        permission_mode: None,
+    });
+    state.session.add_message(ChatMessage::tool_success(
+        "4",
+        "Bash",
+        "app\nbridge\ncommon\nutils\nvercel-ai",
+    ));
+
+    let output = render_to_string(&state, 96, 22);
+    insta::assert_snapshot!("thinking_expanded_show_thinking_on", output);
 }
 
 #[test]
@@ -95,6 +157,119 @@ fn test_snapshot_with_tool_result() {
     insta::assert_snapshot!("with_tool_result", output);
 }
 
+fn thinking_message(
+    id: &str,
+    content: &str,
+    duration_ms: Option<i64>,
+    reasoning_tokens: Option<i64>,
+) -> ChatMessage {
+    ChatMessage {
+        id: id.to_string(),
+        role: crate::state::ChatRole::Assistant,
+        content: MessageContent::Thinking {
+            content: content.to_string(),
+            duration_ms,
+            reasoning_tokens,
+        },
+        is_meta: false,
+        is_compact_summary: false,
+        is_visible_in_transcript_only: false,
+        created_at_ms: 0,
+        permission_mode: None,
+    }
+}
+
+#[test]
+fn test_snapshot_tool_result_middle_truncation() {
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    state
+        .session
+        .add_message(ChatMessage::user_text("1", "find the CLAUDE.md"));
+    state.session.add_message(ChatMessage {
+        id: "2".to_string(),
+        role: crate::state::ChatRole::Assistant,
+        content: MessageContent::ToolUse {
+            tool_name: "Glob".to_string(),
+            call_id: "c1".to_string(),
+            input_preview: "**/CLAUDE.md".to_string(),
+            status: ToolUseStatus::Completed,
+        },
+        is_meta: false,
+        is_compact_summary: false,
+        is_visible_in_transcript_only: false,
+        created_at_ms: 0,
+        permission_mode: None,
+    });
+    state.session.add_message(ChatMessage::tool_success(
+        "3",
+        "Glob",
+        "Found 8 files\n\
+         coco-rs/app/tui/CLAUDE.md\n\
+         coco-rs/app/query/CLAUDE.md\n\
+         coco-rs/core/tools/CLAUDE.md\n\
+         coco-rs/core/messages/CLAUDE.md\n\
+         coco-rs/common/config/CLAUDE.md\n\
+         coco-rs/services/inference/CLAUDE.md\n\
+         coco-rs/utils/string/CLAUDE.md\n\
+         codex-rs/tui/CLAUDE.md",
+    ));
+
+    let output = render_to_string(&state, 96, 24);
+    insta::assert_snapshot!("tool_result_middle_truncation", output);
+}
+
+#[test]
+fn assistant_text_after_tool_result_keeps_dot_and_full_body() {
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    state
+        .session
+        .add_message(ChatMessage::user_text("1", "find the readme.md"));
+    state.session.add_message(ChatMessage {
+        id: "2".to_string(),
+        role: crate::state::ChatRole::Assistant,
+        content: MessageContent::ToolUse {
+            tool_name: "Glob".to_string(),
+            call_id: "c1".to_string(),
+            input_preview: "**/README.md".to_string(),
+            status: ToolUseStatus::Completed,
+        },
+        is_meta: false,
+        is_compact_summary: false,
+        is_visible_in_transcript_only: false,
+        created_at_ms: 0,
+        permission_mode: None,
+    });
+    state.session.add_message(ChatMessage::tool_success(
+        "3",
+        "Glob",
+        "common/error/README.md\n\
+         common/otel/README.md\n\
+         core/system-reminder/README.md\n\
+         vercel-ai/README.md\n\
+         app/tui/README.md\n\
+         app/query/README.md\n\
+         services/inference/README.md",
+    ));
+    state.session.add_message(ChatMessage::assistant_text(
+        "4",
+        "Found 13 `README.md` files in the workspace:\n\n\
+         | Path | Description |\n\
+         |------|-------------|\n\
+         | `common/error/README.md` | Error status codes |\n\
+         | `common/otel/README.md` | Tracing conventions |\n\
+         | `vercel-ai/README.md` | Provider notes |\n\
+         | `app/tui/README.md` | TUI notes |",
+    ));
+
+    let output = render_to_string(&state, 96, 40);
+    assert!(output.contains("⏺ Found 13"));
+    assert!(output.contains("common/error/README.md"));
+    assert!(output.contains("Error status codes"));
+    assert!(!output.contains("… output truncated in UI"));
+}
+
 #[test]
 fn test_snapshot_with_permission_overlay() {
     let mut state = AppState::new();
@@ -114,6 +289,7 @@ fn test_snapshot_with_permission_overlay() {
         classifier_auto_approved: None,
         choices: None,
         selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
         original_input: None,
         permission_suggestions: vec![],
     }));

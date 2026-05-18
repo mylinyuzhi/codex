@@ -224,6 +224,14 @@ pub struct SessionState {
     pub focused_subagent_index: Option<i32>,
     /// Current turn number (within multi-turn loop).
     pub current_turn_number: Option<i32>,
+    /// Transcript index where the current LLM response started.
+    /// Thinking token totals reported at `TurnCompleted` are scoped to
+    /// this response, even if its streaming thinking was flushed before
+    /// a tool call.
+    pub current_turn_message_start: Option<usize>,
+    /// Wall-clock start for the current LLM response. Used when a
+    /// provider reports reasoning tokens but hides the reasoning text.
+    pub current_turn_started_at: Option<Instant>,
     /// Queued commands for mid-turn injection — projection of the
     /// engine's `CommandQueue` populated via `CommandQueued` /
     /// `CommandDequeued` notifications. Each entry pairs the engine
@@ -387,10 +395,16 @@ impl SessionState {
         } else {
             tracing::debug!(call_id, "run_tool: tool not found in tool_executions");
         }
+        self.set_tool_use_status(call_id, ToolUseStatus::Running);
     }
 
     /// Complete a tool execution.
     pub fn complete_tool(&mut self, call_id: &str, is_error: bool) {
+        let use_status = if is_error {
+            ToolUseStatus::Failed
+        } else {
+            ToolUseStatus::Completed
+        };
         if let Some(tool) = self
             .tool_executions
             .iter_mut()
@@ -404,6 +418,21 @@ impl SessionState {
             tool.completed_at = Some(Instant::now());
         } else {
             tracing::debug!(call_id, "complete_tool: tool not found in tool_executions");
+        }
+        self.set_tool_use_status(call_id, use_status);
+    }
+
+    fn set_tool_use_status(&mut self, call_id: &str, next_status: ToolUseStatus) {
+        for message in &mut self.messages {
+            if let MessageContent::ToolUse {
+                call_id: message_call_id,
+                status,
+                ..
+            } = &mut message.content
+                && message_call_id == call_id
+            {
+                *status = next_status;
+            }
         }
     }
 
@@ -445,6 +474,8 @@ impl Default for SessionState {
             lsp_active: false,
             focused_subagent_index: None,
             current_turn_number: None,
+            current_turn_message_start: None,
+            current_turn_started_at: None,
             queued_commands: VecDeque::new(),
             available_models: Vec::new(),
             file_history_enabled: false,
@@ -566,6 +597,7 @@ pub enum MessageContent {
     Thinking {
         content: String,
         duration_ms: Option<i64>,
+        reasoning_tokens: Option<i64>,
     },
     /// Redacted thinking block.
     RedactedThinking,
@@ -825,9 +857,9 @@ impl ChatMessage {
     ///
     /// Tagged `is_meta=true` so the chat widget hides it from the
     /// regular scroll (the filter at `widgets/chat/mod.rs` skips
-    /// `is_meta && !show_system_reminders`); the transcript overlay
-    /// passes `show_all` into `show_system_reminders` so these surface
-    /// there. `is_visible_in_transcript_only=true` also marks the
+    /// `is_meta && !show_system_reminders`); the transcript reader
+    /// renders with system reminders enabled so these surface there.
+    /// `is_visible_in_transcript_only=true` also marks the
     /// message as a non-rewindable anchor (`update_rewind` skips it).
     /// ID is `teammate:{agent}:{uuid}` so concurrent teammates
     /// can't collide.
@@ -968,6 +1000,7 @@ pub enum SubagentStatus {
 pub struct TokenUsage {
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub reasoning_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_creation_tokens: i64,
 }

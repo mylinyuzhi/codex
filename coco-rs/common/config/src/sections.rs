@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
+use coco_types::ModelRole;
 use coco_types::PermissionMode;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 
 use crate::env::EnvKey;
 use crate::env::EnvSnapshot;
+use crate::model::ModelSelection;
 use crate::settings::Settings;
 
 const DEFAULT_MAX_TOOL_CONCURRENCY: i32 = 10;
@@ -36,6 +39,86 @@ const DEFAULT_WEB_FETCH_MAX_CONTENT_LENGTH: i64 = 100_000;
 /// rules targeting Claude-Code's fetcher apply identically to coco-rs.
 const DEFAULT_WEB_FETCH_USER_AGENT: &str =
     "Claude-User (claude-code/coco-rs; +https://support.anthropic.com/)";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TeammateMode {
+    #[default]
+    Auto,
+    Tmux,
+    InProcess,
+}
+
+impl TeammateMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Tmux => "tmux",
+            Self::InProcess => "in-process",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialAgentTeamsSettings {
+    pub teammate_mode: Option<TeammateMode>,
+    pub default_model_role: Option<ModelRole>,
+    pub agent_type_model_roles: Option<HashMap<String, ModelRole>>,
+    pub default_model: Option<ModelSelection>,
+    pub show_spinner_tree: Option<bool>,
+    pub max_agents: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTeamsConfig {
+    pub teammate_mode: TeammateMode,
+    pub default_model_role: ModelRole,
+    pub agent_type_model_roles: HashMap<String, ModelRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<ModelSelection>,
+    pub show_spinner_tree: bool,
+    pub max_agents: i32,
+}
+
+impl Default for AgentTeamsConfig {
+    fn default() -> Self {
+        Self {
+            teammate_mode: TeammateMode::Auto,
+            default_model_role: ModelRole::Main,
+            agent_type_model_roles: HashMap::new(),
+            default_model: None,
+            show_spinner_tree: true,
+            max_agents: 8,
+        }
+    }
+}
+
+impl AgentTeamsConfig {
+    pub fn resolve(settings: &Settings) -> crate::Result<Self> {
+        let mut config = Self::default();
+        let section = &settings.agent_teams;
+        if let Some(mode) = section.teammate_mode {
+            config.teammate_mode = mode;
+        }
+        if let Some(role) = section.default_model_role {
+            config.default_model_role = role;
+        }
+        if let Some(roles) = &section.agent_type_model_roles {
+            config.agent_type_model_roles = roles.clone();
+        }
+        if let Some(model) = &section.default_model {
+            config.default_model = Some(model.clone());
+        }
+        if let Some(show) = section.show_spinner_tree {
+            config.show_spinner_tree = show;
+        }
+        if let Some(max_agents) = section.max_agents {
+            config.max_agents = max_agents.max(1);
+        }
+        Ok(config)
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]

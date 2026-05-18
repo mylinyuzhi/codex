@@ -71,120 +71,13 @@ pub fn write_team_file(team_name: &str, team_file: &TeamFile) -> crate::Result<(
 /// Remove a teammate from the team file by agent ID.
 ///
 /// TS: `removeMemberByAgentId(teamName, agentId)`
-pub fn remove_member_by_agent_id(team_name: &str, agent_id: &str) -> crate::Result<bool> {
+pub(crate) fn remove_member_by_agent_id(team_name: &str, agent_id: &str) -> crate::Result<bool> {
     let Some(mut team_file) = read_team_file(team_name)? else {
         return Ok(false);
     };
     let before = team_file.members.len();
     team_file.members.retain(|m| m.agent_id != agent_id);
     if team_file.members.len() < before {
-        write_team_file(team_name, &team_file)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-/// Remove a teammate by name.
-///
-/// TS: `removeTeammateFromTeamFile(teamName, { name })`
-pub fn remove_member_by_name(team_name: &str, member_name: &str) -> crate::Result<bool> {
-    let Some(mut team_file) = read_team_file(team_name)? else {
-        return Ok(false);
-    };
-    let before = team_file.members.len();
-    team_file.members.retain(|m| m.name != member_name);
-    if team_file.members.len() < before {
-        write_team_file(team_name, &team_file)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-/// Set the permission mode for a member by name.
-///
-/// TS: `setMemberMode(teamName, memberName, mode)`
-pub fn set_member_mode(
-    team_name: &str,
-    member_name: &str,
-    mode: coco_types::PermissionMode,
-) -> crate::Result<bool> {
-    let Some(mut team_file) = read_team_file(team_name)? else {
-        return Ok(false);
-    };
-    if let Some(member) = team_file.members.iter_mut().find(|m| m.name == member_name) {
-        member.mode = Some(mode);
-        write_team_file(team_name, &team_file)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-/// Set multiple member modes at once.
-///
-/// TS: `setMultipleMemberModes(teamName, modeUpdates)`
-pub fn set_multiple_member_modes(
-    team_name: &str,
-    updates: &[(String, coco_types::PermissionMode)],
-) -> crate::Result<bool> {
-    let Some(mut team_file) = read_team_file(team_name)? else {
-        return Ok(false);
-    };
-    let mut changed = false;
-    for (name, mode) in updates {
-        if let Some(member) = team_file.members.iter_mut().find(|m| &m.name == name) {
-            member.mode = Some(*mode);
-            changed = true;
-        }
-    }
-    if changed {
-        write_team_file(team_name, &team_file)?;
-    }
-    Ok(changed)
-}
-
-/// Set a member's active status.
-///
-/// TS: `setMemberActive(teamName, memberName, isActive)`
-pub fn set_member_active(team_name: &str, member_name: &str, is_active: bool) -> crate::Result<()> {
-    let Some(mut team_file) = read_team_file(team_name)? else {
-        return Ok(());
-    };
-    if let Some(member) = team_file.members.iter_mut().find(|m| m.name == member_name) {
-        member.is_active = is_active;
-        write_team_file(team_name, &team_file)?;
-    }
-    Ok(())
-}
-
-/// Add a hidden pane ID.
-///
-/// TS: `addHiddenPaneId(teamName, paneId)`
-pub fn add_hidden_pane_id(team_name: &str, pane_id: &str) -> crate::Result<bool> {
-    let Some(mut team_file) = read_team_file(team_name)? else {
-        return Ok(false);
-    };
-    if !team_file.hidden_pane_ids.contains(&pane_id.to_string()) {
-        team_file.hidden_pane_ids.push(pane_id.to_string());
-        write_team_file(team_name, &team_file)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-/// Remove a hidden pane ID.
-///
-/// TS: `removeHiddenPaneId(teamName, paneId)`
-pub fn remove_hidden_pane_id(team_name: &str, pane_id: &str) -> crate::Result<bool> {
-    let Some(mut team_file) = read_team_file(team_name)? else {
-        return Ok(false);
-    };
-    let before = team_file.hidden_pane_ids.len();
-    team_file.hidden_pane_ids.retain(|id| id != pane_id);
-    if team_file.hidden_pane_ids.len() < before {
         write_team_file(team_name, &team_file)?;
         Ok(true)
     } else {

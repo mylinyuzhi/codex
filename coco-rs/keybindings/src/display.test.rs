@@ -82,6 +82,16 @@ fn chord_display_joins_with_space() {
 }
 
 #[test]
+fn display_renders_function_keys_uppercase() {
+    let combo = parse_combo("f2").unwrap();
+    assert_eq!(
+        keystroke_to_display_string(&combo, DisplayPlatform::Linux),
+        "F2",
+    );
+    assert_eq!(keystroke_to_string(&combo), "f2");
+}
+
+#[test]
 fn current_platform_returns_a_platform() {
     // Smoke test — we can't assert specific value without knowing
     // host, but it must be one of the three.

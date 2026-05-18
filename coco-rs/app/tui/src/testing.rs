@@ -13,7 +13,7 @@ use crate::surface::overlay::OverlaySurfaceState;
 use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::interactive_viewport_desired_height;
 use crate::terminal::NATIVE_VIEWPORT_MAX_HEIGHT;
-use crate::terminal::native_viewport_area;
+use crate::terminal::native_viewport_area_with_max;
 
 #[derive(Debug, Default)]
 pub struct NativeSurfaceTestState {
@@ -41,17 +41,24 @@ pub fn render_native_surface_to_string_with_surface_state(
     let backend = TestBackend::new(width, height);
     let mut terminal = SurfaceTerminal::new(backend).expect("test backend is infallible");
     let size = Size { width, height };
-    let plan = surface_state.overlay_surface.plan(
+    let plan = surface_state.overlay_surface.plan_for_native_viewport(
         state,
         TerminalCompatibility::NativeScrollback,
         std::time::Instant::now(),
+        width,
+        NATIVE_VIEWPORT_MAX_HEIGHT,
     );
     let area = match plan.overlay_placement {
         Some(OverlaySurfacePlacement::AltScreen) => Rect::new(0, 0, width, height),
         _ => {
             let desired_height =
                 interactive_viewport_desired_height(state, width, NATIVE_VIEWPORT_MAX_HEIGHT, plan);
-            native_viewport_area(terminal.history_bottom_y(), size, desired_height)
+            native_viewport_area_with_max(
+                terminal.history_bottom_y(),
+                size,
+                desired_height,
+                NATIVE_VIEWPORT_MAX_HEIGHT,
+            )
         }
     };
     terminal.set_viewport_area(area);

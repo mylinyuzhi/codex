@@ -53,6 +53,8 @@ use coco_tool_runtime::{
     ToolPermissionBridge, ToolPermissionDecision, ToolPermissionRequest, ToolPermissionResolution,
 };
 use coco_types::PendingPermissionGuard;
+use coco_types::PermissionDisplayInput;
+use coco_types::ToolName;
 use coco_types::TuiOnlyEvent;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::warn;
@@ -239,8 +241,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 request_id: request.id.clone(),
                 tool_name: request.tool_name.clone(),
                 description: request.description.clone(),
-                input_preview: serde_json::to_string(&request.input)
-                    .unwrap_or_else(|_| "<unrenderable input>".to_string()),
+                display_input: permission_display_input(&request.tool_name, &request.input),
                 show_always_allow,
                 choices: request.choices.clone(),
                 permission_suggestions: request.suggestions.clone(),
@@ -358,6 +359,67 @@ pub fn send_resolution(
         content_blocks,
     };
     entry.sender.send(resolution).is_ok()
+}
+
+const PERMISSION_DISPLAY_MAX_CHARS: usize = 1200;
+
+fn permission_display_input(tool_name: &str, input: &serde_json::Value) -> PermissionDisplayInput {
+    if is_shell_tool(tool_name)
+        && let Some(command) = input.get("command").and_then(serde_json::Value::as_str)
+    {
+        return PermissionDisplayInput::Command(single_line_capped(
+            command,
+            PERMISSION_DISPLAY_MAX_CHARS,
+        ));
+    }
+
+    match serde_json::to_string(input) {
+        Ok(serialized) if serialized != "null" => PermissionDisplayInput::Json(single_line_capped(
+            &serialized,
+            PERMISSION_DISPLAY_MAX_CHARS,
+        )),
+        _ => PermissionDisplayInput::Empty,
+    }
+}
+
+fn is_shell_tool(tool_name: &str) -> bool {
+    let normalized = tool_name
+        .rsplit(coco_types::MCP_TOOL_SEPARATOR)
+        .next()
+        .unwrap_or(tool_name);
+    normalized == ToolName::Bash.as_str() || normalized == ToolName::PowerShell.as_str()
+}
+
+fn single_line_capped(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut pending_space = false;
+    let mut count = 0;
+    for chunk in text.split_whitespace() {
+        let space = if out.is_empty() || !pending_space {
+            0
+        } else {
+            1
+        };
+        let chunk_len = chunk.chars().count();
+        if count + space + chunk_len > max_chars {
+            if max_chars > 3 {
+                while count + 3 > max_chars {
+                    out.pop();
+                    count = count.saturating_sub(1);
+                }
+                out.push_str("...");
+            }
+            return out;
+        }
+        if space == 1 {
+            out.push(' ');
+            count += 1;
+        }
+        out.push_str(chunk);
+        count += chunk_len;
+        pending_space = true;
+    }
+    out
 }
 
 #[cfg(test)]

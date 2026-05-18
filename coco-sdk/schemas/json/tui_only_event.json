@@ -8,7 +8,7 @@
       "type": "object",
       "required": [
         "description",
-        "input_preview",
+        "display_input",
         "request_id",
         "tool_name",
         "type"
@@ -26,8 +26,8 @@
         "description": {
           "type": "string"
         },
-        "input_preview": {
-          "type": "string"
+        "display_input": {
+          "$ref": "#/definitions/PermissionDisplayInput"
         },
         "original_input": true,
         "permission_suggestions": {
@@ -986,6 +986,79 @@
         "allow",
         "deny",
         "ask"
+      ]
+    },
+    "PermissionDisplayInput": {
+      "description": "Bounded, UI-ready permission input display.\n\nThis is separate from the raw tool input because approval UIs should consume sanitized display data while keeping `original_input` only for updated-input response construction and permission-rule derivation.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "command"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "json"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "text"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "empty"
+              ]
+            }
+          }
+        }
       ]
     },
     "PermissionMode": {

@@ -92,6 +92,7 @@ impl QueryEngine {
                 coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX),
             )),
             task_list: None,
+            team_task_list_router: None,
             todo_list: None,
             reminder_sources: coco_system_reminder::ReminderSources::default(),
             attachment_tx,
@@ -709,6 +710,14 @@ impl QueryEngine {
     /// Install the durable task-list store (V2 task tools).
     pub fn with_task_list(mut self, handle: coco_tool_runtime::TaskListHandleRef) -> Self {
         self.task_list = Some(handle);
+        self
+    }
+
+    pub fn with_team_task_list_router(
+        mut self,
+        router: coco_tool_runtime::TeamTaskListRouterRef,
+    ) -> Self {
+        self.team_task_list_router = Some(router);
         self
     }
 

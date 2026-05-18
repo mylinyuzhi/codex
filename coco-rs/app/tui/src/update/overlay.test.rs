@@ -234,6 +234,7 @@ fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
         classifier_auto_approved: None,
         choices: Some(choices),
         selected_choice: selected,
+        display_input: coco_types::PermissionDisplayInput::Empty,
         original_input: Some(serde_json::json!({"plan": "do the thing"})),
         permission_suggestions: vec![],
     }));
@@ -336,6 +337,7 @@ async fn confirm_classic_yes_no_approves_selected_action() {
         classifier_auto_approved: None,
         choices: None,
         selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
         original_input: None,
         permission_suggestions: vec![],
     }));
@@ -375,6 +377,7 @@ async fn confirm_classic_always_allow_sends_session_update() {
         classifier_auto_approved: None,
         choices: None,
         selected_choice: 1,
+        display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
         original_input: None,
         permission_suggestions: vec![],
     }));
@@ -416,6 +419,7 @@ async fn confirm_classic_read_always_allow_sends_path_scoped_session_update() {
         classifier_auto_approved: None,
         choices: None,
         selected_choice: 1,
+        display_input: coco_types::PermissionDisplayInput::Text(file.display().to_string()),
         original_input: Some(serde_json::json!({"file_path": file.to_string_lossy()})),
         permission_suggestions: vec![],
     }));
@@ -446,23 +450,23 @@ async fn confirm_classic_read_always_allow_sends_path_scoped_session_update() {
 }
 
 #[test]
-fn nav_advances_selected_choice_with_saturation() {
+fn nav_advances_selected_choice_with_wraparound() {
     let mut s = permission_with_choices(&["a", "b", "c"], 0);
     nav(&mut s, 1);
     let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(p.selected_choice, 1);
-    nav(&mut s, 5); // saturates at last
-    let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
-        panic!()
-    };
-    assert_eq!(p.selected_choice, 2);
-    nav(&mut s, -10); // saturates at first
+    nav(&mut s, 5);
     let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
         panic!()
     };
     assert_eq!(p.selected_choice, 0);
+    nav(&mut s, -1);
+    let Some(Overlay::Permission(p)) = s.ui.active_overlay() else {
+        panic!()
+    };
+    assert_eq!(p.selected_choice, 2);
 }
 
 #[test]
@@ -488,6 +492,7 @@ fn build_choice_payload_merges_with_original_input() {
             description: None,
         }]),
         selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Empty,
         original_input: Some(serde_json::json!({"existing": 42, "other": "v"})),
         permission_suggestions: vec![],
     };
@@ -515,6 +520,7 @@ fn build_choice_payload_none_when_cursor_out_of_range() {
         classifier_auto_approved: None,
         choices: Some(vec![]),
         selected_choice: 5,
+        display_input: coco_types::PermissionDisplayInput::Empty,
         original_input: None,
         permission_suggestions: vec![],
     };

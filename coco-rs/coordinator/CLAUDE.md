@@ -14,8 +14,6 @@ invokes.
 - `coordinator/coordinatorMode.ts` — coordinator-mode runtime
 - `tools/AgentTool/forkSubagent.ts` — fork dispatch (consumed via `coco-subagent`)
 
-Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
-
 ## Layer
 
 L5 (root). Sits next to `commands`, `tasks`, `memory`. **Does NOT depend

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ClientRequest",
-  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the 22 base variants and §5.4 for the 7 gap additions (`elicitation/resolve` is TS-aligned). 30 total.",
+  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the 22 base variants and §5.4 for the 8 gap additions (`elicitation/resolve` is TS-aligned). 31 total.",
   "oneOf": [
     {
       "type": "object",
@@ -335,6 +335,25 @@
       }
     },
     {
+      "description": "Interrupt one in-process teammate's active turn without stopping the teammate lifecycle.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "agent/interruptCurrentWork"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/AgentInterruptCurrentWorkParams"
+        }
+      }
+    },
+    {
       "type": "object",
       "required": [
         "method"
@@ -525,6 +544,18 @@
     }
   ],
   "definitions": {
+    "AgentInterruptCurrentWorkParams": {
+      "description": "Params for `agent/interruptCurrentWork`.\n\nMirrors TS's teammate Escape path: abort the target teammate's current model/tool turn while keeping the teammate process alive for later messages.",
+      "type": "object",
+      "required": [
+        "agent_id"
+      ],
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        }
+      }
+    },
     "ApprovalDecision": {
       "description": "TS uses `allow` / `deny` / `ask` for the canUseTool response flow.",
       "type": "string",

@@ -77,6 +77,23 @@ fn app_toggle_transcript_maps_to_toggle_transcript() {
 }
 
 #[test]
+fn scroll_actions_route_to_transcript_commands_inside_transcript_overlay() {
+    let mut state = fresh_state();
+    state.ui.set_overlay(crate::state::Overlay::Transcript(
+        crate::state::transcript::TranscriptOverlay::new(),
+    ));
+
+    let line = dispatch_action(&KeybindingAction::ScrollLineDown, &state).unwrap();
+    assert!(matches!(line, TuiCommand::TranscriptScrollLines(1)));
+
+    let page = dispatch_action(&KeybindingAction::ScrollPageUp, &state).unwrap();
+    assert!(matches!(page, TuiCommand::TranscriptPage(-1)));
+
+    let top = dispatch_action(&KeybindingAction::ScrollTop, &state).unwrap();
+    assert!(matches!(top, TuiCommand::TranscriptJumpStart));
+}
+
+#[test]
 fn app_toggle_teammate_preview_maps_to_toggle_teammate_message_preview() {
     let state = fresh_state();
     let cmd = dispatch_action(&KeybindingAction::AppToggleTeammatePreview, &state).unwrap();

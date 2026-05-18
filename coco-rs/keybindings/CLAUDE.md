@@ -19,7 +19,6 @@ crossterm `KeyEvent` adapter.
   `useKeybinding.ts`, `useShortcutDisplay.ts` — React glue (intentionally
   not ported; replaced by the TUI's TEA dispatch + `keybinding_bridge.rs`)
 
-Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
 
 ## Key Types
 

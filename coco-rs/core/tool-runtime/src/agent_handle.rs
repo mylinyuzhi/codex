@@ -32,6 +32,8 @@ use coco_types::SubagentRuntimeSnapshot;
 use coco_types::ToolFilter;
 use coco_types::ToolOverrides;
 
+use crate::task_list_handle::TeamTaskListRouterRef;
+
 /// Per-spawn safety constraints applied to a forked agent.
 ///
 /// Surfaces parent-imposed limits the spawn pipeline must enforce on the
@@ -310,6 +312,10 @@ pub struct AgentSpawnRequest {
     /// `utils/forkedAgent.ts` `runForkedAgent({forkLabel})`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_label: Option<coco_types::ForkLabel>,
+    /// Whether the parent session is non-interactive/headless. Team
+    /// backend selection uses this to force in-process teammates.
+    #[serde(default)]
+    pub is_non_interactive: bool,
 }
 
 /// Response from spawning a subagent.
@@ -387,6 +393,52 @@ pub struct AgentSpawnResponse {
     pub prompt: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamCreateAllowedPath {
+    pub path: String,
+    pub tool_name: String,
+    pub added_by: String,
+    pub added_at: i64,
+}
+
+/// Typed TeamCreate request. This deliberately carries the session and
+/// task-list routing context that the string-shaped API could not express.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct CreateTeamRequest {
+    pub requested_name: String,
+    pub leader_agent_id: Option<String>,
+    pub leader_session_id: String,
+    pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_paths: Vec<TeamCreateAllowedPath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_model: Option<String>,
+    #[serde(skip)]
+    pub task_list_router: Option<TeamTaskListRouterRef>,
+}
+
+impl std::fmt::Debug for CreateTeamRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateTeamRequest")
+            .field("requested_name", &self.requested_name)
+            .field("leader_agent_id", &self.leader_agent_id)
+            .field("leader_session_id", &self.leader_session_id)
+            .field("cwd", &self.cwd)
+            .field("allowed_paths", &self.allowed_paths)
+            .field("leader_model", &self.leader_model)
+            .field("task_list_router", &self.task_list_router.is_some())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CreateTeamResult {
+    pub team_name: String,
+    pub lead_agent_id: String,
+    pub task_list_id: String,
+}
+
 /// Outcome of a spawn request.
 ///
 /// TS: AgentTool return status variants
@@ -428,7 +480,7 @@ pub trait AgentHandle: Send + Sync {
     /// Create a new team with optional description and lead agent type.
     ///
     /// TS: TeamCreateTool → TeamFile creation + AppState update
-    async fn create_team(&self, name: &str) -> Result<String, String>;
+    async fn create_team(&self, request: CreateTeamRequest) -> Result<CreateTeamResult, String>;
 
     /// Delete the active team (read from session context) and release
     /// resources. Fails if non-lead members are still active.
@@ -478,6 +530,15 @@ pub trait AgentHandle: Send + Sync {
     /// TS: backgroundSignal + wasBackgrounded logic in AgentTool.tsx
     async fn background_agent(&self, agent_id: &str) -> Result<(), String>;
 
+    /// Interrupt an in-process teammate's current turn without stopping
+    /// the teammate lifecycle.
+    ///
+    /// TS: `currentWorkAbortController` in `inProcessRunner.ts` plus
+    /// Escape handling in `useBackgroundTaskNavigation.ts`.
+    async fn interrupt_agent_current_work(&self, _agent_id: &str) -> Result<bool, String> {
+        Err("AgentHandle::interrupt_agent_current_work not supported in this context".into())
+    }
+
     // Note: `resolve_skill` was removed in Phase 7 of the agent-loop
     // refactor. Skill resolution now goes through the dedicated
     // `SkillHandle` trait (`skill_handle.rs`); `AgentHandle` is the
@@ -502,7 +563,7 @@ impl AgentHandle for NoOpAgentHandle {
         Err("Agent messaging not available in this context".into())
     }
 
-    async fn create_team(&self, _name: &str) -> Result<String, String> {
+    async fn create_team(&self, _request: CreateTeamRequest) -> Result<CreateTeamResult, String> {
         Err("Team management not available in this context".into())
     }
 

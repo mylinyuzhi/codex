@@ -236,6 +236,7 @@ impl BackendType {
 ///
 /// TS: TeamFile.members[] in utils/swarm/teamHelpers.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TeamMember {
     pub agent_id: String,
     pub name: String,
@@ -277,6 +278,7 @@ pub struct TeamMember {
 ///
 /// TS: `TeamAllowedPath` in utils/swarm/teamHelpers.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TeamAllowedPath {
     /// Directory path (absolute).
     pub path: String,
@@ -292,6 +294,7 @@ pub struct TeamAllowedPath {
 ///
 /// TS: TeamFile in utils/swarm/teamHelpers.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TeamFile {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -346,11 +349,25 @@ impl TeamManager {
     }
 
     /// Register a running agent.
-    pub async fn register_agent(&self, agent: SubAgentState) {
+    pub(crate) async fn register_agent(&self, agent: SubAgentState) {
         self.agents
             .write()
             .await
             .insert(agent.agent_id.clone(), agent);
+    }
+
+    /// Add or replace a member in the in-memory team file mirror.
+    pub(crate) async fn upsert_member(&self, member: TeamMember) {
+        let mut tf = self.team_file.write().await;
+        if let Some(existing) = tf
+            .members
+            .iter_mut()
+            .find(|m| m.agent_id == member.agent_id)
+        {
+            *existing = member;
+        } else {
+            tf.members.push(member);
+        }
     }
 
     /// Get all running agents.
@@ -365,7 +382,7 @@ impl TeamManager {
     }
 
     /// Remove a member from the team file.
-    pub async fn remove_member(&self, agent_id: &str) -> bool {
+    pub(crate) async fn remove_member(&self, agent_id: &str) -> bool {
         let mut tf = self.team_file.write().await;
         let before = tf.members.len();
         tf.members.retain(|m| m.agent_id != agent_id);
@@ -381,17 +398,6 @@ impl TeamManager {
     /// Check whether the given agent ID is the team leader.
     pub async fn is_leader(&self, agent_id: &str) -> bool {
         self.team_file.read().await.lead_agent_id == agent_id
-    }
-
-    /// Set the permission mode for a member (by name).
-    pub async fn set_member_mode(&self, name: &str, mode: PermissionMode) -> bool {
-        let mut tf = self.team_file.write().await;
-        if let Some(member) = tf.members.iter_mut().find(|m| m.name == name) {
-            member.mode = Some(mode);
-            true
-        } else {
-            false
-        }
     }
 
     /// Send a message to an agent's mailbox.

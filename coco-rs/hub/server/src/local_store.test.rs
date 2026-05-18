@@ -263,3 +263,62 @@ fn tool_result_display_concatenates_all_text_blocks() {
     assert!(display.contains("first result"));
     assert!(display.contains("second result"));
 }
+
+#[test]
+fn nested_tool_result_rows_keep_result_lane_and_tool_name() {
+    let line = json!({
+        "type": "tool_result",
+        "timestamp": "2026-05-17T01:00:03Z",
+        "message": {
+            "message": {
+                "role": "tool",
+                "content": [{
+                    "type": "tool-result",
+                    "toolCallId": "call_1",
+                    "toolName": "Glob",
+                    "isError": false,
+                    "output": {"type": "text", "value": "README.md"}
+                }]
+            },
+            "tool_id": "Glob",
+            "tool_use_id": "call_1"
+        }
+    })
+    .to_string();
+
+    let rows = super::event_rows_from_line("instance", "session", 0, &line);
+    let event = &rows[0];
+
+    assert_eq!(event.msg_type, "tool_result");
+    assert_eq!(event.lane, "tool-result");
+    assert_eq!(event.role, "tool");
+    assert_eq!(event.tool_name.as_deref(), Some("Glob"));
+    assert_eq!(event.call_id.as_deref(), Some("call_1"));
+    assert_eq!(event.display_text.as_deref(), Some("README.md"));
+}
+
+#[test]
+fn tool_call_rows_keep_request_lane_and_tool_name() {
+    let line = json!({
+        "type": "assistant",
+        "timestamp": "2026-05-17T01:00:02Z",
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "tool-call",
+                "toolCallId": "call_1",
+                "toolName": "Glob",
+                "input": {"pattern": "**/README.md"}
+            }]
+        }
+    })
+    .to_string();
+
+    let rows = super::event_rows_from_line("instance", "session", 0, &line);
+    let event = &rows[0];
+
+    assert_eq!(event.msg_type, "tool_use");
+    assert_eq!(event.lane, "search");
+    assert_eq!(event.tool_name.as_deref(), Some("Glob"));
+    assert_eq!(event.call_id.as_deref(), Some("call_1"));
+}

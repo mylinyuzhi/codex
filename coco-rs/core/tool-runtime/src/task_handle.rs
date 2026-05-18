@@ -313,6 +313,12 @@ pub trait AgentTaskRegistry: Send + Sync {
     /// task ids.
     async fn read_output(&self, task_id: &str) -> String;
 
+    /// Path to the task's model-readable output file, when the
+    /// implementation exposes disk-backed task output.
+    async fn output_file_path(&self, _task_id: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// Whether a task is in a terminal state. Periodic loops
     /// observe this so they can stop cleanly without racing the
     /// final `mark_completed` / `mark_failed` call.

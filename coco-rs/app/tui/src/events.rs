@@ -300,9 +300,16 @@ pub enum TuiCommand {
     /// (`useGlobalKeybindings.tsx::handleToggleTranscript`) — verbose,
     /// scrollable, all-messages view.
     ToggleTranscript,
-    /// Toggle `show_all` on the active transcript overlay (include /
-    /// hide meta messages). TS `transcript:toggleShowAll`
-    /// (`Ctrl+E` while the transcript screen is mounted). No-op when
-    /// the active overlay is not a transcript.
-    ToggleTranscriptShowAll,
+    /// Select next expandable transcript cell.
+    TranscriptSelectNext,
+    /// Expand/collapse the selected transcript cell.
+    TranscriptToggleCell,
+    /// Scroll the transcript reader by rendered rows.
+    TranscriptScrollLines(i32),
+    /// Scroll the transcript reader by one viewport page.
+    TranscriptPage(i32),
+    /// Jump the transcript reader to the top.
+    TranscriptJumpStart,
+    /// Jump the transcript reader to the bottom.
+    TranscriptJumpEnd,
 }

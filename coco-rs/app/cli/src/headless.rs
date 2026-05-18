@@ -558,6 +558,7 @@ pub async fn run_chat_with_options(
     );
 
     let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
+    crate::model_card_refresh::spawn_if_enabled(&runtime_config);
     let settings = &runtime_config.settings;
 
     // Resolve the active output style once — fed into the system

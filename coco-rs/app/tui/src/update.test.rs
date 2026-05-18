@@ -165,6 +165,7 @@ fn toggle_syntax_highlighting_does_not_mutate_when_higher_priority_setting_wins(
         syntax_highlighting_editability: DisplaySettingEditability::OverriddenBy(
             coco_config::SettingSource::Project,
         ),
+        show_thinking: false,
     };
 
     super::overlay::toggle_syntax_highlighting(&mut state);
@@ -216,6 +217,35 @@ async fn busy_ctrl_c_interrupts_without_exit_hint() {
     match rx.try_recv() {
         Ok(UserCommand::Interrupt) => {}
         other => panic!("expected Interrupt on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn escape_in_teammates_view_interrupts_focused_teammate_current_work() {
+    let mut state = AppState::new();
+    state.session.expanded_view = coco_types::ExpandedView::Teammates;
+    state.session.focused_subagent_index = Some(0);
+    state
+        .session
+        .subagents
+        .push(crate::state::session::SubagentInstance {
+            agent_id: "worker@team".into(),
+            agent_type: "general".into(),
+            description: "scan".into(),
+            status: crate::state::session::SubagentStatus::Running,
+            color: None,
+            started_at_ms: None,
+            token_usage: None,
+        });
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::InterruptAgentCurrentWork { agent_id }) => {
+            assert_eq!(agent_id, "worker@team");
+        }
+        other => panic!("expected InterruptAgentCurrentWork, got {other:?}"),
     }
 }
 

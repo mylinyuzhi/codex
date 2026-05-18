@@ -136,7 +136,7 @@ pub fn check_read_permission_for_path(
     {
         return ToolCheckResult::Ask {
             message: format!(
-                "Claude requested permissions to read from {path}, which appears to be a UNC path that could access network resources."
+                "Coco requested permissions to read from {path}, which appears to be a UNC path that could access network resources."
             ),
             suggestions: vec![],
             choices: None,
@@ -149,7 +149,7 @@ pub fn check_read_permission_for_path(
     {
         return ToolCheckResult::Ask {
             message: format!(
-                "Claude requested permissions to read from {path}, which contains a suspicious Windows path pattern that requires manual approval."
+                "Coco requested permissions to read from {path}, which contains a suspicious Windows path pattern that requires manual approval."
             ),
             suggestions: vec![],
             choices: None,
@@ -180,7 +180,7 @@ pub fn check_read_permission_for_path(
     {
         return ToolCheckResult::Ask {
             message: format!(
-                "Claude requested permissions to read from {path}, but you haven't granted it yet."
+                "Coco requested permissions to read from {path}, but you haven't granted it yet."
             ),
             suggestions: vec![],
             choices: None,
@@ -230,7 +230,7 @@ pub fn check_read_permission_for_path(
 
     ToolCheckResult::Ask {
         message: format!(
-            "Claude requested permissions to read from {path}, but you haven't granted it yet."
+            "Coco requested permissions to read from {path}, but you haven't granted it yet."
         ),
         suggestions: read_permission_suggestions(path, &cwd_str),
         choices: None,

@@ -163,6 +163,7 @@ fn on_disk_skill_wins_over_mcp_on_name_collision() {
         aliases: Vec::new(),
         allowed_tools: None,
         model: None,
+        model_role: None,
         when_to_use: None,
         argument_names: Vec::new(),
         paths: Vec::new(),

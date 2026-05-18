@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use coco_messages::ToolResult;
+use coco_tool_runtime::CreateTeamRequest;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
@@ -87,9 +88,32 @@ impl Tool for TeamCreateTool {
             });
         }
 
+        let cwd = match ctx.cwd_override.clone() {
+            Some(path) => path,
+            None => std::env::current_dir().map_err(|e| ToolError::ExecutionFailed {
+                message: format!("Failed to resolve current directory for TeamCreate: {e}"),
+                source: None,
+            })?,
+        };
+        let leader_session_id =
+            ctx.session_id_for_history
+                .clone()
+                .ok_or_else(|| ToolError::ExecutionFailed {
+                    message: "TeamCreate requires a real leader session id".into(),
+                    source: None,
+                })?;
+
         let result = ctx
             .agent
-            .create_team(name)
+            .create_team(CreateTeamRequest {
+                requested_name: name.to_string(),
+                leader_agent_id: ctx.agent_id.as_ref().map(ToString::to_string),
+                leader_session_id,
+                cwd,
+                allowed_paths: Vec::new(),
+                leader_model: Some(ctx.main_loop_model.clone()),
+                task_list_router: ctx.team_task_list_router.clone(),
+            })
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: e,
@@ -97,7 +121,11 @@ impl Tool for TeamCreateTool {
             })?;
 
         Ok(ToolResult {
-            data: serde_json::json!(result),
+            data: serde_json::json!({
+                "team_name": result.team_name,
+                "lead_agent_id": result.lead_agent_id,
+                "task_list_id": result.task_list_id,
+            }),
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

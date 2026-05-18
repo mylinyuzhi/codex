@@ -4,7 +4,7 @@ Per-turn `<system-reminder>` injection. **TS-first**: ports Claude Code's `src/u
 
 Scope note: this crate owns the 42 `coco-system-reminder` generators below (40 model-visible, 2 silent/display-only). Claude Code's TS `Attachment` union is broader: file/context attachments, UI-only attachments, hook bookkeeping, slash-command metadata, and direct tool-result `<system-reminder>` strings live outside this crate. Those are covered in the scan sections after the catalog.
 
-**TS source files** (paths relative to `/lyz/codespace/3rd/claude-code/src`):
+**TS source files**:
 - `utils/attachments.ts` — `getAttachments()` orchestrator + per-reminder trigger functions
 - `utils/messages.ts` — `normalizeAttachmentForAPI()` text templates (one `case` per reminder)
 - `query.ts` — mid-turn consumption of memory / skill prefetch and `max_turns_reached`
@@ -453,4 +453,4 @@ Feature-gated reminders default **off** to match TS external-build behavior (`fe
 
 ## Global TS entry point
 
-`getAttachments(input, toolUseContext, ideSelection, queuedCommands, messages?, querySource?)` at `utils/attachments.ts:743-1002` (path relative to `/lyz/codespace/3rd/claude-code/src`) is the canonical per-turn orchestrator. It splits reminders into three batches (`userInputAttachments` / `allThreadAttachments` / `mainThreadAttachments`) which map to this crate's `User` / `Core` / `Main` tiers respectively.
+`getAttachments(input, toolUseContext, ideSelection, queuedCommands, messages?, querySource?)` at `utils/attachments.ts:743-1002` is the canonical per-turn orchestrator. It splits reminders into three batches (`userInputAttachments` / `allThreadAttachments` / `mainThreadAttachments`) which map to this crate's `User` / `Core` / `Main` tiers respectively.

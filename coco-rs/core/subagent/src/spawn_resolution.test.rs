@@ -1,4 +1,4 @@
-use coco_types::{AgentDefinition, AgentTypeId, ModelRole, SubagentType};
+use coco_types::{AgentDefinition, AgentTypeId, LlmModelSelection, ModelRole, SubagentType};
 use pretty_assertions::assert_eq;
 
 use super::{SubagentSelection, resolve_subagent_selection};
@@ -6,16 +6,23 @@ use super::{SubagentSelection, resolve_subagent_selection};
 #[test]
 fn test_request_model_wins_over_definition_model() {
     let def = AgentDefinition {
-        model: Some("haiku".into()),
+        model: Some("anthropic/claude-haiku-4-5".into()),
         ..Default::default()
     };
     let id = AgentTypeId::Builtin(SubagentType::Explore);
-    let sel = resolve_subagent_selection(Some("opus"), Some(&def), Some(&id));
+    let sel = resolve_subagent_selection(Some("anthropic/claude-opus-4-7"), Some(&def), Some(&id));
     assert_eq!(
         sel,
         SubagentSelection {
-            model: Some("opus".into()),
+            model: Some("anthropic/claude-opus-4-7".into()),
             model_role: ModelRole::Explore,
+            model_selection: LlmModelSelection::ExplicitWithFallbackRole {
+                primary: coco_types::ProviderModelSelection {
+                    provider: "anthropic".into(),
+                    model_id: "claude-opus-4-7".into(),
+                },
+                fallback_role: ModelRole::Explore,
+            },
         }
     );
 }
@@ -23,7 +30,7 @@ fn test_request_model_wins_over_definition_model() {
 #[test]
 fn test_definition_model_used_when_request_omits() {
     let def = AgentDefinition {
-        model: Some("haiku".into()),
+        model: Some("anthropic/claude-haiku-4-5".into()),
         ..Default::default()
     };
     let id = AgentTypeId::Builtin(SubagentType::Explore);
@@ -31,8 +38,15 @@ fn test_definition_model_used_when_request_omits() {
     assert_eq!(
         sel,
         SubagentSelection {
-            model: Some("haiku".into()),
+            model: Some("anthropic/claude-haiku-4-5".into()),
             model_role: ModelRole::Explore,
+            model_selection: LlmModelSelection::ExplicitWithFallbackRole {
+                primary: coco_types::ProviderModelSelection {
+                    provider: "anthropic".into(),
+                    model_id: "claude-haiku-4-5".into(),
+                },
+                fallback_role: ModelRole::Explore,
+            },
         }
     );
 }
@@ -46,6 +60,9 @@ fn test_no_model_override_returns_none_for_role_fallback() {
         SubagentSelection {
             model: None,
             model_role: ModelRole::Plan,
+            model_selection: LlmModelSelection::Role {
+                role: ModelRole::Plan,
+            },
         }
     );
 }
@@ -96,6 +113,9 @@ fn test_no_inputs_at_all_defaults_to_subagent_role() {
         SubagentSelection {
             model: None,
             model_role: ModelRole::Subagent,
+            model_selection: LlmModelSelection::Role {
+                role: ModelRole::Subagent,
+            },
         }
     );
 }

@@ -23,6 +23,7 @@
     "control/updateEnv",
     "control/keepAlive",
     "control/cancelRequest",
+    "agent/interruptCurrentWork",
     "config/read",
     "config/value/write",
     "hook/callbackResponse",

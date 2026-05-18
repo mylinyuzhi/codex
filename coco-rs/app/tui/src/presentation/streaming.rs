@@ -1,6 +1,6 @@
 //! Source-backed presentation model for the active streaming tail.
 
-use crate::constants;
+use crate::presentation::thinking::estimate_reasoning_tokens;
 use crate::state::ui::StreamingState;
 
 #[derive(Debug, Clone, Copy)]
@@ -31,15 +31,11 @@ pub(crate) fn streaming_tail_view(input: StreamingTailInput<'_>) -> StreamingTai
 
     if input.show_thinking && !input.streaming.thinking.is_empty() {
         blocks.push(StreamingTailBlock::ThinkingTokens {
-            count: estimate_thinking_tokens(&input.streaming.thinking),
+            count: estimate_reasoning_tokens(&input.streaming.thinking),
         });
     }
 
     StreamingTailView { blocks }
-}
-
-fn estimate_thinking_tokens(thinking: &str) -> i64 {
-    (thinking.split_whitespace().count() as f64 * constants::THINKING_TOKEN_MULTIPLIER) as i64
 }
 
 #[cfg(test)]

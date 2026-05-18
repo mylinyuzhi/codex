@@ -10,6 +10,12 @@ use crate::state::QuestionOption;
 use crate::theme::Theme;
 
 fn permission_overlay(detail: PermissionDetail) -> PermissionOverlay {
+    let display_input = match &detail {
+        PermissionDetail::Generic { input_preview } => {
+            coco_types::PermissionDisplayInput::Text(input_preview.clone())
+        }
+        _ => coco_types::PermissionDisplayInput::Empty,
+    };
     PermissionOverlay {
         request_id: "req-1".to_string(),
         tool_name: "Edit".to_string(),
@@ -21,6 +27,7 @@ fn permission_overlay(detail: PermissionDetail) -> PermissionOverlay {
         classifier_auto_approved: None,
         choices: None,
         selected_choice: 0,
+        display_input,
         original_input: None,
         permission_suggestions: vec![],
     }
@@ -76,6 +83,22 @@ fn permission_content_renders_choices_instead_of_default_actions() {
     assert!(body.contains("▸ Clear context"));
     assert!(body.contains("Start a smaller plan"));
     assert!(!body.contains("Always"));
+}
+
+#[test]
+fn generic_permission_content_uses_display_input_not_raw_original_input() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut overlay = permission_overlay(PermissionDetail::Generic {
+        input_preview: "safe display".to_string(),
+    });
+    overlay.original_input = Some(json!({"secret": "raw value"}));
+    overlay.display_input = coco_types::PermissionDisplayInput::Json("{\"safe\":true}".to_string());
+
+    let (_, body, _) = permission_content(&overlay, UiStyles::new(&theme));
+
+    assert!(body.contains("{\"safe\":true}"));
+    assert!(!body.contains("raw value"));
 }
 
 #[test]

@@ -83,5 +83,6 @@ fn test_model_role_from_str_accepts_camelcase_and_whitespace() {
 #[test]
 fn test_model_role_from_str_rejects_unknown() {
     assert!("nope".parse::<ModelRole>().is_err());
+    assert!("teammate".parse::<ModelRole>().is_err());
     assert!("".parse::<ModelRole>().is_err());
 }

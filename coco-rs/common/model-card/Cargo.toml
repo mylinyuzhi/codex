@@ -8,9 +8,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-# No internal deps. Model facts are vendor-defined and must be
-# usable from the foundation layer (coco-context, coco-otel, coco-tui)
-# without dragging in higher-layer crates.
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

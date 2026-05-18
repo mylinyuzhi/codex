@@ -71,6 +71,19 @@ fn chat_block_includes_chord_kill_agents() {
 }
 
 #[test]
+fn chat_block_includes_single_key_thinking_toggle() {
+    let blocks = default_blocks();
+    let chat = blocks
+        .iter()
+        .find(|b| b.context == KeybindingContext::Chat)
+        .expect("Chat block present");
+    assert_eq!(
+        chat.bindings.get("f2").and_then(Option::as_ref),
+        Some(&KeybindingAction::ChatThinkingToggle),
+    );
+}
+
+#[test]
 fn image_paste_key_is_platform_appropriate() {
     let blocks = default_blocks();
     let chat = blocks

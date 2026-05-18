@@ -3241,6 +3241,31 @@ async fn context_usage_errors_without_active_session() {
 }
 
 #[tokio::test]
+async fn agent_interrupt_current_work_errors_without_team_runtime() {
+    let (server_task, client) = spawn_server().await;
+
+    client
+        .send(req(
+            1,
+            "agent/interruptCurrentWork",
+            serde_json::json!({ "agent_id": "worker@team" }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(e) => {
+            assert_eq!(e.code, error_codes::INVALID_REQUEST);
+            assert!(e.message.contains("agent teams are not active"));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn context_usage_reports_accumulated_session_stats() {
     // Install a StatsEmittingRunner so we can fold synthetic stats
     // into session.stats, then call context/usage and verify the

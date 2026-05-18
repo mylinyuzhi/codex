@@ -19,8 +19,6 @@ pub enum TeammateMode {
     Auto,
     /// Force tmux backend.
     Tmux,
-    /// Force iTerm2 backend.
-    Iterm2,
     /// Force in-process backend.
     InProcess,
 }
@@ -30,7 +28,6 @@ impl TeammateMode {
         match self {
             Self::Auto => "auto",
             Self::Tmux => "tmux",
-            Self::Iterm2 => "iterm2",
             Self::InProcess => "in-process",
         }
     }
@@ -38,16 +35,20 @@ impl TeammateMode {
 
 /// Team/swarm configuration.
 ///
-/// TS: `ConfigOptions.showSpinnerTree`, `teammateMode`, `teammateDefaultModel`
+/// TS: `ConfigOptions.showSpinnerTree`, `teammateMode`
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TeamConfig {
     /// How to spawn teammates.
     #[serde(default)]
     pub teammate_mode: TeammateMode,
 
-    /// Default model for new teammates (None = inherit from leader).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub teammate_default_model: Option<String>,
+    /// Default role for new teammates. Missing config routes through Main.
+    #[serde(default = "default_model_role")]
+    pub default_model_role: coco_types::ModelRole,
+
+    /// Per agent-type role overrides.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub agent_type_model_roles: std::collections::HashMap<String, coco_types::ModelRole>,
 
     /// Show spinner tree instead of pills.
     #[serde(default = "default_true")]
@@ -66,11 +67,16 @@ fn default_max_agents() -> i32 {
     8
 }
 
+fn default_model_role() -> coco_types::ModelRole {
+    coco_types::ModelRole::Main
+}
+
 impl Default for TeamConfig {
     fn default() -> Self {
         Self {
             teammate_mode: TeammateMode::Auto,
-            teammate_default_model: None,
+            default_model_role: coco_types::ModelRole::Main,
+            agent_type_model_roles: std::collections::HashMap::new(),
             show_spinner_tree: true,
             max_agents: default_max_agents(),
         }

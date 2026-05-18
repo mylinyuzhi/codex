@@ -19,10 +19,11 @@ use coco_tool_runtime::AgentQueryConfig;
 use coco_tool_runtime::AgentQueryEngine;
 use coco_tool_runtime::AgentQueryResult;
 use coco_types::Features;
-use coco_types::ModelRole;
+use coco_types::LlmModelSelection;
 use coco_types::ThinkingLevel;
 use coco_types::ToolFilter;
 use coco_types::ToolOverrides;
+use tokio_util::sync::CancellationToken;
 
 use crate::engine::QueryEngine;
 use crate::engine::QueryEngineConfig;
@@ -30,9 +31,9 @@ use crate::engine::QueryEngineConfig;
 /// Factory function type for creating QueryEngine instances.
 ///
 /// Each agent query gets a fresh engine with its own config plus an
-/// optional `ModelRole` that the factory uses to select the right
-/// primary `ApiClient` + fallback chain. `None` defaults to the
-/// parent session's model (TS parity: `runAgent.ts` inherits the
+/// typed model selection that the factory uses to select the right
+/// primary `ApiClient` + fallback chain. `InheritMain` defaults to
+/// the parent session's model (TS parity: `runAgent.ts` inherits the
 /// parent client unless the agent definition specifies a model).
 ///
 /// The factory is async because production implementations (see
@@ -44,7 +45,8 @@ use crate::engine::QueryEngineConfig;
 pub type QueryEngineFactory = Arc<
     dyn Fn(
             QueryEngineConfig,
-            Option<ModelRole>,
+            LlmModelSelection,
+            Option<CancellationToken>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = QueryEngine> + Send>>
         + Send
         + Sync,
@@ -82,13 +84,19 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 serde_json::from_value::<coco_types::PermissionMode>(serde_json::json!(s)).ok()
             })
             .unwrap_or(coco_types::PermissionMode::Default);
+        let model_selection = effective_model_selection(&config);
+        let engine_model_id = model_selection
+            .display_model_id()
+            .unwrap_or_else(|| config.model.clone());
+        let initial_rule_maps = build_initial_rule_maps(&config.extra_permission_rules);
+
         let engine_config = QueryEngineConfig {
             max_turns: config.max_turns.unwrap_or(30),
             max_tokens: None,
             prompt_cache: config.prompt_cache.clone(),
             system_prompt: Some(config.system_prompt),
             append_system_prompt: None,
-            model_id: config.model,
+            model_id: engine_model_id,
             permission_mode,
             // Inherit the parent session's bypass capability. TS
             // parity: `spawnUtils.ts:53` / `spawnMultiAgent.ts:223`
@@ -123,15 +131,17 @@ impl AgentQueryEngine for QueryEngineAdapter {
             session_id: config.session_id.unwrap_or_default(),
             project_dir: None,
             // Subagent rule maps start empty, then we fold in any
-            // `extra_allow_rules` the caller (today: fork-mode
-            // `SkillTool` forwarding skill frontmatter `allowed-tools`)
-            // wants pre-populated under `PermissionRuleSource::Command`.
+            // `extra_permission_rules` the caller (today: fork-mode
+            // `SkillTool` forwarding skill frontmatter `allowed-tools`,
+            // plus teammate control updates) wants pre-populated.
             // TS parity: `createGetAppStateWithAllowedTools`
             // (`forkedAgent.ts:147-171`) wraps `getAppState` to inject
             // the same rules into the subagent's evaluation context.
-            allow_rules: build_initial_allow_rules(&config.extra_allow_rules),
-            deny_rules: Default::default(),
-            ask_rules: Default::default(),
+            allow_rules: initial_rule_maps.allow_rules,
+            deny_rules: initial_rule_maps.deny_rules,
+            ask_rules: initial_rule_maps.ask_rules,
+            live_permission_rules: config.live_permission_rules.clone(),
+            live_permission_mode: config.live_permission_mode.clone(),
             permission_rule_source_roots: Default::default(),
             session_additional_dirs: Default::default(),
             // Propagate the subagent's cwd_override (set by worktree
@@ -143,6 +153,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             plans_directory: None,
             agent_id: config.agent_id,
             is_teammate: config.is_teammate,
+            is_in_process_teammate: config.is_in_process_teammate,
             plan_mode_required: config.plan_mode_required,
             plan_mode_settings: coco_config::PlanModeSettings::default(),
             disable_all_hooks: false,
@@ -252,12 +263,12 @@ impl AgentQueryEngine for QueryEngineAdapter {
             }),
         };
 
-        // Role resolution: the adapter threads the subagent's role
-        // through to the factory so the correct primary+fallback
-        // chain is installed. `None` defers to the factory's
-        // default (typically the parent session's Main role).
-        let role = config.model_role;
-        let mut engine = (self.engine_factory)(engine_config, role).await;
+        // Model resolution: the adapter threads the subagent's typed
+        // selection through to the factory so concrete provider/model
+        // selections build their own ApiClient and role selections
+        // install the role-specific client.
+        let mut engine =
+            (self.engine_factory)(engine_config, model_selection, config.cancel.clone()).await;
         // D3: install the per-spawn permission bridge if one was
         // threaded through. AgentTool spawns set this so worker tool
         // deny paths forward to the leader instead of failing closed.
@@ -358,6 +369,17 @@ impl AgentQueryEngine for QueryEngineAdapter {
     }
 }
 
+fn effective_model_selection(config: &AgentQueryConfig) -> LlmModelSelection {
+    if config.model_selection != LlmModelSelection::InheritMain {
+        return config.model_selection.clone();
+    }
+
+    LlmModelSelection::from_model_and_role(
+        (!config.model.trim().is_empty()).then_some(config.model.as_str()),
+        config.model_role,
+    )
+}
+
 /// Pure helper: micro-compact a teammate worker's serialized history.
 ///
 /// Implements the body of [`coco_coordinator::runner_loop::AgentExecutionEngine::compact_messages`]
@@ -400,47 +422,34 @@ pub fn micro_compact_serialized_messages(
         .collect()
 }
 
-/// Build the initial `allow_rules` map for a fork-spawned subagent.
-///
-/// Groups `extra_allow_rules` by `(source, behavior)` — today every
-/// rule lands under `PermissionRuleSource::Command` because fork-mode
-/// skills are the only producer. The grouping iterates anyway so a
-/// future producer that emits mixed sources continues to slot
-/// correctly without a downstream change.
-fn build_initial_allow_rules(
-    extra: &[coco_types::PermissionRule],
-) -> coco_types::PermissionRulesBySource {
-    let mut map: coco_types::PermissionRulesBySource = Default::default();
-    let mut skipped = 0usize;
+#[derive(Default)]
+struct InitialRuleMaps {
+    allow_rules: coco_types::PermissionRulesBySource,
+    deny_rules: coco_types::PermissionRulesBySource,
+    ask_rules: coco_types::PermissionRulesBySource,
+}
+
+/// Build the initial permission-rule maps for a fork-spawned subagent.
+fn build_initial_rule_maps(extra: &[coco_types::PermissionRule]) -> InitialRuleMaps {
+    let mut maps = InitialRuleMaps::default();
     for rule in extra {
-        if rule.behavior != coco_types::PermissionBehavior::Allow {
-            // Deny / Ask rules don't belong in `allow_rules`. Drop with a
-            // warning so a misbehaving caller doesn't silently widen the
-            // wrong bucket.
-            skipped += 1;
-            tracing::warn!(
-                behavior = ?rule.behavior,
-                "build_initial_allow_rules: skipping non-Allow rule in extra_allow_rules"
-            );
-            continue;
-        }
+        let map = match rule.behavior {
+            coco_types::PermissionBehavior::Allow => &mut maps.allow_rules,
+            coco_types::PermissionBehavior::Deny => &mut maps.deny_rules,
+            coco_types::PermissionBehavior::Ask => &mut maps.ask_rules,
+        };
         map.entry(rule.source).or_default().push(rule.clone());
     }
     if !extra.is_empty() {
-        // Useful at subagent spawn time: confirms the parent's
-        // `extra_allow_rules` (today: fork-mode skill `allowed-tools`)
-        // landed in the subagent's BASE `allow_rules` bucket, not the
-        // per-engine live overlay. The live overlay starts empty;
-        // subagent skills can still emit into it during execution.
         tracing::info!(
             extra = extra.len(),
-            kept = extra.len() - skipped,
-            skipped,
-            sources = ?map.keys().collect::<Vec<_>>(),
-            "agent_adapter: built initial allow_rules for forked subagent"
+            allow_sources = ?maps.allow_rules.keys().collect::<Vec<_>>(),
+            deny_sources = ?maps.deny_rules.keys().collect::<Vec<_>>(),
+            ask_sources = ?maps.ask_rules.keys().collect::<Vec<_>>(),
+            "agent_adapter: built initial permission rules for subagent"
         );
     }
-    map
+    maps
 }
 
 #[cfg(test)]

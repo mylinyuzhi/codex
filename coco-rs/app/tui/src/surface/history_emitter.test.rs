@@ -185,6 +185,8 @@ fn emit_append_only_accepts_finalized_transcript_renderer() {
                     width: 8,
                     syntax_highlighting: SyntaxHighlighting::Disabled,
                     show_system_reminders: false,
+                    show_thinking: false,
+                    kb_handle: None,
                 },
             )
         })

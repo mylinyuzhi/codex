@@ -609,7 +609,8 @@ pub struct AgentDefinition {
     #[serde(default)]
     pub use_exact_tools: bool,
 
-    /// Model override for this agent. Use `"inherit"` for parent's model.
+    /// Concrete model override for this agent, in `provider/model_id`
+    /// format. Use `"inherit"` for parent's model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
@@ -620,7 +621,7 @@ pub struct AgentDefinition {
     /// `~/.coco/config.json` Explore role mapping rather than the
     /// generic Subagent role.
     ///
-    /// No TS equivalent — TS uses model alias strings (`'haiku'`/`'sonnet'`)
+    /// No TS equivalent — TS historically used model alias strings
     /// directly without a role indirection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_role: Option<ModelRole>,

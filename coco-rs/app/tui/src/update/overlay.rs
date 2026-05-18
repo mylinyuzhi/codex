@@ -645,7 +645,7 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
                 .unwrap_or_else(|| p.classic_action_count()) as i32;
             if count > 0 {
                 let current = p.selected_choice as i32;
-                let next = (current + delta).clamp(0, count - 1);
+                let next = (current + delta).rem_euclid(count);
                 p.selected_choice = next as usize;
             }
         }
@@ -1035,10 +1035,13 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             | Overlay::TaskDetail(_)
             | Overlay::Feedback(_)
             | Overlay::McpServerSelect(_)
-            | Overlay::Transcript(_)
             | Overlay::ContextVisualization,
         ) => {
             // Dismiss on confirm (Enter/Esc)
+        }
+        Some(Overlay::Transcript(t)) => {
+            state.ui.restore_active_overlay(Overlay::Transcript(t));
+            return;
         }
         None => {}
     }

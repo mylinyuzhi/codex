@@ -16,10 +16,12 @@ use crate::surface::overlay::SurfaceFramePlan;
 use crate::surface::terminal::SurfaceBackend;
 use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::render_interactive_viewport;
+use crate::widgets::TranscriptLayoutIndex;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct NativeSurfaceController {
     history: SurfaceHistoryDriver,
+    transcript_layout: TranscriptLayoutIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -147,7 +149,7 @@ impl NativeSurfaceController {
 
         let mut layout = FrameLayout::default();
         terminal.draw_viewport(|frame| {
-            layout = render_interactive_viewport(frame, state, plan);
+            layout = render_interactive_viewport(frame, state, plan, &mut self.transcript_layout);
             if let Some(claim) = crate::cursor::compute_cursor(state, layout.input) {
                 frame.set_cursor_claim(claim);
             }
@@ -165,6 +167,7 @@ impl NativeSurfaceController {
 
     pub(crate) fn reset(&mut self) {
         self.history.reset();
+        self.transcript_layout.reset();
     }
 }
 
@@ -174,6 +177,8 @@ fn history_options(state: &AppState, width: u16) -> HistoryLineRenderOptions<'_>
         width,
         syntax_highlighting: state.ui.display_settings.syntax_highlighting,
         show_system_reminders: state.ui.show_system_reminders,
+        show_thinking: state.ui.show_thinking,
+        kb_handle: Some(&state.ui.kb_handle),
     }
 }
 

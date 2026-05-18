@@ -121,6 +121,106 @@ impl FromStr for ModelRole {
     }
 }
 
+/// Unresolved provider/model selection from user-facing config.
+///
+/// This intentionally does not include [`ProviderApi`]: config surfaces
+/// write `provider/model_id`, and the runtime resolves `provider` through
+/// the live provider catalog before constructing an `ApiClient`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ProviderModelSelection {
+    pub provider: String,
+    pub model_id: String,
+}
+
+impl ProviderModelSelection {
+    pub fn from_slash_str(s: &str) -> Result<Self, String> {
+        let (provider, model_id) = s
+            .split_once('/')
+            .ok_or_else(|| format!("`{s}` must use `provider/model_id` format"))?;
+        if provider.is_empty() || model_id.is_empty() {
+            return Err(format!("`{s}` must use `provider/model_id` format"));
+        }
+        Ok(Self {
+            provider: provider.to_string(),
+            model_id: model_id.to_string(),
+        })
+    }
+
+    pub fn display(&self) -> String {
+        format!("{}/{}", self.provider, self.model_id)
+    }
+}
+
+/// Runtime model selection for subagents, skills, and teammates.
+///
+/// `Role` and `InheritMain` preserve role-based routing. `Explicit`
+/// carries the full provider/model pair so the execution factory can
+/// build the actual `ApiClient` instead of only changing a display
+/// `model_id`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LlmModelSelection {
+    #[default]
+    InheritMain,
+    Role {
+        role: ModelRole,
+    },
+    Explicit {
+        primary: ProviderModelSelection,
+    },
+    ExplicitWithFallbackRole {
+        primary: ProviderModelSelection,
+        fallback_role: ModelRole,
+    },
+}
+
+impl LlmModelSelection {
+    pub fn from_model_and_role(model: Option<&str>, model_role: Option<ModelRole>) -> Self {
+        let Some(raw_model) = model.map(str::trim).filter(|m| !m.is_empty()) else {
+            return model_role
+                .map(|role| Self::Role { role })
+                .unwrap_or(Self::InheritMain);
+        };
+
+        if raw_model.eq_ignore_ascii_case("inherit") {
+            return Self::InheritMain;
+        }
+
+        if let Ok(primary) = ProviderModelSelection::from_slash_str(raw_model) {
+            return match model_role {
+                Some(fallback_role) => Self::ExplicitWithFallbackRole {
+                    primary,
+                    fallback_role,
+                },
+                None => Self::Explicit { primary },
+            };
+        }
+
+        model_role
+            .map(|role| Self::Role { role })
+            .unwrap_or(Self::InheritMain)
+    }
+
+    pub fn display_model_id(&self) -> Option<String> {
+        match self {
+            Self::InheritMain | Self::Role { .. } => None,
+            Self::Explicit { primary } | Self::ExplicitWithFallbackRole { primary, .. } => {
+                Some(primary.model_id.clone())
+            }
+        }
+    }
+
+    pub fn fallback_role(&self) -> Option<ModelRole> {
+        match self {
+            Self::Role { role } => Some(*role),
+            Self::ExplicitWithFallbackRole { fallback_role, .. } => Some(*fallback_role),
+            Self::InheritMain | Self::Explicit { .. } => None,
+        }
+    }
+}
+
 /// A resolved model identity: provider + model ID.
 /// Produced by coco-config, consumed by coco-inference.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

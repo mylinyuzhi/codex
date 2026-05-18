@@ -40,14 +40,17 @@ use coco_tool_runtime::MailboxHandleRef;
 use coco_tool_runtime::McpHandleRef;
 use coco_tool_runtime::SkillHandleRef;
 use coco_tool_runtime::TaskListHandleRef;
+use coco_tool_runtime::TeamTaskListRouterRef;
 use coco_tool_runtime::TodoListHandleRef;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::AgentId;
 use coco_types::AppStateReadHandle;
+use coco_types::PermissionBehavior;
 use coco_types::PermissionRule;
 use coco_types::PermissionRuleSource;
+use coco_types::PermissionRulesBySource;
 use coco_types::ToolAppState;
 use coco_types::ToolPermissionContext;
 use tokio::sync::RwLock;
@@ -68,6 +71,7 @@ pub(crate) struct ToolContextFactory {
     pub(crate) cancel: CancellationToken,
     pub(crate) mailbox: Option<MailboxHandleRef>,
     pub(crate) task_list: Option<TaskListHandleRef>,
+    pub(crate) team_task_list_router: Option<TeamTaskListRouterRef>,
     pub(crate) todo_list: Option<TodoListHandleRef>,
     pub(crate) task_handle: Option<coco_tool_runtime::TaskHandleRef>,
     pub(crate) permission_bridge: Option<ToolPermissionBridgeRef>,
@@ -181,6 +185,20 @@ pub(crate) struct ToolContextOverrides {
     pub(crate) current_model_supports_client_side_tool_search: bool,
 }
 
+fn merge_rules_by_behavior(
+    target: &mut PermissionRulesBySource,
+    live_rules: &[PermissionRule],
+    behavior: PermissionBehavior,
+) {
+    for rule in live_rules
+        .iter()
+        .filter(|rule| rule.behavior == behavior)
+        .cloned()
+    {
+        target.entry(rule.source).or_default().push(rule);
+    }
+}
+
 impl ToolContextFactory {
     /// Build a fresh `ToolUseContext` for the next tool batch.
     ///
@@ -188,7 +206,7 @@ impl ToolContextFactory {
     /// the prior batch's `ExitPlanModeTool` / `EnterPlanModeTool` patches
     /// become visible here without a config reload.
     pub(crate) async fn build(&self, overrides: ToolContextOverrides) -> ToolUseContext {
-        let (live_mode, live_pre_plan, live_stripped, live_discovered_tool_names) =
+        let (mut live_mode, live_pre_plan, live_stripped, live_discovered_tool_names) =
             match self.app_state.as_ref() {
                 Some(state) => {
                     let guard = state.read().await;
@@ -206,6 +224,9 @@ impl ToolContextFactory {
                     std::sync::Arc::new(std::collections::HashSet::new()),
                 ),
             };
+        if let Some(mode) = self.config.live_permission_mode.as_ref() {
+            live_mode = *mode.read().await;
+        }
 
         let plans_dir = self.config_home.as_ref().map(|ch| {
             coco_context::resolve_plans_directory(
@@ -238,7 +259,12 @@ impl ToolContextFactory {
         // is called per batch). Cross-batch propagation works because
         // each turn's build() re-reads the live Arc. The empty-fast-path
         // avoids a clone when no skill has emitted rules yet.
-        let allow_rules = {
+        let live_permission_rules = match self.config.live_permission_rules.as_ref() {
+            Some(rules) => rules.read().await.clone(),
+            None => Vec::new(),
+        };
+
+        let mut allow_rules = {
             let live = self.live_command_rules.read().await;
             if live.is_empty() {
                 // Hot path: factory builds every batch; emitting one
@@ -274,6 +300,23 @@ impl ToolContextFactory {
                 merged
             }
         };
+        merge_rules_by_behavior(
+            &mut allow_rules,
+            &live_permission_rules,
+            PermissionBehavior::Allow,
+        );
+        let mut deny_rules = self.config.deny_rules.clone();
+        merge_rules_by_behavior(
+            &mut deny_rules,
+            &live_permission_rules,
+            PermissionBehavior::Deny,
+        );
+        let mut ask_rules = self.config.ask_rules.clone();
+        merge_rules_by_behavior(
+            &mut ask_rules,
+            &live_permission_rules,
+            PermissionBehavior::Ask,
+        );
         ToolUseContext {
             tools: self.tools.clone(),
             main_loop_model,
@@ -310,6 +353,7 @@ impl ToolContextFactory {
             model_supports_client_side_tool_search: overrides
                 .current_model_supports_client_side_tool_search,
             is_teammate: self.config.is_teammate,
+            is_in_process_teammate: self.config.is_in_process_teammate,
             plan_mode_required: self.config.plan_mode_required,
             // Pre-resolve swarm identity once, so tools read from ctx
             // instead of process env. Falls back to env vars set by the
@@ -344,8 +388,8 @@ impl ToolContextFactory {
                 // delta — both read through the same evaluator slot.
                 // Plan Tier 3 polish.
                 allow_rules,
-                deny_rules: self.config.deny_rules.clone(),
-                ask_rules: self.config.ask_rules.clone(),
+                deny_rules,
+                ask_rules,
                 bypass_available: self.config.bypass_permissions_available,
                 pre_plan_mode: live_pre_plan,
                 stripped_dangerous_rules: live_stripped,
@@ -461,6 +505,7 @@ impl ToolContextFactory {
                 .task_list
                 .clone()
                 .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpTaskListHandle)),
+            team_task_list_router: self.team_task_list_router.clone(),
             todo_list: self
                 .todo_list
                 .clone()

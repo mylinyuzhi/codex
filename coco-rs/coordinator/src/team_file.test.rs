@@ -83,8 +83,8 @@ fn test_team_file_serde_new_fields() {
     };
 
     let json = serde_json::to_string(&tf).unwrap();
-    assert!(json.contains("hidden_pane_ids"));
-    assert!(json.contains("team_allowed_paths"));
+    assert!(json.contains("hiddenPaneIds"));
+    assert!(json.contains("teamAllowedPaths"));
     assert!(json.contains("pane-1"));
 
     let parsed: TeamFile = serde_json::from_str(&json).unwrap();

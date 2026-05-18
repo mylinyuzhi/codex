@@ -114,6 +114,9 @@ pub enum ConfigError {
         supported: Vec<ReasoningEffort>,
     },
 
+    #[error("{message}")]
+    InvalidConfig { message: String },
+
     #[error("io error: {source}")]
     Io {
         #[from]
@@ -133,6 +136,12 @@ pub enum ConfigError {
 impl ConfigError {
     pub fn generic(message: impl Into<String>) -> Self {
         Self::Generic {
+            message: message.into(),
+        }
+    }
+
+    pub fn invalid_config(message: impl Into<String>) -> Self {
+        Self::InvalidConfig {
             message: message.into(),
         }
     }
@@ -184,7 +193,9 @@ impl ErrorExt for ConfigError {
             Self::UnknownProvider { .. } => StatusCode::ProviderNotFound,
             Self::UnknownModel { .. } => StatusCode::ModelNotFound,
             Self::InvalidTimeoutSecs { .. } => StatusCode::InvalidArguments,
-            Self::DefaultThinkingLevelNotSupported { .. } => StatusCode::InvalidConfig,
+            Self::DefaultThinkingLevelNotSupported { .. } | Self::InvalidConfig { .. } => {
+                StatusCode::InvalidConfig
+            }
             Self::Io { .. } => StatusCode::IoError,
             Self::Json { .. } => StatusCode::InvalidJson,
             Self::Jsonc { .. } => StatusCode::InvalidJson,

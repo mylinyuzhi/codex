@@ -1,0 +1,21 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCO v0.0.0                                                                           
+ │●│ │●│  opus-4  *  auto                                                                       
+ ╰─╯ ╰─╯                                                                                        
+                                                                                                
+❯ find the CLAUDE.md                                                                            
+                                                                                                
+• 🔨  Glob(**/CLAUDE.md)                                                                         
+  └ Found 8 files                                                                               
+    coco-rs/app/tui/CLAUDE.md                                                                   
+    … +5 lines (ctrl+o to expand)                                                               
+    coco-rs/utils/string/CLAUDE.md                                                              
+    codex-rs/tui/CLAUDE.md                                                                      
+                                                                                                
+────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                               
+────────────────────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto | show thinking(F2):off | ↑0 ↓0 · cache 0% | ctx 0% | 3 msgs

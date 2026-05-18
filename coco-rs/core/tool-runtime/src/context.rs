@@ -28,6 +28,7 @@ use crate::schedule_store::ScheduleStoreRef;
 use crate::side_query::SideQueryHandle;
 use crate::task_handle::TaskHandleRef;
 use crate::task_list_handle::TaskListHandleRef;
+use crate::task_list_handle::TeamTaskListRouterRef;
 use crate::task_list_handle::TodoListHandleRef;
 use crate::traits::ProgressSender;
 
@@ -279,6 +280,11 @@ pub struct ToolUseContext {
     /// (e.g., ExitPlanMode bypasses permission UI for teammates).
     pub is_teammate: bool,
 
+    /// Whether this context is specifically an in-process teammate.
+    /// Pane teammates are separate processes and may run background
+    /// subagents; in-process teammates may not.
+    pub is_in_process_teammate: bool,
+
     /// When `true`, this teammate MUST request plan approval from the
     /// team lead before exiting plan mode. TS: `isPlanModeRequired()` —
     /// tied to the role definition in the team file or the
@@ -442,6 +448,9 @@ pub struct ToolUseContext {
     /// contexts or sessions lacking a resolved config-home path.
     /// TS: `utils/tasks.ts`.
     pub task_list: TaskListHandleRef,
+    /// Router that can switch the active task list when a leader creates
+    /// or deletes an agent team.
+    pub team_task_list_router: Option<TeamTaskListRouterRef>,
 
     // ── Per-Agent TodoWrite (V1) ──
     /// In-memory per-agent checklist store used by `TodoWriteTool`.
@@ -608,6 +617,7 @@ impl ToolUseContext {
             discovered_skill_names: HashSet::new(),
             tool_decisions: HashMap::new(),
             is_teammate: self.is_teammate,
+            is_in_process_teammate: self.is_in_process_teammate,
             plan_mode_required: self.plan_mode_required,
             agent_name: self.agent_name.clone(),
             team_name: self.team_name.clone(),
@@ -634,6 +644,7 @@ impl ToolUseContext {
             progress_tx: self.progress_tx.clone(),
             task_handle: self.task_handle.clone(),
             task_list: self.task_list.clone(),
+            team_task_list_router: self.team_task_list_router.clone(),
             todo_list: self.todo_list.clone(),
             hook_handle: self.hook_handle.clone(),
             file_read_state: self.file_read_state.clone(),
@@ -790,6 +801,7 @@ impl ToolUseContext {
             discovered_skill_names: HashSet::new(),
             tool_decisions: HashMap::new(),
             is_teammate: false,
+            is_in_process_teammate: false,
             plan_mode_required: false,
             agent_name: None,
             team_name: None,
@@ -816,6 +828,7 @@ impl ToolUseContext {
             progress_tx: None,
             task_handle: None,
             task_list: Arc::new(crate::task_list_handle::InMemoryTaskListHandle::new()),
+            team_task_list_router: None,
             todo_list: Arc::new(crate::task_list_handle::InMemoryTodoListHandle::new()),
             hook_handle: None,
             file_read_state: None,

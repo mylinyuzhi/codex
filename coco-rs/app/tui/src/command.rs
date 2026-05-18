@@ -137,6 +137,8 @@ pub enum UserCommand {
     },
     /// Interrupt current operation (Ctrl+C).
     Interrupt,
+    /// Interrupt a teammate's active turn without killing the teammate.
+    InterruptAgentCurrentWork { agent_id: String },
     /// Set permission mode. Replaces the legacy `SetPlanMode { bool }`
     /// — plan-mode activation is just `SetPermissionMode { mode: Plan }`.
     SetPermissionMode { mode: PermissionMode },

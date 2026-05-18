@@ -18,6 +18,7 @@ use crate::state::AppState;
 use crate::state::Overlay;
 use crate::surface::compatibility::TerminalCompatibility;
 use crate::surface::terminal::SurfaceFrame;
+use crate::widgets::TranscriptLayoutIndex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OverlaySurfacePlacement {
@@ -108,11 +109,33 @@ struct LatchedOverlaySurface {
 }
 
 impl OverlaySurfaceState {
+    #[cfg(test)]
     pub(crate) fn plan(
         &mut self,
         state: &AppState,
         compatibility: TerminalCompatibility,
         now: Instant,
+    ) -> SurfaceFramePlan {
+        self.plan_inner(state, compatibility, now, None)
+    }
+
+    pub(crate) fn plan_for_native_viewport(
+        &mut self,
+        state: &AppState,
+        compatibility: TerminalCompatibility,
+        now: Instant,
+        width: u16,
+        max_height: u16,
+    ) -> SurfaceFramePlan {
+        self.plan_inner(state, compatibility, now, Some((width, max_height)))
+    }
+
+    fn plan_inner(
+        &mut self,
+        state: &AppState,
+        compatibility: TerminalCompatibility,
+        now: Instant,
+        native_viewport_bounds: Option<(u16, u16)>,
     ) -> SurfaceFramePlan {
         let Some(overlay) = state.ui.active_overlay() else {
             self.latched = None;
@@ -136,10 +159,14 @@ impl OverlaySurfaceState {
             self.latched = None;
             return SurfaceFramePlan::for_compatibility(compatibility);
         };
+        let needs_alt_screen_for_size = static_placement == OverlaySurfacePlacement::InlineDecision
+            && native_viewport_bounds.is_some_and(|(width, max_height)| {
+                inline_decision_needs_alt_screen_for_size(overlay, state, width, max_height)
+            });
         let attention_requested = static_placement == OverlaySurfacePlacement::InlineDecision
             && inline_decision_needs_attention(overlay)
             && !inline_decision_is_attention_safe(state, now);
-        let placement = if attention_requested {
+        let placement = if attention_requested || needs_alt_screen_for_size {
             OverlaySurfacePlacement::AltScreen
         } else {
             static_placement
@@ -235,6 +262,22 @@ fn inline_decision_is_attention_safe(state: &AppState, now: Instant) -> bool {
             })
 }
 
+fn inline_decision_needs_alt_screen_for_size(
+    overlay: &Overlay,
+    state: &AppState,
+    width: u16,
+    max_height: u16,
+) -> bool {
+    if width == 0 || max_height == 0 {
+        return false;
+    }
+    let styles = UiStyles::new(&state.ui.theme);
+    let overlay_height = required_overlay_height(overlay, state, styles, width, max_height);
+    let protected_bottom_rows =
+        crate::surface::viewport::inline_decision_protected_bottom_rows(state, width, max_height);
+    overlay_height.saturating_add(protected_bottom_rows) > max_height
+}
+
 #[cfg(test)]
 pub(crate) fn history_emission_deferred(overlay: Option<&Overlay>) -> bool {
     overlay_surface_placement(overlay)
@@ -250,8 +293,10 @@ pub(crate) fn history_emission_deferred_for_state(state: &AppState, now: Instant
 pub(crate) fn render_surface_overlay(
     frame: &mut SurfaceFrame<'_>,
     area: Rect,
+    input_area: Option<Rect>,
     overlay: &Overlay,
     state: &AppState,
+    transcript_layout: &mut TranscriptLayoutIndex,
     styles: UiStyles<'_>,
 ) {
     if matches!(
@@ -261,10 +306,32 @@ pub(crate) fn render_surface_overlay(
         return;
     }
 
+    if let Overlay::Transcript(transcript) = overlay {
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            crate::widgets::TranscriptOverlayWidget::new(
+                state,
+                transcript,
+                transcript_layout,
+                styles,
+            ),
+            area,
+        );
+        return;
+    }
+
+    let Some(text_overlay) = crate::overlay_content::text_overlay(overlay) else {
+        return;
+    };
     let (title, body, border_color) =
-        crate::overlay_content::overlay_content(overlay, state, styles);
-    let (width, height) = overlay_box_size(area, &body, overlay_box_policy(overlay));
-    let overlay_area = layout::centered_fixed_area(area, width, height);
+        crate::overlay_content::overlay_content(text_overlay, state, styles);
+    let policy = overlay_box_policy(overlay);
+    let placement_area = overlay_placement_area(area, input_area, overlay);
+    if placement_area.height == 0 {
+        return;
+    }
+    let (width, height) = overlay_box_size(placement_area, &body, policy);
+    let overlay_area = layout::centered_fixed_area(placement_area, width, height);
 
     frame.render_widget(Clear, overlay_area);
     frame.render_widget(
@@ -278,6 +345,22 @@ pub(crate) fn render_surface_overlay(
     );
 }
 
+fn overlay_placement_area(area: Rect, input_area: Option<Rect>, overlay: &Overlay) -> Rect {
+    if !matches!(
+        overlay_surface_placement(Some(overlay)),
+        Some(OverlaySurfacePlacement::InlineDecision)
+    ) {
+        return area;
+    }
+    let Some(input_area) = input_area else {
+        return area;
+    };
+    let top = area.y;
+    let bottom = input_area.y.clamp(area.y, area.bottom());
+    let height = bottom.saturating_sub(top);
+    Rect::new(area.x, top, area.width, height)
+}
+
 pub(crate) fn required_overlay_height(
     overlay: &Overlay,
     state: &AppState,
@@ -288,7 +371,13 @@ pub(crate) fn required_overlay_height(
     if width == 0 || max_height == 0 {
         return 0;
     }
-    let (_, body, _) = crate::overlay_content::overlay_content(overlay, state, styles);
+    if matches!(overlay, Overlay::Transcript(_)) {
+        return max_height;
+    }
+    let Some(text_overlay) = crate::overlay_content::text_overlay(overlay) else {
+        return 0;
+    };
+    let (_, body, _) = crate::overlay_content::overlay_content(text_overlay, state, styles);
     let area = Rect::new(0, 0, width, max_height);
     overlay_box_size(area, &body, overlay_box_policy(overlay)).1
 }

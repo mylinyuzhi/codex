@@ -10,7 +10,7 @@ single seam between coco-rs and AI provider HTTP/streaming protocols.
 |-------|-------|
 | **Mirror baseline commit** | [`ffd70859f`](https://github.com/vercel/ai/commit/ffd70859f9907121cddf4f1ff81fc17d6f6a510e) — *Version Packages (beta) (#13770)*, 2026-03-23 |
 | **Phase 0 catch-up commit** | [`4d58048f9`](https://github.com/vercel/ai/commit/4d58048f9e1782ace6f07fc410324bd2dab0a8fa) — *Version Packages (canary) (#14924)*, 2026-05-01 |
-| **Source repo** | `vercel/ai` — local checkout at `/lyz/codespace/3rd/ai` |
+| **Source repo** | `vercel/ai` |
 | **Spec version** | v4 (LanguageModelV4 / ProviderV4 trait family) |
 
 The mirror was originally bootstrapped at baseline `ffd70859f`. Phase 0
@@ -138,7 +138,7 @@ crate-specific conventions.
 
 When you do a fresh sweep against TS upstream:
 
-1. `cd /lyz/codespace/3rd/ai && git fetch && git log <baseline>..HEAD --no-merges -- packages/ai/ packages/provider/ packages/provider-utils/ packages/anthropic/ packages/openai/ packages/openai-compatible/ packages/google/ packages/bytedance/`
+1. `cd {upstream repo} && git fetch && git log <baseline>..HEAD --no-merges -- packages/ai/ packages/provider/ packages/provider-utils/ packages/anthropic/ packages/openai/ packages/openai-compatible/ packages/google/ packages/bytedance/`
 2. Triage each commit: feature port? bug fix? cosmetic refactor? skip?
 3. Apply deltas; update this README's **Mirror baseline commit** field to the new pinned TS commit; update the "Items observed but NOT yet mirrored" section.
 4. Run `just pre-commit` — there are 7000+ workspace tests; vercel-ai changes commonly trigger seam violations or provider-test regressions.

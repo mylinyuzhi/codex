@@ -201,7 +201,7 @@ code,
 
 .audit-strip {
   display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 8px;
   margin: -8px 0 22px;
 }
@@ -241,7 +241,7 @@ code,
 
 .lens-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
   gap: 10px;
 }
 
@@ -497,6 +497,57 @@ tbody tr:hover {
   color: var(--ink);
 }
 
+.filter-panel select {
+  width: 100%;
+  cursor: pointer;
+}
+
+.filter-panel input:focus,
+.filter-panel select:focus,
+.local-controls input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent), transparent 68%);
+  outline-offset: 2px;
+}
+
+.time-window {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(135deg, rgba(95, 127, 42, 0.12), transparent 42%),
+    var(--panel-3);
+}
+
+.time-window__header {
+  display: grid;
+  gap: 4px;
+}
+
+.time-window__header span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.time-window__header strong {
+  color: var(--ink);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.time-window__fields {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.time-window .button--full {
+  margin-top: 0;
+}
+
 .local-controls {
   margin-top: 18px;
   padding-top: 16px;
@@ -518,6 +569,14 @@ tbody tr:hover {
   min-height: 16px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.search-hit {
+  padding: 0 2px;
+  background: #f7d85c;
+  box-decoration-break: clone;
+  color: #171b1f;
+  font-weight: 800;
 }
 
 .timeline {

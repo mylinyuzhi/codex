@@ -36,6 +36,7 @@ fn factory_with_live_rules(
         cancel: CancellationToken::new(),
         mailbox: None,
         task_list: None,
+        team_task_list_router: None,
         todo_list: None,
         task_handle: None,
         permission_bridge: None,
@@ -289,7 +290,10 @@ async fn test_factory_installs_custom_agent_handle() {
         async fn send_message(&self, _to: &str, _content: &str) -> Result<String, String> {
             Ok("marker".into())
         }
-        async fn create_team(&self, _name: &str) -> Result<String, String> {
+        async fn create_team(
+            &self,
+            _request: coco_tool_runtime::CreateTeamRequest,
+        ) -> Result<coco_tool_runtime::CreateTeamResult, String> {
             Err("marker".into())
         }
         async fn delete_team(&self) -> Result<String, String> {
@@ -439,6 +443,20 @@ fn skill_cmd_rule(tool_pattern: &str) -> coco_types::PermissionRule {
     }
 }
 
+fn session_rule(
+    behavior: coco_types::PermissionBehavior,
+    tool_pattern: &str,
+) -> coco_types::PermissionRule {
+    coco_types::PermissionRule {
+        source: coco_types::PermissionRuleSource::Session,
+        behavior,
+        value: coco_types::PermissionRuleValue {
+            tool_pattern: tool_pattern.into(),
+            rule_content: None,
+        },
+    }
+}
+
 #[tokio::test]
 async fn test_factory_returns_base_allow_rules_when_live_rules_empty() {
     // Zero-clone fast path: when the live store is empty, the
@@ -576,4 +594,47 @@ async fn test_factory_preserves_base_command_rules_when_merging() {
         .map(|r| r.value.tool_pattern.as_str())
         .collect();
     assert_eq!(patterns, vec!["Glob", "Read"]);
+}
+
+#[tokio::test]
+async fn test_factory_merges_live_permission_rules_by_behavior() {
+    let mut config = test_config();
+    let live_rules = Arc::new(RwLock::new(vec![
+        session_rule(coco_types::PermissionBehavior::Allow, "Read"),
+        session_rule(coco_types::PermissionBehavior::Deny, "Bash"),
+        session_rule(coco_types::PermissionBehavior::Ask, "Edit"),
+    ]));
+    config.live_permission_rules = Some(live_rules);
+
+    let ctx = factory(config).build(Default::default()).await;
+
+    assert_eq!(
+        ctx.permission_context.allow_rules[&coco_types::PermissionRuleSource::Session][0]
+            .value
+            .tool_pattern,
+        "Read"
+    );
+    assert_eq!(
+        ctx.permission_context.deny_rules[&coco_types::PermissionRuleSource::Session][0]
+            .value
+            .tool_pattern,
+        "Bash"
+    );
+    assert_eq!(
+        ctx.permission_context.ask_rules[&coco_types::PermissionRuleSource::Session][0]
+            .value
+            .tool_pattern,
+        "Edit"
+    );
+}
+
+#[tokio::test]
+async fn test_factory_uses_live_permission_mode_override() {
+    let mut config = test_config();
+    config.permission_mode = PermissionMode::Default;
+    config.live_permission_mode = Some(Arc::new(RwLock::new(PermissionMode::AcceptEdits)));
+
+    let ctx = factory(config).build(Default::default()).await;
+
+    assert_eq!(ctx.permission_context.mode, PermissionMode::AcceptEdits);
 }

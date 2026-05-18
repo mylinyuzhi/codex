@@ -137,7 +137,7 @@ impl SkillHandle for QuerySkillRuntime {
         // `SkillInvocationResult::Inline.permission_updates` →
         // `ToolResult.permission_updates` → executor's
         // `PermissionRuleHandle` → session config. Fork path inlines
-        // them on `AgentQueryConfig.extra_allow_rules` so the
+        // them on `AgentQueryConfig.extra_permission_rules` so the
         // subagent's first turn already sees them. TS parity:
         // `SkillTool.ts` `contextModifier` for inline,
         // `createGetAppStateWithAllowedTools` for fork — both write
@@ -207,18 +207,24 @@ impl SkillHandle for QuerySkillRuntime {
                 let config = AgentQueryConfig {
                     system_prompt: String::new(),
                     model: skill.model.clone().unwrap_or_default(),
+                    model_selection: coco_types::LlmModelSelection::from_model_and_role(
+                        skill.model.as_deref(),
+                        skill.model_role,
+                    ),
                     max_turns: None,
                     context_window: None,
                     prompt_cache: None,
                     max_output_tokens: None,
                     // Fork skills mirror TS behavior: NO registry
                     // narrowing. The subagent sees the full
-                    // inherited toolset; `extra_allow_rules` below
+                    // inherited toolset; `extra_permission_rules` below
                     // auto-allow the listed tools, others go through
                     // the normal permission pipeline.
                     allowed_tools: Vec::new(),
                     disallowed_tools: Vec::new(),
-                    extra_allow_rules: allow_rules,
+                    extra_permission_rules: allow_rules,
+                    live_permission_rules: None,
+                    live_permission_mode: None,
                     tool_overrides: inherit.tool_overrides.clone(),
                     features: inherit.features.clone(),
                     parent_tool_filter: inherit.parent_tool_filter.clone(),
@@ -226,13 +232,14 @@ impl SkillHandle for QuerySkillRuntime {
                     permission_mode: None,
                     agent_id: Some(agent_id.clone()),
                     is_teammate: false,
+                    is_in_process_teammate: false,
                     plan_mode_required: false,
                     session_id: None,
                     bypass_permissions_available: false,
                     cwd_override: None,
-                    // Skill fork: inherits the parent session's Main
-                    // role by deferring to the factory default.
-                    model_role: None,
+                    // Skill fork: absent model/model_role inherits the
+                    // parent session's Main client via `InheritMain`.
+                    model_role: skill.model_role,
                     fork_context_messages: Vec::new(),
                     allowed_write_roots: Vec::new(),
                     // Skill subagents inherit the parent's call options
@@ -260,12 +267,13 @@ impl SkillHandle for QuerySkillRuntime {
                     require_can_use_tool: false,
                     fork_label: None,
                     max_output_tokens_override: None,
+                    cancel: None,
                 };
 
                 tracing::info!(
                     skill_name = %skill.name,
                     agent_id = %agent_id,
-                    extra_allow_rules = config.extra_allow_rules.len(),
+                    extra_permission_rules = config.extra_permission_rules.len(),
                     "skill fork dispatch"
                 );
                 let query_result = engine

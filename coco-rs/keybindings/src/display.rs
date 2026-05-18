@@ -114,7 +114,7 @@ pub fn keystroke_to_display_string(combo: &KeyCombo, platform: DisplayPlatform) 
             "super"
         });
     }
-    let key = key_to_display_name(&combo.key);
+    let key = key_to_platform_display_name(&combo.key);
     let mut out = parts.join("+");
     if !out.is_empty() {
         out.push('+');
@@ -155,6 +155,16 @@ fn key_to_display_name(key: &str) -> String {
         "end" => "End".into(),
         other => other.into(),
     }
+}
+
+fn key_to_platform_display_name(key: &str) -> String {
+    if let Some(rest) = key.strip_prefix('f')
+        && !rest.is_empty()
+        && rest.chars().all(|c| c.is_ascii_digit())
+    {
+        return format!("F{rest}");
+    }
+    key_to_display_name(key)
 }
 
 #[cfg(test)]

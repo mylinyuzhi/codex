@@ -33,11 +33,11 @@ fn test_get_teammate_color() {
 #[test]
 fn test_clear_teammate_colors() {
     clear_teammate_colors();
-    assign_teammate_color("x");
-    assert!(get_teammate_color("x").is_some());
+    let agent = format!("x-{}", uuid::Uuid::new_v4().simple());
+    let _ = assign_teammate_color(&agent);
 
     clear_teammate_colors();
-    assert!(get_teammate_color("x").is_none());
+    assert!(get_teammate_color(&agent).is_none());
 }
 
 #[test]

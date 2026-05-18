@@ -105,6 +105,10 @@ pub enum Feature {
     /// intentionally not ported; it depends on per-Provider token
     /// counting that pollutes the inference seam.
     ToolSearch,
+    /// Refresh the built-in model-card catalog from OpenRouter in a
+    /// non-blocking startup task. The bundled snapshot remains the
+    /// fallback if fetch or parsing fails.
+    DynamicModelCard,
 
     // Behavior / safety gate (Stable, default=false for risk-conservative).
     /// Run shell commands inside a sandbox.
@@ -347,6 +351,12 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ToolSearch,
         key: "tool_search",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::DynamicModelCard,
+        key: "dynamic_model_card",
         stage: Stage::Stable,
         default_enabled: true,
     },

@@ -105,7 +105,7 @@ fn test_parse_protocol_message_mode_set() {
     let msg = parse_protocol_message(text).unwrap();
     match msg {
         ProtocolMessage::ModeSetRequest { mode, from } => {
-            assert_eq!(mode, "plan");
+            assert_eq!(mode, coco_types::PermissionMode::Plan);
             assert_eq!(from, "leader");
         }
         _ => panic!("Expected ModeSetRequest"),
@@ -134,11 +134,11 @@ fn test_create_idle_notification() {
 
 #[test]
 fn test_create_mode_set_request() {
-    let text = create_mode_set_request("plan", "leader");
+    let text = create_mode_set_request(coco_types::PermissionMode::Plan, "leader");
     let msg = parse_protocol_message(&text).unwrap();
     match msg {
         ProtocolMessage::ModeSetRequest { mode, from } => {
-            assert_eq!(mode, "plan");
+            assert_eq!(mode, coco_types::PermissionMode::Plan);
             assert_eq!(from, "leader");
         }
         _ => panic!("Expected ModeSetRequest"),
