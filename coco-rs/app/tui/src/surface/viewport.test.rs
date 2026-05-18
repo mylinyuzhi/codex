@@ -15,10 +15,11 @@ fn interactive_viewport_does_not_render_session_header() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 48, 6));
     let state = AppState::new();
+    let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state, native_plan());
+            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout);
         })
         .expect("draw");
 
@@ -58,10 +59,11 @@ fn interactive_viewport_does_not_render_finalized_messages() {
         .session
         .messages
         .push(ChatMessage::assistant_text("a1", "finalized history"));
+    let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state, native_plan());
+            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout);
         })
         .expect("draw");
 
@@ -79,10 +81,16 @@ fn interactive_viewport_renders_finalized_messages_in_viewport_history_mode() {
         .session
         .messages
         .push(ChatMessage::assistant_text("a1", "fallback history"));
+    let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state, viewport_history_plan());
+            render_interactive_viewport(
+                frame,
+                &state,
+                viewport_history_plan(),
+                &mut transcript_layout,
+            );
         })
         .expect("draw");
 
@@ -100,10 +108,11 @@ fn interactive_viewport_renders_active_streaming_tail() {
     streaming.append_text("live response");
     streaming.reveal_all();
     state.ui.streaming = Some(streaming);
+    let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state, native_plan());
+            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout);
         })
         .expect("draw");
 
@@ -118,10 +127,12 @@ fn interactive_viewport_reports_input_rect_for_cursor_policy() {
     terminal.set_viewport_area(Rect::new(0, 0, 48, 8));
     let state = AppState::new();
     let mut layout = FrameLayout::default();
+    let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
 
     terminal
         .draw_viewport(|frame| {
-            layout = render_interactive_viewport(frame, &state, native_plan());
+            layout =
+                render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout);
         })
         .expect("draw");
 

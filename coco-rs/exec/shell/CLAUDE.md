@@ -13,7 +13,6 @@ Shell execution with security analysis, destructive-command warnings, sandbox de
 - `tools/BashTool/bashPermissions.ts`, `bashSecurity.ts`, `readOnlyValidation.ts`, `commandSemantics.ts`, `destructiveCommandWarning.ts`, `shouldUseSandbox.ts`, `modeValidation.ts`, `sedEditParser.ts`
 - `utils/powershell/` — PowerShell parsing
 
-Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
 
 ## Layering
 

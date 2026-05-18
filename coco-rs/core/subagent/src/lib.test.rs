@@ -58,10 +58,8 @@ fn builtin_definition_lookup_uses_canonical_case() {
 fn explore_built_in_omits_claude_md_and_blocks_writes() {
     let def = builtins::builtin_definition("Explore").unwrap();
     assert!(def.omit_claude_md);
-    // TS exploreAgent.ts:78 picks `haiku` for non-ant builds (the SDK
-    // default); ant-only builds use `inherit` for cache parity. Default
-    // 3P here matches the SDK default.
-    assert_eq!(def.model.as_deref(), Some("haiku"));
+    assert_eq!(def.model, None);
+    assert_eq!(def.model_role, None);
     // TS exploreAgent.ts:67-73 uses FILE_EDIT_TOOL_NAME = "Edit" and
     // FILE_WRITE_TOOL_NAME = "Write" — NOT "FileEdit"/"FileWrite".
     // Tool names go through `ToolName::*::as_str()` so renames stay
@@ -107,10 +105,11 @@ fn verification_built_in_runs_in_background_with_red_color() {
 }
 
 #[test]
-fn statusline_built_in_uses_orange_color_and_sonnet() {
+fn statusline_built_in_uses_orange_color_and_main_role() {
     let def = builtins::builtin_definition("statusline-setup").unwrap();
     assert_eq!(def.color, Some(AgentColorName::Orange));
-    assert_eq!(def.model.as_deref(), Some("sonnet"));
+    assert_eq!(def.model, None);
+    assert_eq!(def.model_role, Some(coco_types::ModelRole::Main));
     assert_eq!(
         def.allowed_tools,
         coco_types::ToolAllowList::Explicit(vec![
@@ -725,12 +724,12 @@ fn store_loads_user_then_project_with_project_winning() {
     write_md(
         user.path(),
         "build.md",
-        "---\nname: build\ndescription: User build\nmodel: haiku\n---\nuser body",
+        "---\nname: build\ndescription: User build\nmodel: anthropic/claude-haiku-4-5\n---\nuser body",
     );
     write_md(
         project.path(),
         "build.md",
-        "---\nname: build\ndescription: Project build\nmodel: sonnet\n---\nproject body",
+        "---\nname: build\ndescription: Project build\nmodel: anthropic/claude-sonnet-4-6\n---\nproject body",
     );
 
     let mut store = AgentDefinitionStore::new(
@@ -745,7 +744,7 @@ fn store_loads_user_then_project_with_project_winning() {
     let snap = store.snapshot();
     let active = snap.find_active("build").unwrap();
     assert_eq!(active.source, AgentSource::ProjectSettings);
-    assert_eq!(active.model.as_deref(), Some("sonnet"));
+    assert_eq!(active.model.as_deref(), Some("anthropic/claude-sonnet-4-6"));
     assert_eq!(active.system_prompt.as_deref(), Some("project body"));
 }
 

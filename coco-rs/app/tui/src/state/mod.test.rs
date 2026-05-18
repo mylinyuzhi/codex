@@ -120,7 +120,22 @@ fn test_new_state_defaults() {
     assert!(!state.is_plan_mode());
     assert!(!state.session.fast_mode);
     assert_eq!(state.session.turn_count, 0);
+    assert_eq!(state.session.current_turn_message_start, None);
+    assert_eq!(state.session.current_turn_started_at, None);
     assert_eq!(state.session.messages.len(), 0);
+}
+
+#[test]
+fn test_apply_display_settings_updates_show_thinking_default() {
+    let mut state = AppState::new();
+    assert!(!state.ui.show_thinking);
+
+    state.ui.apply_display_settings(crate::DisplaySettings {
+        show_thinking: true,
+        ..crate::DisplaySettings::default()
+    });
+
+    assert!(state.ui.show_thinking);
 }
 
 #[test]
@@ -334,6 +349,7 @@ fn test_permission_overlay() {
         classifier_auto_approved: None,
         choices: None,
         selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
         original_input: None,
         permission_suggestions: vec![],
     }));
@@ -372,6 +388,7 @@ fn test_token_usage_update() {
     state.session.update_tokens(TokenUsage {
         input_tokens: 100,
         output_tokens: 50,
+        reasoning_tokens: 0,
         cache_read_tokens: 20,
         cache_creation_tokens: 10,
     });

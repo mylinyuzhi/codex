@@ -215,9 +215,14 @@ impl Tui {
             prepared.apply(|| self.clear_surface_after_resume())?;
         }
 
-        let plan = self
-            .overlay_surface
-            .plan(state, self.compatibility, std::time::Instant::now());
+        let size = self.terminal.size()?;
+        let plan = self.overlay_surface.plan_for_native_viewport(
+            state,
+            self.compatibility,
+            std::time::Instant::now(),
+            size.width,
+            NATIVE_VIEWPORT_MAX_HEIGHT,
+        );
         self.sync_surface_area(state, plan)?;
         let outcome = self
             .surface
@@ -317,7 +322,12 @@ impl Tui {
                 NATIVE_VIEWPORT_MAX_HEIGHT,
                 plan,
             );
-            native_viewport_area(self.terminal.history_bottom_y(), size, desired_height)
+            native_viewport_area_with_max(
+                self.terminal.history_bottom_y(),
+                size,
+                desired_height,
+                NATIVE_VIEWPORT_MAX_HEIGHT,
+            )
         };
         if self.terminal.viewport_area() != area {
             tracing::debug!(
@@ -364,12 +374,25 @@ impl Drop for Tui {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn native_viewport_area(anchor_y: u16, size: Size, desired_height: u16) -> Rect {
+    native_viewport_area_with_max(anchor_y, size, desired_height, NATIVE_VIEWPORT_MAX_HEIGHT)
+}
+
+pub(crate) fn native_viewport_area_with_max(
+    anchor_y: u16,
+    size: Size,
+    desired_height: u16,
+    max_height: u16,
+) -> Rect {
     if size.height == 0 {
         return Rect::new(0, 0, size.width, 0);
     }
     let height = desired_height
-        .clamp(NATIVE_VIEWPORT_MIN_HEIGHT, NATIVE_VIEWPORT_MAX_HEIGHT)
+        .clamp(
+            NATIVE_VIEWPORT_MIN_HEIGHT,
+            max_height.max(NATIVE_VIEWPORT_MIN_HEIGHT),
+        )
         .min(size.height);
     let y = anchor_y.min(size.height.saturating_sub(height));
     Rect::new(0, y, size.width, height)

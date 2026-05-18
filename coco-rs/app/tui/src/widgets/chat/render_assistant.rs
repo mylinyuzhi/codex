@@ -2,8 +2,6 @@
 //! block (collapsible with token estimate), redacted thinking, tool-use
 //! call, advisor message.
 
-use std::time::Duration;
-
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -11,6 +9,10 @@ use ratatui::text::Span;
 use super::ChatWidget;
 use crate::constants;
 use crate::i18n::t;
+use crate::presentation::thinking::ThinkingDisplay;
+use crate::presentation::thinking::ThinkingRenderInput;
+use crate::presentation::thinking::format_duration_seconds;
+use crate::presentation::thinking::render_thinking_block;
 use crate::state::session::MessageContent;
 use crate::state::session::ToolUseStatus;
 
@@ -20,23 +22,6 @@ use crate::state::session::ToolUseStatus;
 /// renders cleanly in modern Linux/macOS/Windows Terminal fonts and
 /// keeps a consistent visual across platforms.
 const ASSISTANT_DOT: &str = "⏺";
-
-/// Format a `Duration` for the tool-use elapsed badge.
-///
-/// - < 1s: milliseconds (`250ms`)
-/// - < 60s: seconds with one decimal (`12.3s`)
-/// - >= 60s: minutes + whole seconds (`3m 4s`)
-fn format_elapsed(d: Duration) -> String {
-    let ms = d.as_millis();
-    if ms < 1_000 {
-        format!("{ms}ms")
-    } else if ms < 60_000 {
-        format!("{:.1}s", d.as_secs_f64())
-    } else {
-        let secs = d.as_secs();
-        format!("{}m {}s", secs / 60, secs % 60)
-    }
-}
 
 pub(super) fn try_render<'a>(
     w: &ChatWidget<'a>,
@@ -94,65 +79,24 @@ pub(super) fn try_render<'a>(
         MessageContent::Thinking {
             content,
             duration_ms,
+            reasoning_tokens,
         } => {
-            // TS parity: `AssistantThinkingMessage.tsx`. The collapsed
-            // form is a single italic dim line; the expanded form keeps
-            // the same header glyph (`∴`) and indents the body two
-            // spaces. We drop the per-row `│` gutter from the previous
-            // visual — TS doesn't use it and it added visual weight to
-            // a section that's supposed to recede.
-            if w.show_thinking {
-                let token_est = (content.split_whitespace().count() as f64
-                    * constants::THINKING_TOKEN_MULTIPLIER) as i64;
-                let dur = duration_ms
-                    .map(|ms| format!(", {ms}ms"))
-                    .unwrap_or_default();
-                // Annotation lives in the header suffix instead of a
-                // standalone line so the block opens with the same
-                // glyph the collapsed form shows — readers' eyes
-                // anchor on `∴` regardless of expansion state.
-                let suffix = t!(
-                    "chat.thinking_suffix_tokens_dur",
-                    count = token_est,
-                    dur = dur
-                )
-                .to_string();
-                lines.push(Line::from(
-                    Span::raw(t!("chat.thinking_header", suffix = suffix.as_str()).to_string())
-                        .fg(w.styles.thinking())
-                        .dim()
-                        .italic(),
-                ));
-                // Body indented two spaces past the header glyph. TS
-                // renders this as `<Markdown dimColor>`; coco-rs's
-                // markdown reflow is overkill for thinking content
-                // (short prose, no headers / lists worth the indent
-                // math), so plain dim text is the closer match.
-                for line in content.lines().take(constants::THINKING_PREVIEW_LINES) {
-                    lines.push(Line::from(
-                        Span::raw(format!("    {line}"))
-                            .fg(w.styles.thinking())
-                            .dim()
-                            .italic(),
-                    ));
-                }
-                if content.lines().count() > constants::THINKING_PREVIEW_LINES {
-                    lines.push(Line::from(
-                        Span::raw("    …").fg(w.styles.thinking()).dim().italic(),
-                    ));
-                }
-            } else {
-                // Collapsed form mirrors TS `<Text dim italic>∴ Thinking
-                // <CtrlOToExpand /></Text>`. The shortcut text is
-                // baked into the i18n key so each locale can pick
-                // its own modifier wording.
-                lines.push(Line::from(
-                    Span::raw(t!("chat.thinking_collapsed").to_string())
-                        .fg(w.styles.thinking())
-                        .dim()
-                        .italic(),
-                ));
-            }
+            lines.extend(render_thinking_block(
+                ThinkingRenderInput {
+                    content,
+                    duration_ms: *duration_ms,
+                    reasoning_tokens: *reasoning_tokens,
+                    display: if w.show_thinking {
+                        ThinkingDisplay::Expanded {
+                            max_body_lines: crate::constants::THINKING_PREVIEW_LINES,
+                            truncated_hint: "…",
+                        }
+                    } else {
+                        ThinkingDisplay::Collapsed
+                    },
+                },
+                w.styles,
+            ));
             Some(())
         }
         MessageContent::RedactedThinking => {
@@ -195,6 +139,11 @@ pub(super) fn try_render<'a>(
             } else {
                 input_preview.clone()
             };
+            let label = if preview.is_empty() {
+                format!("🔨 {tool_name}")
+            } else {
+                format!("🔨 {tool_name}({preview})")
+            };
             // Elapsed time badge: `(250ms)` / `(1.2s)` / `(3m 4s)`
             // tail-aligned after the preview. Sourced from the
             // matching ToolExecution by call_id so running tools tick
@@ -204,12 +153,11 @@ pub(super) fn try_render<'a>(
                 .tool_executions
                 .iter()
                 .find(|t| t.call_id == *call_id)
-                .map(|t| format!(" ({})", format_elapsed(t.elapsed())))
+                .map(|t| format!(" ({})", format_duration_seconds(t.elapsed())))
                 .unwrap_or_default();
             lines.push(Line::from(vec![
-                Span::raw("  ● ").fg(color),
-                Span::raw(tool_name.clone()).fg(w.styles.text()).bold(),
-                Span::raw(format!("({preview})")).fg(w.styles.dim()),
+                Span::raw("• ").fg(color),
+                Span::raw(label).fg(w.styles.text()),
                 Span::raw(elapsed_badge).fg(w.styles.dim()).dim(),
             ]));
             Some(())

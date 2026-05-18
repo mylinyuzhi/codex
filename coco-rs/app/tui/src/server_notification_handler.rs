@@ -34,6 +34,7 @@ use coco_types::CoreEvent;
 
 use crate::state::AppState;
 
+mod projection;
 mod protocol;
 mod stream;
 mod tui_only;

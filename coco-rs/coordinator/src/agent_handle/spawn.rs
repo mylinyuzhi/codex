@@ -867,6 +867,24 @@ impl SwarmAgentHandle {
                     .clone()
                     .unwrap_or_else(|| self.current_main_model_id())
             }),
+            model_selection: if let Some(model) = model_pinned_to_snapshot.as_deref() {
+                coco_types::LlmModelSelection::from_model_and_role(
+                    Some(model),
+                    Some(coco_types::ModelRole::Main),
+                )
+            } else if request.mode.as_deref() == Some("plan")
+                && !matches!(
+                    request.spawn_mode,
+                    coco_tool_runtime::SpawnMode::Fork { .. }
+                )
+            {
+                coco_types::LlmModelSelection::from_model_and_role(
+                    selection.model.as_deref(),
+                    Some(coco_types::ModelRole::Plan),
+                )
+            } else {
+                selection.model_selection.clone()
+            },
             max_turns: request
                 .constraints
                 .as_ref()
@@ -897,7 +915,9 @@ impl SwarmAgentHandle {
             // Coordinator / AgentTool spawns don't carry skill-style
             // auto-allow rules — those flow only through
             // `SkillRuntime` Fork path. Leave empty.
-            extra_allow_rules: Vec::new(),
+            extra_permission_rules: Vec::new(),
+            live_permission_rules: None,
+            live_permission_mode: None,
             tool_overrides: request.tool_overrides.clone(),
             features: request.features.clone(),
             parent_tool_filter: request.parent_tool_filter.clone(),
@@ -905,6 +925,7 @@ impl SwarmAgentHandle {
             permission_mode: request.mode.clone(),
             agent_id: Some(agent_id.clone()),
             is_teammate: false,
+            is_in_process_teammate: false,
             plan_mode_required: false,
             session_id: None,
             bypass_permissions_available: false,
@@ -960,6 +981,7 @@ impl SwarmAgentHandle {
             require_can_use_tool: request.require_can_use_tool,
             fork_label: request.fork_label,
             max_output_tokens_override: None,
+            cancel: None,
         };
 
         if request.run_in_background {
@@ -1172,24 +1194,6 @@ impl SwarmAgentHandle {
         engine: coco_tool_runtime::AgentQueryEngineRef,
         is_fork: bool,
     ) -> Result<AgentSpawnResponse, String> {
-        if worktree_session.is_some() {
-            if let (Some(m), Some(session)) = (self.worktree_manager(), worktree_session.clone()) {
-                let removed_path = session.path.display().to_string();
-                let _ = m.cleanup_if_unchanged(session);
-                fire_worktree_remove_hook(self.hook_registry().cloned(), &self.cwd, &removed_path)
-                    .await;
-            }
-            return Ok(spawn_failed(
-                agent_id,
-                "Background AgentTool spawn does not currently support worktree \
-                 isolation. Set run_in_background=false to use a worktree, or \
-                 drop isolation: \"worktree\" to run in the parent's working \
-                 directory."
-                    .into(),
-                start.elapsed().as_millis() as i64,
-            ));
-        }
-
         let agents = self.agents().clone();
         let prompt = request.prompt.clone();
         let agent_id_for_task = agent_id.clone();
@@ -1406,6 +1410,8 @@ impl SwarmAgentHandle {
             .await;
         let mcp_handle_for_task = self.mcp_handle().cloned();
         let dynamic_mcp_servers_for_task = self.dynamic_mcp_servers().clone();
+        let worktree_manager_for_task = self.worktree_manager().cloned();
+        let worktree_session_for_task = worktree_session.clone();
         tokio::spawn(async move {
             // Fire SubagentStart hooks before kicking off execution and
             // prepend any returned context blocks to the prompt. TS
@@ -1498,6 +1504,23 @@ impl SwarmAgentHandle {
                     }
                 }
             }
+            if let (Some(manager), Some(session)) = (
+                worktree_manager_for_task.as_ref(),
+                worktree_session_for_task,
+            ) {
+                let session_path = session.path.display().to_string();
+                if matches!(
+                    manager.cleanup_if_unchanged(session),
+                    crate::worktree::WorktreeCleanupOutcome::Removed
+                ) {
+                    fire_worktree_remove_hook(
+                        hook_registry_for_task.clone(),
+                        &cwd_for_task,
+                        &session_path,
+                    )
+                    .await;
+                }
+            }
             // Persist the full message history to the per-agent JSONL
             // transcript on success. `agent/resume` reads this back via
             // `AgentTranscriptStore::load_agent_messages` and threads the
@@ -1528,6 +1551,13 @@ impl SwarmAgentHandle {
             }
         });
 
+        let output_file =
+            if let (Some(reg), Some(tid)) = (task_registry.as_ref(), task_id.as_deref()) {
+                reg.output_file_path(tid).await
+            } else {
+                None
+            };
+
         Ok(AgentSpawnResponse {
             status: AgentSpawnStatus::AsyncLaunched,
             // Return the registry's `task_id` so the model can address the
@@ -1541,7 +1571,7 @@ impl SwarmAgentHandle {
             duration_ms: start.elapsed().as_millis() as i64,
             worktree_path: None,
             worktree_branch: None,
-            output_file: None,
+            output_file,
             prompt: None,
             ..Default::default()
         })

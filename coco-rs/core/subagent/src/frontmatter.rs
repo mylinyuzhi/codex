@@ -91,10 +91,10 @@ pub fn parse_agent_markdown(
     };
 
     if let Some(model) = read_str(frontmatter, "model") {
-        let normalized = if model.trim() == "inherit" {
+        let normalized = if model.trim().eq_ignore_ascii_case("inherit") {
             "inherit".to_owned()
         } else {
-            model.trim().to_ascii_lowercase()
+            model.trim().to_owned()
         };
         def.model = Some(normalized);
     }

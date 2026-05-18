@@ -25,6 +25,14 @@ use crate::types::TeammateIdentity;
 /// Poll interval for inbox scanning (ms). Mirrors [`crate::runner_loop::POLL_INTERVAL_MS`].
 const POLL_INTERVAL_MS: u64 = 500;
 
+#[derive(Debug, Clone, Default)]
+pub struct MailboxPermissionOutcome {
+    pub approved: bool,
+    pub feedback: Option<String>,
+    pub updated_input: Option<serde_json::Value>,
+    pub permission_updates: Vec<coco_types::PermissionUpdate>,
+}
+
 /// Worker-side permission resolution: send a permission request to
 /// the leader's mailbox and block on the matching
 /// [`mailbox::ProtocolMessage::PermissionResponse`].
@@ -39,7 +47,7 @@ pub async fn request_permission_via_mailbox(
     tool_use_id: &str,
     description: &str,
     input: &serde_json::Value,
-) -> Option<(bool, Option<String>)> {
+) -> Option<MailboxPermissionOutcome> {
     let agent_id = format!("{}@{}", identity.agent_name, identity.team_name);
     let envelope = mailbox::create_permission_request_message(
         request_id,
@@ -77,8 +85,8 @@ pub async fn request_permission_via_mailbox(
             if let Some(mailbox::ProtocolMessage::PermissionResponse {
                 request_id: rid,
                 subtype,
+                response,
                 error,
-                ..
             }) = mailbox::parse_protocol_message(&msg.text)
                 && rid == request_id
             {
@@ -87,8 +95,14 @@ pub async fn request_permission_via_mailbox(
                     &identity.team_name,
                     i,
                 );
-                let approved = subtype == "success";
-                return Some((approved, error));
+                let approved = subtype.is_success();
+                let (updated_input, permission_updates) = response.unwrap_or_default().into_parts();
+                return Some(MailboxPermissionOutcome {
+                    approved,
+                    feedback: error,
+                    updated_input,
+                    permission_updates,
+                });
             }
         }
         tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
@@ -132,18 +146,18 @@ impl coco_tool_runtime::ToolPermissionBridge for MailboxPermissionBridge {
         )
         .await;
         match outcome {
-            Some((true, _)) => Ok(coco_tool_runtime::ToolPermissionResolution {
+            Some(outcome) if outcome.approved => Ok(coco_tool_runtime::ToolPermissionResolution {
                 decision: coco_tool_runtime::ToolPermissionDecision::Approved,
                 feedback: None,
-                applied_updates: Vec::new(),
-                updated_input: None,
+                applied_updates: outcome.permission_updates,
+                updated_input: outcome.updated_input,
                 content_blocks: None,
             }),
-            Some((false, feedback)) => Ok(coco_tool_runtime::ToolPermissionResolution {
+            Some(outcome) => Ok(coco_tool_runtime::ToolPermissionResolution {
                 decision: coco_tool_runtime::ToolPermissionDecision::Rejected,
-                feedback,
-                applied_updates: Vec::new(),
-                updated_input: None,
+                feedback: outcome.feedback,
+                applied_updates: outcome.permission_updates,
+                updated_input: outcome.updated_input,
                 content_blocks: None,
             }),
             None => Err("Permission request cancelled or leader mailbox unreachable".into()),

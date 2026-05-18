@@ -61,3 +61,19 @@ coco-query → CoreEvent ─────→ handle_core_event (fold into AppStat
 
 See `docs/coco-rs/crate-coco-tui.md` for widget taxonomy, overlay catalog, and
 snapshot-testing conventions (`insta`).
+
+## Transcript Reader
+
+`Ctrl+O` opens the transcript overlay as a cell-level reader. The projection
+keeps lightweight `TranscriptCell` metadata for the full message list, while
+the overlay renderer locates the visible cells from `TranscriptOverlay.scroll`
+and only renders those cells into the buffer.
+
+Expansion is selected-cell UI state only:
+
+- `Tab` / `Shift+Tab` select expandable cells.
+- `Enter` expands/collapses the selected cell.
+- Expanded cells are capped internally by a fixed per-cell line cap.
+
+Do not reintroduce a user-facing transcript expansion budget, `Ctrl+E` show-all
+mode, or a full transcript `Vec<Line>`/`String` path for overlay rendering.

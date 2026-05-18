@@ -50,6 +50,10 @@ install:
     rustup show active-toolchain
     cargo fetch
 
+# Update the bundled OpenRouter model-card snapshot.
+model-card-update:
+    bash "{{justfile_directory()}}/scripts/update-model-card-openrouter.sh"
+
 # ============================================================================
 # Testing
 # ============================================================================

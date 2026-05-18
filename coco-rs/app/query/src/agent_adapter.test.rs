@@ -46,11 +46,13 @@ async fn test_no_op_engine_returns_error() {
 /// durable check. This avoids depending on tokio spawn semantics
 /// for panic propagation.
 fn role_observer() -> (
-    Arc<std::sync::Mutex<Option<coco_types::ModelRole>>>,
+    Arc<std::sync::Mutex<coco_types::LlmModelSelection>>,
     Arc<AtomicU32>,
 ) {
     (
-        Arc::new(std::sync::Mutex::new(None)),
+        Arc::new(std::sync::Mutex::new(
+            coco_types::LlmModelSelection::InheritMain,
+        )),
         Arc::new(AtomicU32::new(0)),
     )
 }
@@ -67,7 +69,7 @@ async fn test_adapter_threads_model_role_to_factory() {
     let observed_c = observed.clone();
     let calls_c = calls.clone();
 
-    let factory: QueryEngineFactory = Arc::new(move |_cfg, role| {
+    let factory: QueryEngineFactory = Arc::new(move |_cfg, role, _cancel| {
         let observed_c = observed_c.clone();
         let calls_c = calls_c.clone();
         Box::pin(async move {
@@ -83,7 +85,6 @@ async fn test_adapter_threads_model_role_to_factory() {
 
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
-        model: "m".into(),
         max_turns: Some(1),
         model_role: Some(coco_types::ModelRole::Explore),
         ..Default::default()
@@ -103,8 +104,54 @@ async fn test_adapter_threads_model_role_to_factory() {
     );
     assert_eq!(
         *observed.lock().unwrap(),
-        Some(coco_types::ModelRole::Explore),
-        "adapter must thread model_role through unchanged",
+        coco_types::LlmModelSelection::Role {
+            role: coco_types::ModelRole::Explore,
+        },
+        "adapter must convert model_role into typed selection",
+    );
+}
+
+#[tokio::test]
+async fn test_adapter_threads_provider_model_selection_to_factory() {
+    use super::QueryEngineAdapter;
+    use super::QueryEngineFactory;
+
+    let (observed, calls) = role_observer();
+    let observed_c = observed.clone();
+    let calls_c = calls.clone();
+
+    let factory: QueryEngineFactory = Arc::new(move |_cfg, selection, _cancel| {
+        let observed_c = observed_c.clone();
+        let calls_c = calls_c.clone();
+        Box::pin(async move {
+            *observed_c.lock().unwrap() = selection;
+            calls_c.fetch_add(1, Ordering::SeqCst);
+            std::panic::resume_unwind(Box::new("observed"));
+        })
+    });
+    let adapter = QueryEngineAdapter::new(factory);
+
+    let cfg = AgentQueryConfig {
+        system_prompt: "s".into(),
+        model: "openai/gpt-5.2".into(),
+        max_turns: Some(1),
+        model_role: Some(coco_types::ModelRole::Review),
+        ..Default::default()
+    };
+
+    let handle = tokio::task::spawn(async move { adapter.execute_query("hello", cfg).await });
+    let join_err = handle.await.expect_err("factory panic must bubble up");
+    assert!(join_err.is_panic());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *observed.lock().unwrap(),
+        coco_types::LlmModelSelection::ExplicitWithFallbackRole {
+            primary: coco_types::ProviderModelSelection {
+                provider: "openai".into(),
+                model_id: "gpt-5.2".into(),
+            },
+            fallback_role: coco_types::ModelRole::Review,
+        },
     );
 }
 
@@ -121,7 +168,7 @@ async fn test_adapter_parses_effort_string_into_thinking_level() {
         Arc::new(std::sync::Mutex::new(None));
     let observed_c = observed.clone();
 
-    let factory: QueryEngineFactory = Arc::new(move |cfg, _role| {
+    let factory: QueryEngineFactory = Arc::new(move |cfg, _role, _cancel| {
         let observed_c = observed_c.clone();
         Box::pin(async move {
             *observed_c.lock().unwrap() = cfg.thinking_level;
@@ -162,7 +209,7 @@ async fn test_adapter_unknown_effort_degrades_to_none() {
     );
     let observed_c = observed.clone();
 
-    let factory: QueryEngineFactory = Arc::new(move |cfg, _role| {
+    let factory: QueryEngineFactory = Arc::new(move |cfg, _role, _cancel| {
         let observed_c = observed_c.clone();
         Box::pin(async move {
             *observed_c.lock().unwrap() = cfg.thinking_level;
@@ -196,7 +243,7 @@ async fn test_adapter_max_effort_alias_maps_to_xhigh() {
         Arc::new(std::sync::Mutex::new(None));
     let observed_c = observed.clone();
 
-    let factory: QueryEngineFactory = Arc::new(move |cfg, _role| {
+    let factory: QueryEngineFactory = Arc::new(move |cfg, _role, _cancel| {
         let observed_c = observed_c.clone();
         Box::pin(async move {
             *observed_c.lock().unwrap() = cfg.thinking_level;
@@ -228,13 +275,15 @@ async fn test_adapter_defers_to_factory_default_when_role_none() {
     use super::QueryEngineAdapter;
     use super::QueryEngineFactory;
 
-    // Seed with a sentinel OTHER than None so the observer proves
-    // the factory saw exactly `None` (not a leftover value).
-    let observed: Arc<std::sync::Mutex<Option<coco_types::ModelRole>>> =
-        Arc::new(std::sync::Mutex::new(Some(coco_types::ModelRole::Memory)));
+    // Seed with a sentinel other than InheritMain so the observer proves
+    // the factory saw exactly the default selection.
+    let observed: Arc<std::sync::Mutex<coco_types::LlmModelSelection>> =
+        Arc::new(std::sync::Mutex::new(coco_types::LlmModelSelection::Role {
+            role: coco_types::ModelRole::Memory,
+        }));
     let observed_c = observed.clone();
 
-    let factory: QueryEngineFactory = Arc::new(move |_cfg, role| {
+    let factory: QueryEngineFactory = Arc::new(move |_cfg, role, _cancel| {
         let observed_c = observed_c.clone();
         Box::pin(async move {
             *observed_c.lock().unwrap() = role;
@@ -245,7 +294,6 @@ async fn test_adapter_defers_to_factory_default_when_role_none() {
 
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
-        model: "m".into(),
         max_turns: Some(1),
         ..Default::default()
     };
@@ -255,7 +303,7 @@ async fn test_adapter_defers_to_factory_default_when_role_none() {
     assert!(join_err.is_panic());
     assert_eq!(
         *observed.lock().unwrap(),
-        None,
-        "None must flow verbatim so the factory applies its default",
+        coco_types::LlmModelSelection::InheritMain,
+        "InheritMain must flow verbatim so the factory applies its default",
     );
 }

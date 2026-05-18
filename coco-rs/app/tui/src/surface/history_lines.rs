@@ -6,6 +6,7 @@
 use ratatui::text::Line;
 
 use crate::display_settings::SyntaxHighlighting;
+use crate::keybinding_resolver::KeybindingHandle;
 use crate::presentation::styles::UiStyles;
 use crate::state::session::ChatMessage;
 use crate::widgets::ChatWidget;
@@ -18,6 +19,8 @@ pub(crate) struct HistoryLineRenderOptions<'a> {
     pub(crate) width: u16,
     pub(crate) syntax_highlighting: SyntaxHighlighting,
     pub(crate) show_system_reminders: bool,
+    pub(crate) show_thinking: bool,
+    pub(crate) kb_handle: Option<&'a KeybindingHandle>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,11 +33,15 @@ pub(crate) fn render_finalized_history_lines(
     messages: &[ChatMessage],
     options: HistoryLineRenderOptions<'_>,
 ) -> Vec<Line<'static>> {
-    ChatWidget::new(messages, options.styles)
+    let mut chat = ChatWidget::new(messages, options.styles)
         .show_system_reminders(options.show_system_reminders)
+        .show_thinking(options.show_thinking)
         .width(options.width)
-        .syntax_highlighting(options.syntax_highlighting)
-        .build_lines_owned()
+        .syntax_highlighting(options.syntax_highlighting);
+    if let Some(kb_handle) = options.kb_handle {
+        chat = chat.kb_handle(kb_handle);
+    }
+    chat.build_lines_owned()
 }
 
 pub(crate) fn render_replay_history_lines(

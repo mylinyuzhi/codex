@@ -244,6 +244,42 @@ pub(super) async fn handle_update_env(
     HandlerResult::ok_empty()
 }
 
+/// `agent/interruptCurrentWork` — abort one teammate's current turn
+/// without killing the teammate lifecycle.
+///
+/// TS parity: Escape while viewing a teammate aborts
+/// `currentWorkAbortController`, whereas Ctrl+C still kills agents via
+/// the broader cancellation path.
+pub(super) async fn handle_agent_interrupt_current_work(
+    params: coco_types::AgentInterruptCurrentWorkParams,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let Some(runtime) = ctx.state.session_runtime.read().await.clone() else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "agent teams are not active for this session".into(),
+            data: None,
+        };
+    };
+
+    match runtime.interrupt_agent_current_work(&params.agent_id).await {
+        Ok(true) => HandlerResult::ok_empty(),
+        Ok(false) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: format!(
+                "agent {} has no active current work to interrupt",
+                params.agent_id
+            ),
+            data: None,
+        },
+        Err(message) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message,
+            data: None,
+        },
+    }
+}
+
 /// `context/usage` — return the active session's token usage
 /// breakdown.
 ///

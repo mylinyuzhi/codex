@@ -19,6 +19,7 @@ use crate::state::session::ChatMessage;
 use crate::state::session::HookEntry;
 use crate::state::session::HookEntryStatus;
 use crate::state::session::McpServerStatus;
+use crate::state::session::MessageContent;
 use crate::state::session::RateLimitInfo;
 use crate::state::session::SubagentInstance;
 use crate::state::session::SubagentStatus;
@@ -75,6 +76,8 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.session.turn_count = p.turn_number;
             state.session.set_busy(true);
             state.session.stream_stall = false;
+            state.session.current_turn_message_start = Some(state.session.messages.len());
+            state.session.current_turn_started_at = Some(std::time::Instant::now());
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
             // Clear any leftover interrupt banner from the prior turn —
             // the banner is "this turn was interrupted", not "ever was".
@@ -86,6 +89,8 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         ServerNotification::TurnCompleted(p) => on_turn_completed(state, p),
         ServerNotification::TurnFailed(p) => {
             state.session.set_busy(false);
+            state.session.current_turn_message_start = None;
+            state.session.current_turn_started_at = None;
             state.ui.streaming = None;
             // Keep the toast for session history / notification log, AND
             // raise a modal error dialog so users can't miss the failure
@@ -788,6 +793,7 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
     state.session.update_tokens(TokenUsage {
         input_tokens: p.usage.input_tokens,
         output_tokens: p.usage.output_tokens,
+        reasoning_tokens: p.usage.reasoning_output_tokens(),
         cache_read_tokens: p.usage.cache_read_input_tokens(),
         cache_creation_tokens: p.usage.cache_creation_input_tokens(),
     });
@@ -800,17 +806,30 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
             &t!("notification.turn_complete"),
         );
     }
-    if let Some(streaming) = state.ui.streaming.take()
-        && !streaming.content.is_empty()
-    {
-        // Cache raw markdown so /copy and Ctrl+O can reach it even after the
-        // streaming buffer is consumed into the immutable message history.
-        state.session.record_agent_markdown(&streaming.content);
-        state.session.add_message(ChatMessage::assistant_text(
-            format!("turn-{}", state.session.turn_count),
-            streaming.content,
-        ));
-    }
+    let token_only_duration_ms =
+        state
+            .session
+            .current_turn_started_at
+            .and_then(|started_at| started_at.elapsed().as_millis().try_into().ok())
+            .or_else(|| {
+                state.ui.streaming.as_ref().and_then(|streaming| {
+                    streaming.started_at.elapsed().as_millis().try_into().ok()
+                })
+            });
+    let message_count_before_flush = state.session.messages.len();
+    let response_start = state
+        .session
+        .current_turn_message_start
+        .unwrap_or(message_count_before_flush);
+    super::projection::flush_streaming_to_messages(state);
+    apply_reasoning_tokens_to_response(
+        state,
+        p.usage.reasoning_output_tokens(),
+        token_only_duration_ms,
+        response_start,
+    );
+    state.session.current_turn_message_start = None;
+    state.session.current_turn_started_at = None;
     state.session.tool_executions.retain(|t| {
         matches!(
             t.status,
@@ -818,6 +837,70 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
         )
     });
     true
+}
+
+fn apply_reasoning_tokens_to_response(
+    state: &mut AppState,
+    reasoning_tokens: i64,
+    duration_ms: Option<i64>,
+    response_start: usize,
+) {
+    if reasoning_tokens <= 0 {
+        return;
+    }
+    let response_start = response_start.min(state.session.messages.len());
+    if let Some(thinking_offset) = state.session.messages[response_start..]
+        .iter()
+        .position(|message| matches!(message.content, MessageContent::Thinking { .. }))
+    {
+        if let MessageContent::Thinking {
+            reasoning_tokens: tokens,
+            duration_ms: existing_duration_ms,
+            ..
+        } = &mut state.session.messages[response_start + thinking_offset].content
+        {
+            *tokens = Some(reasoning_tokens);
+            if existing_duration_ms.is_none() {
+                *existing_duration_ms = duration_ms;
+            }
+        }
+        return;
+    }
+
+    let Some(response_item_offset) =
+        state.session.messages[response_start..]
+            .iter()
+            .position(|message| {
+                matches!(
+                    message.content,
+                    MessageContent::AssistantText(_) | MessageContent::ToolUse { .. }
+                )
+            })
+    else {
+        return;
+    };
+
+    let thinking = ChatMessage {
+        id: format!(
+            "thinking-{}-{}",
+            state.session.turn_count,
+            state.session.messages.len()
+        ),
+        role: crate::state::ChatRole::Assistant,
+        content: MessageContent::Thinking {
+            content: String::new(),
+            duration_ms,
+            reasoning_tokens: Some(reasoning_tokens),
+        },
+        is_meta: false,
+        created_at_ms: crate::state::session::now_ms(),
+        is_compact_summary: false,
+        is_visible_in_transcript_only: false,
+        permission_mode: None,
+    };
+
+    let insert_at = response_start + response_item_offset;
+    state.session.messages.insert(insert_at, thinking);
 }
 
 /// Handle `TurnInterrupted`: clear streaming state, surface the banner,
@@ -828,6 +911,8 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
 /// after `abortController.abort('user-cancel')` resolves the query.
 fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParams) -> bool {
     state.session.set_busy(false);
+    state.session.current_turn_message_start = None;
+    state.session.current_turn_started_at = None;
     state.ui.streaming = None;
     state.session.was_interrupted = true;
     state

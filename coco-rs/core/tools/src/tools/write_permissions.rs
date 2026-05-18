@@ -83,7 +83,7 @@ pub(crate) fn check_write_permission_for_paths(
     {
         return ToolCheckResult::Ask {
             message: format!(
-                "Claude requested permissions to {action}, but you haven't granted it yet."
+                "Coco requested permissions to {action}, but you haven't granted it yet."
             ),
             suggestions: vec![],
             choices: None,
@@ -121,14 +121,14 @@ pub(crate) fn check_write_permission_for_paths(
         | PermissionMode::Bubble
         | PermissionMode::AcceptEdits => ToolCheckResult::Ask {
             message: format!(
-                "Claude requested permissions to {action}, but you haven't granted it yet."
+                "Coco requested permissions to {action}, but you haven't granted it yet."
             ),
             suggestions: write_permission_suggestions(paths_to_check, &cwd_str, ctx),
             choices: None,
         },
         PermissionMode::Plan if !ctx.permission_context.bypass_available => ToolCheckResult::Ask {
             message: format!(
-                "Claude requested permissions to {action}, but you haven't granted it yet."
+                "Coco requested permissions to {action}, but you haven't granted it yet."
             ),
             suggestions: write_permission_suggestions(paths_to_check, &cwd_str, ctx),
             choices: None,

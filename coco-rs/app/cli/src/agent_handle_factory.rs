@@ -27,26 +27,99 @@ use coco_coordinator::types::TeamManager;
 use coco_query::agent_adapter::{QueryEngineAdapter, QueryEngineFactory};
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentQueryEngineRef;
+use coco_types::LlmModelSelection;
+use coco_types::ModelRole;
+use coco_types::ModelSpec;
+use coco_types::ProviderModelSelection;
 use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::session_runtime::SessionRuntime;
-
-/// Hard cap on concurrent in-process subagents per session.
-///
-/// 16 mirrors the TS `MAX_TEAM_SIZE` (`utils/swarm/constants.ts`).
-/// Going past this risks tokio task explosion on shared resources
-/// (mailbox file IO, retry-jittered locks, per-agent state) without a
-/// matching UX surface — the TUI's coordinator panel doesn't render
-/// well past ~10 simultaneous agents either. Override only when a
-/// specific workload genuinely needs more.
-const MAX_IN_PROCESS_AGENTS: i32 = 16;
 
 /// Per-runtime handles required to construct the production
 /// `SwarmAgentHandle`. Splitting this out of `SessionRuntime::build`
 /// avoids growing the build-options surface for an opt-in feature.
 pub struct AgentTeamWiring {
     pub agent_handle: AgentHandleRef,
+}
+
+async fn resolve_agent_client(
+    runtime: &Arc<SessionRuntime>,
+    selection: &LlmModelSelection,
+) -> Arc<coco_inference::ApiClient> {
+    match selection {
+        LlmModelSelection::InheritMain
+        | LlmModelSelection::Role {
+            role: ModelRole::Main,
+        } => runtime.main_client().await,
+        LlmModelSelection::Role { role } => resolve_role_client(runtime, *role).await,
+        LlmModelSelection::Explicit { primary } => {
+            match resolve_explicit_client(runtime, primary).await {
+                Some(client) => client,
+                None => runtime.main_client().await,
+            }
+        }
+        LlmModelSelection::ExplicitWithFallbackRole {
+            primary,
+            fallback_role,
+        } => match resolve_explicit_client(runtime, primary).await {
+            Some(client) => client,
+            None => resolve_role_client(runtime, *fallback_role).await,
+        },
+    }
+}
+
+async fn resolve_role_client(
+    runtime: &Arc<SessionRuntime>,
+    role: ModelRole,
+) -> Arc<coco_inference::ApiClient> {
+    if role == ModelRole::Main {
+        return runtime.main_client().await;
+    }
+
+    match runtime.client_for_role(role).await {
+        Ok(client) => client,
+        Err(e) => {
+            warn!(?role, error = %e, "client_for_role failed; falling back to Main");
+            runtime.main_client().await
+        }
+    }
+}
+
+async fn resolve_explicit_client(
+    runtime: &Arc<SessionRuntime>,
+    selection: &ProviderModelSelection,
+) -> Option<Arc<coco_inference::ApiClient>> {
+    let provider = match runtime.runtime_config.providers.get(&selection.provider) {
+        Some(provider) => provider,
+        None => {
+            warn!(
+                provider = %selection.provider,
+                model = %selection.model_id,
+                "explicit model references unknown provider; falling back"
+            );
+            return None;
+        }
+    };
+    let spec = ModelSpec {
+        provider: selection.provider.clone(),
+        api: provider.api,
+        display_name: selection.model_id.clone(),
+        model_id: selection.model_id.clone(),
+    };
+    let retry: coco_inference::RetryConfig = runtime.runtime_config.api.retry.clone().into();
+    match coco_inference::model_factory::build_api_client(&runtime.runtime_config, &spec, retry) {
+        Ok(client) => Some(client),
+        Err(e) => {
+            warn!(
+                provider = %selection.provider,
+                model = %selection.model_id,
+                error = %e,
+                "failed to build explicit model ApiClient; falling back"
+            );
+            None
+        }
+    }
 }
 
 /// Assemble the production [`SwarmAgentHandle`] for `runtime`.
@@ -81,16 +154,46 @@ pub async fn build_agent_team_wiring(
     // removed in the post-D cleanup pass.
     let runner = Arc::new(InProcessAgentRunner::new(
         cwd.clone(),
-        MAX_IN_PROCESS_AGENTS,
+        runtime.runtime_config.agent_teams.max_agents,
     ));
     let team_manager = Arc::new(RwLock::new(None::<TeamManager>));
 
     let mut handle = SwarmAgentHandle::new(
-        runner,
+        runner.clone(),
         team_manager,
         cwd.clone(),
         runtime.runtime_config.clone(),
     );
+    let backend_registry = Arc::new(coco_coordinator::pane::BackendRegistry::new());
+    backend_registry
+        .register_in_process_backend(Arc::new(coco_coordinator::InProcessBackend::new(
+            runner.clone(),
+        )))
+        .await;
+    let detection = backend_registry.detect_backend().await;
+    match detection.backend_type {
+        coco_coordinator::BackendType::Tmux => {
+            backend_registry
+                .register_pane_backend(Arc::new(coco_coordinator::pane::tmux::TmuxBackend::new(
+                    detection.is_native,
+                )))
+                .await;
+        }
+        coco_coordinator::BackendType::Iterm2 => {
+            backend_registry
+                .register_pane_backend(
+                    Arc::new(coco_coordinator::pane::iterm2::ITermBackend::new()),
+                )
+                .await;
+        }
+        coco_coordinator::BackendType::InProcess => {
+            backend_registry.mark_in_process_fallback().await;
+        }
+        _ => {
+            backend_registry.mark_in_process_fallback().await;
+        }
+    }
+    handle.set_backend_registry(backend_registry);
 
     // P2'+: install the AgentTaskRegistry side of the production
     // task runtime so AgentTool background spawns register through
@@ -101,6 +204,12 @@ pub async fn build_agent_team_wiring(
     // run unregistered.
     if let Some(task_rt) = runtime.current_task_runtime().await {
         handle.set_task_registry(task_rt as coco_tool_runtime::AgentTaskRegistryRef);
+    }
+    if let Some(task_list) = runtime.current_task_list().await {
+        handle.set_task_list(task_list);
+    }
+    if let Some(router) = runtime.current_team_task_list_router().await {
+        handle.set_team_task_list_router(router);
     }
 
     // Per-agent transcript store for `SwarmAgentHandle::resume_agent`
@@ -118,7 +227,7 @@ pub async fn build_agent_team_wiring(
     // directly without blocking the runtime.
     let factory: QueryEngineFactory = {
         let runtime_for_factory = runtime.clone();
-        Arc::new(move |mut engine_config, role| {
+        Arc::new(move |mut engine_config, role, cancel| {
             let runtime = runtime_for_factory.clone();
             Box::pin(async move {
                 // ── Gap A fix — inherit parent's resolved RuntimeConfig ──
@@ -153,25 +262,7 @@ pub async fn build_agent_team_wiring(
                 engine_config.plan_mode_settings =
                     runtime.runtime_config.settings.merged.plan_mode.clone();
 
-                // Resolve per-role client. `role_clients` caches
-                // post-warm so this is effectively instant after the
-                // first call per role; the cold path pays one
-                // `build_api_client` cost per session per role.
-                // Main reads through `main_client()` so any in-session
-                // hot-swap (TUI picker selecting a new Main model)
-                // is observed by subagents on the next spawn.
-                let client = match role {
-                    Some(r) if r != coco_types::ModelRole::Main => {
-                        match runtime.client_for_role(r).await {
-                            Ok(c) => c,
-                            Err(e) => {
-                                warn!(?r, error = %e, "client_for_role failed; falling back to Main");
-                                runtime.main_client().await
-                            }
-                        }
-                    }
-                    _ => runtime.main_client().await,
-                };
+                let client = resolve_agent_client(&runtime, &role).await;
                 // Build a fresh engine via the runtime's standard
                 // path, then swap in the role-resolved client.
                 // `wire_engine` (called inside `build_engine_from_config`)
@@ -181,7 +272,7 @@ pub async fn build_agent_team_wiring(
                 let engine = runtime
                     .build_engine_from_config(
                         engine_config,
-                        tokio_util::sync::CancellationToken::new(),
+                        cancel.unwrap_or_else(tokio_util::sync::CancellationToken::new),
                         None,
                     )
                     .await;

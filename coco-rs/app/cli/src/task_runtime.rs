@@ -269,6 +269,9 @@ impl AgentTaskRegistry for TaskRuntime {
             .await
             .unwrap_or_default()
     }
+    async fn output_file_path(&self, task_id: &str) -> Option<std::path::PathBuf> {
+        Some(self.disk.output_path(task_id))
+    }
     async fn is_terminal(&self, task_id: &str) -> bool {
         self.manager
             .get(task_id)

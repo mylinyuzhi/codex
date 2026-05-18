@@ -10,43 +10,64 @@ use crate::config::TeammateMode;
 
 // ── Teammate Model Fallback (teammateModel.ts) ──
 
-/// Get the hardcoded default model for teammates.
-///
-/// TS: `getHardcodedTeammateModelFallback()`
-/// Returns the default model to use when no model is explicitly specified
-/// for a teammate. Provider-aware in TS; simplified here.
-pub fn get_default_teammate_model() -> &'static str {
-    "claude-sonnet-4-6-20250514"
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedTeammateModel {
+    pub model: String,
+    pub model_role: Option<coco_types::ModelRole>,
+    pub model_selection: coco_types::LlmModelSelection,
 }
 
 /// Resolve the model for a teammate.
 ///
 /// TS: `resolveTeammateModel(inputModel, leaderModel)`
 ///
-/// Priority: explicit model > config default > leader model > hardcoded fallback.
+/// Priority: input `"inherit"` → leader; input string → explicit;
+/// config concrete default → explicit; per-agent-type role; default
+/// role; finally `ModelRole::Main`.
 pub fn resolve_teammate_model(
     input_model: Option<&str>,
-    leader_model: Option<&str>,
-    config_default: Option<&str>,
-) -> String {
-    // "inherit" is an alias for the leader's model
-    if input_model.is_some_and(|m| m == "inherit") {
-        return leader_model
-            .unwrap_or_else(|| get_default_teammate_model())
-            .to_string();
+    leader_model: &str,
+    config: &coco_config::AgentTeamsConfig,
+    agent_type: Option<&str>,
+    model_for_role: impl Fn(coco_types::ModelRole) -> Option<String>,
+) -> ResolvedTeammateModel {
+    if input_model == Some("inherit") {
+        return ResolvedTeammateModel {
+            model: leader_model.to_string(),
+            model_role: Some(coco_types::ModelRole::Main),
+            model_selection: coco_types::LlmModelSelection::InheritMain,
+        };
     }
 
     if let Some(model) = input_model {
-        return model.to_string();
+        let model_selection = coco_types::LlmModelSelection::from_model_and_role(Some(model), None);
+        return ResolvedTeammateModel {
+            model: model.to_string(),
+            model_role: model_selection.fallback_role(),
+            model_selection,
+        };
     }
 
-    if let Some(default) = config_default {
-        return default.to_string();
+    if let Some(model) = config.default_model.as_ref() {
+        let primary = coco_types::ProviderModelSelection {
+            provider: model.provider.clone(),
+            model_id: model.model_id.clone(),
+        };
+        return ResolvedTeammateModel {
+            model: model.model_id.clone(),
+            model_role: None,
+            model_selection: coco_types::LlmModelSelection::Explicit { primary },
+        };
     }
 
-    leader_model
-        .unwrap_or_else(|| get_default_teammate_model())
-        .to_string()
+    let role = agent_type
+        .and_then(|agent_type| config.agent_type_model_roles.get(agent_type).copied())
+        .unwrap_or(config.default_model_role);
+    ResolvedTeammateModel {
+        model: model_for_role(role).unwrap_or_else(|| leader_model.to_string()),
+        model_role: Some(role),
+        model_selection: coco_types::LlmModelSelection::Role { role },
+    }
 }
 
 // ── Teammate Mode Snapshot (teammateModeSnapshot.ts) ──
@@ -241,8 +262,7 @@ pub fn on_teammate_stop(
 
     let _ = crate::mailbox::write_to_mailbox(crate::constants::TEAM_LEAD_NAME, message, team_name);
 
-    // Mark teammate as inactive in team file
-    let _ = crate::team_file::set_member_active(team_name, agent_name, false);
+    // The runner-loop owns active/idle mutation through TeamRosterStore.
 }
 
 // ── Message Priority (inProcessRunner.ts) ──

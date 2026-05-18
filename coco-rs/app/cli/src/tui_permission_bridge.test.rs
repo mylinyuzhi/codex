@@ -29,11 +29,16 @@ async fn approve_flow_sends_approved_decision() {
         CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
             request_id,
             description,
+            display_input,
             show_always_allow,
             ..
         }) => {
             assert_eq!(request_id, "r1");
             assert_eq!(description, "ls");
+            assert_eq!(
+                display_input,
+                coco_types::PermissionDisplayInput::Command("ls".into())
+            );
             assert!(show_always_allow);
         }
         other => panic!("expected Tui(ApprovalRequired); got {other:?}"),

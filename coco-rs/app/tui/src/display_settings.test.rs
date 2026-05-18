@@ -41,10 +41,21 @@ fn from_settings_with_sources_allows_user_owned_syntax_highlighting() {
     let display = DisplaySettings::from_settings_with_sources(&settings);
 
     assert_eq!(display.syntax_highlighting, SyntaxHighlighting::Disabled);
+    assert!(!display.show_thinking);
     assert_eq!(
         display.syntax_highlighting_editability,
         DisplaySettingEditability::Editable
     );
+}
+
+#[test]
+fn from_settings_reads_show_thinking_default() {
+    let display = DisplaySettings::from_settings(&Settings {
+        show_thinking: true,
+        ..Settings::default()
+    });
+
+    assert!(display.show_thinking);
 }
 
 #[test]

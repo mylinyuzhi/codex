@@ -32,14 +32,17 @@ pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
     let agent_id = format!("{}@{}", config.name, config.team_name);
 
     let mut args = vec![
-        format!("--agent-id={agent_id}"),
-        format!("--agent-name={}", config.name),
-        format!("--team-name={}", config.team_name),
-        format!("--parent-session-id={}", config.parent_session_id),
+        format!("--agent-id={}", shell_quote(&agent_id)),
+        format!("--agent-name={}", shell_quote(&config.name)),
+        format!("--team-name={}", shell_quote(&config.team_name)),
+        format!(
+            "--parent-session-id={}",
+            shell_quote(&config.parent_session_id)
+        ),
     ];
 
     if let Some(color) = &config.color {
-        args.push(format!("--agent-color={}", color.as_str()));
+        args.push(format!("--agent-color={}", shell_quote(color.as_str())));
     }
 
     if config.plan_mode_required {
@@ -47,7 +50,7 @@ pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
     }
 
     if let Some(model) = &config.model {
-        args.push(format!("--model={model}"));
+        args.push(format!("--model={}", shell_quote(model)));
     }
 
     // Build inherited env vars
@@ -56,7 +59,8 @@ pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
     // cd to working directory, then run with env
     format!(
         "cd {cwd} && {env_vars}{command} {args}",
-        cwd = config.cwd,
+        cwd = shell_quote(&config.cwd),
+        command = shell_quote(&command),
         args = args.join(" ")
     )
 }
@@ -147,7 +151,7 @@ pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
         EnvKey::CocoRemoteMemoryDir,
     ] {
         if let Ok(val) = env::var(*var) {
-            vars.push(format!("{var}={val}"));
+            vars.push(format!("{var}={}", shell_quote(&val)));
         }
     }
 
@@ -179,7 +183,7 @@ pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
         "CURL_CA_BUNDLE",
     ] {
         if let Ok(val) = std::env::var(var) {
-            vars.push(format!("{var}={val}"));
+            vars.push(format!("{var}={}", shell_quote(&val)));
         }
     }
 
@@ -188,6 +192,12 @@ pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
     } else {
         format!("{} ", vars.join(" "))
     }
+}
+
+fn shell_quote(value: &str) -> String {
+    shlex::try_quote(value)
+        .map(std::borrow::Cow::into_owned)
+        .unwrap_or_else(|_| "''".to_string())
 }
 
 #[cfg(test)]

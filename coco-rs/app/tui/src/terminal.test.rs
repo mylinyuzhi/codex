@@ -54,6 +54,14 @@ fn native_viewport_anchors_to_history_bottom_not_stale_viewport_top() {
 }
 
 #[test]
+fn native_viewport_caps_to_native_max_height() {
+    assert_eq!(
+        native_viewport_area(/*anchor_y*/ 0, Size::new(80, 80), 80).height,
+        NATIVE_VIEWPORT_MAX_HEIGHT
+    );
+}
+
+#[test]
 fn alternate_scroll_commands_emit_xterm_private_mode_bytes() {
     let mut enabled = String::new();
     EnableAlternateScroll

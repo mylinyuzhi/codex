@@ -24,6 +24,7 @@ fn test_new_task_state() {
     assert!(!state.shutdown_requested);
     assert_eq!(state.turn_count, 0);
     assert!(state.messages.is_empty());
+    assert!(state.current_work_cancel.is_none());
 }
 
 #[test]
@@ -76,9 +77,30 @@ fn test_elapsed_ms() {
 fn test_task_state_serde() {
     let state = InProcessTeammateTaskState::new("task-1".into(), make_identity(), "test".into());
     let json = serde_json::to_string(&state).unwrap();
+    assert!(
+        !json.contains("current_work_cancel"),
+        "runtime-only cancellation token must not serialize"
+    );
     let parsed: InProcessTeammateTaskState = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.task_id, "task-1");
     assert_eq!(parsed.identity.agent_name, "worker");
+    assert!(parsed.current_work_cancel.is_none());
+}
+
+#[test]
+fn test_interrupt_current_work_cancels_runtime_token_only() {
+    let mut state =
+        InProcessTeammateTaskState::new("task-1".into(), make_identity(), "test".into());
+    assert!(!state.interrupt_current_work());
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let observed = cancel.clone();
+    state.set_current_work_cancel(cancel);
+    assert!(state.interrupt_current_work());
+    assert!(observed.is_cancelled());
+
+    state.clear_current_work_cancel();
+    assert!(!state.interrupt_current_work());
 }
 
 #[test]

@@ -10,6 +10,7 @@ use coco_types::ServerNotification;
 use crate::server_notification_handler::handle_core_event;
 use crate::state::AppState;
 use crate::state::session::ChatRole;
+use crate::state::session::MessageContent;
 
 #[test]
 fn test_turn_lifecycle() {
@@ -90,6 +91,8 @@ fn test_tool_use_lifecycle() {
         }),
     );
     assert_eq!(state.session.tool_executions.len(), 1);
+    assert_eq!(state.session.messages.len(), 1);
+    assert_eq!(state.session.messages[0].role, ChatRole::Assistant);
 
     // Tool completed (via Stream layer)
     handle_core_event(
@@ -101,8 +104,257 @@ fn test_tool_use_lifecycle() {
             is_error: false,
         }),
     );
-    assert!(!state.session.messages.is_empty());
-    assert_eq!(state.session.messages[0].role, ChatRole::Tool);
+    assert_eq!(state.session.messages.len(), 2);
+    assert_eq!(state.session.messages[1].role, ChatRole::Tool);
+}
+
+#[test]
+fn test_tool_use_completed_uses_event_name_when_execution_missing() {
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ToolUseCompleted {
+            call_id: "missing".into(),
+            name: "Read".into(),
+            output: "done".into(),
+            is_error: false,
+        }),
+    );
+
+    assert!(matches!(
+        &state.session.messages[0].content,
+        MessageContent::ToolSuccess { tool_name, .. } if tool_name == "Read"
+    ));
+}
+
+#[test]
+fn test_tool_use_queued_stores_bounded_input_preview() {
+    let mut state = AppState::new();
+    let large_text = "x".repeat(2_000);
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
+            call_id: "c1".into(),
+            name: "Write".into(),
+            input: serde_json::json!({"file_path": "/tmp/out.txt", "content": large_text}),
+        }),
+    );
+
+    assert!(matches!(
+        &state.session.messages[0].content,
+        MessageContent::ToolUse { input_preview, .. }
+            if input_preview.chars().count() <= 512 && input_preview.ends_with("...")
+    ));
+}
+
+#[test]
+fn test_tool_use_queued_flushes_reasoning_before_tool_call() {
+    let mut state = AppState::new();
+    state.session.turn_count = 7;
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
+            turn_id: "t1".into(),
+            delta: "I should inspect the file first.".into(),
+        }),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
+            call_id: "c1".into(),
+            name: "Read".into(),
+            input: serde_json::json!({"file_path": "/tmp/README.md", "limit": 3}),
+        }),
+    );
+
+    assert_eq!(state.session.messages.len(), 2);
+    assert!(matches!(
+        state.session.messages[0].content,
+        MessageContent::Thinking { .. }
+    ));
+    assert!(matches!(
+        state.session.messages[1].content,
+        MessageContent::ToolUse { .. }
+    ));
+}
+
+#[test]
+fn test_turn_completed_inserts_reasoning_token_only_message_before_text() {
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TurnStarted(
+            coco_types::TurnStartedParams {
+                turn_id: Some("t1".into()),
+                turn_number: 3,
+            },
+        )),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::TextDelta {
+            turn_id: "t1".into(),
+            delta: "final answer".into(),
+        }),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TurnCompleted(
+            coco_types::TurnCompletedParams {
+                turn_id: Some("t1".into()),
+                usage: coco_types::TokenUsage {
+                    output_token_details: coco_types::OutputTokenDetails {
+                        reasoning_tokens: 220,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        )),
+    );
+
+    assert_eq!(state.session.messages.len(), 2);
+    assert!(matches!(
+        &state.session.messages[0].content,
+        MessageContent::Thinking {
+            content,
+            reasoning_tokens: Some(220),
+            duration_ms: Some(_),
+            ..
+        } if content.is_empty()
+    ));
+    assert!(matches!(
+        &state.session.messages[1].content,
+        MessageContent::AssistantText(text) if text == "final answer"
+    ));
+}
+
+#[test]
+fn test_turn_completed_updates_tool_call_thinking_tokens() {
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TurnStarted(
+            coco_types::TurnStartedParams {
+                turn_id: Some("t1".into()),
+                turn_number: 3,
+            },
+        )),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
+            turn_id: "t1".into(),
+            delta: "Need a command.".into(),
+        }),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
+            call_id: "c1".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "ls -al"}),
+        }),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ToolUseCompleted {
+            call_id: "c1".into(),
+            name: "Bash".into(),
+            output: "ok".into(),
+            is_error: false,
+        }),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TurnCompleted(
+            coco_types::TurnCompletedParams {
+                turn_id: Some("t1".into()),
+                usage: coco_types::TokenUsage {
+                    output_token_details: coco_types::OutputTokenDetails {
+                        reasoning_tokens: 13,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        )),
+    );
+
+    assert_eq!(state.session.messages.len(), 3);
+    assert!(matches!(
+        &state.session.messages[0].content,
+        MessageContent::Thinking {
+            reasoning_tokens: Some(13),
+            ..
+        }
+    ));
+    assert!(matches!(
+        state.session.messages[1].content,
+        MessageContent::ToolUse { .. }
+    ));
+    assert!(matches!(
+        state.session.messages[2].content,
+        MessageContent::ToolSuccess { .. }
+    ));
+}
+
+#[test]
+fn test_turn_completed_inserts_token_only_thinking_before_tool_call() {
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TurnStarted(
+            coco_types::TurnStartedParams {
+                turn_id: Some("t1".into()),
+                turn_number: 3,
+            },
+        )),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
+            call_id: "c1".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "ls -al"}),
+        }),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TurnCompleted(
+            coco_types::TurnCompletedParams {
+                turn_id: Some("t1".into()),
+                usage: coco_types::TokenUsage {
+                    output_token_details: coco_types::OutputTokenDetails {
+                        reasoning_tokens: 13,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        )),
+    );
+
+    assert_eq!(state.session.messages.len(), 2);
+    assert!(matches!(
+        &state.session.messages[0].content,
+        MessageContent::Thinking {
+            content,
+            reasoning_tokens: Some(13),
+            duration_ms: Some(_),
+            ..
+        } if content.is_empty()
+    ));
+    assert!(matches!(
+        state.session.messages[1].content,
+        MessageContent::ToolUse { .. }
+    ));
 }
 
 #[test]
@@ -148,7 +400,7 @@ fn test_permission_request_shows_overlay() {
             request_id: "req-1".into(),
             tool_name: "Bash".into(),
             description: "Execute command".into(),
-            input_preview: "rm -rf /tmp/test".into(),
+            display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
             show_always_allow: true,
             choices: None,
             permission_suggestions: vec![],
@@ -178,7 +430,7 @@ fn test_permission_request_hides_always_allow_when_disabled() {
             request_id: "req-1".into(),
             tool_name: "Bash".into(),
             description: "Execute command".into(),
-            input_preview: "rm -rf /tmp/test".into(),
+            display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
             show_always_allow: false,
             choices: None,
             permission_suggestions: vec![],

@@ -93,7 +93,11 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 (MODE_CYCLE_KEY, KeybindingAction::ChatCycleMode),
                 ("meta+p", KeybindingAction::ChatModelPicker),
                 ("meta+o", KeybindingAction::ChatFastMode),
-                ("meta+t", KeybindingAction::ChatThinkingToggle),
+                // Use a function key instead of Option/Alt on macOS:
+                // many terminals send Option+T as the printable `†`
+                // unless users opt into "Option as Meta". F2 avoids
+                // readline editing keys and does not insert text.
+                ("f2", KeybindingAction::ChatThinkingToggle),
                 // coco-rs extension (no TS counterpart): Ctrl+T in the
                 // Chat context cycles the Main role's thinking effort
                 // forward through the active model's
@@ -174,7 +178,6 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
         make_block(
             KeybindingContext::Transcript,
             [
-                ("ctrl+e", KeybindingAction::TranscriptToggleShowAll),
                 ("ctrl+c", KeybindingAction::TranscriptExit),
                 ("escape", KeybindingAction::TranscriptExit),
                 ("q", KeybindingAction::TranscriptExit),

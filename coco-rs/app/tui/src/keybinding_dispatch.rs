@@ -145,11 +145,6 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         TabsPrevious => TuiCommand::SettingsPrevTab,
 
         // ── Transcript ──────────────────────────────────────────────
-        // TS `transcript:toggleShowAll` flips `showAllInTranscript`
-        // when the transcript screen is mounted. The handler in
-        // `update::transcript` no-ops when no transcript overlay is
-        // active so the keystroke is harmlessly swallowed.
-        TranscriptToggleShowAll => TuiCommand::ToggleTranscriptShowAll,
         TranscriptExit => TuiCommand::Cancel,
 
         // ── Help ────────────────────────────────────────────────────
@@ -235,11 +230,17 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         VoicePushToTalk => return None,
 
         // ── Scroll (internal) ───────────────────────────────────────
+        ScrollPageUp if transcript_active(state) => TuiCommand::TranscriptPage(-1),
         ScrollPageUp => TuiCommand::PageUp,
+        ScrollPageDown if transcript_active(state) => TuiCommand::TranscriptPage(1),
         ScrollPageDown => TuiCommand::PageDown,
+        ScrollLineUp if transcript_active(state) => TuiCommand::TranscriptScrollLines(-1),
         ScrollLineUp => TuiCommand::ScrollUp,
+        ScrollLineDown if transcript_active(state) => TuiCommand::TranscriptScrollLines(1),
         ScrollLineDown => TuiCommand::ScrollDown,
+        ScrollTop if transcript_active(state) => TuiCommand::TranscriptJumpStart,
         ScrollTop => TuiCommand::OverlayJumpStart,
+        ScrollBottom if transcript_active(state) => TuiCommand::TranscriptJumpEnd,
         ScrollBottom => TuiCommand::OverlayJumpEnd,
 
         // ── Selection ───────────────────────────────────────────────
@@ -270,6 +271,13 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         | MessageActionsC
         | MessageActionsP => return None,
     })
+}
+
+fn transcript_active(state: &AppState) -> bool {
+    matches!(
+        state.ui.active_overlay(),
+        Some(crate::state::Overlay::Transcript(_))
+    )
 }
 
 #[cfg(test)]

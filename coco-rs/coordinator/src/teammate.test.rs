@@ -3,39 +3,72 @@ use super::*;
 // ── Model Fallback ──
 
 #[test]
-fn test_default_teammate_model() {
-    let model = get_default_teammate_model();
-    assert!(model.contains("sonnet"));
-}
-
-#[test]
 fn test_resolve_teammate_model_explicit() {
-    let model = resolve_teammate_model(Some("opus-4"), Some("leader-model"), None);
-    assert_eq!(model, "opus-4");
+    let model = resolve_teammate_model(
+        Some("opus-4"),
+        "leader-model",
+        &coco_config::AgentTeamsConfig::default(),
+        None,
+        |_| None,
+    );
+    assert_eq!(model.model, "opus-4");
+    assert_eq!(model.model_role, None);
 }
 
 #[test]
 fn test_resolve_teammate_model_inherit() {
-    let model = resolve_teammate_model(Some("inherit"), Some("leader-model"), None);
-    assert_eq!(model, "leader-model");
+    let model = resolve_teammate_model(
+        Some("inherit"),
+        "leader-model",
+        &coco_config::AgentTeamsConfig::default(),
+        None,
+        |_| None,
+    );
+    assert_eq!(model.model, "leader-model");
+    assert_eq!(model.model_role, Some(coco_types::ModelRole::Main));
 }
 
 #[test]
 fn test_resolve_teammate_model_config_default() {
-    let model = resolve_teammate_model(None, Some("leader"), Some("config-default"));
-    assert_eq!(model, "config-default");
+    let config = coco_config::AgentTeamsConfig {
+        default_model: Some(coco_config::ModelSelection {
+            provider: "openai".into(),
+            model_id: "config-default".into(),
+        }),
+        ..Default::default()
+    };
+    let model = resolve_teammate_model(None, "leader", &config, None, |_| None);
+    assert_eq!(model.model, "config-default");
+    assert_eq!(model.model_role, None);
 }
 
 #[test]
-fn test_resolve_teammate_model_leader_fallback() {
-    let model = resolve_teammate_model(None, Some("leader-model"), None);
-    assert_eq!(model, "leader-model");
+fn test_resolve_teammate_model_agent_type_role_overrides_default() {
+    let config = coco_config::AgentTeamsConfig {
+        default_model_role: coco_types::ModelRole::Fast,
+        agent_type_model_roles: [("reviewer".into(), coco_types::ModelRole::Review)]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    let model = resolve_teammate_model(None, "leader-model", &config, Some("reviewer"), |role| {
+        Some(format!("{role}-model"))
+    });
+    assert_eq!(model.model, "review-model");
+    assert_eq!(model.model_role, Some(coco_types::ModelRole::Review));
 }
 
 #[test]
-fn test_resolve_teammate_model_hardcoded_fallback() {
-    let model = resolve_teammate_model(None, None, None);
-    assert!(model.contains("sonnet"));
+fn test_resolve_teammate_model_missing_config_uses_main_role() {
+    let model = resolve_teammate_model(
+        None,
+        "leader-model",
+        &coco_config::AgentTeamsConfig::default(),
+        None,
+        |role| Some(format!("{role}-model")),
+    );
+    assert_eq!(model.model, "main-model");
+    assert_eq!(model.model_role, Some(coco_types::ModelRole::Main));
 }
 
 // ── Mode Snapshot ──

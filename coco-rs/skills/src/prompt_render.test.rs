@@ -163,6 +163,7 @@ async fn render_text_with_args() {
         aliases: vec![],
         allowed_tools: None,
         model: None,
+        model_role: None,
         when_to_use: None,
         argument_names: vec!["name".into()],
         paths: vec![],

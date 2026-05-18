@@ -258,6 +258,26 @@ pub async fn handle_command(
                 state.ui.active_suggestions = None;
                 return true;
             }
+            // Escape while viewing the teammate activity pane mirrors TS
+            // `useBackgroundTaskNavigation`: interrupt the focused
+            // teammate's current turn only. Ctrl+C / KillAllAgents remains
+            // the lifecycle stop path.
+            if !state.ui.has_overlay()
+                && matches!(
+                    state.session.expanded_view,
+                    coco_types::ExpandedView::Teammates
+                )
+                && let Some(index) = state.session.focused_subagent_index
+                && let Some(agent) = state.session.subagents.get(index as usize)
+                && matches!(agent.status, crate::state::session::SubagentStatus::Running)
+            {
+                let _ = command_tx
+                    .send(UserCommand::InterruptAgentCurrentWork {
+                        agent_id: agent.agent_id.clone(),
+                    })
+                    .await;
+                return true;
+            }
             // No overlay + active suggestions + text present → ESC
             // double-press clears input + saves to history. Mirrors TS
             // `useTextInput.ts:126-153`: single Esc shows a toast; second
@@ -750,7 +770,30 @@ pub async fn handle_command(
             transcript::toggle(state);
             true
         }
-        TuiCommand::ToggleTranscriptShowAll => transcript::toggle_show_all(state),
+        TuiCommand::TranscriptSelectNext => {
+            transcript::select_expandable(state, 1);
+            true
+        }
+        TuiCommand::TranscriptToggleCell => {
+            transcript::toggle_selected_cell(state);
+            true
+        }
+        TuiCommand::TranscriptScrollLines(delta) => {
+            transcript::scroll_lines(state, delta);
+            true
+        }
+        TuiCommand::TranscriptPage(delta) => {
+            transcript::page(state, delta);
+            true
+        }
+        TuiCommand::TranscriptJumpStart => {
+            transcript::jump_start(state);
+            true
+        }
+        TuiCommand::TranscriptJumpEnd => {
+            transcript::jump_end(state);
+            true
+        }
     };
 
     if state.ui.input.text() != text_before || state.ui.input.textarea.cursor() != cursor_before {

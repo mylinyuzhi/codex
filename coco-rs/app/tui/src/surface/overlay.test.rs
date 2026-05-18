@@ -4,7 +4,7 @@ use crate::state::overlay::CommandPaletteOverlay;
 use crate::state::overlay::CostWarningOverlay;
 use crate::state::overlay::PermissionDetail;
 use crate::state::overlay::PermissionOverlay;
-use crate::state::overlay::TranscriptOverlay;
+use crate::state::transcript::TranscriptOverlay;
 use crate::surface::compatibility::TerminalCompatibility;
 use crate::theme::Theme;
 
@@ -26,6 +26,7 @@ fn permission_overlay_with_id(request_id: &str) -> Overlay {
         classifier_auto_approved: None,
         choices: None,
         selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Command("echo hi".to_string()),
         original_input: None,
         permission_suggestions: vec![],
     })
@@ -103,6 +104,52 @@ fn permission_overlay_uses_substantial_box_size() {
     let height = required_overlay_height(&overlay, &state, styles, 80, 24);
 
     assert!(height >= DECISION_OVERLAY_MIN_HEIGHT);
+}
+
+#[test]
+fn inline_decision_placement_never_extends_below_input() {
+    let overlay = permission_overlay();
+    let area = Rect::new(0, 0, 80, 20);
+    let input_area = Rect::new(0, 8, 80, 3);
+
+    let placement = overlay_placement_area(area, Some(input_area), &overlay);
+
+    assert_eq!(placement, Rect::new(0, 0, 80, 8));
+}
+
+#[test]
+fn inline_decision_placement_returns_empty_when_input_starts_at_top() {
+    let overlay = permission_overlay();
+    let area = Rect::new(0, 0, 80, 20);
+    let input_area = Rect::new(0, 0, 80, 3);
+
+    let placement = overlay_placement_area(area, Some(input_area), &overlay);
+
+    assert_eq!(placement.height, 0);
+}
+
+#[test]
+fn inline_decision_promotes_to_alt_screen_when_native_viewport_is_too_short() {
+    let now = std::time::Instant::now();
+    let mut state = AppState::new();
+    state.ui.terminal_focused = true;
+    state.ui.record_surface_interaction(now);
+    state.ui.set_overlay(permission_overlay());
+    let mut surface = OverlaySurfaceState::default();
+
+    let plan = surface.plan_for_native_viewport(
+        &state,
+        TerminalCompatibility::NativeScrollback,
+        now,
+        80,
+        crate::terminal::NATIVE_VIEWPORT_MAX_HEIGHT,
+    );
+
+    assert_eq!(
+        plan.overlay_placement,
+        Some(OverlaySurfacePlacement::AltScreen)
+    );
+    assert!(!plan.attention_requested);
 }
 
 #[test]

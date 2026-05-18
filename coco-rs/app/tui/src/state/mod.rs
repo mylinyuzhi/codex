@@ -7,6 +7,7 @@
 pub mod overlay;
 pub mod rewind;
 pub mod session;
+pub mod transcript;
 pub mod ui;
 
 pub use crate::display_settings::DisplaySettings;
@@ -83,6 +84,7 @@ pub use session::TokenUsage;
 pub use session::ToolExecution;
 pub use session::ToolStatus;
 pub use session::ToolUseStatus;
+pub use transcript::TranscriptOverlay;
 pub use ui::ActiveSuggestions;
 pub use ui::ExitKey;
 pub use ui::FocusTarget;

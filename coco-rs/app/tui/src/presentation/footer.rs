@@ -1,9 +1,11 @@
 //! Footer/status-bar presentation model.
 
+use coco_keybindings::KeybindingAction;
 use coco_types::ModelRole;
 use coco_types::PermissionMode;
 
 use crate::i18n::t;
+use crate::keybinding_bridge::KeybindingContext;
 use crate::state::AppState;
 use crate::state::ExitKey;
 
@@ -87,6 +89,30 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
     spans.push(FooterSpan::new(
         state.session.thinking_effort.to_string(),
         FooterTone::Dim,
+    ));
+
+    separator(&mut spans);
+    let thinking_shortcut = state
+        .ui
+        .kb_handle
+        .display_for(
+            &KeybindingAction::ChatThinkingToggle,
+            KeybindingContext::Chat,
+        )
+        .unwrap_or_else(|| "F2".to_string());
+    let thinking_state = if state.ui.show_thinking { "on" } else { "off" };
+    spans.push(FooterSpan::new(
+        t!(
+            "status.show_thinking",
+            shortcut = thinking_shortcut.as_str(),
+            state = thinking_state
+        )
+        .to_string(),
+        if state.ui.show_thinking {
+            FooterTone::Accent
+        } else {
+            FooterTone::Dim
+        },
     ));
 
     if let Some((mode_label, mode_tone)) =

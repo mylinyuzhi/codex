@@ -32,6 +32,13 @@ fn client_request_method_accessor_matches_serde_tag() {
             ClientRequestMethod::McpStatus,
             "mcp/status",
         ),
+        (
+            ClientRequest::AgentInterruptCurrentWork(AgentInterruptCurrentWorkParams {
+                agent_id: "worker@team".into(),
+            }),
+            ClientRequestMethod::AgentInterruptCurrentWork,
+            "agent/interruptCurrentWork",
+        ),
     ];
     for (req, expected, wire) in cases {
         assert_eq!(req.method(), *expected);
@@ -129,6 +136,16 @@ fn context_usage_is_unit_variant() {
     let req = ClientRequest::ContextUsage;
     let j = serde_json::to_value(&req).unwrap();
     assert_eq!(j["method"], "context/usage");
+}
+
+#[test]
+fn agent_interrupt_current_work_carries_agent_id() {
+    let req = ClientRequest::AgentInterruptCurrentWork(AgentInterruptCurrentWorkParams {
+        agent_id: "worker@team".into(),
+    });
+    let j = serde_json::to_value(&req).unwrap();
+    assert_eq!(j["method"], "agent/interruptCurrentWork");
+    assert_eq!(j["params"]["agent_id"], "worker@team");
 }
 
 #[test]

@@ -270,7 +270,7 @@ fn test_agent_definition_serde_roundtrip() {
         system_prompt: Some("You are a code researcher.".into()),
         effort: Some("high".into()),
         use_exact_tools: true,
-        model: Some("opus-4".into()),
+        model: Some("anthropic/claude-opus-4-7".into()),
         isolation: AgentIsolation::Worktree,
         memory_scope: Some(MemoryScope::Project),
         mcp_servers: vec![

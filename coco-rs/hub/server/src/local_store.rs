@@ -502,19 +502,14 @@ fn event_rows_from_line(
         .filter(|entry| entry.is_sidechain)
         .and_then(|entry| entry.extra.get("agentId"))
         .and_then(as_string_value);
-    let role = payload
-        .get("message")
+    let role = message_value(&payload)
         .and_then(|message| message.get("role"))
         .and_then(serde_json::Value::as_str)
         .or(inner_kind.as_deref())
         .unwrap_or("event")
         .to_string();
 
-    let Some(blocks) = payload
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(serde_json::Value::as_array)
-    else {
+    let Some(blocks) = content_blocks(&payload) else {
         let analysis = analyze_row_without_block(kind, &role, &redacted_payload);
         return vec![event_row_from_parts(EventRowParts {
             instance_id,
@@ -644,6 +639,17 @@ fn event_row_from_parts(parts: EventRowParts<'_>) -> EventRow {
     }
 }
 
+fn message_value(payload: &serde_json::Value) -> Option<&serde_json::Value> {
+    let message = payload.get("message")?;
+    message.get("message").or(Some(message))
+}
+
+fn content_blocks(payload: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    message_value(payload)?
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+}
+
 #[derive(Debug, Default)]
 struct TranscriptStats {
     total_input_tokens: i64,
@@ -726,9 +732,10 @@ fn analyze_row_without_block(
 
 fn analyze_content_block(role: &str, block: &serde_json::Value) -> EventAnalysis {
     match block.get("type").and_then(serde_json::Value::as_str) {
-        Some("tool_use") => {
+        Some("tool_use" | "tool-call") => {
             let tool = block
                 .get("name")
+                .or_else(|| block.get("toolName"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("tool");
             let input = block.get("input").unwrap_or(&serde_json::Value::Null);
@@ -740,7 +747,10 @@ fn analyze_content_block(role: &str, block: &serde_json::Value) -> EventAnalysis
                 lane_class: lane_class_for(lane).to_string(),
                 action: format!("Tool request: {tool}"),
                 tool_name: Some(tool.to_string()),
-                call_id: block.get("id").and_then(as_string_value),
+                call_id: block
+                    .get("id")
+                    .or_else(|| block.get("toolCallId"))
+                    .and_then(as_string_value),
                 preview: Some(format!("tool_use: {tool}")),
                 file_refs: file_refs_from_input(tool, input),
                 searchable: searchable_for_lane(lane).to_string(),
@@ -748,10 +758,15 @@ fn analyze_content_block(role: &str, block: &serde_json::Value) -> EventAnalysis
                 ..EventAnalysis::default()
             }
         }
-        Some("tool_result") => {
+        Some("tool_result" | "tool-result") => {
             let call_id = block
                 .get("tool_use_id")
                 .or_else(|| block.get("toolUseId"))
+                .or_else(|| block.get("toolCallId"))
+                .and_then(as_string_value);
+            let tool_name = block
+                .get("tool_name")
+                .or_else(|| block.get("toolName"))
                 .and_then(as_string_value);
             EventAnalysis {
                 role: role.to_string(),
@@ -759,6 +774,7 @@ fn analyze_content_block(role: &str, block: &serde_json::Value) -> EventAnalysis
                 lane: lane::TOOL_RESULT.to_string(),
                 lane_class: lane_class_for(lane::TOOL_RESULT).to_string(),
                 action: "Tool result".to_string(),
+                tool_name,
                 call_id: call_id.clone(),
                 is_error: block
                     .get("is_error")
@@ -767,6 +783,7 @@ fn analyze_content_block(role: &str, block: &serde_json::Value) -> EventAnalysis
                 preview: block
                     .get("content")
                     .and_then(preview_for_content)
+                    .or_else(|| block.get("output").and_then(preview_for_tool_output))
                     .or_else(|| call_id.as_ref().map(|id| format!("tool_result: {id}"))),
                 searchable: "call id, error flag, result preview".to_string(),
                 ..EventAnalysis::default()
@@ -834,6 +851,14 @@ fn preview_for_content(value: &serde_json::Value) -> Option<String> {
         }
     }
     None
+}
+
+fn preview_for_tool_output(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("value")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| value.as_str())
+        .map(truncate_preview)
 }
 
 fn transcript_files(project_dir: &Path) -> Result<Vec<PathBuf>, EventStoreError> {

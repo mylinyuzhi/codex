@@ -40,6 +40,7 @@ mod teammate_spinner;
 mod teammate_view_header;
 pub mod textarea;
 mod toast;
+mod transcript_overlay;
 mod verification_nudge_banner;
 
 #[cfg(test)]
@@ -77,4 +78,6 @@ pub use textarea::BolBehavior;
 pub use textarea::EolBehavior;
 pub use textarea::TextArea;
 pub use toast::ToastWidget;
+pub(crate) use transcript_overlay::TranscriptLayoutIndex;
+pub(crate) use transcript_overlay::TranscriptOverlayWidget;
 pub use verification_nudge_banner::VerificationNudgeBanner;

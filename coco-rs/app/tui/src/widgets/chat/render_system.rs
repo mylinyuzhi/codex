@@ -17,7 +17,8 @@ pub(super) fn try_render<'a>(
 ) -> Option<()> {
     match content {
         MessageContent::SystemText(text) => {
-            for line in text.lines() {
+            let mut iter = text.lines();
+            for line in iter.by_ref() {
                 lines.push(Line::from(
                     Span::raw(format!("  # {line}")).fg(w.styles.system_message()),
                 ));

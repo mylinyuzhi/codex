@@ -9,6 +9,8 @@ use std::collections::VecDeque;
 use std::time::Duration;
 use std::time::Instant;
 
+use ratatui::layout::Size;
+
 use crate::constants;
 use crate::display_settings::DisplaySettings;
 use crate::double_press::DoublePressTracker;
@@ -86,6 +88,9 @@ pub struct UiState {
     pub collapsed_tools: HashSet<String>,
     /// Help overlay scroll position.
     pub help_scroll: i32,
+    /// Last terminal size reported by crossterm. Used by update logic for
+    /// page-size decisions without reading render-derived metrics.
+    pub(crate) terminal_size: Size,
     /// Double-press tracker for Ctrl+C → exit. Independent from
     /// [`ctrl_d_tracker`] so a "Ctrl+C, Ctrl+D, Ctrl+C" sequence within
     /// the window still completes the Ctrl+C double-press — mirrors
@@ -180,7 +185,7 @@ impl UiState {
             overlay_queue: VecDeque::new(),
             overlay_generation: 0,
             streaming: None,
-            show_thinking: true,
+            show_thinking: false,
             show_system_reminders: false,
             user_scrolled: false,
             theme: theme_state.theme.clone(),
@@ -190,6 +195,7 @@ impl UiState {
             terminal_compatibility_warning: None,
             collapsed_tools: HashSet::new(),
             help_scroll: 0,
+            terminal_size: Size::new(80, 24),
             ctrl_c_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             ctrl_d_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             esc_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
@@ -221,6 +227,7 @@ impl UiState {
 
     pub fn apply_display_settings(&mut self, display_settings: DisplaySettings) {
         self.display_settings = display_settings;
+        self.show_thinking = display_settings.show_thinking;
         if let Some(Overlay::Settings(settings)) = self.overlay.as_mut() {
             settings.set_display_settings(display_settings);
         }
@@ -679,6 +686,8 @@ pub struct StreamingState {
     pub content: String,
     /// Accumulated thinking content.
     pub thinking: String,
+    /// When this stream chunk started, used for elapsed thinking display.
+    pub started_at: Instant,
     /// Current streaming mode.
     pub mode: StreamMode,
     /// Display cursor position for adaptive pacing.
@@ -699,6 +708,7 @@ impl StreamingState {
         Self {
             content: String::new(),
             thinking: String::new(),
+            started_at: Instant::now(),
             mode: StreamMode::Text,
             display_cursor: 0,
         }

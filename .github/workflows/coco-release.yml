@@ -36,8 +36,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  model-card:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: coco-rs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update bundled model-card snapshot
+        shell: bash
+        run: bash scripts/update-model-card-openrouter.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrouter-models
+          path: coco-rs/common/model-card/data/openrouter-models.json
+          if-no-files-found: error
+          retention-days: 1
+
   build:
     name: ${{ matrix.target }}
+    needs: model-card
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     defaults:
@@ -74,6 +94,11 @@ jobs:
         if: contains(matrix.target, 'linux-musl')
         run: cargo install --locked cargo-zigbuild
         working-directory: .
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: openrouter-models
+          path: coco-rs/common/model-card/data
 
       - name: Build (musl)
         if: contains(matrix.target, 'linux-musl')

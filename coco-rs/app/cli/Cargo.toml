@@ -47,6 +47,7 @@ coco-subagent.workspace = true
 coco-tui.workspace = true
 coco-keybindings = { workspace = true, features = ["loader"] }
 coco-otel.workspace = true
+coco-model-card.workspace = true
 coco-file-watch.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 base64.workspace = true

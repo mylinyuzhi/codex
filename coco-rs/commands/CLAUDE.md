@@ -7,7 +7,6 @@ Slash command registry and built-in implementations (help, config, clear, compac
 - `commands/` — 88+ subdirs, one per command (each with its own `.ts` or `.tsx`)
 - Top-level file commands: `commands/commit.ts`, `commit-push-pr.ts`, `bridge-kick.ts`, `brief.ts`, `advisor.ts`, `createMovedToPluginCommand.ts`
 
-Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
 
 ## Key Types
 - `CommandHandler` trait — `execute(args: &str) -> Result<String>`

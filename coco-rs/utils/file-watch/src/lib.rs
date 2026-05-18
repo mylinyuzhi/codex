@@ -41,7 +41,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
-use tracing::info;
+use tracing::trace;
 use tracing::warn;
 
 pub use notify::Event;
@@ -305,7 +305,7 @@ fn spawn_event_loop<E, C, M>(
                 res = raw_rx.recv() => {
                     match res {
                         Some(Ok(event)) => {
-                            info!(
+                            trace!(
                                 event_kind = ?event.kind,
                                 event_paths = ?event.paths,
                                 "file watcher received filesystem event"

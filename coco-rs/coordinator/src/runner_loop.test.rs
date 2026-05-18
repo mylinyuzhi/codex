@@ -47,6 +47,102 @@ impl AgentExecutionEngine for ErrorEngine {
     }
 }
 
+struct InterruptibleEngine {
+    started: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    interrupted: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+#[async_trait]
+impl AgentExecutionEngine for InterruptibleEngine {
+    async fn run_query(
+        &self,
+        _prompt: &str,
+        config: AgentQueryConfig,
+    ) -> crate::Result<AgentQueryResult> {
+        if let Some(tx) = self.started.lock().await.take() {
+            let _ = tx.send(());
+        }
+        let cancel = config.cancel.expect("runner must pass per-turn cancel");
+        cancel.cancelled().await;
+        if let Some(tx) = self.interrupted.lock().await.take() {
+            let _ = tx.send(());
+        }
+        Ok(AgentQueryResult {
+            messages: Vec::new(),
+            token_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            turns: 1,
+            tool_use_count: 0,
+            cancelled: true,
+            response_text: None,
+        })
+    }
+}
+
+struct LiveControlEngine {
+    started: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    observed: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+#[async_trait]
+impl AgentExecutionEngine for LiveControlEngine {
+    async fn run_query(
+        &self,
+        _prompt: &str,
+        config: AgentQueryConfig,
+    ) -> crate::Result<AgentQueryResult> {
+        if let Some(tx) = self.started.lock().await.take() {
+            let _ = tx.send(());
+        }
+        let mode = config
+            .live_permission_mode
+            .expect("runner must pass live mode");
+        let rules = config
+            .live_permission_rules
+            .expect("runner must pass live rules");
+        let cancel = config.cancel.expect("runner must pass per-turn cancel");
+        loop {
+            let mode_seen = *mode.read().await == coco_types::PermissionMode::AcceptEdits;
+            let rule_seen = rules
+                .read()
+                .await
+                .iter()
+                .any(|rule| rule.value.tool_pattern == "Edit");
+            if mode_seen && rule_seen {
+                if let Some(tx) = self.observed.lock().await.take() {
+                    let _ = tx.send(());
+                }
+                return Ok(AgentQueryResult {
+                    messages: Vec::new(),
+                    token_count: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    turns: 1,
+                    tool_use_count: 0,
+                    cancelled: false,
+                    response_text: Some("observed live control".into()),
+                });
+            }
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    return Ok(AgentQueryResult {
+                        messages: Vec::new(),
+                        token_count: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        turns: 1,
+                        tool_use_count: 0,
+                        cancelled: true,
+                        response_text: None,
+                    });
+                }
+                _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+            }
+        }
+    }
+}
+
 fn make_identity() -> TeammateIdentity {
     TeammateIdentity {
         agent_id: "worker@test".into(),
@@ -74,10 +170,26 @@ fn make_config(cancelled: Arc<AtomicBool>) -> InProcessRunnerConfig {
         features: None,
         tool_overrides: None,
         parent_tool_filter: None,
+        effort: None,
+        use_exact_tools: false,
+        mcp_servers: Vec::new(),
+        disallowed_tools: Vec::new(),
+        model_role: None,
+        model_selection: coco_types::LlmModelSelection::InheritMain,
+        task_list: None,
+        roster_store: None,
         plan_mode_required: false,
         hooks: None,
         orchestration_ctx: None,
     }
+}
+
+fn make_task_state(identity: &TeammateIdentity) -> tokio::sync::RwLock<InProcessTeammateTaskState> {
+    tokio::sync::RwLock::new(InProcessTeammateTaskState::new(
+        "task-test".into(),
+        identity.clone(),
+        "prompt".into(),
+    ))
 }
 
 #[tokio::test]
@@ -150,6 +262,176 @@ async fn test_run_single_turn_then_cancel() {
     let state = task_state.read().await;
     assert!(state.is_idle);
     assert_eq!(state.turn_count, 1);
+}
+
+#[tokio::test]
+async fn test_current_work_interrupt_returns_teammate_to_idle() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    unsafe {
+        std::env::set_var("COCO_CONFIG_DIR", scratch.path());
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let mut config = make_config(cancelled.clone());
+    config.max_turns = None;
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (interrupted_tx, interrupted_rx) = tokio::sync::oneshot::channel();
+    let engine = Arc::new(InterruptibleEngine {
+        started: tokio::sync::Mutex::new(Some(started_tx)),
+        interrupted: tokio::sync::Mutex::new(Some(interrupted_tx)),
+    });
+    let task_state = Arc::new(tokio::sync::RwLock::new(InProcessTeammateTaskState::new(
+        "task-1".into(),
+        make_identity(),
+        "test".into(),
+    )));
+
+    let run = {
+        let engine = engine.clone();
+        let task_state = task_state.clone();
+        tokio::spawn(
+            async move { run_in_process_teammate(config, engine.as_ref(), &task_state).await },
+        )
+    };
+
+    started_rx.await.expect("engine must start");
+    assert!(
+        task_state.read().await.interrupt_current_work(),
+        "active per-turn token should be exposed through task state"
+    );
+    interrupted_rx.await.expect("engine must observe interrupt");
+
+    for _ in 0..50 {
+        if task_state.read().await.is_idle {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    {
+        let state = task_state.read().await;
+        assert!(
+            state.is_idle,
+            "teammate should return to idle after interrupt"
+        );
+        assert!(state.current_work_cancel.is_none());
+        assert!(
+            state
+                .messages
+                .iter()
+                .any(|m| m.content == "Interrupted by user."),
+            "interrupt message should be mirrored into teammate transcript"
+        );
+    }
+
+    cancelled.store(true, Ordering::Relaxed);
+    let result = tokio::time::timeout(Duration::from_secs(3), run)
+        .await
+        .expect("runner must exit after lifecycle cancel")
+        .expect("join must succeed");
+    assert!(result.success);
+    assert_eq!(result.turns, 1);
+}
+
+#[tokio::test]
+async fn test_active_query_drains_control_messages_into_live_state() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    unsafe {
+        std::env::set_var("COCO_CONFIG_DIR", scratch.path());
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let mut config = make_config(cancelled.clone());
+    config.max_turns = None;
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+    let engine = Arc::new(LiveControlEngine {
+        started: tokio::sync::Mutex::new(Some(started_tx)),
+        observed: tokio::sync::Mutex::new(Some(observed_tx)),
+    });
+    let task_state = Arc::new(tokio::sync::RwLock::new(InProcessTeammateTaskState::new(
+        "task-1".into(),
+        make_identity(),
+        "test".into(),
+    )));
+
+    let run = {
+        let engine = engine.clone();
+        let task_state = task_state.clone();
+        tokio::spawn(
+            async move { run_in_process_teammate(config, engine.as_ref(), &task_state).await },
+        )
+    };
+
+    started_rx.await.expect("engine must start");
+    let writer_stop = tokio_util::sync::CancellationToken::new();
+    let writer = {
+        let writer_stop = writer_stop.clone();
+        tokio::spawn(async move {
+            loop {
+                let _ = crate::mailbox::write_to_mailbox(
+                    "worker",
+                    crate::mailbox::TeammateMessage {
+                        from: TEAM_LEAD_NAME.into(),
+                        text: crate::mailbox::create_mode_set_request(
+                            coco_types::PermissionMode::AcceptEdits,
+                            TEAM_LEAD_NAME,
+                        ),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        read: false,
+                        color: None,
+                        summary: Some("mode".into()),
+                    },
+                    "test",
+                );
+                let _ = crate::mailbox::write_to_mailbox(
+                    "worker",
+                    crate::mailbox::TeammateMessage {
+                        from: TEAM_LEAD_NAME.into(),
+                        text: serde_json::to_string(
+                            &crate::mailbox::ProtocolMessage::TeamPermissionUpdate {
+                                permission_update:
+                                    crate::mailbox::protocol::WireTeamPermissionUpdate::AddRules {
+                                        rules: vec![
+                                            crate::mailbox::protocol::WirePermissionRuleValue {
+                                                tool_name: "Edit".into(),
+                                                rule_content: Some("/repo/**".into()),
+                                            },
+                                        ],
+                                        behavior: coco_types::PermissionBehavior::Allow,
+                                        destination: crate::mailbox::protocol::WireTeamPermissionUpdateDestination::Session,
+                                    },
+                                directory_path: "/repo".into(),
+                                tool_name: "Edit".into(),
+                            },
+                        )
+                        .unwrap(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        read: false,
+                        color: None,
+                        summary: Some("permission".into()),
+                    },
+                    "test",
+                );
+                tokio::select! {
+                    _ = writer_stop.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+            }
+        })
+    };
+
+    tokio::time::timeout(Duration::from_secs(3), observed_rx)
+        .await
+        .expect("active query should observe live control updates")
+        .expect("engine should signal observation");
+    writer_stop.cancel();
+    writer.await.expect("writer should stop cleanly");
+
+    cancelled.store(true, Ordering::Relaxed);
+    tokio::time::timeout(Duration::from_secs(3), run)
+        .await
+        .expect("runner must exit after lifecycle cancel")
+        .expect("join must succeed");
 }
 
 #[test]
@@ -463,4 +745,366 @@ async fn test_mailbox_permission_bridge_returns_resolution_on_response() {
         resolution.decision,
         coco_tool_runtime::ToolPermissionDecision::Approved
     );
+}
+
+#[tokio::test]
+async fn test_mailbox_permission_bridge_preserves_response_payload() {
+    use coco_tool_runtime::ToolPermissionBridge;
+
+    let scratch = tempfile::TempDir::new().unwrap();
+    unsafe {
+        std::env::set_var("COCO_CONFIG_DIR", scratch.path());
+    }
+    let identity = TeammateIdentity {
+        agent_id: "worker@payload".into(),
+        agent_name: format!("worker-{}", uuid::Uuid::new_v4().simple()),
+        team_name: format!("team-{}", uuid::Uuid::new_v4().simple()),
+        color: None,
+        plan_mode_required: false,
+    };
+    let response_text = serde_json::json!({
+        "type": "permission_response",
+        "request_id": "req-payload",
+        "subtype": "success",
+        "response": {
+            "updated_input": {"path": "/tmp/updated"},
+            "permission_updates": [{
+                "type": "addRules",
+                "rules": [{"toolName": "Read", "ruleContent": "/tmp/**"}],
+                "behavior": "allow",
+                "destination": "session"
+            }]
+        }
+    })
+    .to_string();
+    mailbox::write_to_mailbox(
+        &identity.agent_name,
+        mailbox::TeammateMessage {
+            from: TEAM_LEAD_NAME.into(),
+            text: response_text,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            read: false,
+            color: None,
+            summary: Some("permission response".to_string()),
+        },
+        &identity.team_name,
+    )
+    .unwrap();
+
+    let bridge = MailboxPermissionBridge::new(identity.clone(), Arc::new(AtomicBool::new(false)));
+    let req = coco_tool_runtime::ToolPermissionRequest {
+        id: "req-payload".into(),
+        tool_use_id: "tu-1".into(),
+        agent_id: identity.agent_id.clone(),
+        tool_name: "Read".into(),
+        description: "read file".into(),
+        input: serde_json::json!({"path": "/tmp/original"}),
+        suggestions: vec![],
+        choices: None,
+    };
+    let resolution = tokio::time::timeout(Duration::from_secs(3), bridge.request_permission(req))
+        .await
+        .expect("must return within timeout")
+        .expect("bridge must return Ok on response match");
+
+    assert_eq!(
+        resolution.updated_input,
+        Some(serde_json::json!({"path": "/tmp/updated"}))
+    );
+    assert_eq!(resolution.applied_updates.len(), 1);
+    assert!(resolution.content_blocks.is_none());
+}
+
+#[tokio::test]
+async fn test_wait_for_next_prompt_claims_unassigned_task() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    unsafe {
+        std::env::set_var("COCO_CONFIG_DIR", scratch.path());
+    }
+    let identity = TeammateIdentity {
+        agent_id: "worker@tasks".into(),
+        agent_name: format!("worker-{}", uuid::Uuid::new_v4().simple()),
+        team_name: format!("team-{}", uuid::Uuid::new_v4().simple()),
+        color: None,
+        plan_mode_required: false,
+    };
+    let task_list: coco_tool_runtime::TaskListHandleRef =
+        Arc::new(coco_tool_runtime::InMemoryTaskListHandle::new());
+    let task = task_list
+        .create_task(
+            "Wire task polling".into(),
+            "Claim this when mailbox is empty".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let task_state = make_task_state(&identity);
+    let control_state = tokio::sync::RwLock::new(TeammateControlState::default());
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        wait_for_next_prompt_or_shutdown(
+            &identity,
+            &cancelled,
+            Some(&task_list),
+            &task_state,
+            &control_state,
+        ),
+    )
+    .await
+    .expect("task polling must return within timeout");
+
+    match result {
+        WaitResult::NewMessage {
+            message, summary, ..
+        } => {
+            assert!(message.contains("Complete all open tasks. Start with task #1:"));
+            assert!(message.contains("Wire task polling"));
+            assert_eq!(summary.as_deref(), Some("task list assignment"));
+        }
+        other => panic!("expected task assignment, got {other:?}"),
+    }
+
+    let claimed = task_list
+        .get_task(&task.id)
+        .await
+        .unwrap()
+        .expect("task must still exist");
+    assert_eq!(claimed.owner.as_deref(), Some(identity.agent_name.as_str()));
+    assert_eq!(claimed.status, coco_types::TaskListStatus::InProgress);
+}
+
+#[tokio::test]
+async fn test_wait_for_next_prompt_mailbox_beats_task_claim() {
+    let team_name = format!("team-{}", uuid::Uuid::new_v4().simple());
+    let identity = TeammateIdentity {
+        agent_id: format!("worker@{team_name}"),
+        agent_name: format!("worker-{}", uuid::Uuid::new_v4().simple()),
+        team_name: team_name.clone(),
+        color: None,
+        plan_mode_required: false,
+    };
+    let task_list: coco_tool_runtime::TaskListHandleRef =
+        Arc::new(coco_tool_runtime::InMemoryTaskListHandle::new());
+    let task = task_list
+        .create_task("Task should wait".into(), "mailbox wins".into(), None, None)
+        .await
+        .unwrap();
+    crate::mailbox::write_to_mailbox(
+        &identity.agent_name,
+        crate::mailbox::TeammateMessage {
+            from: crate::constants::TEAM_LEAD_NAME.into(),
+            text: "direct instruction".into(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            read: false,
+            color: None,
+            summary: Some("leader message".into()),
+        },
+        &identity.team_name,
+    )
+    .unwrap();
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let task_state = make_task_state(&identity);
+    let control_state = tokio::sync::RwLock::new(TeammateControlState::default());
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        wait_for_next_prompt_or_shutdown(
+            &identity,
+            &cancelled,
+            Some(&task_list),
+            &task_state,
+            &control_state,
+        ),
+    )
+    .await
+    .expect("mailbox polling must return within timeout");
+
+    match result {
+        WaitResult::NewMessage {
+            message, summary, ..
+        } => {
+            assert_eq!(message, "direct instruction");
+            assert_eq!(summary.as_deref(), Some("leader message"));
+        }
+        other => panic!("expected mailbox message, got {other:?}"),
+    }
+
+    let unclaimed = task_list.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(unclaimed.owner, None);
+    assert_eq!(unclaimed.status, coco_types::TaskListStatus::Pending);
+}
+
+#[tokio::test]
+async fn test_wait_for_next_prompt_applies_control_messages_before_task() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    unsafe {
+        std::env::set_var("COCO_CONFIG_DIR", scratch.path());
+    }
+    let team_name = format!("team-{}", uuid::Uuid::new_v4().simple());
+    let identity = TeammateIdentity {
+        agent_id: format!("worker@{team_name}"),
+        agent_name: format!("worker-{}", uuid::Uuid::new_v4().simple()),
+        team_name: team_name.clone(),
+        color: None,
+        plan_mode_required: false,
+    };
+    crate::mailbox::write_to_mailbox(
+        &identity.agent_name,
+        crate::mailbox::TeammateMessage {
+            from: TEAM_LEAD_NAME.into(),
+            text: crate::mailbox::create_mode_set_request(
+                coco_types::PermissionMode::AcceptEdits,
+                TEAM_LEAD_NAME,
+            ),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            read: false,
+            color: None,
+            summary: None,
+        },
+        &identity.team_name,
+    )
+    .unwrap();
+    crate::mailbox::write_to_mailbox(
+        &identity.agent_name,
+        crate::mailbox::TeammateMessage {
+            from: TEAM_LEAD_NAME.into(),
+            text: serde_json::json!({
+                "type": "team_permission_update",
+                "permissionUpdate": {
+                    "type": "addRules",
+                    "rules": [{"toolName": "Edit", "ruleContent": "/repo/**"}],
+                    "behavior": "allow",
+                    "destination": "session"
+                },
+                "directoryPath": "/repo",
+                "toolName": "Edit"
+            })
+            .to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            read: false,
+            color: None,
+            summary: None,
+        },
+        &identity.team_name,
+    )
+    .unwrap();
+
+    let task_list: coco_tool_runtime::TaskListHandleRef =
+        Arc::new(coco_tool_runtime::InMemoryTaskListHandle::new());
+    task_list
+        .create_task("Next task".into(), String::new(), None, None)
+        .await
+        .unwrap();
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let task_state = make_task_state(&identity);
+    let control_state = tokio::sync::RwLock::new(TeammateControlState::default());
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        wait_for_next_prompt_or_shutdown(
+            &identity,
+            &cancelled,
+            Some(&task_list),
+            &task_state,
+            &control_state,
+        ),
+    )
+    .await
+    .expect("control messages should be consumed before task assignment");
+
+    assert!(matches!(result, WaitResult::NewMessage { .. }));
+    assert_eq!(
+        task_state.read().await.permission_mode,
+        coco_types::PermissionMode::AcceptEdits
+    );
+    let rules_store = control_state.read().await.team_permission_rules.clone();
+    let rules = rules_store.read().await;
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].value.tool_pattern, "Edit");
+    assert_eq!(rules[0].value.rule_content.as_deref(), Some("/repo/**"));
+}
+
+#[tokio::test]
+async fn test_claim_first_available_task_skips_owned_and_blocked_tasks() {
+    let task_list: coco_tool_runtime::TaskListHandleRef =
+        Arc::new(coco_tool_runtime::InMemoryTaskListHandle::new());
+    let owned = task_list
+        .create_task("Owned".into(), String::new(), None, None)
+        .await
+        .unwrap();
+    task_list
+        .claim_task(&owned.id, "other-worker", false)
+        .await
+        .unwrap();
+    let blocker = task_list
+        .create_task("Blocker".into(), String::new(), None, None)
+        .await
+        .unwrap();
+    task_list
+        .claim_task(&blocker.id, "other-worker", false)
+        .await
+        .unwrap();
+    let blocked = task_list
+        .create_task("Blocked".into(), String::new(), None, None)
+        .await
+        .unwrap();
+    task_list
+        .block_task(&blocker.id, &blocked.id)
+        .await
+        .unwrap();
+    let available = task_list
+        .create_task("Available".into(), String::new(), None, None)
+        .await
+        .unwrap();
+
+    let claimed = claim_first_available_task(&task_list, "worker")
+        .await
+        .expect("one available task should be claimed");
+    assert_eq!(claimed.id, available.id);
+    assert_eq!(claimed.owner.as_deref(), Some("worker"));
+    assert_eq!(claimed.status, coco_types::TaskListStatus::InProgress);
+
+    let owned_after = task_list.get_task(&owned.id).await.unwrap().unwrap();
+    assert_eq!(owned_after.owner.as_deref(), Some("other-worker"));
+    let blocked_after = task_list.get_task(&blocked.id).await.unwrap().unwrap();
+    assert_eq!(blocked_after.owner, None);
+    assert_eq!(blocked_after.status, coco_types::TaskListStatus::Pending);
+}
+
+#[tokio::test]
+async fn test_claim_first_available_task_treats_completed_blockers_as_resolved() {
+    let task_list: coco_tool_runtime::TaskListHandleRef =
+        Arc::new(coco_tool_runtime::InMemoryTaskListHandle::new());
+    let blocker = task_list
+        .create_task("Blocker".into(), String::new(), None, None)
+        .await
+        .unwrap();
+    task_list
+        .update_task(
+            &blocker.id,
+            coco_types::TaskRecordUpdate {
+                status: Some(coco_types::TaskListStatus::Completed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let blocked = task_list
+        .create_task("Blocked".into(), String::new(), None, None)
+        .await
+        .unwrap();
+    task_list
+        .block_task(&blocker.id, &blocked.id)
+        .await
+        .unwrap();
+
+    let claimed = claim_first_available_task(&task_list, "worker")
+        .await
+        .expect("completed blocker should not block claim");
+    assert_eq!(claimed.id, blocked.id);
+    assert_eq!(claimed.owner.as_deref(), Some("worker"));
+    assert_eq!(claimed.status, coco_types::TaskListStatus::InProgress);
 }

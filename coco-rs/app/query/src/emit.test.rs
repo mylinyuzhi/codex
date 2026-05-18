@@ -86,7 +86,7 @@ async fn emit_tui_routes_to_tui_layer() {
         request_id: "r1".into(),
         tool_name: "Bash".into(),
         description: "rm -rf".into(),
-        input_preview: "...".into(),
+        display_input: coco_types::PermissionDisplayInput::Command("rm -rf".into()),
         show_always_allow: true,
         choices: None,
         permission_suggestions: vec![],

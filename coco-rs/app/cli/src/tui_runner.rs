@@ -104,6 +104,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             )
         }
     };
+    coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
     // Capture a fresh ConfigChange receiver from the reloader (when
     // available) so the SessionRuntime can drive the `ConfigChange`
     // hook on every settings/catalog file change. Borrowed before
@@ -364,9 +365,11 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Create TUI app
     let mut app = App::new(command_tx, notification_rx)
         .map_err(|e| anyhow::anyhow!("Failed to create TUI: {e}"))?;
-    app.state_mut().ui.apply_display_settings(
-        coco_tui::DisplaySettings::from_settings_with_sources(&runtime.runtime_config.settings),
-    );
+    app.state_mut()
+        .ui
+        .apply_display_settings(coco_tui::DisplaySettings::from_runtime_config(
+            &runtime.runtime_config,
+        ));
     app.state_mut().ui.coordinator_mode_active =
         coco_subagent::is_coordinator_mode(&runtime.runtime_config.features);
     if let Some(rx) = display_settings_rx {
@@ -542,8 +545,7 @@ fn spawn_display_settings_reload(
     let (tx, out_rx) = mpsc::channel(16);
     tokio::spawn(async move {
         while rx.changed().await.is_ok() {
-            let display_settings =
-                coco_tui::DisplaySettings::from_settings_with_sources(&rx.borrow().settings);
+            let display_settings = coco_tui::DisplaySettings::from_runtime_config(&rx.borrow());
             if tx.send(display_settings).await.is_err() {
                 break;
             }
@@ -993,6 +995,20 @@ async fn run_agent_driver(
                     let _ = state.cancel_reason.set(CancelReason::UserCancel);
                     state.cancel.cancel();
                     info!("Interrupt: cancelled active turn");
+                }
+            }
+
+            UserCommand::InterruptAgentCurrentWork { agent_id } => {
+                match runtime.interrupt_agent_current_work(&agent_id).await {
+                    Ok(true) => {
+                        info!(%agent_id, "Interrupt: cancelled teammate current turn");
+                    }
+                    Ok(false) => {
+                        info!(%agent_id, "Interrupt: teammate had no active turn to cancel");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%agent_id, %error, "Interrupt: teammate current turn failed");
+                    }
                 }
             }
 

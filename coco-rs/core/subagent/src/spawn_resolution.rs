@@ -15,7 +15,7 @@
 //! ```
 //!
 //! - **`request_model`** — the AgentTool input field, e.g.
-//!   `Agent({ model: "sonnet", … })`. Wins when set.
+//!   `Agent({ model: "provider/model-id", … })`. Wins when set.
 //! - **`definition.model`** — the agent `.md` frontmatter `model:` field.
 //!   Used only when the AgentTool input omits `model`. Already
 //!   normalized to lowercase / `"inherit"` by the frontmatter parser.
@@ -28,7 +28,7 @@
 //! can pin a concrete model id while still carrying its semantic role
 //! (used for fallback chains, recovery policy, telemetry).
 
-use coco_types::{AgentDefinition, AgentTypeId, ModelRole};
+use coco_types::{AgentDefinition, AgentTypeId, LlmModelSelection, ModelRole};
 
 use crate::subagent_role::resolve_subagent_role;
 
@@ -43,6 +43,8 @@ pub struct SubagentSelection {
     /// Resolved `ModelRole`. Falls back to `Subagent` for custom agents
     /// without a `model_role` declaration.
     pub model_role: ModelRole,
+    /// Unified model routing selection for the execution factory.
+    pub model_selection: LlmModelSelection,
 }
 
 /// Pure resolver — see module doc for precedence rules.
@@ -55,7 +57,13 @@ pub fn resolve_subagent_selection(
         .map(str::to_owned)
         .or_else(|| definition.and_then(|d| d.model.clone()));
     let model_role = resolve_subagent_role(definition, subagent_type);
-    SubagentSelection { model, model_role }
+    let model_selection =
+        LlmModelSelection::from_model_and_role(model.as_deref(), Some(model_role));
+    SubagentSelection {
+        model,
+        model_role,
+        model_selection,
+    }
 }
 
 #[cfg(test)]

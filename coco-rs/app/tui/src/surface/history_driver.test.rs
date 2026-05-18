@@ -165,6 +165,8 @@ fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
         width,
         syntax_highlighting: SyntaxHighlighting::Disabled,
         show_system_reminders: false,
+        show_thinking: false,
+        kb_handle: None,
     }
 }
 

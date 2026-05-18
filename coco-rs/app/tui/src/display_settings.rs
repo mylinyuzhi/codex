@@ -64,6 +64,7 @@ impl DisplaySettingEditability {
 pub struct DisplaySettings {
     pub syntax_highlighting: SyntaxHighlighting,
     pub syntax_highlighting_editability: DisplaySettingEditability,
+    pub show_thinking: bool,
 }
 
 impl DisplaySettings {
@@ -73,6 +74,7 @@ impl DisplaySettings {
                 settings.syntax_highlighting_disabled,
             ),
             syntax_highlighting_editability: DisplaySettingEditability::Editable,
+            show_thinking: settings.show_thinking,
         }
     }
 
@@ -82,7 +84,12 @@ impl DisplaySettings {
                 settings.merged.syntax_highlighting_disabled,
             ),
             syntax_highlighting_editability: syntax_highlighting_editability(settings),
+            show_thinking: settings.merged.show_thinking,
         }
+    }
+
+    pub fn from_runtime_config(config: &coco_config::RuntimeConfig) -> Self {
+        Self::from_settings_with_sources(&config.settings)
     }
 
     pub fn with_syntax_highlighting(self, syntax_highlighting: SyntaxHighlighting) -> Self {

@@ -618,6 +618,7 @@ fn test_unconfigured_roles_default_to_main() {
         ModelRole::Review,
         ModelRole::HookAgent,
         ModelRole::Memory,
+        ModelRole::Subagent,
     ] {
         let got = runtime
             .model_roles

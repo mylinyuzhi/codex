@@ -4,7 +4,7 @@
 //!
 //! - `AsyncHookRegistry` — bridges completed async-hook responses
 //!   (TS `getAsyncHookResponseAttachments()` at
-//!   `/lyz/codespace/3rd/claude-code/src/utils/attachments.ts:3464`).
+//!   `utils/attachments.ts:3464`).
 //!   Each call to [`HookEventsSource::drain`] delegates to
 //!   `AsyncHookRegistry::collect_responses()` — which marks responses
 //!   delivered — and maps each response to a `HookEvent::AsyncResponse`.

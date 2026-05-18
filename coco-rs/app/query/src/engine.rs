@@ -317,6 +317,8 @@ pub struct QueryEngine {
     /// return errors on write, matching TS's "no store configured"
     /// behavior. Install via [`Self::with_task_list`].
     pub(crate) task_list: Option<coco_tool_runtime::TaskListHandleRef>,
+    /// Router for switching leader task tools onto a team task list.
+    pub(crate) team_task_list_router: Option<coco_tool_runtime::TeamTaskListRouterRef>,
     /// Per-agent ephemeral todo store (V1, `TodoWrite`). Defaults to
     /// an in-memory instance when absent.
     pub(crate) todo_list: Option<coco_tool_runtime::TodoListHandleRef>,

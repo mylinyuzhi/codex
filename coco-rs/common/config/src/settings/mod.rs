@@ -17,6 +17,7 @@ use crate::prompt_cache_settings::PartialAccountSettings;
 use crate::prompt_cache_settings::PartialPromptCacheSettings;
 use crate::provider::PartialProviderConfig;
 use crate::sandbox_settings::SandboxSettings;
+use crate::sections::PartialAgentTeamsSettings;
 use crate::sections::PartialApiSettings;
 use crate::sections::PartialLoopSettings;
 use crate::sections::PartialLspSettings;
@@ -31,6 +32,7 @@ use crate::sections::PartialWebSearchSettings;
 pub use source::SettingSource;
 
 pub const SYNTAX_HIGHLIGHTING_DISABLED_KEY: &str = "syntax_highlighting_disabled";
+pub const SHOW_THINKING_KEY: &str = "show_thinking";
 
 /// The merged settings snapshot. Immutable after loading.
 /// TS: SettingsJson type in types.ts (Zod schema)
@@ -103,6 +105,8 @@ pub struct Settings {
     pub lsp: PartialLspSettings,
     #[serde(default)]
     pub paths: PartialPathSettings,
+    #[serde(default)]
+    pub agent_teams: PartialAgentTeamsSettings,
 
     // === Compaction ===
     /// Compaction (auto / micro / api-native / session-memory / experimental).
@@ -154,6 +158,10 @@ pub struct Settings {
     pub language: Option<String>,
     #[serde(default)]
     pub syntax_highlighting_disabled: bool,
+    /// Initial TUI visibility for assistant thinking content. Runtime
+    /// toggling is UI-local; settings reload reapplies this default.
+    #[serde(default)]
+    pub show_thinking: bool,
 
     // === Plugins ===
     #[serde(default)]

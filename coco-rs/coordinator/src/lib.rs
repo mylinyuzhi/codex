@@ -77,6 +77,7 @@ pub mod identity;
 pub mod inprocess_backend;
 pub mod prompt;
 pub mod reconnect;
+pub mod roster_store;
 pub mod spawn;
 pub mod task;
 pub mod teammate;

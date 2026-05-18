@@ -3,6 +3,10 @@ use super::*;
 use coco_tool_runtime::AgentHandle;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnStatus;
+use coco_tool_runtime::CreateTeamRequest;
+use coco_tool_runtime::CreateTeamResult;
+use coco_tool_runtime::TaskListHandleRef;
+use coco_tool_runtime::TeamTaskListRouter;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -38,6 +42,83 @@ fn create_test_handle() -> SwarmAgentHandle {
     let runtime_config = Arc::new(build_test_runtime());
 
     SwarmAgentHandle::new(runner, team_manager, "/tmp".to_string(), runtime_config)
+}
+
+#[derive(Debug)]
+struct TestTaskListRouter;
+
+#[async_trait::async_trait]
+impl TeamTaskListRouter for TestTaskListRouter {
+    async fn route_team_task_list(
+        &self,
+        _task_list_id: &str,
+    ) -> Result<TaskListHandleRef, coco_error::BoxedError> {
+        Ok(Arc::new(coco_tool_runtime::InMemoryTaskListHandle::new()))
+    }
+
+    async fn clear_team_task_list_route(&self) -> Result<(), coco_error::BoxedError> {
+        Ok(())
+    }
+}
+
+fn create_team_request(name: &str) -> CreateTeamRequest {
+    create_team_request_with_session(name, &format!("session-{}", uuid::Uuid::new_v4().simple()))
+}
+
+fn create_team_request_with_session(name: &str, leader_session_id: &str) -> CreateTeamRequest {
+    CreateTeamRequest {
+        requested_name: name.to_string(),
+        leader_agent_id: None,
+        leader_session_id: leader_session_id.to_string(),
+        cwd: std::path::PathBuf::from("/tmp"),
+        allowed_paths: Vec::new(),
+        leader_model: Some("test-model".to_string()),
+        task_list_router: Some(Arc::new(TestTaskListRouter)),
+    }
+}
+
+async fn create_team(handle: &SwarmAgentHandle, name: &str) -> CreateTeamResult {
+    handle.create_team(create_team_request(name)).await.unwrap()
+}
+
+#[tokio::test]
+async fn test_interrupt_teammate_current_work_cancels_task_token_only() {
+    let handle = create_test_handle();
+    let agent_id = "worker@test";
+    let identity = crate::types::TeammateIdentity {
+        agent_id: agent_id.to_string(),
+        agent_name: "worker".to_string(),
+        team_name: "test".to_string(),
+        color: None,
+        plan_mode_required: false,
+    };
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let observed = cancel.clone();
+    let mut state = crate::task::InProcessTeammateTaskState::new(
+        "task-worker@test".into(),
+        identity,
+        "p".into(),
+    );
+    state.set_current_work_cancel(cancel);
+    handle.teammate_task_states.write().await.insert(
+        agent_id.to_string(),
+        Arc::new(tokio::sync::RwLock::new(state)),
+    );
+
+    assert!(
+        handle
+            .interrupt_teammate_current_work(agent_id)
+            .await
+            .unwrap()
+    );
+    assert!(observed.is_cancelled());
+    assert!(
+        !handle
+            .interrupt_teammate_current_work("missing@test")
+            .await
+            .is_ok(),
+        "unknown teammate should surface an error"
+    );
 }
 
 // ── Handoff classifier orchestration (D4) ──
@@ -370,18 +451,27 @@ async fn test_spawn_subagent_async_without_engine_fails_cleanly() {
 
 #[tokio::test]
 async fn test_spawn_teammate() {
+    let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
     let handle = create_test_handle();
+    create_team(&handle, &team_name).await;
     let request = AgentSpawnRequest {
         prompt: "Help me".to_string(),
         name: Some("researcher".to_string()),
-        team_name: Some("my-team".to_string()),
+        team_name: Some(team_name.clone()),
         ..Default::default()
     };
 
     let response = handle.spawn_agent(request).await.unwrap();
     assert_eq!(response.status, AgentSpawnStatus::TeammateSpawned);
     assert!(response.agent_id.is_some());
-    assert!(response.agent_id.unwrap().contains("researcher@my-team"));
+    assert!(
+        response
+            .agent_id
+            .unwrap()
+            .contains(&format!("researcher@{team_name}"))
+    );
+    let _ = handle.delete_team().await;
 }
 
 #[tokio::test]
@@ -424,16 +514,19 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
     }
 
     let calls = Arc::new(AtomicI32::new(0));
+    let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
     let mut handle = create_test_handle();
     handle.set_teammate_execution_engine(Arc::new(CountingTeammateEngine {
         calls: calls.clone(),
     }));
+    create_team(&handle, &team_name).await;
 
     let response = handle
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
             name: Some("worker".into()),
-            team_name: Some("alpha".into()),
+            team_name: Some(team_name.clone()),
             ..Default::default()
         })
         .await
@@ -464,6 +557,7 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
          call count = {}",
         calls.load(Ordering::SeqCst),
     );
+    let _ = handle.delete_team().await;
 }
 
 #[tokio::test]
@@ -566,10 +660,13 @@ async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
     }
 
     let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
     let mut handle = create_test_handle();
     handle.set_teammate_execution_engine(Arc::new(CapturingEngine {
         captured: captured.clone(),
     }));
+    create_team(&handle, &team_name).await;
     handle
         .set_teammate_base_system_prompt("LEADER PROMPT BODY".into())
         .await;
@@ -578,7 +675,7 @@ async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
             name: Some("worker".into()),
-            team_name: Some("alpha".into()),
+            team_name: Some(team_name.clone()),
             ..Default::default()
         })
         .await
@@ -599,6 +696,72 @@ async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
         observed.contains("Agent Teammate Communication"),
         "teammate prompt must include team addendum; got: {observed}"
     );
+    let _ = handle.delete_team().await;
+}
+
+#[tokio::test]
+async fn test_spawn_teammate_forwards_runner_query_options() {
+    use crate::runner_loop::{
+        AgentExecutionEngine, AgentQueryConfig as RunnerCfg, AgentQueryResult as RunnerResult,
+    };
+
+    struct CapturingEngine {
+        captured: Arc<tokio::sync::Mutex<Option<RunnerCfg>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentExecutionEngine for CapturingEngine {
+        async fn run_query(&self, _prompt: &str, config: RunnerCfg) -> crate::Result<RunnerResult> {
+            *self.captured.lock().await = Some(config);
+            Ok(RunnerResult {
+                messages: Vec::new(),
+                token_count: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                turns: 1,
+                tool_use_count: 0,
+                cancelled: true,
+                response_text: None,
+            })
+        }
+    }
+
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
+    let mut handle = create_test_handle();
+    handle.set_teammate_execution_engine(Arc::new(CapturingEngine {
+        captured: captured.clone(),
+    }));
+    create_team(&handle, &team_name).await;
+
+    handle
+        .spawn_agent(AgentSpawnRequest {
+            prompt: "do work".into(),
+            name: Some("worker".into()),
+            team_name: Some(team_name.clone()),
+            effort: Some("high".into()),
+            use_exact_tools: true,
+            mcp_servers: vec!["github".into()],
+            disallowed_tools: vec!["Bash".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    for _ in 0..50 {
+        if captured.lock().await.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let observed = captured.lock().await.clone().expect("engine ran");
+    assert_eq!(observed.effort.as_deref(), Some("high"));
+    assert!(observed.use_exact_tools);
+    assert_eq!(observed.mcp_servers, vec!["github"]);
+    assert_eq!(observed.disallowed_tools, vec!["Bash"]);
+    assert_eq!(observed.model_role, Some(coco_types::ModelRole::Main));
+    let _ = handle.delete_team().await;
 }
 
 #[tokio::test]
@@ -612,15 +775,173 @@ async fn test_send_message_no_team() {
 #[tokio::test]
 async fn test_create_and_delete_team() {
     let handle = create_test_handle();
+    let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
 
     // Create
-    let result = handle.create_team("alpha").await;
+    let result = handle.create_team(create_team_request(&team_name)).await;
     assert!(result.is_ok());
-    assert!(result.unwrap().contains("alpha"));
+    assert_eq!(result.unwrap().team_name, team_name);
 
     // Delete
     let result = handle.delete_team().await;
     assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_team_lifecycle_writes_roster_and_blocks_delete_while_active() {
+    let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
+
+    let handle = create_test_handle();
+    let created = create_team(&handle, &team_name).await;
+    assert_eq!(created.team_name, team_name);
+
+    let duplicate = handle
+        .create_team(create_team_request("another-team"))
+        .await;
+    assert!(
+        duplicate
+            .expect_err("second active team must be rejected")
+            .contains("already has active team"),
+    );
+
+    let team_file = crate::team_file::read_team_file(&team_name)
+        .unwrap()
+        .expect("team file must exist after TeamCreate");
+    assert_eq!(team_file.name, team_name);
+    assert_eq!(team_file.members.len(), 1);
+    assert_eq!(team_file.members[0].name, crate::constants::TEAM_LEAD_NAME);
+    assert_eq!(team_file.lead_agent_id, format!("team-lead@{team_name}"));
+
+    let spawned = handle
+        .spawn_agent(AgentSpawnRequest {
+            prompt: "inspect the repo".into(),
+            name: Some("researcher".into()),
+            team_name: Some(team_name.clone()),
+            session_id: "session-1".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(spawned.status, AgentSpawnStatus::TeammateSpawned);
+    let agent_id = spawned.agent_id.expect("spawned teammate id");
+
+    let disk_file = crate::team_file::read_team_file(&team_name)
+        .unwrap()
+        .expect("team file must still exist");
+    let disk_member = disk_file
+        .members
+        .iter()
+        .find(|m| m.name == "researcher")
+        .expect("spawned teammate must be persisted to disk");
+    assert_eq!(disk_member.agent_id, agent_id);
+    assert_eq!(
+        disk_member.backend_type,
+        Some(crate::types::BackendType::InProcess)
+    );
+    assert_eq!(disk_member.session_id.as_deref(), None);
+
+    let manager_file = handle
+        .team_manager
+        .read()
+        .await
+        .as_ref()
+        .expect("team manager installed")
+        .team_file()
+        .await;
+    assert!(
+        manager_file.members.iter().any(|m| m.name == "researcher"),
+        "in-memory roster must mirror disk roster"
+    );
+
+    let statuses = crate::discovery::get_teammate_statuses(&team_name);
+    assert!(
+        statuses.iter().any(|s| s.name == "researcher"),
+        "discovery must see the spawned teammate; got {statuses:?}"
+    );
+
+    let broadcast = handle.send_message("*", "status please").await.unwrap();
+    assert!(broadcast.contains("1 recipients"));
+    let mailbox = crate::mailbox::read_mailbox("researcher", &team_name).unwrap();
+    assert!(
+        mailbox.iter().any(|m| m.text == "status please"),
+        "broadcast must write to teammate mailbox"
+    );
+
+    let delete = handle.delete_team().await;
+    assert!(
+        delete
+            .expect_err("delete must block while non-lead member is active")
+            .contains("active members: researcher")
+    );
+
+    handle
+        .roster_store
+        .rollback_member(&team_name, &agent_id)
+        .await
+        .unwrap();
+    let deleted = handle.delete_team().await.unwrap();
+    assert!(deleted.contains(&team_name));
+    assert!(
+        !crate::team_file::get_team_dir(&team_name).exists(),
+        "team directory must be cleaned up"
+    );
+}
+
+#[tokio::test]
+async fn test_create_team_rejects_existing_team_for_same_leader_session() {
+    let session_id = format!("session-{}", uuid::Uuid::new_v4().simple());
+    let first_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let second_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&first_name);
+    let _ = crate::team_file::cleanup_team_directories(&second_name);
+
+    let first_handle = create_test_handle();
+    first_handle
+        .create_team(create_team_request_with_session(&first_name, &session_id))
+        .await
+        .expect("first team create succeeds");
+
+    let second_handle = create_test_handle();
+    let duplicate = second_handle
+        .create_team(create_team_request_with_session(&second_name, &session_id))
+        .await;
+    assert!(
+        duplicate
+            .expect_err("same leader session must not create another team")
+            .contains("leader session already has active team"),
+    );
+
+    let _ = first_handle.delete_team().await;
+    let _ = crate::team_file::cleanup_team_directories(&first_name);
+    let _ = crate::team_file::cleanup_team_directories(&second_name);
+}
+
+#[tokio::test]
+async fn test_create_team_uses_unique_name_when_requested_dir_exists() {
+    let base = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let expected = format!("{base}-2");
+    let _ = crate::team_file::cleanup_team_directories(&base);
+    let _ = crate::team_file::cleanup_team_directories(&expected);
+    std::fs::create_dir_all(crate::team_file::get_team_dir(&base)).unwrap();
+
+    let handle = create_test_handle();
+    let created = handle
+        .create_team(create_team_request(&base))
+        .await
+        .unwrap();
+    assert_eq!(created.team_name, expected);
+    assert!(
+        crate::team_file::read_team_file(&expected)
+            .unwrap()
+            .is_some(),
+        "unique team file should be written under {expected}"
+    );
+
+    let _ = handle.delete_team().await;
+    let _ = crate::team_file::cleanup_team_directories(&base);
+    let _ = crate::team_file::cleanup_team_directories(&expected);
 }
 
 #[tokio::test]

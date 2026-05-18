@@ -177,7 +177,7 @@ fn read_only_disallowed() -> Vec<String> {
 
 fn statusline_setup() -> AgentDefinition {
     AgentDefinition {
-        model: Some("sonnet".into()),
+        model_role: Some(coco_types::ModelRole::Main),
         color: Some(AgentColorName::Orange),
         allowed_tools: coco_types::ToolAllowList::Explicit(vec![
             ToolName::Read.as_str().into(),
@@ -193,10 +193,6 @@ fn statusline_setup() -> AgentDefinition {
 
 fn explore(has_embedded_search_tools: bool) -> AgentDefinition {
     AgentDefinition {
-        // TS exploreAgent.ts:78: `process.env.USER_TYPE === 'ant' ? 'inherit' : 'haiku'`.
-        // Default 3P/SDK build → haiku (cheaper, cache-friendly fast explore).
-        // The runtime can override via `model` parameter.
-        model: Some("haiku".into()),
         omit_claude_md: true,
         disallowed_tools: read_only_disallowed(),
         system_prompt: Some(explore_system_prompt(has_embedded_search_tools)),
@@ -210,7 +206,6 @@ fn explore(has_embedded_search_tools: bool) -> AgentDefinition {
 
 fn plan(has_embedded_search_tools: bool) -> AgentDefinition {
     AgentDefinition {
-        model: Some("inherit".into()),
         omit_claude_md: true,
         disallowed_tools: read_only_disallowed(),
         system_prompt: Some(plan_system_prompt(has_embedded_search_tools)),
@@ -224,7 +219,6 @@ fn plan(has_embedded_search_tools: bool) -> AgentDefinition {
 
 fn verification() -> AgentDefinition {
     AgentDefinition {
-        model: Some("inherit".into()),
         color: Some(AgentColorName::Red),
         background: true,
         disallowed_tools: read_only_disallowed(),
@@ -275,7 +269,7 @@ fn coco_guide_with(has_embedded_search_tools: bool) -> AgentDefinition {
         ])
     };
     AgentDefinition {
-        model: Some("haiku".into()),
+        model_role: Some(coco_types::ModelRole::Explore),
         permission_mode: Some("dontAsk".into()),
         allowed_tools,
         system_prompt: Some(coco_guide_system_prompt(has_embedded_search_tools)),

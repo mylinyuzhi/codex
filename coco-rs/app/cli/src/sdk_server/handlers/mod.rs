@@ -768,6 +768,9 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         ClientRequest::KeepAlive => HandlerResult::ok_empty(),
 
         ClientRequest::CancelRequest(params) => turn::handle_cancel_request(params, &ctx).await,
+        ClientRequest::AgentInterruptCurrentWork(params) => {
+            runtime::handle_agent_interrupt_current_work(params, &ctx).await
+        }
 
         // === Config ===
         ClientRequest::ConfigRead => config::handle_config_read(&ctx).await,

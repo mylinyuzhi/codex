@@ -20,6 +20,8 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 /// Configuration for a single agent query turn.
 ///
@@ -30,6 +32,16 @@ pub struct AgentQueryConfig {
     pub system_prompt: String,
     /// Model to use for inference.
     pub model: String,
+    /// Typed runtime model selection. New callers should set this
+    /// instead of relying on `model`/`model_role`; those legacy fields
+    /// are still accepted at the adapter boundary for older IPC/tests.
+    #[serde(default)]
+    pub model_selection: coco_types::LlmModelSelection,
+    /// Optional cancellation token for this agent query turn. In-process
+    /// teammates use a fresh token per prompt so interrupting current
+    /// work does not kill the teammate lifecycle.
+    #[serde(skip)]
+    pub cancel: Option<CancellationToken>,
     /// Maximum turns for this query.
     pub max_turns: Option<i32>,
     /// Context window size (tokens). Defaults to model's max.
@@ -50,7 +62,7 @@ pub struct AgentQueryConfig {
     /// where the parent intends to narrow the visible toolset.
     ///
     /// Fork-mode skills DO NOT populate this. They go through
-    /// [`AgentQueryConfig::extra_allow_rules`] instead, mirroring TS
+    /// [`AgentQueryConfig::extra_permission_rules`] instead, mirroring TS
     /// `createGetAppStateWithAllowedTools` (which adds to
     /// `alwaysAllowRules.command` without narrowing tools[]).
     #[serde(default)]
@@ -59,9 +71,8 @@ pub struct AgentQueryConfig {
     /// Sourced from `AgentDefinition.disallowed_tools`.
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
-    /// Auto-allow rules (typically Command-source from a skill's
-    /// `allowed-tools` frontmatter) folded into the subagent's
-    /// `ToolPermissionContext.allow_rules` at fork-engine
+    /// Runtime permission rules folded into the subagent's
+    /// `ToolPermissionContext.{allow,deny,ask}_rules` at fork-engine
     /// construction. Skipped at the JSON boundary because the rule
     /// values carry runtime-only metadata (`PermissionRule` is
     /// `Clone`, but cross-process serialization would round-trip the
@@ -70,7 +81,18 @@ pub struct AgentQueryConfig {
     /// TS parity: `createGetAppStateWithAllowedTools` wrapping
     /// `getAppState` for forked-skill contexts (`forkedAgent.ts:147-171`).
     #[serde(skip)]
-    pub extra_allow_rules: Vec<coco_types::PermissionRule>,
+    pub extra_permission_rules: Vec<coco_types::PermissionRule>,
+    /// Live teammate permission rules, read by the query engine when it
+    /// builds each tool context. Used by agent-team control messages so
+    /// team-level allow/deny/ask updates apply to an in-flight turn
+    /// without restarting the teammate.
+    #[serde(skip)]
+    pub live_permission_rules: Option<Arc<RwLock<Vec<coco_types::PermissionRule>>>>,
+    /// Live teammate permission mode, read by the query engine when it
+    /// builds each tool context. This mirrors TS's app-state read at
+    /// permission-check time.
+    #[serde(skip)]
+    pub live_permission_mode: Option<Arc<RwLock<coco_types::PermissionMode>>>,
     /// Layer 2 tool overrides inherited from the parent. The subagent
     /// **never** widens this set — `ToolOverrides::none()` would
     /// expose tools the active model doesn't actually accept. Skipped
@@ -113,6 +135,8 @@ pub struct AgentQueryConfig {
     /// branch + bypass-permission behavior.
     #[serde(default)]
     pub is_teammate: bool,
+    #[serde(default)]
+    pub is_in_process_teammate: bool,
     /// Per-role `plan_mode_required` flag. TS: `isPlanModeRequired()`.
     /// Controls whether this teammate's ExitPlanMode sends an approval
     /// request to the leader (required) or exits locally (voluntary).

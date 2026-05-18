@@ -43,7 +43,10 @@ impl AgentHandle for RecordingHandle {
     async fn send_message(&self, _to: &str, _content: &str) -> Result<String, String> {
         Err("unused".into())
     }
-    async fn create_team(&self, _name: &str) -> Result<String, String> {
+    async fn create_team(
+        &self,
+        _request: coco_tool_runtime::CreateTeamRequest,
+    ) -> Result<coco_tool_runtime::CreateTeamResult, String> {
         Err("unused".into())
     }
     async fn delete_team(&self) -> Result<String, String> {

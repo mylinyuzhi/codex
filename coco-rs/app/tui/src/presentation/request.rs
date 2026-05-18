@@ -19,7 +19,7 @@ pub(crate) fn permission_content(
     p: &PermissionOverlay,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    let detail = permission_detail(&p.detail);
+    let detail = permission_detail_for_overlay(p);
     let risk_badge = match p.risk_level {
         Some(RiskLevel::Low) => t!("dialog.risk_low").to_string(),
         Some(RiskLevel::Medium) => t!("dialog.risk_medium").to_string(),
@@ -170,6 +170,13 @@ pub(crate) fn question_content(
     }
 
     (title, body, styles.primary())
+}
+
+fn permission_detail_for_overlay(p: &PermissionOverlay) -> String {
+    if matches!(p.detail, PermissionDetail::Generic { .. }) {
+        return p.display_input.as_display_str().to_string();
+    }
+    permission_detail(&p.detail)
 }
 
 fn permission_detail(detail: &PermissionDetail) -> String {

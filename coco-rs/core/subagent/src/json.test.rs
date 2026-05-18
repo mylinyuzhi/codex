@@ -25,14 +25,14 @@ fn parse_single_agent_with_required_fields() {
     let entry = serde_json::json!({
         "description": "Hand-rolled JSON agent",
         "prompt": "You are a helpful agent.",
-        "model": "haiku",
+        "model": "anthropic/claude-haiku-4-5",
     });
     let (def, warnings) = parse_agent_json("custom-json", &entry, AgentSource::FlagSettings)
         .expect("required fields present");
     assert!(warnings.is_empty(), "no warnings expected: {warnings:?}");
     assert_eq!(def.name, "custom-json");
     assert_eq!(def.when_to_use.as_deref(), Some("Hand-rolled JSON agent"));
-    assert_eq!(def.model.as_deref(), Some("haiku"));
+    assert_eq!(def.model.as_deref(), Some("anthropic/claude-haiku-4-5"));
     assert_eq!(
         def.system_prompt.as_deref(),
         Some("You are a helpful agent.")

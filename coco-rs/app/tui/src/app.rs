@@ -108,6 +108,9 @@ impl App {
         crate::i18n::init();
         let tui = Tui::new()?;
         let mut state = AppState::new();
+        if let Ok(size) = tui.size() {
+            state.ui.terminal_size = size;
+        }
         apply_terminal_compatibility_status(&mut state, &tui);
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let index = create_shared_index(cwd.clone());
@@ -551,7 +554,10 @@ impl App {
                 }
                 true
             }
-            TuiEvent::Resize { .. } => true,
+            TuiEvent::Resize { width, height } => {
+                self.state.ui.terminal_size = ratatui::layout::Size::new(width, height);
+                true
+            }
             TuiEvent::FocusChanged { focused } => {
                 // Track focus for turn-complete notification gating.
                 self.state.ui.terminal_focused = focused;

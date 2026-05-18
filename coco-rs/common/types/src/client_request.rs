@@ -1,8 +1,8 @@
 //! `ClientRequest` — SDK-to-agent protocol requests.
 //!
 //! TS source: `src/entrypoints/sdk/controlSchemas.ts` (21 control request
-//! subtypes). coco-rs extends this to 30 variants: 22 cocode-rs base +
-//! `elicitation/resolve` (TS-aligned) + 7 P1 gap additions.
+//! subtypes). coco-rs extends this to 31 variants: 22 cocode-rs base +
+//! `elicitation/resolve` (TS-aligned) + 8 P1 gap additions.
 //!
 //! See `event-system-design.md` §5.
 
@@ -30,7 +30,7 @@ Bidirectional control protocol — client-initiated requests.\n\n\
 Each variant carries a unique `method` string used on the wire. \
 The method is the discriminator; params are the variant-specific payload.\n\n\
 See `event-system-design.md` §5.1 for the 22 base variants and §5.4 for \
-the 7 gap additions (`elicitation/resolve` is TS-aligned). 30 total.",
+the 8 gap additions (`elicitation/resolve` is TS-aligned). 31 total.",
     variants = {
         // === Session lifecycle (6) ===
         "initialize" => Initialize(InitializeParams),
@@ -55,7 +55,7 @@ the 7 gap additions (`elicitation/resolve` is TS-aligned). 30 total.",
         /// planned addition in `event-system-design.md` §5.4.
         "elicitation/resolve" => ElicitationResolve(ElicitationResolveParams),
 
-        // === Runtime control (8) ===
+        // === Runtime control (9) ===
         "control/setModel" => SetModel(SetModelParams),
         "control/setPermissionMode" => SetPermissionMode(SetPermissionModeParams),
         "control/setThinking" => SetThinking(SetThinkingParams),
@@ -64,6 +64,9 @@ the 7 gap additions (`elicitation/resolve` is TS-aligned). 30 total.",
         "control/updateEnv" => UpdateEnv(UpdateEnvParams),
         "control/keepAlive" => KeepAlive,
         "control/cancelRequest" => CancelRequest(CancelRequestParams),
+        /// Interrupt one in-process teammate's active turn without
+        /// stopping the teammate lifecycle.
+        "agent/interruptCurrentWork" => AgentInterruptCurrentWork(AgentInterruptCurrentWorkParams),
 
         // === Config (2) ===
         "config/read" => ConfigRead,
@@ -357,6 +360,17 @@ pub struct CancelRequestParams {
     pub request_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// Params for `agent/interruptCurrentWork`.
+///
+/// Mirrors TS's teammate Escape path: abort the target teammate's
+/// current model/tool turn while keeping the teammate process alive for
+/// later messages.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInterruptCurrentWorkParams {
+    pub agent_id: String,
 }
 
 /// Params for `config/value/write`.

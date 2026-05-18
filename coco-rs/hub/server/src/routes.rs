@@ -12,6 +12,9 @@ use axum::response::Html;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::get;
+use chrono::DateTime;
+use chrono::SecondsFormat;
+use chrono::Utc;
 use coco_hub_protocol::SCHEMA_VERSION_V1;
 use coco_hub_protocol::SUBPROTOCOL_V1;
 use serde::Deserialize;
@@ -29,6 +32,7 @@ use crate::store::ListInstancesParams;
 use crate::store::ListSessionsParams;
 use crate::store::SearchQuery;
 use crate::store::SessionRow;
+use crate::store::msg_type;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -217,15 +221,21 @@ async fn session_timeline_page(
     let Some(session) = state.store.get_session(&instance_id, &session_id).await? else {
         return Err(ApiError::not_found("session not found"));
     };
+    let filters = query.to_filter_state();
     let events = state
         .store
         .list_events(query.into_event_query(instance_id.clone(), Some(session_id.clone()))?)
         .await?;
+    let session_events = load_session_events(&state, &instance_id, &session_id).await?;
     let tokens = session.total_input_tokens + session.total_output_tokens;
+    let time_range = TimeRangeView::from_events(&session_events);
+    let session_event_views: Vec<EventView> =
+        session_events.into_iter().map(EventView::from).collect();
     let all_event_views: Vec<EventView> = events.items.into_iter().map(EventView::from).collect();
     let audit = AuditSummary::from_events(&all_event_views);
     let file_impacts = ImpactView::top_files(&all_event_views);
     let tool_impacts = ImpactView::top_tools(&all_event_views);
+    let tool_options = ImpactView::tool_options(&session_event_views);
     let event_count = all_event_views.len();
     render(SessionTemplate {
         title: "Session Timeline",
@@ -236,8 +246,37 @@ async fn session_timeline_page(
         audit,
         file_impacts,
         tool_impacts,
+        tool_options,
+        time_range,
+        filters,
         events: all_event_views,
     })
+}
+
+async fn load_session_events(
+    state: &AppState,
+    instance_id: &str,
+    session_id: &str,
+) -> Result<Vec<EventRow>, ApiError> {
+    let mut before = None;
+    let mut rows = Vec::new();
+    loop {
+        let page = state
+            .store
+            .list_events(EventQuery {
+                instance_id: instance_id.to_string(),
+                session_id: Some(session_id.to_string()),
+                before,
+                limit: 500,
+                filter: EventFilter::default(),
+            })
+            .await?;
+        rows.extend(page.items);
+        let Some(next_cursor) = page.next_cursor else {
+            return Ok(rows);
+        };
+        before = Some(next_cursor);
+    }
 }
 
 fn render(template: impl Template) -> Result<Html<String>, ApiError> {
@@ -276,6 +315,9 @@ struct SessionTemplate {
     audit: AuditSummary,
     file_impacts: Vec<ImpactView>,
     tool_impacts: Vec<ImpactView>,
+    tool_options: Vec<ImpactView>,
+    time_range: TimeRangeView,
+    filters: EventFilterState,
     events: Vec<EventView>,
 }
 
@@ -394,12 +436,25 @@ impl ImpactView {
         let mut counts = BTreeMap::new();
         for tool_name in events
             .iter()
+            .filter(|event| event.msg_type == msg_type::TOOL_USE)
             .map(|event| event.tool_name.as_str())
             .filter(|tool_name| !tool_name.is_empty())
         {
             *counts.entry(tool_name.to_owned()).or_insert(0) += 1;
         }
         Self::top_counts(counts, 8)
+    }
+
+    fn tool_options(events: &[EventView]) -> Vec<Self> {
+        let mut counts = BTreeMap::new();
+        for tool_name in events
+            .iter()
+            .map(|event| event.tool_name.as_str())
+            .filter(|tool_name| !tool_name.is_empty())
+        {
+            *counts.entry(tool_name.to_owned()).or_insert(0) += 1;
+        }
+        Self::top_counts(counts, usize::MAX)
     }
 
     fn top_counts(counts: BTreeMap<String, usize>, limit: usize) -> Vec<Self> {
@@ -416,6 +471,53 @@ impl ImpactView {
         rows.truncate(limit);
         rows
     }
+}
+
+struct TimeRangeView {
+    has_range: bool,
+    start_iso: String,
+    end_iso: String,
+    start_label: String,
+    end_label: String,
+}
+
+impl TimeRangeView {
+    fn from_events(events: &[EventRow]) -> Self {
+        let min_ts = events.iter().filter_map(valid_ts).min();
+        let max_ts = events.iter().filter_map(valid_ts).max();
+        match (min_ts, max_ts) {
+            (Some(start), Some(end)) => Self {
+                has_range: true,
+                start_iso: format_rfc3339_seconds(start),
+                end_iso: format_rfc3339_seconds(end),
+                start_label: format_minute_label(start),
+                end_label: format_minute_label(end),
+            },
+            _ => Self {
+                has_range: false,
+                start_iso: String::new(),
+                end_iso: String::new(),
+                start_label: String::new(),
+                end_label: String::new(),
+            },
+        }
+    }
+}
+
+fn valid_ts(event: &EventRow) -> Option<i64> {
+    (event.ts > 0).then_some(event.ts)
+}
+
+fn format_rfc3339_seconds(ts: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(ts)
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+        .unwrap_or_default()
+}
+
+fn format_minute_label(ts: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(ts)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_default()
 }
 
 #[derive(Debug)]
@@ -453,7 +555,7 @@ impl AuditSummary {
                 .count(),
             tool_results: events
                 .iter()
-                .filter(|event| event.lane == "tool-result")
+                .filter(|event| event.lane == "tool-result" || event.msg_type == "tool_result")
                 .count(),
             reads: events.iter().filter(|event| event.lane == "read").count(),
             searches: events.iter().filter(|event| event.lane == "search").count(),
@@ -468,7 +570,17 @@ impl AuditSummary {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default)]
+struct EventFilterState {
+    kind: String,
+    msg_type: String,
+    tool: String,
+    time_from: String,
+    time_to: String,
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 struct PageParams {
     limit: Option<usize>,
     cursor: Option<String>,
@@ -490,7 +602,7 @@ impl PageParams {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct EventParams {
     kind: Option<String>,
     msg_type: Option<String>,
@@ -503,6 +615,17 @@ struct EventParams {
 }
 
 impl EventParams {
+    fn to_filter_state(&self) -> EventFilterState {
+        EventFilterState {
+            kind: self.kind.clone().unwrap_or_default(),
+            msg_type: self.msg_type.clone().unwrap_or_default(),
+            tool: self.tool.clone().unwrap_or_default(),
+            time_from: self.time_from.clone().unwrap_or_default(),
+            time_to: self.time_to.clone().unwrap_or_default(),
+            limit: self.limit.unwrap_or(100).clamp(1, 500),
+        }
+    }
+
     fn into_event_query(
         self,
         instance_id: String,

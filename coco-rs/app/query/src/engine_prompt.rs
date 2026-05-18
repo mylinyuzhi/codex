@@ -472,6 +472,7 @@ impl QueryEngine {
             cancel: self.cancel.clone(),
             mailbox: self.mailbox.clone(),
             task_list: self.task_list.clone(),
+            team_task_list_router: self.team_task_list_router.clone(),
             todo_list: self.todo_list.clone(),
             task_handle: self.task_handle.clone(),
             permission_bridge: self.permission_bridge.clone(),

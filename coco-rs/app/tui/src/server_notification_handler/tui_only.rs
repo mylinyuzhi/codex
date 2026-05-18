@@ -25,7 +25,7 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             request_id,
             tool_name,
             description,
-            input_preview,
+            display_input,
             show_always_allow,
             choices,
             permission_suggestions,
@@ -36,7 +36,9 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     request_id,
                     tool_name,
                     description,
-                    detail: crate::state::PermissionDetail::Generic { input_preview },
+                    detail: crate::state::PermissionDetail::Generic {
+                        input_preview: display_input.as_display_str().to_string(),
+                    },
                     risk_level: None,
                     // When the dialog is in choice mode, suppress the
                     // "Always Allow" affordance — the user is picking
@@ -47,6 +49,7 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     classifier_auto_approved: None,
                     choices,
                     selected_choice: 0,
+                    display_input,
                     original_input,
                     permission_suggestions,
                 },

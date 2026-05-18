@@ -189,7 +189,7 @@ async fn test_get_context() {
             prompt: "hello".into(),
             color: Some("blue".into()),
             plan_mode_required: true,
-            model: Some("opus-4".into()),
+            model: Some("anthropic/claude-opus-4-7".into()),
             working_dir: Some("/custom/dir".into()),
             system_prompt: Some("You are helpful.".into()),
             allowed_tools: vec!["Read".into(), "Write".into()],
@@ -210,7 +210,7 @@ async fn test_get_context() {
     assert_eq!(ctx.agent_id, "ctx-agent@ctx-team");
     assert_eq!(ctx.color.as_deref(), Some("blue"));
     assert!(ctx.plan_mode_required);
-    assert_eq!(ctx.model.as_deref(), Some("opus-4"));
+    assert_eq!(ctx.model.as_deref(), Some("anthropic/claude-opus-4-7"));
     assert_eq!(ctx.working_dir, "/custom/dir");
     assert_eq!(ctx.allowed_tools, vec!["Read", "Write"]);
     assert!(ctx.allow_permission_prompts);

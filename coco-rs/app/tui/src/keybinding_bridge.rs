@@ -26,6 +26,8 @@ pub enum KeybindingContext {
     ModelPicker,
     /// Scrollable content overlay (help, diff view, task detail, doctor).
     Scrollable,
+    /// Transcript reader overlay.
+    Transcript,
     /// Autocomplete suggestions visible.
     Autocomplete,
     /// Tabbed settings overlay — Tab/Shift+Tab cycle tabs, Up/Down nav.
@@ -58,8 +60,8 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             | Overlay::DiffView(_)
             | Overlay::TaskDetail(_)
             | Overlay::Doctor(_)
-            | Overlay::Transcript(_)
             | Overlay::ContextVisualization => KeybindingContext::Scrollable,
+            Overlay::Transcript(_) => KeybindingContext::Transcript,
 
             // Tabbed settings overlay. The Theme tab gets the TS
             // ThemePicker context so `theme:toggleSyntaxHighlighting`
@@ -109,6 +111,15 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
 pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctx = active_context(state);
 
+    if matches!(ctx, KeybindingContext::Transcript) {
+        if matches!(key.code, KeyCode::BackTab) {
+            return None;
+        }
+        if let Some(cmd) = map_transcript_key(key) {
+            return Some(cmd);
+        }
+    }
+
     // Layer 1: TS-defined bindings via the resolver.
     match state.ui.kb_handle.resolve_key(key, ctx) {
         crate::keybinding_resolver::ResolverResult::Action(action) => {
@@ -137,6 +148,7 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeybindingContext::ModelPicker => map_model_picker_key(key),
         KeybindingContext::Picker => map_picker_key(key),
         KeybindingContext::Scrollable => map_scrollable_key(key),
+        KeybindingContext::Transcript => map_transcript_key(key),
         // Autocomplete intercepts navigation keys only; other keys fall
         // through to input editing so the user keeps typing and the
         // suggestion popup refreshes reactively.
@@ -257,6 +269,24 @@ fn map_scrollable_key(key: KeyEvent) -> Option<TuiCommand> {
     }
 }
 
+fn map_transcript_key(key: KeyEvent) -> Option<TuiCommand> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => Some(TuiCommand::Cancel),
+        KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::TranscriptScrollLines(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::TranscriptScrollLines(1)),
+        KeyCode::Home => Some(TuiCommand::TranscriptJumpStart),
+        KeyCode::End => Some(TuiCommand::TranscriptJumpEnd),
+        KeyCode::PageUp => Some(TuiCommand::TranscriptPage(-1)),
+        KeyCode::PageDown => Some(TuiCommand::TranscriptPage(1)),
+        KeyCode::Tab => Some(TuiCommand::TranscriptSelectNext),
+        KeyCode::Enter => Some(TuiCommand::TranscriptToggleCell),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(TuiCommand::Cancel)
+        }
+        _ => None,
+    }
+}
+
 /// Keys for autocomplete suggestions.
 fn map_autocomplete_key(key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
@@ -289,10 +319,10 @@ fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         // what gives it meaning.
         KeyCode::Char('q') if ctrl => Some(TuiCommand::Quit),
         KeyCode::Char('l') if ctrl => Some(TuiCommand::ClearScreen),
-        // Ctrl+T / Ctrl+Shift+T are owned by the keybindings resolver
-        // (Chat: `chat:cycleThinking` → `CycleThinkingLevel`; Global:
-        // `app:toggleTodos` → `ToggleExpandedTasksView`). No legacy
-        // fallback needed; users who unbind both can rebind via
+        // Ctrl+T / F2 are owned by the keybindings resolver
+        // (Chat: `chat:cycleThinking` → `CycleThinkingLevel`, and
+        // `chat:thinkingToggle` → `ToggleThinking`). No legacy fallback
+        // needed; users who unbind both can rebind via
         // `~/.coco/keybindings.json`.
         //
         // Bare Ctrl+E is deliberately NOT mapped here: TS uses the chord

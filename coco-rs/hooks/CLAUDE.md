@@ -12,8 +12,6 @@ Pre/post event interception with scoped priority: Command / Prompt / Http / Agen
 - `utils/hooks/registerFrontmatterHooks.ts`, `registerSkillHooks.ts` — integration with skills/commands
 - `utils/hooks/apiQueryHookHelper.ts`, `fileChangedWatcher.ts`, `hookEvents.ts` — pipeline glue
 
-Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
-
 ## Key Types
 - `HookDefinition` — `event` (`HookEventType`, 27 variants matching TS), `matcher`, `handler`, `priority` (asc), `scope` (Session>Local>Project>User>Builtin), `if_condition`, `once`, `is_async`, `async_rewake`, `status_message`
 - `HookHandler` — `Command{command,timeout_ms,shell}` / `Prompt{prompt,model,timeout_ms}` / `Http{url,headers,timeout_ms,allowed_env_vars}` / `Agent{prompt,model,timeout_ms}` (TS-aligned schema)

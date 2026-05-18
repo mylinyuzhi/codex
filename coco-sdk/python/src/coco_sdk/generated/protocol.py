@@ -78,6 +78,7 @@ class ClientRequestMethod(str, Enum):
     control_updateEnv = 'control/updateEnv'
     control_keepAlive = 'control/keepAlive'
     control_cancelRequest = 'control/cancelRequest'
+    agent_interruptCurrentWork = 'agent/interruptCurrentWork'
     config_read = 'config/read'
     config_value_write = 'config/value/write'
     hook_callbackResponse = 'hook/callbackResponse'
@@ -325,6 +326,9 @@ JsonRpcMessage = dict[str, Any]
 
 # Semantic row kind for the `/memory` picker.
 MemoryDialogRowKind = dict[str, Any]
+
+# Bounded, UI-ready permission input display.
+PermissionDisplayInput = dict[str, Any]
 
 # A permission update action.
 PermissionUpdate = dict[str, Any]
@@ -1324,6 +1328,9 @@ McpServerConfig = StdioMcpServerConfig | SseMcpServerConfig | HttpMcpServerConfi
 # Client request params
 # ---------------------------------------------------------------------------
 
+class AgentInterruptCurrentWorkParams(BaseModel):
+    agent_id: str
+
 class ApprovalResolveParams(BaseModel):
     decision: ApprovalDecision
     request_id: str
@@ -1454,6 +1461,7 @@ class ClientRequestMethod(str, Enum):
     CONTROL_UPDATE_ENV = 'control/updateEnv'
     CONTROL_KEEP_ALIVE = 'control/keepAlive'
     CONTROL_CANCEL_REQUEST = 'control/cancelRequest'
+    AGENT_INTERRUPT_CURRENT_WORK = 'agent/interruptCurrentWork'
     CONFIG_READ = 'config/read'
     CONFIG_VALUE_WRITE = 'config/value/write'
     HOOK_CALLBACK_RESPONSE = 'hook/callbackResponse'
@@ -1641,6 +1649,15 @@ class CancelRequest(BaseModel):
         pass
 
 CancelRequestParams = CancelRequest.CancelRequestParams
+
+class AgentInterruptCurrentWorkRequest(BaseModel):
+    method: str = 'agent/interruptCurrentWork'
+    params: AgentInterruptCurrentWorkRequestParams
+
+    class AgentInterruptCurrentWorkRequestParams(AgentInterruptCurrentWorkParams):
+        pass
+
+AgentInterruptCurrentWorkRequestParams = AgentInterruptCurrentWorkRequest.AgentInterruptCurrentWorkRequestParams
 
 class ConfigReadRequest(BaseModel):
     method: str = 'config/read'

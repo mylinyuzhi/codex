@@ -13,6 +13,7 @@ fn skill(name: &str, desc: &str) -> SkillDefinition {
         aliases: Vec::new(),
         allowed_tools: None,
         model: None,
+        model_role: None,
         when_to_use: None,
         argument_names: Vec::new(),
         paths: Vec::new(),

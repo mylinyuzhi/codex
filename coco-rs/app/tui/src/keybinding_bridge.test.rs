@@ -69,6 +69,57 @@ fn test_help_overlay_context() {
 }
 
 #[test]
+fn test_transcript_overlay_context() {
+    let mut state = AppState::new();
+    state.ui.set_overlay(crate::state::Overlay::Transcript(
+        crate::state::transcript::TranscriptOverlay::new(),
+    ));
+    assert_eq!(active_context(&state), KeybindingContext::Transcript);
+}
+
+#[test]
+fn test_transcript_overlay_uses_pager_controls() {
+    let mut state = AppState::new();
+    state.ui.set_overlay(crate::state::Overlay::Transcript(
+        crate::state::transcript::TranscriptOverlay::new(),
+    ));
+
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Up)),
+        Some(TuiCommand::TranscriptScrollLines(-1))
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Down)),
+        Some(TuiCommand::TranscriptScrollLines(1))
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::PageUp)),
+        Some(TuiCommand::TranscriptPage(-1))
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::PageDown)),
+        Some(TuiCommand::TranscriptPage(1))
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Home)),
+        Some(TuiCommand::TranscriptJumpStart)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::End)),
+        Some(TuiCommand::TranscriptJumpEnd)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Tab)),
+        Some(TuiCommand::TranscriptSelectNext)
+    ));
+    assert!(map_key(&state, press(KeyCode::BackTab)).is_none());
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Esc)),
+        Some(TuiCommand::Cancel)
+    ));
+}
+
+#[test]
 fn test_permission_overlay_context() {
     let mut state = AppState::new();
     state.ui.set_overlay(crate::state::Overlay::Permission(
@@ -85,6 +136,7 @@ fn test_permission_overlay_context() {
             classifier_auto_approved: None,
             choices: None,
             selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
             original_input: None,
             permission_suggestions: vec![],
         },
@@ -215,6 +267,7 @@ fn test_overlay_y_approves() {
             classifier_auto_approved: None,
             choices: None,
             selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
             original_input: None,
             permission_suggestions: vec![],
         },
@@ -240,6 +293,7 @@ fn test_overlay_n_denies() {
             classifier_auto_approved: None,
             choices: None,
             selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
             original_input: None,
             permission_suggestions: vec![],
         },
@@ -257,6 +311,14 @@ fn test_ctrl_t_cycles_thinking_level_in_chat_context() {
     let state = AppState::new();
     let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
     assert!(matches!(cmd, Some(TuiCommand::CycleThinkingLevel)));
+}
+
+#[test]
+fn test_f2_toggles_thinking_display() {
+    let state = AppState::new();
+    let cmd = map_key(&state, press(KeyCode::F(2)));
+
+    assert!(matches!(cmd, Some(TuiCommand::ToggleThinking)));
 }
 
 #[test]

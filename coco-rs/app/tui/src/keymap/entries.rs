@@ -217,6 +217,14 @@ pub const KEYMAP: &[KeymapEntry] = &[
         description_key: "keymap.global.cycle_thinking",
     },
     KeymapEntry {
+        id: "global:toggle_thinking",
+        combo: "F2",
+        alternates: &[],
+        group: KeymapGroup::GlobalHotkey,
+        binding: action(KeybindingAction::ChatThinkingToggle),
+        description_key: "keymap.global.toggle_thinking",
+    },
+    KeymapEntry {
         id: "global:clear_screen",
         combo: "Ctrl+L",
         alternates: &[],

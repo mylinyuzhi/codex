@@ -603,6 +603,10 @@ pub struct SessionRuntime {
     /// `None` resolves to `NoOpTaskHandle` semantics (the task tools
     /// surface a clean "no task runtime configured" error).
     task_runtime: Arc<RwLock<Option<Arc<crate::task_runtime::TaskRuntime>>>>,
+    /// Durable task-list store shared by the leader, AgentTool children,
+    /// and in-process teammates.
+    task_list: Arc<RwLock<Option<coco_tool_runtime::TaskListHandleRef>>>,
+    team_task_list_router: Arc<RwLock<Option<coco_tool_runtime::TeamTaskListRouterRef>>>,
     /// Per-agent transcript / metadata store for resume support.
     /// Late-bound so CLI bootstrap can construct the impl after
     /// `SessionRuntime::build` returns. `agent_handle_factory`
@@ -1266,6 +1270,8 @@ impl SessionRuntime {
             fork_dispatcher: Arc::new(RwLock::new(None)),
             current_suggestion_abort: Arc::new(tokio::sync::Mutex::new(None)),
             task_runtime: Arc::new(RwLock::new(None)),
+            task_list: Arc::new(RwLock::new(None)),
+            team_task_list_router: Arc::new(RwLock::new(None)),
             agent_transcript_store: Arc::new(RwLock::new(None)),
             mcp_handle: Arc::new(RwLock::new(None)),
             lsp_handle: Arc::new(RwLock::new(None)),
@@ -1997,6 +2003,12 @@ impl SessionRuntime {
         if let Some(rt) = self.task_runtime.read().await.clone() {
             engine = engine.with_task_handle(rt as coco_tool_runtime::TaskHandleRef);
         }
+        if let Some(task_list) = self.task_list.read().await.clone() {
+            engine = engine.with_task_list(task_list);
+        }
+        if let Some(router) = self.team_task_list_router.read().await.clone() {
+            engine = engine.with_team_task_list_router(router);
+        }
         engine
     }
 
@@ -2008,6 +2020,14 @@ impl SessionRuntime {
     /// this from inside `build()` would create a cycle.
     pub async fn attach_agent_handle(&self, handle: AgentHandleRef) {
         *self.agent_handle.write().await = Some(handle);
+    }
+
+    /// Interrupt an in-process teammate's current turn without
+    /// cancelling the teammate lifecycle.
+    pub async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {
+        self.swarm_agent_handle
+            .interrupt_agent_current_work(agent_id)
+            .await
     }
 
     /// Install the post-turn fork dispatcher (D1/D2). Late-bound for
@@ -2043,6 +2063,27 @@ impl SessionRuntime {
     /// instance with `SwarmAgentHandle`.
     pub async fn current_task_runtime(&self) -> Option<Arc<crate::task_runtime::TaskRuntime>> {
         self.task_runtime.read().await.clone()
+    }
+
+    pub async fn attach_task_list(&self, handle: coco_tool_runtime::TaskListHandleRef) {
+        *self.task_list.write().await = Some(handle);
+    }
+
+    pub async fn attach_team_task_list_router(
+        &self,
+        router: coco_tool_runtime::TeamTaskListRouterRef,
+    ) {
+        *self.team_task_list_router.write().await = Some(router);
+    }
+
+    pub async fn current_task_list(&self) -> Option<coco_tool_runtime::TaskListHandleRef> {
+        self.task_list.read().await.clone()
+    }
+
+    pub async fn current_team_task_list_router(
+        &self,
+    ) -> Option<coco_tool_runtime::TeamTaskListRouterRef> {
+        self.team_task_list_router.read().await.clone()
     }
 
     /// Install the per-agent transcript / metadata store used for

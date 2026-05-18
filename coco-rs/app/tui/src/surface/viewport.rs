@@ -33,6 +33,7 @@ use crate::surface::overlay::render_surface_overlay;
 use crate::surface::overlay::required_overlay_height;
 use crate::surface::terminal::SurfaceFrame;
 use crate::widgets::SuggestionPopup;
+use crate::widgets::TranscriptLayoutIndex;
 
 /// Render the retained native-scrollback viewport.
 ///
@@ -43,6 +44,7 @@ pub(crate) fn render_interactive_viewport(
     frame: &mut SurfaceFrame<'_>,
     state: &AppState,
     plan: SurfaceFramePlan,
+    transcript_layout: &mut TranscriptLayoutIndex,
 ) -> FrameLayout {
     let mut layout = FrameLayout::default();
     let area = frame.area();
@@ -51,7 +53,15 @@ pub(crate) fn render_interactive_viewport(
     render_live_viewport(frame, area, state, styles, plan, &mut layout);
 
     if let Some(overlay) = state.ui.active_overlay() {
-        render_surface_overlay(frame, area, overlay, state, styles);
+        render_surface_overlay(
+            frame,
+            area,
+            Some(layout.input),
+            overlay,
+            state,
+            transcript_layout,
+            styles,
+        );
     }
 
     if state.ui.has_toasts() {
@@ -81,6 +91,62 @@ pub(crate) fn interactive_viewport_desired_height(
         } else {
             0
         };
+    let bottom =
+        inline_decision_bottom_reservation(state, width, max_height, activity_rows, queue_rows);
+    let input_height = bottom.input_height;
+    let stash_rows = bottom.stash_rows;
+    let bottom_height = bottom.bottom_height;
+    let other_fixed_rows = activity_rows + queue_rows + input_height + stash_rows;
+    let fixed_rows = other_fixed_rows + bottom_height;
+    let desired = fixed_rows + live_content_height.min(max_height.saturating_sub(fixed_rows));
+    let overlay_height = state
+        .ui
+        .active_overlay()
+        .filter(|_| {
+            plan.overlay_placement.is_some_and(|placement| {
+                matches!(placement, OverlaySurfacePlacement::InlineDecision)
+            })
+        })
+        .map(|overlay| required_overlay_height(overlay, state, styles, width, max_height))
+        .unwrap_or(0);
+    let protected_bottom_rows = input_height + stash_rows + bottom_height;
+    desired
+        .max(overlay_height.saturating_add(protected_bottom_rows))
+        .min(max_height)
+}
+
+pub(crate) fn inline_decision_protected_bottom_rows(
+    state: &AppState,
+    width: u16,
+    max_height: u16,
+) -> u16 {
+    let activity = turn_activity_view(state, width);
+    let activity_rows = inline_activity_height(&activity, max_height, width);
+    let queue_rows: u16 =
+        if crate::widgets::QueueStatusWidget::should_display(&state.session.queued_commands) {
+            1
+        } else {
+            0
+        };
+    let bottom =
+        inline_decision_bottom_reservation(state, width, max_height, activity_rows, queue_rows);
+    bottom.input_height + bottom.stash_rows + bottom.bottom_height
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InlineDecisionBottomReservation {
+    input_height: u16,
+    stash_rows: u16,
+    bottom_height: u16,
+}
+
+fn inline_decision_bottom_reservation(
+    state: &AppState,
+    _width: u16,
+    max_height: u16,
+    activity_rows: u16,
+    queue_rows: u16,
+) -> InlineDecisionBottomReservation {
     let stash_rows: u16 =
         if crate::widgets::StashNotice::should_display(state.ui.stashed_input.as_ref()) {
             1
@@ -105,21 +171,11 @@ pub(crate) fn interactive_viewport_desired_height(
     } else {
         status_height.min(avail_below_input)
     };
-    let fixed_rows = other_fixed_rows + bottom_height;
-    let desired = fixed_rows + live_content_height.min(max_height.saturating_sub(fixed_rows));
-    let overlay_height = state
-        .ui
-        .active_overlay()
-        .filter(|_| {
-            plan.overlay_placement.is_some_and(|placement| {
-                matches!(placement, OverlaySurfacePlacement::InlineDecision)
-            })
-        })
-        .map(|overlay| required_overlay_height(overlay, state, styles, width, max_height))
-        .unwrap_or(0);
-    desired
-        .max(overlay_height.saturating_add(2))
-        .min(max_height)
+    InlineDecisionBottomReservation {
+        input_height,
+        stash_rows,
+        bottom_height,
+    }
 }
 
 fn render_live_viewport(

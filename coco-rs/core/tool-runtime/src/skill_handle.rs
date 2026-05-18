@@ -61,7 +61,7 @@ pub struct SubagentInheritance {
 /// session's `QueryEngineConfig` picks up the skill's `allowed-tools`
 /// frontmatter as `PermissionRuleSource::Command` auto-allow rules. The
 /// Forked variant has no permission channel — fork-mode skills inject
-/// their rules at dispatch time via `AgentQueryConfig.extra_allow_rules`
+/// their rules at dispatch time via `AgentQueryConfig.extra_permission_rules`
 /// (Layer 4 inheritance), so by the time the subagent finishes there's
 /// nothing to thread back. TS parity: `SkillTool.ts:775` `contextModifier`
 /// for inline; `createGetAppStateWithAllowedTools` wrapping for fork.

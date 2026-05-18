@@ -1,25 +1,79 @@
 //! Transcript overlay presentation.
 
-use coco_keybindings::KeybindingAction;
+use std::collections::VecDeque;
+
 use coco_subagent::ParsedTaskNotification;
 use coco_subagent::TaskNotificationStatus;
 use coco_subagent::parse_task_notification;
-use ratatui::prelude::Color;
 
-use crate::i18n::t;
-use crate::keybinding_bridge::KeybindingContext as TuiContext;
-use crate::presentation::pager;
 use crate::presentation::streaming::StreamingTailInput;
 use crate::presentation::streaming::StreamingTailView;
 use crate::presentation::streaming::streaming_tail_view;
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
-use crate::state::overlay::TranscriptOverlay;
 use crate::state::session::ChatMessage;
 use crate::state::session::MessageContent;
 use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
+use crate::state::transcript::TranscriptCellId;
 use crate::state::ui::StreamingState;
+
+pub(crate) const TRANSCRIPT_COLLAPSED_PREVIEW_LINES: usize = 5;
+pub(crate) const TRANSCRIPT_EXPANDED_CELL_LINE_CAP: usize = 2_000;
+pub(crate) const TRANSCRIPT_LINE_CHAR_CAP: usize = 512;
+pub(crate) const TRANSCRIPT_TRUNCATED_HINT: &str = "… output truncated in UI";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ToolOutputPreview<'a> {
+    Empty,
+    Full(Vec<&'a str>),
+    Truncated {
+        head: Vec<&'a str>,
+        omitted: usize,
+        tail: Vec<&'a str>,
+    },
+}
+
+pub(crate) fn tool_output_preview(output: &str, max_rows: usize) -> ToolOutputPreview<'_> {
+    if max_rows == 0 {
+        return ToolOutputPreview::Empty;
+    }
+
+    let visible_rows = max_rows.saturating_sub(1);
+    let head_limit = visible_rows / 2;
+    let tail_limit = visible_rows.saturating_sub(head_limit);
+    let mut short = Vec::with_capacity(max_rows);
+    let mut head = Vec::with_capacity(head_limit);
+    let mut tail = VecDeque::with_capacity(tail_limit);
+    let mut total = 0usize;
+
+    for line in output.lines() {
+        if total < max_rows {
+            short.push(line);
+        }
+        if total < head_limit {
+            head.push(line);
+        } else if tail_limit > 0 {
+            if tail.len() == tail_limit {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+        total += 1;
+    }
+
+    if total == 0 {
+        return ToolOutputPreview::Empty;
+    }
+    if total <= max_rows {
+        return ToolOutputPreview::Full(short);
+    }
+
+    ToolOutputPreview::Truncated {
+        omitted: total.saturating_sub(head.len() + tail.len()),
+        head,
+        tail: tail.into_iter().collect(),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TranscriptCell {
@@ -28,6 +82,11 @@ pub(crate) enum TranscriptCell {
     },
     Message {
         index: usize,
+    },
+    ToolCall {
+        invocation: Option<usize>,
+        result: Option<usize>,
+        call_id: Option<String>,
     },
     ToolBatch {
         start: usize,
@@ -110,8 +169,13 @@ pub(crate) fn transcript_projection(
 ) -> TranscriptProjection {
     let show_system_reminders = options.show_system_reminders;
     let mut cells = Vec::new();
+    let mut consumed = vec![false; messages.len()];
     let mut i = 0;
     while i < messages.len() {
+        if consumed[i] {
+            i += 1;
+            continue;
+        }
         let msg = &messages[i];
         if let Some(batch) = task_notification_batch(messages, i, show_system_reminders) {
             i = batch.end();
@@ -138,13 +202,40 @@ pub(crate) fn transcript_projection(
         }
 
         let batch_end = tool_batch_end(messages, i);
-        if batch_end > i + 1 {
+        if batch_end > i + 1 && !tool_batch_has_results(messages, &consumed, i, batch_end) {
             cells.push(TranscriptCell::ToolBatch {
                 start: i,
                 end: batch_end,
                 count: batch_end - i,
             });
             i = batch_end;
+            continue;
+        }
+
+        if let MessageContent::ToolUse {
+            tool_name, call_id, ..
+        } = &msg.content
+        {
+            let result = find_tool_result(messages, &consumed, i + 1, call_id, tool_name);
+            if let Some(result) = result {
+                consumed[result] = true;
+            }
+            cells.push(TranscriptCell::ToolCall {
+                invocation: Some(i),
+                result,
+                call_id: Some(call_id.clone()),
+            });
+            i += 1;
+            continue;
+        }
+
+        if is_tool_result(&msg.content) {
+            cells.push(TranscriptCell::ToolCall {
+                invocation: None,
+                result: Some(i),
+                call_id: call_id_from_tool_result_message_id(&msg.id),
+            });
+            i += 1;
             continue;
         }
 
@@ -207,6 +298,95 @@ fn tool_batch_end(messages: &[ChatMessage], start: usize) -> usize {
         }
     }
     end
+}
+
+fn tool_batch_has_results(
+    messages: &[ChatMessage],
+    consumed: &[bool],
+    start: usize,
+    end: usize,
+) -> bool {
+    messages[start..end].iter().any(|msg| {
+        let MessageContent::ToolUse {
+            tool_name, call_id, ..
+        } = &msg.content
+        else {
+            return false;
+        };
+        find_tool_result(messages, consumed, end, call_id, tool_name).is_some()
+    })
+}
+
+fn find_tool_result(
+    messages: &[ChatMessage],
+    consumed: &[bool],
+    start: usize,
+    call_id: &str,
+    tool_name: &str,
+) -> Option<usize> {
+    let exact_id = format!("tool-{call_id}");
+    for i in start..messages.len() {
+        if consumed[i] {
+            continue;
+        }
+        let msg = &messages[i];
+        if msg.id == exact_id && is_tool_result(&msg.content) {
+            return Some(i);
+        }
+    }
+
+    let mut skipped_tool_uses = 0usize;
+    for i in start..messages.len() {
+        if consumed[i] {
+            continue;
+        }
+        match &messages[i].content {
+            MessageContent::ToolUse { .. } => {
+                skipped_tool_uses += 1;
+                if skipped_tool_uses > 0 {
+                    break;
+                }
+            }
+            content if tool_result_name(content) == Some(tool_name) => return Some(i),
+            content if is_tool_result(content) => break,
+            content if is_turn_boundary(content) => break,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_turn_boundary(content: &MessageContent) -> bool {
+    matches!(
+        content,
+        MessageContent::Text(_) | MessageContent::AssistantText(_)
+    )
+}
+
+fn is_tool_result(content: &MessageContent) -> bool {
+    matches!(
+        content,
+        MessageContent::ToolSuccess { .. }
+            | MessageContent::ToolError { .. }
+            | MessageContent::ToolRejected { .. }
+            | MessageContent::ToolCanceled { .. }
+    )
+}
+
+fn tool_result_name(content: &MessageContent) -> Option<&str> {
+    match content {
+        MessageContent::ToolSuccess { tool_name, .. }
+        | MessageContent::ToolError { tool_name, .. }
+        | MessageContent::ToolRejected { tool_name, .. }
+        | MessageContent::ToolCanceled { tool_name } => Some(tool_name.as_str()),
+        _ => None,
+    }
+}
+
+fn call_id_from_tool_result_message_id(id: &str) -> Option<String> {
+    id.strip_prefix("tool-")
+        .filter(|rest| !rest.is_empty())
+        .map(ToString::to_string)
 }
 
 fn hook_batch(messages: &[ChatMessage], start: usize) -> Option<TranscriptCell> {
@@ -355,77 +535,110 @@ impl TranscriptCell {
     fn end(&self) -> usize {
         match self {
             Self::MetaPreview { index } | Self::Message { index } => index + 1,
+            Self::ToolCall {
+                invocation, result, ..
+            } => invocation
+                .iter()
+                .chain(result.iter())
+                .copied()
+                .max()
+                .map(|idx| idx + 1)
+                .unwrap_or(0),
             Self::ToolBatch { end, .. }
             | Self::HookBatch { end, .. }
             | Self::TaskNotificationBatch { end, .. } => *end,
             Self::TaskNotification { index, .. } => index + 1,
         }
     }
+
+    pub(crate) fn cell_id(&self, messages: &[ChatMessage]) -> Option<TranscriptCellId> {
+        match self {
+            Self::ToolCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(TranscriptCellId::tool(call_id.clone())),
+            Self::ToolCall {
+                invocation: Some(index),
+                ..
+            }
+            | Self::ToolCall {
+                result: Some(index),
+                ..
+            }
+            | Self::MetaPreview { index }
+            | Self::Message { index }
+            | Self::TaskNotification { index, .. } => Some(TranscriptCellId::message(
+                *index,
+                messages.get(*index)?.id.clone(),
+            )),
+            Self::ToolCall { .. } => None,
+            Self::ToolBatch { start, end, .. } => Some(TranscriptCellId::tool_batch(*start, *end)),
+            Self::HookBatch { start, end, .. } => Some(TranscriptCellId::hook_batch(*start, *end)),
+            Self::TaskNotificationBatch { start, end, .. } => {
+                Some(TranscriptCellId::task_notification_batch(*start, *end))
+            }
+        }
+    }
 }
 
-pub(crate) fn transcript_overlay_content(
-    state: &AppState,
-    overlay: &TranscriptOverlay,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    let title = t!("transcript.title").to_string();
-    let mut chat = crate::widgets::ChatWidget::new(&state.session.messages, styles)
-        .show_thinking(true)
-        .show_system_reminders(overlay.show_all)
-        .tool_executions(&state.session.tool_executions)
-        .syntax_highlighting(state.ui.display_settings.syntax_highlighting)
-        .kb_handle(&state.ui.kb_handle);
-    if !state.ui.collapsed_tools.is_empty() {
-        chat = chat.collapsed_tools(&state.ui.collapsed_tools);
+impl<'a> TranscriptSourceCell<'a> {
+    pub(crate) fn cell_id(&self, messages: &[ChatMessage]) -> Option<TranscriptCellId> {
+        match self {
+            Self::Committed(cell) => cell.cell_id(messages),
+            Self::Active(_) => Some(TranscriptCellId::ActiveTail),
+        }
     }
 
-    let lines = chat.build_lines_owned();
-    let window = pager::pager_window(lines.len(), overlay.scroll, lines.len());
-    let body_text = lines
-        .get(window.range())
-        .unwrap_or_default()
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let body_text = if body_text.is_empty() {
-        t!("transcript.empty").to_string()
-    } else {
-        body_text
-    };
+    pub(crate) fn is_expandable(&self, messages: &[ChatMessage]) -> bool {
+        match self {
+            Self::Committed(TranscriptCell::ToolCall { .. }) => true,
+            Self::Committed(TranscriptCell::Message { index }) => messages
+                .get(*index)
+                .is_some_and(|message| message_content_is_expandable(&message.content)),
+            Self::Committed(_) | Self::Active(_) => false,
+        }
+    }
+}
 
-    let toggle_chord = state
-        .ui
-        .kb_handle
-        .display_for(&KeybindingAction::AppToggleTranscript, TuiContext::Chat)
-        .unwrap_or_else(|| "ctrl+o".to_string());
-    let show_all_chord = state
-        .ui
-        .kb_handle
-        .display_for(
-            &KeybindingAction::TranscriptToggleShowAll,
-            TuiContext::Scrollable,
-        )
-        .unwrap_or_else(|| "ctrl+e".to_string());
-    let show_all_label = if overlay.show_all {
-        t!("transcript.hint_show_all_on").to_string()
-    } else {
-        t!("transcript.hint_show_all_off").to_string()
-    };
-    let footer = t!(
-        "transcript.hint_footer",
-        toggle = toggle_chord.as_str(),
-        show_all_chord = show_all_chord.as_str(),
-        show_all = show_all_label.as_str(),
-    )
-    .to_string();
+fn message_content_is_expandable(content: &MessageContent) -> bool {
+    match content {
+        MessageContent::Thinking { content, .. } => !content.is_empty(),
+        MessageContent::ToolSuccess { .. }
+        | MessageContent::ToolError { .. }
+        | MessageContent::ToolRejected { .. }
+        | MessageContent::ToolCanceled { .. } => true,
+        MessageContent::Text(_)
+        | MessageContent::AssistantText(_)
+        | MessageContent::SystemText(_) => false,
+        _ => false,
+    }
+}
 
-    (title, format!("{body_text}\n\n{footer}"), styles.primary())
+pub(crate) fn transcript_expandable_cell_ids(state: &AppState) -> Vec<TranscriptCellId> {
+    transcript_presentation_for_state(state)
+        .cells
+        .into_iter()
+        .filter(|cell| cell.is_expandable(&state.session.messages))
+        .filter_map(|cell| cell.cell_id(&state.session.messages))
+        .collect()
+}
+
+pub(crate) fn latest_expandable_cell_id(state: &AppState) -> Option<TranscriptCellId> {
+    transcript_expandable_cell_ids(state)
+        .into_iter()
+        .next_back()
+}
+
+pub(crate) fn transcript_presentation_for_state(state: &AppState) -> TranscriptPresentation<'_> {
+    transcript_presentation(TranscriptPresentationInput {
+        messages: &state.session.messages,
+        options: TranscriptProjectionOptions {
+            show_system_reminders: true,
+        },
+        streaming: state.ui.streaming.as_ref(),
+        show_thinking: true,
+        tool_executions: &state.session.tool_executions,
+    })
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ fn test_build_teammate_command_basic() {
         plan_mode_required: false,
         prompt: "Find the bug".into(),
         cwd: "/project".into(),
-        model: Some("opus-4".into()),
+        model: Some("anthropic/claude-opus-4-7".into()),
         system_prompt: None,
         system_prompt_mode: crate::pane::SystemPromptMode::Default,
         worktree_path: None,
@@ -32,7 +32,7 @@ fn test_build_teammate_command_basic() {
     assert!(cmd.contains("--agent-name=researcher"));
     assert!(cmd.contains("--team-name=my-team"));
     assert!(cmd.contains("--agent-color=blue"));
-    assert!(cmd.contains("--model=opus-4"));
+    assert!(cmd.contains("--model=anthropic/claude-opus-4-7"));
     assert!(cmd.contains("--parent-session-id=session-1"));
     assert!(!cmd.contains("--plan-mode-required"));
 }
@@ -104,7 +104,7 @@ fn test_build_inherited_cli_flags() {
         plan_mode_required: false,
         prompt: String::new(),
         cwd: String::new(),
-        model: Some("sonnet".into()),
+        model: Some("anthropic/claude-sonnet-4-6".into()),
         system_prompt: None,
         system_prompt_mode: crate::pane::SystemPromptMode::Default,
         worktree_path: None,
@@ -116,7 +116,7 @@ fn test_build_inherited_cli_flags() {
 
     let flags = build_inherited_cli_flags(&config);
     assert!(flags.contains(&"--agent-id=worker@t".to_string()));
-    assert!(flags.contains(&"--model=sonnet".to_string()));
+    assert!(flags.contains(&"--model=anthropic/claude-sonnet-4-6".to_string()));
     assert!(flags.contains(&"--agent-color=green".to_string()));
     assert!(flags.contains(&"--permission=Edit".to_string()));
 }

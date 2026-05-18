@@ -82,6 +82,44 @@ pub trait TaskListHandle: Send + Sync {
 
 pub type TaskListHandleRef = Arc<dyn TaskListHandle>;
 
+/// Session-level router for the active task list.
+///
+/// Team creation needs to switch the leader from the session task list to
+/// the team task list immediately. The concrete app layer owns how a
+/// task-list id maps to storage; tools and coordinator only need this
+/// typed callback.
+#[async_trait::async_trait]
+pub trait TeamTaskListRouter: Send + Sync {
+    async fn route_team_task_list(
+        &self,
+        task_list_id: &str,
+    ) -> Result<TaskListHandleRef, coco_error::BoxedError>;
+
+    async fn clear_team_task_list_route(&self) -> Result<(), coco_error::BoxedError>;
+}
+
+pub type TeamTaskListRouterRef = Arc<dyn TeamTaskListRouter>;
+
+#[derive(Debug, Clone)]
+pub struct NoOpTeamTaskListRouter;
+
+#[async_trait::async_trait]
+impl TeamTaskListRouter for NoOpTeamTaskListRouter {
+    async fn route_team_task_list(
+        &self,
+        _task_list_id: &str,
+    ) -> Result<TaskListHandleRef, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "team task-list routing is not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
+    }
+
+    async fn clear_team_task_list_route(&self) -> Result<(), coco_error::BoxedError> {
+        Ok(())
+    }
+}
+
 /// In-memory implementation for tests. Real sessions wire up the
 /// disk-backed `coco_tasks::TaskListStore` instead.
 ///

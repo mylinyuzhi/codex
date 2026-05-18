@@ -38,6 +38,7 @@ fn sample_skill(
         aliases: Vec::new(),
         allowed_tools: None,
         model: None,
+        model_role: None,
         when_to_use: None,
         argument_names: Vec::new(),
         paths: Vec::new(),
@@ -315,9 +316,10 @@ async fn test_inline_skill_with_allowed_tools_emits_command_rules() {
 #[tokio::test]
 async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
     // TS-mirror behavior: fork-mode skills push `allowed-tools` into
-    // `extra_allow_rules` (auto-allow), NOT `allowed_tools` (registry
-    // filter). The forked subagent therefore sees the full inherited
-    // tool registry; the listed entries are simply auto-allowed.
+    // `extra_permission_rules` (auto-allow), NOT `allowed_tools`
+    // (registry filter). The forked subagent therefore sees the full
+    // inherited tool registry; the listed entries are simply
+    // auto-allowed.
     //
     // We assert this on the config the runtime hands to the engine
     // by recording the value through a capturing `AgentQueryEngine`.
@@ -366,14 +368,14 @@ async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
         config.allowed_tools
     );
     // Auto-allow set MUST contain the two Command-source rules.
-    assert_eq!(config.extra_allow_rules.len(), 2);
+    assert_eq!(config.extra_permission_rules.len(), 2);
     assert!(
         config
-            .extra_allow_rules
+            .extra_permission_rules
             .iter()
             .all(|r| r.source == coco_types::PermissionRuleSource::Command
                 && r.behavior == coco_types::PermissionBehavior::Allow),
-        "extra_allow_rules must all be Command + Allow; got: {:?}",
-        config.extra_allow_rules
+        "extra_permission_rules must all be Command + Allow; got: {:?}",
+        config.extra_permission_rules
     );
 }

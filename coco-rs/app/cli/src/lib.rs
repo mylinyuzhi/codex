@@ -12,6 +12,7 @@ pub mod fork_dispatcher;
 pub mod headless;
 pub mod lsp_handle_adapter;
 pub mod mcp_handle_adapter;
+pub mod model_card_refresh;
 pub mod output;
 pub mod paths;
 pub mod permission_rule_loader;
@@ -23,6 +24,7 @@ pub mod session_bootstrap;
 pub mod session_runtime;
 pub mod side_query_impl;
 pub mod task_runtime;
+pub mod team_task_list_router;
 pub mod tracing_init;
 pub mod tui_permission_bridge;
 

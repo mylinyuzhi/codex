@@ -8,14 +8,12 @@ expression: output
                                                                                 
 ❯ List files                                                                    
                                                                                 
-  ● Bash(ls -la)                                                                
-                                                                                
-  ● Bash                                                                        
-    file1.rs                                                                    
+• 🔨  Bash(ls -la)                                                               
+  └ file1.rs                                                                    
     file2.rs                                                                    
     Cargo.toml                                                                  
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
- opus-4 * auto | ↑0 ↓0 · cache 0% | ctx 0% | 3 msgs
+ opus-4 * auto | show thinking(F2):off | ↑0 ↓0 · cache 0% | ctx 0% | 3 msgs

@@ -25,6 +25,7 @@ use crate::prompt_cache_settings::PromptCacheRuntimeConfig;
 use crate::provider::PartialProviderConfig;
 use crate::provider::ProviderConfig;
 use crate::sandbox_settings::SandboxSettings;
+use crate::sections::AgentTeamsConfig;
 use crate::sections::ApiConfig;
 use crate::sections::LoopConfig;
 use crate::sections::LspConfig;
@@ -74,6 +75,7 @@ pub struct RuntimeConfig {
     /// api-native gate, session-memory budgets, experimental flags). Single
     /// source of truth — `coco_compact` reads this and never touches env.
     pub compact: CompactConfig,
+    pub agent_teams: AgentTeamsConfig,
     /// Provider-agnostic prompt-cache settings (1h-TTL allowlist).
     /// Adapter (`vercel-ai-anthropic`) reads `allowlist` via
     /// `AnthropicConfig.prompt_cache_allowlist` (set by `build_anthropic`).
@@ -261,6 +263,7 @@ pub fn build_runtime_config_with(
         lsp: LspConfig::resolve(merged, &env),
         paths: PathConfig::resolve(merged),
         compact: CompactConfig::resolve(merged, &env),
+        agent_teams: AgentTeamsConfig::resolve(merged)?,
         prompt_cache: PromptCacheRuntimeConfig::resolve(merged, &env),
         account: AccountConfig::resolve(merged, &env),
         features,
@@ -508,6 +511,7 @@ fn resolve_model_roles(
     // configure via settings instead. Only `COCO_MODEL` survives as
     // the single-knob Main escape hatch (handled above).
     if let Some(main_slots) = roles.roles.get(&ModelRole::Main).cloned() {
+        let mut defaulted_roles = Vec::new();
         for fallback_role in [
             ModelRole::Fast,
             ModelRole::Plan,
@@ -518,13 +522,16 @@ fn resolve_model_roles(
             ModelRole::Subagent,
         ] {
             if let std::collections::hash_map::Entry::Vacant(e) = roles.roles.entry(fallback_role) {
-                tracing::debug!(
-                    role = ?fallback_role,
-                    main_model = %main_slots.primary.model_id,
-                    "model role unconfigured; defaulting to Main",
-                );
                 e.insert(main_slots.clone());
+                defaulted_roles.push(fallback_role.as_str());
             }
+        }
+        if !defaulted_roles.is_empty() {
+            tracing::debug!(
+                roles = %defaulted_roles.join(","),
+                main_model = %main_slots.primary.model_id,
+                "model roles unconfigured; defaulting to Main",
+            );
         }
     }
 

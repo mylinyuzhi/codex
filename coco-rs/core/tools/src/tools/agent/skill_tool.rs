@@ -145,7 +145,7 @@ impl Tool for SkillTool {
         // skill's `allowed-tools` frontmatter folds into the running
         // session config via the executor's `PermissionRuleHandle`.
         // Fork variant has no return-channel updates — those were
-        // applied at dispatch time via `AgentQueryConfig.extra_allow_rules`.
+        // applied at dispatch time via `AgentQueryConfig.extra_permission_rules`.
         let (data, permission_updates) = match result {
             coco_tool_runtime::SkillInvocationResult::Inline {
                 summary,

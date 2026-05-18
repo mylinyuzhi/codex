@@ -14,6 +14,7 @@ use coco_messages::CostTracker;
 use coco_messages::Message;
 use coco_types::Features;
 use coco_types::PermissionMode;
+use coco_types::PermissionRule;
 use coco_types::PermissionRuleSource;
 use coco_types::PermissionRulesBySource;
 use coco_types::PromptCacheConfig;
@@ -125,6 +126,16 @@ pub struct QueryEngineConfig {
     pub allow_rules: PermissionRulesBySource,
     pub deny_rules: PermissionRulesBySource,
     pub ask_rules: PermissionRulesBySource,
+    /// Optional live permission rules read on every tool-context build.
+    /// Agent teams use this to mirror TS's in-process runner: the
+    /// leader can send `team_permission_update` while a teammate is
+    /// mid-turn, and the next tool permission check sees the new
+    /// allow/deny/ask rule without restarting the teammate.
+    pub live_permission_rules: Option<Arc<tokio::sync::RwLock<Vec<PermissionRule>>>>,
+    /// Optional live permission mode read on every tool-context build.
+    /// This is the teammate analog of `ToolAppState.permission_mode`
+    /// for sessions that do not own a full app-state handle.
+    pub live_permission_mode: Option<Arc<tokio::sync::RwLock<PermissionMode>>>,
     /// Root directories used to resolve leading-`/` path permission
     /// patterns per rule source. TS:
     /// `settings.ts::getSettingsRootPathForSource` + filesystem
@@ -176,6 +187,9 @@ pub struct QueryEngineConfig {
     /// team context. We lift it to a config flag so `ToolUseContext.is_teammate`
     /// is set correctly without reading task-local state at every tool call.
     pub is_teammate: bool,
+    /// True only for in-process swarm teammates. Pane teammates are
+    /// separate CLI sessions and can manage background subagents.
+    pub is_in_process_teammate: bool,
     /// Per-role `plan_mode_required` flag for teammates. TS:
     /// `isPlanModeRequired()` — read from the role definition in the
     /// team file or `COCO_PLAN_MODE_REQUIRED`. When `true`, the
@@ -359,12 +373,15 @@ impl Default for QueryEngineConfig {
             allow_rules: Default::default(),
             deny_rules: Default::default(),
             ask_rules: Default::default(),
+            live_permission_rules: None,
+            live_permission_mode: None,
             permission_rule_source_roots: Default::default(),
             session_additional_dirs: Default::default(),
             cwd_override: None,
             plans_directory: None,
             agent_id: None,
             is_teammate: false,
+            is_in_process_teammate: false,
             plan_mode_required: false,
             plan_mode_settings: PlanModeSettings::default(),
             disable_all_hooks: false,

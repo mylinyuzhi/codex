@@ -1004,6 +1004,7 @@ dependencies = [
  "coco-mcp-skills",
  "coco-memory",
  "coco-messages",
+ "coco-model-card",
  "coco-otel",
  "coco-output-styles",
  "coco-paths",
@@ -1168,6 +1169,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "shlex",
  "snafu",
  "tempfile",
  "thiserror 2.0.18",
@@ -1521,6 +1523,8 @@ name = "coco-model-card"
 version = "0.0.0"
 dependencies = [
  "pretty_assertions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2044,6 +2048,7 @@ dependencies = [
  "coco-commands",
  "coco-config",
  "coco-context",
+ "coco-coordinator",
  "coco-hooks",
  "coco-inference",
  "coco-messages",

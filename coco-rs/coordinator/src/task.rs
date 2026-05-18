@@ -9,6 +9,7 @@
 use coco_types::PermissionMode;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
 use crate::types::TeammateIdentity;
 
@@ -98,6 +99,10 @@ pub struct InProcessTeammateTaskState {
     /// Whether a shutdown has been requested.
     #[serde(default)]
     pub shutdown_requested: bool,
+    /// Per-turn cancellation token. UI/API uses this to interrupt the
+    /// current teammate turn without cancelling the teammate lifecycle.
+    #[serde(skip)]
+    pub current_work_cancel: Option<CancellationToken>,
 
     // ── Counters for delta reporting ──
     /// Last reported tool count (for incremental updates).
@@ -148,6 +153,7 @@ impl InProcessTeammateTaskState {
             past_tense_verb: None,
             is_idle: false,
             shutdown_requested: false,
+            current_work_cancel: None,
             last_reported_tool_count: 0,
             last_reported_token_count: 0,
         }
@@ -176,6 +182,25 @@ impl InProcessTeammateTaskState {
     /// Total token count (input + output).
     pub fn total_tokens(&self) -> i64 {
         self.input_tokens + self.output_tokens
+    }
+
+    /// Install the active per-turn cancellation token.
+    pub fn set_current_work_cancel(&mut self, cancel: CancellationToken) {
+        self.current_work_cancel = Some(cancel);
+    }
+
+    /// Clear the active per-turn cancellation token.
+    pub fn clear_current_work_cancel(&mut self) {
+        self.current_work_cancel = None;
+    }
+
+    /// Interrupt the current turn only. Returns false when no turn is active.
+    pub fn interrupt_current_work(&self) -> bool {
+        let Some(cancel) = self.current_work_cancel.as_ref() else {
+            return false;
+        };
+        cancel.cancel();
+        true
     }
 }
 

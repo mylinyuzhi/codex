@@ -4,6 +4,7 @@ use coco_tool_runtime::AgentHandle;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
 use coco_tool_runtime::AgentSpawnStatus;
+use coco_tool_runtime::CreateTeamResult;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolUseContext;
 use pretty_assertions::assert_eq;
@@ -15,8 +16,70 @@ use super::*;
 struct MockAgentHandle {
     spawn_result: tokio::sync::Mutex<Option<Result<AgentSpawnResponse, String>>>,
     send_result: tokio::sync::Mutex<Option<Result<String, String>>>,
-    team_create_result: tokio::sync::Mutex<Option<Result<String, String>>>,
+    team_create_result: tokio::sync::Mutex<Option<Result<CreateTeamResult, String>>>,
     team_delete_result: tokio::sync::Mutex<Option<Result<String, String>>>,
+}
+
+struct ConnectedMcpHandle {
+    servers: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::McpHandle for ConnectedMcpHandle {
+    async fn list_resources(
+        &self,
+        _server_name: Option<&str>,
+    ) -> Result<Vec<coco_tool_runtime::mcp_handle::McpResourceInfo>, coco_error::BoxedError> {
+        Ok(Vec::new())
+    }
+
+    async fn read_resource(
+        &self,
+        _server_name: &str,
+        _resource_uri: &str,
+    ) -> Result<Vec<coco_tool_runtime::mcp_handle::McpResourceContent>, coco_error::BoxedError>
+    {
+        Err(Box::new(coco_error::PlainError::new(
+            "unused",
+            coco_error::StatusCode::Internal,
+        )))
+    }
+
+    async fn call_tool(
+        &self,
+        _server_name: &str,
+        _tool_name: &str,
+        _arguments: Option<serde_json::Value>,
+    ) -> Result<coco_tool_runtime::mcp_handle::McpToolCallResult, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "unused",
+            coco_error::StatusCode::Internal,
+        )))
+    }
+
+    async fn authenticate(&self, _server_name: &str) -> Result<String, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "unused",
+            coco_error::StatusCode::Internal,
+        )))
+    }
+
+    async fn connected_servers(&self) -> Vec<String> {
+        self.servers.clone()
+    }
+
+    async fn list_tools(&self) -> Vec<coco_tool_runtime::McpToolSchema> {
+        self.servers
+            .iter()
+            .map(|server| coco_tool_runtime::McpToolSchema {
+                server_name: server.clone(),
+                tool_name: "tool".into(),
+                description: None,
+                input_schema: serde_json::json!({}),
+                annotations: Default::default(),
+            })
+            .collect()
+    }
 }
 
 impl MockAgentHandle {
@@ -38,7 +101,7 @@ impl MockAgentHandle {
         }
     }
 
-    fn with_team_create(result: Result<String, String>) -> Self {
+    fn with_team_create(result: Result<CreateTeamResult, String>) -> Self {
         Self {
             spawn_result: tokio::sync::Mutex::new(None),
             send_result: tokio::sync::Mutex::new(None),
@@ -75,7 +138,10 @@ impl AgentHandle for MockAgentHandle {
             .unwrap_or(Err("no mock result".into()))
     }
 
-    async fn create_team(&self, _name: &str) -> Result<String, String> {
+    async fn create_team(
+        &self,
+        _request: coco_tool_runtime::CreateTeamRequest,
+    ) -> Result<CreateTeamResult, String> {
         self.team_create_result
             .lock()
             .await
@@ -144,7 +210,10 @@ impl AgentHandle for CapturingAgentHandle {
     async fn send_message(&self, _: &str, _: &str) -> Result<String, String> {
         Err("unused".into())
     }
-    async fn create_team(&self, _: &str) -> Result<String, String> {
+    async fn create_team(
+        &self,
+        _: coco_tool_runtime::CreateTeamRequest,
+    ) -> Result<CreateTeamResult, String> {
         Err("unused".into())
     }
     async fn delete_team(&self) -> Result<String, String> {
@@ -376,6 +445,32 @@ async fn test_agent_tool_async_launched() {
 }
 
 #[tokio::test]
+async fn test_agent_tool_async_launched_includes_output_file_metadata() {
+    let response = AgentSpawnResponse {
+        status: AgentSpawnStatus::AsyncLaunched,
+        agent_id: Some("agent-abc".into()),
+        output_file: Some("/tmp/agent-abc.output".into()),
+        ..Default::default()
+    };
+    let ctx = ctx_with_agent(MockAgentHandle::with_spawn(Ok(response)));
+    let result = AgentTool
+        .execute(
+            serde_json::json!({
+                "prompt": "Background task",
+                "description": "bg task",
+                "run_in_background": true,
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.data["status"], "async_launched");
+    assert_eq!(result.data["outputFile"], "/tmp/agent-abc.output");
+    assert_eq!(result.data["canReadOutputFile"], true);
+}
+
+#[tokio::test]
 async fn test_agent_tool_teammate_spawned() {
     let response = AgentSpawnResponse {
         status: AgentSpawnStatus::TeammateSpawned,
@@ -406,6 +501,110 @@ async fn test_agent_tool_teammate_spawned() {
         .unwrap();
 
     assert_eq!(result.data["status"], "teammate_spawned");
+}
+
+#[tokio::test]
+async fn test_agent_tool_omitted_subagent_type_resolves_general_purpose() {
+    let handle = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+
+    let result = AgentTool
+        .execute(
+            serde_json::json!({
+                "prompt": "Do broad work",
+                "description": "broad work",
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.data["status"], "completed");
+    let request = handle
+        .last_request
+        .lock()
+        .await
+        .clone()
+        .expect("captured request");
+    assert_eq!(request.subagent_type.as_deref(), Some("general-purpose"));
+}
+
+#[tokio::test]
+async fn test_agent_tool_omitted_subagent_type_for_team_spawn_stays_untyped() {
+    let handle = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+
+    let result = AgentTool
+        .execute(
+            serde_json::json!({
+                "prompt": "Help the team",
+                "description": "team help",
+                "team_name": "alpha",
+                "name": "helper",
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.data["status"], "completed");
+    let request = handle
+        .last_request
+        .lock()
+        .await
+        .clone()
+        .expect("captured request");
+    assert_eq!(request.subagent_type, None);
+    assert_eq!(request.team_name.as_deref(), Some("alpha"));
+    assert_eq!(request.name.as_deref(), Some("helper"));
+}
+
+#[tokio::test]
+async fn test_agent_tool_uses_active_team_when_team_name_omitted() {
+    let response = AgentSpawnResponse {
+        status: AgentSpawnStatus::TeammateSpawned,
+        agent_id: Some("helper@active-team".into()),
+        ..Default::default()
+    };
+    let mut ctx = ctx_with_agent(MockAgentHandle::with_spawn(Ok(response)));
+    ctx.team_name = Some("active-team".into());
+    let result = AgentTool
+        .execute(
+            serde_json::json!({
+                "prompt": "Help me",
+                "description": "help",
+                "name": "helper",
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.data["status"], "teammate_spawned");
+    assert_eq!(result.data["team_name"], "active-team");
+}
+
+#[tokio::test]
+async fn test_agent_tool_teammate_cannot_spawn_teammate() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.is_teammate = true;
+    ctx.team_name = Some("active-team".into());
+
+    let result = AgentTool
+        .execute(
+            serde_json::json!({
+                "prompt": "Help me",
+                "description": "help",
+                "name": "helper",
+            }),
+            &ctx,
+        )
+        .await;
+    let err = result.expect_err("teammate nesting must be rejected");
+    assert!(
+        format!("{err}").contains("cannot spawn other teammates"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -597,7 +796,10 @@ impl AgentHandle for ResumeRecordingHandle {
     async fn send_message(&self, _: &str, _: &str) -> Result<String, String> {
         Err("send_message must NOT be reached when auto-resume fires".into())
     }
-    async fn create_team(&self, _: &str) -> Result<String, String> {
+    async fn create_team(
+        &self,
+        _: coco_tool_runtime::CreateTeamRequest,
+    ) -> Result<CreateTeamResult, String> {
         Err("not expected".into())
     }
     async fn delete_team(&self) -> Result<String, String> {
@@ -780,14 +982,18 @@ async fn test_team_create_empty_name_rejected() {
 
 #[tokio::test]
 async fn test_team_create_success() {
-    let ctx = ctx_with_agent(MockAgentHandle::with_team_create(Ok(
-        "Team 'alpha' created".into(),
-    )));
+    let mut ctx = ctx_with_agent(MockAgentHandle::with_team_create(Ok(CreateTeamResult {
+        team_name: "alpha".into(),
+        lead_agent_id: "team-lead@alpha".into(),
+        task_list_id: "alpha".into(),
+    })));
+    ctx.session_id_for_history = Some("session-1".into());
     let result = TeamCreateTool
         .execute(serde_json::json!({"team_name": "alpha"}), &ctx)
         .await
         .unwrap();
-    assert_eq!(result.data.as_str().unwrap(), "Team 'alpha' created");
+    assert_eq!(result.data["team_name"], "alpha");
+    assert_eq!(result.data["task_list_id"], "alpha");
 }
 
 // ── TeamDeleteTool tests ──
@@ -846,7 +1052,7 @@ async fn test_agent_tool_threads_definition_from_catalog_to_spawn_request() {
             when_to_use: Some("desc".into()),
             description: Some("desc".into()),
             source: AgentSource::BuiltIn,
-            model: Some("haiku".into()),
+            model: Some("anthropic/claude-haiku-4-5".into()),
             model_role: Some(ModelRole::Explore),
             ..Default::default()
         },
@@ -877,8 +1083,57 @@ async fn test_agent_tool_threads_definition_from_catalog_to_spawn_request() {
         .as_ref()
         .expect("AgentTool must thread the catalog's AgentDefinition into the request");
     assert_eq!(def.name, "Explore");
-    assert_eq!(def.model.as_deref(), Some("haiku"));
+    assert_eq!(def.model.as_deref(), Some("anthropic/claude-haiku-4-5"));
     assert_eq!(def.model_role, Some(ModelRole::Explore));
+}
+
+#[tokio::test]
+async fn test_agent_tool_rejects_definition_when_required_mcp_missing() {
+    use coco_subagent::AgentCatalogSnapshot;
+    use coco_types::{AgentDefinition, AgentSource, AgentTypeId, SubagentType};
+    use std::collections::BTreeMap;
+
+    let mut active = BTreeMap::new();
+    active.insert(
+        "Explore".to_string(),
+        AgentDefinition {
+            agent_type: AgentTypeId::Builtin(SubagentType::Explore),
+            name: "Explore".into(),
+            when_to_use: Some("desc".into()),
+            description: Some("desc".into()),
+            source: AgentSource::BuiltIn,
+            required_mcp_servers: vec!["github".into()],
+            ..Default::default()
+        },
+    );
+
+    let capturing = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = capturing.clone();
+    ctx.agent_catalog = Some(Arc::new(AgentCatalogSnapshot::new(active, Vec::new())));
+    ctx.mcp = Arc::new(ConnectedMcpHandle {
+        servers: vec!["slack".into()],
+    });
+
+    let err = AgentTool
+        .execute(
+            serde_json::json!({
+                "prompt": "find files",
+                "description": "search code paths",
+                "subagent_type": "Explore",
+            }),
+            &ctx,
+        )
+        .await
+        .expect_err("missing required MCP server must fail before spawn");
+    assert!(
+        format!("{err}").contains("requires MCP server"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        capturing.last_request.lock().await.is_none(),
+        "AgentTool must not spawn when required MCP validation fails"
+    );
 }
 
 #[tokio::test]

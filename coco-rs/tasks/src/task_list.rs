@@ -390,6 +390,41 @@ impl TaskListStore {
         Ok(task)
     }
 
+    /// Reset this task list for a newly-created team.
+    ///
+    /// Mirrors TS `resetTaskList`: preserve the highest assigned id as a
+    /// high-water mark, then remove all task JSON files under the list lock.
+    pub async fn reset(&self) -> crate::Result<()> {
+        self.with_list_lock(|| {
+            let highest = self.highest_id_unlocked();
+            if highest > self.read_hwm() {
+                self.write_hwm(highest)?;
+            }
+            let entries = match fs::read_dir(&self.tasks_dir) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => return Err(e.into()),
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                if name.ends_with(".json") && !name.starts_with('.') {
+                    match fs::remove_file(&path) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+            }
+            Ok(())
+        })
+        .await?;
+        self.notify();
+        Ok(())
+    }
+
     /// Delete a task and cascade removal of its id from other tasks'
     /// blocks / blockedBy arrays. Updates the high-water-mark so the
     /// id isn't reassigned later.

@@ -18,6 +18,14 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
+use coco_types::PermissionBehavior;
+use coco_types::PermissionMode;
+use coco_types::PermissionRule;
+use coco_types::PermissionRuleSource;
+use coco_types::PermissionRuleValue;
+use coco_types::PermissionUpdate;
+use coco_types::PermissionUpdateDestination;
+
 use crate::team_file::get_team_dir;
 
 use super::io::{TeammateMessage, write_to_mailbox};
@@ -61,6 +69,356 @@ pub fn parse_protocol_message(text: &str) -> Option<ProtocolMessage> {
     serde_json::from_str(trimmed).ok()
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PermissionResponsePayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_updates: Vec<WirePermissionUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PermissionResponseSubtype {
+    #[serde(rename = "success")]
+    Success,
+    #[serde(rename = "error")]
+    Error,
+}
+
+impl PermissionResponseSubtype {
+    pub const fn from_approved(approved: bool) -> Self {
+        if approved { Self::Success } else { Self::Error }
+    }
+
+    pub const fn is_success(self) -> bool {
+        matches!(self, Self::Success)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl PermissionResponsePayload {
+    pub fn into_permission_updates(self) -> Vec<PermissionUpdate> {
+        self.permission_updates
+            .into_iter()
+            .map(WirePermissionUpdate::into_permission_update)
+            .collect()
+    }
+
+    pub fn into_parts(self) -> (Option<serde_json::Value>, Vec<PermissionUpdate>) {
+        (
+            self.updated_input,
+            self.permission_updates
+                .into_iter()
+                .map(WirePermissionUpdate::into_permission_update)
+                .collect(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum WireTeamPermissionUpdate {
+    #[serde(rename = "addRules")]
+    AddRules {
+        rules: Vec<WirePermissionRuleValue>,
+        behavior: PermissionBehavior,
+        destination: WireTeamPermissionUpdateDestination,
+    },
+}
+
+impl WireTeamPermissionUpdate {
+    pub fn into_permission_rules(self) -> Vec<PermissionRule> {
+        match self {
+            Self::AddRules {
+                rules,
+                behavior,
+                destination: WireTeamPermissionUpdateDestination::Session,
+            } => rules
+                .into_iter()
+                .map(|rule| rule.into_permission_rule(behavior))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum WireTeamPermissionUpdateDestination {
+    #[serde(rename = "session")]
+    Session,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum WirePermissionUpdate {
+    #[serde(rename = "addRules")]
+    AddRules {
+        rules: Vec<WirePermissionRuleValue>,
+        behavior: PermissionBehavior,
+        destination: WirePermissionUpdateDestination,
+    },
+    #[serde(rename = "replaceRules")]
+    ReplaceRules {
+        rules: Vec<WirePermissionRuleValue>,
+        behavior: PermissionBehavior,
+        destination: WirePermissionUpdateDestination,
+    },
+    #[serde(rename = "removeRules")]
+    RemoveRules {
+        rules: Vec<WirePermissionRuleValue>,
+        behavior: PermissionBehavior,
+        destination: WirePermissionUpdateDestination,
+    },
+    #[serde(rename = "setMode")]
+    SetMode {
+        mode: PermissionMode,
+        destination: WirePermissionUpdateDestination,
+    },
+    #[serde(rename = "addDirectories")]
+    AddDirectories {
+        directories: Vec<String>,
+        destination: WirePermissionUpdateDestination,
+    },
+    #[serde(rename = "removeDirectories")]
+    RemoveDirectories {
+        directories: Vec<String>,
+        destination: WirePermissionUpdateDestination,
+    },
+}
+
+impl WirePermissionUpdate {
+    pub fn into_permission_update(self) -> PermissionUpdate {
+        match self {
+            Self::AddRules {
+                rules,
+                behavior,
+                destination,
+            } => PermissionUpdate::AddRules {
+                rules: rules
+                    .into_iter()
+                    .map(|rule| rule.into_permission_rule(behavior))
+                    .collect(),
+                destination: destination.into(),
+            },
+            Self::ReplaceRules {
+                rules,
+                behavior,
+                destination,
+            } => PermissionUpdate::ReplaceRules {
+                rules: rules
+                    .into_iter()
+                    .map(|rule| rule.into_permission_rule(behavior))
+                    .collect(),
+                destination: destination.into(),
+            },
+            Self::RemoveRules {
+                rules,
+                behavior,
+                destination,
+            } => PermissionUpdate::RemoveRules {
+                rules: rules
+                    .into_iter()
+                    .map(|rule| rule.into_permission_rule(behavior))
+                    .collect(),
+                destination: destination.into(),
+            },
+            Self::SetMode { mode, .. } => PermissionUpdate::SetMode { mode },
+            Self::AddDirectories {
+                directories,
+                destination,
+            } => PermissionUpdate::AddDirectories {
+                directories,
+                destination: destination.into(),
+            },
+            Self::RemoveDirectories {
+                directories,
+                destination,
+            } => PermissionUpdate::RemoveDirectories {
+                directories,
+                destination: destination.into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RuleUpdateKind {
+    Add,
+    Replace,
+    Remove,
+}
+
+fn wire_permission_updates_from(update: PermissionUpdate) -> Vec<WirePermissionUpdate> {
+    match update {
+        PermissionUpdate::AddRules { rules, destination } => {
+            wire_rule_updates(RuleUpdateKind::Add, rules, destination)
+        }
+        PermissionUpdate::ReplaceRules { rules, destination } => {
+            wire_rule_updates(RuleUpdateKind::Replace, rules, destination)
+        }
+        PermissionUpdate::RemoveRules { rules, destination } => {
+            wire_rule_updates(RuleUpdateKind::Remove, rules, destination)
+        }
+        PermissionUpdate::SetMode { mode } => vec![WirePermissionUpdate::SetMode {
+            mode,
+            destination: WirePermissionUpdateDestination::Session,
+        }],
+        PermissionUpdate::AddDirectories {
+            directories,
+            destination,
+        } => vec![WirePermissionUpdate::AddDirectories {
+            directories,
+            destination: destination.into(),
+        }],
+        PermissionUpdate::RemoveDirectories {
+            directories,
+            destination,
+        } => vec![WirePermissionUpdate::RemoveDirectories {
+            directories,
+            destination: destination.into(),
+        }],
+    }
+}
+
+fn wire_rule_updates(
+    kind: RuleUpdateKind,
+    rules: Vec<PermissionRule>,
+    destination: PermissionUpdateDestination,
+) -> Vec<WirePermissionUpdate> {
+    if rules.is_empty() {
+        return vec![wire_rule_update(
+            kind,
+            Vec::new(),
+            PermissionBehavior::Allow,
+            destination.into(),
+        )];
+    }
+
+    let destination = WirePermissionUpdateDestination::from(destination);
+    [
+        PermissionBehavior::Allow,
+        PermissionBehavior::Deny,
+        PermissionBehavior::Ask,
+    ]
+    .into_iter()
+    .filter_map(|behavior| {
+        let rules = rules
+            .iter()
+            .filter(|rule| rule.behavior == behavior)
+            .cloned()
+            .map(WirePermissionRuleValue::from)
+            .collect::<Vec<_>>();
+        if rules.is_empty() {
+            None
+        } else {
+            Some(wire_rule_update(kind, rules, behavior, destination))
+        }
+    })
+    .collect()
+}
+
+fn wire_rule_update(
+    kind: RuleUpdateKind,
+    rules: Vec<WirePermissionRuleValue>,
+    behavior: PermissionBehavior,
+    destination: WirePermissionUpdateDestination,
+) -> WirePermissionUpdate {
+    match kind {
+        RuleUpdateKind::Add => WirePermissionUpdate::AddRules {
+            rules,
+            behavior,
+            destination,
+        },
+        RuleUpdateKind::Replace => WirePermissionUpdate::ReplaceRules {
+            rules,
+            behavior,
+            destination,
+        },
+        RuleUpdateKind::Remove => WirePermissionUpdate::RemoveRules {
+            rules,
+            behavior,
+            destination,
+        },
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WirePermissionRuleValue {
+    pub tool_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_content: Option<String>,
+}
+
+impl WirePermissionRuleValue {
+    fn into_permission_rule(self, behavior: PermissionBehavior) -> PermissionRule {
+        PermissionRule {
+            source: PermissionRuleSource::Session,
+            behavior,
+            value: PermissionRuleValue {
+                tool_pattern: self.tool_name,
+                rule_content: self.rule_content,
+            },
+        }
+    }
+}
+
+impl From<PermissionRule> for WirePermissionRuleValue {
+    fn from(rule: PermissionRule) -> Self {
+        Self {
+            tool_name: rule.value.tool_pattern,
+            rule_content: rule.value.rule_content,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum WirePermissionUpdateDestination {
+    #[serde(rename = "userSettings")]
+    UserSettings,
+    #[serde(rename = "projectSettings")]
+    ProjectSettings,
+    #[serde(rename = "localSettings")]
+    LocalSettings,
+    #[serde(rename = "session")]
+    Session,
+    #[serde(rename = "cliArg")]
+    CliArg,
+    #[serde(rename = "command")]
+    Command,
+}
+
+impl From<WirePermissionUpdateDestination> for PermissionUpdateDestination {
+    fn from(destination: WirePermissionUpdateDestination) -> Self {
+        match destination {
+            WirePermissionUpdateDestination::UserSettings => Self::UserSettings,
+            WirePermissionUpdateDestination::ProjectSettings => Self::ProjectSettings,
+            WirePermissionUpdateDestination::LocalSettings => Self::LocalSettings,
+            WirePermissionUpdateDestination::Session => Self::Session,
+            WirePermissionUpdateDestination::CliArg => Self::CliArg,
+            WirePermissionUpdateDestination::Command => Self::Command,
+        }
+    }
+}
+
+impl From<PermissionUpdateDestination> for WirePermissionUpdateDestination {
+    fn from(destination: PermissionUpdateDestination) -> Self {
+        match destination {
+            PermissionUpdateDestination::UserSettings => Self::UserSettings,
+            PermissionUpdateDestination::ProjectSettings => Self::ProjectSettings,
+            PermissionUpdateDestination::LocalSettings => Self::LocalSettings,
+            PermissionUpdateDestination::Session => Self::Session,
+            PermissionUpdateDestination::CliArg => Self::CliArg,
+            PermissionUpdateDestination::Command => Self::Command,
+        }
+    }
+}
+
 /// All structured protocol message types.
 ///
 /// TS: various type definitions in utils/teammateMailbox.ts
@@ -70,15 +428,31 @@ pub enum ProtocolMessage {
     IdleNotification {
         from: String,
         timestamp: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "idleReason",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         idle_reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "completedTaskId",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         completed_task_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "completedStatus",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         completed_status: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "failureReason",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         failure_reason: Option<String>,
     },
     PermissionRequest {
@@ -95,22 +469,32 @@ pub enum ProtocolMessage {
     },
     PermissionResponse {
         request_id: String,
-        subtype: String,
+        subtype: PermissionResponseSubtype,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        response: Option<serde_json::Value>,
+        response: Option<PermissionResponsePayload>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
     SandboxPermissionRequest {
+        #[serde(rename = "requestId")]
         request_id: String,
+        #[serde(rename = "workerId")]
         worker_id: String,
+        #[serde(rename = "workerName")]
         worker_name: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "workerColor",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         worker_color: Option<String>,
+        #[serde(rename = "hostPattern")]
         host_pattern: serde_json::Value,
+        #[serde(rename = "createdAt")]
         created_at: i64,
     },
     SandboxPermissionResponse {
+        #[serde(rename = "requestId")]
         request_id: String,
         host: String,
         allow: bool,
@@ -119,20 +503,29 @@ pub enum ProtocolMessage {
     PlanApprovalRequest {
         from: String,
         timestamp: String,
+        #[serde(rename = "planFilePath")]
         plan_file_path: String,
+        #[serde(rename = "planContent")]
         plan_content: String,
+        #[serde(rename = "requestId")]
         request_id: String,
     },
     PlanApprovalResponse {
+        #[serde(rename = "requestId")]
         request_id: String,
         approved: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feedback: Option<String>,
         timestamp: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "permissionMode",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         permission_mode: Option<String>,
     },
     ShutdownRequest {
+        #[serde(rename = "requestId")]
         request_id: String,
         from: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,34 +533,45 @@ pub enum ProtocolMessage {
         timestamp: String,
     },
     ShutdownApproved {
+        #[serde(rename = "requestId")]
         request_id: String,
         from: String,
         timestamp: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "paneId", default, skip_serializing_if = "Option::is_none")]
         pane_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "backendType",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         backend_type: Option<String>,
     },
     ShutdownRejected {
+        #[serde(rename = "requestId")]
         request_id: String,
         from: String,
         reason: String,
         timestamp: String,
     },
     TaskAssignment {
+        #[serde(rename = "taskId")]
         task_id: String,
         subject: String,
         description: String,
+        #[serde(rename = "assignedBy")]
         assigned_by: String,
         timestamp: String,
     },
     TeamPermissionUpdate {
-        permission_update: serde_json::Value,
+        #[serde(rename = "permissionUpdate")]
+        permission_update: WireTeamPermissionUpdate,
+        #[serde(rename = "directoryPath")]
         directory_path: String,
+        #[serde(rename = "toolName")]
         tool_name: String,
     },
     ModeSetRequest {
-        mode: String,
+        mode: PermissionMode,
         from: String,
     },
 }
@@ -228,9 +632,9 @@ pub fn create_idle_notification(
 /// Create a mode set request protocol message.
 ///
 /// TS: `createModeSetRequestMessage(params)`
-pub fn create_mode_set_request(mode: &str, from: &str) -> String {
+pub fn create_mode_set_request(mode: PermissionMode, from: &str) -> String {
     let msg = ProtocolMessage::ModeSetRequest {
-        mode: mode.to_string(),
+        mode,
         from: from.to_string(),
     };
     serde_json::to_string(&msg).unwrap_or_default()
@@ -413,13 +817,16 @@ pub fn send_permission_response_via_mailbox(
     request_id: &str,
     approved: bool,
     feedback: Option<&str>,
+    updated_input: Option<serde_json::Value>,
+    permission_updates: Vec<coco_types::PermissionUpdate>,
     team_name: &str,
 ) -> crate::Result<()> {
-    let subtype = if approved { "success" } else { "error" };
+    let subtype = PermissionResponseSubtype::from_approved(approved);
+    let response = permission_response_payload(updated_input, permission_updates);
     let text = serde_json::to_string(&ProtocolMessage::PermissionResponse {
         request_id: request_id.to_string(),
-        subtype: subtype.to_string(),
-        response: None,
+        subtype,
+        response,
         error: if approved {
             None
         } else {
@@ -526,10 +933,26 @@ pub fn create_permission_response_message(
     approved: bool,
     feedback: Option<&str>,
 ) -> String {
+    create_permission_response_message_with_payload(
+        request_id,
+        approved,
+        feedback,
+        None,
+        Vec::new(),
+    )
+}
+
+pub fn create_permission_response_message_with_payload(
+    request_id: &str,
+    approved: bool,
+    feedback: Option<&str>,
+    updated_input: Option<serde_json::Value>,
+    permission_updates: Vec<coco_types::PermissionUpdate>,
+) -> String {
     let msg = ProtocolMessage::PermissionResponse {
         request_id: request_id.to_string(),
-        subtype: if approved { "success" } else { "error" }.to_string(),
-        response: None,
+        subtype: PermissionResponseSubtype::from_approved(approved),
+        response: permission_response_payload(updated_input, permission_updates),
         error: if approved {
             None
         } else {
@@ -537,6 +960,22 @@ pub fn create_permission_response_message(
         },
     };
     serde_json::to_string(&msg).unwrap_or_default()
+}
+
+fn permission_response_payload(
+    updated_input: Option<serde_json::Value>,
+    permission_updates: Vec<coco_types::PermissionUpdate>,
+) -> Option<PermissionResponsePayload> {
+    if updated_input.is_none() && permission_updates.is_empty() {
+        return None;
+    }
+    Some(PermissionResponsePayload {
+        updated_input,
+        permission_updates: permission_updates
+            .into_iter()
+            .flat_map(wire_permission_updates_from)
+            .collect(),
+    })
 }
 
 /// Create a shutdown approved protocol message string.

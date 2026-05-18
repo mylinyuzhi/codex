@@ -31,6 +31,7 @@ use crate::SkillContext;
 use crate::SkillDefinition;
 use crate::SkillSource;
 use crate::SkillsError;
+use coco_types::ModelRole;
 
 /// Wire-shape input emitted by an MCP server for one skill.
 ///
@@ -115,6 +116,8 @@ pub fn build_mcp_skill_default(spec: &McpSkillSpec) -> Result<SkillDefinition, S
 
     let allowed_tools = lookup(&["allowed-tools", "allowed_tools"]).map(value_to_csv_list_local);
     let model = lookup_str(&["model"]);
+    let model_role = lookup_str(&["model-role", "model_role", "modelRole"])
+        .and_then(|raw| raw.parse::<ModelRole>().ok());
     let when_to_use = lookup_str(&["when-to-use", "when_to_use"]);
 
     let argument_names = lookup(&["arguments", "argument-names", "argument_names"])
@@ -169,6 +172,7 @@ pub fn build_mcp_skill_default(spec: &McpSkillSpec) -> Result<SkillDefinition, S
         aliases,
         allowed_tools,
         model,
+        model_role,
         when_to_use,
         argument_names,
         // MCP-sourced skills have no on-disk `paths` semantics (the path

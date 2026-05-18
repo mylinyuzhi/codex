@@ -1314,6 +1314,30 @@ pub enum SessionState {
 // TuiOnlyEvent — TUI-exclusive events (21 variants)
 // ---------------------------------------------------------------------------
 
+/// Bounded, UI-ready permission input display.
+///
+/// This is separate from the raw tool input because approval UIs should
+/// consume sanitized display data while keeping `original_input` only for
+/// updated-input response construction and permission-rule derivation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum PermissionDisplayInput {
+    Command(String),
+    Json(String),
+    Text(String),
+    Empty,
+}
+
+impl PermissionDisplayInput {
+    pub fn as_display_str(&self) -> &str {
+        match self {
+            Self::Command(value) | Self::Json(value) | Self::Text(value) => value,
+            Self::Empty => "",
+        }
+    }
+}
+
 /// TUI-exclusive events.
 ///
 /// These events are dropped by SDK and App-Server consumers. They drive
@@ -1350,7 +1374,7 @@ pub enum TuiOnlyEvent {
         request_id: String,
         tool_name: String,
         description: String,
-        input_preview: String,
+        display_input: PermissionDisplayInput,
         /// Whether the UI may offer an "always allow" action. False
         /// when managed policy restricts local/session rule changes.
         #[serde(default)]

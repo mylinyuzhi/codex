@@ -384,6 +384,8 @@ Tests go in `implementation.test.rs` alongside the source. Integration tests in 
 - Changed shared (common/, core/, services/): `just test`
 - Clippy fix: `just fix -p coco-<name>`
 
+- `cargo test` accepts only one positional test filter; use a shared substring/module prefix or run separate commands instead of passing multiple test names.
+
 ### Snapshot Tests (insta)
 
 - UI changes require `insta` snapshot coverage

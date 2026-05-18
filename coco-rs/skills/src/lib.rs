@@ -21,6 +21,7 @@ pub type Result<T, E = SkillsError> = std::result::Result<T, E>;
 
 use coco_types::Feature;
 use coco_types::Features;
+use coco_types::ModelRole;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -70,6 +71,9 @@ pub struct SkillDefinition {
     pub allowed_tools: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Semantic model role for fork-mode skill execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_role: Option<ModelRole>,
     /// Guidance for when the model should invoke this skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_to_use: Option<String>,
@@ -860,6 +864,8 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
     let allowed_tools = lookup(&["allowed-tools", "allowed_tools"]).map(value_to_csv_list);
 
     let model = lookup_str(&["model"]);
+    let model_role = lookup_str(&["model-role", "model_role", "modelRole"])
+        .and_then(|raw| raw.parse::<ModelRole>().ok());
     let when_to_use = lookup_str(&["when-to-use", "when_to_use"]);
 
     // TS reads the `arguments` frontmatter key (`utils/argumentSubstitution.ts:50`).
@@ -965,6 +971,7 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
         aliases,
         allowed_tools,
         model,
+        model_role,
         when_to_use,
         argument_names,
         paths,
