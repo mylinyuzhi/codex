@@ -54,16 +54,21 @@ fn fake_running_tool(call_id: &str) -> ToolExecution {
         completed_at: None,
         description: None,
         streaming_input: None,
+        // Unstamped (`None`) — mid-stream tool with no committed
+        // assistant message UUID yet. D4 keeps these on truncate.
+        message_uuid: None,
     }
 }
 
 #[tokio::test]
-async fn truncate_shrinks_transcript_and_clears_overlays() {
+async fn truncate_shrinks_transcript_and_drops_anchored_overlays() {
     let mut state = AppState::new();
 
     // ── Seed transcript with 3 user messages through the wire ──────
+    let mut msg_uuids: Vec<uuid::Uuid> = Vec::new();
     for i in 0..3 {
         let m = create_user_message(&format!("msg {i}"));
+        msg_uuids.push(*m.uuid().unwrap());
         handle_core_event(
             &mut state,
             protocol_evt(ServerNotification::MessageAppended { message: m }),
@@ -71,9 +76,20 @@ async fn truncate_shrinks_transcript_and_clears_overlays() {
     }
     assert_eq!(state.session.transcript.len(), 3, "three cells seeded");
 
-    // ── Seed overlays the truncate handler must wipe ───────────────
-    state.session.tool_executions.push(fake_running_tool("c1"));
-    state.session.tool_executions.push(fake_running_tool("c2"));
+    // ── Seed overlays the truncate handler must filter ─────────────
+    // `c1` is anchored to msg_uuids[0] (survives truncate to keep=1).
+    // `c2` is anchored to msg_uuids[2] (dropped by truncate).
+    // `c3` is unstamped — represents an in-flight stream that the
+    // truncate doesn't kill (the streaming overlay is the cancel
+    // signal for that case).
+    let mut c1 = fake_running_tool("c1");
+    c1.message_uuid = Some(msg_uuids[0]);
+    let mut c2 = fake_running_tool("c2");
+    c2.message_uuid = Some(msg_uuids[2]);
+    let c3 = fake_running_tool("c3");
+    state.session.tool_executions.push(c1);
+    state.session.tool_executions.push(c2);
+    state.session.tool_executions.push(c3);
     state.ui.streaming = Some(StreamingState::default());
 
     // ── SDK-observer path: event flows through a real channel ──────
@@ -98,9 +114,19 @@ async fn truncate_shrinks_transcript_and_clears_overlays() {
         1,
         "transcript truncated to keep_count"
     );
-    assert!(
-        state.session.tool_executions.is_empty(),
-        "tool_executions cleared on truncate (plan §6.3)"
+    // D4: c1 survives (anchored to msg_uuids[0], still in transcript).
+    // c2 dropped (anchored to msg_uuids[2], no longer in transcript).
+    // c3 survives (unstamped — in-flight stream).
+    let surviving_ids: Vec<&str> = state
+        .session
+        .tool_executions
+        .iter()
+        .map(|t| t.call_id.as_str())
+        .collect();
+    assert_eq!(
+        surviving_ids,
+        vec!["c1", "c3"],
+        "anchored-to-surviving + unstamped tools kept; anchored-to-dropped removed"
     );
     assert!(
         state.ui.streaming.is_none(),

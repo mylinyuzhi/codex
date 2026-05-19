@@ -561,8 +561,18 @@ impl QueryEngine {
                 _ => None,
             })
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        // I-1 (Authority) — D2 fix: callers (`tui_runner`, SDK turn
+        // handler, subagent factory) emit `MessageAppended` for any
+        // NEW messages they introduce BEFORE invoking the engine. The
+        // initial load here just populates the engine's per-turn
+        // working `MessageHistory` with prior context — re-emitting
+        // would deliver duplicate events to consumers on every turn
+        // (TUI dedups by UUID, but SDK NDJSON observers would see N
+        // copies after N turns). Subsequent push sites inside the loop
+        // (new assistant turns, tool results, system messages) still
+        // emit normally.
         for msg in turn_messages {
-            crate::history_sync::history_push_and_emit(history, msg, &event_tx).await;
+            history.push(msg);
         }
 
         // NOTE: `SessionStarted` + `SessionStateChanged(Running)` + the
@@ -801,7 +811,12 @@ impl QueryEngine {
                     std::mem::take(&mut w.pending_clear_message_history)
                 };
                 if drained {
-                    history.clear();
+                    // I-1 (Authority): every transcript mutation must
+                    // emit so TUI's TranscriptView + SDK NDJSON
+                    // observers stay coherent. Plan-mode exit doesn't
+                    // rotate session_id — `MessageTruncated { 0 }` is
+                    // the right signal (vs. SessionResetForResume).
+                    crate::history_sync::history_clear_and_emit(history, &event_tx).await;
                     info!(turn, "plan-mode exit cleared conversation history");
                 }
             }

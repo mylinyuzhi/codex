@@ -7,74 +7,67 @@ Phase 3c left off and completes the migration that finally allows
 deletion of `ChatMessage`, `MessageContent`, `session.messages`, and
 the `merged_chat_messages` back-adapter.
 
-## Landing Status (2026-05-19)
+## Landing Status (updated post-deletion + D1/D2/D4 fix pass)
 
-Commits 1, 2, and 3 landed as documented below. Commits 4 and 5 were
-condensed into a "Pragmatic close-out" pass instead of the full
-renderer rewrite:
+All five commits landed:
 
 - ✅ Commit 1 (Section 2.1) — `SessionRuntime.history: Arc<Mutex<MessageHistory>>`.
 - ✅ Commit 2 (Section 2.2) — `UserCommand::PushSystemMessage` + engine
-  round-trip for all TUI-originated transcript content. `SubmitInput`
-  and `run_prompt_mode_bash` now push through `history_push_and_emit`;
-  10 of 13 `add_message` sites converted, 3 removed (bash input,
-  user_text submit, memory cancel toast). Auto-restore predicates
-  switched to the merged view. `TranscriptView::on_message_appended`
-  dedups by UUID so multi-turn re-emission doesn't accumulate
-  duplicate cells.
-- ✅ Commit 3 (Section 2.3) — adapter variant. Instead of the
-  `TranscriptSource<'a> { Legacy | Cells }` dual-path rewrite of the
-  646-LoC `presentation::transcript` module,
-  `SessionState::transcript_messages()` builds the merged view
-  (legacy `session.messages` + engine cells) and every transcript-
-  pipeline caller threads the merged slice through.
-  `TranscriptPresentationInput` lifetime split into `<'msg, 'state>`
-  so the projection can be fed a temporary `Vec<ChatMessage>` without
-  pinning the output. `transcript_modal.rs` builds the merged view
-  once per render and passes it to projection / renderer / hash
-  helpers / `cell_id` lookups.
-- 🟡 Commits 4 + 5 condensed into "Pragmatic close-out" — every
-  remaining `&state.session.messages` reader on the rendering /
-  picker / status path was switched to
-  `state.session.transcript_messages()` (rewind picker, status bar,
-  footer, activity preview). `session.messages` was documented as
-  vestigial. The full `RenderedCell` rewrite of the 4 `render_*.rs`
-  files + `ChatWidget` was deferred; the renderer continues to
-  consume `&[ChatMessage]` via the merged adapter. `ChatMessage`,
-  `MessageContent`, and `merged_chat_messages` are retained as
-  render-time projection types — they no longer serve as the source
-  of truth but are kept because deleting them would require ~2000
-  LoC of mechanical match-arm replacement plus test-suite churn
-  that is out of scope for this phase.
+  round-trip for all TUI-originated transcript content. Every `add_message`
+  call site is gone. Auto-restore predicates walk
+  `state.session.transcript.cells()` directly.
+- ✅ Commit 3 (Section 2.3) — adapter variant landed and then
+  superseded by the full renderer rewrite.
+- ✅ Commits 4 + 5 — `ChatMessage`, `MessageContent`,
+  `session.messages`, `cell_to_chat_message`, `cells_to_chat_messages`,
+  `merged_chat_messages`, and the `TranscriptPresentationInput`
+  lifetime split are all deleted (commit `3b85d7751`). The four
+  `render_*.rs` files + `ChatWidget` + `surface/*` consume
+  `&[RenderedCell]` directly.
 
-End-state invariants achieved:
+End-state invariants achieved (and re-audited; see
+`engine-tui-unified-transcript-plan.md` §3.1 invariant catalog and the
+D1/D2/D4 fix notes below):
 
 - **I-1 Authority** — engine `MessageHistory` is the single source of
-  truth for the conversation chain. `runtime.history` is the
-  authoritative live view; resume / clear / rewind all flow through
+  truth. Every transcript mutation emits a wire event via one of:
   `MessageAppended` / `MessageTruncated` / `SessionResetForResume`.
+  Helpers: `coco_query::history_sync::{history_push_and_emit,
+  history_clear_and_emit, history_clear_and_emit_session_reset,
+  history_replace_and_emit}`. D1 sweep migrated `/clear`, plan-mode-exit
+  clear, all four compaction rewrite paths (partial / session-memory /
+  full / reactive head-trim), and the `/compact` summary fast-path.
 - **I-2 Derived view** — TUI cells are derived from `&Message` via
-  `derive::message_to_cells`. The merged-ChatMessage adapter
-  (`cells_to_chat_messages` + `merged_chat_messages`) is now a
-  rendering convenience layer, not a parallel state store.
+  `derive::message_to_cells`. The merged-ChatMessage adapter is gone.
+  Sole tolerated exception: `TranscriptView::record_reasoning_tokens`
+  stamps `duration_ms` / `reasoning_tokens` onto the most recent
+  Thinking cell on `TurnCompleted` (engine emits aggregate usage as a
+  turn-level stat; no per-message metadata-attached event exists yet).
+  Documented in `app/tui/CLAUDE.md` "Transcript Invariants".
 - **I-3 UI-only state stays UI-only** — `ui.streaming`,
-  `session.tool_executions`, transcript-modal collapse state, etc.
+  `session.tool_executions`, modals, toasts.
 
-Outstanding deltas vs the original plan §4/§5:
+### D2 — per-turn re-emit closed
 
-- `chat::ChatWidget`, `render_user.rs`, `render_assistant.rs`,
-  `render_tool.rs`, `render_system.rs` continue to take
-  `messages: &[ChatMessage]`. Future rewrite to `&[RenderedCell]` is
-  isolated to these files and
-  `surface/{viewport,controller,history_lines}.rs`.
-- `session.messages` field still exists. Direct writers reduced to
-  the thinking-metadata synthesis path
-  (`apply_reasoning_tokens_to_response` in `protocol.rs`), the
-  Ctrl+L clear, and the rewind-picker truncate. All three are
-  candidates for full removal in the deferred §4/§5 rewrite.
-- `ChatMessage`, `MessageContent`, `cell_to_chat_message`,
-  `cells_to_chat_messages`, `merged_chat_messages` retained — see
-  the "Vestigial" doc on `SessionState::messages`.
+Previously `run_session_loop` at `engine.rs:564` re-emitted
+`MessageAppended` for every message in `turn_messages` (= the entire
+prior history) at the top of each turn. The TUI deduped by UUID but
+SDK NDJSON observers received N copies after N turns. The initial
+load now uses `history.push(msg)` (silent) — callers
+(`tui_runner::process_submit_turn`, `sdk_runner::run_turn`) emit
+`MessageAppended` for the NEW messages they introduce before invoking
+`engine.run_with_messages`. Per-UUID emit count is now exactly one.
+
+### D4 — `ToolExecution` carries `message_uuid`
+
+`ToolExecution.message_uuid: Option<Uuid>` records the assistant
+message UUID that owns the tool_use content block. Stamped from the
+`MessageAppended` handler when an Assistant message lands
+(walks `AssistantContent::ToolCall` blocks to pair `call_id` →
+parent UUID). On `MessageTruncated`, the handler retains executions
+whose anchor survives plus unstamped ones (in-flight stream; the
+streaming overlay is the cancel signal for those). Compaction
+truncates no longer kill the live tool overlay.
 
 ## 0. Starting State
 

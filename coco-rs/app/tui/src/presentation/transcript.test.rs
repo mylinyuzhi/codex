@@ -558,5 +558,7 @@ fn tool_execution(status: ToolStatus) -> ToolExecution {
         completed_at: None,
         description: None,
         streaming_input: None,
+        // Unstamped: presentation-test fixture, anchor is irrelevant.
+        message_uuid: None,
     }
 }

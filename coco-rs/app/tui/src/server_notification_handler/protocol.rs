@@ -793,6 +793,16 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             // allocated assistant UUID; no emitter for that exists
             // today so the role check is the correct minimal fix.
             let is_assistant = matches!(&message, coco_messages::Message::Assistant(_));
+            // D4: stamp any pending tool_executions whose `call_id`
+            // matches a `ToolCall` content block in this assistant
+            // message. Stamps the parent message UUID so the
+            // MessageTruncated handler can retain in-flight executions
+            // whose anchor survives the truncate.
+            if is_assistant {
+                state
+                    .session
+                    .stamp_tool_executions_with_assistant_uuid(&message);
+            }
             state
                 .session
                 .transcript
@@ -805,16 +815,22 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         ServerNotification::MessageTruncated { keep_count } => {
             let n = keep_count.max(0) as usize;
             state.session.transcript.on_message_truncated(n);
-            // Plan §6.3: any tool execution or live streaming overlay
-            // anchored to a now-dropped message must go. ToolExecution
-            // does not yet carry a parent message UUID, so the
-            // conservative move is to clear everything — truncate is a
-            // user-initiated rewind, and an in-flight tool from a
-            // turn that no longer exists in history has no anchor to
-            // render against. The upgrade path is a `message_uuid`
-            // field on ToolExecution + a `retain` predicate; deferred
-            // until per-tool anchoring is actually needed.
-            state.session.tool_executions.clear();
+            // D4: drop only tool overlays whose anchor message no
+            // longer survives. Unstamped executions (mid-stream, no
+            // committed assistant message yet) are kept — they belong
+            // to the live turn the user is interacting with. The
+            // streaming overlay is the live-turn anchor and is always
+            // cleared because truncate semantically ends the live turn.
+            let surviving_uuids: std::collections::HashSet<uuid::Uuid> = state
+                .session
+                .transcript
+                .cells()
+                .iter()
+                .map(|c| c.message_uuid)
+                .collect();
+            state
+                .session
+                .retain_tool_executions_for_messages(&surviving_uuids);
             state.ui.streaming = None;
             true
         }

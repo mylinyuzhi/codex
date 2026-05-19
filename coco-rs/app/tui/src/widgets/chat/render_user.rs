@@ -50,16 +50,22 @@ pub(super) fn try_render(
             ]));
             Some(())
         }
-        CellKind::System(SystemCellKind::UserInterruption { for_tool_use: _ }) => {
-            // TS `InterruptedByUser.tsx`: two dim-color text fragments
-            // rendered inside a `<MessageResponse height={1}>`. The
-            // wrapper is the assistant-row container (gives the row a
-            // shaped indent), but the text itself is bare and dim. We
-            // mirror that: no `❯` user-bubble prefix, no bg tint, just
-            // a single dim line. `for_tool_use` is informational only —
-            // TS uses the same component for both variants.
+        CellKind::System(SystemCellKind::UserInterruption { for_tool_use }) => {
+            // Dim "Interrupted · …" row. The `for_tool_use` flag is
+            // the engine-authoritative answer to "was a tool in flight
+            // when the user cancelled?" (computed once in
+            // `finalize_user_cancel`). Surfaces a more specific
+            // wording for mid-tool cancellation so users see the
+            // distinction TS encodes via the
+            // `INTERRUPT_MESSAGE_FOR_TOOL_USE` text variant in
+            // persisted JSONL.
+            let key = if *for_tool_use {
+                "chat.interrupted_for_tool_use_marker"
+            } else {
+                "chat.interrupted_marker"
+            };
             lines.push(Line::from(
-                Span::raw(t!("chat.interrupted_marker").to_string()).fg(w.styles.dim()),
+                Span::raw(t!(key).to_string()).fg(w.styles.dim()),
             ));
             Some(())
         }

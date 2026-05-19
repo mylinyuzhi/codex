@@ -675,7 +675,7 @@ async fn run_agent_driver(
                             continue;
                         }
                         SlashOutcome::TriggerClear { scope } => {
-                            run_clear_conversation(&runtime, scope, &active_turn).await;
+                            run_clear_conversation(&runtime, scope, &active_turn, &event_tx).await;
                             continue;
                         }
                         SlashOutcome::TriggerDream => {
@@ -911,7 +911,7 @@ async fn run_agent_driver(
                             .await;
                     }
                     SlashOutcome::TriggerClear { scope } => {
-                        run_clear_conversation(&runtime, scope, &active_turn).await;
+                        run_clear_conversation(&runtime, scope, &active_turn, &event_tx).await;
                     }
                     SlashOutcome::TriggerDream => {
                         run_dream_consolidation(&runtime).await;
@@ -994,7 +994,7 @@ async fn run_agent_driver(
                             .await;
                     }
                     SlashOutcome::TriggerClear { scope } => {
-                        run_clear_conversation(&runtime, scope, &active_turn).await;
+                        run_clear_conversation(&runtime, scope, &active_turn, &event_tx).await;
                     }
                     SlashOutcome::TriggerDream => {
                         run_dream_consolidation(&runtime).await;
@@ -1965,8 +1965,18 @@ async fn dispatch_slash_command(
             // the handler — when no handler emits this today, we err on
             // the side of preserving history rather than dropping it.
             if !summary.trim().is_empty() {
+                // I-1 (Authority): pre-computed compact summary push
+                // goes through history_push_and_emit so the TUI
+                // TranscriptView and SDK observers see the new
+                // boundary marker, not just the slash text echo.
                 let mut h = runtime.history.lock().await;
-                h.push(coco_compact::build_compact_summary_message(&summary));
+                let event_tx_opt = Some(event_tx.clone());
+                coco_query::history_sync::history_push_and_emit(
+                    &mut h,
+                    coco_compact::build_compact_summary_message(&summary),
+                    &event_tx_opt,
+                )
+                .await;
             }
             emit_slash_text(event_tx, name, &display_text).await;
             SlashOutcome::Handled
@@ -2288,15 +2298,33 @@ async fn run_manual_compact(
 
 /// Run the clear flow. Drains any active turn first since clear mutates
 /// session_id + resets several per-session caches. TS: `clearConversation()`.
+///
+/// Plan I-1 (Authority): emits a wire-visible event after the clear so
+/// the TUI's `TranscriptView` and SDK NDJSON observers stay coherent.
+/// Full-scope `/clear` rotates session_id → emit
+/// `SessionResetForResume { session_id: new }`; lighter `/clear history`
+/// keeps the same session id → emit `MessageTruncated { keep_count: 0 }`.
 async fn run_clear_conversation(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     scope: ClearScope,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
+    event_tx: &mpsc::Sender<CoreEvent>,
 ) {
     drain_active_turn(active_turn).await;
     if let Err(e) = runtime.clear_conversation(scope).await {
         warn!(error = %e, "/clear failed");
+        return;
     }
+    let notif = match scope {
+        ClearScope::History => ServerNotification::MessageTruncated { keep_count: 0 },
+        ClearScope::Conversation | ClearScope::All => {
+            let new_session_id = runtime.current_session_id().await;
+            ServerNotification::SessionResetForResume {
+                session_id: new_session_id,
+            }
+        }
+    };
+    let _ = event_tx.send(CoreEvent::Protocol(notif)).await;
 }
 
 /// Force auto-memory consolidation now (skips the three-gate scheduler).

@@ -42,6 +42,78 @@ pub async fn history_push_and_emit(
     .await;
 }
 
+/// Clear `history` and emit `MessageTruncated { keep_count: 0 }`. The
+/// symmetric companion to [`history_push_and_emit`] — every transcript
+/// mutation goes through a wire-visible event so the TUI's
+/// `TranscriptView` and SDK NDJSON observers stay coherent with engine
+/// state. Use this for plan-mode-exit clears and any other
+/// "drop entire history" path that should NOT rotate session_id.
+///
+/// For `/clear` (which rotates session_id), call
+/// [`history_clear_and_emit_session_reset`] instead so consumers
+/// also rotate `conversation_id` / re-key the prompt cache.
+pub async fn history_clear_and_emit(
+    history: &mut MessageHistory,
+    event_tx: &Option<Sender<CoreEvent>>,
+) {
+    history.clear();
+    let _delivered = emit_protocol(
+        event_tx,
+        ServerNotification::MessageTruncated { keep_count: 0 },
+    )
+    .await;
+}
+
+/// Clear `history` and emit `SessionResetForResume { session_id }`. Use
+/// for `/clear` paths that rotate the session id — the same event the
+/// resume path uses, since TUI / SDK consumers handle both with the
+/// same teardown (wipe transcript, clear overlays, re-key
+/// `conversation_id`).
+pub async fn history_clear_and_emit_session_reset(
+    history: &mut MessageHistory,
+    new_session_id: String,
+    event_tx: &Option<Sender<CoreEvent>>,
+) {
+    history.clear();
+    let _delivered = emit_protocol(
+        event_tx,
+        ServerNotification::SessionResetForResume {
+            session_id: new_session_id,
+        },
+    )
+    .await;
+}
+
+/// Replace `history.messages` wholesale and emit the event burst that
+/// makes the swap observable: a `MessageTruncated { keep_count: 0 }`
+/// followed by one `MessageAppended` per new message. Used by
+/// compaction (partial / session-memory / full / reactive head-trim) so
+/// the TUI's derived view tracks the engine-side rewrite.
+///
+/// Empty `new_messages` is allowed — equivalent to
+/// [`history_clear_and_emit`] in that case.
+pub async fn history_replace_and_emit(
+    history: &mut MessageHistory,
+    new_messages: Vec<Message>,
+    event_tx: &Option<Sender<CoreEvent>>,
+) {
+    history.clear();
+    let _delivered = emit_protocol(
+        event_tx,
+        ServerNotification::MessageTruncated { keep_count: 0 },
+    )
+    .await;
+    for msg in new_messages {
+        let notif_msg = msg.clone();
+        history.push(msg);
+        let _delivered = emit_protocol(
+            event_tx,
+            ServerNotification::MessageAppended { message: notif_msg },
+        )
+        .await;
+    }
+}
+
 /// Single writer for the user-cancel marker. Reads `in_flight_tool_calls`
 /// from the engine (which holds the authoritative view of running tool
 /// state at the cancel checkpoint) and pushes a typed

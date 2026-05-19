@@ -52,6 +52,10 @@ fn fake_running_tool() -> ToolExecution {
         completed_at: None,
         description: None,
         streaming_input: None,
+        // Stamped to an arbitrary UUID — SessionResetForResume wipes
+        // every execution regardless of anchor, so the value is
+        // immaterial for this test.
+        message_uuid: Some(uuid::Uuid::nil()),
     }
 }
 

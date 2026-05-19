@@ -61,7 +61,7 @@ fn idle_with_meaningful_tail() -> AppState {
 
 /// Map a legacy test id ("u1") to the v5 UUID string the cell mirror
 /// produces. `apply_auto_restore` reads message ids from
-/// `transcript_messages()` (= `cell.message_uuid.to_string()`), so the
+/// `transcript.cells()` (= `cell.message_uuid.to_string()`), so the
 /// expected `pending_auto_restore_truncate` value is the same
 /// derivation, not the raw fixture id.
 fn test_id(s: &str) -> String {

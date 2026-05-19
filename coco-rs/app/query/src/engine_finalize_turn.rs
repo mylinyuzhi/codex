@@ -209,7 +209,11 @@ impl QueryEngine {
                 && let Some(survivors) =
                     coco_compact::peel_head_for_ptl_retry(&history.messages, drop_target - freed)
             {
-                history.messages = survivors;
+                // I-1 (Authority): reactive head-trim drops oldest
+                // messages from history. Pair the swap with truncate
+                // + appended-burst so TUI/SDK observers see the new
+                // state.
+                crate::history_sync::history_replace_and_emit(history, survivors, event_tx).await;
             }
         }
 

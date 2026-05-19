@@ -365,10 +365,19 @@ impl TurnRunner for QueryEngineRunner {
                     "UserPromptSubmit hook blocked the turn: {}\n\nOriginal prompt: {prompt}",
                     blocking.blocking_error,
                 );
+                let warning_msg = coco_messages::create_user_message(&warning);
                 {
                     let mut h = history_handle.lock().await;
-                    h.push(coco_messages::create_user_message(&warning));
+                    h.push(warning_msg.clone());
                 }
+                // I-1: emit so SDK observers see the warning row.
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(
+                        coco_types::ServerNotification::MessageAppended {
+                            message: warning_msg,
+                        },
+                    ))
+                    .await;
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
                         coco_types::ServerNotification::TurnFailed(coco_types::TurnFailedParams {
@@ -384,11 +393,28 @@ impl TurnRunner for QueryEngineRunner {
                     .clone()
                     .map(|r| format!("Operation stopped by hook: {r}"))
                     .unwrap_or_else(|| "Operation stopped by hook".to_string());
+                let prompt_msg = coco_messages::create_user_message(&prompt);
+                let stop_msg_obj = coco_messages::create_user_message(&stop_msg);
                 {
                     let mut h = history_handle.lock().await;
-                    h.push(coco_messages::create_user_message(&prompt));
-                    h.push(coco_messages::create_user_message(&stop_msg));
+                    h.push(prompt_msg.clone());
+                    h.push(stop_msg_obj.clone());
                 }
+                // I-1: emit so SDK observers see both rows.
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(
+                        coco_types::ServerNotification::MessageAppended {
+                            message: prompt_msg,
+                        },
+                    ))
+                    .await;
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(
+                        coco_types::ServerNotification::MessageAppended {
+                            message: stop_msg_obj,
+                        },
+                    ))
+                    .await;
                 return Ok(());
             }
 
@@ -409,6 +435,20 @@ impl TurnRunner for QueryEngineRunner {
             )
             .await;
             let new_msgs = crate::at_mention_turn::build_messages_for_turn(&inputs);
+            // I-1 (Authority) — D2: emit MessageAppended for the new
+            // turn messages BEFORE invoking the engine. The engine no
+            // longer re-emits its initial turn_messages load (would
+            // double-fire on every turn). Engines only emit for
+            // newly-produced content (assistant turns, tool results,
+            // system pushes) within the loop. See
+            // `engine-tui-unified-transcript-plan.md` §5.2.
+            for m in new_msgs.iter().cloned() {
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(
+                        coco_types::ServerNotification::MessageAppended { message: m },
+                    ))
+                    .await;
+            }
             let combined: Vec<coco_messages::Message> = {
                 let mut h = history_handle.lock().await;
                 h.extend(new_msgs.iter().cloned());

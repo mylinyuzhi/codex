@@ -384,6 +384,49 @@ impl SessionState {
             completed_at: None,
             description: None,
             streaming_input: None,
+            // Set later by `on_message_appended` when the assistant
+            // turn that owns this tool_use commits. Mid-stream, the
+            // engine assistant message UUID isn't known yet.
+            message_uuid: None,
+        });
+    }
+
+    /// Stamp the parent assistant message UUID onto every ToolExecution
+    /// whose `call_id` matches a `ToolCall` content block in `msg`.
+    /// Called from the `MessageAppended` handler when an Assistant
+    /// message lands. After this stamp, [`Self::retain_tool_executions_for_messages`]
+    /// can decide which overlays survive a truncate.
+    pub fn stamp_tool_executions_with_assistant_uuid(&mut self, msg: &coco_messages::Message) {
+        let coco_messages::Message::Assistant(a) = msg else {
+            return;
+        };
+        let coco_messages::LlmMessage::Assistant { content, .. } = &a.message else {
+            return;
+        };
+        for part in content {
+            if let coco_messages::AssistantContent::ToolCall(tc) = part
+                && let Some(exec) = self
+                    .tool_executions
+                    .iter_mut()
+                    .find(|t| t.call_id == tc.tool_call_id)
+            {
+                exec.message_uuid = Some(a.uuid);
+            }
+        }
+    }
+
+    /// Drop tool executions whose anchor assistant-message UUID is no
+    /// longer in `surviving_uuids`. Executions that were never stamped
+    /// (`message_uuid = None`) are kept — they belong to an in-flight
+    /// stream that survives any user-initiated truncate, since the
+    /// stream itself was already cancelled by the same UI flow.
+    pub fn retain_tool_executions_for_messages(
+        &mut self,
+        surviving_uuids: &std::collections::HashSet<uuid::Uuid>,
+    ) {
+        self.tool_executions.retain(|t| match t.message_uuid {
+            Some(uuid) => surviving_uuids.contains(&uuid),
+            None => true,
         });
     }
 
@@ -509,6 +552,17 @@ pub struct ToolExecution {
     pub description: Option<String>,
     /// Streaming tool input delta (typing effect for bash/powershell).
     pub streaming_input: Option<String>,
+    /// UUID of the engine `Message::Assistant` that emitted this
+    /// tool_use content block. Populated when `MessageAppended` for the
+    /// owning assistant turn arrives and walks `ToolCall` blocks to
+    /// pair `call_id` with the parent message UUID. `None` until then
+    /// (mid-stream window — the engine assistant message hasn't been
+    /// committed yet).
+    ///
+    /// Used by the `MessageTruncated` handler to drop only executions
+    /// anchored to messages that no longer survive the truncation,
+    /// rather than clearing every in-flight tool overlay.
+    pub message_uuid: Option<uuid::Uuid>,
 }
 
 impl ToolExecution {
