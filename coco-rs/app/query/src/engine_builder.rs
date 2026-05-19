@@ -522,13 +522,25 @@ impl QueryEngine {
     /// Drain any silent attachments emitted since the last turn into
     /// `history`. Called at the head of each outer-loop iteration.
     /// Returns the number of drained attachments for telemetry.
-    pub(crate) async fn drain_attachment_inbox(&self, history: &mut MessageHistory) -> usize {
+    pub(crate) async fn drain_attachment_inbox(
+        &self,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    ) -> usize {
         let mut count = 0;
         let mut rx = self.attachment_rx.lock().await;
         while let Ok(att) = rx.try_recv() {
-            history
-                .messages
-                .push(coco_messages::Message::Attachment(att));
+            // I-1 (Authority): every transcript-visible append must
+            // emit so TUI's TranscriptView + SDK NDJSON observers
+            // track the new attachment. Drain happens at turn-start
+            // before the reminder pipeline so cross-crate-produced
+            // attachments land in history with full provenance.
+            crate::history_sync::history_push_and_emit(
+                history,
+                coco_messages::Message::Attachment(att),
+                event_tx,
+            )
+            .await;
             count += 1;
         }
         count

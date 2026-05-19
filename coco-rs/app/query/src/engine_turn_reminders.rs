@@ -59,6 +59,12 @@ pub(crate) struct TurnReminderContext<'a> {
     pub todo_key: &'a str,
     pub context_window: i64,
     pub effective_window: i64,
+    /// Wire channel for the reminder injection step so each
+    /// model-visible reminder appended to `MessageHistory` emits a
+    /// `ServerNotification::MessageAppended` and observers stay
+    /// coherent (I-1 authority). `None` for paths that don't have a
+    /// wire (forked agents, tests).
+    pub event_tx: &'a Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 }
 
 impl QueryEngine {
@@ -93,6 +99,7 @@ impl QueryEngine {
             todo_key: reminder_todo_key,
             context_window: reminder_context_window,
             effective_window: reminder_effective_window,
+            event_tx,
         } = ctx;
         // Phase 1. Run non-reminder side effects (mode reconciliation +
         // mailbox polling + leader pending-approvals) — these MUTATE
@@ -198,7 +205,7 @@ impl QueryEngine {
                 _ => (None, false),
             };
 
-        let reminder_human_turn_number = count_human_turns(&history.messages);
+        let reminder_human_turn_number = count_human_turns(history.as_slice());
 
         // Take an app_state snapshot so the input struct holds an
         // immutable borrow; any post-emit clearing happens after the
@@ -308,7 +315,7 @@ impl QueryEngine {
         // user-message UUID that has already been reminder-scanned
         // and skips re-parsing it so the user-input tier fires once
         // per human turn, not once per tool-result iteration.
-        let reminder_current_user_uuid = history.messages.iter().rev().find_map(|m| match m {
+        let reminder_current_user_uuid = history.iter().rev().find_map(|m| match m {
             Message::User(u) => Some(u.uuid),
             _ => None,
         });
@@ -394,7 +401,7 @@ impl QueryEngine {
         // deprioritize reference docs for tools the model is actively
         // exercising. Empty when no human-turn boundary is established
         // yet (start of conversation, or no successful tool runs).
-        let reminder_recent_tools = collect_recent_successful_tools(&history.messages);
+        let reminder_recent_tools = collect_recent_successful_tools(history.as_slice());
         let materialized = self
             .reminder_sources
             .materialize(coco_system_reminder::MaterializeContext {
@@ -457,7 +464,7 @@ impl QueryEngine {
             turn_number: reminder_human_turn_number,
             agent_id: self.config.agent_id.clone(),
             user_input: reminder_user_input.clone(),
-            last_human_turn_uuid: history.messages.iter().rev().find_map(|m| match m {
+            last_human_turn_uuid: history.iter().rev().find_map(|m| match m {
                 Message::User(u) => Some(u.uuid),
                 _ => None,
             }),
@@ -663,7 +670,7 @@ impl QueryEngine {
                     // tool-result rounds sharing the same UUID don't
                     // advance the counter (mirror of the old
                     // `observe_turn_and_count` behavior).
-                    if let Some(uuid) = history.messages.iter().rev().find_map(|m| match m {
+                    if let Some(uuid) = history.iter().rev().find_map(|m| match m {
                         Message::User(u) => Some(u.uuid),
                         _ => None,
                     }) {
@@ -699,7 +706,7 @@ impl QueryEngine {
         // (hooks / permissions / tools / etc.) since the prior turn.
         // Must happen BEFORE inject_reminders so the reminder pipeline
         // sees any cross-crate-produced attachments in history.
-        let drained = self.drain_attachment_inbox(history).await;
+        let drained = self.drain_attachment_inbox(history, event_tx).await;
         if drained > 0 {
             tracing::debug!(
                 target: "coco::attachment_inbox",
@@ -708,8 +715,23 @@ impl QueryEngine {
             );
         }
 
-        let display_only = inject_reminders(reminders, &mut history.messages);
-        for msg in &display_only {
+        // I-1 (Authority): every reminder appended to history must emit
+        // a `MessageAppended` so TUI's TranscriptView + SDK NDJSON
+        // observers track it. Pull the materialized reminder messages
+        // and push each through the event-emitting helper.
+        let batch = inject_reminders(reminders);
+        if !batch.is_empty() {
+            tracing::debug!(
+                target: "coco::system_reminder::inject",
+                model_visible = batch.model_visible.len(),
+                display_only = batch.display_only.len(),
+                "injecting reminder batch",
+            );
+        }
+        for msg in batch.model_visible {
+            crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+        }
+        for msg in &batch.display_only {
             tracing::debug!(
                 target: "coco::system_reminder::display_only",
                 injected = ?msg,

@@ -19,6 +19,7 @@ fn finalized_history_lines_render_committed_assistant_message() {
             show_system_reminders: false,
             show_thinking: false,
             kb_handle: None,
+            reasoning_metadata: None,
         },
     );
 
@@ -39,6 +40,7 @@ fn finalized_history_lines_do_not_emit_active_busy_tail() {
             show_system_reminders: false,
             show_thinking: false,
             kb_handle: None,
+            reasoning_metadata: None,
         },
     );
 
@@ -59,6 +61,7 @@ fn finalized_history_lines_collapse_meta_by_default() {
             show_system_reminders: false,
             show_thinking: false,
             kb_handle: None,
+            reasoning_metadata: None,
         },
     );
 
@@ -76,11 +79,14 @@ fn finalized_history_lines_show_collapsed_thinking_without_per_item_toggle_hint(
     // cell so the header renders the full `Thinking · 1.3s · 15
     // reasoning tokens` line. Tests bypass the engine flow and use the
     // `_with_metadata` helper directly.
-    let cells = vec![test_helpers::assistant_thinking_cell_with_metadata(
-        "Need to inspect files.",
-        1300,
-        15,
-    )];
+    let (cell, meta) =
+        test_helpers::assistant_thinking_cell_with_metadata("Need to inspect files.", 1300, 15);
+    let mut reasoning_metadata: std::collections::HashMap<
+        uuid::Uuid,
+        crate::state::session::ReasoningMetadata,
+    > = std::collections::HashMap::new();
+    reasoning_metadata.insert(cell.message_uuid, meta);
+    let cells = vec![cell];
 
     let lines = render_finalized_history_lines(
         &cells,
@@ -91,6 +97,7 @@ fn finalized_history_lines_show_collapsed_thinking_without_per_item_toggle_hint(
             show_system_reminders: false,
             show_thinking: false,
             kb_handle: Some(&kb_handle),
+            reasoning_metadata: Some(&reasoning_metadata),
         },
     );
 
@@ -143,6 +150,7 @@ fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
         show_system_reminders: false,
         show_thinking: false,
         kb_handle: None,
+        reasoning_metadata: None,
     }
 }
 

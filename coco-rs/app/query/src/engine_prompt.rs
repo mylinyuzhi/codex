@@ -69,16 +69,16 @@ impl QueryEngine {
                     Err(_) => Vec::new(),
                 };
                 let (collapsed, applied) =
-                    coco_compact::apply_collapses_if_needed(&history.messages, &commits);
+                    coco_compact::apply_collapses_if_needed(history.as_slice(), &commits);
                 if applied > 0 {
                     info!(applied, "applied {applied} staged collapses to prompt");
                 }
                 collapsed
             } else {
-                history.messages.clone()
+                history.to_vec()
             }
         } else {
-            history.messages.clone()
+            history.to_vec()
         };
 
         self.apply_tool_result_budget_to_prompt(&mut messages_for_api)
@@ -589,8 +589,7 @@ fn collect_api_user_tool_result_groups(messages: &[Message]) -> Vec<Vec<usize>> 
             | Message::System(_)
             | Message::Attachment(_)
             | Message::Progress(_)
-            | Message::Tombstone(_)
-            | Message::ToolUseSummary(_) => {}
+            | Message::Tombstone(_) => {}
         }
     }
 

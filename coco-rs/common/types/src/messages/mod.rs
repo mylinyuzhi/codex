@@ -78,7 +78,6 @@ pub use message::SystemTurnDurationMessage;
 pub use message::SystemUserInterruptionMessage;
 pub use message::TombstoneMessage;
 pub use message::ToolResultMessage;
-pub use message::ToolUseSummaryMessage;
 pub use message::UserMessage;
 pub use message::Visibility;
 

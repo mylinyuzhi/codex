@@ -754,7 +754,6 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                                 message_id,
                                 restore_type: restore,
                                 rewound_turn,
-                                mode: crate::state::rewind::RewindMode::Explicit,
                             })
                             .await;
                     }

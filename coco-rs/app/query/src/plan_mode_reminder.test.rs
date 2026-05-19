@@ -32,7 +32,7 @@ fn text_of(msg: &Message) -> Option<String> {
 }
 
 fn history_texts(history: &MessageHistory) -> Vec<String> {
-    history.messages.iter().filter_map(text_of).collect()
+    history.iter().filter_map(text_of).collect()
 }
 
 // ── Mode reconciliation ──────────────────────────────────────────────
@@ -58,7 +58,7 @@ async fn unannounced_plan_exit_via_shift_tab_sets_flags() {
     r.turn_start_side_effects_only(&mut h).await;
 
     // Side-effects-only never writes reminders into history.
-    assert!(h.messages.is_empty(), "no emission from side-effects-only");
+    assert!(h.is_empty(), "no emission from side-effects-only");
 
     let guard = app_state.read().await;
     assert!(guard.has_exited_plan_mode);
@@ -157,8 +157,7 @@ async fn plan_mode_bumps_turn_counter_on_new_human_uuid() {
         Some(app_state.clone()),
     );
     let mut h = MessageHistory::new();
-    h.messages
-        .push(coco_messages::create_user_message("turn 1"));
+    h.push(coco_messages::create_user_message("turn 1"));
     r.turn_start_side_effects_only(&mut h).await;
     assert_eq!(
         app_state.read().await.plan_mode_turns_since_last_attachment,
@@ -174,8 +173,7 @@ async fn plan_mode_bumps_turn_counter_on_new_human_uuid() {
     );
 
     // New human turn: bump to 2.
-    h.messages
-        .push(coco_messages::create_user_message("turn 2"));
+    h.push(coco_messages::create_user_message("turn 2"));
     r.turn_start_side_effects_only(&mut h).await;
     assert_eq!(
         app_state.read().await.plan_mode_turns_since_last_attachment,
@@ -194,7 +192,7 @@ async fn default_mode_does_not_bump_plan_turn_counter() {
         Some(app_state.clone()),
     );
     let mut h = MessageHistory::new();
-    h.messages.push(coco_messages::create_user_message("t1"));
+    h.push(coco_messages::create_user_message("t1"));
     r.turn_start_side_effects_only(&mut h).await;
     assert_eq!(
         app_state.read().await.plan_mode_turns_since_last_attachment,

@@ -134,38 +134,29 @@ fn multiple_reminders_preserve_order() {
 #[test]
 fn inject_text_reminder_produces_attachment_message_with_is_meta() {
     use coco_messages::Message;
-    let mut history: Vec<Message> = Vec::new();
-    inject_reminders(
-        vec![SystemReminder::new(AttachmentType::PlanMode, "hi")],
-        &mut history,
-    );
-    assert_eq!(history.len(), 1);
-    match &history[0] {
+    let batch = inject_reminders(vec![SystemReminder::new(AttachmentType::PlanMode, "hi")]);
+    assert_eq!(batch.model_visible.len(), 1);
+    match &batch.model_visible[0] {
         Message::Attachment(a) => {
             assert_eq!(a.kind, coco_types::AttachmentKind::PlanMode);
             assert!(a.as_api_message().is_some());
         }
-        _ => panic!("expected Attachment variant, got {:?}", history[0].kind()),
+        other => panic!("expected Attachment variant, got {:?}", other.kind()),
     }
 }
 
 #[test]
 fn inject_empty_batch_leaves_history_unchanged() {
-    use coco_messages::Message;
-    let mut history: Vec<Message> = Vec::new();
-    inject_reminders(Vec::new(), &mut history);
-    assert_eq!(history.len(), 0);
+    let batch = inject_reminders(Vec::new());
+    assert!(batch.is_empty());
 }
 
 #[test]
 fn inject_silent_reminder_does_not_append() {
-    use coco_messages::Message;
-    let mut history: Vec<Message> = Vec::new();
-    inject_reminders(
-        vec![SystemReminder::new(AttachmentType::PlanMode, "x").silent()],
-        &mut history,
-    );
-    assert_eq!(history.len(), 0);
+    let batch = inject_reminders(vec![
+        SystemReminder::new(AttachmentType::PlanMode, "x").silent(),
+    ]);
+    assert!(batch.model_visible.is_empty());
 }
 
 #[test]
@@ -173,10 +164,9 @@ fn inject_user_blocks_produces_user_message_with_system_injected_origin() {
     use coco_messages::Message;
     let msgs = vec![ReminderMessage::user_text("note")];
     let r = SystemReminder::messages(AttachmentType::PlanMode, msgs);
-    let mut history: Vec<Message> = Vec::new();
-    inject_reminders(vec![r], &mut history);
-    assert_eq!(history.len(), 1);
-    match &history[0] {
+    let batch = inject_reminders(vec![r]);
+    assert_eq!(batch.model_visible.len(), 1);
+    match &batch.model_visible[0] {
         // Post-Phase-2: multi-block reminder messages land as
         // Message::Attachment with Api body + kind.
         Message::Attachment(a) => {
@@ -188,19 +178,14 @@ fn inject_user_blocks_produces_user_message_with_system_injected_origin() {
 
 #[test]
 fn inject_multiple_reminders_appends_in_order() {
-    use coco_messages::Message;
-    let mut history: Vec<Message> = Vec::new();
-    inject_reminders(
-        vec![
-            SystemReminder::new(AttachmentType::PlanMode, "a"),
-            SystemReminder::new(AttachmentType::PlanModeExit, "b"),
-        ],
-        &mut history,
-    );
-    assert_eq!(history.len(), 2);
+    let batch = inject_reminders(vec![
+        SystemReminder::new(AttachmentType::PlanMode, "a"),
+        SystemReminder::new(AttachmentType::PlanModeExit, "b"),
+    ]);
+    assert_eq!(batch.model_visible.len(), 2);
     // Both are Attachment messages.
-    assert!(matches!(history[0], Message::Attachment(_)));
-    assert!(matches!(history[1], Message::Attachment(_)));
+    assert!(matches!(batch.model_visible[0], Message::Attachment(_)));
+    assert!(matches!(batch.model_visible[1], Message::Attachment(_)));
 }
 
 /// Regression guard for the audit-add silent-reminder shape.
@@ -215,7 +200,6 @@ fn inject_multiple_reminders_appends_in_order() {
 /// `kind.is_api_visible()` that would panic.
 #[test]
 fn audit_add_silent_reminders_route_to_display_only_not_history() {
-    use coco_messages::Message;
     let kinds = [
         AttachmentType::MaxTurnsReached,
         AttachmentType::CurrentSessionMemory,
@@ -234,14 +218,13 @@ fn audit_add_silent_reminders_route_to_display_only_not_history() {
             "{at:?}: is_effectively_silent() must be true",
         );
 
-        let mut history: Vec<Message> = Vec::new();
-        let display_only = inject_reminders(vec![r], &mut history);
+        let batch = inject_reminders(vec![r]);
         assert!(
-            history.is_empty(),
+            batch.model_visible.is_empty(),
             "{at:?}: silent reminder must not append to history",
         );
         assert_eq!(
-            display_only.len(),
+            batch.display_only.len(),
             1,
             "{at:?}: silent reminder must land in display_only",
         );

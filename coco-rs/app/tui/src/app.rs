@@ -396,23 +396,22 @@ impl App {
     }
 
     /// Dispatch any pending auto-restore truncation as
-    /// `UserCommand::Rewind { mode: AutoRestore }`. Called once per
+    /// `UserCommand::AutoTruncate`. Called once per
     /// `handle_core_event` invocation so the engine truncation lags
     /// the TUI in-place restore by at most one event cycle.
     ///
-    /// See `engine-tui-unified-transcript-plan.md` §7.4.
+    /// See `engine-tui-unified-transcript-plan.md` §7.4. The split
+    /// from explicit `Rewind` makes "no file restore" a type-level
+    /// invariant — the engine's auto-truncate handler can't be passed
+    /// a `RestoreType` at all, so it cannot accidentally fire file
+    /// rewinds during a cancel-on-empty-input flow.
     async fn drain_pending_auto_restore_truncate(&mut self) {
         let Some(message_id) = self.state.session.pending_auto_restore_truncate.take() else {
             return;
         };
         let _ = self
             .command_tx
-            .send(UserCommand::Rewind {
-                message_id,
-                restore_type: crate::state::rewind::RestoreType::ConversationOnly,
-                rewound_turn: 0,
-                mode: crate::state::rewind::RewindMode::AutoRestore,
-            })
+            .send(UserCommand::AutoTruncate { message_id })
             .await;
     }
 

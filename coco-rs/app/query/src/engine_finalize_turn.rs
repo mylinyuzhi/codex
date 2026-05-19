@@ -82,7 +82,7 @@ impl QueryEngine {
         fields(
             trigger = "reactive",
             session_id = %self.config.session_id,
-            history_len = history.messages.len(),
+            history_len = history.len(),
         ),
     )]
     pub(crate) async fn do_reactive_compact(
@@ -103,8 +103,8 @@ impl QueryEngine {
             }
         }
 
-        let pre_tokens = coco_compact::estimate_tokens(&history.messages);
-        let pre_count = history.messages.len() as i32;
+        let pre_tokens = coco_compact::estimate_tokens(history.as_slice());
+        let pre_count = history.len() as i32;
         let drop_target = coco_compact::reactive::calculate_drop_target(
             pre_tokens,
             &coco_compact::ReactiveCompactConfig {
@@ -196,8 +196,8 @@ impl QueryEngine {
             // call sends the original (oversized) prompt + the payload;
             // Anthropic strips and bills accordingly.
         } else {
-            coco_compact::reactive::api_microcompact(&mut history.messages, drop_target);
-            let post_micro_tokens = coco_compact::estimate_tokens(&history.messages);
+            coco_compact::reactive::api_microcompact(history.messages_mut(), drop_target);
+            let post_micro_tokens = coco_compact::estimate_tokens(history.as_slice());
             let freed = (pre_tokens - post_micro_tokens).max(0);
 
             // Escalate when api_microcompact couldn't free enough — most
@@ -207,7 +207,7 @@ impl QueryEngine {
             // the in-place tool-result clear can't recover budget.
             if freed < drop_target
                 && let Some(survivors) =
-                    coco_compact::peel_head_for_ptl_retry(&history.messages, drop_target - freed)
+                    coco_compact::peel_head_for_ptl_retry(history.as_slice(), drop_target - freed)
             {
                 // I-1 (Authority): reactive head-trim drops oldest
                 // messages from history. Pair the swap with truncate
@@ -221,7 +221,7 @@ impl QueryEngine {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        let post_tokens = coco_compact::estimate_tokens(&history.messages);
+        let post_tokens = coco_compact::estimate_tokens(history.as_slice());
         let actually_freed = (pre_tokens - post_tokens).max(0);
         {
             let mut state = self.reactive_state.lock().await;
@@ -235,7 +235,7 @@ impl QueryEngine {
             }
         }
 
-        let removed = (pre_count - history.messages.len() as i32).max(0);
+        let removed = (pre_count - history.len() as i32).max(0);
         let _ = emit_protocol(
             event_tx,
             ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
@@ -263,7 +263,7 @@ impl QueryEngine {
             raw_summary: None,
             summary_messages: Vec::new(),
             attachments: Vec::new(),
-            messages_to_keep: history.messages.clone(),
+            messages_to_keep: history.to_vec(),
             hook_results: Vec::new(),
             user_display_message: None,
             pre_compact_tokens: pre_tokens,
@@ -276,7 +276,7 @@ impl QueryEngine {
             .notify_all(&synth, is_main_agent)
             .await;
         self.compaction_observers
-            .notify_post_compact(&history.messages)
+            .notify_post_compact(history.as_slice())
             .await;
 
         // Reset the cache-break baseline — TS notifyCompaction(query_source, agent_id).
@@ -389,16 +389,16 @@ impl QueryEngine {
             if let Some(trigger) = coco_compact::evaluate_time_based_trigger(
                 tb_cfg, now_ms, last_opt, /*is_main_thread*/ true,
             ) {
-                let pre_tb_tokens = coco_compact::estimate_tokens(&history.messages);
+                let pre_tb_tokens = coco_compact::estimate_tokens(history.as_slice());
                 if let Some(res) =
-                    coco_compact::time_based_microcompact(&mut history.messages, &trigger)
+                    coco_compact::time_based_microcompact(history.messages_mut(), &trigger)
                 {
                     info!(
                         cleared = res.messages_cleared,
                         gap_min = trigger.gap_minutes,
                         "time-based micro-compaction triggered",
                     );
-                    let post_tb_tokens = coco_compact::estimate_tokens(&history.messages);
+                    let post_tb_tokens = coco_compact::estimate_tokens(history.as_slice());
                     // TS does not emit a CompactBoundary for time-based MC —
                     // it logs an analytics event (`tengu_time_based_microcompact`)
                     // and leaves the trigger label to the surrounding flow.
@@ -438,15 +438,15 @@ impl QueryEngine {
         if self.config.compact.micro.enabled
             && self.config.compact.micro.clear_file_unchanged_stubs_enabled
         {
-            let _ = coco_compact::clear_file_unchanged_stubs(&mut history.messages);
+            let _ = coco_compact::clear_file_unchanged_stubs(history.messages_mut());
         }
 
         // Compute message-level stats once and share across the
         // auto-memory fan-out and the auto-compact threshold check
         // below — both read the same post-Step-0.5 history.
-        let estimated_tokens = coco_compact::estimate_tokens(&history.messages);
+        let estimated_tokens = coco_compact::estimate_tokens(history.as_slice());
         let tool_calls_last_turn =
-            coco_messages::count_tool_calls_in_last_assistant_turn(&history.messages);
+            coco_messages::count_tool_calls_in_last_assistant_turn(history.as_slice());
 
         // Stop-hooks gate (TS `query/stopHooks.ts:136-157`): bare
         // mode skips the entire post-turn fan-out (promptSuggestion +
@@ -475,7 +475,7 @@ impl QueryEngine {
             // an earlier assistant turn in the slice wrote memory
             // and the latest didn't.
             let has_memory_writes = main_agent_wrote_memory(
-                &history.messages,
+                history.as_slice(),
                 runtime.personal_dir(),
                 last_cursor.as_deref(),
             );
@@ -488,7 +488,7 @@ impl QueryEngine {
             let session_memory = runtime.session_memory.clone();
             let sm_cursor = session_memory.last_extraction_message_id().await;
             let tool_calls_since_sm =
-                count_tool_calls_since(&history.messages, sm_cursor.as_deref());
+                count_tool_calls_since(history.as_slice(), sm_cursor.as_deref());
             // TS parity (`extractMemories.ts:432-434` /
             // `sessionMemory.ts:173-176`): use the **last message** uuid
             // (which can be tool_result / system / attachment), NOT the
@@ -498,7 +498,6 @@ impl QueryEngine {
             // pair; the cursor needs to advance past the tool_result so
             // the next gate's `countToolCallsSince` doesn't double-count.
             let last_msg_id = history
-                .messages
                 .last()
                 .and_then(|m| m.uuid())
                 .map(uuid::Uuid::to_string);
@@ -509,8 +508,8 @@ impl QueryEngine {
             // subagent, so over-counting (history.len()) inflates the
             // "analyze the most recent ~N messages" guidance.
             let extract_message_count =
-                count_model_visible_since(&history.messages, last_cursor.as_deref());
-            let messages_for_fork = history.messages.clone();
+                count_model_visible_since(history.as_slice(), last_cursor.as_deref());
+            let messages_for_fork = history.to_vec();
             let extract_input = coco_memory::service::extract::TurnInput {
                 fork_messages: Box::new(move || {
                     serialize_messages_since(&messages_for_fork, last_cursor.as_deref())
@@ -583,14 +582,14 @@ impl QueryEngine {
             // `feature('CACHED_MICROCOMPACT')`. Opt-in via
             // `compact.micro.count_based_enabled` (default off). When off,
             // we go straight to SM/LLM compaction below.
-            let pre_count = history.messages.len() as i32;
+            let pre_count = history.len() as i32;
             let pre_micro_tokens = estimated_tokens;
             if self.config.compact.micro.enabled && self.config.compact.micro.count_based_enabled {
-                coco_compact::micro_compact(&mut history.messages, micro_keep);
+                coco_compact::micro_compact(history.messages_mut(), micro_keep);
                 info!("auto micro-compaction triggered (keep_recent={micro_keep})");
             }
-            let removed = (pre_count - history.messages.len() as i32).max(0);
-            let post_micro_tokens = coco_compact::estimate_tokens(&history.messages);
+            let removed = (pre_count - history.len() as i32).max(0);
+            let post_micro_tokens = coco_compact::estimate_tokens(history.as_slice());
             let _ = emit_protocol(
                 event_tx,
                 ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
@@ -668,7 +667,7 @@ impl QueryEngine {
         usage: TokenUsage,
     ) {
         self.flush_successful_turn_state(history).await;
-        self.emit_turn_completed(event_tx, turn_id, usage, history.messages.len())
+        self.emit_turn_completed(event_tx, turn_id, usage, history.len())
             .await;
     }
 
@@ -739,7 +738,7 @@ impl QueryEngine {
         let now = chrono::Utc::now().to_rfc3339();
         let mut prev_uuid: Option<String> = None;
 
-        for msg in &history.messages {
+        for msg in history.iter() {
             let Some(uuid) = msg.uuid().copied() else {
                 continue;
             };
@@ -804,7 +803,7 @@ impl QueryEngine {
         let Some(role_cache) = self.role_client_cache.clone() else {
             return;
         };
-        let Some(input) = crate::tool_use_summary::build_input_from_history(&history.messages)
+        let Some(input) = crate::tool_use_summary::build_input_from_history(history.as_slice())
         else {
             return;
         };
@@ -831,9 +830,11 @@ impl QueryEngine {
 
     /// Drain the pending tool-use-summary fork at the top of a new
     /// iteration. On success, emits `ServerNotification::ToolUseSummary`
-    /// for SDK consumers and pushes a `Message::ToolUseSummary`
-    /// (UI-only visibility) into history. On `None` / join-error,
-    /// silent skip — TS parity `.catch(() => null)` at query.ts:1481.
+    /// for SDK consumers; the TUI side-caches the payload without
+    /// writing it to `MessageHistory` (per I-3: tool-use summaries are
+    /// UI-only polish and must not pollute the authoritative
+    /// transcript). On `None` / join-error, silent skip — TS parity
+    /// `.catch(() => null)` at query.ts:1481.
     ///
     /// **No drain-side timeout, no drain-side cancel guard**:
     ///
@@ -854,7 +855,6 @@ impl QueryEngine {
     /// await is a no-op in practice.
     pub(crate) async fn drain_pending_tool_use_summary(
         &self,
-        history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     ) {
         let handle = {
@@ -864,8 +864,8 @@ impl QueryEngine {
         let Some(handle) = handle else {
             return;
         };
-        let msg = match handle.await {
-            Ok(Some(m)) => m,
+        let params = match handle.await {
+            Ok(Some(p)) => p,
             Ok(None) => return,
             Err(join_err) => {
                 tracing::debug!(error = %join_err, "tool_use_summary task join error");
@@ -873,24 +873,10 @@ impl QueryEngine {
             }
         };
 
-        // Wire-level SDK emission: `tool/useSummary` notification.
-        let _ = emit_protocol(
-            event_tx,
-            ServerNotification::ToolUseSummary(coco_types::ToolUseSummaryParams {
-                summary: msg.summary.clone(),
-                preceding_tool_use_ids: msg.preceding_tool_use_ids.clone(),
-            }),
-        )
-        .await;
-
-        // UI-only history entry (Visibility::UI_ONLY) — surfaces in
-        // the transcript but is not sent back to the LLM.
-        crate::history_sync::history_push_and_emit(
-            history,
-            coco_messages::Message::ToolUseSummary(msg),
-            event_tx,
-        )
-        .await;
+        // Wire-level SDK emission: `tool/useSummary` notification. No
+        // transcript entry — UI consumers (TUI) cache the summary by
+        // `preceding_tool_use_ids` and render it as overlay polish.
+        let _ = emit_protocol(event_tx, ServerNotification::ToolUseSummary(params)).await;
     }
 
     /// Spawn the post-turn promptSuggestion fork in a detached task
@@ -1367,7 +1353,7 @@ fn build_transcript_entry(
             None,
             None,
         ),
-        Message::Progress(_) | Message::Tombstone(_) | Message::ToolUseSummary(_) => return None,
+        Message::Progress(_) | Message::Tombstone(_) => return None,
     };
     Some(coco_session::TranscriptEntry {
         entry_type: entry_type.to_string(),

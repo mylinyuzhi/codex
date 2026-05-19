@@ -239,7 +239,9 @@ pub enum UserCommand {
     /// the user's focus directive. TS: `commands/compact/compact.ts:40`
     /// passes `args.trim()` as `customInstructions`.
     Compact { custom_instructions: Option<String> },
-    /// Rewind to a previous checkpoint.
+    /// Explicit `/rewind` flow from the picker. Carries the full
+    /// restore policy (`RestoreType`) — may restore files, emit the
+    /// `RewindCompleted` overlay, and run the picker confirmation.
     /// TS: rewindConversationTo() + fileHistoryRewind() in REPL.tsx
     Rewind {
         message_id: String,
@@ -249,12 +251,18 @@ pub enum UserCommand {
         /// (renders on the React side); coco-rs threads it through so
         /// SDK consumers see it without a second query.
         rewound_turn: i32,
-        /// Trigger source: explicit `/rewind` picker vs TUI auto-restore
-        /// on cancel. Both end with `MessageTruncated` emission; only
-        /// `Explicit` may also restore files and emit modal overlay
-        /// events. See `engine-tui-unified-transcript-plan.md` §4.2.
-        mode: crate::state::rewind::RewindMode,
     },
+    /// TUI-driven auto-restore: synchronous history truncation only.
+    /// Fired when the user hits Ctrl+C on an empty input at a lossless
+    /// tail boundary. No file restoration, no modal overlay — the
+    /// engine just truncates `MessageHistory` and emits
+    /// `MessageTruncated` so observers converge on the engine
+    /// authority. See `engine-tui-unified-transcript-plan.md` §7.4.
+    ///
+    /// Kept separate from `Rewind` so the engine doesn't need to
+    /// branch on a mode field and `RestoreType` cannot leak in (the
+    /// AutoRestore path explicitly never restores files).
+    AutoTruncate { message_id: String },
     /// Request diff stats for a message (async, response via ServerNotification).
     /// TS: fileHistoryGetDiffStats() called from MessageSelector useEffect.
     RequestDiffStats { message_id: String },

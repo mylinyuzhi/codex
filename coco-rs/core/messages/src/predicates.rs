@@ -129,11 +129,6 @@ pub fn is_api_error_message(msg: &Message) -> bool {
     matches!(msg, Message::System(crate::SystemMessage::ApiError(_)))
 }
 
-/// Whether a message is a tool use summary.
-pub fn is_tool_use_summary(msg: &Message) -> bool {
-    msg.kind() == MessageKind::ToolUseSummary
-}
-
 /// Whether a message is an attachment.
 pub fn is_attachment(msg: &Message) -> bool {
     msg.kind() == MessageKind::Attachment

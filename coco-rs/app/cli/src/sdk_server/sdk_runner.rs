@@ -222,7 +222,7 @@ impl TurnRunner for QueryEngineRunner {
                     .await;
                 {
                     let mut h = history_handle.lock().await;
-                    *h = history.messages;
+                    *h = history.to_vec();
                 }
                 return Ok(());
             }

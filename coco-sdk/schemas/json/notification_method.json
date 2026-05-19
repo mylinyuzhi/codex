@@ -10,6 +10,7 @@
     "history/messageAppended",
     "history/messageTruncated",
     "history/resetForResume",
+    "history/replaced",
     "turn/started",
     "turn/completed",
     "turn/failed",

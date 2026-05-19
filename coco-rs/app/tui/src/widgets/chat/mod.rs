@@ -10,6 +10,7 @@ mod render_system;
 mod render_tool;
 mod render_user;
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use ratatui::buffer::Buffer;
@@ -64,6 +65,10 @@ pub struct ChatWidget<'a> {
     spinner_frame: &'a str,
     pub(crate) tool_executions: &'a [ToolExecution],
     collapsed_tools: Option<&'a HashSet<String>>,
+    /// Side-cache lookup for `AssistantThinking` cells.
+    /// `None` ⇒ no reasoning badges (renderer falls back to header without metrics).
+    pub(crate) reasoning_metadata:
+        Option<&'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>>,
     pub(crate) styles: UiStyles<'a>,
     pub(crate) syntax_highlighting: SyntaxHighlighting,
     pub(crate) width: u16,
@@ -86,12 +91,21 @@ impl<'a> ChatWidget<'a> {
             spinner_frame: "⠋",
             tool_executions: &[],
             collapsed_tools: None,
+            reasoning_metadata: None,
             styles,
             syntax_highlighting: SyntaxHighlighting::Enabled,
             width: 80,
             kb_handle: None,
             show_thinking_internal: false,
         }
+    }
+
+    pub fn reasoning_metadata(
+        mut self,
+        meta: &'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>,
+    ) -> Self {
+        self.reasoning_metadata = Some(meta);
+        self
     }
 
     pub fn kb_handle(mut self, handle: &'a crate::keybinding_resolver::KeybindingHandle) -> Self {
@@ -517,7 +531,6 @@ fn meta_category(kind: &CellKind) -> &'static str {
         CellKind::System(SystemCellKind::StopHookSummary) => "hook",
         CellKind::System(SystemCellKind::TurnDuration) => "turn",
         CellKind::System(SystemCellKind::ScheduledTaskFire) => "schedule",
-        CellKind::ToolUseSummary { .. } => "summary",
         _ => "meta",
     }
 }
@@ -528,9 +541,6 @@ fn meta_category(kind: &CellKind) -> &'static str {
 fn meta_preview_text(cell: &RenderedCell) -> String {
     use coco_messages::Message;
     use coco_messages::SystemMessage as SM;
-    if let CellKind::ToolUseSummary { summary } = &cell.kind {
-        return summary.clone();
-    }
     let Message::System(sm) = cell.source.as_ref() else {
         return String::new();
     };

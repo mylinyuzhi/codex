@@ -175,7 +175,7 @@ impl PlanModeReminder {
     /// message UUID. "Human turn" marker in TS parlance
     /// (`type === 'user' && !isMeta && !hasToolResultContent`).
     fn latest_non_meta_user_uuid(history: &MessageHistory) -> Option<uuid::Uuid> {
-        history.messages.iter().rev().find_map(|m| match m {
+        history.iter().rev().find_map(|m| match m {
             Message::User(u) => Some(u.uuid),
             _ => None,
         })

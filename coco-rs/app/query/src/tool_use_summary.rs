@@ -53,8 +53,8 @@ use coco_inference::RoleClientCache;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::LlmMessage;
 use coco_llm_types::UserContentPart;
-use coco_messages::ToolUseSummaryMessage;
 use coco_types::ModelRole;
+use coco_types::ToolUseSummaryParams;
 
 /// System prompt — byte-for-byte port of TS
 /// `toolUseSummaryGenerator.ts:15-24`. Do not edit without updating
@@ -106,7 +106,7 @@ pub struct ToolUseSummaryInput {
     pub tools: Vec<ToolInfo>,
     /// `preceding_tool_use_ids` — the tool_use_id strings from the
     /// model's last assistant turn. Flows through unchanged to
-    /// `ToolUseSummaryMessage.preceding_tool_use_ids` so SDK consumers
+    /// `ToolUseSummaryParams.preceding_tool_use_ids` so SDK consumers
     /// can correlate the summary with its batch.
     pub preceding_tool_use_ids: Vec<String>,
     /// Last text-typed block from the most recent assistant message.
@@ -234,7 +234,7 @@ pub fn build_input_from_history(
 pub async fn generate_tool_use_summary(
     input: ToolUseSummaryInput,
     role_cache: Arc<RoleClientCache>,
-) -> Option<ToolUseSummaryMessage> {
+) -> Option<ToolUseSummaryParams> {
     if !input.has_tools() {
         return None;
     }
@@ -312,8 +312,7 @@ pub async fn generate_tool_use_summary(
         return None;
     }
 
-    Some(ToolUseSummaryMessage {
-        uuid: uuid::Uuid::new_v4(),
+    Some(ToolUseSummaryParams {
         summary,
         preceding_tool_use_ids: input.preceding_tool_use_ids,
     })

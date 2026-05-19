@@ -158,6 +158,5 @@ fn message_kind(m: &coco_messages::Message) -> &'static str {
         coco_messages::Message::System(_) => "System",
         coco_messages::Message::Progress(_) => "Progress",
         coco_messages::Message::Tombstone(_) => "Tombstone",
-        coco_messages::Message::ToolUseSummary(_) => "ToolUseSummary",
     }
 }

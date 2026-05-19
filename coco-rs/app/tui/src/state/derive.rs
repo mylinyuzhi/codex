@@ -61,13 +61,6 @@ pub fn message_to_cells(msg: Arc<Message>) -> Vec<RenderedCell> {
         Message::Attachment(a) => vec![cell(a.uuid, CellKind::Attachment, msg.clone())],
         Message::Progress(_) => Vec::new(),
         Message::Tombstone(_) => Vec::new(),
-        Message::ToolUseSummary(s) => vec![cell(
-            s.uuid,
-            CellKind::ToolUseSummary {
-                summary: s.summary.clone(),
-            },
-            msg.clone(),
-        )],
     }
 }
 
@@ -117,8 +110,6 @@ fn assistant_cells(
                 } else {
                     CellKind::AssistantThinking {
                         text: r.text.clone(),
-                        duration_ms: None,
-                        reasoning_tokens: None,
                     }
                 }
             }
@@ -281,26 +272,22 @@ pub(crate) mod test_helpers {
             .expect("thinking message yields a cell")
     }
 
-    /// Synthetic thinking cell with reasoning-token metadata already
-    /// stamped (as if `TranscriptView::record_reasoning_tokens` had
-    /// fired). Used by renderer tests that need to assert on the full
-    /// `Thinking · <duration> · <tokens> reasoning tokens` header.
+    /// Synthetic thinking cell paired with its reasoning metadata.
+    /// Returns `(cell, ReasoningMetadata)` so tests can stash the
+    /// metadata in `SessionState.reasoning_metadata` keyed by the
+    /// returned cell's `message_uuid` to exercise the renderer's
+    /// "Thinking · <duration> · <tokens>" header path.
     pub fn assistant_thinking_cell_with_metadata(
         text: &str,
         duration_ms: i64,
         reasoning_tokens: i64,
-    ) -> RenderedCell {
-        let mut cell = assistant_thinking_cell(text);
-        if let super::super::transcript_view::CellKind::AssistantThinking {
-            duration_ms: dms,
-            reasoning_tokens: rt,
-            ..
-        } = &mut cell.kind
-        {
-            *dms = Some(duration_ms);
-            *rt = Some(reasoning_tokens);
-        }
-        cell
+    ) -> (RenderedCell, super::super::session::ReasoningMetadata) {
+        let cell = assistant_thinking_cell(text);
+        let meta = super::super::session::ReasoningMetadata {
+            duration_ms: Some(duration_ms),
+            reasoning_tokens,
+        };
+        (cell, meta)
     }
 
     /// Override the message uuid on a freshly-constructed cell so tests
@@ -403,8 +390,9 @@ pub(crate) mod test_helpers {
     }
 
     /// Push an assistant `Thinking` cell with reasoning metadata.
-    /// Replays `TranscriptView::record_reasoning_tokens` so the cell
-    /// carries `duration_ms` + `reasoning_tokens` after derivation.
+    /// Mirrors the production path: the cell derives from `Message`
+    /// (no embedded metadata); duration + reasoning tokens land in
+    /// `SessionState.reasoning_metadata` keyed by the cell uuid.
     #[allow(dead_code)]
     pub fn push_assistant_thinking(
         state: &mut SessionState,
@@ -425,9 +413,13 @@ pub(crate) mod test_helpers {
             _ => unreachable!("create_assistant_message yields Assistant"),
         };
         push(state, msg);
-        state
-            .transcript
-            .record_reasoning_tokens(reasoning_tokens, Some(duration_ms));
+        state.reasoning_metadata.insert(
+            uuid,
+            super::super::session::ReasoningMetadata {
+                duration_ms: Some(duration_ms),
+                reasoning_tokens,
+            },
+        );
         uuid
     }
 

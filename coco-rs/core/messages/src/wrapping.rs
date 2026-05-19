@@ -30,7 +30,6 @@ pub fn extract_text_from_message(msg: &Message) -> String {
             crate::SystemMessage::LocalCommand(m) => m.output.clone(),
             _ => String::new(),
         },
-        Message::ToolUseSummary(m) => m.summary.clone(),
         Message::Progress(_) | Message::Tombstone(_) => String::new(),
     }
 }

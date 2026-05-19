@@ -253,7 +253,6 @@ class MessageKind(str, Enum):
     tool_result = 'tool_result'
     progress = 'progress'
     tombstone = 'tombstone'
-    tool_use_summary = 'tool_use_summary'
 
 class MessageOrigin(str, Enum):
     user_input = 'user_input'
@@ -279,6 +278,7 @@ class NotificationMethod(str, Enum):
     history_messageAppended = 'history/messageAppended'
     history_messageTruncated = 'history/messageTruncated'
     history_resetForResume = 'history/resetForResume'
+    history_replaced = 'history/replaced'
     turn_started = 'turn/started'
     turn_completed = 'turn/completed'
     turn_failed = 'turn/failed'
@@ -474,7 +474,7 @@ LanguageModelV4Message = dict[str, Any]
 MemoryDialogRowKind = dict[str, Any]
 
 # Top-level message enum.
-Message = Union["UserMessage", "AssistantMessage", "SystemMessage", "AttachmentMessage", "ToolResultMessage", "ProgressMessage", "TombstoneMessage", "ToolUseSummaryMessage"]
+Message = Union["UserMessage", "AssistantMessage", "SystemMessage", "AttachmentMessage", "ToolResultMessage", "ProgressMessage", "TombstoneMessage"]
 
 # Bounded, UI-ready permission input display.
 PermissionDisplayInput = dict[str, Any]
@@ -862,6 +862,9 @@ class HistoryMessageTruncatedParams(BaseModel):
 class HistoryResetForResumeParams(BaseModel):
     session_id: str
 
+class HistoryReplacedParams(BaseModel):
+    messages: list[Message]
+
 class ItemStartedParams(BaseModel):
     item: ThreadItem
 
@@ -944,6 +947,7 @@ class NotificationMethod(str, Enum):
     HISTORY_MESSAGE_APPENDED = 'history/messageAppended'
     HISTORY_MESSAGE_TRUNCATED = 'history/messageTruncated'
     HISTORY_RESET_FOR_RESUME = 'history/resetForResume'
+    HISTORY_REPLACED = 'history/replaced'
     TURN_STARTED = 'turn/started'
     TURN_COMPLETED = 'turn/completed'
     TURN_FAILED = 'turn/failed'
@@ -1051,6 +1055,11 @@ class ServerNotification(BaseModel):
     def as_history_reset_for_resume(self) -> HistoryResetForResumeParams | None:
         if self.method == 'history/resetForResume':
             return HistoryResetForResumeParams.model_validate(self.params)
+        return None
+
+    def as_history_replaced(self) -> HistoryReplacedParams | None:
+        if self.method == 'history/replaced':
+            return HistoryReplacedParams.model_validate(self.params)
         return None
 
     def as_turn_started(self) -> TurnStartedParams | None:
@@ -2332,11 +2341,6 @@ class ToolResultPart(BaseModel):
     toolName: str
     isError: bool = False
     providerMetadata: ProviderMetadata | None = None
-
-class ToolUseSummaryMessage(BaseModel):
-    preceding_tool_use_ids: list[str]
-    summary: str
-    uuid: str
 
 class UserMessage(BaseModel):
     message: LanguageModelV4Message

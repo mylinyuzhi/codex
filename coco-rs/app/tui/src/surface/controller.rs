@@ -181,6 +181,7 @@ fn history_options(state: &AppState, width: u16) -> HistoryLineRenderOptions<'_>
         show_system_reminders: state.ui.show_system_reminders,
         show_thinking: state.ui.show_thinking,
         kb_handle: Some(&state.ui.kb_handle),
+        reasoning_metadata: Some(&state.session.reasoning_metadata),
     }
 }
 

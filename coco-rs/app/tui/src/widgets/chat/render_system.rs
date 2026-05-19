@@ -22,14 +22,6 @@ pub(super) fn try_render(
     lines: &mut Vec<Line<'static>>,
 ) -> Option<()> {
     match &cell.kind {
-        CellKind::ToolUseSummary { summary } => {
-            for line in summary.lines() {
-                lines.push(Line::from(
-                    Span::raw(format!("  # {line}")).fg(w.styles.system_message()),
-                ));
-            }
-            Some(())
-        }
         CellKind::System(SystemCellKind::Informational) => {
             let Message::System(SystemMessage::Informational(info)) = cell.source.as_ref() else {
                 return Some(());

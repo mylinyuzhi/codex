@@ -283,7 +283,7 @@ matching `NotificationMethod` discriminant.",
     /// Session ended.
     "session/ended" => SessionEnded(SessionEndedParams),
 
-    // === History lifecycle (3) ===
+    // === History lifecycle (4) ===
     //
     // Engine MessageHistory is single source of truth. These events let
     // TUI / SDK consumers maintain derived views without recomputing
@@ -305,6 +305,15 @@ matching `NotificationMethod` discriminant.",
     /// in preparation for a burst of `MessageAppended` that replays
     /// the loaded JSONL transcript.
     "history/resetForResume" => SessionResetForResume { session_id: String },
+    /// Bulk snapshot for resume hydration. Consumers replace the
+    /// derived transcript view wholesale (one cache-rebuild pass)
+    /// instead of processing N `MessageAppended` events sequentially.
+    /// Used when loading large JSONL transcripts where the
+    /// per-message channel-bounded path would stall at the 256-msg
+    /// queue boundary and force the engine task to yield. Live
+    /// appends still use `MessageAppended` — this variant models
+    /// bulk replacement (a genuinely different operation).
+    "history/replaced" => HistoryReplaced { messages: Vec<crate::messages::Message> },
 
     // === Turn lifecycle (4) ===
 

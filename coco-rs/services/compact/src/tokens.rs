@@ -74,7 +74,7 @@ fn message_char_count(msg: &Message) -> i64 {
             .map(llm_message_char_count)
             .unwrap_or_else(|| a.as_text_for_display().len() as i64),
         Message::System(_) => 20, // minimal overhead
-        Message::Progress(_) | Message::Tombstone(_) | Message::ToolUseSummary(_) => 0,
+        Message::Progress(_) | Message::Tombstone(_) => 0,
     }
 }
 

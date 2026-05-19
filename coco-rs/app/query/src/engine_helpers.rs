@@ -293,7 +293,7 @@ pub(crate) fn most_recent_assistant_exceeds(messages: &[Message], threshold: i64
 /// Returns `None` when there's no plain-text user message (e.g. the
 /// session opened with a compacted summary).
 pub(crate) fn latest_user_input_text(history: &MessageHistory) -> Option<String> {
-    for msg in history.messages.iter().rev() {
+    for msg in history.iter().rev() {
         let Message::User(u) = msg else {
             continue;
         };

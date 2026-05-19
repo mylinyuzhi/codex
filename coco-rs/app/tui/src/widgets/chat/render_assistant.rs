@@ -80,16 +80,15 @@ pub(super) fn try_render(
             lines.extend(md_lines);
             Some(())
         }
-        CellKind::AssistantThinking {
-            text,
-            duration_ms,
-            reasoning_tokens,
-        } => {
+        CellKind::AssistantThinking { text } => {
+            let meta = w
+                .reasoning_metadata
+                .and_then(|cache| cache.get(&cell.message_uuid));
             lines.extend(render_thinking_block(
                 ThinkingRenderInput {
                     content: text,
-                    duration_ms: *duration_ms,
-                    reasoning_tokens: *reasoning_tokens,
+                    duration_ms: meta.and_then(|m| m.duration_ms),
+                    reasoning_tokens: meta.map(|m| m.reasoning_tokens),
                     display: if w.show_thinking {
                         ThinkingDisplay::Expanded {
                             max_body_lines: crate::constants::THINKING_PREVIEW_LINES,

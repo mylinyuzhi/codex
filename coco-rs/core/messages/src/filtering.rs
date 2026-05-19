@@ -40,15 +40,6 @@ pub fn filter_meta(messages: &[Message]) -> Vec<Message> {
         .collect()
 }
 
-/// Filter out tool use summary messages.
-pub fn filter_tool_use_summaries(messages: &[Message]) -> Vec<Message> {
-    messages
-        .iter()
-        .filter(|m| !predicates::is_tool_use_summary(m))
-        .cloned()
-        .collect()
-}
-
 /// Filter out API error system messages.
 pub fn filter_api_errors(messages: &[Message]) -> Vec<Message> {
     messages
@@ -59,7 +50,7 @@ pub fn filter_api_errors(messages: &[Message]) -> Vec<Message> {
 }
 
 /// Filter to only user-visible messages (for UI display).
-/// Removes: meta, virtual, progress, tombstone, tool_use_summary.
+/// Removes: meta, virtual, progress, tombstone.
 pub fn filter_for_display(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
@@ -68,7 +59,6 @@ pub fn filter_for_display(messages: &[Message]) -> Vec<Message> {
                 && !predicates::is_virtual_message(m)
                 && !predicates::is_progress_message(m)
                 && !predicates::is_tombstone(m)
-                && !predicates::is_tool_use_summary(m)
         })
         .cloned()
         .collect()

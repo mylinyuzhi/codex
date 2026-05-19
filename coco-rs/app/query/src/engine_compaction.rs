@@ -55,7 +55,7 @@ impl QueryEngine {
             && self.config.compact.micro.enabled
             && self.config.compact.micro.count_based_enabled
         {
-            coco_compact::micro_compact(&mut history.messages, micro_keep);
+            coco_compact::micro_compact(history.messages_mut(), micro_keep);
         }
 
         // SM-first short-circuit + LLM fallback are both centralized in
@@ -143,7 +143,7 @@ impl QueryEngine {
             self.run_compact_summary_attempt(attempt).await
         };
         let result = coco_compact::partial_compact_conversation(
-            &history.messages,
+            history.as_slice(),
             pivot_index,
             direction,
             user_feedback.as_deref(),
@@ -262,7 +262,7 @@ impl QueryEngine {
                 result.attachments.extend(delta_attachments);
                 let new_messages =
                     coco_compact::build_partial_post_compact_messages(&result, direction);
-                let pre_len = history.messages.len() as i32;
+                let pre_len = history.len() as i32;
                 let post_len = new_messages.len() as i32;
                 let removed_messages = (pre_len - post_len).max(0);
                 // I-1 (Authority): partial compaction rewrites the
@@ -408,7 +408,7 @@ impl QueryEngine {
         };
 
         let mut result = match coco_compact::compact_session_memory(
-            &history.messages,
+            history.as_slice(),
             &memory_text,
             last_summarized,
             &sm_compact_cfg,
@@ -482,7 +482,7 @@ impl QueryEngine {
             .await;
         result.attachments.extend(delta_attachments);
         let new_messages = coco_compact::build_post_compact_messages(&result);
-        let pre_len = history.messages.len() as i32;
+        let pre_len = history.len() as i32;
         let post_len = new_messages.len() as i32;
         let removed_messages = (pre_len - post_len).max(0);
         // I-1 (Authority): session-memory compaction rewrites history.
@@ -673,9 +673,11 @@ impl QueryEngine {
             }
         }
 
-        let mut out = Vec::new();
-        let _display_only = coco_system_reminder::inject_reminders(reminders, &mut out);
-        out
+        // Compact-side reminders go into a scratch vector (no
+        // MessageHistory yet); event emission is not relevant here
+        // because the engine hasn't started the next turn. Just
+        // collect the materialized model-visible messages.
+        coco_system_reminder::inject_reminders(reminders).model_visible
     }
 
     async fn run_direct_compact_summary_attempt(
@@ -855,10 +857,9 @@ impl QueryEngine {
             }
         }
 
-        let mut scratch = Vec::new();
-        let _display_only = coco_system_reminder::inject_reminders(reminders, &mut scratch);
+        let batch = coco_system_reminder::inject_reminders(reminders);
         let mut attachments = Vec::new();
-        for message in scratch {
+        for message in batch.model_visible {
             if let Message::Attachment(att) = message {
                 attachments.push(att);
             }
@@ -1007,7 +1008,7 @@ impl QueryEngine {
         fields(
             trigger = ?trigger,
             session_id = %self.config.session_id,
-            history_len = history.messages.len(),
+            history_len = history.len(),
             has_custom_instructions = custom_instructions.is_some(),
         ),
     )]
@@ -1322,7 +1323,7 @@ impl QueryEngine {
         };
 
         match coco_compact::compact_conversation(
-            &history.messages,
+            history.as_slice(),
             &compact_run_options,
             summarize_fn,
             Some(attachment_fn),
@@ -1424,7 +1425,7 @@ impl QueryEngine {
                 // attachments, hookResults. Use the canonical helper.
                 let summary_tokens = result.post_compact_tokens as i32;
                 let new_messages = coco_compact::build_post_compact_messages(&result);
-                let pre_len = history.messages.len() as i32;
+                let pre_len = history.len() as i32;
                 let post_len = new_messages.len() as i32;
                 let removed_messages = (pre_len - post_len).max(0);
                 // I-1 (Authority): full LLM compaction rewrites the

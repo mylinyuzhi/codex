@@ -340,14 +340,10 @@ async fn partial_compact_runs_hooks_and_inlines_session_start_results() {
     let engine = new_engine_with_hooks(model.clone(), hooks, sync.clone(), None);
 
     let mut history = coco_messages::MessageHistory::new();
-    history
-        .messages
-        .push(coco_messages::create_user_message("kept prefix"));
-    history.messages.push(assistant_msg("kept assistant"));
-    history
-        .messages
-        .push(coco_messages::create_user_message("summarize tail"));
-    history.messages.push(assistant_msg("tail assistant"));
+    history.push(coco_messages::create_user_message("kept prefix"));
+    history.push(assistant_msg("kept assistant"));
+    history.push(coco_messages::create_user_message("summarize tail"));
+    history.push(assistant_msg("tail assistant"));
 
     let outcome = engine
         .run_partial_compact(
@@ -372,7 +368,7 @@ async fn partial_compact_runs_hooks_and_inlines_session_start_results() {
     assert!(rendered_prompt.contains("pre-hook-instruction"));
     assert!(rendered_prompt.contains("focus user feedback"));
 
-    let rendered_history = format!("{:?}", history.messages);
+    let rendered_history = format!("{:?}", history.as_slice());
     assert!(rendered_history.contains("session-hook-output"));
     assert!(
         sync.drain().await.is_empty(),
@@ -393,14 +389,10 @@ async fn partial_compact_applies_session_start_aggregate_side_effects() {
     let engine = new_engine_with_hooks(model, hooks, sync.clone(), Some(sink.clone()));
 
     let mut history = coco_messages::MessageHistory::new();
-    history
-        .messages
-        .push(coco_messages::create_user_message("kept prefix"));
-    history.messages.push(assistant_msg("kept assistant"));
-    history
-        .messages
-        .push(coco_messages::create_user_message("summarize tail"));
-    history.messages.push(assistant_msg("tail assistant"));
+    history.push(coco_messages::create_user_message("kept prefix"));
+    history.push(assistant_msg("kept assistant"));
+    history.push(coco_messages::create_user_message("summarize tail"));
+    history.push(assistant_msg("tail assistant"));
 
     let outcome = engine
         .run_partial_compact(
@@ -414,7 +406,7 @@ async fn partial_compact_applies_session_start_aggregate_side_effects() {
         .await;
 
     assert_eq!(outcome, coco_compact::CompactOutcome::Applied);
-    let rendered_history = format!("{:?}", history.messages);
+    let rendered_history = format!("{:?}", history.as_slice());
     assert!(rendered_history.contains("hook initial turn"));
     let effects = sink
         .effects

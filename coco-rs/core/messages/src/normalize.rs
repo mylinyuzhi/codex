@@ -518,7 +518,7 @@ fn extract_llm_message(msg: &Message) -> Option<LlmMessage> {
             // They become LlmMessage::User with system-reminder wrapping
             None // handled by system-reminder injection, not normalization
         }
-        Message::Progress(_) | Message::Tombstone(_) | Message::ToolUseSummary(_) => None,
+        Message::Progress(_) | Message::Tombstone(_) => None,
     }
 }
 

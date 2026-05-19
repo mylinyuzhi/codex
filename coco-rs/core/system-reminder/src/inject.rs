@@ -223,24 +223,47 @@ pub fn normalize_injected_messages(reminders: Vec<SystemReminder>) -> Normalized
     out
 }
 
-/// Append model-visible reminders to `history` and **return** the
-/// silent / display-only subset so callers (TUI / session / telemetry)
-/// can surface them without sending them to the model.
+/// Materialized reminder messages produced by [`inject_reminders`].
+///
+/// Holds the model-visible `Message`s that the caller should push
+/// into `MessageHistory` (typically via
+/// `coco_query::history_sync::history_push_and_emit` so each entry
+/// emits a `MessageAppended` event and the TUI / SDK observers stay
+/// coherent — I-1 authority), plus the silent / display-only
+/// reminders that never reach the model but may surface to UI or
+/// telemetry.
+#[derive(Debug, Clone, Default)]
+pub struct InjectedReminderBatch {
+    /// Reminders that must land in `MessageHistory`. Order preserved.
+    /// Caller is responsible for pushing each one through an
+    /// event-emitting helper so observers track the new entries.
+    pub model_visible: Vec<Message>,
+    /// Reminders that **must not** reach the model. Returned for UI /
+    /// telemetry sinks; never written to history.
+    pub display_only: Vec<InjectedMessage>,
+}
+impl InjectedReminderBatch {
+    pub fn is_empty(&self) -> bool {
+        self.model_visible.is_empty() && self.display_only.is_empty()
+    }
+}
+
+/// Build model-visible reminder messages and split out the silent
+/// subset. Returns owned `Message`s instead of mutating a history
+/// vector so callers go through the event-emitting helper
+/// (`coco_query::history_sync::history_push_and_emit`) and every
+/// reminder appended to `MessageHistory` is observable on the wire.
 ///
 /// - Simple text reminders → [`Message::Attachment`] (matches the existing
 ///   `PlanModeReminder::reminder_message` shape in `app/query`).
-/// - Multi-block user reminders → [`Message::User`] with `is_meta=true` and
-///   `origin=SystemInjected`.
+/// - Multi-block user reminders → [`Message::Attachment`] with API body.
 /// - Multi-block assistant reminders → [`Message::Assistant`] carrying the
 ///   raw blocks. No model/usage metadata is attached — these are synthetic.
-/// - Silent reminders → returned as `Vec<InjectedMessage>`. **Never**
-///   appended to `history` (they must not reach the model). Callers
-///   that don't care can simply ignore the return value.
-pub fn inject_reminders(
-    reminders: Vec<SystemReminder>,
-    history: &mut Vec<Message>,
-) -> Vec<InjectedMessage> {
+/// - Silent reminders → returned on `display_only`. **Never**
+///   suggested for history push (they must not reach the model).
+pub fn inject_reminders(reminders: Vec<SystemReminder>) -> InjectedReminderBatch {
     let normalized = normalize_injected_messages(reminders);
+    let mut model_visible: Vec<Message> = Vec::with_capacity(normalized.model_visible.len());
     for msg in normalized.model_visible {
         match msg {
             InjectedMessage::UserText {
@@ -248,7 +271,7 @@ pub fn inject_reminders(
                 content,
                 is_meta: _,
             } => {
-                history.push(Message::Attachment(AttachmentMessage::api(
+                model_visible.push(Message::Attachment(AttachmentMessage::api(
                     kind,
                     LlmMessage::user_text(content),
                 )));
@@ -262,7 +285,7 @@ pub fn inject_reminders(
                 // with Api body. The kind governs API + UI filtering; no
                 // separate is_meta flag needed.
                 let llm = user_llm_from_blocks(blocks);
-                history.push(Message::Attachment(coco_messages::AttachmentMessage::api(
+                model_visible.push(Message::Attachment(coco_messages::AttachmentMessage::api(
                     kind, llm,
                 )));
             }
@@ -272,7 +295,7 @@ pub fn inject_reminders(
                 is_meta: _,
             } => {
                 let llm = assistant_llm_from_blocks(blocks);
-                history.push(Message::Assistant(AssistantMessage {
+                model_visible.push(Message::Assistant(AssistantMessage {
                     message: llm,
                     uuid: Uuid::new_v4(),
                     model: String::new(),
@@ -285,7 +308,10 @@ pub fn inject_reminders(
             }
         }
     }
-    normalized.display_only
+    InjectedReminderBatch {
+        model_visible,
+        display_only: normalized.display_only,
+    }
 }
 
 fn user_llm_from_blocks(blocks: Vec<InjectedBlock>) -> LlmMessage {

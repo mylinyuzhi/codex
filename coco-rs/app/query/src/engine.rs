@@ -136,7 +136,7 @@ pub struct QueryEngine {
     pub(crate) hook_llm_handle: Option<Arc<dyn coco_hooks::HookLlmHandle>>,
     /// Shared role-client cache. When set, `finalize_turn_post_tools`
     /// spawns a `ModelRole::Fast` side-fork after each tool batch to
-    /// generate a `ToolUseSummaryMessage` for SDK / mobile UI consumers
+    /// generate a tool-use summary for SDK / mobile UI consumers
     /// (TS `generateToolUseSummary` → coco-rs
     /// [`crate::tool_use_summary::generate_tool_use_summary`]).
     ///
@@ -157,7 +157,7 @@ pub struct QueryEngine {
     /// turn.
     pub(crate) pending_tool_use_summary: Arc<
         tokio::sync::Mutex<
-            Option<tokio::task::JoinHandle<Option<coco_messages::ToolUseSummaryMessage>>>,
+            Option<tokio::task::JoinHandle<Option<coco_types::ToolUseSummaryParams>>>,
         >,
     >,
     /// Mid-turn command queue for steering. Carries both human-typed
@@ -739,7 +739,7 @@ impl QueryEngine {
                     api_time_ms,
                     Some("cancelled".into()),
                     permission_denials,
-                    history.messages.clone(),
+                    history.to_vec(),
                 ));
             }
 
@@ -749,8 +749,7 @@ impl QueryEngine {
             // blocks the new turn for more than that. Silent no-op
             // when no pending handle exists (first iteration, or
             // previous turn had no tool batch).
-            self.drain_pending_tool_use_summary(&mut *history, &event_tx)
-                .await;
+            self.drain_pending_tool_use_summary(&event_tx).await;
 
             // Budget check before each turn
             match budget.check(turn) {
@@ -769,7 +768,7 @@ impl QueryEngine {
                         api_time_ms,
                         Some("budget_exhausted".into()),
                         permission_denials,
-                        history.messages.clone(),
+                        history.to_vec(),
                     ));
                 }
                 BudgetDecision::Nudge { message } => {
@@ -830,7 +829,7 @@ impl QueryEngine {
             info!(
                 turn,
                 turn_id = %turn_id,
-                history_len = history.messages.len(),
+                history_len = history.len(),
                 active_model = model_runtime.current_model_id(),
                 "turn start"
             );
@@ -859,6 +858,7 @@ impl QueryEngine {
                     todo_key: &reminder_todo_key,
                     context_window: reminder_context_window,
                     effective_window: reminder_effective_window,
+                    event_tx: &event_tx,
                 })
                 .await;
 
@@ -1103,7 +1103,7 @@ impl QueryEngine {
             };
             let plan_swap_candidate = if live_permission_mode == coco_types::PermissionMode::Plan
                 && !crate::engine_helpers::most_recent_assistant_exceeds(
-                    &history.messages,
+                    history.as_slice(),
                     self.config
                         .plan_mode_settings
                         .plan_model_fallback_threshold_tokens,
@@ -1522,7 +1522,7 @@ impl QueryEngine {
                                 completion_event_mode:
                                     crate::helpers::ToolCompletionEventMode::Defer,
                             };
-                            let pre_prep_len = prep_args.history.messages.len();
+                            let pre_prep_len = prep_args.history.len();
                             let prep_result =
                                 crate::tool_call_preparer::prepare_one_pending_tool_call(
                                     &mut prep_args,
@@ -1534,8 +1534,7 @@ impl QueryEngine {
                             // tool_result rows on the failure paths).
                             // `drain_pushed_since` rebuilds the UUID
                             // index so subsequent lookups stay valid.
-                            let captured_errors =
-                                history.messages.len().saturating_sub(pre_prep_len);
+                            let captured_errors = history.len().saturating_sub(pre_prep_len);
                             let captured: Vec<coco_messages::Message> = if captured_errors > 0 {
                                 history.drain_pushed_since(pre_prep_len)
                             } else {
@@ -2283,13 +2282,8 @@ impl QueryEngine {
                         Ok(agg) if agg.prevent_continuation => {
                             info!("Stop hook prevented continuation");
                             self.flush_successful_turn_state(&mut *history).await;
-                            self.emit_turn_completed(
-                                &event_tx,
-                                turn_id,
-                                usage,
-                                history.messages.len(),
-                            )
-                            .await;
+                            self.emit_turn_completed(&event_tx, turn_id, usage, history.len())
+                                .await;
                             return Ok(make_query_result(
                                 response_text,
                                 turn,
@@ -2302,7 +2296,7 @@ impl QueryEngine {
                                 api_time_ms,
                                 Some("stop_hook_prevented".into()),
                                 permission_denials,
-                                history.messages.clone(),
+                                history.to_vec(),
                             ));
                         }
                         Ok(agg) if agg.is_blocked() => {
@@ -2355,7 +2349,7 @@ impl QueryEngine {
                     tokens_out = usage.output_tokens,
                     "no tool calls, conversation complete"
                 );
-                self.emit_turn_completed(&event_tx, turn_id, usage, history.messages.len())
+                self.emit_turn_completed(&event_tx, turn_id, usage, history.len())
                     .await;
                 return Ok(make_query_result(
                     response_text,
@@ -2369,7 +2363,7 @@ impl QueryEngine {
                     api_time_ms,
                     Some("end_turn".into()),
                     permission_denials,
-                    history.messages.clone(),
+                    history.to_vec(),
                 ));
             }
 
@@ -2420,7 +2414,7 @@ impl QueryEngine {
                         api_time_ms,
                         Some(stop_reason),
                         permission_denials,
-                        history.messages.clone(),
+                        history.to_vec(),
                     ));
                 }
                 last_continue_reason = Some(ContinueReason::NextTurn);
@@ -2502,7 +2496,7 @@ impl QueryEngine {
                     api_time_ms,
                     tool_run_outcome.stop_reason_override,
                     permission_denials,
-                    history.messages.clone(),
+                    history.to_vec(),
                 ));
             }
             last_continue_reason = Some(ContinueReason::NextTurn);

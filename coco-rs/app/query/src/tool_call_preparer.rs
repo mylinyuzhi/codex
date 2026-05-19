@@ -161,7 +161,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         &tool,
         &effective_input,
         args.ctx,
-        &args.history.messages,
+        args.history.as_slice(),
         (hook_permission_behavior, hook_permission_reason),
         args.auto_mode_state,
         args.denial_tracker,

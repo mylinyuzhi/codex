@@ -520,7 +520,6 @@ pub fn cells_after_are_only_synthetic(cells: &[RenderedCell], from_index: usize)
             | CellKind::System(_)
             | CellKind::UserAttachment
             | CellKind::Attachment
-            | CellKind::ToolUseSummary { .. }
             | CellKind::Progress
             | CellKind::Tombstone => continue,
         }

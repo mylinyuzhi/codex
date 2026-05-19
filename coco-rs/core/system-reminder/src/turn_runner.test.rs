@@ -133,7 +133,7 @@ async fn todo_reminder_gates_on_tool_presence_and_turn_counter() {
     // turns — counter will be large (equal to total assistant turns).
     let mut history = MessageHistory::default();
     for i in 0..15 {
-        history.messages.push(coco_messages::Message::Assistant(
+        history.push(coco_messages::Message::Assistant(
             coco_messages::AssistantMessage {
                 message: coco_messages::LlmMessage::Assistant {
                     content: vec![coco_messages::AssistantContent::Text(
@@ -185,7 +185,7 @@ async fn brief_tool_suppresses_todo_reminder() {
     let app_state = ToolAppState::default();
     let mut history = MessageHistory::default();
     for i in 0..15 {
-        history.messages.push(coco_messages::Message::Assistant(
+        history.push(coco_messages::Message::Assistant(
             coco_messages::AssistantMessage {
                 message: coco_messages::LlmMessage::Assistant {
                     content: vec![coco_messages::AssistantContent::Text(

@@ -8,9 +8,24 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// In-memory message history with turn tracking.
+///
+/// The backing storage is `pub(crate)` so internal helpers can do
+/// bulk operations cheaply; external callers go through the
+/// controlled API ([`push`](Self::push), [`truncate`](Self::truncate),
+/// [`clear`](Self::clear), [`iter`](Self::iter), [`as_slice`](Self::as_slice),
+/// [`first`](Self::first), [`last`](Self::last), [`get`](Self::get))
+/// or the explicit escape hatch
+/// [`messages_mut`](Self::messages_mut) for raw in-place mutation
+/// (which obligates the caller to call [`rebuild_index`](Self::rebuild_index)
+/// and emit `MessageTruncated`/`MessageAppended` events).
+///
+/// Restricting direct field access enforces I-1 from
+/// `docs/coco-rs/engine-tui-unified-transcript-plan.md`: every
+/// transcript mutation must be observable via the wire-level event
+/// stream so TUI / SDK consumers stay coherent with engine state.
 #[derive(Debug, Default)]
 pub struct MessageHistory {
-    pub messages: Vec<Message>,
+    pub(crate) messages: Vec<Message>,
     /// Message UUID -> index in messages vec.
     index: HashMap<Uuid, usize>,
 }
@@ -25,6 +40,51 @@ impl MessageHistory {
             self.index.insert(*uuid, self.messages.len());
         }
         self.messages.push(msg);
+    }
+
+    /// Raw mutable access to the backing message vector. **Bypasses
+    /// the controlled API.** Callers MUST:
+    ///
+    /// 1. Call [`rebuild_index`](Self::rebuild_index) after any
+    ///    structural change (push / insert / remove / truncate /
+    ///    reorder).
+    /// 2. Emit the matching `ServerNotification` events
+    ///    (`MessageAppended` for new entries, `MessageTruncated` for
+    ///    removals) so TUI / SDK consumers stay coherent.
+    ///
+    /// Reserved for in-place compaction passes (`coco_compact::*`)
+    /// that operate on the vector representation and re-publish via
+    /// `history_replace_and_emit` afterwards. New call sites should
+    /// prefer [`push`](Self::push), [`truncate`](Self::truncate),
+    /// [`clear`](Self::clear), or
+    /// `coco_query::history_sync::history_push_and_emit`.
+    pub fn messages_mut(&mut self) -> &mut Vec<Message> {
+        &mut self.messages
+    }
+
+    /// Read-only iterator over the underlying messages.
+    pub fn iter(&self) -> std::slice::Iter<'_, Message> {
+        self.messages.iter()
+    }
+
+    /// First message, if any.
+    pub fn first(&self) -> Option<&Message> {
+        self.messages.first()
+    }
+
+    /// Last message, if any.
+    pub fn last(&self) -> Option<&Message> {
+        self.messages.last()
+    }
+
+    /// Indexed access; returns `None` if out of bounds.
+    pub fn get(&self, idx: usize) -> Option<&Message> {
+        self.messages.get(idx)
+    }
+
+    /// Cloned snapshot of the underlying messages.
+    pub fn to_vec(&self) -> Vec<Message> {
+        self.messages.clone()
     }
 
     /// Drain messages pushed since `since_len` and rebuild the UUID index.
@@ -152,8 +212,11 @@ impl MessageHistory {
         self.rebuild_index();
     }
 
-    /// Rebuild the UUID index from the current messages.
-    fn rebuild_index(&mut self) {
+    /// Rebuild the UUID index from the current messages. Must be
+    /// called by any caller that mutated the underlying vector via
+    /// [`messages_mut`](Self::messages_mut) in a way that changed
+    /// indices (push/insert/remove/reorder/truncate).
+    pub fn rebuild_index(&mut self) {
         self.index.clear();
         for (i, msg) in self.messages.iter().enumerate() {
             if let Some(uuid) = msg.uuid() {

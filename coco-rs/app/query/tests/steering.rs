@@ -480,12 +480,11 @@ async fn e2e_steering_origin_framing_per_kind() {
     .await;
 
     assert_eq!(
-        history.messages.len(),
+        history.len(),
         4,
         "all four queued items should drain into history"
     );
     let bodies: Vec<String> = history
-        .messages
         .iter()
         .map(coco_messages::wrapping::extract_text_from_message)
         .collect();
