@@ -63,6 +63,25 @@ def resolve_ref(ref: str) -> str:
     return ref.rsplit("/", 1)[-1]
 
 
+def enum_values(prop: dict) -> list:
+    """Return the closed set of values for a string-typed schema property.
+
+    schemars 1.x (JSON Schema 2020-12) emits single-value enums as
+    ``"const": <v>`` and multi-value enums as ``"enum": [<v>, ...]``.
+    schemars 0.8 used ``"enum": [<v>]`` even for the single-value case.
+    This helper hides the version skew so callers can treat both forms
+    uniformly.
+    """
+    if "const" in prop:
+        return [prop["const"]]
+    return prop.get("enum", []) or []
+
+
+def has_enum_or_const(prop: dict) -> bool:
+    """True if the property is a closed-set string (enum or const form)."""
+    return "const" in prop or "enum" in prop
+
+
 def schema_to_python_type(prop: dict, required: bool, defs: dict) -> str:
     """Convert a JSON schema property to a Python type annotation."""
     if isinstance(prop, bool):
@@ -107,7 +126,7 @@ def schema_to_python_type(prop: dict, required: bool, defs: dict) -> str:
         return "Any"
 
     if "oneOf" in prop and all(
-        v.get("type") == "string" and "enum" in v for v in prop["oneOf"]
+        v.get("type") == "string" and has_enum_or_const(v) for v in prop["oneOf"]
     ):
         # Inline enum — this shouldn't happen at property level, but handle it
         return "str"
@@ -135,11 +154,23 @@ def schema_to_python_type(prop: dict, required: bool, defs: dict) -> str:
         return f"list[{inner}]"
     if t == "object":
         addl = prop.get("additionalProperties")
-        if addl:
-            if isinstance(addl, bool):
-                return "dict[str, Any]"
+        if isinstance(addl, dict) and addl:
             val_type = schema_to_python_type(addl, True, defs)
             return f"dict[str, {val_type}]"
+        # schemars 1.x emits `HashMap<EnumKey, V>` as a closed object —
+        # one property per enum variant, all sharing the same value
+        # schema, with `additionalProperties: false`. Recover the
+        # `dict[str, V]` shape from that form.
+        props = prop.get("properties") or {}
+        if props and addl is False:
+            shapes = {json.dumps(v, sort_keys=True) for v in props.values()}
+            if len(shapes) == 1:
+                val_type = schema_to_python_type(
+                    next(iter(props.values())), True, defs
+                )
+                return f"dict[str, {val_type}]"
+        if isinstance(addl, bool) and addl:
+            return "dict[str, Any]"
         return "dict[str, Any]"
 
     return "Any"
@@ -171,11 +202,9 @@ def generate_enum(name: str, schema: dict) -> str:
     values: list[str] = []
     if "oneOf" in schema:
         for variant in schema["oneOf"]:
-            for value in variant.get("enum", []):
-                values.append(value)
+            values.extend(enum_values(variant))
     else:
-        for value in schema.get("enum", []):
-            values.append(value)
+        values.extend(enum_values(schema))
     for value in values:
         ident = str(value).replace("/", "_").replace("-", "_")
         lines.append(f"    {ident} = {value!r}")
@@ -318,13 +347,15 @@ def is_enum_schema(schema: dict) -> bool:
 
     Handles both the schemars-tagged form (`oneOf: [{type: string, enum: [v]}]`)
     used for variant-typed enums and the plain form (`type: string, enum: [...]`)
-    used for simple closed vocabularies like `ReasoningEffort`.
+    used for simple closed vocabularies like `ReasoningEffort`. schemars 1.x
+    may emit single-value variants as ``const`` instead of ``enum: [v]``;
+    accept either.
     """
     if "oneOf" in schema:
         return all(
-            v.get("type") == "string" and "enum" in v for v in schema["oneOf"]
+            v.get("type") == "string" and has_enum_or_const(v) for v in schema["oneOf"]
         )
-    return schema.get("type") == "string" and "enum" in schema
+    return schema.get("type") == "string" and has_enum_or_const(schema)
 
 
 def is_union_alias_schema(schema: dict) -> bool:
@@ -340,11 +371,40 @@ def is_union_alias_schema(schema: dict) -> bool:
     variants = schema.get("anyOf") or schema.get("oneOf")
     if not variants:
         return False
-    return all(isinstance(v, dict) and "enum" not in v for v in variants)
+    return all(
+        isinstance(v, dict) and not has_enum_or_const(v) for v in variants
+    )
+
+
+_BUILTIN_PY_TYPES = {
+    "int", "str", "float", "bool", "bytes", "None", "Any",
+    "list", "dict", "tuple", "set",
+}
+
+
+def _looks_like_class_ref(part: str) -> bool:
+    """True if ``part`` contains an identifier that isn't a Python builtin.
+
+    Distinguishes ``RequestId = int | str`` (all builtins, safe to emit as
+    ``int | str``) from ``Message = UserMessage | AssistantMessage | ...``
+    (class refs that may not be defined yet at the alias's emit point).
+    """
+    return any(
+        token.isidentifier() and token not in _BUILTIN_PY_TYPES
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", part)
+    )
 
 
 def generate_union_alias(name: str, schema: dict, defs: dict) -> str:
-    """Emit a Python type alias from an anyOf schema."""
+    """Emit a Python type alias from an anyOf schema.
+
+    Aliases that reference user-defined classes are emitted as
+    ``Union["A", "B", ...]`` so forward refs work — the alias section
+    runs before the class section, and ``from __future__ import
+    annotations`` defers *annotation* evaluation but not module-level
+    assignments like ``X = A | B``. Pure-builtin aliases
+    (``RequestId = int | str``) keep the ``|`` syntax.
+    """
     parts: list[str] = []
     for variant in schema.get("anyOf") or schema.get("oneOf") or []:
         if variant == {"type": "null"}:
@@ -352,12 +412,29 @@ def generate_union_alias(name: str, schema: dict, defs: dict) -> str:
         else:
             parts.append(schema_to_python_type(variant, True, defs))
     deduped_parts = list(dict.fromkeys(parts))
-    body = " | ".join(deduped_parts) if deduped_parts else "Any"
+    if not deduped_parts:
+        body = "Any"
+    elif any(_looks_like_class_ref(p) for p in deduped_parts):
+        body = "Union[" + ", ".join(
+            "None" if p == "None" else f'"{p}"' for p in deduped_parts
+        ) + "]"
+    else:
+        body = " | ".join(deduped_parts)
     py_name = TYPE_RENAMES.get(name, name)
     desc = schema.get("description", "").strip().splitlines()
     if desc:
         return f"# {desc[0][:120]}\n{py_name} = {body}"
     return f"{py_name} = {body}"
+
+
+def _defs_of(schema: dict) -> dict:
+    """Return the schema's referenceable subschemas.
+
+    schemars 1.x (JSON Schema 2020-12) uses ``$defs`` by default;
+    pre-1.x (draft-07) used ``definitions``. Fall back to the legacy
+    key so this script keeps working if either side regresses.
+    """
+    return schema.get("$defs") or schema.get("definitions") or {}
 
 
 def collect_definitions(schema_dir: Path) -> dict[str, dict]:
@@ -369,7 +446,7 @@ def collect_definitions(schema_dir: Path) -> dict[str, dict]:
             continue
         with open(path) as f:
             schema = json.load(f)
-        for name, defn in schema.get("definitions", {}).items():
+        for name, defn in _defs_of(schema).items():
             if name not in defs:
                 defs[name] = defn
 
@@ -380,7 +457,7 @@ def collect_definitions(schema_dir: Path) -> dict[str, dict]:
     if bundle_path.exists():
         with open(bundle_path) as f:
             bundle = json.load(f)
-        for name, entry in bundle.get("definitions", {}).items():
+        for name, entry in _defs_of(bundle).items():
             if name in defs:
                 continue
             # Bundle entries are full root schemas. We accept four
@@ -410,10 +487,11 @@ def collect_definitions(schema_dir: Path) -> dict[str, dict]:
         with open(thread_item_path) as f:
             ti_schema = json.load(f)
         for variant in ti_schema.get("oneOf", []):
-            type_enum = variant.get("properties", {}).get("type", {}).get("enum", [])
-            if not type_enum:
+            type_prop = variant.get("properties", {}).get("type", {})
+            type_values = enum_values(type_prop)
+            if not type_values:
                 continue
-            type_val = type_enum[0]
+            type_val = type_values[0]
             # Convert snake_case type to PascalCase + "Item"
             class_name = _type_to_item_class(type_val)
             if class_name and class_name not in defs:
@@ -465,7 +543,8 @@ def extract_variants(schema: dict) -> list[dict]:
     variants: list[dict] = []
     for variant in schema.get("oneOf", []):
         props = variant.get("properties", {})
-        wire = props.get("method", {}).get("enum", [None])[0]
+        method_vals = enum_values(props.get("method", {}))
+        wire = method_vals[0] if method_vals else None
         if not wire:
             continue
         params = props.get("params")
@@ -720,7 +799,7 @@ def main() -> None:
         from __future__ import annotations
 
         from enum import Enum
-        from typing import Any
+        from typing import Any, Union
 
         from pydantic import BaseModel, Field
     '''))

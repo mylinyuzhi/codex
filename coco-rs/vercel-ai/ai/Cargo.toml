@@ -17,7 +17,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 once_cell = { workspace = true }
-schemars = "0.8"
+schemars = { workspace = true }
 jsonschema = "0.18"
 base64 = { workspace = true }
 tracing = { workspace = true }

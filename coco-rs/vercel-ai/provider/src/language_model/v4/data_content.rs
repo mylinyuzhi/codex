@@ -109,12 +109,18 @@ impl<'de> Deserialize<'de> for LanguageModelV4DataContent {
 
 // Wire shape is always a string (base64 or URL). Match that in the
 // schema rather than letting schemars infer a tagged-enum shape.
+// `inline_schema = true` matches schemars 0.8 behavior: parents inline
+// the `{"type": "string"}` shape instead of `$ref`-ing a named alias
+// for what is already-a-string on the wire.
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for LanguageModelV4DataContent {
-    fn schema_name() -> String {
-        "LanguageModelV4DataContent".to_string()
+    fn inline_schema() -> bool {
+        true
     }
-    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "LanguageModelV4DataContent".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         <String as schemars::JsonSchema>::json_schema(generator)
     }
 }
