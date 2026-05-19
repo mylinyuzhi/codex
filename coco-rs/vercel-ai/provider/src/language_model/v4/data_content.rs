@@ -107,6 +107,18 @@ impl<'de> Deserialize<'de> for LanguageModelV4DataContent {
     }
 }
 
+// Wire shape is always a string (base64 or URL). Match that in the
+// schema rather than letting schemars infer a tagged-enum shape.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for LanguageModelV4DataContent {
+    fn schema_name() -> String {
+        "LanguageModelV4DataContent".to_string()
+    }
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        <String as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+
 impl From<Vec<u8>> for LanguageModelV4DataContent {
     fn from(data: Vec<u8>) -> Self {
         Self::bytes(data)
