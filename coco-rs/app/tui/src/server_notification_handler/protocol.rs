@@ -781,12 +781,29 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         ServerNotification::MessageAppended { message } => {
             match serde_json::from_value::<coco_messages::Message>(message) {
                 Ok(msg) => {
+                    // Plan §6.4 atomic finalize: when the appended
+                    // message is the assistant push that just ended
+                    // the in-flight stream, the cell now owns the
+                    // content — drop the overlay so the same text
+                    // does not render twice for one frame. Subsequent
+                    // stream deltas inside the same turn re-create
+                    // the StreamingState lazily via
+                    // `get_or_insert_with` in `stream.rs`.
+                    //
+                    // Single-agent model: every assistant push is the
+                    // current stream. A future parallel-stream world
+                    // would need an anchor UUID on StreamingState +
+                    // an engine-side pre-allocated assistant UUID; no
+                    // emitter for that exists today so the role check
+                    // is the correct minimal fix.
+                    let is_assistant = matches!(&msg, coco_messages::Message::Assistant(_));
                     state
                         .session
                         .transcript
                         .on_message_appended(std::sync::Arc::new(msg));
-                    // Engine-pushed content becomes visible via the
-                    // transcript-derived render path. Signal redraw.
+                    if is_assistant {
+                        state.ui.streaming = None;
+                    }
                     return true;
                 }
                 Err(e) => {
@@ -801,11 +818,32 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         ServerNotification::MessageTruncated { keep_count } => {
             let n = keep_count.max(0) as usize;
             state.session.transcript.on_message_truncated(n);
-            false
+            // Plan §6.3: any tool execution or live streaming overlay
+            // anchored to a now-dropped message must go. ToolExecution
+            // does not yet carry a parent message UUID, so the
+            // conservative move is to clear everything — truncate is a
+            // user-initiated rewind, and an in-flight tool from a
+            // turn that no longer exists in history has no anchor to
+            // render against. The upgrade path is a `message_uuid`
+            // field on ToolExecution + a `retain` predicate; deferred
+            // until per-tool anchoring is actually needed.
+            state.session.tool_executions.clear();
+            state.ui.streaming = None;
+            true
         }
-        ServerNotification::SessionResetForResume { .. } => {
+        ServerNotification::SessionResetForResume { session_id } => {
+            // Plan §6.3: clear every piece of UI-only state that
+            // belonged to the prior session before the burst of
+            // MessageAppended replays the loaded history. Without this,
+            // tool panels and streaming text from the previous run
+            // leak into the resumed view.
             state.session.transcript.on_session_reset();
-            false
+            state.session.tool_executions.clear();
+            state.ui.streaming = None;
+            // Conversation id rotates on resume so prompt-cache keys
+            // do not collide with the prior run's break points.
+            state.session.conversation_id = Some(session_id);
+            true
         }
     }
 }
