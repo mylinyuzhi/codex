@@ -1394,6 +1394,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-llm-types"
+version = "0.0.0"
+dependencies = [
+ "vercel-ai-provider",
+]
+
+[[package]]
 name = "coco-lsp"
 version = "0.0.0"
 dependencies = [
@@ -1510,6 +1517,7 @@ name = "coco-messages"
 version = "0.0.0"
 dependencies = [
  "coco-inference",
+ "coco-llm-types",
  "coco-types",
  "pretty_assertions",
  "serde",

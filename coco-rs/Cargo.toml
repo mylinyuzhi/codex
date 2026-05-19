@@ -9,6 +9,7 @@ members = [
     "common/config",
     "common/config-reload",
     "common/model-card",
+    "common/llm-types",
 
     # ─── utils/ (26) ── 24 from cocode-rs + 2 new ───
     "utils/absolute-path",
@@ -121,6 +122,7 @@ coco-types = { path = "common/types" }
 coco-config = { path = "common/config" }
 coco-config-reload = { path = "common/config-reload" }
 coco-model-card = { path = "common/model-card" }
+coco-llm-types = { path = "common/llm-types" }
 
 # Internal - utilities
 coco-file-encoding = { path = "utils/file-encoding" }

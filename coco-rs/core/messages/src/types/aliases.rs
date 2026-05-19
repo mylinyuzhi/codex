@@ -1,23 +1,23 @@
-//! Version-agnostic LLM type aliases — shielded through `coco-inference`.
+//! Version-agnostic LLM type aliases — shielded through `coco-llm-types`.
 //!
 //! All Message-family structs in this `types/` tree reference these aliases;
 //! never reach for `vercel_ai_provider` directly. Upgrading the underlying
-//! SDK only requires changing `services/inference/src/lib.rs` — this file
+//! SDK only requires changing `common/llm-types/src/lib.rs` — this file
 //! stays unchanged.
 
-pub use coco_inference::AssistantContentPart as AssistantContent;
-pub use coco_inference::DataContent;
-pub use coco_inference::FilePart as FileContent;
-pub use coco_inference::LanguageModelMessage as LlmMessage;
-pub use coco_inference::LanguageModelPrompt as LlmPrompt;
-pub use coco_inference::ReasoningPart as ReasoningContent;
-pub use coco_inference::TextPart as TextContent;
-pub use coco_inference::ToolCallPart as ToolCallContent;
-pub use coco_inference::ToolContentPart as ToolContent;
-pub use coco_inference::ToolResultContent as ToolResultOutput;
-pub use coco_inference::ToolResultContentPart;
-pub use coco_inference::ToolResultPart as ToolResultContent;
-pub use coco_inference::UserContentPart as UserContent;
+pub use coco_llm_types::AssistantContentPart as AssistantContent;
+pub use coco_llm_types::DataContent;
+pub use coco_llm_types::FilePart as FileContent;
+pub use coco_llm_types::LlmMessage;
+pub use coco_llm_types::LlmPrompt;
+pub use coco_llm_types::ReasoningPart as ReasoningContent;
+pub use coco_llm_types::TextPart as TextContent;
+pub use coco_llm_types::ToolCallPart as ToolCallContent;
+pub use coco_llm_types::ToolContentPart as ToolContent;
+pub use coco_llm_types::ToolResultContent as ToolResultOutput;
+pub use coco_llm_types::ToolResultContentPart;
+pub use coco_llm_types::ToolResultPart as ToolResultContent;
+pub use coco_llm_types::UserContentPart as UserContent;
 
 /// Construct a `ToolResultContentPart` that carries an Anthropic
 /// `tool_reference` content block. The Anthropic API server expands
@@ -61,6 +61,6 @@ pub fn tool_reference_content_part(tool_name: impl Into<String>) -> ToolResultCo
     let mut map = HashMap::new();
     map.insert("anthropic".to_string(), anthropic);
     ToolResultContentPart::Custom {
-        provider_options: Some(coco_inference::ProviderOptions(map)),
+        provider_options: Some(coco_llm_types::ProviderOptions(map)),
     }
 }

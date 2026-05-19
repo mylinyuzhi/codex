@@ -1,0 +1,11 @@
+[package]
+name = "coco-llm-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+vercel-ai-provider.workspace = true
