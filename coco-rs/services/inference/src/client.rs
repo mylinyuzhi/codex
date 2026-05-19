@@ -13,6 +13,10 @@ use crate::prompt_layout::put_layout_options;
 use crate::retry::RetryConfig;
 use crate::usage::UsageAccumulator;
 use coco_config::ModelInfo;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::LlmPrompt;
+use coco_llm_types::UserContentPart;
 use coco_types::Capability;
 use coco_types::PromptCacheConfig;
 use coco_types::ThinkingLevel;
@@ -26,18 +30,14 @@ use tokio::sync::Mutex;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
-use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::LanguageModelV4;
 use vercel_ai_provider::LanguageModelV4CallOptions;
-use vercel_ai_provider::LanguageModelV4Message;
-use vercel_ai_provider::LanguageModelV4Prompt;
-use vercel_ai_provider::UserContentPart;
 
 /// Parameters for a single query.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QueryParams {
     /// Messages to send (as LlmPrompt).
-    pub prompt: LanguageModelV4Prompt,
+    pub prompt: LlmPrompt,
     /// Maximum output tokens. Use [`coco_config::PositiveTokens`] when
     /// validation is required at the JSON boundary; this field stays
     /// `Option<i64>` because callers (TUI, CLI overrides) supply it
@@ -118,11 +118,11 @@ pub struct QueryResult {
     pub usage: TokenUsage,
     pub model: String,
     /// Typed stop reason — the canonical 8-variant
-    /// [`UnifiedFinishReason`] (re-exported as [`crate::StopReason`])
+    /// [`StopReason`] (re-exported as [`coco_llm_types::StopReason`])
     /// from the vercel-ai-provider seam. Higher layers match on this
     /// enum directly; no wire-string parsing anywhere above this
     /// boundary.
-    pub stop_reason: Option<crate::StopReason>,
+    pub stop_reason: Option<coco_llm_types::StopReason>,
     pub request_id: Option<String>,
     pub retries: i32,
     pub total_duration_ms: i64,
@@ -430,7 +430,7 @@ impl ApiClient {
                     // warn so ops can spot truncation / content-filter
                     // events without scraping every info-level line.
                     // Happy-path set: `EndTurn` / `StopSequence` /
-                    // `ToolUse` (see [`UnifiedFinishReason::is_normal`]).
+                    // `ToolUse` (see [`StopReason::is_normal`]).
                     if let Some(reason) = result.stop_reason
                         && reason.is_abnormal()
                     {
@@ -899,10 +899,10 @@ fn build_prompt_state_input(
 
 /// Extract the concatenated system message text + char count. Returns
 /// `("", 0)` when no system message is present.
-fn extract_system_text(prompt: &LanguageModelV4Prompt) -> (String, i64) {
+fn extract_system_text(prompt: &LlmPrompt) -> (String, i64) {
     let mut text = String::new();
     for msg in prompt {
-        if let LanguageModelV4Message::System { content, .. } = msg {
+        if let LlmMessage::System { content, .. } = msg {
             if !text.is_empty() {
                 text.push('\n');
             }

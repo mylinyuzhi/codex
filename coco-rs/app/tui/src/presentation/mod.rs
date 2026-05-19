@@ -10,7 +10,6 @@ pub(crate) mod diff;
 pub(crate) mod footer;
 pub(crate) mod header;
 pub(crate) mod help;
-pub(crate) mod help_slash;
 pub(crate) mod information;
 pub(crate) mod input;
 pub(crate) mod layout;

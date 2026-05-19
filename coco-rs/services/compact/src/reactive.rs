@@ -214,7 +214,7 @@ pub fn api_microcompact(messages: &mut [Message], tokens_to_free: i64) {
                         coco_messages::ToolResultContent {
                             tool_call_id: tr.tool_use_id.clone(),
                             tool_name: String::new(),
-                            output: coco_inference::ToolResultContent::text(
+                            output: coco_llm_types::ToolResultContent::text(
                                 CLEARED_TOOL_RESULT_MESSAGE,
                             ),
                             is_error: false,

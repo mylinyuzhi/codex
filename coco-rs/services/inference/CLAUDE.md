@@ -19,7 +19,8 @@ Thin multi-provider LLM client wrapper over `vercel-ai`. Generic retry, usage ag
 - `UsageAccumulator` — token/cost accumulation
 - `CacheBreakDetector`, `CacheBreakResult`, `CacheState` — prompt-cache boundary detection
 - `StreamEvent`, `synthetic_stream_from_content` — streaming primitives
-- `InferenceError`, `ErrorLog`, `RequestLog`, `ResponseLog`, `StopReason`, `KnownGateway`
+- `InferenceError`, `ErrorLog`, `RequestLog`, `ResponseLog`, `KnownGateway`
+- `StopReason` and other DTO names (Message, content parts, ProviderOptions, FinishReason, Usage, ProviderMetadata, ReasoningLevel) **are not re-exported here** — they live in `common/llm-types` (DTO seam). This crate owns runtime types only (`LanguageModel` trait, CallOptions, GenerateResult, Provider trait)
 - `merge_provider_options`, `provider_base_options` — provider option merging
 - `generate_tool_schemas`, `filter_schemas_by_model`, `estimate_schema_tokens` — tool schema pipeline
 - `cache_convert::to_extra_body` — provider-neutral pass-through emission of `cacheStrategy` / `requestedBetas` (Anthropic-only consumer today)

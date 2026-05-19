@@ -11,7 +11,8 @@
 //!                                                    ↓
 //!  TUI handler                      →  state.ui.streaming.{thinking, content}
 //!                                                    ↓
-//!  TurnCompleted                    →  flush content → ChatMessage::AssistantText
+//!  TurnCompleted                    →  engine pushes Message::Assistant via
+//!                                       MessageAppended → transcript cell
 //!                                       (thinking stays in the streaming buffer
 //!                                        and is dropped on `take()` — by design,
 //!                                        thinking is real-time-only)
@@ -19,13 +20,12 @@
 //!
 //! Verifies:
 //! - The wire carried a `ThinkingDelta` with the scripted reasoning text.
-//! - The final assistant text landed in `session.messages`.
+//! - The final assistant text landed as a cell on the transcript.
 //! - `state.ui.streaming` is `None` after the turn (took-and-flushed).
 
 use std::time::Duration;
 
 use anyhow::Result;
-use coco_tui::state::session::ChatRole;
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
 
@@ -59,23 +59,11 @@ pub async fn run() -> Result<()> {
     );
 
     // The final assistant text reached the chat.
-    let saw_body = harness
-        .state
-        .session
-        .messages
-        .iter()
-        .any(|m| matches!(m.role, ChatRole::Assistant) && m.text_content().contains(body));
     assert!(
-        saw_body,
+        harness.assistant_text_contains(body),
         "thinking_block: assistant text body `{body}` missing — \
-         got messages: {:?}",
-        harness
-            .state
-            .session
-            .messages
-            .iter()
-            .map(|m| (m.role, m.text_content().to_string()))
-            .collect::<Vec<_>>(),
+         got cells: {:?}",
+        harness.text_cells_in_order(),
     );
 
     // After TurnCompleted, the streaming buffer is `take()`'n. Any leak

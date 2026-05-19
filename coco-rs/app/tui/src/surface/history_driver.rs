@@ -1,4 +1,10 @@
 //! Surface history orchestration for native scrollback.
+//!
+//! Phase 3d (§4): operates on `&[RenderedCell]` directly. The
+//! `HistoryEmissionTracker` still tracks exactly-once emission by
+//! engine message UUIDs, which are stable across the engine
+//! `MessageAppended` events and survive resume reloads (each cell
+//! carries `Arc<Message>` from the engine `MessageHistory`).
 // S2 driver lands before production `Tui` switches to `SurfaceTerminal`.
 #![allow(dead_code)]
 
@@ -6,7 +12,7 @@ use std::time::Instant;
 
 use ratatui::text::Line;
 
-use crate::state::session::ChatMessage;
+use crate::state::transcript_view::RenderedCell;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
 use crate::surface::history_emitter::HistoryEmissionPlan;
 use crate::surface::history_emitter::HistoryEmissionTracker;
@@ -62,7 +68,7 @@ impl SurfaceHistoryDriver {
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
         session_header: Vec<Line<'static>>,
-        messages: &[ChatMessage],
+        cells: &[RenderedCell],
         options: HistoryLineRenderOptions<'_>,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
@@ -77,7 +83,7 @@ impl SurfaceHistoryDriver {
             return Ok(HistoryEmissionOutcome::ReplayRequired);
         }
 
-        let plan = self.emitter.plan(messages);
+        let plan = self.emitter.plan(cells);
         let should_emit_header = self.header_fingerprint.is_none();
         if matches!(plan, HistoryEmissionPlan::Noop) && !should_emit_header {
             return Ok(HistoryEmissionOutcome::Noop);
@@ -88,19 +94,19 @@ impl SurfaceHistoryDriver {
 
         let start = match plan {
             HistoryEmissionPlan::Append { start } => start,
-            HistoryEmissionPlan::Noop | HistoryEmissionPlan::ReplayRequired => messages.len(),
+            HistoryEmissionPlan::Noop | HistoryEmissionPlan::ReplayRequired => cells.len(),
         };
         let mut lines = Vec::new();
         if should_emit_header {
             lines.extend(session_header);
         }
-        lines.extend(render_finalized_history_lines(&messages[start..], options));
+        lines.extend(render_finalized_history_lines(&cells[start..], options));
         let rows = terminal.insert_history_lines(lines)?;
         self.header_fingerprint = Some(header_fingerprint);
-        self.emitter.mark_emitted_through(messages, messages.len());
+        self.emitter.mark_emitted_through(cells, cells.len());
         Ok(HistoryEmissionOutcome::Appended {
             start,
-            message_count: messages.len() - start,
+            message_count: cells.len() - start,
             rows,
         })
     }
@@ -109,7 +115,7 @@ impl SurfaceHistoryDriver {
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
         session_header: Vec<Line<'static>>,
-        messages: &[ChatMessage],
+        cells: &[RenderedCell],
         options: HistoryLineRenderOptions<'_>,
         stream_active: bool,
     ) -> Result<HistoryEmissionOutcome, B::Error>
@@ -119,8 +125,8 @@ impl SurfaceHistoryDriver {
         let outcome = self.replay_lines(
             terminal,
             session_header,
-            messages,
-            render_finalized_history_lines(messages, options),
+            cells,
+            render_finalized_history_lines(cells, options),
         )?;
         let area = terminal.viewport_area();
         self.reflow
@@ -132,15 +138,15 @@ impl SurfaceHistoryDriver {
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
         session_header: Vec<Line<'static>>,
-        messages: &[ChatMessage],
+        cells: &[RenderedCell],
         options: HistoryLineRenderOptions<'_>,
         stream_active: bool,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
         B: SurfaceBackend,
     {
-        let replay = render_replay_history_lines(messages, options, DEFAULT_MAX_REFLOW_ROWS).lines;
-        let outcome = self.replay_lines(terminal, session_header, messages, replay)?;
+        let replay = render_replay_history_lines(cells, options, DEFAULT_MAX_REFLOW_ROWS).lines;
+        let outcome = self.replay_lines(terminal, session_header, cells, replay)?;
         let area = terminal.viewport_area();
         self.reflow
             .mark_replayed_viewport(area.width, area.height, stream_active);
@@ -161,7 +167,7 @@ impl SurfaceHistoryDriver {
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
         session_header: Vec<Line<'static>>,
-        messages: &[ChatMessage],
+        cells: &[RenderedCell],
         message_lines: Vec<Line<'static>>,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
@@ -173,9 +179,9 @@ impl SurfaceHistoryDriver {
         terminal.clear_owned_scrollback()?;
         let rows = terminal.insert_history_lines(lines)?;
         self.header_fingerprint = Some(header_fingerprint);
-        self.emitter.mark_emitted_through(messages, messages.len());
+        self.emitter.mark_emitted_through(cells, cells.len());
         Ok(HistoryEmissionOutcome::Replayed {
-            message_count: messages.len(),
+            message_count: cells.len(),
             rows,
         })
     }

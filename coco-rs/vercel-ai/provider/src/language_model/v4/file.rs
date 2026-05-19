@@ -9,6 +9,7 @@ use serde::Serialize;
 ///
 /// Matches the 2-arm `SharedV4FileDataData | SharedV4FileDataUrl` tagged union
 /// from the TypeScript v4 spec.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum LanguageModelV4FileData {
@@ -67,6 +68,7 @@ impl LanguageModelV4FileData {
 /// If the API returns base64 encoded strings, the file data should be returned
 /// as base64 encoded strings. If the API returns binary data, it should be
 /// returned as binary data.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LanguageModelV4File {

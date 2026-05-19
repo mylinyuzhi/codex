@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::StopReason;
+use coco_llm_types::TextPart;
+use coco_llm_types::Usage;
 use vercel_ai_provider::LanguageModelV4;
 use vercel_ai_provider::LanguageModelV4CallOptions;
 use vercel_ai_provider::LanguageModelV4GenerateResult;
-use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::TextPart;
-use vercel_ai_provider::UnifiedFinishReason;
-use vercel_ai_provider::Usage;
 
 use super::*;
 
@@ -46,7 +46,7 @@ impl LanguageModelV4 for MockModel {
                 provider_metadata: None,
             })],
             usage: Usage::new(10, 5),
-            finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
             warnings: vec![],
             provider_metadata: None,
             request: None,
@@ -97,7 +97,7 @@ fn mock_client(text: &str) -> ApiClient {
 async fn test_client_returns_mock_text() {
     let client = mock_client("Hello from mock!");
     let params = QueryParams {
-        prompt: vec![LanguageModelV4Message::user_text("hi")],
+        prompt: vec![LlmMessage::user_text("hi")],
         max_tokens: Some(100),
         ..Default::default()
     };
@@ -123,7 +123,7 @@ async fn test_client_model_id() {
 async fn test_usage_accumulation() {
     let client = mock_client("test");
     let params = QueryParams {
-        prompt: vec![LanguageModelV4Message::user_text("hi")],
+        prompt: vec![LlmMessage::user_text("hi")],
         max_tokens: Some(100),
         ..Default::default()
     };
@@ -147,7 +147,7 @@ async fn test_error_model_fails() {
         },
     );
     let params = QueryParams {
-        prompt: vec![LanguageModelV4Message::user_text("hi")],
+        prompt: vec![LlmMessage::user_text("hi")],
         max_tokens: Some(100),
         ..Default::default()
     };
@@ -165,7 +165,7 @@ async fn test_provider_error_includes_provider_and_model_attribution() {
         },
     );
     let params = QueryParams {
-        prompt: vec![LanguageModelV4Message::user_text("hi")],
+        prompt: vec![LlmMessage::user_text("hi")],
         max_tokens: Some(100),
         ..Default::default()
     };
@@ -191,9 +191,9 @@ async fn test_provider_error_includes_provider_and_model_attribution() {
 #[test]
 fn stop_reason_is_normal_covers_happy_path() {
     for normal in [
-        crate::StopReason::EndTurn,
-        crate::StopReason::StopSequence,
-        crate::StopReason::ToolUse,
+        coco_llm_types::StopReason::EndTurn,
+        coco_llm_types::StopReason::StopSequence,
+        coco_llm_types::StopReason::ToolUse,
     ] {
         assert!(normal.is_normal(), "{normal:?} should be normal");
         assert!(!normal.is_abnormal());
@@ -203,11 +203,11 @@ fn stop_reason_is_normal_covers_happy_path() {
 #[test]
 fn stop_reason_flags_truncation_and_filter() {
     for abnormal in [
-        crate::StopReason::MaxTokens,
-        crate::StopReason::ContextWindowExceeded,
-        crate::StopReason::ContentFilter,
-        crate::StopReason::Error,
-        crate::StopReason::Other,
+        coco_llm_types::StopReason::MaxTokens,
+        coco_llm_types::StopReason::ContextWindowExceeded,
+        coco_llm_types::StopReason::ContentFilter,
+        coco_llm_types::StopReason::Error,
+        coco_llm_types::StopReason::Other,
     ] {
         assert!(abnormal.is_abnormal(), "{abnormal:?} should be abnormal");
         assert!(!abnormal.is_normal());

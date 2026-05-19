@@ -2,14 +2,12 @@
 
 use crate::i18n::locale_test_guard;
 use crate::state::AppState;
-use crate::state::Overlay;
 use crate::state::PermissionDetail;
-use crate::state::PermissionOverlay;
+use crate::state::PermissionPromptState;
 use crate::state::StreamingState;
+use crate::state::SuggestionKind;
 use crate::state::Toast;
-use crate::state::session::ChatMessage;
-use crate::state::session::MessageContent;
-use crate::state::session::ToolUseStatus;
+use crate::state::derive::test_helpers;
 
 fn mark_retained_surface_visible(state: &mut AppState) {
     state
@@ -52,13 +50,11 @@ fn test_snapshot_status_bar_full() {
 fn test_snapshot_with_messages() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "Hello, how are you?"));
-    state.session.add_message(ChatMessage::assistant_text(
-        "2",
+    test_helpers::push_user_text(&mut state.session, "1", "Hello, how are you?");
+    test_helpers::push_assistant_text(
+        &mut state.session,
         "I'm doing well! How can I help you today?",
-    ));
+    );
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("with_messages", output);
@@ -68,18 +64,14 @@ fn test_snapshot_with_messages() {
 fn test_snapshot_thinking_collapsed() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "hello"));
-    state.session.add_message(thinking_message(
-        "2",
+    test_helpers::push_user_text(&mut state.session, "1", "hello");
+    test_helpers::push_assistant_thinking(
+        &mut state.session,
         "The user just said hello, so respond briefly.",
-        Some(1600),
-        Some(22),
-    ));
-    state
-        .session
-        .add_message(ChatMessage::assistant_text("3", "Hello! How can I help?"));
+        1600,
+        22,
+    );
+    test_helpers::push_assistant_text(&mut state.session, "Hello! How can I help?");
 
     let output = render_to_string(&state, 96, 18);
     insta::assert_snapshot!("thinking_collapsed", output);
@@ -90,36 +82,22 @@ fn test_snapshot_thinking_expanded_show_thinking_on() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
     state.ui.show_thinking = true;
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "bash ls"));
-    state.session.add_message(thinking_message(
-        "2",
+    test_helpers::push_user_text(&mut state.session, "1", "bash ls");
+    test_helpers::push_assistant_thinking(
+        &mut state.session,
         "The user wants me to run `ls` in the current working directory.\n\
          I should call the Bash tool and then summarize the result.",
-        Some(1300),
-        Some(15),
-    ));
-    state.session.add_message(ChatMessage {
-        id: "3".to_string(),
-        role: crate::state::ChatRole::Assistant,
-        content: MessageContent::ToolUse {
-            tool_name: "Bash".to_string(),
-            call_id: "call-1".to_string(),
-            input_preview: "ls".to_string(),
-            status: ToolUseStatus::Completed,
-        },
-        is_meta: false,
-        is_compact_summary: false,
-        is_visible_in_transcript_only: false,
-        created_at_ms: 0,
-        permission_mode: None,
-    });
-    state.session.add_message(ChatMessage::tool_success(
-        "4",
+        1300,
+        15,
+    );
+    test_helpers::push_tool_use(&mut state.session, "call-1", "Bash", "ls");
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "call-1",
         "Bash",
         "app\nbridge\ncommon\nutils\nvercel-ai",
-    ));
+        false,
+    );
 
     let output = render_to_string(&state, 96, 22);
     insta::assert_snapshot!("thinking_expanded_show_thinking_on", output);
@@ -129,80 +107,29 @@ fn test_snapshot_thinking_expanded_show_thinking_on() {
 fn test_snapshot_with_tool_result() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "List files"));
-    state.session.add_message(ChatMessage {
-        id: "2".to_string(),
-        role: crate::state::ChatRole::Assistant,
-        content: MessageContent::ToolUse {
-            tool_name: "Bash".to_string(),
-            call_id: "c1".to_string(),
-            input_preview: "ls -la".to_string(),
-            status: ToolUseStatus::Completed,
-        },
-        is_meta: false,
-        is_compact_summary: false,
-        is_visible_in_transcript_only: false,
-        created_at_ms: 0,
-        permission_mode: None,
-    });
-    state.session.add_message(ChatMessage::tool_success(
-        "3",
+    test_helpers::push_user_text(&mut state.session, "1", "List files");
+    test_helpers::push_tool_use(&mut state.session, "c1", "Bash", "ls -la");
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "c1",
         "Bash",
         "file1.rs\nfile2.rs\nCargo.toml",
-    ));
+        false,
+    );
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("with_tool_result", output);
-}
-
-fn thinking_message(
-    id: &str,
-    content: &str,
-    duration_ms: Option<i64>,
-    reasoning_tokens: Option<i64>,
-) -> ChatMessage {
-    ChatMessage {
-        id: id.to_string(),
-        role: crate::state::ChatRole::Assistant,
-        content: MessageContent::Thinking {
-            content: content.to_string(),
-            duration_ms,
-            reasoning_tokens,
-        },
-        is_meta: false,
-        is_compact_summary: false,
-        is_visible_in_transcript_only: false,
-        created_at_ms: 0,
-        permission_mode: None,
-    }
 }
 
 #[test]
 fn test_snapshot_tool_result_middle_truncation() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "find the CLAUDE.md"));
-    state.session.add_message(ChatMessage {
-        id: "2".to_string(),
-        role: crate::state::ChatRole::Assistant,
-        content: MessageContent::ToolUse {
-            tool_name: "Glob".to_string(),
-            call_id: "c1".to_string(),
-            input_preview: "**/CLAUDE.md".to_string(),
-            status: ToolUseStatus::Completed,
-        },
-        is_meta: false,
-        is_compact_summary: false,
-        is_visible_in_transcript_only: false,
-        created_at_ms: 0,
-        permission_mode: None,
-    });
-    state.session.add_message(ChatMessage::tool_success(
-        "3",
+    test_helpers::push_user_text(&mut state.session, "1", "find the CLAUDE.md");
+    test_helpers::push_tool_use(&mut state.session, "c1", "Glob", "**/CLAUDE.md");
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "c1",
         "Glob",
         "Found 8 files\n\
          coco-rs/app/tui/CLAUDE.md\n\
@@ -213,7 +140,8 @@ fn test_snapshot_tool_result_middle_truncation() {
          coco-rs/services/inference/CLAUDE.md\n\
          coco-rs/utils/string/CLAUDE.md\n\
          codex-rs/tui/CLAUDE.md",
-    ));
+        false,
+    );
 
     let output = render_to_string(&state, 96, 24);
     insta::assert_snapshot!("tool_result_middle_truncation", output);
@@ -223,26 +151,11 @@ fn test_snapshot_tool_result_middle_truncation() {
 fn assistant_text_after_tool_result_keeps_dot_and_full_body() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "find the readme.md"));
-    state.session.add_message(ChatMessage {
-        id: "2".to_string(),
-        role: crate::state::ChatRole::Assistant,
-        content: MessageContent::ToolUse {
-            tool_name: "Glob".to_string(),
-            call_id: "c1".to_string(),
-            input_preview: "**/README.md".to_string(),
-            status: ToolUseStatus::Completed,
-        },
-        is_meta: false,
-        is_compact_summary: false,
-        is_visible_in_transcript_only: false,
-        created_at_ms: 0,
-        permission_mode: None,
-    });
-    state.session.add_message(ChatMessage::tool_success(
-        "3",
+    test_helpers::push_user_text(&mut state.session, "1", "find the readme.md");
+    test_helpers::push_tool_use(&mut state.session, "c1", "Glob", "**/README.md");
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "c1",
         "Glob",
         "common/error/README.md\n\
          common/otel/README.md\n\
@@ -251,9 +164,10 @@ fn assistant_text_after_tool_result_keeps_dot_and_full_body() {
          app/tui/README.md\n\
          app/query/README.md\n\
          services/inference/README.md",
-    ));
-    state.session.add_message(ChatMessage::assistant_text(
-        "4",
+        false,
+    );
+    test_helpers::push_assistant_text(
+        &mut state.session,
         "Found 13 `README.md` files in the workspace:\n\n\
          | Path | Description |\n\
          |------|-------------|\n\
@@ -261,7 +175,7 @@ fn assistant_text_after_tool_result_keeps_dot_and_full_body() {
          | `common/otel/README.md` | Tracing conventions |\n\
          | `vercel-ai/README.md` | Provider notes |\n\
          | `app/tui/README.md` | TUI notes |",
-    ));
+    );
 
     let output = render_to_string(&state, 96, 40);
     assert!(output.contains("⏺ Found 13"));
@@ -271,41 +185,45 @@ fn assistant_text_after_tool_result_keeps_dot_and_full_body() {
 }
 
 #[test]
-fn test_snapshot_with_permission_overlay() {
+fn test_snapshot_with_permission_prompt() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state.ui.set_overlay(Overlay::Permission(PermissionOverlay {
-        request_id: "r1".to_string(),
-        tool_name: "Bash".to_string(),
-        description: "Execute shell command".to_string(),
-        detail: PermissionDetail::Bash {
-            command: "rm -rf /tmp/test".to_string(),
-            risk_description: Some("Removes files recursively".to_string()),
-            working_dir: Some("/home/user/project".to_string()),
-        },
-        risk_level: Some(crate::state::RiskLevel::High),
-        show_always_allow: true,
-        classifier_checking: false,
-        classifier_auto_approved: None,
-        choices: None,
-        selected_choice: 0,
-        display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
-        original_input: None,
-        permission_suggestions: vec![],
-    }));
+    state
+        .ui
+        .push_prompt(crate::state::PanePromptState::Permission(
+            PermissionPromptState {
+                request_id: "r1".to_string(),
+                tool_name: "Bash".to_string(),
+                description: "Execute shell command".to_string(),
+                detail: PermissionDetail::Bash {
+                    command: "rm -rf /tmp/test".to_string(),
+                    risk_description: Some("Removes files recursively".to_string()),
+                    working_dir: Some("/home/user/project".to_string()),
+                },
+                risk_level: Some(crate::state::RiskLevel::High),
+                show_always_allow: true,
+                classifier_checking: false,
+                classifier_auto_approved: None,
+                choices: None,
+                selected_choice: 0,
+                display_input: coco_types::PermissionDisplayInput::Command(
+                    "rm -rf /tmp/test".into(),
+                ),
+                original_input: None,
+                permission_suggestions: vec![],
+            },
+        ));
     mark_retained_surface_visible(&mut state);
 
     let output = render_to_string(&state, 80, 24);
-    insta::assert_snapshot!("permission_overlay", output);
+    insta::assert_snapshot!("permission_prompt", output);
 }
 
 #[test]
 fn test_snapshot_with_streaming() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "Explain Rust"));
+    test_helpers::push_user_text(&mut state.session, "1", "Explain Rust");
 
     let mut streaming = StreamingState::new();
     streaming.append_text("Rust is a systems programming language");
@@ -317,10 +235,10 @@ fn test_snapshot_with_streaming() {
 }
 
 #[test]
-fn test_snapshot_with_help_overlay() {
+fn test_snapshot_with_help_modal() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state.ui.set_overlay(Overlay::Help);
+    state.ui.show_modal(crate::state::ModalState::Help);
 
     let output = render_to_string(&state, 80, 24);
     // Modifier label depends on host OS (`opt` on macOS, `alt`
@@ -333,7 +251,7 @@ fn test_snapshot_with_help_overlay() {
         "linux"
     };
     insta::with_settings!({ snapshot_suffix => suffix }, {
-        insta::assert_snapshot!("help_overlay", output);
+        insta::assert_snapshot!("help_modal", output);
     });
 }
 
@@ -420,7 +338,7 @@ fn test_snapshot_with_model_fallback_banner() {
 }
 
 #[test]
-fn test_snapshot_with_error_overlay() {
+fn test_snapshot_with_error_modal() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
     let body = crate::widgets::error_dialog::format_error_body(
@@ -428,11 +346,11 @@ fn test_snapshot_with_error_overlay() {
         Some("network"),
         false,
     );
-    state.ui.set_overlay(Overlay::Error(body));
+    state.ui.show_modal(crate::state::ModalState::Error(body));
     mark_retained_surface_visible(&mut state);
 
     let output = render_to_string(&state, 80, 24);
-    insta::assert_snapshot!("error_overlay_non_retryable", output);
+    insta::assert_snapshot!("error_modal_non_retryable", output);
 }
 
 #[test]
@@ -452,37 +370,15 @@ fn test_snapshot_plan_mode() {
     state.session.model = "opus-4".to_string();
     state.session.permission_mode = coco_types::PermissionMode::Plan;
     state.session.turn_count = 3;
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "Plan the implementation"));
+    test_helpers::push_user_text(&mut state.session, "1", "Plan the implementation");
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("plan_mode", output);
 }
 
-#[test]
-fn test_snapshot_file_diff() {
-    let mut state = AppState::new();
-    state.session.model = "opus-4".to_string();
-    state.session.add_message(ChatMessage {
-        id: "1".to_string(),
-        role: crate::state::ChatRole::Tool,
-        content: MessageContent::FileEditDiff {
-            path: "src/main.rs".to_string(),
-            diff: "+fn main() {\n+    println!(\"hello\");\n+}\n-fn main() {}".to_string(),
-            old_content: None,
-            new_content: None,
-        },
-        is_meta: false,
-        is_compact_summary: false,
-        is_visible_in_transcript_only: false,
-        created_at_ms: 0,
-        permission_mode: None,
-    });
-
-    let output = render_to_string(&state, 80, 24);
-    insta::assert_snapshot!("file_diff", output);
-}
+// Edit tool results land as `Message::ToolResult` cells and render
+// through the generic tool-result preview — covered by
+// `test_snapshot_with_tool_result`.
 
 #[test]
 fn test_snapshot_parallel_tool_batch() {
@@ -490,9 +386,7 @@ fn test_snapshot_parallel_tool_batch() {
     // messages are rendered under a `‖ N in parallel` header.
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "Investigate"));
+    test_helpers::push_user_text(&mut state.session, "1", "Investigate");
     for (i, (name, input)) in [
         ("Bash", "ls -la"),
         ("Read", "src/main.rs"),
@@ -501,21 +395,7 @@ fn test_snapshot_parallel_tool_batch() {
     .iter()
     .enumerate()
     {
-        state.session.add_message(ChatMessage {
-            id: format!("m{}", i + 2),
-            role: crate::state::ChatRole::Assistant,
-            content: MessageContent::ToolUse {
-                tool_name: name.to_string(),
-                call_id: format!("c{i}"),
-                input_preview: input.to_string(),
-                status: ToolUseStatus::Running,
-            },
-            is_meta: false,
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            created_at_ms: 0,
-            permission_mode: None,
-        });
+        test_helpers::push_tool_use(&mut state.session, &format!("c{i}"), name, input);
     }
 
     let output = render_to_string(&state, 80, 24);
@@ -618,26 +498,27 @@ fn test_snapshot_command_palette_inline_popup() {
     // user can see what they typed.
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state.ui.set_overlay(crate::state::Overlay::CommandPalette(
-        crate::state::CommandPaletteOverlay {
-            commands: vec![
-                crate::state::CommandOption {
-                    name: "model".into(),
-                    description: Some("Set the AI model".into()),
-                },
-                crate::state::CommandOption {
-                    name: "clear".into(),
-                    description: Some("Clear conversation".into()),
-                },
-                crate::state::CommandOption {
-                    name: "compact".into(),
-                    description: Some("Compact conversation".into()),
-                },
-            ],
-            filter: "c".to_string(),
-            selected: 0,
-        },
-    ));
+    state.ui.input.textarea.set_text("/c");
+    state.ui.input.textarea.set_cursor(2);
+    state.ui.active_suggestions = Some(crate::state::ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: vec![
+            crate::widgets::suggestion_popup::SuggestionItem {
+                label: "/clear".into(),
+                description: Some("Clear conversation".into()),
+                metadata: None,
+            },
+            crate::widgets::suggestion_popup::SuggestionItem {
+                label: "/compact".into(),
+                description: Some("Compact conversation".into()),
+                metadata: None,
+            },
+        ],
+        selected: 0,
+        query: "c".into(),
+        trigger_pos: 0,
+    });
+    state.ui.sync_popup_from_active_suggestions();
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("command_palette_inline", output);

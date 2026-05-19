@@ -6,8 +6,8 @@
 //! check rather than a tautology against the cached client.
 
 use anyhow::Result;
-use coco_inference::LanguageModelMessage;
 use coco_inference::QueryParams;
+use coco_llm_types::LlmMessage;
 
 use crate::common::build_client;
 use crate::common::usage_report;
@@ -30,8 +30,8 @@ pub async fn run(provider: &str, model_id: &str) -> Result<()> {
     );
 
     let prompt = vec![
-        LanguageModelMessage::system("You are a helpful assistant. Be concise."),
-        LanguageModelMessage::user_text("Reply with the single word: ok"),
+        LlmMessage::system("You are a helpful assistant. Be concise."),
+        LlmMessage::user_text("Reply with the single word: ok"),
     ];
 
     let params = QueryParams {

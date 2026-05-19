@@ -3,7 +3,7 @@
 //! Determines the active keybinding context from state, then resolves
 //! key events to commands. Context priority:
 //!
-//!   overlay > autocomplete > global > input
+//!   state > autocomplete > global > input
 //!
 //! TS: src/keybindings/ + event/handler.rs in cocode-rs
 
@@ -13,24 +13,25 @@ use crossterm::event::KeyModifiers;
 
 use crate::events::TuiCommand;
 use crate::state::AppState;
-use crate::state::Overlay;
+use crate::state::ModalState;
+use crate::state::PanePromptState;
 
 /// Keybinding context — determines which key mappings are active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeybindingContext {
-    /// Permission/question overlay — Y/N/A approval.
+    /// Permission/question state — Y/N/A approval.
     Confirmation,
-    /// Filterable list overlay (model picker, command palette, etc.).
+    /// Filterable list state (model picker, command palette, etc.).
     Picker,
-    /// Model picker overlay — filterable list plus effort/role controls.
+    /// Model picker state — filterable list plus effort/role controls.
     ModelPicker,
-    /// Scrollable content overlay (help, diff view, task detail, doctor).
+    /// Scrollable content state (help, diff view, task detail, doctor).
     Scrollable,
-    /// Transcript reader overlay.
+    /// Transcript reader state.
     Transcript,
     /// Autocomplete suggestions visible.
     Autocomplete,
-    /// Tabbed settings overlay — Tab/Shift+Tab cycle tabs, Up/Down nav.
+    /// Tabbed settings state — Tab/Shift+Tab cycle tabs, Up/Down nav.
     Settings,
     /// Theme tab inside Settings — includes theme-picker-specific actions.
     ThemePicker,
@@ -40,42 +41,57 @@ pub enum KeybindingContext {
 
 /// Determine the active keybinding context from state.
 pub fn active_context(state: &AppState) -> KeybindingContext {
-    if let Some(overlay) = state.ui.active_overlay() {
-        return match overlay {
-            // Filterable list overlays
-            Overlay::ModelPicker(_) => KeybindingContext::ModelPicker,
+    if let Some(modal) = state.ui.modal.as_ref() {
+        return match modal {
+            // Filterable list modals
+            ModalState::ModelPicker(_) => KeybindingContext::ModelPicker,
 
-            // Filterable list overlays
-            Overlay::CommandPalette(_)
-            | Overlay::SessionBrowser(_)
-            | Overlay::GlobalSearch(_)
-            | Overlay::QuickOpen(_)
-            | Overlay::Export(_)
-            | Overlay::Feedback(_)
-            | Overlay::McpServerSelect(_)
-            | Overlay::Rewind(_) => KeybindingContext::Picker,
+            // Filterable list modals
+            ModalState::SessionBrowser(_)
+            | ModalState::GlobalSearch(_)
+            | ModalState::QuickOpen(_)
+            | ModalState::Export(_)
+            | ModalState::Feedback(_)
+            | ModalState::McpServerSelect(_)
+            | ModalState::Rewind(_) => KeybindingContext::Picker,
 
-            // Scrollable read-only overlays
-            Overlay::Help
-            | Overlay::DiffView(_)
-            | Overlay::TaskDetail(_)
-            | Overlay::Doctor(_)
-            | Overlay::ContextVisualization => KeybindingContext::Scrollable,
-            Overlay::Transcript(_) => KeybindingContext::Transcript,
+            // Scrollable read-only modals
+            ModalState::Help
+            | ModalState::DiffView(_)
+            | ModalState::TaskDetail(_)
+            | ModalState::Doctor(_)
+            | ModalState::ContextVisualization => KeybindingContext::Scrollable,
+            ModalState::Transcript(_) => KeybindingContext::Transcript,
 
-            // Tabbed settings overlay. The Theme tab gets the TS
+            // Tabbed settings state. The Theme tab gets the TS
             // ThemePicker context so `theme:toggleSyntaxHighlighting`
             // works without making syntax highlighting a theme.json field.
-            Overlay::Settings(s)
+            ModalState::Settings(s)
                 if s.active_tab == crate::widgets::settings_panel::SettingsTab::Theme =>
             {
                 KeybindingContext::ThemePicker
             }
-            Overlay::Settings(_) => KeybindingContext::Settings,
+            ModalState::Settings(_) => KeybindingContext::Settings,
 
-            // All others are confirmation/approval overlays
+            // All others are confirmation/approval surfaces
             _ => KeybindingContext::Confirmation,
         };
+    }
+
+    if matches!(
+        state.ui.interaction.active_prompt,
+        Some(
+            PanePromptState::Permission(_)
+                | PanePromptState::Question(_)
+                | PanePromptState::SandboxPermission(_)
+                | PanePromptState::CostWarning(_)
+                | PanePromptState::PlanEntry(_)
+                | PanePromptState::PlanExit(_)
+                | PanePromptState::PlanApproval(_)
+                | PanePromptState::McpServerApproval(_)
+        )
+    ) {
+        return KeybindingContext::Confirmation;
     }
 
     // Autocomplete popup active: Up/Down/Tab/Esc route to suggestion
@@ -166,36 +182,36 @@ fn map_model_picker_key(key: KeyEvent) -> Option<TuiCommand> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
-        KeyCode::Home => Some(TuiCommand::OverlayJumpStart),
-        KeyCode::End => Some(TuiCommand::OverlayJumpEnd),
-        KeyCode::Up if shift => Some(TuiCommand::OverlayJumpStart),
-        KeyCode::Down if shift => Some(TuiCommand::OverlayJumpEnd),
-        KeyCode::Up => Some(TuiCommand::OverlayPrev),
-        KeyCode::Down => Some(TuiCommand::OverlayNext),
+        KeyCode::Home => Some(TuiCommand::SurfaceJumpStart),
+        KeyCode::End => Some(TuiCommand::SurfaceJumpEnd),
+        KeyCode::Up if shift => Some(TuiCommand::SurfaceJumpStart),
+        KeyCode::Down if shift => Some(TuiCommand::SurfaceJumpEnd),
+        KeyCode::Up => Some(TuiCommand::SurfacePrev),
+        KeyCode::Down => Some(TuiCommand::SurfaceNext),
         KeyCode::Left => Some(TuiCommand::ModelPickerCycleEffort(-1)),
         KeyCode::Right => Some(TuiCommand::ModelPickerCycleEffort(1)),
         KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
         KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
-        KeyCode::Enter => Some(TuiCommand::OverlayConfirm),
+        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
         KeyCode::Esc => Some(TuiCommand::Cancel),
-        KeyCode::Backspace => Some(TuiCommand::OverlayFilterBackspace),
+        KeyCode::Backspace => Some(TuiCommand::SurfaceFilterBackspace),
         KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
-        KeyCode::Char('p') if ctrl => Some(TuiCommand::OverlayPrev),
-        KeyCode::Char('n') if ctrl => Some(TuiCommand::OverlayNext),
-        KeyCode::Char(c) => Some(TuiCommand::OverlayFilter(c)),
+        KeyCode::Char('p') if ctrl => Some(TuiCommand::SurfacePrev),
+        KeyCode::Char('n') if ctrl => Some(TuiCommand::SurfaceNext),
+        KeyCode::Char(c) => Some(TuiCommand::SurfaceFilter(c)),
         _ => None,
     }
 }
 
-/// Keys for the tabbed Settings overlay: Tab cycles tabs, Up/Down nav,
+/// Keys for the tabbed Settings state: Tab cycles tabs, Up/Down nav,
 /// Enter selects, Esc closes.
 fn map_settings_key(key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
         KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
         KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
-        KeyCode::Up => Some(TuiCommand::OverlayPrev),
-        KeyCode::Down => Some(TuiCommand::OverlayNext),
-        KeyCode::Enter => Some(TuiCommand::OverlayConfirm),
+        KeyCode::Up => Some(TuiCommand::SurfacePrev),
+        KeyCode::Down => Some(TuiCommand::SurfaceNext),
+        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
         KeyCode::Esc => Some(TuiCommand::Cancel),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(TuiCommand::Cancel)
@@ -204,7 +220,7 @@ fn map_settings_key(key: KeyEvent) -> Option<TuiCommand> {
     }
 }
 
-/// Keys for permission/question/elicitation/approval overlays.
+/// Keys for permission/question/approval prompts.
 fn map_confirmation_key(key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
         KeyCode::Char('y' | 'Y') => Some(TuiCommand::Approve),
@@ -213,11 +229,11 @@ fn map_confirmation_key(key: KeyEvent) -> Option<TuiCommand> {
         // Tab cycles multi-option confirmations (PlanExit approval
         // target: Restore / AcceptEdits / Bypass). For simple Y/N
         // dialogs the handler is a no-op.
-        KeyCode::Tab => Some(TuiCommand::OverlayNext),
-        KeyCode::BackTab => Some(TuiCommand::OverlayPrev),
-        KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::OverlayPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::OverlayNext),
-        KeyCode::Enter => Some(TuiCommand::OverlayConfirm),
+        KeyCode::Tab => Some(TuiCommand::SurfaceNext),
+        KeyCode::BackTab => Some(TuiCommand::SurfacePrev),
+        KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::SurfacePrev),
+        KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::SurfaceNext),
+        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
         KeyCode::Esc => Some(TuiCommand::Cancel),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(TuiCommand::Cancel)
@@ -226,40 +242,40 @@ fn map_confirmation_key(key: KeyEvent) -> Option<TuiCommand> {
     }
 }
 
-/// Keys for filterable list overlays (model picker, command palette, etc.).
+/// Keys for filterable list modals (model picker, command palette, etc.).
 fn map_picker_key(key: KeyEvent) -> Option<TuiCommand> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
         // Top/bottom — TS `messageSelector:top|bottom` (defaultBindings.ts:256-263).
-        KeyCode::Home => Some(TuiCommand::OverlayJumpStart),
-        KeyCode::End => Some(TuiCommand::OverlayJumpEnd),
-        KeyCode::Up if shift => Some(TuiCommand::OverlayJumpStart),
-        KeyCode::Down if shift => Some(TuiCommand::OverlayJumpEnd),
-        KeyCode::Up => Some(TuiCommand::OverlayPrev),
-        KeyCode::Down => Some(TuiCommand::OverlayNext),
-        KeyCode::Enter => Some(TuiCommand::OverlayConfirm),
+        KeyCode::Home => Some(TuiCommand::SurfaceJumpStart),
+        KeyCode::End => Some(TuiCommand::SurfaceJumpEnd),
+        KeyCode::Up if shift => Some(TuiCommand::SurfaceJumpStart),
+        KeyCode::Down if shift => Some(TuiCommand::SurfaceJumpEnd),
+        KeyCode::Up => Some(TuiCommand::SurfacePrev),
+        KeyCode::Down => Some(TuiCommand::SurfaceNext),
+        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
         KeyCode::Esc => Some(TuiCommand::Cancel),
-        KeyCode::Backspace => Some(TuiCommand::OverlayFilterBackspace),
+        KeyCode::Backspace => Some(TuiCommand::SurfaceFilterBackspace),
         KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
         // Vim + emacs nav aliases — TS `messageSelector:up|down` accepts
         // k / j / ctrl+p / ctrl+n. For text-input pickers (model picker,
         // command palette) Char(c) routes into the filter; we keep that
         // path by short-circuiting only on ctrl+p / ctrl+n which would
-        // otherwise be no-ops in those overlays.
-        KeyCode::Char('p') if ctrl => Some(TuiCommand::OverlayPrev),
-        KeyCode::Char('n') if ctrl => Some(TuiCommand::OverlayNext),
-        KeyCode::Char(c) => Some(TuiCommand::OverlayFilter(c)),
+        // otherwise be no-ops in those modals.
+        KeyCode::Char('p') if ctrl => Some(TuiCommand::SurfacePrev),
+        KeyCode::Char('n') if ctrl => Some(TuiCommand::SurfaceNext),
+        KeyCode::Char(c) => Some(TuiCommand::SurfaceFilter(c)),
         _ => None,
     }
 }
 
-/// Keys for scrollable read-only overlays (help, diff, doctor, etc.).
+/// Keys for scrollable read-only modals (help, diff, doctor, etc.).
 fn map_scrollable_key(key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Some(TuiCommand::Cancel),
-        KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::OverlayPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::OverlayNext),
+        KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::SurfacePrev),
+        KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::SurfaceNext),
         KeyCode::PageUp => Some(TuiCommand::PageUp),
         KeyCode::PageDown => Some(TuiCommand::PageDown),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -290,9 +306,9 @@ fn map_transcript_key(key: KeyEvent) -> Option<TuiCommand> {
 /// Keys for autocomplete suggestions.
 fn map_autocomplete_key(key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
-        KeyCode::Up => Some(TuiCommand::OverlayPrev),
-        KeyCode::Down => Some(TuiCommand::OverlayNext),
-        KeyCode::Tab | KeyCode::Enter => Some(TuiCommand::OverlayConfirm),
+        KeyCode::Up => Some(TuiCommand::SurfacePrev),
+        KeyCode::Down => Some(TuiCommand::SurfaceNext),
+        KeyCode::Tab | KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
         KeyCode::Esc => Some(TuiCommand::Cancel),
         _ => None,
     }
@@ -382,7 +398,7 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
         // Submit / queue — each match arm carries the structured `keymap`
         // entry id it implements; the keymap/ module is the source of
-        // truth that `/help`, the help overlay, and subagent retrieval
+        // truth that `/help`, the help state, and subagent retrieval
         // all read from.
         // keymap = "input:newline"
         KeyCode::Enter if shift || alt => Some(TuiCommand::InsertNewline),

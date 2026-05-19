@@ -1,9 +1,18 @@
 //! Exactly-once finalized-history emission tracking.
+//!
+//! Phase 3d (§4): the tracker keys off engine-message UUIDs (the
+//! `message_uuid` on each `RenderedCell`). A `Message::Assistant` that
+//! produces multiple cells (text + thinking + tool_use) is represented
+//! by one entry — the tracker collapses repeated UUIDs so the
+//! "previously emitted prefix" comparison works at engine-message
+//! granularity rather than per-cell.
 // S2 lands before production native scrollback wiring; keep this scoped while
 // `terminal::Tui` still owns the live UI.
 #![allow(dead_code)]
 
-use crate::state::session::ChatMessage;
+use uuid::Uuid;
+
+use crate::state::transcript_view::RenderedCell;
 use crate::surface::terminal::SurfaceBackend;
 use crate::surface::terminal::SurfaceTerminal;
 use ratatui::text::Line;
@@ -32,7 +41,10 @@ pub(crate) enum HistoryEmissionOutcome {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct HistoryEmissionTracker {
-    emitted_message_ids: Vec<String>,
+    /// UUIDs of engine messages already emitted, in append order. One
+    /// entry per distinct `message_uuid` regardless of how many cells
+    /// that engine message produced.
+    emitted_message_uuids: Vec<Uuid>,
 }
 
 impl HistoryEmissionTracker {
@@ -41,64 +53,75 @@ impl HistoryEmissionTracker {
     }
 
     pub(crate) fn emitted_count(&self) -> usize {
-        self.emitted_message_ids.len()
+        self.emitted_message_uuids.len()
     }
 
-    pub(crate) fn plan(&self, messages: &[ChatMessage]) -> HistoryEmissionPlan {
-        if self.emitted_message_ids.is_empty() {
-            return if messages.is_empty() {
+    pub(crate) fn plan(&self, cells: &[RenderedCell]) -> HistoryEmissionPlan {
+        let cell_starts = engine_message_cell_starts(cells);
+        let total_messages = cell_starts.len();
+
+        if self.emitted_message_uuids.is_empty() {
+            return if cells.is_empty() {
                 HistoryEmissionPlan::Noop
             } else {
                 HistoryEmissionPlan::Append { start: 0 }
             };
         }
 
-        if self.emitted_message_ids.len() > messages.len() {
+        if self.emitted_message_uuids.len() > total_messages {
             return HistoryEmissionPlan::ReplayRequired;
         }
 
         let prefix_matches = self
-            .emitted_message_ids
+            .emitted_message_uuids
             .iter()
-            .zip(messages.iter())
-            .all(|(emitted_id, message)| emitted_id == &message.id);
+            .zip(cell_starts.iter())
+            .all(|(emitted_uuid, &start_idx)| {
+                cells
+                    .get(start_idx)
+                    .is_some_and(|cell| cell.message_uuid == *emitted_uuid)
+            });
         if !prefix_matches {
             return HistoryEmissionPlan::ReplayRequired;
         }
 
-        if self.emitted_message_ids.len() == messages.len() {
+        if self.emitted_message_uuids.len() == total_messages {
             HistoryEmissionPlan::Noop
         } else {
             HistoryEmissionPlan::Append {
-                start: self.emitted_message_ids.len(),
+                start: cell_starts[self.emitted_message_uuids.len()],
             }
         }
     }
 
-    pub(crate) fn mark_emitted_through(&mut self, messages: &[ChatMessage], end: usize) {
-        let end = end.min(messages.len());
-        self.emitted_message_ids = messages
-            .iter()
-            .take(end)
-            .map(|message| message.id.clone())
-            .collect();
+    pub(crate) fn mark_emitted_through(&mut self, cells: &[RenderedCell], end: usize) {
+        let end = end.min(cells.len());
+        let mut uuids: Vec<Uuid> = Vec::new();
+        let mut prev = None;
+        for cell in cells.iter().take(end) {
+            if Some(cell.message_uuid) != prev {
+                uuids.push(cell.message_uuid);
+                prev = Some(cell.message_uuid);
+            }
+        }
+        self.emitted_message_uuids = uuids;
     }
 
     pub(crate) fn reset(&mut self) {
-        self.emitted_message_ids.clear();
+        self.emitted_message_uuids.clear();
     }
 
     pub(crate) fn emit_append_only<B, F>(
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
-        messages: &[ChatMessage],
+        cells: &[RenderedCell],
         render_tail: F,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
         B: SurfaceBackend,
-        F: FnOnce(&[ChatMessage]) -> Vec<Line<'static>>,
+        F: FnOnce(&[RenderedCell]) -> Vec<Line<'static>>,
     {
-        let start = match self.plan(messages) {
+        let start = match self.plan(cells) {
             HistoryEmissionPlan::Noop => return Ok(HistoryEmissionOutcome::Noop),
             HistoryEmissionPlan::ReplayRequired => {
                 return Ok(HistoryEmissionOutcome::ReplayRequired);
@@ -106,11 +129,11 @@ impl HistoryEmissionTracker {
             HistoryEmissionPlan::Append { start } => start,
         };
 
-        let rows = terminal.insert_history_lines(render_tail(&messages[start..]))?;
-        self.mark_emitted_through(messages, messages.len());
+        let rows = terminal.insert_history_lines(render_tail(&cells[start..]))?;
+        self.mark_emitted_through(cells, cells.len());
         Ok(HistoryEmissionOutcome::Appended {
             start,
-            message_count: messages.len() - start,
+            message_count: cells.len() - start,
             rows,
         })
     }
@@ -118,21 +141,36 @@ impl HistoryEmissionTracker {
     pub(crate) fn replay_all<B, F>(
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
-        messages: &[ChatMessage],
+        cells: &[RenderedCell],
         render_all: F,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
         B: SurfaceBackend,
-        F: FnOnce(&[ChatMessage]) -> Vec<Line<'static>>,
+        F: FnOnce(&[RenderedCell]) -> Vec<Line<'static>>,
     {
         terminal.clear_owned_scrollback()?;
-        let rows = terminal.insert_history_lines(render_all(messages))?;
-        self.mark_emitted_through(messages, messages.len());
+        let rows = terminal.insert_history_lines(render_all(cells))?;
+        self.mark_emitted_through(cells, cells.len());
         Ok(HistoryEmissionOutcome::Replayed {
-            message_count: messages.len(),
+            message_count: cells.len(),
             rows,
         })
     }
+}
+
+/// Indices where each distinct engine-message UUID starts within
+/// `cells`. Multiple cells sharing a UUID (assistant turn fanout)
+/// collapse to one entry.
+fn engine_message_cell_starts(cells: &[RenderedCell]) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut prev = None;
+    for (i, cell) in cells.iter().enumerate() {
+        if Some(cell.message_uuid) != prev {
+            starts.push(i);
+            prev = Some(cell.message_uuid);
+        }
+    }
+    starts
 }
 
 #[cfg(test)]

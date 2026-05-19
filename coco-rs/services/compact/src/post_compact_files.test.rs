@@ -4,7 +4,7 @@ use coco_context::file_read_state::FileReadEntry;
 use pretty_assertions::assert_eq;
 use uuid::Uuid;
 
-use coco_inference::ToolCallPart;
+use coco_llm_types::ToolCallPart;
 
 use super::*;
 
@@ -40,10 +40,10 @@ fn make_tool_result(tool_use_id: &str, text: &str) -> Message {
         uuid: Uuid::new_v4(),
         message: LlmMessage::Tool {
             content: vec![coco_messages::ToolContent::ToolResult(
-                coco_inference::ToolResultPart {
+                coco_llm_types::ToolResultPart {
                     tool_call_id: tool_use_id.to_string(),
                     tool_name: String::new(),
-                    output: coco_inference::ToolResultContent::text(text),
+                    output: coco_llm_types::ToolResultContent::text(text),
                     is_error: false,
                     provider_metadata: None,
                 },

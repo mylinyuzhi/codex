@@ -390,14 +390,14 @@ pub fn extract_suggestion_generation(messages: &[Message]) -> ExtractedSuggestio
         .iter()
         .filter_map(|m| match m {
             coco_messages::Message::Assistant(a) => match &a.message {
-                coco_inference::LanguageModelMessage::Assistant { content, .. } => Some(content),
+                coco_llm_types::LlmMessage::Assistant { content, .. } => Some(content),
                 _ => None,
             },
             _ => None,
         })
         .flat_map(|content| content.iter())
         .find_map(|part| match part {
-            coco_inference::AssistantContentPart::Text(t) => {
+            coco_llm_types::AssistantContentPart::Text(t) => {
                 let trimmed = t.text.trim();
                 if trimmed.is_empty() {
                     None

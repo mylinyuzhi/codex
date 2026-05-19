@@ -16,11 +16,6 @@ use coco_types::MCP_TOOL_SEPARATOR;
 
 use super::projection::flush_streaming_to_messages;
 use crate::state::AppState;
-use crate::state::session::ChatMessage;
-use crate::state::session::MessageContent;
-use crate::state::session::ToolUseStatus;
-
-const TOOL_INPUT_PREVIEW_MAX_CHARS: usize = 512;
 
 pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
     match event {
@@ -48,26 +43,13 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
         AgentStreamEvent::ToolUseQueued {
             call_id,
             name,
-            input,
+            input: _,
         } => {
+            // Clear the live streaming overlay; the engine's
+            // Message::Assistant push (with ToolCall content blocks)
+            // will appear via transcript when the turn finalizes.
             flush_streaming_to_messages(state);
-            let input_preview = tool_input_preview(&name, &input);
-            state.session.start_tool(call_id.clone(), name.clone());
-            state.session.add_message(ChatMessage {
-                id: format!("tool-use-{call_id}"),
-                role: crate::state::ChatRole::Assistant,
-                content: MessageContent::ToolUse {
-                    tool_name: name,
-                    call_id,
-                    input_preview,
-                    status: ToolUseStatus::Queued,
-                },
-                is_meta: false,
-                created_at_ms: crate::state::session::now_ms(),
-                is_compact_summary: false,
-                is_visible_in_transcript_only: false,
-                permission_mode: None,
-            });
+            state.session.start_tool(call_id, name);
             true
         }
         AgentStreamEvent::ToolUseStarted { call_id, .. } => {
@@ -76,31 +58,13 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
         }
         AgentStreamEvent::ToolUseCompleted {
             call_id,
-            name,
-            output,
+            name: _,
+            output: _,
             is_error,
         } => {
             state.session.complete_tool(&call_id, is_error);
-            let tool_name_str = state
-                .session
-                .tool_executions
-                .iter()
-                .find(|t| t.call_id == call_id)
-                .map(|t| t.name.clone())
-                .unwrap_or(name);
-            if is_error {
-                state.session.add_message(ChatMessage::tool_error(
-                    format!("tool-{call_id}"),
-                    &tool_name_str,
-                    output,
-                ));
-            } else {
-                state.session.add_message(ChatMessage::tool_success(
-                    format!("tool-{call_id}"),
-                    &tool_name_str,
-                    output,
-                ));
-            }
+            // Engine pushes Message::ToolResult → MessageAppended →
+            // transcript; the renderer surfaces it from there.
             true
         }
         AgentStreamEvent::McpToolCallBegin {
@@ -130,46 +94,4 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
             true
         }
     }
-}
-
-fn tool_input_preview(tool_name: &str, input: &serde_json::Value) -> String {
-    let normalized = tool_name
-        .rsplit(MCP_TOOL_SEPARATOR)
-        .next()
-        .unwrap_or(tool_name)
-        .to_ascii_lowercase();
-    if matches!(normalized.as_str(), "bash" | "powershell")
-        && let Some(command) = input.get("command").and_then(serde_json::Value::as_str)
-    {
-        return single_line_capped(command, TOOL_INPUT_PREVIEW_MAX_CHARS);
-    }
-    serde_json::to_string(input)
-        .map(|s| single_line_capped(&s, TOOL_INPUT_PREVIEW_MAX_CHARS))
-        .unwrap_or_default()
-}
-
-fn single_line_capped(text: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    let mut count = 0;
-    for chunk in text.split_whitespace() {
-        let space = usize::from(!out.is_empty());
-        let chunk_len = chunk.chars().count();
-        if count + space + chunk_len > max_chars {
-            if max_chars > 3 {
-                while count + 3 > max_chars {
-                    out.pop();
-                    count = count.saturating_sub(1);
-                }
-                out.push_str("...");
-            }
-            return out;
-        }
-        if space == 1 {
-            out.push(' ');
-            count += 1;
-        }
-        out.push_str(chunk);
-        count += chunk_len;
-    }
-    out
 }

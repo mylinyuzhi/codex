@@ -13,10 +13,9 @@ use ratatui::widgets::Widget;
 
 use crate::i18n::t;
 use crate::presentation::styles::UiStyles;
-use crate::state::session::ChatMessage;
-use crate::state::session::MessageContent;
 use crate::state::session::SubagentInstance;
 use crate::state::session::SubagentStatus;
+use crate::state::transcript_view::RenderedCell;
 
 /// Number of recent message lines per teammate when preview is on.
 /// TS uses 3 (`getMessagePreview` in `TeammateSpinnerLine.tsx`); coco-rs
@@ -31,7 +30,7 @@ pub struct SubagentPanel<'a> {
     /// When set + non-empty, the panel renders up to
     /// [`PREVIEW_LINES_PER_TEAMMATE`] recent message lines per agent.
     /// TS `showTeammateMessagePreview` (`TeammateSpinnerTree`).
-    messages_for_preview: Option<&'a [ChatMessage]>,
+    cells_for_preview: Option<&'a [RenderedCell]>,
 }
 
 impl<'a> SubagentPanel<'a> {
@@ -40,7 +39,7 @@ impl<'a> SubagentPanel<'a> {
             subagents,
             focused_index: None,
             styles,
-            messages_for_preview: None,
+            cells_for_preview: None,
         }
     }
 
@@ -50,10 +49,12 @@ impl<'a> SubagentPanel<'a> {
     }
 
     /// Enable per-teammate message preview lines (TS
-    /// `showTeammateMessagePreview`). Pass the full session message
-    /// list — the panel filters per teammate.
-    pub fn message_preview(mut self, messages: &'a [ChatMessage]) -> Self {
-        self.messages_for_preview = Some(messages);
+    /// `showTeammateMessagePreview`). Pass the engine-authoritative
+    /// transcript cells — the panel filters per teammate by reading
+    /// `SystemMessage::Informational` rows with a
+    /// `teammate:<agent_id>` title.
+    pub fn message_preview(mut self, cells: &'a [RenderedCell]) -> Self {
+        self.cells_for_preview = Some(cells);
         self
     }
 }
@@ -62,20 +63,23 @@ impl<'a> SubagentPanel<'a> {
 /// session. Walks newest-first so the most recent activity wins, then
 /// reverses so the rendered lines read top-to-bottom in chronological
 /// order. Mirrors TS `getMessagePreview` (`TeammateSpinnerLine.tsx`).
-fn last_preview_lines<'a>(
-    messages: &'a [ChatMessage],
-    teammate_id: &str,
-    n: usize,
-) -> Vec<&'a str> {
-    let mut lines: Vec<&str> = Vec::new();
-    for msg in messages.iter().rev() {
-        let MessageContent::TeammateMessage { teammate, content } = &msg.content else {
+///
+/// Teammate messages arrive as `SystemMessage::Informational` cells
+/// whose title is `teammate:<agent_id>` (the convention set by
+/// `server_notification_handler::protocol::push_teammate_message`).
+fn last_preview_lines(cells: &[RenderedCell], teammate_id: &str, n: usize) -> Vec<String> {
+    let prefix = format!("teammate:{teammate_id}");
+    let mut lines: Vec<String> = Vec::new();
+    for cell in cells.iter().rev() {
+        let coco_messages::Message::System(coco_messages::SystemMessage::Informational(info)) =
+            cell.source.as_ref()
+        else {
             continue;
         };
-        if teammate != teammate_id {
+        if info.title != prefix {
             continue;
         }
-        for line in content.lines().rev() {
+        for line in info.message.lines().rev() {
             if lines.len() >= n {
                 break;
             }
@@ -83,7 +87,7 @@ fn last_preview_lines<'a>(
             if trimmed.is_empty() {
                 continue;
             }
-            lines.push(trimmed);
+            lines.push(trimmed.to_string());
         }
         if lines.len() >= n {
             break;
@@ -177,8 +181,9 @@ impl Widget for SubagentPanel<'_> {
             // TS-parity: when `showTeammateMessagePreview` is on,
             // each spinner line is followed by up to N indented
             // recent-activity lines from this teammate's messages.
-            if let Some(msgs) = self.messages_for_preview {
-                for preview in last_preview_lines(msgs, &agent.agent_id, PREVIEW_LINES_PER_TEAMMATE)
+            if let Some(cells) = self.cells_for_preview {
+                for preview in
+                    last_preview_lines(cells, &agent.agent_id, PREVIEW_LINES_PER_TEAMMATE)
                 {
                     lines.push(Line::from(vec![
                         Span::raw("    "),

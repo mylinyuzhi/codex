@@ -51,16 +51,14 @@ impl coco_inference::LanguageModel for StubModel {
         _options: coco_inference::LanguageModelCallOptions,
     ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
         Ok(coco_inference::LanguageModelGenerateResult {
-            content: vec![coco_inference::AssistantContentPart::Text(
-                coco_inference::TextPart {
+            content: vec![coco_llm_types::AssistantContentPart::Text(
+                coco_llm_types::TextPart {
                     text: "".into(),
                     provider_metadata: None,
                 },
             )],
-            usage: coco_inference::Usage::new(0, 0),
-            finish_reason: coco_inference::FinishReason::new(
-                coco_inference::UnifiedFinishReason::EndTurn,
-            ),
+            usage: coco_llm_types::Usage::new(0, 0),
+            finish_reason: coco_llm_types::FinishReason::new(coco_llm_types::StopReason::EndTurn),
             warnings: vec![],
             provider_metadata: None,
             request: None,

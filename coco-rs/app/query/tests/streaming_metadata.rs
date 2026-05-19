@@ -21,19 +21,19 @@ use std::sync::atomic::Ordering;
 
 use coco_inference::AISdkError;
 use coco_inference::ApiClient;
-use coco_inference::AssistantContentPart;
-use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::ProviderMetadata;
-use coco_inference::ReasoningPart;
 use coco_inference::RetryConfig;
-use coco_inference::TextPart;
-use coco_inference::ToolCallPart;
-use coco_inference::UnifiedFinishReason;
-use coco_inference::Usage;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
+use coco_llm_types::ProviderMetadata;
+use coco_llm_types::ReasoningPart;
+use coco_llm_types::StopReason;
+use coco_llm_types::TextPart;
+use coco_llm_types::ToolCallPart;
+use coco_llm_types::Usage;
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
@@ -104,9 +104,9 @@ impl LanguageModel for MetadataMock {
                 .iter()
                 .any(|p| matches!(p, AssistantContentPart::ToolCall(_)))
         {
-            UnifiedFinishReason::ToolUse
+            StopReason::ToolUse
         } else {
-            UnifiedFinishReason::EndTurn
+            StopReason::EndTurn
         };
         Ok(LanguageModelGenerateResult {
             content,

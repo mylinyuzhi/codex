@@ -2645,7 +2645,10 @@ async fn session_list_returns_persisted_sessions() {
     );
 
     // Attach a custom-title to the older session — verifies list
-    // surfaces the picker's metadata fields from the JSONL.
+    // surfaces the picker's metadata fields from the JSONL. Do not
+    // assert that this write changes list ordering: filesystem mtime
+    // granularity varies, so the title append may share a timestamp
+    // bucket with the newer seed on fast test machines.
     let manager = state.session_manager.read().await.clone().unwrap();
     manager.set_title("pre-existing-a", "first").unwrap();
 
@@ -2658,11 +2661,16 @@ async fn session_list_returns_persisted_sessions() {
         JsonRpcMessage::Response(r) => {
             let sessions = r.result["sessions"].as_array().unwrap();
             assert_eq!(sessions.len(), 2);
-            // Title-bump on `pre-existing-a` bumps its transcript
-            // mtime, so it lands at index 0 after the title write.
-            assert_eq!(sessions[0]["session_id"], "pre-existing-a");
-            assert_eq!(sessions[1]["session_id"], "pre-existing-b");
-            assert_eq!(sessions[0]["title"], "first");
+            let session_a = sessions
+                .iter()
+                .find(|session| session["session_id"] == "pre-existing-a")
+                .expect("expected pre-existing-a in session/list result");
+            let session_b = sessions
+                .iter()
+                .find(|session| session["session_id"] == "pre-existing-b")
+                .expect("expected pre-existing-b in session/list result");
+            assert_eq!(session_a["title"], "first");
+            assert_eq!(session_b["cwd"], "/tmp/b");
         }
         other => panic!("expected Response, got {other:?}"),
     }

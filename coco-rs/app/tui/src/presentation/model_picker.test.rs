@@ -20,7 +20,7 @@ fn entry(provider: &str, provider_display: &str, model_id: &str, display_name: &
     }
 }
 
-fn sample_overlay() -> ModelPickerOverlay {
+fn sample_state() -> ModelPickerState {
     let mut current = entry(
         "anthropic",
         "Anthropic",
@@ -44,7 +44,7 @@ fn sample_overlay() -> ModelPickerOverlay {
             env_key: "OPENAI_API_KEY".to_string(),
         });
 
-    ModelPickerOverlay {
+    ModelPickerState {
         role: ModelRole::Main,
         entries: vec![
             current,
@@ -69,13 +69,13 @@ fn lines_text(lines: &[Line<'_>]) -> String {
     lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
 }
 
-fn render_snapshot(width: u16, height: u16, overlay: &ModelPickerOverlay) -> String {
+fn render_snapshot(width: u16, height: u16, state: &ModelPickerState) -> String {
     let _locale = locale_test_guard("en");
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     let theme = Theme::default();
     terminal
-        .draw(|frame| render_model_picker(frame, frame.area(), overlay, UiStyles::new(&theme)))
+        .draw(|frame| render_model_picker(frame, frame.area(), state, UiStyles::new(&theme)))
         .unwrap();
     let buf = terminal.backend().buffer().clone();
     let mut out = String::new();
@@ -91,8 +91,8 @@ fn render_snapshot(width: u16, height: u16, overlay: &ModelPickerOverlay) -> Str
 #[test]
 fn groups_rows_by_provider() {
     let _locale = locale_test_guard("en");
-    let overlay = sample_overlay();
-    let view = build_view_model(&overlay, 20);
+    let state = sample_state();
+    let view = build_view_model(&state, 20);
 
     assert!(matches!(view.list.rows[0], PickerRow::Header("Anthropic")));
     assert!(matches!(
@@ -111,9 +111,9 @@ fn groups_rows_by_provider() {
 #[test]
 fn current_row_is_visible_and_badged() {
     let _locale = locale_test_guard("en");
-    let overlay = sample_overlay();
+    let state = sample_state();
     let theme = Theme::default();
-    let lines = render_model_picker_lines(&overlay, UiStyles::new(&theme), 80, 18);
+    let lines = render_model_picker_lines(&state, UiStyles::new(&theme), 80, 18);
     let text = lines_text(&lines);
 
     assert!(text.contains("Claude Sonnet 4.6"));
@@ -123,11 +123,11 @@ fn current_row_is_visible_and_badged() {
 #[test]
 fn unavailable_provider_rows_stay_visible_with_reason() {
     let _locale = locale_test_guard("en");
-    let mut overlay = sample_overlay();
-    overlay.selected = 3;
-    overlay.effort = Some(ReasoningEffort::Low);
+    let mut state = sample_state();
+    state.selected = 3;
+    state.effort = Some(ReasoningEffort::Low);
     let theme = Theme::default();
-    let lines = render_model_picker_lines(&overlay, UiStyles::new(&theme), 90, 18);
+    let lines = render_model_picker_lines(&state, UiStyles::new(&theme), 90, 18);
     let text = lines_text(&lines);
 
     assert!(text.contains("GPT-5.4"));
@@ -138,22 +138,22 @@ fn unavailable_provider_rows_stay_visible_with_reason() {
 #[test]
 fn effort_line_handles_supported_and_unsupported_models() {
     let _locale = locale_test_guard("en");
-    let mut overlay = sample_overlay();
+    let mut state = sample_state();
     let theme = Theme::default();
-    let supported = build_view_model(&overlay, 10);
+    let supported = build_view_model(&state, 10);
     let supported_line = line_text(&render_effort_line(
-        &overlay,
+        &state,
         &supported,
         UiStyles::new(&theme),
     ));
     assert!(supported_line.contains("▸auto◂"));
     assert!(supported_line.contains(" high "));
 
-    overlay.selected = 1;
-    overlay.effort = None;
-    let unsupported = build_view_model(&overlay, 10);
+    state.selected = 1;
+    state.effort = None;
+    let unsupported = build_view_model(&state, 10);
     let unsupported_line = line_text(&render_effort_line(
-        &overlay,
+        &state,
         &unsupported,
         UiStyles::new(&theme),
     ));
@@ -164,12 +164,12 @@ fn effort_line_handles_supported_and_unsupported_models() {
 #[test]
 fn filtered_selection_uses_filtered_index() {
     let _locale = locale_test_guard("en");
-    let mut overlay = sample_overlay();
-    overlay.filter = "open".to_string();
-    overlay.selected = 0;
-    overlay.effort = Some(ReasoningEffort::Low);
+    let mut state = sample_state();
+    state.filter = "open".to_string();
+    state.selected = 0;
+    state.effort = Some(ReasoningEffort::Low);
     let theme = Theme::default();
-    let lines = render_model_picker_lines(&overlay, UiStyles::new(&theme), 90, 18);
+    let lines = render_model_picker_lines(&state, UiStyles::new(&theme), 90, 18);
     let text = lines_text(&lines);
 
     assert!(text.contains("OpenAI"));
@@ -179,18 +179,18 @@ fn filtered_selection_uses_filtered_index() {
 
 #[test]
 fn snapshot_model_picker_narrow() {
-    let overlay = sample_overlay();
-    insta::assert_snapshot!("model_picker_narrow", render_snapshot(50, 20, &overlay));
+    let state = sample_state();
+    insta::assert_snapshot!("model_picker_narrow", render_snapshot(50, 20, &state));
 }
 
 #[test]
 fn snapshot_model_picker_normal() {
-    let overlay = sample_overlay();
-    insta::assert_snapshot!("model_picker_normal", render_snapshot(90, 24, &overlay));
+    let state = sample_state();
+    insta::assert_snapshot!("model_picker_normal", render_snapshot(90, 24, &state));
 }
 
 #[test]
 fn snapshot_model_picker_wide() {
-    let overlay = sample_overlay();
-    insta::assert_snapshot!("model_picker_wide", render_snapshot(140, 34, &overlay));
+    let state = sample_state();
+    insta::assert_snapshot!("model_picker_wide", render_snapshot(140, 34, &state));
 }

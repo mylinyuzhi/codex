@@ -12,7 +12,7 @@ expression: output
   The user wants me to run `ls` in the current working directory.                               
   I should call the Bash tool and then summarize the result.                                    
                                                                                                 
-• 🔨  Bash(ls)                                                                                   
+🔨  Bash(ls)                                                                                     
   └ app                                                                                         
     bridge                                                                                      
     common                                                                                      

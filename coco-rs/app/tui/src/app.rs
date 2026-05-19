@@ -390,7 +390,45 @@ impl App {
             needs_redraw |=
                 server_notification_handler::handle_core_event(&mut self.state, deferred);
         }
+        self.drain_pending_auto_restore_truncate().await;
+        self.drain_pending_system_pushes().await;
         Ok(needs_redraw)
+    }
+
+    /// Dispatch any pending auto-restore truncation as
+    /// `UserCommand::Rewind { mode: AutoRestore }`. Called once per
+    /// `handle_core_event` invocation so the engine truncation lags
+    /// the TUI in-place restore by at most one event cycle.
+    ///
+    /// See `engine-tui-unified-transcript-plan.md` §7.4.
+    async fn drain_pending_auto_restore_truncate(&mut self) {
+        let Some(message_id) = self.state.session.pending_auto_restore_truncate.take() else {
+            return;
+        };
+        let _ = self
+            .command_tx
+            .send(UserCommand::Rewind {
+                message_id,
+                restore_type: crate::state::rewind::RestoreType::ConversationOnly,
+                rewound_turn: 0,
+                mode: crate::state::rewind::RewindMode::AutoRestore,
+            })
+            .await;
+    }
+
+    /// Dispatch any TUI-originated system messages that notification
+    /// handlers queued during this `handle_core_event` cycle. Sends each
+    /// as a `UserCommand::PushSystemMessage` so the engine pushes via
+    /// `history_push_and_emit` and the transcript view sees the entry
+    /// via the standard round-trip. Mirrors
+    /// [`Self::drain_pending_auto_restore_truncate`].
+    async fn drain_pending_system_pushes(&mut self) {
+        while let Some(kind) = self.state.session.pending_system_pushes.pop_front() {
+            let _ = self
+                .command_tx
+                .send(UserCommand::PushSystemMessage { kind })
+                .await;
+        }
     }
 
     /// Fire a file/symbol search if the active trigger's (kind, query) pair
@@ -496,6 +534,7 @@ impl App {
                 let now = std::time::Instant::now();
                 let had_toasts = self.state.ui.has_toasts();
                 self.state.ui.expire_toasts();
+                let permission_prompt_ready = self.state.ui.flush_delayed_permissions(now);
                 self.maybe_fire_idle_prompt().await;
                 // Drive the chord-timeout from the tick so a pending
                 // chord auto-cancels after the 1 s window without
@@ -518,6 +557,7 @@ impl App {
                 (had_toasts && !self.state.ui.has_toasts())
                     || chord_cancelled
                     || double_press_expired
+                    || permission_prompt_ready
             }
             TuiEvent::SpinnerTick => {
                 if let Some(ref mut streaming) = self.state.ui.streaming {
@@ -577,10 +617,9 @@ impl App {
                 request_id,
                 matched_rule,
             } => {
-                if let Some(crate::state::Overlay::Permission(p)) = self.state.ui.active_overlay()
+                if let Some(crate::state::PanePromptState::Permission(p)) =
+                    self.state.ui.interaction.active_prompt.as_mut()
                     && p.request_id == request_id
-                    && let Some(crate::state::Overlay::Permission(p)) =
-                        self.state.ui.active_overlay_mut()
                 {
                     p.classifier_checking = false;
                     p.classifier_auto_approved = Some(matched_rule.unwrap_or_default());
@@ -588,8 +627,8 @@ impl App {
                 true
             }
             TuiEvent::ClassifierDenied { .. } => {
-                if let Some(crate::state::Overlay::Permission(p)) =
-                    self.state.ui.active_overlay_mut()
+                if let Some(crate::state::PanePromptState::Permission(p)) =
+                    self.state.ui.interaction.active_prompt.as_mut()
                 {
                     p.classifier_checking = false;
                 }
@@ -604,7 +643,7 @@ impl App {
     /// TS `REPL.tsx:3920-3939` runs this check inside a `setTimeout`
     /// scheduled when `lastQueryCompletionTime` updates. Coco-rs
     /// instead polls on the existing 250 ms tick — same outcome,
-    /// avoids spawning extra timer tasks. Skips when an overlay is
+    /// avoids spawning extra timer tasks. Skips when an state is
     /// open (TS `focusedInputDialogRef.current === undefined`) or
     /// the agent is busy.
     async fn maybe_fire_idle_prompt(&mut self) {
@@ -618,7 +657,7 @@ impl App {
         if session.is_busy() {
             return;
         }
-        if self.state.ui.has_overlay() {
+        if self.state.ui.has_active_surface() {
             return;
         }
         if session.last_user_interaction_at > qct {

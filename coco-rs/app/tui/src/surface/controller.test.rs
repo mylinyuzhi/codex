@@ -4,10 +4,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::*;
-use crate::state::session::ChatMessage;
+use crate::state::derive::test_helpers;
 use crate::state::ui::StreamingState;
-use crate::surface::overlay::HistorySurfaceMode;
-use crate::surface::overlay::SurfaceFramePlan;
+use crate::surface::modal::HistorySurfaceMode;
+use crate::surface::modal::SurfaceFramePlan;
 
 #[test]
 fn native_draw_does_not_duplicate_header_across_streaming_redraws() {
@@ -24,10 +24,7 @@ fn native_draw_does_not_duplicate_header_across_streaming_redraws() {
         .draw_at(&mut terminal, &state, t0)
         .expect("startup draw");
 
-    state
-        .session
-        .messages
-        .push(ChatMessage::user_text("u1", "hello"));
+    test_helpers::push_user_text(&mut state.session, "u1", "hello");
     let mut streaming = StreamingState::new();
     streaming.append_text("Hi");
     streaming.reveal_all();
@@ -54,10 +51,7 @@ fn native_draw_does_not_duplicate_header_across_streaming_redraws() {
         .expect("second stream draw");
 
     state.ui.streaming = None;
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "Hi there"));
+    test_helpers::push_assistant_text(&mut state.session, "Hi there");
     apply_native_viewport(&mut terminal, Rect::new(0, 10, 64, 4));
     controller
         .draw_at(
@@ -113,10 +107,7 @@ fn native_draw_appends_finalized_history_and_keeps_live_tail_in_viewport() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 5, 48, 6));
     let mut state = AppState::new();
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "finalized"));
+    test_helpers::push_assistant_text(&mut state.session, "finalized");
     let mut streaming = StreamingState::new();
     streaming.append_text("live response");
     streaming.reveal_all();
@@ -144,14 +135,14 @@ fn native_draw_replays_history_when_source_prefix_diverges() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 5, 48, 3));
     let mut state = AppState::new();
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "one"));
+    test_helpers::push_assistant_text(&mut state.session, "one");
     let mut controller = NativeSurfaceController::new();
     controller.draw(&mut terminal, &state).expect("first draw");
 
-    state.session.messages = vec![ChatMessage::assistant_text("a2", "two")];
+    // Reset the engine-authoritative transcript so the prefix-divergence
+    // path fires (the renderer reads cells).
+    state.session.transcript.on_session_reset();
+    test_helpers::push_assistant_text(&mut state.session, "two");
     let outcome = controller.draw(&mut terminal, &state).expect("replay");
 
     assert_eq!(
@@ -182,10 +173,7 @@ fn native_draw_replays_after_resize_requested_during_stream_finishes() {
     controller.draw(&mut terminal, &state).expect("resize draw");
 
     state.ui.streaming = None;
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "done"));
+    test_helpers::push_assistant_text(&mut state.session, "done");
     let outcome = controller.draw(&mut terminal, &state).expect("finish draw");
 
     assert_eq!(
@@ -211,10 +199,7 @@ fn native_draw_stream_finish_replay_does_not_leave_gap_before_input() {
         .draw(&mut terminal, &state)
         .expect("initial draw");
 
-    state
-        .session
-        .messages
-        .push(ChatMessage::user_text("u1", "hello"));
+    test_helpers::push_user_text(&mut state.session, "u1", "hello");
     let mut streaming = StreamingState::new();
     streaming.append_text("short reply");
     streaming.reveal_all();
@@ -223,10 +208,7 @@ fn native_draw_stream_finish_replay_does_not_leave_gap_before_input() {
     controller.draw(&mut terminal, &state).expect("stream draw");
 
     state.ui.streaming = None;
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "short reply"));
+    test_helpers::push_assistant_text(&mut state.session, "short reply");
     apply_native_viewport(&mut terminal, Rect::new(0, 26, 64, 4));
     let outcome = controller.draw(&mut terminal, &state).expect("finish draw");
 
@@ -251,10 +233,7 @@ fn native_draw_replays_after_viewport_height_change_debounce() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 7, 48, 3));
     let mut state = AppState::new();
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "height replay"));
+    test_helpers::push_assistant_text(&mut state.session, "height replay");
     let mut controller = NativeSurfaceController::new();
     controller
         .draw(&mut terminal, &state)
@@ -284,16 +263,13 @@ fn native_draw_replays_after_viewport_height_change_debounce() {
 }
 
 #[test]
-fn native_draw_defers_history_while_overlay_is_open() {
+fn native_draw_defers_history_while_modal_is_open() {
     let backend = TestBackend::new(48, 8);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 5, 48, 3));
     let mut state = AppState::new();
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "deferred"));
-    state.ui.set_overlay(crate::state::Overlay::Help);
+    test_helpers::push_assistant_text(&mut state.session, "deferred");
+    state.ui.show_modal(crate::state::ModalState::Help);
     let mut controller = NativeSurfaceController::new();
 
     let outcome = controller.draw(&mut terminal, &state).expect("draw");
@@ -309,13 +285,10 @@ fn native_draw_renders_finalized_history_in_viewport_when_terminal_is_incompatib
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 48, 12));
     let mut state = AppState::new();
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "zellij deferred"));
+    test_helpers::push_assistant_text(&mut state.session, "zellij deferred");
     let mut controller = NativeSurfaceController::new();
     let plan = SurfaceFramePlan {
-        overlay_placement: None,
+        modal_placement: None,
         history_surface: HistorySurfaceMode::Viewport,
         attention_requested: false,
     };

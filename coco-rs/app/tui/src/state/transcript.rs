@@ -5,22 +5,22 @@
 
 use std::collections::HashSet;
 
-/// Transcript overlay — cell-level reader for `Ctrl+O`.
+/// Transcript state — cell-level reader for `Ctrl+O`.
 #[derive(Debug, Clone, Default)]
-pub struct TranscriptOverlay {
+pub struct TranscriptState {
     /// Logical scroll intent. The renderer resolves it against the current
     /// layout without writing derived metrics back into state.
     pub(crate) scroll: TranscriptScrollPosition,
     /// Expandable cell currently selected for actions such as collapse/expand.
     pub(crate) selected_cell_id: Option<TranscriptCellId>,
-    /// Cell ids explicitly collapsed in this overlay session only.
+    /// Cell ids explicitly collapsed in this state session only.
     ///
     /// Transcript opens expanded by default; this set records opt-in
     /// collapses instead of opt-in expansion.
     pub(crate) collapsed_cell_ids: HashSet<TranscriptCellId>,
 }
 
-impl TranscriptOverlay {
+impl TranscriptState {
     /// Open with default state — scrolled to top with no expanded cells.
     #[cfg(test)]
     pub(crate) fn new() -> Self {
@@ -113,8 +113,6 @@ pub(crate) enum TranscriptCellId {
     ToolCall { call_id: String },
     Message { index: usize, message_id: String },
     ToolBatch { start: usize, end: usize },
-    HookBatch { start: usize, end: usize },
-    TaskNotificationBatch { start: usize, end: usize },
     ActiveTail,
 }
 
@@ -134,13 +132,5 @@ impl TranscriptCellId {
 
     pub(crate) fn tool_batch(start: usize, end: usize) -> Self {
         Self::ToolBatch { start, end }
-    }
-
-    pub(crate) fn hook_batch(start: usize, end: usize) -> Self {
-        Self::HookBatch { start, end }
-    }
-
-    pub(crate) fn task_notification_batch(start: usize, end: usize) -> Self {
-        Self::TaskNotificationBatch { start, end }
     }
 }

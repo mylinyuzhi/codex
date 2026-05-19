@@ -1,4 +1,4 @@
-//! Presentation for read-only information overlays.
+//! Presentation for read-only information surfaces.
 
 use ratatui::prelude::Color;
 
@@ -7,10 +7,10 @@ use crate::presentation::footer::format_token_count;
 use crate::presentation::pager;
 use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
-use crate::state::DiffViewOverlay;
+use crate::state::DiffViewState;
 
 pub(crate) fn diff_view_content(
-    d: &DiffViewOverlay,
+    d: &DiffViewState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let all_lines: Vec<&str> = d.diff.lines().collect();

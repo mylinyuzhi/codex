@@ -12,7 +12,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use coco_tui::state::session::MessageContent;
 use serde_json::json;
 
 use crate::tui::harness::TuiHarness;
@@ -51,23 +50,15 @@ pub async fn run() -> Result<()> {
         "bash_capture: expected single clean Bash completion, got {completions:?}",
     );
 
-    // Chat surface: the `ToolSuccess` for Bash carries the captured stdout.
-    let captured_output = harness
-        .state
-        .session
-        .messages
-        .iter()
-        .find_map(|m| match &m.content {
-            MessageContent::ToolSuccess { tool_name, output } if tool_name == "Bash" => {
-                Some(output.as_str())
-            }
-            _ => None,
-        });
-    let output = captured_output
-        .ok_or_else(|| anyhow::anyhow!("bash_capture: missing ToolSuccess(Bash) chat entry"))?;
+    // Chat surface: the tool-result cell for Bash carries the captured
+    // stdout. `is_error` must be false (Bash exited 0).
+    let (output, is_error) = harness
+        .find_tool_result("Bash")
+        .ok_or_else(|| anyhow::anyhow!("bash_capture: missing ToolResult(Bash) cell"))?;
+    assert!(!is_error, "bash_capture: Bash result flagged is_error");
     assert!(
         output.contains(MARKER),
-        "bash_capture: ToolSuccess.output missing marker `{MARKER}`:\n{output}",
+        "bash_capture: tool-result output missing marker `{MARKER}`:\n{output}",
     );
 
     // Render side: marker reaches the terminal buffer too. A pure

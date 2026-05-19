@@ -1,7 +1,7 @@
 //! The keymap table. See `mod.rs` for the type model.
 //!
 //! New bindings are added here and only here. The three rendering layers
-//! (`/help`, help overlay, JSON export) all read from this slice.
+//! (`/help`, help state, JSON export) all read from this slice.
 
 use coco_keybindings::KeybindingAction;
 
@@ -281,12 +281,12 @@ pub const KEYMAP: &[KeymapEntry] = &[
         description_key: "keymap.global.quit",
     },
     KeymapEntry {
-        id: "global:help_overlay",
+        id: "global:help_modal",
         combo: "F1",
         alternates: &["?"],
         group: KeymapGroup::GlobalHotkey,
         binding: KeymapBinding::Marker,
-        description_key: "keymap.global.help_overlay",
+        description_key: "keymap.global.help_modal",
     },
     // ────────────────────── Prompt prefixes ──────────────────────────
     KeymapEntry {

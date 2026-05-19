@@ -2,10 +2,10 @@
 //! - The harness pumps the engine end-to-end (SessionStarted →
 //!   TurnStarted → TextDelta(s) → TurnCompleted → SessionResult).
 //! - `handle_core_event` folds `TurnCompleted`'s flushed streaming
-//!   buffer into a `ChatMessage::assistant_text` entry.
+//!   buffer into an `AssistantText` cell.
 //! - The rendered buffer surfaces both the user's prompt and the
 //!   assistant's reply (proves the chat panel widget pulled them out
-//!   of state.session.messages).
+//!   of the engine transcript).
 
 use std::time::Duration;
 
@@ -36,29 +36,17 @@ pub async fn run() -> Result<()> {
         harness.model.call_count()
     );
 
-    // State shape: user message + assistant reply landed in the chat.
-    let messages = &harness.state.session.messages;
+    // State shape: user message + assistant reply landed in the transcript.
     assert!(
-        messages.iter().any(
-            |m| matches!(m.role, coco_tui::state::session::ChatRole::User)
-                && m.text_content() == "hello"
-        ),
-        "one_shot: user message not folded into session.messages \
-         (got {} messages)",
-        messages.len()
+        harness.has_user_cell(),
+        "one_shot: user cell not folded into transcript (cell count {})",
+        harness.cell_count(),
     );
     assert!(
-        messages.iter().any(
-            |m| matches!(m.role, coco_tui::state::session::ChatRole::Assistant)
-                && m.text_content().contains("ack from scripted model")
-        ),
-        "one_shot: assistant reply not folded into session.messages \
-         (got {} messages: {:?})",
-        messages.len(),
-        messages
-            .iter()
-            .map(|m| (m.role, m.text_content().to_string()))
-            .collect::<Vec<_>>()
+        harness.assistant_text_contains("ack from scripted model"),
+        "one_shot: assistant reply not folded into transcript \
+         (cell count {})",
+        harness.cell_count(),
     );
 
     // Render side: user-visible buffer surfaces both turns.

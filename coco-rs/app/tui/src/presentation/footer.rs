@@ -183,7 +183,7 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
 
     separator(&mut spans);
     spans.push(FooterSpan::new(
-        t!("status.msgs", count = state.session.messages.len()).to_string(),
+        t!("status.msgs", count = state.session.transcript.len()).to_string(),
         FooterTone::Dim,
     ));
 

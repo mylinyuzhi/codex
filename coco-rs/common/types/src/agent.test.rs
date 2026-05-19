@@ -300,7 +300,7 @@ fn test_agent_definition_serde_roundtrip() {
     );
     assert_eq!(parsed.effort.as_deref(), Some("high"));
     assert!(parsed.use_exact_tools);
-    assert_eq!(parsed.model.as_deref(), Some("opus-4"));
+    assert_eq!(parsed.model.as_deref(), Some("anthropic/claude-opus-4-7"));
     assert_eq!(parsed.isolation, AgentIsolation::Worktree);
     assert_eq!(parsed.memory_scope, Some(MemoryScope::Project));
     assert_eq!(

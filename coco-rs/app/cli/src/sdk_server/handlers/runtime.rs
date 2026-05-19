@@ -69,7 +69,7 @@ pub(super) async fn handle_set_permission_mode(
     // Reject any attempt to escalate into `BypassPermissions` when the
     // session was not launched with one of the authorization flags.
     // Catches accidental SDK clients and closes the ungated-bypass
-    // surface exposed by the TUI plan-exit overlay before its fix.
+    // surface exposed by the TUI plan-exit prompt before its fix.
     if params.mode == coco_types::PermissionMode::BypassPermissions
         && !ctx
             .state

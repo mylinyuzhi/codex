@@ -7,9 +7,9 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-/// Bounds for a centered overlay.
+/// Bounds for a centered state.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct OverlayBounds {
+pub(crate) struct ModalBounds {
     pub(crate) width_percent: u16,
     pub(crate) height_percent: u16,
     pub(crate) min_width: u16,
@@ -18,7 +18,7 @@ pub(crate) struct OverlayBounds {
     pub(crate) max_height: u16,
 }
 
-impl OverlayBounds {
+impl ModalBounds {
     pub(crate) const fn new(
         width_percent: u16,
         height_percent: u16,
@@ -38,8 +38,8 @@ impl OverlayBounds {
     }
 }
 
-/// Center an overlay inside `area`, clamping to available space first.
-pub(crate) fn centered_overlay_area(area: Rect, bounds: OverlayBounds) -> Rect {
+/// Center an state inside `area`, clamping to available space first.
+pub(crate) fn centered_modal_area(area: Rect, bounds: ModalBounds) -> Rect {
     if area.width == 0 || area.height == 0 {
         return area;
     }
@@ -48,13 +48,13 @@ pub(crate) fn centered_overlay_area(area: Rect, bounds: OverlayBounds) -> Rect {
     let max_height = area.height.saturating_sub(2).max(1);
     let preferred_width = area.width.saturating_mul(bounds.width_percent) / 100;
     let preferred_height = area.height.saturating_mul(bounds.height_percent) / 100;
-    let width = clamp_overlay_len(
+    let width = clamp_modal_len(
         preferred_width,
         bounds.min_width,
         bounds.max_width,
         max_width,
     );
-    let height = clamp_overlay_len(
+    let height = clamp_modal_len(
         preferred_height,
         bounds.min_height,
         bounds.max_height,
@@ -64,11 +64,11 @@ pub(crate) fn centered_overlay_area(area: Rect, bounds: OverlayBounds) -> Rect {
     area.centered(Constraint::Length(width), Constraint::Length(height))
 }
 
-/// Center a fixed-size overlay, clamping it inside `area`.
+/// Center a fixed-size state, clamping it inside `area`.
 pub(crate) fn centered_fixed_area(area: Rect, width: u16, height: u16) -> Rect {
-    centered_overlay_area(
+    centered_modal_area(
         area,
-        OverlayBounds::new(100, 100, width, width, height, height),
+        ModalBounds::new(100, 100, width, width, height, height),
     )
 }
 
@@ -135,7 +135,7 @@ pub(crate) fn truncate_to_width(text: &str, width: usize) -> String {
     out
 }
 
-fn clamp_overlay_len(preferred: u16, min: u16, max: u16, available: u16) -> u16 {
+fn clamp_modal_len(preferred: u16, min: u16, max: u16, available: u16) -> u16 {
     let upper = max.min(available);
     let lower = min.min(upper);
     preferred.clamp(lower, upper)

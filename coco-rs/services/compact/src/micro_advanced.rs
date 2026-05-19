@@ -88,7 +88,7 @@ pub fn micro_compact_with_budget(
                 coco_messages::ToolResultContent {
                     tool_call_id: tr.tool_use_id.clone(),
                     tool_name: String::new(),
-                    output: coco_inference::ToolResultContent::text(CLEARED_TOOL_RESULT_MESSAGE),
+                    output: coco_llm_types::ToolResultContent::text(CLEARED_TOOL_RESULT_MESSAGE),
                     is_error: false,
                     provider_metadata: None,
                 },
@@ -134,7 +134,7 @@ pub fn clear_file_unchanged_stubs(messages: &mut [Message]) -> MicrocompactResul
                 coco_messages::ToolResultContent {
                     tool_call_id: tr.tool_use_id.clone(),
                     tool_name: String::new(),
-                    output: coco_inference::ToolResultContent::text(
+                    output: coco_llm_types::ToolResultContent::text(
                         "[file unchanged - stub cleared]",
                     ),
                     is_error: false,
@@ -344,14 +344,14 @@ fn tool_result_contains_text(tr: &coco_messages::ToolResultMessage, needle: &str
             continue;
         };
         match &result.output {
-            coco_inference::ToolResultContent::Text { value, .. } => {
+            coco_llm_types::ToolResultContent::Text { value, .. } => {
                 if value.contains(needle) {
                     return true;
                 }
             }
-            coco_inference::ToolResultContent::Content { value, .. } => {
+            coco_llm_types::ToolResultContent::Content { value, .. } => {
                 for sub in value {
-                    if let coco_inference::ToolResultContentPart::Text { text, .. } = sub
+                    if let coco_llm_types::ToolResultContentPart::Text { text, .. } = sub
                         && text.contains(needle)
                     {
                         return true;

@@ -1,13 +1,13 @@
-//! Error dialog — renders the body text that `overlay_content` wraps in
-//! a centered modal for `Overlay::Error`.
+//! Error dialog — renders the body text that `surface_content` wraps in
+//! a centered error modal.
 //!
 //! TS reference: src/components/ErrorBanner.tsx (inline) and the
 //! fullscreen error state triggered by terminal errors. Unlike a toast,
-//! an error overlay blocks input until dismissed — used for `TurnFailed`
+//! an error state blocks input until dismissed — used for `TurnFailed`
 //! and non-retryable `Error` events so the user must acknowledge them.
 //!
 //! Exposed as a small library (not a `ratatui::Widget`) because the
-//! overlay framework already owns the block + border + centering layout;
+//! state framework already owns the block + border + centering layout;
 //! we only need to format the body string.
 
 use coco_types::ErrorParams;
@@ -15,7 +15,7 @@ use coco_types::TurnFailedParams;
 
 use crate::i18n::t;
 
-/// Format a rich error body for `Overlay::Error`. Includes category,
+/// Format a rich error body for the error modal. Includes category,
 /// retryability hint, and a footer telling the user how to dismiss.
 pub fn format_error_body(message: &str, category: Option<&str>, retryable: bool) -> String {
     let mut body = String::new();

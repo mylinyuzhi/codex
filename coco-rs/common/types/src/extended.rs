@@ -19,6 +19,7 @@ use crate::PermissionUpdate;
 // ============================================================================
 
 /// Progress report from a running hook.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookProgress {
     pub hook_event: HookEventType,
@@ -31,6 +32,7 @@ pub struct HookProgress {
 }
 
 /// Error from a blocking hook that prevents continuation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookBlockingError {
     pub blocking_error: String,
@@ -38,6 +40,7 @@ pub struct HookBlockingError {
 }
 
 /// Result of a permission request hook (allow or deny).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "behavior", rename_all = "snake_case")]
 pub enum PermissionRequestResult {
@@ -61,6 +64,7 @@ pub enum PermissionRequestResult {
 //   - AggregatedHookResult in coco_hooks::orchestration (the implementation)
 
 /// Prompt elicitation request from a hook.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptRequest {
     /// Request ID.
@@ -70,6 +74,7 @@ pub struct PromptRequest {
 }
 
 /// A single option in a prompt elicitation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptOption {
     pub key: String,
@@ -79,6 +84,7 @@ pub struct PromptOption {
 }
 
 /// Response to a prompt elicitation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptResponse {
     /// Request ID (mirrors PromptRequest.prompt).
@@ -91,6 +97,7 @@ pub struct PromptResponse {
 // ============================================================================
 
 /// How a command result should be displayed.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandResultDisplay {
@@ -100,6 +107,7 @@ pub enum CommandResultDisplay {
 }
 
 /// Entrypoint for session resume.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResumeEntrypoint {
@@ -111,6 +119,7 @@ pub enum ResumeEntrypoint {
 }
 
 /// Distinguishes workflow-backed commands.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandKind {
@@ -120,6 +129,7 @@ pub enum CommandKind {
 /// Extended command base with fields from TS CommandBase not in the core CommandBase.
 ///
 /// Meant to be composed alongside `CommandBase` when the full TS shape is needed.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommandBaseExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +152,7 @@ pub struct CommandBaseExt {
 /// Extended prompt command data with fields from TS PromptCommand.
 ///
 /// Supplements `PromptCommandData` when the full TS shape is needed.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PromptCommandDataExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -165,6 +176,7 @@ pub struct PromptCommandDataExt {
 ///
 /// Supplements the core `PermissionDecisionReason` with variants that
 /// are used in the full permission evaluation pipeline.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PermissionDecisionReasonExt {
@@ -212,6 +224,7 @@ pub enum PermissionDecisionReasonExt {
 }
 
 /// Specific reasons for a sandbox override.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxOverrideReason {
@@ -220,6 +233,7 @@ pub enum SandboxOverrideReason {
 }
 
 /// Permission result with passthrough option (extends PermissionDecision).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "behavior", rename_all = "snake_case")]
 pub enum PermissionResult {
@@ -264,6 +278,7 @@ pub enum PermissionResult {
 }
 
 /// Extended tool permission context fields from TS.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolPermissionContextExt {
     #[serde(default)]
@@ -275,6 +290,7 @@ pub struct ToolPermissionContextExt {
 }
 
 /// Minimal command shape for permission metadata.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionCommandMetadata {
     pub name: String,
@@ -283,6 +299,7 @@ pub struct PermissionCommandMetadata {
 }
 
 /// Risk level for permission explanations.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RiskLevel {
     #[serde(rename = "LOW")]
@@ -294,6 +311,7 @@ pub enum RiskLevel {
 }
 
 /// Human-readable explanation of a permission decision.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionExplanation {
     pub risk_level: RiskLevel,
@@ -307,6 +325,7 @@ pub struct PermissionExplanation {
 // ============================================================================
 
 /// Summary message for session compaction.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummaryEntry {
     pub leaf_uuid: Uuid,
@@ -314,6 +333,7 @@ pub struct SummaryEntry {
 }
 
 /// User-set custom title for a session.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomTitleEntry {
     pub session_id: Uuid,
@@ -321,6 +341,7 @@ pub struct CustomTitleEntry {
 }
 
 /// AI-generated session title (distinct from user-set titles).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiTitleEntry {
     pub session_id: Uuid,
@@ -328,6 +349,7 @@ pub struct AiTitleEntry {
 }
 
 /// Tag for session search.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagEntry {
     pub session_id: Uuid,
@@ -335,6 +357,7 @@ pub struct TagEntry {
 }
 
 /// Agent name assignment.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentNameEntry {
     pub session_id: Uuid,
@@ -342,6 +365,7 @@ pub struct AgentNameEntry {
 }
 
 /// Agent color assignment.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentColorEntry {
     pub session_id: Uuid,
@@ -349,6 +373,7 @@ pub struct AgentColorEntry {
 }
 
 /// Agent setting reference.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSettingEntry {
     pub session_id: Uuid,
@@ -356,6 +381,7 @@ pub struct AgentSettingEntry {
 }
 
 /// Periodic fork-generated summary of current agent activity.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSummaryEntry {
     pub session_id: Uuid,
@@ -364,6 +390,7 @@ pub struct TaskSummaryEntry {
 }
 
 /// PR link stored in session transcript.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrLinkEntry {
     pub session_id: Uuid,
@@ -375,6 +402,7 @@ pub struct PrLinkEntry {
 }
 
 /// Session mode entry (coordinator or normal).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionMode {
@@ -383,6 +411,7 @@ pub enum SessionMode {
 }
 
 /// Persisted worktree session state for resume.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedWorktreeSession {
     pub original_cwd: String,
@@ -402,6 +431,7 @@ pub struct PersistedWorktreeSession {
 }
 
 /// Per-file attribution state tracking.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileAttributionState {
     pub content_hash: String,
@@ -410,6 +440,7 @@ pub struct FileAttributionState {
 }
 
 /// Attribution snapshot for commit attribution tracking.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttributionSnapshotEntry {
     pub message_id: Uuid,

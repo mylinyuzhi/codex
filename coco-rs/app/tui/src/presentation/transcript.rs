@@ -1,20 +1,24 @@
-//! Transcript overlay presentation.
+//! Transcript state presentation.
+//!
+//! Consumes `&[RenderedCell]` directly. `TranscriptCell` indices point
+//! into the cells slice; batch detection (tool batches) dispatches on
+//! `CellKind`. Hooks land via `Attachment`, not the transcript, and
+//! task notifications are no longer XML-wrapped — so there are no
+//! hook-batch or task-notification variants here.
+//!
+//! See `engine-tui-phase3d-renderer-migration-plan.md` §6.
 
 use std::collections::VecDeque;
-
-use coco_subagent::ParsedTaskNotification;
-use coco_subagent::TaskNotificationStatus;
-use coco_subagent::parse_task_notification;
 
 use crate::presentation::streaming::StreamingTailInput;
 use crate::presentation::streaming::StreamingTailView;
 use crate::presentation::streaming::streaming_tail_view;
 use crate::state::AppState;
-use crate::state::session::ChatMessage;
-use crate::state::session::MessageContent;
 use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
 use crate::state::transcript::TranscriptCellId;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
 use crate::state::ui::StreamingState;
 
 pub(crate) const TRANSCRIPT_COLLAPSED_PREVIEW_LINES: usize = 5;
@@ -75,41 +79,25 @@ pub(crate) fn tool_output_preview(output: &str, max_rows: usize) -> ToolOutputPr
     }
 }
 
+/// One transcript-presentation cell. Indices point into the
+/// `&[RenderedCell]` slice passed to `transcript_projection`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TranscriptCell {
-    MetaPreview {
-        index: usize,
-    },
-    Message {
-        index: usize,
-    },
+    /// Collapsed system-reminder preview row.
+    MetaPreview { index: usize },
+    /// Standalone cell — assistant text, user text, etc.
+    Cell { index: usize },
+    /// Paired tool invocation + result.
     ToolCall {
         invocation: Option<usize>,
         result: Option<usize>,
         call_id: Option<String>,
     },
+    /// Multiple adjacent tool invocations without intervening results.
     ToolBatch {
         start: usize,
         end: usize,
         count: usize,
-    },
-    HookBatch {
-        start: usize,
-        end: usize,
-        count: usize,
-        hook_name: String,
-        has_error: bool,
-    },
-    TaskNotification {
-        index: usize,
-        summary: String,
-        tone: TaskNotificationTone,
-    },
-    TaskNotificationBatch {
-        start: usize,
-        end: usize,
-        count: usize,
-        kind: TaskNotificationBatchKind,
     },
 }
 
@@ -126,20 +114,6 @@ pub(crate) enum ActiveTranscriptCell<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TaskNotificationTone {
-    Completed,
-    Failed,
-    Killed,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TaskNotificationBatchKind {
-    BackgroundBashCompleted,
-    TeammateShutdown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TranscriptProjectionOptions {
     pub show_system_reminders: bool,
 }
@@ -150,12 +124,16 @@ pub(crate) struct TranscriptProjection {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct TranscriptPresentationInput<'a> {
-    pub messages: &'a [ChatMessage],
+pub(crate) struct TranscriptPresentationInput<'cells, 'state> {
+    /// Engine-derived cells — single source of truth. `'cells` is
+    /// decoupled from `'state` so callers can pass a slice borrowed
+    /// from a temporary (rare; `state.session.transcript.cells()`
+    /// usually borrows from `state` directly).
+    pub cells: &'cells [RenderedCell],
     pub options: TranscriptProjectionOptions,
-    pub streaming: Option<&'a StreamingState>,
+    pub streaming: Option<&'state StreamingState>,
     pub show_thinking: bool,
-    pub tool_executions: &'a [ToolExecution],
+    pub tool_executions: &'state [ToolExecution],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,46 +142,34 @@ pub(crate) struct TranscriptPresentation<'a> {
 }
 
 pub(crate) fn transcript_projection(
-    messages: &[ChatMessage],
+    cells: &[RenderedCell],
     options: TranscriptProjectionOptions,
 ) -> TranscriptProjection {
     let show_system_reminders = options.show_system_reminders;
-    let mut cells = Vec::new();
-    let mut consumed = vec![false; messages.len()];
+    let mut out = Vec::new();
+    let mut consumed = vec![false; cells.len()];
     let mut i = 0;
-    while i < messages.len() {
+    while i < cells.len() {
         if consumed[i] {
             i += 1;
             continue;
         }
-        let msg = &messages[i];
-        if let Some(batch) = task_notification_batch(messages, i, show_system_reminders) {
-            i = batch.end();
-            cells.push(batch);
-            continue;
-        }
+        let cell = &cells[i];
 
-        if let Some(notification) = task_notification_cell(&messages[i].content, i) {
-            cells.push(notification);
+        // System reminders collapse to one-line preview unless the
+        // user explicitly opted in via show_system_reminders.
+        if is_meta(cell) && !show_system_reminders {
+            out.push(TranscriptCell::MetaPreview { index: i });
             i += 1;
             continue;
         }
 
-        if msg.is_meta && !show_system_reminders {
-            cells.push(TranscriptCell::MetaPreview { index: i });
-            i += 1;
-            continue;
-        }
-
-        if !show_system_reminders && let Some(batch) = hook_batch(messages, i) {
-            i = batch.end();
-            cells.push(batch);
-            continue;
-        }
-
-        let batch_end = tool_batch_end(messages, i);
-        if batch_end > i + 1 && !tool_batch_has_results(messages, &consumed, i, batch_end) {
-            cells.push(TranscriptCell::ToolBatch {
+        // Tool-use batch: 2+ adjacent ToolUse cells (no intervening
+        // assistant text or tool result) render as a single batch
+        // header followed by the individual rows.
+        let batch_end = tool_batch_end(cells, i);
+        if batch_end > i + 1 && !tool_batch_has_results(cells, &consumed, i, batch_end) {
+            out.push(TranscriptCell::ToolBatch {
                 start: i,
                 end: batch_end,
                 count: batch_end - i,
@@ -212,15 +178,13 @@ pub(crate) fn transcript_projection(
             continue;
         }
 
-        if let MessageContent::ToolUse {
-            tool_name, call_id, ..
-        } = &msg.content
-        {
-            let result = find_tool_result(messages, &consumed, i + 1, call_id, tool_name);
-            if let Some(result) = result {
-                consumed[result] = true;
+        // Tool invocation paired with its result.
+        if let CellKind::ToolUse { call_id, .. } = &cell.kind {
+            let result = find_tool_result(cells, &consumed, i + 1, call_id);
+            if let Some(r) = result {
+                consumed[r] = true;
             }
-            cells.push(TranscriptCell::ToolCall {
+            out.push(TranscriptCell::ToolCall {
                 invocation: Some(i),
                 result,
                 call_id: Some(call_id.clone()),
@@ -229,26 +193,32 @@ pub(crate) fn transcript_projection(
             continue;
         }
 
-        if is_tool_result(&msg.content) {
-            cells.push(TranscriptCell::ToolCall {
+        // Orphan tool result (engine emitted ToolResult without a
+        // matching ToolUse in scope — fallback path).
+        if is_tool_result(cell) {
+            let call_id = match &cell.kind {
+                CellKind::ToolResult { call_id } => Some(call_id.clone()),
+                _ => None,
+            };
+            out.push(TranscriptCell::ToolCall {
                 invocation: None,
                 result: Some(i),
-                call_id: call_id_from_tool_result_message_id(&msg.id),
+                call_id,
             });
             i += 1;
             continue;
         }
 
-        cells.push(TranscriptCell::Message { index: i });
+        out.push(TranscriptCell::Cell { index: i });
         i += 1;
     }
-    TranscriptProjection { cells }
+    TranscriptProjection { cells: out }
 }
 
-pub(crate) fn transcript_presentation(
-    input: TranscriptPresentationInput<'_>,
-) -> TranscriptPresentation<'_> {
-    let mut cells = transcript_projection(input.messages, input.options)
+pub(crate) fn transcript_presentation<'cells, 'state>(
+    input: TranscriptPresentationInput<'cells, 'state>,
+) -> TranscriptPresentation<'state> {
+    let mut cells = transcript_projection(input.cells, input.options)
         .cells
         .into_iter()
         .map(TranscriptSourceCell::Committed)
@@ -283,15 +253,24 @@ pub(crate) fn active_transcript_cell<'a>(
     None
 }
 
-fn tool_batch_end(messages: &[ChatMessage], start: usize) -> usize {
-    let is_tool_use = |m: &ChatMessage| matches!(m.content, MessageContent::ToolUse { .. });
-    if !is_tool_use(&messages[start]) {
+fn is_meta(cell: &RenderedCell) -> bool {
+    // System cells are meta. Attachments (e.g. tool-summary) ride
+    // through but render dim; treat them as meta by default.
+    matches!(
+        cell.kind,
+        CellKind::System(_) | CellKind::Attachment | CellKind::ToolUseSummary { .. }
+    )
+}
+
+fn tool_batch_end(cells: &[RenderedCell], start: usize) -> usize {
+    let is_tool_use = |c: &RenderedCell| matches!(c.kind, CellKind::ToolUse { .. });
+    if !is_tool_use(&cells[start]) {
         return start + 1;
     }
     let mut end = start + 1;
-    while end < messages.len() {
-        let next = &messages[end];
-        if is_tool_use(next) || next.is_meta {
+    while end < cells.len() {
+        let next = &cells[end];
+        if is_tool_use(next) || is_meta(next) {
             end += 1;
         } else {
             break;
@@ -301,257 +280,46 @@ fn tool_batch_end(messages: &[ChatMessage], start: usize) -> usize {
 }
 
 fn tool_batch_has_results(
-    messages: &[ChatMessage],
+    cells: &[RenderedCell],
     consumed: &[bool],
     start: usize,
     end: usize,
 ) -> bool {
-    messages[start..end].iter().any(|msg| {
-        let MessageContent::ToolUse {
-            tool_name, call_id, ..
-        } = &msg.content
-        else {
+    cells[start..end].iter().any(|cell| {
+        let CellKind::ToolUse { call_id, .. } = &cell.kind else {
             return false;
         };
-        find_tool_result(messages, consumed, end, call_id, tool_name).is_some()
+        find_tool_result(cells, consumed, end, call_id).is_some()
     })
 }
 
 fn find_tool_result(
-    messages: &[ChatMessage],
+    cells: &[RenderedCell],
     consumed: &[bool],
     start: usize,
     call_id: &str,
-    tool_name: &str,
 ) -> Option<usize> {
-    let exact_id = format!("tool-{call_id}");
-    for i in start..messages.len() {
+    for i in start..cells.len() {
         if consumed[i] {
             continue;
         }
-        let msg = &messages[i];
-        if msg.id == exact_id && is_tool_result(&msg.content) {
+        if let CellKind::ToolResult {
+            call_id: result_call_id,
+        } = &cells[i].kind
+            && result_call_id == call_id
+        {
             return Some(i);
         }
     }
-
-    let mut skipped_tool_uses = 0usize;
-    for i in start..messages.len() {
-        if consumed[i] {
-            continue;
-        }
-        match &messages[i].content {
-            MessageContent::ToolUse { .. } => {
-                skipped_tool_uses += 1;
-                if skipped_tool_uses > 0 {
-                    break;
-                }
-            }
-            content if tool_result_name(content) == Some(tool_name) => return Some(i),
-            content if is_tool_result(content) => break,
-            content if is_turn_boundary(content) => break,
-            _ => {}
-        }
-    }
     None
 }
 
-fn is_turn_boundary(content: &MessageContent) -> bool {
-    matches!(
-        content,
-        MessageContent::Text(_) | MessageContent::AssistantText(_)
-    )
-}
-
-fn is_tool_result(content: &MessageContent) -> bool {
-    matches!(
-        content,
-        MessageContent::ToolSuccess { .. }
-            | MessageContent::ToolError { .. }
-            | MessageContent::ToolRejected { .. }
-            | MessageContent::ToolCanceled { .. }
-    )
-}
-
-fn tool_result_name(content: &MessageContent) -> Option<&str> {
-    match content {
-        MessageContent::ToolSuccess { tool_name, .. }
-        | MessageContent::ToolError { tool_name, .. }
-        | MessageContent::ToolRejected { tool_name, .. }
-        | MessageContent::ToolCanceled { tool_name } => Some(tool_name.as_str()),
-        _ => None,
-    }
-}
-
-fn call_id_from_tool_result_message_id(id: &str) -> Option<String> {
-    id.strip_prefix("tool-")
-        .filter(|rest| !rest.is_empty())
-        .map(ToString::to_string)
-}
-
-fn hook_batch(messages: &[ChatMessage], start: usize) -> Option<TranscriptCell> {
-    let name = hook_name(&messages[start].content)?;
-    let mut end = start + 1;
-    let mut has_error = hook_has_error(&messages[start].content);
-    while end < messages.len() {
-        let next = &messages[end].content;
-        if hook_name(next) != Some(name) {
-            break;
-        }
-        has_error |= hook_has_error(next);
-        end += 1;
-    }
-    let count = end - start;
-    if count <= 1 {
-        return None;
-    }
-    Some(TranscriptCell::HookBatch {
-        start,
-        end,
-        count,
-        hook_name: name.to_string(),
-        has_error,
-    })
-}
-
-fn hook_name(content: &MessageContent) -> Option<&str> {
-    match content {
-        MessageContent::HookSuccess { hook_name, .. }
-        | MessageContent::HookNonBlockingError { hook_name, .. }
-        | MessageContent::HookBlockingError { hook_name, .. }
-        | MessageContent::HookCancelled { hook_name }
-        | MessageContent::HookSystemMessage { hook_name, .. }
-        | MessageContent::HookAdditionalContext { hook_name, .. }
-        | MessageContent::HookStoppedContinuation { hook_name, .. }
-        | MessageContent::HookAsyncResponse { hook_name, .. } => Some(hook_name.as_str()),
-        _ => None,
-    }
-}
-
-fn hook_has_error(content: &MessageContent) -> bool {
-    matches!(
-        content,
-        MessageContent::HookNonBlockingError { .. }
-            | MessageContent::HookBlockingError { .. }
-            | MessageContent::HookStoppedContinuation { .. }
-    )
-}
-
-fn task_notification_batch(
-    messages: &[ChatMessage],
-    start: usize,
-    show_system_reminders: bool,
-) -> Option<TranscriptCell> {
-    if show_system_reminders {
-        return None;
-    }
-    let first = parsed_task_notification(&messages[start].content)?;
-    let kind = task_notification_batch_kind(&first)?;
-    let mut end = start + 1;
-    while end < messages.len() {
-        let Some(next) = parsed_task_notification(&messages[end].content) else {
-            break;
-        };
-        if task_notification_batch_kind(&next) != Some(kind) {
-            break;
-        }
-        end += 1;
-    }
-
-    let count = end - start;
-    if count <= 1 {
-        return None;
-    }
-    Some(TranscriptCell::TaskNotificationBatch {
-        start,
-        end,
-        count,
-        kind,
-    })
-}
-
-fn task_notification_cell(content: &MessageContent, index: usize) -> Option<TranscriptCell> {
-    let notification = parsed_task_notification(content)?;
-    Some(TranscriptCell::TaskNotification {
-        index,
-        summary: notification.summary,
-        tone: task_notification_tone(notification.status),
-    })
-}
-
-fn parsed_task_notification(content: &MessageContent) -> Option<ParsedTaskNotification> {
-    let text = match content {
-        MessageContent::Text(text)
-        | MessageContent::SystemText(text)
-        | MessageContent::AgentNotification { summary: text, .. }
-        | MessageContent::TeammateMessage { content: text, .. } => text.as_str(),
-        MessageContent::Attachment { preview, .. } => preview.as_str(),
-        _ => return None,
-    };
-    parse_embedded_task_notification(text)
-}
-
-fn parse_embedded_task_notification(text: &str) -> Option<ParsedTaskNotification> {
-    parse_task_notification(text).or_else(|| {
-        let start = text.find("<task-notification>")?;
-        parse_task_notification(&text[start..])
-    })
-}
-
-fn task_notification_tone(status: TaskNotificationStatus) -> TaskNotificationTone {
-    match status {
-        TaskNotificationStatus::Completed => TaskNotificationTone::Completed,
-        TaskNotificationStatus::Failed => TaskNotificationTone::Failed,
-        TaskNotificationStatus::Killed => TaskNotificationTone::Killed,
-        _ => TaskNotificationTone::Unknown,
-    }
-}
-
-fn task_notification_batch_kind(
-    notification: &ParsedTaskNotification,
-) -> Option<TaskNotificationBatchKind> {
-    if notification.status != TaskNotificationStatus::Completed {
-        return None;
-    }
-    if is_background_bash_notification(notification) {
-        return Some(TaskNotificationBatchKind::BackgroundBashCompleted);
-    }
-    if is_teammate_shutdown_notification(notification) {
-        return Some(TaskNotificationBatchKind::TeammateShutdown);
-    }
-    None
-}
-
-fn is_background_bash_notification(notification: &ParsedTaskNotification) -> bool {
-    notification.summary.starts_with("Background command ")
-        || notification.task_id.starts_with("tb")
-}
-
-fn is_teammate_shutdown_notification(notification: &ParsedTaskNotification) -> bool {
-    notification.task_id.starts_with("tt")
+fn is_tool_result(cell: &RenderedCell) -> bool {
+    matches!(cell.kind, CellKind::ToolResult { .. })
 }
 
 impl TranscriptCell {
-    fn end(&self) -> usize {
-        match self {
-            Self::MetaPreview { index } | Self::Message { index } => index + 1,
-            Self::ToolCall {
-                invocation, result, ..
-            } => invocation
-                .iter()
-                .chain(result.iter())
-                .copied()
-                .max()
-                .map(|idx| idx + 1)
-                .unwrap_or(0),
-            Self::ToolBatch { end, .. }
-            | Self::HookBatch { end, .. }
-            | Self::TaskNotificationBatch { end, .. } => *end,
-            Self::TaskNotification { index, .. } => index + 1,
-        }
-    }
-
-    pub(crate) fn cell_id(&self, messages: &[ChatMessage]) -> Option<TranscriptCellId> {
+    pub(crate) fn cell_id(&self, cells: &[RenderedCell]) -> Option<TranscriptCellId> {
         match self {
             Self::ToolCall {
                 call_id: Some(call_id),
@@ -566,61 +334,60 @@ impl TranscriptCell {
                 ..
             }
             | Self::MetaPreview { index }
-            | Self::Message { index }
-            | Self::TaskNotification { index, .. } => Some(TranscriptCellId::message(
+            | Self::Cell { index } => Some(TranscriptCellId::message(
                 *index,
-                messages.get(*index)?.id.clone(),
+                cells.get(*index)?.message_uuid.to_string(),
             )),
             Self::ToolCall { .. } => None,
             Self::ToolBatch { start, end, .. } => Some(TranscriptCellId::tool_batch(*start, *end)),
-            Self::HookBatch { start, end, .. } => Some(TranscriptCellId::hook_batch(*start, *end)),
-            Self::TaskNotificationBatch { start, end, .. } => {
-                Some(TranscriptCellId::task_notification_batch(*start, *end))
-            }
         }
     }
 }
 
 impl<'a> TranscriptSourceCell<'a> {
-    pub(crate) fn cell_id(&self, messages: &[ChatMessage]) -> Option<TranscriptCellId> {
+    pub(crate) fn cell_id(&self, cells: &[RenderedCell]) -> Option<TranscriptCellId> {
         match self {
-            Self::Committed(cell) => cell.cell_id(messages),
+            Self::Committed(cell) => cell.cell_id(cells),
             Self::Active(_) => Some(TranscriptCellId::ActiveTail),
         }
     }
 
-    pub(crate) fn is_expandable(&self, messages: &[ChatMessage]) -> bool {
+    pub(crate) fn is_expandable(&self, cells: &[RenderedCell]) -> bool {
         match self {
             Self::Committed(TranscriptCell::ToolCall { .. }) => true,
-            Self::Committed(TranscriptCell::Message { index }) => messages
-                .get(*index)
-                .is_some_and(|message| message_content_is_expandable(&message.content)),
+            Self::Committed(TranscriptCell::Cell { index }) => {
+                cells.get(*index).is_some_and(cell_is_expandable)
+            }
             Self::Committed(_) | Self::Active(_) => false,
         }
     }
 }
 
-fn message_content_is_expandable(content: &MessageContent) -> bool {
-    match content {
-        MessageContent::Thinking { content, .. } => !content.is_empty(),
-        MessageContent::ToolSuccess { .. }
-        | MessageContent::ToolError { .. }
-        | MessageContent::ToolRejected { .. }
-        | MessageContent::ToolCanceled { .. } => true,
-        MessageContent::Text(_)
-        | MessageContent::AssistantText(_)
-        | MessageContent::SystemText(_) => false,
+fn cell_is_expandable(cell: &RenderedCell) -> bool {
+    match &cell.kind {
+        CellKind::AssistantThinking { text, .. } => !text.is_empty(),
+        CellKind::ToolResult { .. } => true,
+        CellKind::UserText { .. } | CellKind::AssistantText { .. } => false,
         _ => false,
     }
 }
 
 pub(crate) fn transcript_expandable_cell_ids(state: &AppState) -> Vec<TranscriptCellId> {
-    transcript_presentation_for_state(state)
-        .cells
-        .into_iter()
-        .filter(|cell| cell.is_expandable(&state.session.messages))
-        .filter_map(|cell| cell.cell_id(&state.session.messages))
-        .collect()
+    let cells = state.session.transcript.cells();
+    transcript_presentation(TranscriptPresentationInput {
+        cells,
+        options: TranscriptProjectionOptions {
+            show_system_reminders: true,
+        },
+        streaming: state.ui.streaming.as_ref(),
+        show_thinking: true,
+        tool_executions: &state.session.tool_executions,
+    })
+    .cells
+    .into_iter()
+    .filter(|cell| cell.is_expandable(cells))
+    .filter_map(|cell| cell.cell_id(cells))
+    .collect()
 }
 
 pub(crate) fn latest_expandable_cell_id(state: &AppState) -> Option<TranscriptCellId> {
@@ -629,9 +396,15 @@ pub(crate) fn latest_expandable_cell_id(state: &AppState) -> Option<TranscriptCe
         .next_back()
 }
 
-pub(crate) fn transcript_presentation_for_state(state: &AppState) -> TranscriptPresentation<'_> {
+/// Build a `TranscriptPresentation` from a caller-supplied cells slice
+/// — the entry point for everything that wants to render the chat
+/// transcript (typically the Ctrl+O modal).
+pub(crate) fn transcript_presentation_with_cells<'state>(
+    state: &'state AppState,
+    cells: &[RenderedCell],
+) -> TranscriptPresentation<'state> {
     transcript_presentation(TranscriptPresentationInput {
-        messages: &state.session.messages,
+        cells,
         options: TranscriptProjectionOptions {
             show_system_reminders: true,
         },

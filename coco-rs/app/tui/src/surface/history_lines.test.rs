@@ -1,16 +1,17 @@
 use pretty_assertions::assert_eq;
+use uuid::Uuid;
 
 use super::*;
-use crate::state::session::MessageContent;
+use crate::state::derive::test_helpers;
 use crate::theme::Theme;
 
 #[test]
 fn finalized_history_lines_render_committed_assistant_message() {
     let theme = Theme::default();
-    let messages = vec![ChatMessage::assistant_text("a1", "hello")];
+    let cells = vec![test_helpers::assistant_text_cell("hello")];
 
     let lines = render_finalized_history_lines(
-        &messages,
+        &cells,
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 40,
@@ -27,10 +28,10 @@ fn finalized_history_lines_render_committed_assistant_message() {
 #[test]
 fn finalized_history_lines_do_not_emit_active_busy_tail() {
     let theme = Theme::default();
-    let messages = vec![ChatMessage::user_text("u1", "hello")];
+    let cells = vec![test_helpers::user_text_cell(Uuid::new_v4(), "hello")];
 
     let lines = render_finalized_history_lines(
-        &messages,
+        &cells,
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 40,
@@ -47,11 +48,10 @@ fn finalized_history_lines_do_not_emit_active_busy_tail() {
 #[test]
 fn finalized_history_lines_collapse_meta_by_default() {
     let theme = Theme::default();
-    let mut meta = ChatMessage::system_text("m1", "system reminder");
-    meta.is_meta = true;
+    let cells = vec![test_helpers::info_cell("", "system reminder")];
 
     let lines = render_finalized_history_lines(
-        &[meta],
+        &cells,
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 40,
@@ -69,23 +69,21 @@ fn finalized_history_lines_collapse_meta_by_default() {
 fn finalized_history_lines_show_collapsed_thinking_without_per_item_toggle_hint() {
     let theme = Theme::default();
     let kb_handle = crate::keybinding_resolver::KeybindingHandle::from_defaults();
-    let messages = vec![ChatMessage {
-        id: "t1".into(),
-        role: crate::state::ChatRole::Assistant,
-        content: MessageContent::Thinking {
-            content: "Need to inspect files.".into(),
-            duration_ms: Some(1300),
-            reasoning_tokens: Some(15),
-        },
-        is_meta: false,
-        created_at_ms: crate::state::session::now_ms(),
-        is_compact_summary: false,
-        is_visible_in_transcript_only: false,
-        permission_mode: None,
-    }];
+    // Phase 3d (§5): reasoning metadata now rides on
+    // `CellKind::AssistantThinking { duration_ms, reasoning_tokens }`.
+    // `TranscriptView::record_reasoning_tokens` (called from
+    // `on_turn_completed`) stamps the values onto the latest thinking
+    // cell so the header renders the full `Thinking · 1.3s · 15
+    // reasoning tokens` line. Tests bypass the engine flow and use the
+    // `_with_metadata` helper directly.
+    let cells = vec![test_helpers::assistant_thinking_cell_with_metadata(
+        "Need to inspect files.",
+        1300,
+        15,
+    )];
 
     let lines = render_finalized_history_lines(
-        &messages,
+        &cells,
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 80,
@@ -105,9 +103,9 @@ fn finalized_history_lines_show_collapsed_thinking_without_per_item_toggle_hint(
 #[test]
 fn replay_history_lines_keeps_all_rows_under_cap() {
     let theme = Theme::default();
-    let messages = vec![ChatMessage::assistant_text("a1", "hello")];
+    let cells = vec![test_helpers::assistant_text_cell("hello")];
 
-    let replay = render_replay_history_lines(&messages, options(&theme, 40), 4);
+    let replay = render_replay_history_lines(&cells, options(&theme, 40), 4);
 
     assert_eq!(plain_lines(&replay.lines), vec!["⏺ hello", ""]);
     assert_eq!(replay.omitted_messages, 0);
@@ -116,13 +114,13 @@ fn replay_history_lines_keeps_all_rows_under_cap() {
 #[test]
 fn replay_history_lines_truncates_at_message_boundaries_with_marker() {
     let theme = Theme::default();
-    let messages = vec![
-        ChatMessage::assistant_text("a1", "one"),
-        ChatMessage::assistant_text("a2", "two"),
-        ChatMessage::assistant_text("a3", "three"),
+    let cells = vec![
+        test_helpers::assistant_text_cell("one"),
+        test_helpers::assistant_text_cell("two"),
+        test_helpers::assistant_text_cell("three"),
     ];
 
-    let replay = render_replay_history_lines(&messages, options(&theme, 40), 5);
+    let replay = render_replay_history_lines(&cells, options(&theme, 40), 5);
 
     assert_eq!(replay.omitted_messages, 2);
     assert_eq!(

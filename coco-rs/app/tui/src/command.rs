@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use coco_messages::SystemMessageLevel;
 use coco_types::PermissionMode;
 use coco_types::PermissionUpdate;
 
@@ -65,15 +66,35 @@ impl fmt::Display for ShutdownReason {
     }
 }
 
+/// Typed payload for [`UserCommand::PushSystemMessage`]. Each variant
+/// carries the fields the engine needs to construct the matching
+/// [`coco_messages::SystemMessage`] sub-variant before calling
+/// `history_push_and_emit`. Lets TUI-originated transcript content
+/// (slash output, file-open notices, bash command results, …) flow
+/// through the engine instead of being written directly into a
+/// TUI-local buffer. See
+/// `engine-tui-unified-transcript-plan.md` §3 Commit 2.
+#[derive(Debug, Clone)]
+pub enum SystemPushKind {
+    /// Plain notice → `SystemMessage::Informational { level, title, message }`.
+    /// Empty `title` renders without the `"<title>: "` prefix.
+    Informational {
+        level: SystemMessageLevel,
+        title: String,
+        message: String,
+    },
+    /// Bash-mode local command result → `SystemMessage::LocalCommand`.
+    LocalCommand { command: String, output: String },
+}
+
 /// Commands sent from TUI to the core agent loop.
 #[derive(Debug, Clone)]
 pub enum UserCommand {
     /// Submit a bash-mode entry (input started with `!`). The TUI has
-    /// already stripped the leading `!` and pushed a
-    /// `ChatMessage::BashInput` locally; the engine bridge in
+    /// already stripped the leading `!`; the engine bridge in
     /// `tui_runner` runs the command via `coco_shell::ShellExecutor`
-    /// and emits a `ChatMessage::BashOutput` back through the
-    /// `ServerNotification::Message` channel. TS parity:
+    /// and pushes a `SystemMessage::LocalCommand` (input + output) onto
+    /// the engine transcript via `history_push_and_emit`. TS parity:
     /// `LocalShellTask.tsx` — bypasses the model loop entirely.
     SubmitBash {
         /// User-message UUID minted at submit time so the BashInput
@@ -101,7 +122,7 @@ pub enum UserCommand {
     /// bridge resolves the concrete plan-file path from the current
     /// session id and runtime config before launching the editor.
     OpenPlanEditor,
-    /// The TUI has left raw mode and any active overlay alt-screen, so
+    /// The TUI has left raw mode and any active state alt-screen, so
     /// the CLI runner may now start the editor process for `request_id`.
     ExternalEditorTerminalReady {
         /// Opaque id from `TuiOnlyEvent::ExternalEditorPrepare`.
@@ -117,12 +138,12 @@ pub enum UserCommand {
     },
     /// Submit user input text with resolved paste data.
     SubmitInput {
-        /// User-message UUID minted at submit time. The TUI pushes a
-        /// `ChatMessage` carrying this id, the agent driver builds the
-        /// `Message::User` carrying the same id, and `FileHistoryState`
-        /// keys the per-turn snapshot on it. Single source of truth so
-        /// rewind picker selections, file-history snapshots, and the
-        /// JSONL transcript line up.
+        /// User-message UUID minted at submit time. The agent driver
+        /// builds the `Message::User` carrying this id and emits it via
+        /// `history_push_and_emit`; `FileHistoryState` keys the per-turn
+        /// snapshot on the same id. Single source of truth so rewind
+        /// picker selections, file-history snapshots, and the JSONL
+        /// transcript line up.
         ///
         /// TS parity: `screens/REPL.tsx`'s `onSubmit` mints
         /// `randomUUID()` once via `createUserMessage()` before the
@@ -188,6 +209,12 @@ pub enum UserCommand {
     },
     /// Execute a skill by name.
     ExecuteSkill { name: String, args: Option<String> },
+    /// Execute a registered slash command without echoing the raw slash
+    /// invocation into chat history.
+    ExecuteSlashCommand {
+        name: crate::state::SlashCommandName,
+        args: String,
+    },
     /// Queue a command for mid-turn injection.
     ///
     /// Sent by [`crate::update::QueueInput`] when the user presses
@@ -222,15 +249,15 @@ pub enum UserCommand {
         /// (renders on the React side); coco-rs threads it through so
         /// SDK consumers see it without a second query.
         rewound_turn: i32,
+        /// Trigger source: explicit `/rewind` picker vs TUI auto-restore
+        /// on cancel. Both end with `MessageTruncated` emission; only
+        /// `Explicit` may also restore files and emit modal overlay
+        /// events. See `engine-tui-unified-transcript-plan.md` §4.2.
+        mode: crate::state::rewind::RewindMode,
     },
     /// Request diff stats for a message (async, response via ServerNotification).
     /// TS: fileHistoryGetDiffStats() called from MessageSelector useEffect.
     RequestDiffStats { message_id: String },
-    /// Clear conversation state — TUI has already wiped its local
-    /// transcript; this tells the engine to reset its matching
-    /// in-process state (plan-mode flags, attachment counters, slug
-    /// cache) so the next turn starts clean. TS: `clearConversation()`.
-    ClearConversation { scope: ClearScope },
     /// Team lead responding to a teammate's plan-approval request.
     /// The engine routes this to the teammate's mailbox as a
     /// `plan_approval_response` envelope. TS: the response side of
@@ -238,7 +265,7 @@ pub enum UserCommand {
     PlanApprovalResponse {
         request_id: String,
         /// Teammate agent name to address the response envelope to —
-        /// carried in from `PlanApprovalOverlay.from` so we don't have
+        /// carried in from `PlanApprovalPromptState.from` so we don't have
         /// to re-scan mailbox state to correlate the request_id.
         teammate_agent: String,
         approved: bool,
@@ -257,4 +284,10 @@ pub enum UserCommand {
     /// this into a `coco_hooks::orchestration::execute_notification`
     /// call so registered `Notification` hooks can react.
     FireIdleNotification { message: String },
+    /// Push a TUI-originated system message into engine `MessageHistory`.
+    /// The engine handler constructs the matching
+    /// `coco_messages::SystemMessage::*` from `kind` and calls
+    /// `history_push_and_emit`, so the round-trip surfaces via the
+    /// normal `MessageAppended` → `TranscriptView` → render path.
+    PushSystemMessage { kind: SystemPushKind },
 }

@@ -1,9 +1,9 @@
 //! Streaming tests via `coco_inference::ApiClient::query_stream`.
 
 use anyhow::Result;
-use coco_inference::LanguageModelMessage;
 use coco_inference::QueryParams;
 use coco_inference::StreamEvent;
+use coco_llm_types::LlmMessage;
 
 use crate::common::LiveTarget;
 use crate::common::usage_report;
@@ -14,8 +14,8 @@ use crate::common::weather_tool_def;
 pub async fn run(target: &LiveTarget) -> Result<()> {
     let params = QueryParams {
         prompt: vec![
-            LanguageModelMessage::system("You are a helpful assistant. Be concise."),
-            LanguageModelMessage::user_text("Say 'hello world' exactly."),
+            LlmMessage::system("You are a helpful assistant. Be concise."),
+            LlmMessage::user_text("Say 'hello world' exactly."),
         ],
         // 1024 leaves headroom for reasoning models — see the same
         // rationale on `basic::params_for`.
@@ -91,12 +91,12 @@ pub async fn run_with_tools(target: &LiveTarget) -> Result<()> {
         // 4096-token budget eliminates (1); the imperative system
         // prompt + "Do not answer in text" forcing addresses (2).
         prompt: vec![
-            LanguageModelMessage::system(
+            LlmMessage::system(
                 "You are a helpful assistant. For weather questions you MUST call \
                  the get_weather tool — do not answer with prose, do not refuse, \
                  do not return an empty message.",
             ),
-            LanguageModelMessage::user_text(
+            LlmMessage::user_text(
                 "What's the weather in Tokyo? Call get_weather with city='Tokyo'.",
             ),
         ],

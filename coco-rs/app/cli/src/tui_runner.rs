@@ -326,7 +326,10 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         runtime.start_new_session(plan.session_id.clone()).await;
         {
             let mut history = runtime.history.lock().await;
-            *history = plan.prior_messages.clone();
+            history.clear();
+            for m in plan.prior_messages.iter().cloned() {
+                history.push(m);
+            }
         }
         runtime
             .seed_transcript_dedup(plan.prior_messages.iter().filter_map(|m| m.uuid().copied()))
@@ -334,6 +337,27 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         runtime
             .seed_tool_result_replacement_state(&plan.prior_messages, &plan.session_id)
             .await;
+        // Phase 4: signal the TUI to reset its derived transcript view
+        // and replay every prior message as a normal `MessageAppended`
+        // event, so /resume scrollback flows through the same render
+        // path as live turns. SDK observers receive the same event
+        // stream. See `engine-tui-unified-transcript-plan.md` §7.3.
+        let _ = notification_tx
+            .send(CoreEvent::Protocol(
+                coco_types::ServerNotification::SessionResetForResume {
+                    session_id: plan.session_id.clone(),
+                },
+            ))
+            .await;
+        for msg in &plan.prior_messages {
+            let _ = notification_tx
+                .send(CoreEvent::Protocol(
+                    coco_types::ServerNotification::MessageAppended {
+                        message: msg.clone(),
+                    },
+                ))
+                .await;
+        }
         eprintln!(
             "{} session {} ({} prior message(s))",
             if plan.is_fork { "Forked" } else { "Resumed" },
@@ -380,12 +404,12 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     }
 
     // Wire file_history_enabled into TUI session state so the rewind
-    // overlay knows whether to show code restore options.
+    // modal knows whether to show code restore options.
     app.state_mut().session.file_history_enabled = runtime.file_history.is_some();
 
     // Seed the capability gate that controls both Shift+Tab cycle
     // (`PermissionMode::next_in_cycle`) and the plan-mode exit
-    // overlay's "Bypass" option. Matches engine_config below so the
+    // modal's "Bypass" option. Matches engine_config below so the
     // engine and TUI share one truth. Static for session lifetime.
     app.state_mut().session.bypass_permissions_available = bypass_permissions_available;
     app.state_mut().session.permission_mode = permission_mode;
@@ -599,7 +623,7 @@ async fn run_agent_driver(
     // Active-turn tracker. SubmitInput spawns the engine work into a
     // dedicated task and stores its `JoinHandle` + `CancellationToken`
     // here; the dispatch loop continues to `recv()` so interrupting
-    // commands (`Interrupt`, `ClearConversation`, `Compact`, `Rewind`,
+    // commands (`Interrupt`, `Compact`, `Rewind`,
     // `Shutdown`) reach their arms without waiting for the engine to
     // finish. TS parity: REPL.tsx's `query()` runs in the same single-
     // threaded React event loop, so its keyboard `useInput` hook fires
@@ -651,7 +675,7 @@ async fn run_agent_driver(
                             continue;
                         }
                         SlashOutcome::TriggerClear { scope } => {
-                            run_clear_conversation(&runtime, scope, &active_turn).await;
+                            run_clear_conversation(&runtime, scope, &active_turn, &event_tx).await;
                             continue;
                         }
                         SlashOutcome::TriggerDream => {
@@ -739,6 +763,7 @@ async fn run_agent_driver(
                 command,
             } => {
                 let event_tx_t = event_tx.clone();
+                let runtime_t = runtime.clone();
                 // Run from the process's current dir — shell prompt
                 // commands inherit the same cwd the agent is using.
                 // `runtime_config.paths.project_dir` is the explicit
@@ -751,7 +776,8 @@ async fn run_agent_driver(
                     .clone()
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 tokio::spawn(async move {
-                    run_prompt_mode_bash(&cwd, user_message_id, command, event_tx_t).await;
+                    run_prompt_mode_bash(&cwd, user_message_id, command, runtime_t, event_tx_t)
+                        .await;
                 });
             }
 
@@ -836,7 +862,7 @@ async fn run_agent_driver(
             }
 
             UserCommand::ExecuteSkill { name, args } => {
-                // Command-palette dispatch (`update/overlay.rs::Submit`).
+                // Command-palette dispatch.
                 // Same registry lookup as the typed path, but with no
                 // user-supplied chat message — for `Prompt` outcomes we
                 // mint a fresh user-message UUID so file-history /
@@ -885,7 +911,90 @@ async fn run_agent_driver(
                             .await;
                     }
                     SlashOutcome::TriggerClear { scope } => {
-                        run_clear_conversation(&runtime, scope, &active_turn).await;
+                        run_clear_conversation(&runtime, scope, &active_turn, &event_tx).await;
+                    }
+                    SlashOutcome::TriggerDream => {
+                        run_dream_consolidation(&runtime).await;
+                    }
+                    SlashOutcome::TriggerSummary => {
+                        run_session_memory_force(&runtime).await;
+                    }
+                    SlashOutcome::TriggerRename { name } => {
+                        run_session_rename(&runtime, &event_tx, &name).await;
+                    }
+                    SlashOutcome::TriggerTag { tag } => {
+                        run_session_tag(&runtime, &event_tx, &tag).await;
+                    }
+                    SlashOutcome::TriggerAddDir { path } => {
+                        run_add_working_dir(&runtime, &path).await;
+                    }
+                    SlashOutcome::TriggerOpenPlanEditor { path } => {
+                        prepare_external_editor_request(
+                            &mut pending_editor_requests,
+                            PendingEditorRequest::Plan { path },
+                            &event_tx,
+                        )
+                        .await;
+                    }
+                    SlashOutcome::TriggerReloadPlugins => {
+                        run_reload_plugins(&runtime, &event_tx).await;
+                    }
+                    SlashOutcome::TriggerReloadHooks => {
+                        run_reload_hooks(&runtime, &event_tx).await;
+                    }
+                }
+            }
+
+            UserCommand::ExecuteSlashCommand { name, args } => {
+                match dispatch_slash_command(name.as_str(), &args, &runtime, &event_tx).await {
+                    SlashOutcome::Handled => {}
+                    SlashOutcome::RunEngine { content } => {
+                        drain_active_turn(&active_turn).await;
+                        let turn_cancel = CancellationToken::new();
+                        let cancel_for_state = turn_cancel.clone();
+                        let cancel_reason: Arc<OnceLock<CancelReason>> = Arc::new(OnceLock::new());
+                        let cancel_reason_for_state = cancel_reason.clone();
+                        let runtime_t = runtime.clone();
+                        let event_tx_t = event_tx.clone();
+                        let title_gen_attempted_t = title_gen_attempted.clone();
+                        let session_id_t = session_id.clone();
+                        let synth_id = uuid::Uuid::new_v4().to_string();
+                        let task = tokio::spawn(async move {
+                            process_submit_turn(
+                                synth_id,
+                                content,
+                                Vec::new(),
+                                runtime_t,
+                                event_tx_t,
+                                title_gen_attempted_t,
+                                session_id_t,
+                                turn_cancel,
+                                cancel_reason,
+                            )
+                            .await;
+                        });
+                        *active_turn.lock().await = Some(ActiveTurn {
+                            task,
+                            cancel: cancel_for_state,
+                            cancel_reason: cancel_reason_for_state,
+                        });
+                    }
+                    SlashOutcome::NotFound => {
+                        emit_slash_status(
+                            &event_tx,
+                            name.as_str(),
+                            SlashCommandStatusKind::NoHandler,
+                        )
+                        .await;
+                    }
+                    SlashOutcome::TriggerCompact {
+                        custom_instructions,
+                    } => {
+                        run_manual_compact(&runtime, &event_tx, custom_instructions, &active_turn)
+                            .await;
+                    }
+                    SlashOutcome::TriggerClear { scope } => {
+                        run_clear_conversation(&runtime, scope, &active_turn, &event_tx).await;
                     }
                     SlashOutcome::TriggerDream => {
                         run_dream_consolidation(&runtime).await;
@@ -923,6 +1032,7 @@ async fn run_agent_driver(
                 message_id,
                 restore_type,
                 rewound_turn,
+                mode,
             } => {
                 // Drain first — rewind reads file_history snapshots
                 // and rewrites runtime.history; an in-flight turn that
@@ -932,6 +1042,7 @@ async fn run_agent_driver(
                     &restore_type,
                     &message_id,
                     rewound_turn,
+                    mode,
                     &runtime.file_history,
                     &runtime.config_home,
                     &session_id,
@@ -1086,10 +1197,6 @@ async fn run_agent_driver(
                     to = ?mode,
                     "TUI SetPermissionMode propagated to engine_config + app_state",
                 );
-            }
-
-            UserCommand::ClearConversation { scope } => {
-                run_clear_conversation(&runtime, scope, &active_turn).await;
             }
 
             UserCommand::PlanApprovalResponse {
@@ -1301,8 +1408,8 @@ async fn run_agent_driver(
 
                 // Always-allow with empty `permission_updates` is the
                 // legacy path (pre-Phase A). Treat as one-shot approve
-                // — the rule plumbing the dialog produced was lost
-                // somewhere between overlay and runner. Log and move
+                // — the rule plumbing the prompt produced was lost
+                // somewhere between TUI and runner. Log and move
                 // on rather than failing.
                 if always_allow && permission_updates.is_empty() {
                     debug!(
@@ -1316,7 +1423,7 @@ async fn run_agent_driver(
                 // `applied_updates` are forwarded so audit/logging
                 // downstream sees the user's intent. Stale request_ids
                 // (already resolved or timed-out) are logged and
-                // dropped — TS does the same when an overlay closes
+                // dropped — TS does the same when a prompt closes
                 // after the engine moved on.
                 if let Some(entry) = pending_entry {
                     let resolved = coco_cli::tui_permission_bridge::send_resolution(
@@ -1387,6 +1494,20 @@ async fn run_agent_driver(
                 }
             }
 
+            UserCommand::PushSystemMessage { kind } => {
+                // TUI-originated transcript content (slash output,
+                // file-open notices, plan-rejected body, …) round-trips
+                // through engine `MessageHistory` so every observer
+                // (TUI transcript view, SDK consumers, JSONL transcript)
+                // sees it via the same `MessageAppended` event stream as
+                // engine-pushed content. See
+                // `engine-tui-unified-transcript-plan.md` §3 Commit 2.
+                let msg = build_system_message_from_push_kind(kind);
+                let mut h = runtime.history.lock().await;
+                let event_tx_opt = Some(event_tx.clone());
+                coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
+            }
+
             // Other commands: log and skip for now
             other => {
                 info!(?other, "Unhandled UserCommand in agent driver");
@@ -1424,7 +1545,7 @@ async fn drain_pending_memory_extraction(runtime: &Arc<crate::session_runtime::S
 /// Body of `UserCommand::SubmitInput` extracted into an async fn so
 /// it can be `tokio::spawn`ed. The dispatch loop stores the
 /// `JoinHandle` in `active_turn` and continues to recv the next
-/// command — letting `Interrupt` / `ClearConversation` / `Compact` /
+/// command — letting `Interrupt` / `Compact` /
 /// `Rewind` / `Shutdown` reach their arms while the engine runs.
 ///
 /// All session-scoped Arcs are read out of `runtime` inside the body —
@@ -1456,8 +1577,7 @@ enum SlashOutcome {
     /// driver runs `engine.run_manual_compact` so the model actually
     /// summarizes — not just print "Compacting…".
     TriggerCompact { custom_instructions: Option<String> },
-    /// Trigger the same flow as `UserCommand::ClearConversation`.
-    /// Emitted for the palette path of `/clear` / `/clear all` /
+    /// Trigger the clear flow for `/clear` / `/clear all` /
     /// `/clear history`. The agent driver calls
     /// `runtime.clear_conversation(scope)` which actually wipes
     /// transcript, plan slugs, file caches, etc.
@@ -1704,11 +1824,9 @@ async fn dispatch_slash_command(
     {
         return outcome;
     }
-    // `/clear` from the palette: typed `/clear` is intercepted in
-    // `update/edit.rs::try_local_clear`, but ExecuteSkill flows
-    // through here. Without this short-circuit the registry handler's
-    // text — which says "Conversation cleared" — would print without
-    // any actual clearing.
+    // `/clear` mutates runtime state. Keep it in the command layer so
+    // typed and palette dispatch both run the real clear flow instead
+    // of letting a registry text handler print without clearing.
     if name == "clear" {
         return match parse_clear_scope(args) {
             Some(scope) => SlashOutcome::TriggerClear { scope },
@@ -1730,9 +1848,8 @@ async fn dispatch_slash_command(
             }
         };
     }
-    // `/rewind` / `/checkpoint` from the palette: emit a TuiOnlyEvent
-    // so the TUI builds the picker overlay from current session state.
-    // Typed paths are intercepted earlier in the TUI.
+    // `/rewind` / `/checkpoint` need current TUI session state for the
+    // picker, so the command layer asks the TUI to open the modal.
     if matches!(name, "rewind" | "checkpoint") {
         let _ = event_tx
             .send(CoreEvent::Tui(TuiOnlyEvent::OpenRewindPicker))
@@ -1848,18 +1965,25 @@ async fn dispatch_slash_command(
             // the handler — when no handler emits this today, we err on
             // the side of preserving history rather than dropping it.
             if !summary.trim().is_empty() {
+                // I-1 (Authority): pre-computed compact summary push
+                // goes through history_push_and_emit so the TUI
+                // TranscriptView and SDK observers see the new
+                // boundary marker, not just the slash text echo.
                 let mut h = runtime.history.lock().await;
-                h.push(coco_compact::build_compact_summary_message(&summary));
+                let event_tx_opt = Some(event_tx.clone());
+                coco_query::history_sync::history_push_and_emit(
+                    &mut h,
+                    coco_compact::build_compact_summary_message(&summary),
+                    &event_tx_opt,
+                )
+                .await;
             }
             emit_slash_text(event_tx, name, &display_text).await;
             SlashOutcome::Handled
         }
         CommandResult::OpenDialog(spec) => {
             // Wired dialogs route to TuiOnlyEvent so the TUI opens the
-            // overlay; unwired dialogs emit a localized breadcrumb.
-            // Typed `/rewind` etc. are intercepted earlier in
-            // `update/edit.rs::try_local_command`; this path covers the
-            // command-palette (ExecuteSkill) flow.
+            // modal; unwired dialogs emit a localized breadcrumb.
             match spec {
                 DialogSpec::MessageSelector => {
                     let _ = event_tx
@@ -2158,9 +2282,8 @@ async fn run_manual_compact(
     drain_active_turn(active_turn).await;
     let compact_cancel = CancellationToken::new();
     let engine = runtime.build_engine(compact_cancel).await;
-    let history_msgs = runtime.history.lock().await.clone();
     let mut history = coco_messages::MessageHistory::new();
-    for m in history_msgs {
+    for m in runtime.history.lock().await.as_slice().iter().cloned() {
         history.push(m);
     }
     let event_tx_opt = Some(event_tx.clone());
@@ -2169,22 +2292,39 @@ async fn run_manual_compact(
         .await;
     {
         let mut h = runtime.history.lock().await;
-        *h = history.messages;
+        *h = history;
     }
 }
 
-/// Run the same clear flow as `UserCommand::ClearConversation`. Drains
-/// any active turn first since clear mutates session_id + resets several
-/// per-session caches. TS: `clearConversation()`.
+/// Run the clear flow. Drains any active turn first since clear mutates
+/// session_id + resets several per-session caches. TS: `clearConversation()`.
+///
+/// Plan I-1 (Authority): emits a wire-visible event after the clear so
+/// the TUI's `TranscriptView` and SDK NDJSON observers stay coherent.
+/// Full-scope `/clear` rotates session_id → emit
+/// `SessionResetForResume { session_id: new }`; lighter `/clear history`
+/// keeps the same session id → emit `MessageTruncated { keep_count: 0 }`.
 async fn run_clear_conversation(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     scope: ClearScope,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
+    event_tx: &mpsc::Sender<CoreEvent>,
 ) {
     drain_active_turn(active_turn).await;
     if let Err(e) = runtime.clear_conversation(scope).await {
         warn!(error = %e, "/clear failed");
+        return;
     }
+    let notif = match scope {
+        ClearScope::History => ServerNotification::MessageTruncated { keep_count: 0 },
+        ClearScope::Conversation | ClearScope::All => {
+            let new_session_id = runtime.current_session_id().await;
+            ServerNotification::SessionResetForResume {
+                session_id: new_session_id,
+            }
+        }
+    };
+    let _ = event_tx.send(CoreEvent::Protocol(notif)).await;
 }
 
 /// Force auto-memory consolidation now (skips the three-gate scheduler).
@@ -2218,7 +2358,7 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
         info!("/summary: no MemoryRuntime; skipping");
         return;
     };
-    let history_msgs = runtime.history.lock().await.clone();
+    let history_msgs = runtime.history.lock().await.as_slice().to_vec();
     let tokens = coco_compact::estimate_tokens(&history_msgs);
     // TS parity (`sessionMemory.ts:441-442`): manual /summary still
     // walks history to decide whether to advance the safely-summarized
@@ -2619,12 +2759,25 @@ async fn process_submit_turn(
             .clone()
             .map(|r| format!("Operation stopped by hook: {r}"))
             .unwrap_or_else(|| "Operation stopped by hook".to_string());
-        // Persist the prompt + system warning so the user sees it in
-        // the transcript even though no LLM call follows.
+        // Persist the prompt + system warning via history_push_and_emit
+        // so the TUI transcript view picks them up — no LLM call follows
+        // this branch, so a silent h.push would leave the user without
+        // any visual record of their prompt.
         {
             let mut h = runtime.history.lock().await;
-            h.push(coco_messages::create_user_message(&content));
-            h.push(coco_messages::create_user_message(&stop_msg));
+            let event_tx_opt = Some(event_tx.clone());
+            coco_query::history_sync::history_push_and_emit(
+                &mut h,
+                coco_messages::create_user_message(&content),
+                &event_tx_opt,
+            )
+            .await;
+            coco_query::history_sync::history_push_and_emit(
+                &mut h,
+                coco_messages::create_user_message(&stop_msg),
+                &event_tx_opt,
+            )
+            .await;
         }
         return;
     }
@@ -2632,10 +2785,16 @@ async fn process_submit_turn(
     let new_turn_messages = coco_cli::at_mention_turn::build_messages_for_turn(&inputs);
 
     // Persist user message immediately so engine errors don't lose it.
+    // history_push_and_emit fires MessageAppended for each new turn
+    // message so the TUI transcript view surfaces them via the standard
+    // round-trip (replaces the legacy TUI-local optimistic add_message).
     let messages: Vec<coco_messages::Message> = {
         let mut h = runtime.history.lock().await;
-        h.extend(new_turn_messages.iter().cloned());
-        h.clone()
+        let event_tx_opt = Some(event_tx.clone());
+        for m in new_turn_messages.iter().cloned() {
+            coco_query::history_sync::history_push_and_emit(&mut h, m, &event_tx_opt).await;
+        }
+        h.as_slice().to_vec()
     };
 
     let engine = runtime.build_engine(turn_cancel.clone()).await;
@@ -2658,7 +2817,10 @@ async fn process_submit_turn(
     match engine.run_with_messages(messages, core_event_tx).await {
         Ok(result) => {
             let mut h = runtime.history.lock().await;
-            *h = result.final_messages;
+            h.clear();
+            for m in result.final_messages {
+                h.push(m);
+            }
         }
         Err(e) => {
             // User message stays in `runtime.history` from the
@@ -2751,6 +2913,7 @@ async fn handle_rewind(
     restore_type: &coco_tui::state::RestoreType,
     message_id: &str,
     rewound_turn: i32,
+    mode: coco_tui::state::rewind::RewindMode,
     file_history: &Option<Arc<RwLock<FileHistoryState>>>,
     config_home: &std::path::Path,
     session_id: &str,
@@ -2758,9 +2921,39 @@ async fn handle_rewind(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
 ) {
     use coco_tui::state::RestoreType;
+    use coco_tui::state::rewind::RewindMode;
 
     let mut files_changed = 0i32;
     let mut messages_removed = 0i32;
+
+    // AutoRestore is the synchronous TUI-cancel cleanup path. It
+    // never touches the workspace and never emits the modal
+    // `RewindCompleted` overlay — only the authoritative
+    // `MessageTruncated` event so SDK + TUI converge. See
+    // `engine-tui-unified-transcript-plan.md` §7.4.
+    if matches!(mode, RewindMode::AutoRestore) {
+        let mut h = runtime.history.lock().await;
+        if let Some(idx) = h.as_slice().iter().position(|m| match m {
+            coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
+            _ => false,
+        }) {
+            let pre_count = h.len() as i32;
+            let removed = (pre_count - idx as i32).max(0);
+            h.truncate(idx);
+            coco_otel::events::emit_conversation_rewind(
+                pre_count as i64,
+                h.len() as i64,
+                removed as i64,
+                idx as i64,
+            );
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
+                    keep_count: idx as i64,
+                }))
+                .await;
+        }
+        return;
+    }
 
     // Summarize variants: dispatch to partial_compact_conversation
     // and replace the history with the resulting messages. TS:
@@ -2814,7 +3007,7 @@ async fn handle_rewind(
 
     if should_truncate {
         let mut h = runtime.history.lock().await;
-        if let Some(idx) = h.iter().position(|m| match m {
+        if let Some(idx) = h.as_slice().iter().position(|m| match m {
             coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
             _ => false,
         }) {
@@ -2828,6 +3021,14 @@ async fn handle_rewind(
                 messages_removed as i64,
                 idx as i64,
             );
+            // Explicit-rewind converges on the same `MessageTruncated`
+            // event the AutoRestore path emits, so SDK consumers see
+            // one authoritative truncation signal regardless of trigger.
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
+                    keep_count: idx as i64,
+                }))
+                .await;
         }
     }
 
@@ -2880,7 +3081,7 @@ async fn handle_summarize_rewind(
 
     let messages = {
         let h = runtime.history.lock().await;
-        h.clone()
+        h.as_slice().to_vec()
     };
 
     // Pivot index: position of the picked user message in the
@@ -2929,10 +3130,10 @@ async fn handle_summarize_rewind(
         coco_compact::CompactOutcome::Applied => {
             {
                 let mut h = runtime.history.lock().await;
-                *h = history.messages;
+                *h = history;
             }
             // Emit a RewindCompleted with empty target so the TUI
-            // dismisses the overlay + shows a toast, but does NOT try
+            // dismisses the modal + shows a toast, but does NOT try
             // to truncate by message_id (the message is gone after
             // summarization).
             let _ = event_tx
@@ -3083,6 +3284,35 @@ fn image_data_to_queued(images: &[coco_tui::paste::ImageData]) -> Vec<QueuedImag
         .collect()
 }
 
+/// Construct the engine `Message::System(...)` payload from a
+/// TUI-originated [`coco_tui::SystemPushKind`]. Centralises the
+/// kind → sub-variant mapping so every TUI-side push site agrees on
+/// shape, and so adding a new kind only touches one match arm.
+fn build_system_message_from_push_kind(kind: coco_tui::SystemPushKind) -> coco_messages::Message {
+    let sys = match kind {
+        coco_tui::SystemPushKind::Informational {
+            level,
+            title,
+            message,
+        } => {
+            coco_messages::SystemMessage::Informational(coco_messages::SystemInformationalMessage {
+                uuid: uuid::Uuid::new_v4(),
+                level,
+                title,
+                message,
+            })
+        }
+        coco_tui::SystemPushKind::LocalCommand { command, output } => {
+            coco_messages::SystemMessage::LocalCommand(coco_messages::SystemLocalCommandMessage {
+                uuid: uuid::Uuid::new_v4(),
+                command,
+                output,
+            })
+        }
+    };
+    coco_messages::Message::System(sys)
+}
+
 /// Run a prompt-mode bash submission (`!ls -la`). Mirrors TS's
 /// `LocalShellTask` semantics: the model loop is bypassed entirely;
 /// the command runs once in the session cwd via [`coco_shell::ShellExecutor`]
@@ -3097,6 +3327,7 @@ async fn run_prompt_mode_bash(
     cwd: &std::path::Path,
     user_message_id: String,
     command: String,
+    runtime: Arc<crate::session_runtime::SessionRuntime>,
     event_tx: mpsc::Sender<CoreEvent>,
 ) {
     const MAX_OUTPUT_BYTES: usize = 8 * 1024;
@@ -3123,6 +3354,25 @@ async fn run_prompt_mode_bash(
         }
         Err(err) => (format!("error: {err}"), -1),
     };
+
+    // Push a single SystemLocalCommandMessage into engine MessageHistory
+    // so the chat transcript (TUI + SDK consumers + JSONL) records the
+    // bash invocation via the standard `MessageAppended` event path.
+    // Pairs with Commit 2 deleting the TUI-local `add_message`
+    // optimistic echoes for both the `!cmd` input row and the matching
+    // output row.
+    {
+        let msg = coco_messages::Message::System(coco_messages::SystemMessage::LocalCommand(
+            coco_messages::SystemLocalCommandMessage {
+                uuid: uuid::Uuid::new_v4(),
+                command: command.clone(),
+                output: output.clone(),
+            },
+        ));
+        let mut h = runtime.history.lock().await;
+        let event_tx_opt = Some(event_tx.clone());
+        coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
+    }
 
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::BashCommandCompleted {

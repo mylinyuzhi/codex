@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use coco_context::attachment::FileReadOptions;
 use coco_context::attachment::generate_file_attachment;
 use coco_context::file_read_state::FileReadEntry;
-use coco_inference::AssistantContentPart;
+use coco_llm_types::AssistantContentPart;
 use coco_messages::AttachmentMessage;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
@@ -230,14 +230,14 @@ fn tool_result_starts_with_text(tr: &coco_messages::ToolResultMessage, prefix: &
             continue;
         };
         match &result.output {
-            coco_inference::ToolResultContent::Text { value, .. } => {
+            coco_llm_types::ToolResultContent::Text { value, .. } => {
                 if value.starts_with(prefix) {
                     return true;
                 }
             }
-            coco_inference::ToolResultContent::Content { value, .. } => {
+            coco_llm_types::ToolResultContent::Content { value, .. } => {
                 for sub in value {
-                    if let coco_inference::ToolResultContentPart::Text { text, .. } = sub
+                    if let coco_llm_types::ToolResultContentPart::Text { text, .. } = sub
                         && text.starts_with(prefix)
                     {
                         return true;

@@ -1,4 +1,6 @@
 use crate::AssistantContent;
+use crate::INTERRUPT_MESSAGE;
+use crate::INTERRUPT_MESSAGE_FOR_TOOL_USE;
 use crate::LlmMessage;
 use crate::Message;
 use crate::MessageKind;
@@ -124,13 +126,33 @@ fn test_create_progress_message() {
 }
 
 #[test]
-fn test_create_cancellation_message() {
-    let msg = create_cancellation_message();
-    let Message::System(SystemMessage::Informational(info)) = &msg else {
-        panic!("expected SystemMessage::Informational");
+fn user_interruption_message_uses_canonical_text() {
+    // TS parity: `createUserInterruptionMessage` returns a user message
+    // whose text matches one of `INTERRUPT_MESSAGE` /
+    // `INTERRUPT_MESSAGE_FOR_TOOL_USE` byte-for-byte.
+    let plain = create_user_interruption_message(/*for_tool_use*/ false);
+    let Message::User(u) = &plain else {
+        panic!("expected Message::User");
     };
-    assert_eq!(info.level, SystemMessageLevel::Warning);
-    assert_eq!(info.title, "Cancelled");
+    let coco_llm_types::LlmMessage::User { content, .. } = &u.message else {
+        panic!("expected LlmMessage::User");
+    };
+    let [coco_llm_types::UserContentPart::Text(text)] = content.as_slice() else {
+        panic!("expected single text content part");
+    };
+    assert_eq!(text.text, INTERRUPT_MESSAGE);
+
+    let tool = create_user_interruption_message(/*for_tool_use*/ true);
+    let Message::User(u) = &tool else {
+        panic!("expected Message::User");
+    };
+    let coco_llm_types::LlmMessage::User { content, .. } = &u.message else {
+        panic!("expected LlmMessage::User");
+    };
+    let [coco_llm_types::UserContentPart::Text(text)] = content.as_slice() else {
+        panic!("expected single text content part");
+    };
+    assert_eq!(text.text, INTERRUPT_MESSAGE_FOR_TOOL_USE);
 }
 
 #[test]

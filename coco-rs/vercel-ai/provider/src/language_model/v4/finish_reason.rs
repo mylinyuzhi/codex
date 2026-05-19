@@ -35,6 +35,7 @@ use std::fmt;
 /// Multi-LLM-stable: each `vercel-ai-<provider>` adapter maps its raw
 /// stop_reason into one of these variants. See module docs for the
 /// per-provider mapping table.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnifiedFinishReason {
@@ -142,6 +143,7 @@ impl fmt::Display for UnifiedFinishReason {
 /// string (preserved for diagnostics / logs / transcript provenance).
 /// `unified` is the field higher layers should match on; `raw` is
 /// for humans reading logs.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FinishReason {
     /// Typed unified finish reason — set once at the

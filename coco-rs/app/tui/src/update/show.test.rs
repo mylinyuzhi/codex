@@ -1,7 +1,7 @@
 use super::*;
 use crate::state::AppState;
+use crate::state::ModalState;
 use crate::state::ModelCatalogEntry;
-use crate::state::Overlay;
 use crate::state::ProviderStatus;
 use crate::state::ProviderUnavailableReason;
 use coco_types::ModelRole;
@@ -36,8 +36,8 @@ fn cycle_model_uses_session_model_catalog() {
     state.session.model = "claude-sonnet-4-6".to_string();
     state.session.provider = "anthropic".to_string();
     cycle_model(&mut state);
-    let m = match state.ui.active_overlay() {
-        Some(Overlay::ModelPicker(m)) => m.clone(),
+    let m = match state.ui.modal.as_ref() {
+        Some(ModalState::ModelPicker(m)) => m.clone(),
         other => panic!("expected ModelPicker, got {other:?}"),
     };
     assert_eq!(m.role, ModelRole::Main);
@@ -65,8 +65,8 @@ fn cycle_model_marks_provider_config_unavailable() {
     );
 
     cycle_model(&mut state);
-    let m = match state.ui.active_overlay() {
-        Some(Overlay::ModelPicker(m)) => m,
+    let m = match state.ui.modal.as_ref() {
+        Some(ModalState::ModelPicker(m)) => m,
         other => panic!("expected ModelPicker, got {other:?}"),
     };
     let openai = m.entries.iter().find(|e| e.provider == "openai").unwrap();
@@ -91,8 +91,8 @@ fn cycle_model_adds_unavailable_provider_without_models() {
     );
 
     cycle_model(&mut state);
-    let m = match state.ui.active_overlay() {
-        Some(Overlay::ModelPicker(m)) => m,
+    let m = match state.ui.modal.as_ref() {
+        Some(ModalState::ModelPicker(m)) => m,
         other => panic!("expected ModelPicker, got {other:?}"),
     };
     let custom = m.entries.iter().find(|e| e.provider == "custom").unwrap();
@@ -112,12 +112,12 @@ fn cycle_model_role_wraps_and_resets_filter() {
     state.session.model = "claude-sonnet-4-6".to_string();
     state.session.provider = "anthropic".to_string();
     cycle_model(&mut state);
-    if let Some(Overlay::ModelPicker(m)) = state.ui.active_overlay_mut() {
+    if let Some(ModalState::ModelPicker(m)) = state.ui.modal.as_mut() {
         m.filter = "ignored".to_string();
     }
     cycle_model_role(&mut state, 1);
-    let m = match state.ui.active_overlay() {
-        Some(Overlay::ModelPicker(m)) => m,
+    let m = match state.ui.modal.as_ref() {
+        Some(ModalState::ModelPicker(m)) => m,
         _ => unreachable!(),
     };
     assert_eq!(m.role, ModelRole::Fast);
@@ -126,8 +126,8 @@ fn cycle_model_role_wraps_and_resets_filter() {
     // Wrap-around: from Main, Shift+Tab (delta = -1) goes to Subagent.
     cycle_model_role(&mut state, -1); // Fast → Main
     cycle_model_role(&mut state, -1); // Main → Subagent (wrap)
-    let m = match state.ui.active_overlay() {
-        Some(Overlay::ModelPicker(m)) => m,
+    let m = match state.ui.modal.as_ref() {
+        Some(ModalState::ModelPicker(m)) => m,
         _ => unreachable!(),
     };
     assert_eq!(m.role, ModelRole::Subagent);
@@ -145,7 +145,7 @@ fn build_model_entries_empty_catalog_has_no_prefix_inference() {
 }
 
 /// `next_role` cycles deterministically over the canonical order and
-/// stays consistent with the overlay content adapter (see overlay_content/pickers.rs).
+/// stays consistent with the state content adapter (see surface_content/pickers.rs).
 #[test]
 fn next_role_cycles_canonical_order() {
     assert_eq!(next_role(ModelRole::Main, 1), ModelRole::Fast);

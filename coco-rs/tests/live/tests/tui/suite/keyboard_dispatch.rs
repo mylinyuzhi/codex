@@ -9,8 +9,8 @@
 //! Exercised here:
 //! - Typing "hi" (two `Char` keys) builds the input buffer.
 //! - `Enter` flushes the buffer through `TuiCommand::SubmitInput`,
-//!   which both folds a user `ChatMessage` into AppState and emits
-//!   `UserCommand::SubmitInput` to the agent driver.
+//!   which emits `UserCommand::SubmitInput` to the agent driver;
+//!   the engine echoes a `Message::User` back via `MessageAppended`.
 //! - `Shift+Tab` cycles `permission_mode` and emits
 //!   `UserCommand::SetPermissionMode` (the gateway used by the
 //!   permission-cycling overlay flow).
@@ -70,20 +70,14 @@ pub async fn run() -> Result<()> {
 
     // The "hi" prompt should have reached the engine and produced an
     // assistant reply. This proves Enter routed end-to-end.
-    let saw_user = harness.state.session.messages.iter().any(|m| {
-        matches!(m.role, coco_tui::state::session::ChatRole::User) && m.text_content() == "hi"
-    });
-    let saw_assistant = harness.state.session.messages.iter().any(|m| {
-        matches!(m.role, coco_tui::state::session::ChatRole::Assistant)
-            && m.text_content().contains("ack")
-    });
+    let saw_user = harness
+        .text_cells_in_order()
+        .iter()
+        .any(|(role, text)| *role == "user" && *text == "hi");
+    assert!(saw_user, "keyboard_dispatch: user `hi` not in transcript");
     assert!(
-        saw_user,
-        "keyboard_dispatch: user `hi` not in session.messages"
-    );
-    assert!(
-        saw_assistant,
-        "keyboard_dispatch: assistant reply not in session.messages"
+        harness.assistant_text_contains("ack"),
+        "keyboard_dispatch: assistant reply not in transcript"
     );
 
     // Shift+Tab cycles permission mode. The engine driver discards

@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
-# Enforce the coco-inference seam.
+# Enforce the vercel-ai dual-seam.
 #
-# Rule: only `services/inference/Cargo.toml` (the seam crate) may declare
-# a `vercel-ai*` dependency. All other crates must reach AI SDK types via
-# `coco_inference::*` aliases — see `services/inference/src/lib.rs` for
-# the canonical version-agnostic re-export list.
+# Rule: only the two designated seam crates may declare a `vercel-ai*`
+# dependency. All other crates must reach AI SDK types through one of
+# the seams — never `vercel_ai_provider::*` directly.
 #
-# `coco-messages` consumes `LanguageModelMessage` (etc.) via `coco_inference`,
-# never via `vercel_ai_provider`. `coco-types` is intentionally LLM-free.
+# Seam crates (steady state, both directly depend on vercel-ai by design):
+#   - `common/llm-types/Cargo.toml`   — DTO seam: message + content
+#                                       shapes consumed by domain crates
+#                                       via `coco_llm_types::*`
+#   - `services/inference/Cargo.toml` — runtime/client seam: LanguageModelV4
+#                                       trait, Provider trait, ApiClient,
+#                                       retry, auth, prompt-cache detection
+#
+# Switching SDK version edits both seams. Trying to collapse to a single
+# seam would force runtime concerns into a types-only crate or schema
+# concerns into a client crate — both worse than two narrow seams.
+#
+# `coco-messages` consumes content-part aliases via `coco_llm_types`.
+# `coco-types` is intentionally vercel-ai-free at the source level.
 #
 # Wired into `just pre-commit` (justfile) and the Stop hook
 # (.claude/scripts/rust-quality-check.sh). Safe to run standalone:
@@ -26,7 +37,7 @@ cd "$(dirname "$0")/.."
 #   - the workspace root (`Cargo.toml`) where workspace deps are declared
 #   - the `vercel-ai/` SDK crates themselves (they reference each other internally)
 #   - `services/inference/Cargo.toml` — the single seam crate
-allow_re='^(Cargo\.toml$|vercel-ai/|services/inference/Cargo\.toml$)'
+allow_re='^(Cargo\.toml$|vercel-ai/|services/inference/Cargo\.toml$|common/llm-types/Cargo\.toml$)'
 
 # A line in a Cargo.toml that declares a dep on any `vercel-ai*` crate.
 # Matches both forms:
@@ -48,8 +59,8 @@ violations=$(printf '%s' "$violations" | sed 's|^\./||' | grep -Ev "$allow_re" |
 if [ -n "$violations" ]; then
     echo "✗ Cargo.toml depends on vercel-ai* outside the seam:" >&2
     echo "$violations" | sed 's/^/    /' >&2
-    echo "  → only services/inference may declare vercel-ai* deps." >&2
-    echo "  → other crates must use coco_inference::* aliases." >&2
-    echo "  → see services/inference/src/lib.rs for the canonical re-export list." >&2
+    echo "  → only common/llm-types or services/inference may declare vercel-ai* deps." >&2
+    echo "  → other crates must use coco_llm_types::* aliases (DTOs)." >&2
+    echo "  → see common/llm-types/src/lib.rs for the canonical re-export list." >&2
     exit 1
 fi

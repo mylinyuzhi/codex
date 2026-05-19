@@ -3,7 +3,7 @@ use std::sync::Arc;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_hooks::orchestration::PermissionRequestDecision;
-use coco_inference::ToolCallPart;
+use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_types::CoreEvent;

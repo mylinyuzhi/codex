@@ -1,361 +1,23 @@
 //! Tests for server notification handler.
 //!
-//! Post WS-2: tests use CoreEvent directly instead of the deleted
-//! TuiNotification bridge type.
+//! Tests use `CoreEvent` directly. Turn-lifecycle and tool-use-lifecycle
+//! suites that asserted on TUI-synthesised buffer entries are gone —
+//! the engine pushes authoritative `Message::Assistant` /
+//! `Message::ToolResult` via `MessageAppended`; the TUI just renders
+//! the cells. Reasoning-token metadata is stamped via
+//! `TranscriptView::record_reasoning_tokens` — exercised by the cell
+//! renderer tests in `state::transcript_view` and `widgets`.
 
-use coco_types::AgentStreamEvent;
+use std::time::Duration;
+use std::time::Instant;
+
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
 
+use coco_types::AgentStreamEvent;
+
 use crate::server_notification_handler::handle_core_event;
 use crate::state::AppState;
-use crate::state::session::ChatRole;
-use crate::state::session::MessageContent;
-
-#[test]
-fn test_turn_lifecycle() {
-    let mut state = AppState::new();
-
-    // Turn started
-    let changed = handle_core_event(
-        &mut state,
-        CoreEvent::Protocol(ServerNotification::TurnStarted(
-            coco_types::TurnStartedParams {
-                turn_id: Some("t1".into()),
-                turn_number: 1,
-            },
-        )),
-    );
-    assert!(changed);
-    assert_eq!(state.session.turn_count, 1);
-    assert!(state.session.is_busy());
-    assert!(state.is_streaming());
-
-    // Text delta (via Stream layer — TUI consumes directly)
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::TextDelta {
-            turn_id: "t1".into(),
-            delta: "Hello ".into(),
-        }),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::TextDelta {
-            turn_id: "t1".into(),
-            delta: "world".into(),
-        }),
-    );
-    assert_eq!(
-        state.ui.streaming.as_ref().map(|s| s.content.as_str()),
-        Some("Hello world")
-    );
-
-    // Turn completed — streaming committed to messages
-    handle_core_event(
-        &mut state,
-        CoreEvent::Protocol(ServerNotification::TurnCompleted(
-            coco_types::TurnCompletedParams {
-                turn_id: Some("t1".into()),
-                usage: coco_types::TokenUsage {
-                    input_tokens: 100,
-                    output_tokens: 50,
-                    input_token_details: coco_types::InputTokenDetails {
-                        cache_read_tokens: 0,
-                        cache_write_tokens: 0,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            },
-        )),
-    );
-    assert!(!state.session.is_busy());
-    assert!(!state.is_streaming());
-    assert_eq!(state.session.messages.len(), 1);
-    assert_eq!(state.session.messages[0].text_content(), "Hello world");
-    assert_eq!(state.session.messages[0].role, ChatRole::Assistant);
-}
-
-#[test]
-fn test_tool_use_lifecycle() {
-    let mut state = AppState::new();
-
-    // Tool queued (via Stream layer)
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
-            call_id: "c1".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({"command": "ls -la"}),
-        }),
-    );
-    assert_eq!(state.session.tool_executions.len(), 1);
-    assert_eq!(state.session.messages.len(), 1);
-    assert_eq!(state.session.messages[0].role, ChatRole::Assistant);
-
-    // Tool completed (via Stream layer)
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ToolUseCompleted {
-            call_id: "c1".into(),
-            name: "Bash".into(),
-            output: "file1.rs\nfile2.rs".into(),
-            is_error: false,
-        }),
-    );
-    assert_eq!(state.session.messages.len(), 2);
-    assert_eq!(state.session.messages[1].role, ChatRole::Tool);
-}
-
-#[test]
-fn test_tool_use_completed_uses_event_name_when_execution_missing() {
-    let mut state = AppState::new();
-
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ToolUseCompleted {
-            call_id: "missing".into(),
-            name: "Read".into(),
-            output: "done".into(),
-            is_error: false,
-        }),
-    );
-
-    assert!(matches!(
-        &state.session.messages[0].content,
-        MessageContent::ToolSuccess { tool_name, .. } if tool_name == "Read"
-    ));
-}
-
-#[test]
-fn test_tool_use_queued_stores_bounded_input_preview() {
-    let mut state = AppState::new();
-    let large_text = "x".repeat(2_000);
-
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
-            call_id: "c1".into(),
-            name: "Write".into(),
-            input: serde_json::json!({"file_path": "/tmp/out.txt", "content": large_text}),
-        }),
-    );
-
-    assert!(matches!(
-        &state.session.messages[0].content,
-        MessageContent::ToolUse { input_preview, .. }
-            if input_preview.chars().count() <= 512 && input_preview.ends_with("...")
-    ));
-}
-
-#[test]
-fn test_tool_use_queued_flushes_reasoning_before_tool_call() {
-    let mut state = AppState::new();
-    state.session.turn_count = 7;
-
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
-            turn_id: "t1".into(),
-            delta: "I should inspect the file first.".into(),
-        }),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
-            call_id: "c1".into(),
-            name: "Read".into(),
-            input: serde_json::json!({"file_path": "/tmp/README.md", "limit": 3}),
-        }),
-    );
-
-    assert_eq!(state.session.messages.len(), 2);
-    assert!(matches!(
-        state.session.messages[0].content,
-        MessageContent::Thinking { .. }
-    ));
-    assert!(matches!(
-        state.session.messages[1].content,
-        MessageContent::ToolUse { .. }
-    ));
-}
-
-#[test]
-fn test_turn_completed_inserts_reasoning_token_only_message_before_text() {
-    let mut state = AppState::new();
-
-    handle_core_event(
-        &mut state,
-        CoreEvent::Protocol(ServerNotification::TurnStarted(
-            coco_types::TurnStartedParams {
-                turn_id: Some("t1".into()),
-                turn_number: 3,
-            },
-        )),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::TextDelta {
-            turn_id: "t1".into(),
-            delta: "final answer".into(),
-        }),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Protocol(ServerNotification::TurnCompleted(
-            coco_types::TurnCompletedParams {
-                turn_id: Some("t1".into()),
-                usage: coco_types::TokenUsage {
-                    output_token_details: coco_types::OutputTokenDetails {
-                        reasoning_tokens: 220,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            },
-        )),
-    );
-
-    assert_eq!(state.session.messages.len(), 2);
-    assert!(matches!(
-        &state.session.messages[0].content,
-        MessageContent::Thinking {
-            content,
-            reasoning_tokens: Some(220),
-            duration_ms: Some(_),
-            ..
-        } if content.is_empty()
-    ));
-    assert!(matches!(
-        &state.session.messages[1].content,
-        MessageContent::AssistantText(text) if text == "final answer"
-    ));
-}
-
-#[test]
-fn test_turn_completed_updates_tool_call_thinking_tokens() {
-    let mut state = AppState::new();
-
-    handle_core_event(
-        &mut state,
-        CoreEvent::Protocol(ServerNotification::TurnStarted(
-            coco_types::TurnStartedParams {
-                turn_id: Some("t1".into()),
-                turn_number: 3,
-            },
-        )),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
-            turn_id: "t1".into(),
-            delta: "Need a command.".into(),
-        }),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
-            call_id: "c1".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({"command": "ls -al"}),
-        }),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ToolUseCompleted {
-            call_id: "c1".into(),
-            name: "Bash".into(),
-            output: "ok".into(),
-            is_error: false,
-        }),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Protocol(ServerNotification::TurnCompleted(
-            coco_types::TurnCompletedParams {
-                turn_id: Some("t1".into()),
-                usage: coco_types::TokenUsage {
-                    output_token_details: coco_types::OutputTokenDetails {
-                        reasoning_tokens: 13,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            },
-        )),
-    );
-
-    assert_eq!(state.session.messages.len(), 3);
-    assert!(matches!(
-        &state.session.messages[0].content,
-        MessageContent::Thinking {
-            reasoning_tokens: Some(13),
-            ..
-        }
-    ));
-    assert!(matches!(
-        state.session.messages[1].content,
-        MessageContent::ToolUse { .. }
-    ));
-    assert!(matches!(
-        state.session.messages[2].content,
-        MessageContent::ToolSuccess { .. }
-    ));
-}
-
-#[test]
-fn test_turn_completed_inserts_token_only_thinking_before_tool_call() {
-    let mut state = AppState::new();
-
-    handle_core_event(
-        &mut state,
-        CoreEvent::Protocol(ServerNotification::TurnStarted(
-            coco_types::TurnStartedParams {
-                turn_id: Some("t1".into()),
-                turn_number: 3,
-            },
-        )),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
-            call_id: "c1".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({"command": "ls -al"}),
-        }),
-    );
-    handle_core_event(
-        &mut state,
-        CoreEvent::Protocol(ServerNotification::TurnCompleted(
-            coco_types::TurnCompletedParams {
-                turn_id: Some("t1".into()),
-                usage: coco_types::TokenUsage {
-                    output_token_details: coco_types::OutputTokenDetails {
-                        reasoning_tokens: 13,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            },
-        )),
-    );
-
-    assert_eq!(state.session.messages.len(), 2);
-    assert!(matches!(
-        &state.session.messages[0].content,
-        MessageContent::Thinking {
-            content,
-            reasoning_tokens: Some(13),
-            duration_ms: Some(_),
-            ..
-        } if content.is_empty()
-    ));
-    assert!(matches!(
-        state.session.messages[1].content,
-        MessageContent::ToolUse { .. }
-    ));
-}
 
 #[test]
 fn test_subagent_lifecycle() {
@@ -391,8 +53,9 @@ fn test_subagent_lifecycle() {
 }
 
 #[test]
-fn test_permission_request_shows_overlay() {
+fn test_permission_request_shows_prompt() {
     let mut state = AppState::new();
+    let ready_at = Instant::now() + Duration::from_secs(2);
 
     handle_core_event(
         &mut state,
@@ -407,22 +70,26 @@ fn test_permission_request_shows_overlay() {
             original_input: None,
         }),
     );
-    assert!(state.has_overlay());
+    assert!(!state.has_active_surface());
+    assert!(state.ui.flush_delayed_permissions(ready_at));
+
+    assert!(state.has_active_surface());
     assert!(matches!(
-        state.ui.active_overlay(),
-        Some(crate::state::Overlay::Permission(_))
+        state.ui.interaction.active_prompt,
+        Some(crate::state::PanePromptState::Permission(_))
     ));
-    match state.ui.active_overlay() {
-        Some(crate::state::Overlay::Permission(overlay)) => {
-            assert!(overlay.show_always_allow);
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(state)) => {
+            assert!(state.show_always_allow);
         }
-        other => panic!("expected permission overlay, got {other:?}"),
+        other => panic!("expected permission state, got {other:?}"),
     }
 }
 
 #[test]
 fn test_permission_request_hides_always_allow_when_disabled() {
     let mut state = AppState::new();
+    let ready_at = Instant::now() + Duration::from_secs(2);
 
     handle_core_event(
         &mut state,
@@ -437,12 +104,13 @@ fn test_permission_request_hides_always_allow_when_disabled() {
             original_input: None,
         }),
     );
+    assert!(state.ui.flush_delayed_permissions(ready_at));
 
-    match state.ui.active_overlay() {
-        Some(crate::state::Overlay::Permission(overlay)) => {
-            assert!(!overlay.show_always_allow);
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(state)) => {
+            assert!(!state.show_always_allow);
         }
-        other => panic!("expected permission overlay, got {other:?}"),
+        other => panic!("expected permission state, got {other:?}"),
     }
 }
 

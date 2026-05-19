@@ -262,7 +262,20 @@ impl QueryEngine {
                 result.attachments.extend(delta_attachments);
                 let new_messages =
                     coco_compact::build_partial_post_compact_messages(&result, direction);
-                history.messages = new_messages.clone();
+                let pre_len = history.messages.len() as i32;
+                let post_len = new_messages.len() as i32;
+                let removed_messages = (pre_len - post_len).max(0);
+                // I-1 (Authority): partial compaction rewrites the
+                // engine-authoritative history. Pair the swap with a
+                // `MessageTruncated { 0 }` + per-message
+                // `MessageAppended` burst so the TUI's TranscriptView
+                // and SDK observers see the new state.
+                crate::history_sync::history_replace_and_emit(
+                    history,
+                    new_messages.clone(),
+                    event_tx,
+                )
+                .await;
                 self.update_post_compact_delta_state(delta_state).await;
                 if let Some(frs) = &self.file_read_state {
                     let mut frs = frs.write().await;
@@ -282,7 +295,7 @@ impl QueryEngine {
                 let _ = emit_protocol(
                     event_tx,
                     ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
-                        removed_messages: 0,
+                        removed_messages,
                         summary_tokens: result.post_compact_tokens as i32,
                         trigger: coco_types::CompactTrigger::Manual,
                         pre_tokens: Some(result.pre_compact_tokens),
@@ -469,13 +482,20 @@ impl QueryEngine {
             .await;
         result.attachments.extend(delta_attachments);
         let new_messages = coco_compact::build_post_compact_messages(&result);
-        history.messages = new_messages.clone();
+        let pre_len = history.messages.len() as i32;
+        let post_len = new_messages.len() as i32;
+        let removed_messages = (pre_len - post_len).max(0);
+        // I-1 (Authority): session-memory compaction rewrites history.
+        // Emit truncate + appended-burst so the TUI/SDK derived views
+        // converge on the new state.
+        crate::history_sync::history_replace_and_emit(history, new_messages.clone(), event_tx)
+            .await;
         self.update_post_compact_delta_state(delta_state).await;
 
         let _ = emit_protocol(
             event_tx,
             ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
-                removed_messages: 0,
+                removed_messages,
                 summary_tokens,
                 trigger: coco_types::CompactTrigger::SessionMemory,
                 pre_tokens: Some(pre_tokens),
@@ -1404,7 +1424,20 @@ impl QueryEngine {
                 // attachments, hookResults. Use the canonical helper.
                 let summary_tokens = result.post_compact_tokens as i32;
                 let new_messages = coco_compact::build_post_compact_messages(&result);
-                history.messages = new_messages.clone();
+                let pre_len = history.messages.len() as i32;
+                let post_len = new_messages.len() as i32;
+                let removed_messages = (pre_len - post_len).max(0);
+                // I-1 (Authority): full LLM compaction rewrites the
+                // engine-authoritative history. Pair the swap with a
+                // `MessageTruncated { 0 }` + per-message
+                // `MessageAppended` burst so the TUI/SDK derived views
+                // track the new state.
+                crate::history_sync::history_replace_and_emit(
+                    history,
+                    new_messages.clone(),
+                    event_tx,
+                )
+                .await;
                 self.update_post_compact_delta_state(delta_state).await;
 
                 if let Some(frs) = &self.file_read_state {
@@ -1448,7 +1481,7 @@ impl QueryEngine {
                 let _delivered = emit_protocol(
                     event_tx,
                     ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
-                        removed_messages: 0,
+                        removed_messages,
                         summary_tokens,
                         trigger,
                         pre_tokens: Some(result.pre_compact_tokens),

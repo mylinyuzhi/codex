@@ -9,14 +9,14 @@ use crate::state::PermissionDetail;
 use crate::state::QuestionOption;
 use crate::theme::Theme;
 
-fn permission_overlay(detail: PermissionDetail) -> PermissionOverlay {
+fn permission_prompt(detail: PermissionDetail) -> PermissionPromptState {
     let display_input = match &detail {
         PermissionDetail::Generic { input_preview } => {
             coco_types::PermissionDisplayInput::Text(input_preview.clone())
         }
         _ => coco_types::PermissionDisplayInput::Empty,
     };
-    PermissionOverlay {
+    PermissionPromptState {
         request_id: "req-1".to_string(),
         tool_name: "Edit".to_string(),
         description: "Allow this operation?".to_string(),
@@ -37,15 +37,15 @@ fn permission_overlay(detail: PermissionDetail) -> PermissionOverlay {
 fn permission_content_uses_high_risk_border() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let mut overlay = permission_overlay(PermissionDetail::Bash {
+    let mut state = permission_prompt(PermissionDetail::Bash {
         command: "rm -rf target/tmp".to_string(),
         risk_description: Some("Deletes files".to_string()),
         working_dir: Some("/repo".to_string()),
     });
-    overlay.risk_level = Some(RiskLevel::High);
-    overlay.show_always_allow = true;
+    state.risk_level = Some(RiskLevel::High);
+    state.show_always_allow = true;
 
-    let (title, body, border) = permission_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = permission_content(&state, UiStyles::new(&theme));
 
     assert_eq!(border, theme.error);
     assert!(title.contains("Edit"));
@@ -59,12 +59,12 @@ fn permission_content_uses_high_risk_border() {
 fn permission_content_renders_choices_instead_of_default_actions() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let mut overlay = permission_overlay(PermissionDetail::Generic {
+    let mut state = permission_prompt(PermissionDetail::Generic {
         input_preview: "Pick an option".to_string(),
     });
-    overlay.show_always_allow = true;
-    overlay.selected_choice = 1;
-    overlay.choices = Some(vec![
+    state.show_always_allow = true;
+    state.selected_choice = 1;
+    state.choices = Some(vec![
         PermissionAskChoice {
             value: "keep".to_string(),
             label: "Keep context".to_string(),
@@ -77,7 +77,7 @@ fn permission_content_renders_choices_instead_of_default_actions() {
         },
     ]);
 
-    let (_, body, _) = permission_content(&overlay, UiStyles::new(&theme));
+    let (_, body, _) = permission_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("  Keep context"));
     assert!(body.contains("▸ Clear context"));
@@ -89,13 +89,13 @@ fn permission_content_renders_choices_instead_of_default_actions() {
 fn generic_permission_content_uses_display_input_not_raw_original_input() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let mut overlay = permission_overlay(PermissionDetail::Generic {
+    let mut state = permission_prompt(PermissionDetail::Generic {
         input_preview: "safe display".to_string(),
     });
-    overlay.original_input = Some(json!({"secret": "raw value"}));
-    overlay.display_input = coco_types::PermissionDisplayInput::Json("{\"safe\":true}".to_string());
+    state.original_input = Some(json!({"secret": "raw value"}));
+    state.display_input = coco_types::PermissionDisplayInput::Json("{\"safe\":true}".to_string());
 
-    let (_, body, _) = permission_content(&overlay, UiStyles::new(&theme));
+    let (_, body, _) = permission_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("{\"safe\":true}"));
     assert!(!body.contains("raw value"));
@@ -106,19 +106,19 @@ fn permission_content_truncates_unicode_file_edit_preview() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let diff = "切".repeat(501);
-    let overlay = permission_overlay(PermissionDetail::FileEdit {
+    let state = permission_prompt(PermissionDetail::FileEdit {
         path: "src/lib.rs".to_string(),
         diff,
     });
 
-    let (_, body, _) = permission_content(&overlay, UiStyles::new(&theme));
+    let (_, body, _) = permission_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("File: src/lib.rs"));
     assert!(body.contains(&format!("{}...", "切".repeat(500))));
 }
 
-fn question_overlay(question: QuestionItem) -> QuestionOverlay {
-    QuestionOverlay {
+fn question_prompt(question: QuestionItem) -> QuestionPromptState {
+    QuestionPromptState {
         request_id: "req-1".to_string(),
         original_input: json!({"source": "test"}),
         questions: vec![question],
@@ -131,7 +131,7 @@ fn question_overlay(question: QuestionItem) -> QuestionOverlay {
 fn question_content_renders_other_answer_buffer() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = question_overlay(QuestionItem {
+    let state = question_prompt(QuestionItem {
         header: "Auth".to_string(),
         question: "Which auth flow?".to_string(),
         options: vec![
@@ -153,7 +153,7 @@ fn question_content_renders_other_answer_buffer() {
         editing_notes: true,
     });
 
-    let (title, body, border) = question_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = question_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Question ");
     assert_eq!(border, theme.primary);
@@ -166,7 +166,7 @@ fn question_content_renders_other_answer_buffer() {
 fn question_content_renders_multiselect_footer_hints() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let mut overlay = question_overlay(QuestionItem {
+    let mut state = question_prompt(QuestionItem {
         header: "Tools".to_string(),
         question: "Pick tools".to_string(),
         options: vec![
@@ -187,9 +187,9 @@ fn question_content_renders_multiselect_footer_hints() {
         notes: String::new(),
         editing_notes: false,
     });
-    overlay.is_in_plan_mode = true;
+    state.is_in_plan_mode = true;
 
-    let (_, body, _) = question_content(&overlay, UiStyles::new(&theme));
+    let (_, body, _) = question_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("> [x] Read"));
     assert!(body.contains("— preview —"));
@@ -202,7 +202,7 @@ fn question_content_renders_multiselect_footer_hints() {
 fn question_content_clamps_negative_focus_and_selection() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let mut overlay = QuestionOverlay {
+    let mut state = QuestionPromptState {
         request_id: "req-1".to_string(),
         original_input: json!({"source": "test"}),
         questions: vec![
@@ -242,14 +242,14 @@ fn question_content_clamps_negative_focus_and_selection() {
         is_in_plan_mode: false,
     };
 
-    let (_, body, _) = question_content(&overlay, UiStyles::new(&theme));
+    let (_, body, _) = question_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("[First] 1/2"));
     assert!(body.contains("▸  Alpha"));
     assert!(body.contains("alpha preview"));
     assert!(!body.contains("[Second]"));
 
-    overlay.questions[0].selected = 99;
-    let (_, body, _) = question_content(&overlay, UiStyles::new(&theme));
+    state.questions[0].selected = 99;
+    let (_, body, _) = question_content(&state, UiStyles::new(&theme));
     assert!(body.contains("▸  Beta"));
 }

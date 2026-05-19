@@ -6,7 +6,7 @@ use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_inference::ApiClient;
 use coco_inference::QueryParams;
-use coco_inference::ToolCallPart;
+use coco_llm_types::ToolCallPart;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
@@ -497,19 +497,19 @@ async fn try_classify_in_auto_mode(
     let classify_fn = move |req: coco_permissions::ClassifyRequest| {
         let client = Arc::clone(&client);
         async move {
-            let prompt: coco_inference::LanguageModelPrompt = vec![
-                coco_inference::LanguageModelMessage::System {
-                    content: vec![coco_inference::UserContentPart::Text(
-                        coco_inference::TextPart {
+            let prompt: coco_llm_types::LlmPrompt = vec![
+                coco_llm_types::LlmMessage::System {
+                    content: vec![coco_llm_types::UserContentPart::Text(
+                        coco_llm_types::TextPart {
                             text: req.system_prompt,
                             provider_metadata: None,
                         },
                     )],
                     provider_options: None,
                 },
-                coco_inference::LanguageModelMessage::User {
-                    content: vec![coco_inference::UserContentPart::Text(
-                        coco_inference::TextPart {
+                coco_llm_types::LlmMessage::User {
+                    content: vec![coco_llm_types::UserContentPart::Text(
+                        coco_llm_types::TextPart {
                             text: req.user_prompt,
                             provider_metadata: None,
                         },
@@ -547,10 +547,10 @@ async fn try_classify_in_auto_mode(
                     let mut chunks: Vec<String> = Vec::new();
                     for p in &result.content {
                         match p {
-                            coco_inference::AssistantContentPart::Text(t) if !t.text.is_empty() => {
+                            coco_llm_types::AssistantContentPart::Text(t) if !t.text.is_empty() => {
                                 chunks.push(t.text.clone());
                             }
-                            coco_inference::AssistantContentPart::ToolCall(tc) => {
+                            coco_llm_types::AssistantContentPart::ToolCall(tc) => {
                                 chunks.push(format!("[tool: {}]", tc.tool_name));
                             }
                             _ => {}

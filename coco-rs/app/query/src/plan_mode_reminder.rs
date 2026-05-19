@@ -313,10 +313,12 @@ impl PlanModeReminder {
                      mode and refine based on the feedback.{feedback_line}"
                 )
             };
-            history.push(Self::raw_reminder_message(
-                coco_types::AttachmentKind::TeammateMailbox,
-                &text,
-            ));
+            crate::history_sync::history_push_and_emit(
+                history,
+                Self::raw_reminder_message(coco_types::AttachmentKind::TeammateMailbox, &text),
+                &self.event_tx,
+            )
+            .await;
 
             let mut guard = app_state.write().await;
             guard.awaiting_plan_approval = false;
@@ -392,10 +394,12 @@ impl PlanModeReminder {
              type: \"plan_approval_response\", request_id: \"<id>\", approve: false, \
              feedback: \"<why>\"}})`.",
         );
-        history.push(Self::raw_reminder_message(
-            coco_types::AttachmentKind::QueuedCommand,
-            &body,
-        ));
+        crate::history_sync::history_push_and_emit(
+            history,
+            Self::raw_reminder_message(coco_types::AttachmentKind::QueuedCommand, &body),
+            &self.event_tx,
+        )
+        .await;
 
         if let Some(tx) = self.event_tx.as_ref() {
             for (_idx, req) in &pending {

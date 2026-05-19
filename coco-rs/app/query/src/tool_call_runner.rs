@@ -29,7 +29,7 @@ use coco_hooks::HookExecutionEvent;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_inference::ApiClient;
-use coco_inference::ToolCallPart;
+use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
 use coco_tool_runtime::PreparedToolCall;
@@ -308,10 +308,10 @@ fn render_completed_output(outcome: &coco_tool_runtime::ToolCallOutcome) -> Stri
             for part in content {
                 if let coco_messages::ToolContent::ToolResult(r) = part {
                     match &r.output {
-                        coco_inference::ToolResultContent::Text { value, .. } => {
+                        coco_llm_types::ToolResultContent::Text { value, .. } => {
                             return value.clone();
                         }
-                        coco_inference::ToolResultContent::ErrorText { value, .. } => {
+                        coco_llm_types::ToolResultContent::ErrorText { value, .. } => {
                             return value.clone();
                         }
                         _ => {}

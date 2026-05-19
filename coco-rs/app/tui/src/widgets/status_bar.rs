@@ -159,10 +159,11 @@ impl Widget for StatusBar<'_> {
             parts.push(Span::raw(format!("${cost:.2}")).fg(self.styles.dim()));
         }
 
-        // Message count
+        // Message count — count merged view so engine-pushed cells
+        // (the bulk of the live transcript after Commit 2) participate.
         parts.push(Span::raw(" | ").fg(self.styles.border()));
         parts.push(
-            Span::raw(t!("status.msgs", count = self.state.session.messages.len()).to_string())
+            Span::raw(t!("status.msgs", count = self.state.session.transcript.len()).to_string())
                 .fg(self.styles.dim()),
         );
 

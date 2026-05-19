@@ -5,6 +5,7 @@ use serde::Serialize;
 ///
 /// TS: `process.env.USER_TYPE` checks throughout `skills/bundled/*.ts`,
 /// `commands/init.ts`, `commands/createMovedToPluginCommand.ts`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserType {
@@ -35,6 +36,7 @@ impl UserType {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Entrypoint {

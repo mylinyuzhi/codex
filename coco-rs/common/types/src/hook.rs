@@ -12,6 +12,7 @@ use strum::IntoStaticStr;
 ///
 /// `#[non_exhaustive]` so future TS additions can land without
 /// breaking match exhaustiveness in downstream crates.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
 )]
@@ -97,6 +98,7 @@ pub enum HookScope {
 }
 
 /// Outcome of hook execution.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookOutcome {

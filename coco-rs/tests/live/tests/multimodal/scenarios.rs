@@ -30,11 +30,11 @@
 
 use anyhow::Context;
 use anyhow::Result;
-use coco_inference::AssistantContentPart;
-use coco_inference::LanguageModelMessage;
-use coco_inference::ToolContentPart;
-use coco_inference::ToolResultContent as InnerToolResultContent;
-use coco_inference::ToolResultContentPart;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::ToolContentPart;
+use coco_llm_types::ToolResultContent as InnerToolResultContent;
+use coco_llm_types::ToolResultContentPart;
 use serde_json::json;
 
 use crate::multimodal::fixtures;
@@ -253,19 +253,19 @@ pub async fn bash_cat_image_round_trip_via_real_loop() -> Result<()> {
 
 // ── helpers ────────────────────────────────────────────────────────
 
-/// True when any `LanguageModelMessage::Tool` in the prompt holds a
+/// True when any `LlmMessage::Tool` in the prompt holds a
 /// `ToolResultContent::Content` whose value contains a `FileData`
 /// part with an `image/*` media type. Used to verify the post-tool
 /// turn carries the multimodal payload.
-fn contains_tool_result_with_filedata(prompt: &[LanguageModelMessage]) -> bool {
+fn contains_tool_result_with_filedata(prompt: &[LlmMessage]) -> bool {
     find_image_filedata(prompt).is_some()
 }
 
 /// Find the first `FileData(image/*)` part inside a tool-result
 /// `Content` variant. Returns `(media_type, data_len)`.
-fn find_image_filedata(prompt: &[LanguageModelMessage]) -> Option<(String, usize)> {
+fn find_image_filedata(prompt: &[LlmMessage]) -> Option<(String, usize)> {
     for msg in prompt {
-        let LanguageModelMessage::Tool { content, .. } = msg else {
+        let LlmMessage::Tool { content, .. } = msg else {
             continue;
         };
         for c in content {
@@ -289,12 +289,12 @@ fn find_image_filedata(prompt: &[LanguageModelMessage]) -> Option<(String, usize
     None
 }
 
-/// Find the first `ToolResultPart` in any `LanguageModelMessage::Tool`
+/// Find the first `ToolResultPart` in any `LlmMessage::Tool`
 /// in the prompt. Tests use this to inspect the output variant
 /// (Text vs Content) the engine produced.
-fn find_tool_result(prompt: &[LanguageModelMessage]) -> Option<&coco_inference::ToolResultPart> {
+fn find_tool_result(prompt: &[LlmMessage]) -> Option<&coco_llm_types::ToolResultPart> {
     for msg in prompt {
-        let LanguageModelMessage::Tool { content, .. } = msg else {
+        let LlmMessage::Tool { content, .. } = msg else {
             continue;
         };
         for c in content {
@@ -311,9 +311,9 @@ fn find_tool_result(prompt: &[LanguageModelMessage]) -> Option<&coco_inference::
 /// Currently unused by the active scenarios; kept as a guarded helper
 /// for follow-on tests that assert ToolCall plumbing.
 #[allow(dead_code)]
-fn assistant_has_tool_call(prompt: &[LanguageModelMessage]) -> bool {
+fn assistant_has_tool_call(prompt: &[LlmMessage]) -> bool {
     prompt.iter().any(|msg| {
-        let LanguageModelMessage::Assistant { content, .. } = msg else {
+        let LlmMessage::Assistant { content, .. } = msg else {
             return false;
         };
         content

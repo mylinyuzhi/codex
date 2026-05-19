@@ -1,6 +1,8 @@
-//! Assistant-side message renderers — plain text (markdown), thinking
-//! block (collapsible with token estimate), redacted thinking, tool-use
-//! call, advisor message.
+//! Assistant-side cell renderers — text (markdown), thinking
+//! (collapsible), redacted thinking, tool-use invocation.
+//!
+//! Dispatches directly on `cell.kind` / `cell.source: Arc<Message>`.
+//! All emitted lines are `Line<'static>` (owned spans).
 
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -13,8 +15,10 @@ use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::format_duration_seconds;
 use crate::presentation::thinking::render_thinking_block;
-use crate::state::session::MessageContent;
-use crate::state::session::ToolUseStatus;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
+use crate::tool_display::ToolNameTone;
+use crate::tool_display::tool_name_tone;
 
 /// Turn-boundary glyph at the start of each assistant text response.
 /// TS `BLACK_CIRCLE` from `constants/figures.ts` picks `⏺` on macOS for
@@ -23,13 +27,13 @@ use crate::state::session::ToolUseStatus;
 /// keeps a consistent visual across platforms.
 const ASSISTANT_DOT: &str = "⏺";
 
-pub(super) fn try_render<'a>(
-    w: &ChatWidget<'a>,
-    content: &'a MessageContent,
-    lines: &mut Vec<Line<'a>>,
+pub(super) fn try_render(
+    w: &ChatWidget<'_>,
+    cell: &RenderedCell,
+    lines: &mut Vec<Line<'static>>,
 ) -> Option<()> {
-    match content {
-        MessageContent::AssistantText(text) => {
+    match &cell.kind {
+        CellKind::AssistantText { text, .. } => {
             // TS parity: `AssistantTextMessage` renders the body with a
             // leading `BLACK_CIRCLE` glyph on the first line as a turn
             // marker (`shouldShowDot` is true for the top assistant
@@ -76,14 +80,14 @@ pub(super) fn try_render<'a>(
             lines.extend(md_lines);
             Some(())
         }
-        MessageContent::Thinking {
-            content,
+        CellKind::AssistantThinking {
+            text,
             duration_ms,
             reasoning_tokens,
         } => {
             lines.extend(render_thinking_block(
                 ThinkingRenderInput {
-                    content,
+                    content: text,
                     duration_ms: *duration_ms,
                     reasoning_tokens: *reasoning_tokens,
                     display: if w.show_thinking {
@@ -99,7 +103,7 @@ pub(super) fn try_render<'a>(
             ));
             Some(())
         }
-        MessageContent::RedactedThinking => {
+        CellKind::AssistantRedactedThinking => {
             // ✻ (teardrop asterisk) signals "still thinking" — TS uses
             // this glyph for the redacted/in-flight variant so users
             // can tell at a glance the block isn't finalized.
@@ -111,38 +115,16 @@ pub(super) fn try_render<'a>(
             ));
             Some(())
         }
-        MessageContent::ToolUse {
-            tool_name,
-            call_id,
-            input_preview,
-            status,
-        } => {
-            // TS parity: `AssistantToolUseMessage.tsx` + `ToolUseLoader`.
-            // The dot is the same glyph (`●`) across all states; only
-            // the colour varies. This is intentional — different
-            // glyphs for queued/running/done created visual churn
-            // when a long turn cycled through them, and the colour
-            // alone is enough to distinguish status at a glance. The
-            // `bold` tool name plus the inline preview match the TS
-            // layout `<dot> <bold name>(<preview>)`.
-            let color = match status {
-                ToolUseStatus::Queued => w.styles.dim(),
-                ToolUseStatus::Running => w.styles.tool_running(),
-                ToolUseStatus::Completed => w.styles.tool_completed(),
-                ToolUseStatus::Failed => w.styles.tool_error(),
-            };
+        CellKind::ToolUse { call_id, tool_name } => {
+            let input_preview =
+                crate::state::derive::extract_tool_call_input_preview(&cell.source, call_id);
             let preview = if input_preview.len() > constants::TOOL_DESCRIPTION_MAX_CHARS as usize {
                 format!(
                     "{}…",
                     &input_preview[..constants::TOOL_DESCRIPTION_MAX_CHARS as usize - 1]
                 )
             } else {
-                input_preview.clone()
-            };
-            let label = if preview.is_empty() {
-                format!("🔨 {tool_name}")
-            } else {
-                format!("🔨 {tool_name}({preview})")
+                input_preview
             };
             // Elapsed time badge: `(250ms)` / `(1.2s)` / `(3m 4s)`
             // tail-aligned after the preview. Sourced from the
@@ -155,32 +137,33 @@ pub(super) fn try_render<'a>(
                 .find(|t| t.call_id == *call_id)
                 .map(|t| format!(" ({})", format_duration_seconds(t.elapsed())))
                 .unwrap_or_default();
-            lines.push(Line::from(vec![
-                Span::raw("• ").fg(color),
-                Span::raw(label).fg(w.styles.text()),
-                Span::raw(elapsed_badge).fg(w.styles.dim()).dim(),
-            ]));
-            Some(())
-        }
-        MessageContent::Advisor {
-            advisor_id,
-            content,
-        } => {
-            lines.push(Line::from(vec![
-                Span::raw("  📋 ").fg(w.styles.accent()),
-                Span::raw(format!("[advisor:{advisor_id}] "))
-                    .fg(w.styles.dim())
+            let mut spans = vec![
+                Span::raw("🔨 ").fg(w.styles.dim()),
+                Span::raw(tool_name.clone())
+                    .fg(tool_tone_color(tool_name_tone(tool_name), w.styles))
                     .bold(),
-            ]));
-            let md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
-                content,
-                w.styles,
-                w.width,
-                w.syntax_highlighting,
-            );
-            lines.extend(md_lines);
+            ];
+            if !preview.is_empty() {
+                spans.push(Span::raw(format!("({preview})")).fg(w.styles.text()));
+            }
+            spans.push(Span::raw(elapsed_badge).fg(w.styles.dim()).dim());
+            lines.push(Line::from(spans));
             Some(())
         }
         _ => None,
+    }
+}
+
+fn tool_tone_color(
+    tone: ToolNameTone,
+    styles: crate::presentation::styles::UiStyles<'_>,
+) -> ratatui::style::Color {
+    match tone {
+        ToolNameTone::ReadOnly => styles.success(),
+        ToolNameTone::Shell => styles.primary(),
+        ToolNameTone::Write => styles.warning(),
+        ToolNameTone::Agent => styles.accent(),
+        ToolNameTone::Plan => styles.plan(),
+        ToolNameTone::Utility => styles.secondary(),
     }
 }

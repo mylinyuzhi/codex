@@ -1,17 +1,17 @@
 use super::toggle;
 use crate::state::AppState;
-use crate::state::Overlay;
-use crate::state::session::ChatMessage;
+use crate::state::ModalState;
+use crate::state::derive::test_helpers;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript::TranscriptScrollPosition;
 
 #[test]
-fn toggle_opens_transcript_when_no_overlay_active() {
+fn toggle_opens_transcript_when_no_surface_active() {
     let mut state = AppState::new();
     toggle(&mut state);
     assert!(matches!(
-        state.ui.active_overlay(),
-        Some(Overlay::Transcript(_))
+        state.ui.modal.as_ref(),
+        Some(ModalState::Transcript(_))
     ));
 }
 
@@ -20,20 +20,20 @@ fn toggle_closes_transcript_when_already_open() {
     let mut state = AppState::new();
     toggle(&mut state);
     assert!(matches!(
-        state.ui.active_overlay(),
-        Some(Overlay::Transcript(_))
+        state.ui.modal.as_ref(),
+        Some(ModalState::Transcript(_))
     ));
     toggle(&mut state);
-    assert!(!state.ui.has_overlay());
+    assert!(!state.ui.has_active_surface());
 }
 
 #[test]
-fn transcript_overlay_defaults_to_cell_pager_state() {
+fn transcript_modal_defaults_to_cell_pager_state() {
     let mut state = AppState::new();
     toggle(&mut state);
-    let overlay = state.ui.active_overlay().expect("transcript opened");
-    let Overlay::Transcript(t) = overlay else {
-        panic!("expected Transcript overlay");
+    let state = state.ui.modal.as_ref().expect("transcript opened");
+    let ModalState::Transcript(t) = state else {
+        panic!("expected Transcript state");
     };
     assert_eq!(t.scroll, TranscriptScrollPosition::Top);
     assert_eq!(t.selected_cell_id, None);
@@ -43,17 +43,13 @@ fn transcript_overlay_defaults_to_cell_pager_state() {
 #[test]
 fn toggle_opens_transcript_on_latest_expandable_cell() {
     let mut state = AppState::new();
-    state
-        .session
-        .add_message(ChatMessage::tool_success("tool-old", "Read", "old\nlines"));
-    state
-        .session
-        .add_message(ChatMessage::tool_success("tool-new", "Read", "new\nlines"));
+    test_helpers::push_tool_result(&mut state.session, "old", "Read", "old\nlines", false);
+    test_helpers::push_tool_result(&mut state.session, "new", "Read", "new\nlines", false);
 
     toggle(&mut state);
 
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert_eq!(
         t.selected_cell_id.as_ref(),
@@ -68,16 +64,12 @@ fn toggle_opens_transcript_on_latest_expandable_cell() {
 #[test]
 fn select_and_enter_toggle_collapsed_cell() {
     let mut state = AppState::new();
-    state.session.add_message(ChatMessage::tool_success(
-        "tool-call-1",
-        "Read",
-        "alpha\nbeta",
-    ));
+    test_helpers::push_tool_result(&mut state.session, "call-1", "Read", "alpha\nbeta", false);
     toggle(&mut state);
 
     assert!(super::select_expandable(&mut state, 1));
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert_eq!(
         t.selected_cell_id.as_ref(),
@@ -85,8 +77,8 @@ fn select_and_enter_toggle_collapsed_cell() {
     );
 
     assert!(super::toggle_selected_cell(&mut state));
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert!(
         t.collapsed_cell_ids
@@ -94,8 +86,8 @@ fn select_and_enter_toggle_collapsed_cell() {
     );
 
     assert!(super::toggle_selected_cell(&mut state));
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert!(
         !t.collapsed_cell_ids
@@ -106,19 +98,13 @@ fn select_and_enter_toggle_collapsed_cell() {
 #[test]
 fn select_expandable_wraps_at_edges() {
     let mut state = AppState::new();
-    state
-        .session
-        .add_message(ChatMessage::tool_success("tool-first", "Read", "one\ntwo"));
-    state.session.add_message(ChatMessage::tool_success(
-        "tool-last",
-        "Read",
-        "three\nfour",
-    ));
+    test_helpers::push_tool_result(&mut state.session, "first", "Read", "one\ntwo", false);
+    test_helpers::push_tool_result(&mut state.session, "last", "Read", "three\nfour", false);
     toggle(&mut state);
 
     assert!(super::select_expandable(&mut state, 1));
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert_eq!(
         t.selected_cell_id.as_ref(),
@@ -126,8 +112,8 @@ fn select_expandable_wraps_at_edges() {
     );
 
     assert!(super::select_expandable(&mut state, -1));
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert_eq!(
         t.selected_cell_id.as_ref(),
@@ -138,18 +124,14 @@ fn select_expandable_wraps_at_edges() {
 #[test]
 fn select_expandable_anchors_selected_cell_from_current_scroll() {
     let mut state = AppState::new();
-    state.session.add_message(ChatMessage::tool_success(
-        "tool-call-1",
-        "Read",
-        "alpha\nbeta",
-    ));
+    test_helpers::push_tool_result(&mut state.session, "call-1", "Read", "alpha\nbeta", false);
     toggle(&mut state);
     assert!(super::scroll_lines(&mut state, 40));
 
     assert!(super::select_expandable(&mut state, 1));
 
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert_eq!(
         t.scroll,
@@ -158,14 +140,14 @@ fn select_expandable_anchors_selected_cell_from_current_scroll() {
 }
 
 #[test]
-fn transcript_scroll_uses_overlay_state() {
+fn transcript_scroll_uses_modal_state() {
     let mut state = AppState::new();
     toggle(&mut state);
 
     assert!(super::scroll_lines(&mut state, 5));
     assert_eq!(state.ui.scroll_offset, 0);
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert_eq!(t.scroll, TranscriptScrollPosition::Absolute(5));
 }
@@ -175,19 +157,19 @@ fn transcript_page_uses_terminal_size() {
     let mut state = AppState::new();
     state.ui.terminal_size = ratatui::layout::Size::new(100, 21);
     toggle(&mut state);
-    let Some(Overlay::Transcript(_)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(_)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
 
     assert!(super::page(&mut state, 1));
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert_eq!(t.scroll, TranscriptScrollPosition::Absolute(17));
 
     assert!(super::page(&mut state, -1));
-    let Some(Overlay::Transcript(t)) = state.ui.active_overlay() else {
-        panic!("expected Transcript overlay");
+    let Some(ModalState::Transcript(t)) = state.ui.modal.as_ref() else {
+        panic!("expected Transcript state");
     };
     assert_eq!(t.scroll, TranscriptScrollPosition::Top);
 }

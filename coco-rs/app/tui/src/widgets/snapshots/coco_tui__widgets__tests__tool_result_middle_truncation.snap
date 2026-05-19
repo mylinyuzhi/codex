@@ -8,7 +8,7 @@ expression: output
                                                                                                 
 ❯ find the CLAUDE.md                                                                            
                                                                                                 
-• 🔨  Glob(**/CLAUDE.md)                                                                         
+🔨  Glob(**/CLAUDE.md)                                                                           
   └ Found 8 files                                                                               
     coco-rs/app/tui/CLAUDE.md                                                                   
     … +5 lines (ctrl+o to expand)                                                               

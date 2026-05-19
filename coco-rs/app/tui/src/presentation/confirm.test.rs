@@ -3,22 +3,22 @@ use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
 use crate::presentation::styles::UiStyles;
-use crate::state::CostWarningOverlay;
-use crate::state::FeedbackOverlay;
-use crate::state::PlanApprovalOverlay;
-use crate::state::TaskDetailOverlay;
+use crate::state::CostWarningPromptState;
+use crate::state::FeedbackState;
+use crate::state::PlanApprovalPromptState;
+use crate::state::TaskDetailState;
 use crate::theme::Theme;
 
 #[test]
 fn cost_warning_content_formats_cents() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = CostWarningOverlay {
+    let state = CostWarningPromptState {
         current_cost_cents: 123,
         threshold_cents: 456,
     };
 
-    let (title, body, border) = cost_warning_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = cost_warning_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Cost Warning ");
     assert_eq!(border, theme.warning);
@@ -30,7 +30,7 @@ fn cost_warning_content_formats_cents() {
 fn task_detail_content_applies_scroll_window() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = TaskDetailOverlay {
+    let state = TaskDetailState {
         task_id: "task-1".to_string(),
         task_type: "build".to_string(),
         description: "Build output".to_string(),
@@ -42,7 +42,7 @@ fn task_detail_content_applies_scroll_window() {
         scroll: 3,
     };
 
-    let (title, body, border) = task_detail_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = task_detail_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Task: build [4/25] ");
     assert_eq!(border, theme.primary);
@@ -57,7 +57,7 @@ fn task_detail_content_applies_scroll_window() {
 fn task_detail_content_clamps_negative_scroll_to_start() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = TaskDetailOverlay {
+    let state = TaskDetailState {
         task_id: "task-1".to_string(),
         task_type: "build".to_string(),
         description: "Build output".to_string(),
@@ -69,7 +69,7 @@ fn task_detail_content_clamps_negative_scroll_to_start() {
         scroll: -5,
     };
 
-    let (_, body, _) = task_detail_content(&overlay, UiStyles::new(&theme));
+    let (_, body, _) = task_detail_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("line-0"));
     assert!(body.contains("line-19"));
@@ -80,7 +80,7 @@ fn task_detail_content_clamps_negative_scroll_to_start() {
 fn task_detail_content_clamps_past_end_and_shows_position() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = TaskDetailOverlay {
+    let state = TaskDetailState {
         task_id: "task-1".to_string(),
         task_type: "build".to_string(),
         description: "Build output".to_string(),
@@ -92,7 +92,7 @@ fn task_detail_content_clamps_past_end_and_shows_position() {
         scroll: 10,
     };
 
-    let (title, body, _) = task_detail_content(&overlay, UiStyles::new(&theme));
+    let (title, body, _) = task_detail_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Task: build [4/3] ");
     assert!(!body.lines().any(|line| line == "line-0"));
@@ -103,7 +103,7 @@ fn task_detail_content_clamps_past_end_and_shows_position() {
 fn plan_approval_content_truncates_long_preview_and_marks_focus() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let mut overlay = PlanApprovalOverlay::new(
+    let mut state = PlanApprovalPromptState::new(
         "req-1".to_string(),
         "planner".to_string(),
         Some(".claude/plans/demo.md".to_string()),
@@ -112,9 +112,9 @@ fn plan_approval_content_truncates_long_preview_and_marks_focus() {
             .collect::<Vec<_>>()
             .join("\n"),
     );
-    overlay.toggle_focus();
+    state.toggle_focus();
 
-    let (title, body, border) = plan_approval_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = plan_approval_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Plan approval — from planner ");
     assert_eq!(border, theme.plan_mode);
@@ -129,13 +129,13 @@ fn plan_approval_content_truncates_long_preview_and_marks_focus() {
 fn feedback_content_marks_selected_option() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = FeedbackOverlay {
+    let state = FeedbackState {
         prompt: "How was it?".to_string(),
         options: vec!["Good".to_string(), "Needs work".to_string()],
         selected: 1,
     };
 
-    let (title, body, border) = feedback_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = feedback_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Feedback ");
     assert_eq!(border, theme.primary);

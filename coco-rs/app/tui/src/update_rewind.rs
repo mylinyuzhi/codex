@@ -1,14 +1,17 @@
-//! Rewind overlay update logic — extracted to stay under 800 LoC in update.rs.
+//! Rewind state update logic — extracted to stay under 800 LoC in update.rs.
 //!
 //! TS: MessageSelector.tsx state management + restore option handling.
 
+use coco_messages::Message;
+
 use crate::state::AppState;
-use crate::state::ChatRole;
 use crate::state::rewind::RestoreType;
-use crate::state::rewind::RewindOverlay;
 use crate::state::rewind::RewindPhase;
+use crate::state::rewind::RewindState;
 use crate::state::rewind::RewindableMessage;
 use crate::state::rewind::build_restore_options;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
 
 /// Format an epoch-ms timestamp as a relative-time English phrase
 /// against a reference `now` (also epoch-ms). Mirrors TS
@@ -110,35 +113,24 @@ pub fn strip_ide_context_tags(text: &str) -> String {
     out.trim().to_string()
 }
 
-/// Check if a message is a selectable user message for the rewind picker.
+/// Check if a cell is a selectable user message for the rewind picker.
 ///
 /// TS: `selectableUserMessagesFilter()` in `MessageSelector.tsx:767-792`.
-/// Rejects tool results / synthetic messages / meta / compact-summary /
-/// transcript-only, plus content beginning with the synthetic XML
-/// wrappers used for command output / teammate / task / tick envelopes.
-fn is_selectable_user_message(msg: &crate::state::ChatMessage) -> bool {
-    if msg.role != ChatRole::User {
+/// Rejects tool results / synthetic messages / virtual user pushes /
+/// compact-summary / transcript-only rows, plus content beginning with
+/// the synthetic XML wrappers used for command output / teammate / task /
+/// tick envelopes.
+fn is_selectable_user_cell(cell: &RenderedCell) -> bool {
+    let CellKind::UserText { text } = &cell.kind else {
         return false;
-    }
-    if msg.is_meta || msg.is_compact_summary || msg.is_visible_in_transcript_only {
+    };
+    let Message::User(u) = cell.source.as_ref() else {
         return false;
-    }
-    // Reject every non-text user content variant — TS filters tool_result
-    // first-content-block (`MessageSelector.tsx:771`) and uses
-    // `isSyntheticMessage` (line 774) to drop most non-user-authored
-    // entries. In coco-rs that maps to: keep only `Text` / `Image` /
-    // `BashInput`; drop everything else (BashOutput, Attachment,
-    // ChannelMessage, ResourceUpdate, AgentNotification,
-    // TeammateMessage, PlanMarker, CompactBoundary, …).
-    use crate::state::MessageContent;
-    if !matches!(
-        msg.content,
-        MessageContent::Text(_) | MessageContent::Image { .. } | MessageContent::BashInput { .. }
-    ) {
+    };
+    if u.is_virtual || u.is_compact_summary || u.is_visible_in_transcript_only {
         return false;
     }
     // Filter out synthetic XML-wrapped content (TS: indexOf checks).
-    let text = msg.text_content();
     let trimmed = text.trim_start();
     for prefix in SYNTHETIC_XML_PREFIXES {
         if trimmed.starts_with(prefix) {
@@ -148,52 +140,56 @@ fn is_selectable_user_message(msg: &crate::state::ChatMessage) -> bool {
     true
 }
 
-/// Build the initial RewindOverlay from current session state, optionally
+/// Build the initial RewindState from current session state, optionally
 /// pre-anchored to a specific message.
 ///
 /// When `preselect_message_id` matches a real (non-synthetic) row, the
-/// overlay opens directly in the `RestoreOptions` phase with that row
+/// state opens directly in the `RestoreOptions` phase with that row
 /// selected. TS: `preselectedMessage` (`MessageSelector.tsx:42-44`,
 /// 72-83). Used by the message-actions `edit` flow.
 ///
-/// `preselect_message_id = None` → identical to `build_rewind_overlay`.
-pub fn build_rewind_overlay_for(
-    state: &AppState,
-    preselect_message_id: Option<&str>,
-) -> RewindOverlay {
-    let mut overlay = build_rewind_overlay_internal(state);
+/// `preselect_message_id = None` → identical to `build_rewind_state`.
+pub fn build_rewind_state_for(state: &AppState, preselect_message_id: Option<&str>) -> RewindState {
+    let mut state = build_rewind_state_internal(state);
     let Some(target_id) = preselect_message_id else {
-        return overlay;
+        return state;
     };
-    let Some(row_idx) = overlay
-        .messages
-        .iter()
-        .position(|m| !m.is_current_prompt && m.message_id == target_id)
-    else {
+    // Production strings are valid UUIDs and match `m.message_id`
+    // directly; legacy test-fixture ids (`"msg-1"`) flow through the
+    // shared `id_to_uuid` helper so they pair up with the cells the
+    // engine-cell fixture produced. Cheap pure mapping — no branch on
+    // test cfg.
+    let target_uuid = crate::state::derive::id_to_uuid(target_id).to_string();
+    let Some(row_idx) = state.messages.iter().position(|m| {
+        !m.is_current_prompt && (m.message_id == target_id || m.message_id == target_uuid)
+    }) else {
         // Unknown id — fall back to the standard pick-list.
-        return overlay;
+        return state;
     };
-    overlay.selected = row_idx as i32;
-    overlay.preselected = true;
-    overlay.available_options = build_restore_options(
-        overlay.file_history_enabled,
-        overlay.has_file_changes,
-        overlay.allow_summarize_up_to,
+    state.selected = row_idx as i32;
+    state.preselected = true;
+    state.available_options = build_restore_options(
+        state.file_history_enabled,
+        state.has_file_changes,
+        state.allow_summarize_up_to,
     );
-    overlay.option_selected = 0;
-    overlay.phase = RewindPhase::RestoreOptions;
-    overlay
+    state.option_selected = 0;
+    state.phase = RewindPhase::RestoreOptions;
+    state
 }
 
-/// Build the initial RewindOverlay from current session state.
+/// Build the initial RewindState from current session state.
 ///
-/// Extracts user messages from session.messages, builds RewindableMessage list.
+/// Sources from the engine-authoritative `transcript.cells()` so
+/// engine-pushed user messages — the entire live transcript after
+/// `engine-tui-unified-transcript-plan.md` Commit 2 — show up in the
+/// rewind picker.
 /// TS: MessageSelector receives `messages` prop filtered by selectableUserMessagesFilter.
-pub fn build_rewind_overlay(state: &AppState) -> RewindOverlay {
-    build_rewind_overlay_internal(state)
+pub fn build_rewind_state(state: &AppState) -> RewindState {
+    build_rewind_state_internal(state)
 }
 
-fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
+fn build_rewind_state_internal(state: &AppState) -> RewindState {
     // TS: tengu_message_selector_opened
     tracing::info!(target: "rewind", event = "selector_opened");
     let mut rewindable: Vec<RewindableMessage> = Vec::new();
@@ -202,10 +198,17 @@ fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    for (i, msg) in state.session.messages.iter().enumerate() {
-        if !is_selectable_user_message(msg) {
+    let cells = state.session.transcript.cells();
+    for (i, cell) in cells.iter().enumerate() {
+        if !is_selectable_user_cell(cell) {
             continue;
         }
+        let CellKind::UserText { text } = &cell.kind else {
+            continue;
+        };
+        let Message::User(user) = cell.source.as_ref() else {
+            continue;
+        };
 
         // TS `MessageSelector.tsx:618-624` substitutes the localized
         // `((empty message))` placeholder when `isEmptyMessageText`
@@ -214,8 +217,7 @@ fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
         // `<commit_analysis>...</commit_analysis>` still renders the
         // placeholder.
         let display_text = {
-            let raw = msg.text_content();
-            let stripped = strip_prompt_xml_tags(raw).trim().to_string();
+            let stripped = strip_prompt_xml_tags(text).trim().to_string();
             if stripped.is_empty() {
                 crate::i18n::t!("dialog.rewind_empty_message").to_string()
             } else if stripped.len() > 50 {
@@ -226,11 +228,11 @@ fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
         };
 
         rewindable.push(RewindableMessage {
-            message_id: msg.id.clone(),
+            message_id: cell.message_uuid.to_string(),
             message_index: i as i32,
             display_text,
-            relative_time: format_relative_time_ago(now, msg.created_at_ms),
-            permission_mode: msg.permission_mode,
+            relative_time: format_relative_time_ago(now, timestamp_to_ms(&user.timestamp)),
+            permission_mode: user.permission_mode,
             diff_stats: None,
             can_restore_code: None,
             is_current_prompt: false,
@@ -262,7 +264,7 @@ fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
     // TS: fileHistoryEnabled() in fileHistory.ts
     let file_history_enabled = state.session.file_history_enabled;
 
-    RewindOverlay {
+    RewindState {
         phase: RewindPhase::MessageSelect,
         messages: rewindable,
         selected,
@@ -284,20 +286,19 @@ fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
     }
 }
 
-/// Navigate up/down in the rewind overlay.
+/// Navigate up/down in the rewind state.
 ///
 /// In MessageSelect phase, navigates the message list.
 /// In RestoreOptions phase, navigates the option list.
-pub fn handle_rewind_nav(overlay: &mut RewindOverlay, delta: i32) {
-    match overlay.phase {
+pub fn handle_rewind_nav(state: &mut RewindState, delta: i32) {
+    match state.phase {
         RewindPhase::MessageSelect => {
-            let count = overlay.messages.len() as i32;
-            overlay.selected = (overlay.selected + delta).clamp(0, (count - 1).max(0));
+            let count = state.messages.len() as i32;
+            state.selected = (state.selected + delta).clamp(0, (count - 1).max(0));
         }
         RewindPhase::RestoreOptions => {
-            let count = overlay.available_options.len() as i32;
-            overlay.option_selected =
-                (overlay.option_selected + delta).clamp(0, (count - 1).max(0));
+            let count = state.available_options.len() as i32;
+            state.option_selected = (state.option_selected + delta).clamp(0, (count - 1).max(0));
         }
         // Feedback / confirming phases ignore arrow navigation.
         RewindPhase::SummarizeFeedback | RewindPhase::Confirming => {}
@@ -316,22 +317,22 @@ pub enum ConfirmOutcome {
     },
     /// Phase transition only (no dispatch yet).
     Phase,
-    /// Dismiss the overlay (synthetic current-prompt row, or cancel-on-confirm).
+    /// Dismiss the state (synthetic current-prompt row, or cancel-on-confirm).
     /// TS: `MessageSelector.tsx:165` — `if (!messages.includes(message_0)) onClose()`.
     Dismiss,
 }
 
-/// Handle Enter/confirm in the rewind overlay.
+/// Handle Enter/confirm in the rewind state.
 ///
 /// Returns `ConfirmOutcome` so the dispatcher knows whether to send the
-/// rewind, keep the overlay open in a new phase, or dismiss it.
+/// rewind, keep the state open in a new phase, or dismiss it.
 ///
 /// TS: MessageSelector onSelect -> onRestoreOptionSelect
-pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
+pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
     use crate::state::rewind::SummarizeDirection;
-    match overlay.phase {
+    match state.phase {
         RewindPhase::MessageSelect => {
-            let Some(msg) = overlay.messages.get(overlay.selected as usize) else {
+            let Some(msg) = state.messages.get(state.selected as usize) else {
                 return ConfirmOutcome::Phase;
             };
             // Synthetic `(current)` row — TS `MessageSelector.tsx:165`.
@@ -343,34 +344,34 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
             tracing::info!(
                 target: "rewind",
                 event = "message_selected",
-                index_from_end = overlay.messages.len() as i32 - overlay.selected - 1,
+                index_from_end = state.messages.len() as i32 - state.selected - 1,
             );
             // TS `MessageSelector.tsx:169-172`: when file history is
             // disabled the selector skips the option screen entirely
             // and dispatches `restoreConversationDirectly`. Mirror by
             // returning ConversationOnly straight away.
-            if !overlay.file_history_enabled {
+            if !state.file_history_enabled {
                 return ConfirmOutcome::Dispatch {
                     message_id: msg.message_id.clone(),
                     restore: RestoreType::ConversationOnly,
                 };
             }
-            overlay.available_options = build_restore_options(
-                overlay.file_history_enabled,
-                overlay.has_file_changes,
-                overlay.allow_summarize_up_to,
+            state.available_options = build_restore_options(
+                state.file_history_enabled,
+                state.has_file_changes,
+                state.allow_summarize_up_to,
             );
-            overlay.option_selected = 0;
-            overlay.phase = RewindPhase::RestoreOptions;
+            state.option_selected = 0;
+            state.phase = RewindPhase::RestoreOptions;
             ConfirmOutcome::Phase
         }
         RewindPhase::RestoreOptions => {
-            let Some(msg) = overlay.messages.get(overlay.selected as usize) else {
+            let Some(msg) = state.messages.get(state.selected as usize) else {
                 return ConfirmOutcome::Phase;
             };
-            let Some(opt) = overlay
+            let Some(opt) = state
                 .available_options
-                .get(overlay.option_selected as usize)
+                .get(state.option_selected as usize)
                 .cloned()
             else {
                 return ConfirmOutcome::Phase;
@@ -384,15 +385,15 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
             // Summarize variants need the optional feedback box first.
             match &opt {
                 RestoreType::SummarizeFrom { .. } => {
-                    overlay.pending_summarize = Some(SummarizeDirection::From);
-                    overlay.summarize_feedback.clear();
-                    overlay.phase = RewindPhase::SummarizeFeedback;
+                    state.pending_summarize = Some(SummarizeDirection::From);
+                    state.summarize_feedback.clear();
+                    state.phase = RewindPhase::SummarizeFeedback;
                     ConfirmOutcome::Phase
                 }
                 RestoreType::SummarizeUpTo { .. } => {
-                    overlay.pending_summarize = Some(SummarizeDirection::UpTo);
-                    overlay.summarize_feedback.clear();
-                    overlay.phase = RewindPhase::SummarizeFeedback;
+                    state.pending_summarize = Some(SummarizeDirection::UpTo);
+                    state.summarize_feedback.clear();
+                    state.phase = RewindPhase::SummarizeFeedback;
                     ConfirmOutcome::Phase
                 }
                 // TS `MessageSelector.tsx:185-188`: Nevermind cancels
@@ -400,13 +401,13 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
                 // no message list to fall back to, so it dismisses
                 // (TS line 186: `if (preselectedMessage) onClose()`).
                 RestoreType::Nevermind => {
-                    if overlay.preselected {
+                    if state.preselected {
                         ConfirmOutcome::Dismiss
                     } else {
-                        overlay.available_options.clear();
-                        overlay.diff_stats = None;
-                        overlay.option_selected = 0;
-                        overlay.phase = RewindPhase::MessageSelect;
+                        state.available_options.clear();
+                        state.diff_stats = None;
+                        state.option_selected = 0;
+                        state.phase = RewindPhase::MessageSelect;
                         ConfirmOutcome::Phase
                     }
                 }
@@ -417,21 +418,21 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
             }
         }
         RewindPhase::SummarizeFeedback => {
-            let Some(msg) = overlay.messages.get(overlay.selected as usize) else {
+            let Some(msg) = state.messages.get(state.selected as usize) else {
                 return ConfirmOutcome::Phase;
             };
             // TS `allowEmptySubmitToCancel: true` — empty submit cancels
             // the summarize choice and returns to the option list.
-            let fb = overlay.summarize_feedback.trim();
+            let fb = state.summarize_feedback.trim();
             if fb.is_empty() {
-                overlay.summarize_feedback.clear();
-                overlay.pending_summarize = None;
-                overlay.phase = RewindPhase::RestoreOptions;
+                state.summarize_feedback.clear();
+                state.pending_summarize = None;
+                state.phase = RewindPhase::RestoreOptions;
                 return ConfirmOutcome::Phase;
             }
             // Peek (don't take) — keep `pending_summarize` set so the
             // renderer's Confirming phase can show "Summarizing…".
-            let Some(dir) = overlay.pending_summarize else {
+            let Some(dir) = state.pending_summarize else {
                 return ConfirmOutcome::Phase;
             };
             let feedback = Some(fb.to_string());
@@ -448,14 +449,14 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> ConfirmOutcome {
     }
 }
 
-/// Handle Esc/cancel in the rewind overlay.
+/// Handle Esc/cancel in the rewind state.
 ///
-/// Returns `true` if the overlay should be fully dismissed (was in MessageSelect).
+/// Returns `true` if the state should be fully dismissed (was in MessageSelect).
 /// Returns `false` if it went back to a previous phase (RestoreOptions -> MessageSelect).
 ///
 /// TS: Esc in restore options goes back to message list; Esc in message list closes.
-pub fn handle_rewind_cancel(overlay: &mut RewindOverlay) -> bool {
-    match overlay.phase {
+pub fn handle_rewind_cancel(state: &mut RewindState) -> bool {
+    match state.phase {
         RewindPhase::MessageSelect => {
             // TS: tengu_message_selector_cancelled
             tracing::info!(target: "rewind", event = "selector_cancelled");
@@ -464,63 +465,115 @@ pub fn handle_rewind_cancel(overlay: &mut RewindOverlay) -> bool {
         RewindPhase::RestoreOptions => {
             // TS `MessageSelector.tsx:248-253`: when launched preselected
             // there is no message list to fall back to — Esc closes the
-            // overlay entirely.
-            if overlay.preselected {
+            // state entirely.
+            if state.preselected {
                 tracing::info!(target: "rewind", event = "selector_cancelled_preselected");
                 return true;
             }
-            overlay.phase = RewindPhase::MessageSelect;
-            overlay.available_options.clear();
-            overlay.diff_stats = None;
+            state.phase = RewindPhase::MessageSelect;
+            state.available_options.clear();
+            state.diff_stats = None;
             false
         }
         RewindPhase::SummarizeFeedback => {
             // Esc in the feedback box goes back to the option list,
             // discarding the typed feedback. TS: SummarizeOption's
             // `allowEmptySubmitToCancel` plus Esc routing.
-            overlay.summarize_feedback.clear();
-            overlay.pending_summarize = None;
-            overlay.phase = RewindPhase::RestoreOptions;
+            state.summarize_feedback.clear();
+            state.pending_summarize = None;
+            state.phase = RewindPhase::RestoreOptions;
             false
         }
         RewindPhase::Confirming => true,
     }
 }
 
-/// Check if all messages after `from_index` are synthetic/non-meaningful.
+/// Check if all cells after `from_index` are synthetic/non-meaningful.
 ///
-/// TS: messagesAfterAreOnlySynthetic() in MessageSelector.tsx.
-/// Returns true if it's safe to auto-restore without losing meaningful work.
-pub fn messages_after_are_only_synthetic(
-    messages: &[crate::state::ChatMessage],
-    from_index: usize,
-) -> bool {
-    for msg in messages.iter().skip(from_index + 1) {
-        match msg.role {
-            ChatRole::User => {
-                if msg.is_meta {
+/// TS: `messagesAfterAreOnlySynthetic` in `MessageSelector.tsx:799`.
+/// Cell-side predicates mirror the 2 "meaningful → return false" arms:
+/// - any virtual user message is skipped (synthetic engine push)
+/// - tool results / system / attachment / progress rows are skipped
+/// - assistant text with non-empty body (and non-`[redacted]`) is meaningful
+/// - any `ToolUse` cell is meaningful even with empty text
+/// - any other real user message is meaningful → not safe to truncate
+pub fn cells_after_are_only_synthetic(cells: &[RenderedCell], from_index: usize) -> bool {
+    for cell in cells.iter().skip(from_index + 1) {
+        match &cell.kind {
+            CellKind::UserText { .. } => {
+                if matches!(cell.source.as_ref(), Message::User(u) if u.is_virtual) {
                     continue;
                 }
-                // Real user message — not synthetic
                 return false;
             }
-            crate::state::ChatRole::Assistant => {
-                // Assistant message with actual text content is meaningful
-                let text = msg.text_content();
+            CellKind::AssistantText { text, .. } => {
                 if !text.is_empty() && text != "[redacted]" {
                     return false;
                 }
             }
-            // Tool results, system messages — synthetic
-            _ => continue,
+            CellKind::ToolUse { .. } => {
+                return false;
+            }
+            CellKind::AssistantThinking { .. }
+            | CellKind::AssistantRedactedThinking
+            | CellKind::ToolResult { .. }
+            | CellKind::System(_)
+            | CellKind::UserAttachment
+            | CellKind::Attachment
+            | CellKind::ToolUseSummary { .. }
+            | CellKind::Progress
+            | CellKind::Tombstone => continue,
         }
     }
     true
 }
 
 /// Find the last selectable user message index for auto-restore.
-pub fn find_last_user_message_index(messages: &[crate::state::ChatMessage]) -> Option<usize> {
-    messages.iter().rposition(is_selectable_user_message)
+pub fn find_last_user_cell_index(cells: &[RenderedCell]) -> Option<usize> {
+    cells.iter().rposition(is_selectable_user_cell)
+}
+
+/// Parse the engine `UserMessage.timestamp` string (ISO 8601 or epoch
+/// integer) into epoch-ms. Returns 0 for empty / unparseable values
+/// so the rewind picker renders "just now" rather than erroring out.
+fn timestamp_to_ms(ts: &str) -> i64 {
+    if ts.is_empty() {
+        return 0;
+    }
+    if let Ok(n) = ts.parse::<i64>() {
+        return n;
+    }
+    // Best-effort RFC 3339 parse: pull seconds via chrono if present,
+    // else fall back to 0. The engine emits ISO timestamps; tests
+    // typically leave this empty.
+    chrono_iso_to_ms(ts).unwrap_or(0)
+}
+
+/// Lightweight RFC 3339 → epoch-ms conversion. Mirrors what
+/// `chrono::DateTime::parse_from_rfc3339(...).timestamp_millis()` does
+/// without adding a `chrono` dependency: we accept a strict subset
+/// (`YYYY-MM-DDTHH:MM:SS[.frac][Z|±HH:MM]`). Returns `None` for
+/// anything else — callers fall back to 0.
+fn chrono_iso_to_ms(ts: &str) -> Option<i64> {
+    let bytes = ts.as_bytes();
+    if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
+        return None;
+    }
+    let year: i64 = ts.get(0..4)?.parse().ok()?;
+    let month: i64 = ts.get(5..7)?.parse().ok()?;
+    let day: i64 = ts.get(8..10)?.parse().ok()?;
+    let hour: i64 = ts.get(11..13)?.parse().ok()?;
+    let minute: i64 = ts.get(14..16)?.parse().ok()?;
+    let second: i64 = ts.get(17..19)?.parse().ok()?;
+    // Days since Unix epoch (1970-01-01) — civil-from-days algorithm.
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (month + (if month > 2 { -3 } else { 9 })) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let secs = days * 86400 + hour * 3600 + minute * 60 + second;
+    Some(secs * 1000)
 }
 
 #[cfg(test)]

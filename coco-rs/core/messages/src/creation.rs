@@ -9,11 +9,12 @@ use crate::SystemCompactBoundaryMessage;
 use crate::SystemInformationalMessage;
 use crate::SystemMessage;
 use crate::SystemMessageLevel;
+use crate::SystemUserInterruptionMessage;
 use crate::ToolContent;
 use crate::ToolResultMessage;
 use crate::UserMessage;
-use coco_inference::ToolResultContent;
-use coco_inference::UserContentPart;
+use coco_llm_types::ToolResultContent;
+use coco_llm_types::UserContentPart;
 use coco_types::TokenUsage;
 use coco_types::ToolId;
 use uuid::Uuid;
@@ -158,7 +159,7 @@ pub fn create_error_tool_result(
 /// Used by the executor when a tool's [`Tool::render_for_model`]
 /// returns more than a single Text part — e.g. `FileReadTool` reading
 /// a PNG returns one [`ToolResultContentPart::FileData`] block. The
-/// underlying SDK enum [`coco_inference::ToolResultContent::Content`]
+/// underlying SDK enum [`coco_llm_types::ToolResultContent::Content`]
 /// is the canonical multimodal carrier; provider crates already know
 /// how to translate it (Anthropic / Gemini 3+ pass through; OpenAI /
 /// OpenAI-Compatible degrade non-Text parts to a visible text marker).
@@ -221,14 +222,59 @@ pub fn create_progress_message(tool_use_id: &str, data: serde_json::Value) -> Me
     })
 }
 
-/// Create a system informational message about operation cancellation.
-pub fn create_cancellation_message() -> Message {
-    Message::System(SystemMessage::Informational(SystemInformationalMessage {
+/// Literal text content for a Ctrl+C cancellation marker that lives in
+/// the message history.
+///
+/// TS: `utils/messages.ts:207` — `INTERRUPT_MESSAGE = '[Request interrupted by user]'`.
+/// Rendered specially by `UserTextMessage.tsx:83` as the dim
+/// "Interrupted · What should Claude do instead?" row.
+pub const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
+
+/// Variant of [`INTERRUPT_MESSAGE`] used when the cancel happened while a
+/// tool was running. Carries slightly different model-facing context so
+/// the model knows the prior turn's tool calls were interrupted, not
+/// "the user typed a question and then cancelled".
+///
+/// TS: `utils/messages.ts:208`.
+pub const INTERRUPT_MESSAGE_FOR_TOOL_USE: &str = "[Request interrupted by user for tool use]";
+
+/// Create the typed user-interruption SystemMessage variant. The
+/// engine cancel finalizer is the single writer; downstream consumers
+/// (TUI render, SDK observers) read `for_tool_use` from this struct
+/// rather than recomputing it. See
+/// `engine-tui-unified-transcript-plan.md` §7.1.
+pub fn create_user_interruption_system_message(for_tool_use: bool) -> Message {
+    Message::System(SystemMessage::UserInterruption(
+        SystemUserInterruptionMessage {
+            uuid: Uuid::new_v4(),
+            for_tool_use,
+        },
+    ))
+}
+
+/// Legacy text-based interruption marker (User-role with literal
+/// `INTERRUPT_MESSAGE*` text). Retained for backward read-compat with
+/// older JSONL transcripts; new engine writes use
+/// [`create_user_interruption_system_message`].
+///
+/// TS parity: `createUserInterruptionMessage` in `utils/messages.ts:545`.
+pub fn create_user_interruption_message(for_tool_use: bool) -> Message {
+    let text = if for_tool_use {
+        INTERRUPT_MESSAGE_FOR_TOOL_USE
+    } else {
+        INTERRUPT_MESSAGE
+    };
+    Message::User(UserMessage {
+        message: LlmMessage::user_text(text),
         uuid: Uuid::new_v4(),
-        level: SystemMessageLevel::Warning,
-        title: "Cancelled".to_string(),
-        message: "Operation was cancelled by the user.".to_string(),
-    }))
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: Some(MessageOrigin::UserInput),
+        parent_tool_use_id: None,
+    })
 }
 
 /// Create a system message about a tool permission denial.

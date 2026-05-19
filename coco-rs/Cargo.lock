@@ -999,6 +999,7 @@ dependencies = [
  "coco-hooks",
  "coco-inference",
  "coco-keybindings",
+ "coco-llm-types",
  "coco-lsp",
  "coco-mcp",
  "coco-mcp-skills",
@@ -1070,6 +1071,7 @@ dependencies = [
  "coco-context",
  "coco-error",
  "coco-inference",
+ "coco-llm-types",
  "coco-messages",
  "coco-test-harness",
  "coco-types",
@@ -1350,6 +1352,7 @@ dependencies = [
  "async-trait",
  "coco-config",
  "coco-error",
+ "coco-llm-types",
  "coco-otel",
  "coco-types",
  "futures",
@@ -1391,6 +1394,13 @@ version = "0.0.0"
 dependencies = [
  "keyring",
  "tracing",
+]
+
+[[package]]
+name = "coco-llm-types"
+version = "0.0.0"
+dependencies = [
+ "vercel-ai-provider",
 ]
 
 [[package]]
@@ -1509,7 +1519,7 @@ dependencies = [
 name = "coco-messages"
 version = "0.0.0"
 dependencies = [
- "coco-inference",
+ "coco-llm-types",
  "coco-types",
  "pretty_assertions",
  "serde",
@@ -1646,6 +1656,7 @@ dependencies = [
  "coco-error",
  "coco-hooks",
  "coco-inference",
+ "coco-llm-types",
  "coco-lsp",
  "coco-mcp",
  "coco-memory",
@@ -2030,6 +2041,7 @@ version = "0.0.0"
 dependencies = [
  "coco-compact",
  "coco-inference",
+ "coco-llm-types",
  "coco-messages",
  "coco-types",
  "serde_json",
@@ -2051,6 +2063,7 @@ dependencies = [
  "coco-coordinator",
  "coco-hooks",
  "coco-inference",
+ "coco-llm-types",
  "coco-messages",
  "coco-permissions",
  "coco-query",
@@ -2167,6 +2180,7 @@ dependencies = [
  "coco-file-watch",
  "coco-git",
  "coco-keybindings",
+ "coco-messages",
  "coco-subagent",
  "coco-types",
  "crossterm",
@@ -2192,6 +2206,7 @@ dependencies = [
 name = "coco-types"
 version = "0.0.0"
 dependencies = [
+ "coco-llm-types",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -6769,6 +6784,7 @@ dependencies = [
  "schemars_derive 0.8.22",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -7073,6 +7089,12 @@ dependencies = [
  "cpufeatures",
  "digest",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
@@ -8512,6 +8534,7 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 
@@ -8682,6 +8705,7 @@ dependencies = [
  "chrono",
  "futures",
  "regex",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

@@ -1,4 +1,4 @@
-//! Presentation for request-style overlays.
+//! Presentation for request-style prompts.
 
 use ratatui::prelude::Color;
 
@@ -8,18 +8,18 @@ use crate::i18n::t;
 use crate::state::OTHER_OPTION_DISPLAY;
 use crate::state::OTHER_OPTION_LABEL;
 use crate::state::PermissionDetail;
-use crate::state::PermissionOverlay;
+use crate::state::PermissionPromptState;
 use crate::state::QuestionFocus;
 use crate::state::QuestionItem;
-use crate::state::QuestionOverlay;
+use crate::state::QuestionPromptState;
 use crate::state::RiskLevel;
-use crate::state::overlay::PermissionAction;
+use crate::state::surface_payloads::PermissionAction;
 
 pub(crate) fn permission_content(
-    p: &PermissionOverlay,
+    p: &PermissionPromptState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    let detail = permission_detail_for_overlay(p);
+    let detail = permission_detail_for_prompt(p);
     let risk_badge = match p.risk_level {
         Some(RiskLevel::Low) => t!("dialog.risk_low").to_string(),
         Some(RiskLevel::Medium) => t!("dialog.risk_medium").to_string(),
@@ -71,7 +71,7 @@ pub(crate) fn permission_content(
     )
 }
 
-fn classic_permission_actions(p: &PermissionOverlay) -> String {
+fn classic_permission_actions(p: &PermissionPromptState) -> String {
     let selected = p
         .selected_choice
         .min(p.classic_action_count().saturating_sub(1));
@@ -96,7 +96,7 @@ fn classic_permission_actions(p: &PermissionOverlay) -> String {
 }
 
 pub(crate) fn question_content(
-    q: &QuestionOverlay,
+    q: &QuestionPromptState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let title = t!("dialog.title_question").to_string();
@@ -172,7 +172,7 @@ pub(crate) fn question_content(
     (title, body, styles.primary())
 }
 
-fn permission_detail_for_overlay(p: &PermissionOverlay) -> String {
+fn permission_detail_for_prompt(p: &PermissionPromptState) -> String {
     if matches!(p.detail, PermissionDetail::Generic { .. }) {
         return p.display_input.as_display_str().to_string();
     }
@@ -354,7 +354,7 @@ fn render_options(qi: &QuestionItem, focus: QuestionFocus) -> String {
     out
 }
 
-fn render_footer(q: &QuestionOverlay) -> String {
+fn render_footer(q: &QuestionPromptState) -> String {
     let mut out = String::from("\n");
     let chat_focused = matches!(q.focus, QuestionFocus::ChatAboutThis);
     let skip_focused = matches!(q.focus, QuestionFocus::SkipInterview);

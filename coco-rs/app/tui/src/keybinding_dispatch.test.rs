@@ -37,10 +37,10 @@ fn confirm_yes_maps_to_approve() {
 }
 
 #[test]
-fn select_accept_maps_to_overlay_confirm() {
+fn select_accept_maps_to_surface_confirm() {
     let state = fresh_state();
     let cmd = dispatch_action(&KeybindingAction::SelectAccept, &state).unwrap();
-    assert!(matches!(cmd, TuiCommand::OverlayConfirm));
+    assert!(matches!(cmd, TuiCommand::SurfaceConfirm));
 }
 
 #[test]
@@ -77,10 +77,10 @@ fn app_toggle_transcript_maps_to_toggle_transcript() {
 }
 
 #[test]
-fn scroll_actions_route_to_transcript_commands_inside_transcript_overlay() {
+fn scroll_actions_route_to_transcript_commands_inside_transcript_modal() {
     let mut state = fresh_state();
-    state.ui.set_overlay(crate::state::Overlay::Transcript(
-        crate::state::transcript::TranscriptOverlay::new(),
+    state.ui.show_modal(crate::state::ModalState::Transcript(
+        crate::state::transcript::TranscriptState::new(),
     ));
 
     let line = dispatch_action(&KeybindingAction::ScrollLineDown, &state).unwrap();

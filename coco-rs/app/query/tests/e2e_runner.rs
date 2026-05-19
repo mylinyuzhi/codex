@@ -23,17 +23,17 @@ use std::sync::atomic::Ordering;
 
 use coco_inference::AISdkError;
 use coco_inference::ApiClient;
-use coco_inference::AssistantContentPart;
-use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
-use coco_inference::TextPart;
-use coco_inference::ToolCallPart;
-use coco_inference::UnifiedFinishReason;
-use coco_inference::Usage;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
+use coco_llm_types::StopReason;
+use coco_llm_types::TextPart;
+use coco_llm_types::ToolCallPart;
+use coco_llm_types::Usage;
 use coco_query::AgentStreamEvent;
 use coco_query::CoreEvent;
 use coco_query::QueryEngine;
@@ -225,7 +225,7 @@ fn make_text_result(text: &str, _call_idx: i32) -> LanguageModelGenerateResult {
             provider_metadata: None,
         })],
         usage: Usage::new(50, 20),
-        finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+        finish_reason: FinishReason::new(StopReason::EndTurn),
         warnings: vec![],
         provider_metadata: None,
         request: None,
@@ -251,7 +251,7 @@ fn make_tool_result(tool_calls: &[ResolvedToolCall], call_idx: i32) -> LanguageM
     LanguageModelGenerateResult {
         content,
         usage: Usage::new(50, 20),
-        finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+        finish_reason: FinishReason::new(StopReason::ToolUse),
         warnings: vec![],
         provider_metadata: None,
         request: None,
@@ -281,7 +281,7 @@ fn make_text_and_tool_result(
     LanguageModelGenerateResult {
         content,
         usage: Usage::new(50, 20),
-        finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+        finish_reason: FinishReason::new(StopReason::ToolUse),
         warnings: vec![],
         provider_metadata: None,
         request: None,

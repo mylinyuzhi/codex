@@ -26,6 +26,7 @@ use serde::Serialize;
 ///
 /// Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
 /// to match TS `Attachment.type` exactly, so transcripts round-trip.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentKind {
@@ -736,6 +737,7 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
 /// validated by the owning crate. `is_meta` mirrors TS `isMeta` on
 /// `UserMessage` — `true` for silent / UI-only events, `false` if the
 /// event should also surface in the model-visible transcript.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AttachmentEvent {
     pub kind: AttachmentKind,

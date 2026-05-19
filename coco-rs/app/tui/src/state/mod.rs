@@ -2,76 +2,40 @@
 //!
 //! Split into two substates:
 //! - [`SessionState`]: agent-synchronized data (model, messages, tools, subagents)
-//! - [`UiState`]: local TUI state (input, scroll, overlay, streaming, theme)
+//! - [`UiState`]: local TUI state (input, scroll, surfaces, streaming, theme)
 
-pub mod overlay;
+pub mod derive;
+pub mod interaction;
+pub mod modal;
 pub mod rewind;
 pub mod session;
+pub mod surface_payloads;
 pub mod transcript;
+pub mod transcript_view;
 pub mod ui;
 
 pub use crate::display_settings::DisplaySettings;
 pub use crate::display_settings::SyntaxHighlighting;
-pub use overlay::AutoModeOptInOverlay;
-pub use overlay::BridgeOverlay;
-pub use overlay::BypassPermissionsOverlay;
-pub use overlay::CommandOption;
-pub use overlay::CommandPaletteOverlay;
-pub use overlay::CostWarningOverlay;
-pub use overlay::DiffViewOverlay;
-pub use overlay::DoctorCheck;
-pub use overlay::DoctorOverlay;
-pub use overlay::ElicitationField;
-pub use overlay::ElicitationOverlay;
-pub use overlay::ExportFormat;
-pub use overlay::ExportOverlay;
-pub use overlay::FeedbackOverlay;
-pub use overlay::GlobalSearchOverlay;
-pub use overlay::IdleReturnOverlay;
-pub use overlay::InvalidConfigOverlay;
-pub use overlay::McpServerApprovalOverlay;
-pub use overlay::McpServerOption;
-pub use overlay::McpServerSelectOverlay;
-pub use overlay::MemoryDialogEntry;
-pub use overlay::MemoryDialogOverlay;
-pub use overlay::MemoryDialogRowKind;
-pub use overlay::MemoryDialogScope;
-pub use overlay::ModelEntry;
-pub use overlay::ModelPickerOverlay;
-pub use overlay::OTHER_OPTION_DISPLAY;
-pub use overlay::OTHER_OPTION_LABEL;
-pub use overlay::Overlay;
-pub use overlay::PermissionDetail;
-pub use overlay::PermissionOverlay;
-pub use overlay::PlanApprovalOverlay;
-pub use overlay::PlanEntryOverlay;
-pub use overlay::PlanExitOverlay;
-pub use overlay::PlanExitTarget;
-pub use overlay::QuestionFocus;
-pub use overlay::QuestionItem;
-pub use overlay::QuestionOption;
-pub use overlay::QuestionOverlay;
-pub use overlay::QuickOpenOverlay;
-pub use overlay::RiskLevel;
-pub use overlay::SandboxPermissionOverlay;
-pub use overlay::SearchResult;
-pub use overlay::SessionBrowserOverlay;
-pub use overlay::SessionOption;
-pub use overlay::TaskDetailOverlay;
-pub use overlay::TrustOverlay;
-pub use overlay::WorktreeExitOverlay;
+pub use interaction::AgentPopupState;
+pub use interaction::ComposerPopupState;
+pub use interaction::ComposerState;
+pub use interaction::FilePopupState;
+pub use interaction::InteractionPaneState;
+pub use interaction::InvalidSlashCommandName;
+pub use interaction::PanePromptState;
+pub use interaction::SlashCommandName;
+pub use interaction::SlashPopupState;
+pub use interaction::SymbolPopupState;
+pub use modal::ModalQueue;
+pub use modal::ModalState;
 pub use rewind::DiffStatsPreview;
 pub use rewind::RestoreType;
-pub use rewind::RewindOverlay;
 pub use rewind::RewindPhase;
+pub use rewind::RewindState;
 pub use rewind::RewindableMessage;
-pub use session::ChatMessage;
-pub use session::ChatRole;
 pub use session::McpServerStatus;
-pub use session::MessageContent;
 pub use session::ModelBinding;
 pub use session::ModelCatalogEntry;
-pub use session::PlanAction;
 pub use session::ProviderStatus;
 pub use session::ProviderUnavailableReason;
 pub use session::QueuedCommandDisplay;
@@ -83,8 +47,54 @@ pub use session::SubagentStatus;
 pub use session::TokenUsage;
 pub use session::ToolExecution;
 pub use session::ToolStatus;
-pub use session::ToolUseStatus;
-pub use transcript::TranscriptOverlay;
+pub use surface_payloads::AutoModeOptInState;
+pub use surface_payloads::BridgeState;
+pub use surface_payloads::BypassPermissionsState;
+pub use surface_payloads::CostWarningPromptState;
+pub use surface_payloads::DiffViewState;
+pub use surface_payloads::DoctorCheck;
+pub use surface_payloads::DoctorState;
+pub use surface_payloads::ExportFormat;
+pub use surface_payloads::ExportState;
+pub use surface_payloads::FeedbackState;
+pub use surface_payloads::GlobalSearchState;
+pub use surface_payloads::IdleReturnState;
+pub use surface_payloads::InvalidConfigState;
+pub use surface_payloads::McpServerApprovalPromptState;
+pub use surface_payloads::McpServerOption;
+pub use surface_payloads::McpServerSelectState;
+pub use surface_payloads::MemoryDialogEntry;
+pub use surface_payloads::MemoryDialogRowKind;
+pub use surface_payloads::MemoryDialogScope;
+pub use surface_payloads::MemoryDialogState;
+pub use surface_payloads::ModelEntry;
+pub use surface_payloads::ModelPickerState;
+pub use surface_payloads::OTHER_OPTION_DISPLAY;
+pub use surface_payloads::OTHER_OPTION_LABEL;
+pub use surface_payloads::PermissionDetail;
+pub use surface_payloads::PermissionPromptState;
+pub use surface_payloads::PlanApprovalPromptState;
+pub use surface_payloads::PlanEntryPromptState;
+pub use surface_payloads::PlanExitPromptState;
+pub use surface_payloads::PlanExitTarget;
+pub use surface_payloads::QuestionFocus;
+pub use surface_payloads::QuestionItem;
+pub use surface_payloads::QuestionOption;
+pub use surface_payloads::QuestionPromptState;
+pub use surface_payloads::QuickOpenState;
+pub use surface_payloads::RiskLevel;
+pub use surface_payloads::SandboxPermissionPromptState;
+pub use surface_payloads::SearchResult;
+pub use surface_payloads::SessionBrowserState;
+pub use surface_payloads::SessionOption;
+pub use surface_payloads::TaskDetailState;
+pub use surface_payloads::TrustState;
+pub use surface_payloads::WorktreeExitState;
+pub use transcript::TranscriptState;
+pub use transcript_view::CellKind;
+pub use transcript_view::RenderedCell;
+pub use transcript_view::SystemCellKind;
+pub use transcript_view::TranscriptView;
 pub use ui::ActiveSuggestions;
 pub use ui::ExitKey;
 pub use ui::FocusTarget;
@@ -139,9 +149,9 @@ impl AppState {
         self.running = RunningState::Done;
     }
 
-    /// Whether an overlay is currently active.
-    pub fn has_overlay(&self) -> bool {
-        self.ui.has_overlay()
+    /// Whether an interaction surface is currently active.
+    pub fn has_active_surface(&self) -> bool {
+        self.ui.has_active_surface()
     }
 
     /// Whether the agent is actively streaming.
@@ -164,10 +174,15 @@ impl AppState {
 
     /// Whether Esc-driven rewind is currently appropriate: the input
     /// must be empty, the session must have user-visible history, and
-    /// no overlay can be occluding the cursor. Mirrors TS
+    /// no state can be occluding the cursor. Mirrors TS
     /// `PromptInput.tsx:1955` (`doublePressEscFromEmpty`).
+    ///
+    /// "Session has history" reads from the engine-authoritative
+    /// `transcript` view.
     pub fn rewind_available_from_input(&self) -> bool {
-        self.ui.input.is_empty() && !self.session.messages.is_empty() && !self.ui.has_overlay()
+        self.ui.input.is_empty()
+            && !self.session.transcript.is_empty()
+            && !self.ui.has_active_surface()
     }
 
     /// Cycle permission mode (Shift+Tab).

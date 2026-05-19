@@ -209,7 +209,11 @@ impl QueryEngine {
                 && let Some(survivors) =
                     coco_compact::peel_head_for_ptl_retry(&history.messages, drop_target - freed)
             {
-                history.messages = survivors;
+                // I-1 (Authority): reactive head-trim drops oldest
+                // messages from history. Pair the swap with truncate
+                // + appended-burst so TUI/SDK observers see the new
+                // state.
+                crate::history_sync::history_replace_and_emit(history, survivors, event_tx).await;
             }
         }
 
@@ -552,15 +556,15 @@ impl QueryEngine {
             // (services skip pushing when no topic file changed), so
             // here we only see real save events.
             for notice in runtime.drain_user_notices() {
-                history.push(coco_messages::Message::System(
-                    coco_messages::SystemMessage::MemorySaved(
+                let msg =
+                    coco_messages::Message::System(coco_messages::SystemMessage::MemorySaved(
                         coco_messages::SystemMemorySavedMessage {
                             uuid: uuid::Uuid::new_v4(),
                             written_paths: notice.written_paths,
                             verb: notice.verb.as_str().to_string(),
                         },
-                    ),
-                ));
+                    ));
+                crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
             }
         }
         // Collapse-aware guard: when staged_compact is active it owns
@@ -881,7 +885,12 @@ impl QueryEngine {
 
         // UI-only history entry (Visibility::UI_ONLY) — surfaces in
         // the transcript but is not sent back to the LLM.
-        history.push(coco_messages::Message::ToolUseSummary(msg));
+        crate::history_sync::history_push_and_emit(
+            history,
+            coco_messages::Message::ToolUseSummary(msg),
+            event_tx,
+        )
+        .await;
     }
 
     /// Spawn the post-turn promptSuggestion fork in a detached task

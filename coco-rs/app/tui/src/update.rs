@@ -2,7 +2,7 @@
 //!
 //! Applies [`TuiCommand`]s to [`AppState`]. Side effects (sending to core)
 //! are dispatched via the command channel. Complex per-category handlers
-//! live in the private submodules (`overlay`, `show`, `edit`) to keep this
+//! live in the private submodules (`state`, `show`, `edit`) to keep this
 //! dispatcher focused on routing.
 
 use tokio::sync::mpsc;
@@ -14,6 +14,8 @@ use crate::events::TuiCommand;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::FocusTarget;
+use crate::state::ModalState;
+use crate::state::PanePromptState;
 
 use exit::ExitEffect;
 
@@ -21,7 +23,7 @@ mod clipboard;
 mod edit;
 mod exit;
 mod expanded_view;
-mod overlay;
+mod interaction;
 // `pub(crate)` so the slash-command dispatcher (in
 // `server_notification_handler::tui_only`) can call into `cycle_model`
 // when `TuiOnlyEvent::OpenModelPicker` arrives. The other `show::*`
@@ -49,6 +51,7 @@ pub async fn handle_command(
     let cursor_before = state.ui.input.textarea.cursor();
 
     let changed = match cmd {
+        TuiCommand::Noop => false,
         // ── Mode toggles ──
         TuiCommand::TogglePlanMode => {
             state.toggle_plan_mode();
@@ -85,17 +88,15 @@ pub async fn handle_command(
             match next {
                 coco_types::PermissionMode::BypassPermissions => {
                     let current_label = format!("{:?}", state.session.permission_mode);
-                    state
-                        .ui
-                        .set_overlay(crate::state::Overlay::BypassPermissions(
-                            crate::state::BypassPermissionsOverlay {
-                                current_mode: current_label,
-                            },
-                        ));
+                    state.ui.show_modal(ModalState::BypassPermissions(
+                        crate::state::BypassPermissionsState {
+                            current_mode: current_label,
+                        },
+                    ));
                 }
                 coco_types::PermissionMode::Auto => {
-                    state.ui.set_overlay(crate::state::Overlay::AutoModeOptIn(
-                        crate::state::AutoModeOptInOverlay {
+                    state.ui.show_modal(ModalState::AutoModeOptIn(
+                        crate::state::AutoModeOptInState {
                             description: t!("dialog.auto_mode_description").to_string(),
                         },
                     ));
@@ -191,12 +192,10 @@ pub async fn handle_command(
             if text.is_empty() {
                 return true;
             }
-            // Local-only slash commands (/copy, /rewind, /checkpoint) must
-            // dispatch immediately even while a turn is streaming, rather
-            // than being queued to the agent which wouldn't know what to do
-            // with them. Shared with `edit::submit` so both paths behave
-            // identically.
-            if edit::try_local_command(state, text.trim()) {
+            if let Some((name, args)) = edit::parse_slash_input(text.trim()) {
+                let _ = command_tx
+                    .send(UserCommand::ExecuteSlashCommand { name, args })
+                    .await;
                 return true;
             }
             // Resolve paste pills the same way `submit` does so mid-turn
@@ -253,16 +252,17 @@ pub async fn handle_command(
             }
             // Esc dismisses autocomplete first (so the user can escape out
             // of a trigger without losing their typed input) before
-            // touching any overlay.
-            if !state.ui.has_overlay() && state.ui.active_suggestions.is_some() {
+            // touching any state.
+            if !state.ui.has_blocking_interaction() && state.ui.active_suggestions.is_some() {
                 state.ui.active_suggestions = None;
+                state.ui.sync_popup_from_active_suggestions();
                 return true;
             }
             // Escape while viewing the teammate activity pane mirrors TS
             // `useBackgroundTaskNavigation`: interrupt the focused
             // teammate's current turn only. Ctrl+C / KillAllAgents remains
             // the lifecycle stop path.
-            if !state.ui.has_overlay()
+            if !state.ui.has_blocking_interaction()
                 && matches!(
                     state.session.expanded_view,
                     coco_types::ExpandedView::Teammates
@@ -278,11 +278,11 @@ pub async fn handle_command(
                     .await;
                 return true;
             }
-            // No overlay + active suggestions + text present → ESC
+            // No state + active suggestions + text present → ESC
             // double-press clears input + saves to history. Mirrors TS
             // `useTextInput.ts:126-153`: single Esc shows a toast; second
             // Esc within `DOUBLE_PRESS_TIMEOUT` clears.
-            if !state.ui.has_overlay()
+            if !state.ui.has_blocking_interaction()
                 && state.ui.active_suggestions.is_none()
                 && !state.ui.input.is_empty()
             {
@@ -298,7 +298,7 @@ pub async fn handle_command(
                 }
                 return true;
             }
-            // No overlay + no suggestions + idle conditions met → run
+            // No state + no suggestions + idle conditions met → run
             // the double-Esc tracker so a second Esc opens the rewind
             // picker. TS: `useDoublePress` in `PromptInput.tsx`. The
             // poll lives here (not in `keybinding_dispatch`) because
@@ -311,31 +311,33 @@ pub async fn handle_command(
                     return true;
                 }
             }
-            if !overlay::rewind_cancel(state) {
-                return true; // phase-back; keep overlay
+            if !interaction::rewind_cancel(state) {
+                return true; // phase-back; keep state
             }
             // /memory cancel surfaces a toast (TS:
             // `commands/memory/memory.tsx::onCancel` → "Cancelled memory editing").
-            if matches!(
-                state.ui.active_overlay(),
-                Some(crate::state::Overlay::MemoryDialog(_))
-            ) {
+            // Transient confirmation only — the transcript line was a
+            // duplicate of the toast and was dropped as part of
+            // unified-transcript Commit 2.
+            if matches!(state.ui.modal, Some(ModalState::MemoryDialog(_))) {
                 let text = crate::i18n::t!("toast.memory_cancelled").to_string();
-                state
-                    .session
-                    .add_message(crate::state::session::ChatMessage::system_text(
-                        uuid::Uuid::new_v4().to_string(),
-                        text.clone(),
-                    ));
                 state.ui.add_toast(crate::state::ui::Toast::info(text));
             }
-            if state.has_overlay() {
-                state.ui.dismiss_overlay();
+            if state.has_active_surface() {
+                if state.ui.modal.is_some() {
+                    state.ui.dismiss_modal();
+                } else {
+                    state.ui.dismiss_prompt();
+                }
             }
             true
         }
         TuiCommand::ClearScreen => {
-            state.session.messages.clear();
+            // Phase 3d (§5): clear the engine-derived transcript so the
+            // visible chat empties. The engine retains the full
+            // conversation; future `MessageAppended` events repopulate
+            // the cell view from the next turn forward.
+            state.session.transcript.on_session_reset();
             // Dropping messages also invalidates the copy cache — without this
             // Ctrl+O after /clear would surface the response the user just
             // wiped, which is surprising. Matches codex-rs's clear-on-reset.
@@ -347,9 +349,9 @@ pub async fn handle_command(
         // ── Text editing ──
         TuiCommand::InsertChar(c) => {
             // Route into the rewind summarize-feedback box when that
-            // overlay phase is active so typing builds the feedback
+            // state phase is active so typing builds the feedback
             // string instead of leaking to the input bar.
-            if let Some(crate::state::Overlay::Rewind(r)) = state.ui.active_overlay_mut()
+            if let Some(ModalState::Rewind(r)) = state.ui.modal.as_mut()
                 && r.phase == crate::state::rewind::RewindPhase::SummarizeFeedback
             {
                 r.summarize_feedback.push(c);
@@ -385,7 +387,7 @@ pub async fn handle_command(
             true
         }
         TuiCommand::DeleteBackward => {
-            if let Some(crate::state::Overlay::Rewind(r)) = state.ui.active_overlay_mut()
+            if let Some(ModalState::Rewind(r)) = state.ui.modal.as_mut()
                 && r.phase == crate::state::rewind::RewindPhase::SummarizeFeedback
             {
                 r.summarize_feedback.pop();
@@ -510,64 +512,64 @@ pub async fn handle_command(
             true
         }
 
-        // ── Overlay actions ──
+        // ── Surface actions ──
         TuiCommand::Approve => {
-            overlay::approve(state, command_tx).await;
+            interaction::approve(state, command_tx).await;
             true
         }
         TuiCommand::Deny => {
-            overlay::deny(state, command_tx).await;
+            interaction::deny(state, command_tx).await;
             true
         }
         TuiCommand::ApproveAll => {
-            overlay::approve_all(state, command_tx).await;
+            interaction::approve_all(state, command_tx).await;
             true
         }
         TuiCommand::ClassifierAutoApprove {
             request_id,
             matched_rule: _,
         } => {
-            overlay::classifier_auto_approve(state, command_tx, request_id).await;
+            interaction::classifier_auto_approve(state, command_tx, request_id).await;
             true
         }
 
-        // ── Overlay navigation ──
-        TuiCommand::OverlayFilter(c) => {
-            overlay::filter(state, c);
+        // ── Surface navigation ──
+        TuiCommand::SurfaceFilter(c) => {
+            interaction::filter(state, c);
             true
         }
-        TuiCommand::OverlayFilterBackspace => {
-            overlay::filter_backspace(state);
+        TuiCommand::SurfaceFilterBackspace => {
+            interaction::filter_backspace(state);
             true
         }
-        TuiCommand::OverlayNext => {
-            overlay::nav(state, 1);
-            overlay::request_diff_stats_if_rewind(state, command_tx).await;
+        TuiCommand::SurfaceNext => {
+            interaction::nav(state, 1);
+            interaction::request_diff_stats_if_rewind(state, command_tx).await;
             true
         }
-        TuiCommand::OverlayPrev => {
-            overlay::nav(state, -1);
-            overlay::request_diff_stats_if_rewind(state, command_tx).await;
+        TuiCommand::SurfacePrev => {
+            interaction::nav(state, -1);
+            interaction::request_diff_stats_if_rewind(state, command_tx).await;
             true
         }
-        TuiCommand::OverlayJumpStart => {
-            overlay::nav(state, i32::MIN / 2);
-            overlay::request_diff_stats_if_rewind(state, command_tx).await;
+        TuiCommand::SurfaceJumpStart => {
+            interaction::nav(state, i32::MIN / 2);
+            interaction::request_diff_stats_if_rewind(state, command_tx).await;
             true
         }
-        TuiCommand::OverlayJumpEnd => {
-            overlay::nav(state, i32::MAX / 2);
-            overlay::request_diff_stats_if_rewind(state, command_tx).await;
+        TuiCommand::SurfaceJumpEnd => {
+            interaction::nav(state, i32::MAX / 2);
+            interaction::request_diff_stats_if_rewind(state, command_tx).await;
             true
         }
-        TuiCommand::OverlayConfirm => {
-            overlay::confirm(state, command_tx).await;
+        TuiCommand::SurfaceConfirm => {
+            interaction::confirm(state, command_tx).await;
             true
         }
 
-        // ── Commands & overlays ──
+        // ── Commands & surfaces ──
         TuiCommand::ShowHelp => {
-            state.ui.set_overlay(crate::state::Overlay::Help);
+            state.ui.show_modal(ModalState::Help);
             true
         }
         TuiCommand::ShowCommandPalette => {
@@ -591,9 +593,7 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ShowContextViz => {
-            state
-                .ui
-                .set_overlay(crate::state::Overlay::ContextVisualization);
+            state.ui.show_modal(ModalState::ContextVisualization);
             true
         }
         TuiCommand::ShowRewind => {
@@ -613,47 +613,41 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ToggleSyntaxHighlighting => {
-            overlay::toggle_syntax_highlighting(state);
+            interaction::toggle_syntax_highlighting(state);
             true
         }
         TuiCommand::SettingsNextTab => {
-            // Tab cycles between contexts depending on the active overlay.
-            // Settings overlay → next tab. Question overlay → cycle focus
+            // Tab cycles between contexts depending on the active state.
+            // Settings state → next tab. Question state → cycle focus
             // (questions → footer items). ModelPicker → cycle the
-            // role pill. Other overlays ignore Tab.
-            if let Some(crate::state::Overlay::Settings(s)) = state.ui.active_overlay_mut() {
+            // role pill. Other surfaces ignore Tab.
+            if let Some(ModalState::Settings(s)) = state.ui.modal.as_mut() {
                 s.next_tab();
             } else if matches!(
-                state.ui.active_overlay(),
-                Some(crate::state::Overlay::Question(_))
+                state.ui.interaction.active_prompt,
+                Some(PanePromptState::Question(_))
             ) {
-                overlay::question_cycle_focus(state, 1);
-            } else if matches!(
-                state.ui.active_overlay(),
-                Some(crate::state::Overlay::ModelPicker(_))
-            ) {
+                interaction::question_cycle_focus(state, 1);
+            } else if matches!(state.ui.modal, Some(ModalState::ModelPicker(_))) {
                 show::cycle_model_role(state, 1);
             }
             true
         }
         TuiCommand::SettingsPrevTab => {
-            if let Some(crate::state::Overlay::Settings(s)) = state.ui.active_overlay_mut() {
+            if let Some(ModalState::Settings(s)) = state.ui.modal.as_mut() {
                 s.prev_tab();
             } else if matches!(
-                state.ui.active_overlay(),
-                Some(crate::state::Overlay::Question(_))
+                state.ui.interaction.active_prompt,
+                Some(PanePromptState::Question(_))
             ) {
-                overlay::question_cycle_focus(state, -1);
-            } else if matches!(
-                state.ui.active_overlay(),
-                Some(crate::state::Overlay::ModelPicker(_))
-            ) {
+                interaction::question_cycle_focus(state, -1);
+            } else if matches!(state.ui.modal, Some(ModalState::ModelPicker(_))) {
                 show::cycle_model_role(state, -1);
             }
             true
         }
         TuiCommand::ModelPickerCycleEffort(delta) => {
-            overlay::cycle_model_effort(state, delta);
+            interaction::cycle_model_effort(state, delta);
             true
         }
         TuiCommand::ModelPickerCycleRole(delta) => {
@@ -667,22 +661,10 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ExecuteSlashCommand(name) => {
-            // Synthesize a SubmitInput as if the user typed `/foo<Enter>`.
-            // The agent driver's existing slash-command parser handles
-            // it the same way. `display_text: None` keeps the chat
-            // history clean — the rendered slash command shows up via
-            // the agent driver's own ChatMessage emission.
-            let user_message_id = uuid::Uuid::new_v4().to_string();
-            let content = format!("/{name}");
-            if edit::try_local_command(state, &content) {
-                return true;
-            }
             let _ = command_tx
-                .send(UserCommand::SubmitInput {
-                    user_message_id,
-                    content: content.clone(),
-                    display_text: Some(content),
-                    images: Vec::new(),
+                .send(UserCommand::ExecuteSlashCommand {
+                    name,
+                    args: String::new(),
                 })
                 .await;
             true
@@ -799,7 +781,6 @@ pub async fn handle_command(
     if state.ui.input.text() != text_before || state.ui.input.textarea.cursor() != cursor_before {
         crate::autocomplete::refresh_suggestions(state);
     }
-
     changed
 }
 
@@ -864,7 +845,6 @@ async fn apply_exit_effect(
                 exit_case = "interrupt_active_turn",
                 "exit key interrupted active turn"
             );
-            state.session.was_interrupted = true;
             let _ = command_tx.send(UserCommand::Interrupt).await;
         }
         ExitEffect::ClearInput => {
@@ -887,7 +867,7 @@ async fn apply_exit_effect(
             );
         }
         ExitEffect::ArmOnly => {
-            // First idle Ctrl+C / Ctrl+D: no interrupt, no overlay.
+            // First idle Ctrl+C / Ctrl+D: no interrupt, no state.
             // Tracker already updated by `exit::*`; renderer reads
             // `state.ui.pending_exit_hint()` to show the footer hint.
             let prompt = state
@@ -919,10 +899,10 @@ async fn apply_exit_effect(
 }
 
 /// Localised label for a permission mode, used in toasts/banners so the
-/// user sees the same wording the help overlay and status row use.
-/// `pub(crate)` so the overlay deny handler can reuse it without
+/// user sees the same wording the help state and status row use.
+/// `pub(crate)` so the state deny handler can reuse it without
 /// duplicating the match — keeps mode wording consistent across the
-/// TogglePlanMode / Cycle / overlay-decline surfaces.
+/// TogglePlanMode / Cycle / state-decline surfaces.
 pub(crate) fn permission_mode_label(mode: coco_types::PermissionMode) -> String {
     let key = match mode {
         coco_types::PermissionMode::Default => "permission_mode.default",

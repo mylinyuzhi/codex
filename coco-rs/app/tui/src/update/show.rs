@@ -1,7 +1,6 @@
-//! Overlay constructors for the `Show*` commands.
+//! Surface constructors for the `Show*` commands.
 //!
-//! Each function builds the appropriate overlay struct and installs it via
-//! `UiState::set_overlay`. Extracted from `update.rs` to keep the top-level
+//! Each function builds the appropriate prompt/modal state. Extracted from `update.rs` to keep the top-level
 //! dispatch under 500 LoC.
 
 use std::collections::HashSet;
@@ -10,25 +9,26 @@ use coco_types::ModelRole;
 use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
-use crate::i18n::t;
+use crate::state::ActiveSuggestions;
 use crate::state::AppState;
-use crate::state::CommandOption;
-use crate::state::CommandPaletteOverlay;
+use crate::state::ComposerPopupState;
 use crate::state::ExportFormat;
-use crate::state::ExportOverlay;
-use crate::state::GlobalSearchOverlay;
+use crate::state::ExportState;
+use crate::state::GlobalSearchState;
+use crate::state::ModalState;
 use crate::state::ModelEntry;
-use crate::state::ModelPickerOverlay;
-use crate::state::Overlay;
+use crate::state::ModelPickerState;
 use crate::state::ProviderUnavailableReason;
-use crate::state::QuickOpenOverlay;
-use crate::state::SessionBrowserOverlay;
+use crate::state::QuickOpenState;
+use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
+use crate::state::SlashPopupState;
+use crate::state::SuggestionKind;
 use crate::update_rewind;
 
 /// Open the model picker for the `Main` role, seeded from the
 /// session-frozen model catalog. The picker is open-only: changing
-/// roles inside it cycles via `update::overlay::cycle_model_role`.
+/// roles inside it cycles via `update::interaction::cycle_model_role`.
 ///
 /// `pub(crate)` so the `OpenModelPicker` TuiOnlyEvent handler can
 /// open the picker without round-tripping through the keybind layer.
@@ -44,7 +44,7 @@ pub(crate) fn cycle_model(state: &mut AppState) {
         .and_then(|e| e.default_effort);
     state
         .ui
-        .set_overlay(Overlay::ModelPicker(ModelPickerOverlay {
+        .show_modal(ModalState::ModelPicker(ModelPickerState {
             role,
             entries,
             filter: String::new(),
@@ -155,11 +155,8 @@ fn current_model_for_role(state: &AppState, role: ModelRole) -> Option<(String, 
 /// Cycle the picker's target role by `delta`, rebuilding entries for
 /// the new role. Called from the keybind layer via Tab / Shift+Tab.
 pub(super) fn cycle_model_role(state: &mut AppState, delta: i32) {
-    if !matches!(state.ui.active_overlay(), Some(Overlay::ModelPicker(_))) {
-        return;
-    }
-    let role = match state.ui.active_overlay() {
-        Some(Overlay::ModelPicker(m)) => m.role,
+    let role = match state.ui.modal.as_ref() {
+        Some(ModalState::ModelPicker(m)) => m.role,
         _ => return,
     };
     let next = next_role(role, delta);
@@ -171,7 +168,7 @@ pub(super) fn cycle_model_role(state: &mut AppState, delta: i32) {
     let effort = entries
         .get(selected as usize)
         .and_then(|e| e.default_effort);
-    if let Some(Overlay::ModelPicker(m)) = state.ui.active_overlay_mut() {
+    if let Some(ModalState::ModelPicker(m)) = state.ui.modal.as_mut() {
         m.role = next;
         m.entries = entries;
         m.filter.clear();
@@ -198,49 +195,27 @@ fn next_role(current: ModelRole, delta: i32) -> ModelRole {
     ORDER[((idx + delta).rem_euclid(n)) as usize]
 }
 
-/// Open the command palette, seeded from `available_commands` (or defaults).
+/// Open the command palette, seeded only from the command registry snapshot.
 pub(super) fn command_palette(state: &mut AppState) {
-    let commands: Vec<CommandOption> = if state.session.available_commands.is_empty() {
-        // Fallback list — used only when the registry snapshot never
-        // landed (smoke tests, bare `AppState::new`). Production paths
-        // seed `available_commands` from `CommandRegistry` in
-        // `tui_runner::run`.
-        vec![
-            ("help", t!("palette.help")),
-            ("clear", t!("palette.clear")),
-            ("compact", t!("palette.compact")),
-            ("config", t!("palette.config")),
-            ("copy", t!("palette.copy_last")),
-            ("doctor", t!("palette.doctor")),
-            ("diff", t!("palette.diff")),
-            ("login", t!("palette.login")),
-            ("mcp", t!("palette.mcp")),
-            ("session", t!("palette.session")),
-        ]
-        .into_iter()
-        .map(|(name, desc)| CommandOption {
-            name: name.to_string(),
-            description: Some(desc.to_string()),
+    let items = state
+        .session
+        .available_commands
+        .iter()
+        .map(|cmd| crate::widgets::suggestion_popup::SuggestionItem {
+            label: format!("/{}", cmd.name),
+            description: cmd.description.clone(),
+            metadata: None,
         })
-        .collect()
-    } else {
-        state
-            .session
-            .available_commands
-            .iter()
-            .map(|cmd| CommandOption {
-                name: cmd.name.clone(),
-                description: cmd.description.clone(),
-            })
-            .collect()
+        .collect();
+    let suggestions = ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items,
+        selected: 0,
+        query: String::new(),
+        trigger_pos: 0,
     };
-    state
-        .ui
-        .set_overlay(Overlay::CommandPalette(CommandPaletteOverlay {
-            commands,
-            filter: String::new(),
-            selected: 0,
-        }));
+    state.ui.active_suggestions = Some(suggestions);
+    state.ui.interaction.popup = Some(ComposerPopupState::Slash(SlashPopupState));
 }
 
 /// Open the session browser populated from `saved_sessions`.
@@ -258,18 +233,18 @@ pub(super) fn session_browser(state: &mut AppState) {
         .collect();
     state
         .ui
-        .set_overlay(Overlay::SessionBrowser(SessionBrowserOverlay {
+        .show_modal(ModalState::SessionBrowser(SessionBrowserState {
             sessions,
             filter: String::new(),
             selected: 0,
         }));
 }
 
-/// Open the global search overlay with an empty query.
+/// Open the global search state with an empty query.
 pub(super) fn global_search(state: &mut AppState) {
     state
         .ui
-        .set_overlay(Overlay::GlobalSearch(GlobalSearchOverlay {
+        .show_modal(ModalState::GlobalSearch(GlobalSearchState {
             query: String::new(),
             results: Vec::new(),
             selected: 0,
@@ -279,16 +254,16 @@ pub(super) fn global_search(state: &mut AppState) {
 
 /// Open the quick-open file picker.
 pub(super) fn quick_open(state: &mut AppState) {
-    state.ui.set_overlay(Overlay::QuickOpen(QuickOpenOverlay {
+    state.ui.show_modal(ModalState::QuickOpen(QuickOpenState {
         filter: String::new(),
         files: Vec::new(),
         selected: 0,
     }));
 }
 
-/// Open the export overlay with the available formats.
+/// Open the export state with the available formats.
 pub(super) fn export(state: &mut AppState) {
-    state.ui.set_overlay(Overlay::Export(ExportOverlay {
+    state.ui.show_modal(ModalState::Export(ExportState {
         formats: vec![
             ExportFormat::Markdown,
             ExportFormat::Json,
@@ -298,7 +273,7 @@ pub(super) fn export(state: &mut AppState) {
     }));
 }
 
-/// Open the rewind overlay pre-anchored to `message_id`, jumping
+/// Open the rewind state pre-anchored to `message_id`, jumping
 /// straight to the RestoreOptions confirm screen. TS:
 /// `setMessageSelectorPreselect(raw); setIsMessageSelectorVisible(true)`
 /// (`screens/REPL.tsx:3783-3784`). Falls back to the standard picker
@@ -308,11 +283,11 @@ pub(super) async fn rewind_for(
     command_tx: &mpsc::Sender<UserCommand>,
     message_id: String,
 ) {
-    let overlay = update_rewind::build_rewind_overlay_for(state, Some(&message_id));
+    let rewind = update_rewind::build_rewind_state_for(state, Some(&message_id));
     let load_all_stats =
-        overlay.file_history_enabled && overlay.messages.iter().any(|m| !m.is_current_prompt);
+        rewind.file_history_enabled && rewind.messages.iter().any(|m| !m.is_current_prompt);
     let row_ids: Vec<String> = if load_all_stats {
-        overlay
+        rewind
             .messages
             .iter()
             .filter(|m| !m.is_current_prompt)
@@ -321,7 +296,7 @@ pub(super) async fn rewind_for(
     } else {
         Vec::new()
     };
-    state.ui.set_overlay(Overlay::Rewind(overlay));
+    state.ui.show_modal(ModalState::Rewind(rewind));
     for id in row_ids {
         let _ = command_tx
             .send(UserCommand::RequestDiffStats { message_id: id })
@@ -329,17 +304,17 @@ pub(super) async fn rewind_for(
     }
 }
 
-/// Open the rewind overlay; renders inline empty-state when nothing is
+/// Open the rewind state; renders inline empty-state when nothing is
 /// rewindable. TS: MessageSelector useEffect loads diffStats per row on
 /// mount (`MessageSelector.tsx:285-312`); we mirror that by firing
 /// `RequestDiffStats` for every row instead of just the selected one.
 pub(super) async fn rewind(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    let overlay = update_rewind::build_rewind_overlay(state);
-    let load_all_stats = overlay.file_history_enabled && !overlay.messages.is_empty();
+    let rewind = update_rewind::build_rewind_state(state);
+    let load_all_stats = rewind.file_history_enabled && !rewind.messages.is_empty();
     let row_ids: Vec<String> = if load_all_stats {
         // Skip the synthetic current-prompt row (empty message_id);
         // there is no snapshot to fetch for "now".
-        overlay
+        rewind
             .messages
             .iter()
             .filter(|m| !m.is_current_prompt)
@@ -348,7 +323,7 @@ pub(super) async fn rewind(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     } else {
         Vec::new()
     };
-    state.ui.set_overlay(Overlay::Rewind(overlay));
+    state.ui.show_modal(ModalState::Rewind(rewind));
     for id in row_ids {
         let _ = command_tx
             .send(UserCommand::RequestDiffStats { message_id: id })
@@ -356,18 +331,18 @@ pub(super) async fn rewind(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     }
 }
 
-/// Open the doctor/diagnostics overlay.
+/// Open the doctor/diagnostics state.
 pub(super) fn doctor(state: &mut AppState) {
     state
         .ui
-        .set_overlay(Overlay::Doctor(crate::state::DoctorOverlay {
+        .show_modal(ModalState::Doctor(crate::state::DoctorState {
             checks: Vec::new(),
         }));
 }
 
-/// Open the tabbed settings overlay (theme, output style, permissions, about).
+/// Open the tabbed settings state (theme, output style, permissions, about).
 pub(super) fn settings(state: &mut AppState) {
-    state.ui.set_overlay(Overlay::Settings(
+    state.ui.show_modal(ModalState::Settings(
         crate::widgets::settings_panel::SettingsPanelState::new(
             &state.ui.theme_state,
             state.ui.display_settings,

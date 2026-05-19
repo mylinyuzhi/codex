@@ -14,6 +14,7 @@ use crate::shared::ProviderOptions;
 use crate::shared::SharedV4FileData;
 
 /// A text content part.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextPart {
@@ -47,6 +48,7 @@ impl TextPart {
 /// - `Url { url }` — a URL pointing to the file.
 /// - `Reference { reference }` — a provider reference (`{ [provider]: id }`).
 /// - `Text { text }` — inline text content.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilePart {
@@ -123,6 +125,7 @@ impl FilePart {
 }
 
 /// A reasoning content part (for thinking models).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReasoningPart {
@@ -150,6 +153,7 @@ impl ReasoningPart {
 }
 
 /// A tool call content part.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallPart {
@@ -198,6 +202,7 @@ impl ToolCallPart {
 }
 
 /// A tool result content part.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResultPart {
@@ -247,6 +252,7 @@ impl ToolResultPart {
 /// Content of a tool result.
 ///
 /// This matches the LanguageModelV4ToolResultOutput type from the v4 spec.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -374,6 +380,7 @@ impl From<&str> for ToolResultContent {
 /// `file-url`, `file-reference`, `custom`. Image / non-image are
 /// distinguished by `media_type` (image/png vs application/pdf etc.),
 /// not by separate variants.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -473,6 +480,7 @@ impl ToolResultContentPart {
 pub type SharedV4ProviderReference = std::collections::HashMap<String, String>;
 
 /// User message content parts.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum UserContentPart {
@@ -509,6 +517,7 @@ impl UserContentPart {
 /// `data` is a 2-arm tagged union:
 /// - `Data { data }` — raw bytes or base64-encoded string.
 /// - `Url { url }` — a URL pointing to the file.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReasoningFilePart {
@@ -569,6 +578,7 @@ impl ReasoningFilePart {
 /// A custom content part for provider-specific extensions.
 ///
 /// Used in both prompts (with `provider_options`) and responses (with `provider_metadata`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomPart {
@@ -606,6 +616,7 @@ impl CustomPart {
 }
 
 /// Assistant message content parts.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum AssistantContentPart {
@@ -669,6 +680,7 @@ impl AssistantContentPart {
 }
 
 /// A source reference content part (for citations).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourcePart {
@@ -756,6 +768,7 @@ impl SourcePart {
 }
 
 /// Types of sources.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceType {
@@ -769,6 +782,7 @@ pub enum SourceType {
 ///
 /// This is used for flows where the provider executes the tool (e.g. MCP tools)
 /// but requires an explicit user approval before continuing.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolApprovalRequestPart {
@@ -820,6 +834,7 @@ impl ToolApprovalRequestPart {
 }
 
 /// Tool message content parts.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ToolContentPart {
@@ -832,6 +847,7 @@ pub enum ToolContentPart {
 /// A tool approval response part (for tools that require approval).
 ///
 /// This contains the user's decision to approve or deny a provider-executed tool call.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolApprovalResponsePart {

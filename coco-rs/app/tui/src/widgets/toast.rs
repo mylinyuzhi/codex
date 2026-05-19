@@ -7,6 +7,8 @@ use ratatui::text::Span;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 use crate::presentation::styles::UiStyles;
 use crate::state::ui::Toast;
@@ -44,13 +46,8 @@ impl Widget for ToastWidget<'_> {
             let x = area.width.saturating_sub(toast_width + 1);
             let toast_area = Rect::new(area.x + x, area.y + y, toast_width, 1);
 
-            // Truncate message to fit
-            let max_msg_len = (toast_width as usize).saturating_sub(5);
-            let msg = if toast.message.len() > max_msg_len {
-                format!("{}...", &toast.message[..max_msg_len.saturating_sub(3)])
-            } else {
-                toast.message.clone()
-            };
+            let max_msg_width = (toast_width as usize).saturating_sub(5);
+            let msg = truncate_width(&toast.message, max_msg_width);
 
             let text = format!(" {icon} {msg} ");
             Clear.render(toast_area, buf);
@@ -59,4 +56,24 @@ impl Widget for ToastWidget<'_> {
             y += 1;
         }
     }
+}
+
+fn truncate_width(message: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(message) <= max_width {
+        return message.to_string();
+    }
+    let ellipsis = "...";
+    let content_width = max_width.saturating_sub(UnicodeWidthStr::width(ellipsis));
+    let mut out = String::new();
+    let mut width = 0;
+    for ch in message.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+        if width + ch_width > content_width {
+            break;
+        }
+        width += ch_width;
+        out.push(ch);
+    }
+    out.push_str(ellipsis);
+    out
 }

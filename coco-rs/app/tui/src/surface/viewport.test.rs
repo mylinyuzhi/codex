@@ -4,9 +4,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::*;
-use crate::state::session::ChatMessage;
+use crate::state::derive::test_helpers;
 use crate::state::ui::StreamingState;
-use crate::surface::overlay::HistorySurfaceMode;
+use crate::surface::modal::HistorySurfaceMode;
 use crate::surface::terminal::SurfaceTerminal;
 
 #[test]
@@ -55,10 +55,7 @@ fn interactive_viewport_does_not_render_finalized_messages() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 48, 8));
     let mut state = AppState::new();
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "finalized history"));
+    test_helpers::push_assistant_text(&mut state.session, "finalized history");
     let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
 
     terminal
@@ -77,10 +74,7 @@ fn interactive_viewport_renders_finalized_messages_in_viewport_history_mode() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 48, 8));
     let mut state = AppState::new();
-    state
-        .session
-        .messages
-        .push(ChatMessage::assistant_text("a1", "fallback history"));
+    test_helpers::push_assistant_text(&mut state.session, "fallback history");
     let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
 
     terminal
@@ -140,9 +134,41 @@ fn interactive_viewport_reports_input_rect_for_cursor_policy() {
     assert_eq!(layout.input.width, 48);
 }
 
+#[test]
+fn compact_prompt_body_preserves_tail_action_block() {
+    let body = "\
+Execute shell command
+
+Command:
+  rm -rf /tmp/test
+
+Risk:
+  Removes files recursively
+
+Actions:
+▸ Yes, approve once
+  Yes, always allow Bash for this session
+  No, deny
+↑/↓ Navigate  Enter Select  Y/N/A shortcuts";
+
+    let compact = compact_prompt_body(body, 7);
+
+    assert_eq!(
+        compact,
+        "\
+Execute shell command
+...
+Actions:
+▸ Yes, approve once
+  Yes, always allow Bash for this session
+  No, deny
+↑/↓ Navigate  Enter Select  Y/N/A shortcuts"
+    );
+}
+
 fn native_plan() -> SurfaceFramePlan {
     SurfaceFramePlan {
-        overlay_placement: None,
+        modal_placement: None,
         history_surface: HistorySurfaceMode::NativeScrollback,
         attention_requested: false,
     }

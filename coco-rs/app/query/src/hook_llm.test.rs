@@ -1,5 +1,5 @@
 use super::*;
-use coco_inference::TextPart;
+use coco_llm_types::TextPart;
 
 #[test]
 fn test_parse_hook_response_ok_true() {
@@ -73,7 +73,7 @@ fn test_parse_hook_response_concatenates_multiple_text_parts() {
 
 #[test]
 fn test_parse_hook_response_ignores_non_text_parts() {
-    use coco_inference::ReasoningPart;
+    use coco_llm_types::ReasoningPart;
     let content = vec![
         AssistantContentPart::Reasoning(ReasoningPart::new("thinking…")),
         AssistantContentPart::Text(TextPart::new(r#"{"ok": true}"#)),
@@ -86,10 +86,10 @@ fn test_parse_hook_response_ignores_non_text_parts() {
 fn test_build_prompt_shape() {
     let messages = build_prompt("is the file safe?");
     assert_eq!(messages.len(), 2);
-    matches!(messages[0], LanguageModelMessage::System { .. });
-    matches!(messages[1], LanguageModelMessage::User { .. });
+    matches!(messages[0], LlmMessage::System { .. });
+    matches!(messages[1], LlmMessage::User { .. });
 
-    if let LanguageModelMessage::System { content, .. } = &messages[0] {
+    if let LlmMessage::System { content, .. } = &messages[0] {
         let UserContentPart::Text(t) = &content[0] else {
             panic!("expected text part");
         };

@@ -16,8 +16,8 @@ use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
 use crate::presentation::styles::UiStyles;
-use crate::state::session::ChatMessage;
-use crate::state::session::ChatRole;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
 
 /// A search match in the message history.
 #[derive(Debug, Clone)]
@@ -51,8 +51,8 @@ impl HistorySearchState {
         }
     }
 
-    /// Execute search against messages.
-    pub fn search(&mut self, messages: &[ChatMessage]) {
+    /// Execute search against the engine-authoritative cell list.
+    pub fn search(&mut self, cells: &[RenderedCell]) {
         let query_lower = self.query.to_lowercase();
         self.matches.clear();
         self.selected = 0;
@@ -61,36 +61,29 @@ impl HistorySearchState {
             return;
         }
 
-        for (i, msg) in messages.iter().enumerate() {
-            let text = msg.text_content();
-            if text.to_lowercase().contains(&query_lower) {
-                // Extract preview around match
-                let preview = if text.len() > 80 {
-                    if let Some(pos) = text.to_lowercase().find(&query_lower) {
-                        let start = pos.saturating_sub(20);
-                        let end = (pos + query_lower.len() + 40).min(text.len());
-                        format!("...{}...", &text[start..end])
-                    } else {
-                        text[..80].to_string()
-                    }
-                } else {
-                    text.to_string()
-                };
-
-                let role_label = match msg.role {
-                    ChatRole::User => "you",
-                    ChatRole::Assistant => "assistant",
-                    ChatRole::System => "system",
-                    ChatRole::Tool => "tool",
-                }
-                .to_string();
-
-                self.matches.push(SearchMatch {
-                    message_index: i as i32,
-                    preview,
-                    role_label,
-                });
+        for (i, cell) in cells.iter().enumerate() {
+            let Some((text, role_label)) = cell_search_target(cell) else {
+                continue;
+            };
+            if !text.to_lowercase().contains(&query_lower) {
+                continue;
             }
+            let preview = if text.len() > 80 {
+                if let Some(pos) = text.to_lowercase().find(&query_lower) {
+                    let start = pos.saturating_sub(20);
+                    let end = (pos + query_lower.len() + 40).min(text.len());
+                    format!("...{}...", &text[start..end])
+                } else {
+                    text[..80].to_string()
+                }
+            } else {
+                text.to_string()
+            };
+            self.matches.push(SearchMatch {
+                message_index: i as i32,
+                preview,
+                role_label: role_label.to_string(),
+            });
         }
     }
 
@@ -116,13 +109,35 @@ impl HistorySearchState {
     }
 }
 
+/// Extract (text, role_label) from a cell when it is a searchable
+/// row. Returns `None` for cells that have no searchable body
+/// (attachments / progress / tombstones / pure-marker system rows).
+fn cell_search_target(cell: &RenderedCell) -> Option<(&str, &'static str)> {
+    match &cell.kind {
+        CellKind::UserText { text } => Some((text.as_str(), "you")),
+        CellKind::AssistantText { text, .. } => Some((text.as_str(), "assistant")),
+        CellKind::AssistantThinking { text, .. } => Some((text.as_str(), "assistant")),
+        CellKind::System(_) => {
+            if let coco_messages::Message::System(coco_messages::SystemMessage::Informational(
+                info,
+            )) = cell.source.as_ref()
+            {
+                Some((info.message.as_str(), "system"))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 impl Default for HistorySearchState {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// History search overlay widget.
+/// History search state widget.
 pub struct HistorySearchWidget<'a> {
     state: &'a HistorySearchState,
     styles: UiStyles<'a>,

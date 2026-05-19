@@ -237,25 +237,17 @@ async fn reject_path() -> Result<()> {
         "reject_path: rejected Bash should complete with is_error=true",
     );
 
-    // ToolError chat message captures the user's feedback so the next
-    // turn (and rendered transcript) can see why it was denied.
+    // The denied Bash result captures the user's feedback so the next
+    // turn (and rendered transcript) can see why it was denied. The
+    // engine surfaces this as a tool-result cell with `is_error=true`.
     let saw_feedback = harness
-        .state
-        .session
-        .messages
-        .iter()
-        .any(|m| m.text_content().contains(feedback));
+        .find_tool_result("Bash")
+        .is_some_and(|(out, _)| out.contains(feedback));
     assert!(
         saw_feedback,
         "reject_path: rejection feedback `{feedback}` should appear in chat \
-         (got messages: {:?})",
-        harness
-            .state
-            .session
-            .messages
-            .iter()
-            .map(|m| (m.role, m.text_content().to_string()))
-            .collect::<Vec<_>>(),
+         (got cells: {:?})",
+        harness.text_cells_in_order(),
     );
 
     harness.shutdown().await;

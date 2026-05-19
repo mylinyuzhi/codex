@@ -9,6 +9,7 @@ members = [
     "common/config",
     "common/config-reload",
     "common/model-card",
+    "common/llm-types",
 
     # ─── utils/ (26) ── 24 from cocode-rs + 2 new ───
     "utils/absolute-path",
@@ -121,6 +122,7 @@ coco-types = { path = "common/types" }
 coco-config = { path = "common/config" }
 coco-config-reload = { path = "common/config-reload" }
 coco-model-card = { path = "common/model-card" }
+coco-llm-types = { path = "common/llm-types" }
 
 # Internal - utilities
 coco-file-encoding = { path = "utils/file-encoding" }
@@ -263,7 +265,7 @@ regex = "1.12.2"
 regex-lite = "0.1.8"
 reqwest = "0.12"
 rustls = { version = "0.23", features = ["ring"] }
-schemars = "0.8.22"
+schemars = { version = "0.8.22", features = ["uuid1"] }
 serde = "1"
 serde_json = "1"
 serde_path_to_error = "0.1"

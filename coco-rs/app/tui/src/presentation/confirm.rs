@@ -1,35 +1,34 @@
-//! Confirmation dialog renderers — small, mostly one-screen text overlays.
+//! Confirmation dialog renderers — small, mostly one-screen text surfaces.
 //!
 //! Covers: cost warning, plan exit/entry, sandbox permission, MCP server
 //! approval, worktree exit, doctor, bridge, invalid config, idle return,
-//! trust, auto-mode opt-in, bypass permissions, task detail, feedback,
-//! elicitation. Kept together because each is short.
+//! trust, auto-mode opt-in, bypass permissions, task detail, and feedback.
+//! Kept together because each is short.
 
 use ratatui::prelude::Color;
 
 use crate::i18n::t;
 use crate::presentation::pager;
 use crate::presentation::styles::UiStyles;
-use crate::state::AutoModeOptInOverlay;
-use crate::state::BridgeOverlay;
-use crate::state::BypassPermissionsOverlay;
-use crate::state::CostWarningOverlay;
-use crate::state::DoctorOverlay;
-use crate::state::ElicitationOverlay;
-use crate::state::FeedbackOverlay;
-use crate::state::IdleReturnOverlay;
-use crate::state::InvalidConfigOverlay;
-use crate::state::McpServerApprovalOverlay;
-use crate::state::PlanApprovalOverlay;
-use crate::state::PlanEntryOverlay;
-use crate::state::PlanExitOverlay;
-use crate::state::SandboxPermissionOverlay;
-use crate::state::TaskDetailOverlay;
-use crate::state::TrustOverlay;
-use crate::state::WorktreeExitOverlay;
+use crate::state::AutoModeOptInState;
+use crate::state::BridgeState;
+use crate::state::BypassPermissionsState;
+use crate::state::CostWarningPromptState;
+use crate::state::DoctorState;
+use crate::state::FeedbackState;
+use crate::state::IdleReturnState;
+use crate::state::InvalidConfigState;
+use crate::state::McpServerApprovalPromptState;
+use crate::state::PlanApprovalPromptState;
+use crate::state::PlanEntryPromptState;
+use crate::state::PlanExitPromptState;
+use crate::state::SandboxPermissionPromptState;
+use crate::state::TaskDetailState;
+use crate::state::TrustState;
+use crate::state::WorktreeExitState;
 
 pub(crate) fn cost_warning_content(
-    c: &CostWarningOverlay,
+    c: &CostWarningPromptState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
@@ -51,7 +50,7 @@ pub(crate) fn cost_warning_content(
 }
 
 pub(crate) fn plan_exit_content(
-    p: &PlanExitOverlay,
+    p: &PlanExitPromptState,
     bypass_permissions_available: bool,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
@@ -91,7 +90,7 @@ pub(crate) fn plan_exit_content(
 }
 
 pub(crate) fn plan_entry_content(
-    p: &PlanEntryOverlay,
+    p: &PlanEntryPromptState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
@@ -102,7 +101,7 @@ pub(crate) fn plan_entry_content(
 }
 
 pub(crate) fn sandbox_content(
-    s: &SandboxPermissionOverlay,
+    s: &SandboxPermissionPromptState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
@@ -112,19 +111,8 @@ pub(crate) fn sandbox_content(
     )
 }
 
-pub(crate) fn elicitation_content(
-    e: &ElicitationOverlay,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    (
-        format!(" {} ", e.server_name),
-        format!("{}\n\n{}", e.message, t!("dialog.fill_fields_hint")),
-        styles.accent(),
-    )
-}
-
 pub(crate) fn mcp_server_approval_content(
-    m: &McpServerApprovalOverlay,
+    m: &McpServerApprovalPromptState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
@@ -141,7 +129,7 @@ pub(crate) fn mcp_server_approval_content(
 }
 
 pub(crate) fn worktree_exit_content(
-    w: &WorktreeExitOverlay,
+    w: &WorktreeExitState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let files = if w.changed_files.is_empty() {
@@ -164,7 +152,7 @@ pub(crate) fn worktree_exit_content(
     )
 }
 
-pub(crate) fn doctor_content(d: &DoctorOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
+pub(crate) fn doctor_content(d: &DoctorState, styles: UiStyles<'_>) -> (String, String, Color) {
     let checks: Vec<String> = d
         .checks
         .iter()
@@ -189,7 +177,7 @@ pub(crate) fn doctor_content(d: &DoctorOverlay, styles: UiStyles<'_>) -> (String
     )
 }
 
-pub(crate) fn bridge_content(b: &BridgeOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
+pub(crate) fn bridge_content(b: &BridgeState, styles: UiStyles<'_>) -> (String, String, Color) {
     (
         t!("dialog.title_bridge", bridge_type = b.bridge_type.as_str()).to_string(),
         format!(
@@ -203,7 +191,7 @@ pub(crate) fn bridge_content(b: &BridgeOverlay, styles: UiStyles<'_>) -> (String
 }
 
 pub(crate) fn invalid_config_content(
-    ic: &InvalidConfigOverlay,
+    ic: &InvalidConfigState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let errors = ic
@@ -224,7 +212,7 @@ pub(crate) fn invalid_config_content(
 }
 
 pub(crate) fn idle_return_content(
-    ir: &IdleReturnOverlay,
+    ir: &IdleReturnState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let mins = ir.idle_duration_secs / 60;
@@ -239,7 +227,7 @@ pub(crate) fn idle_return_content(
     )
 }
 
-pub(crate) fn trust_content(tr: &TrustOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
+pub(crate) fn trust_content(tr: &TrustState, styles: UiStyles<'_>) -> (String, String, Color) {
     (
         t!("dialog.title_trust").to_string(),
         format!(
@@ -254,7 +242,7 @@ pub(crate) fn trust_content(tr: &TrustOverlay, styles: UiStyles<'_>) -> (String,
 }
 
 pub(crate) fn auto_mode_opt_in_content(
-    a: &AutoModeOptInOverlay,
+    a: &AutoModeOptInState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
@@ -265,7 +253,7 @@ pub(crate) fn auto_mode_opt_in_content(
 }
 
 pub(crate) fn bypass_permissions_content(
-    bp: &BypassPermissionsOverlay,
+    bp: &BypassPermissionsState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     (
@@ -280,7 +268,7 @@ pub(crate) fn bypass_permissions_content(
 }
 
 pub(crate) fn task_detail_content(
-    td: &TaskDetailOverlay,
+    td: &TaskDetailState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let output_lines: Vec<&str> = td.output.lines().collect();
@@ -313,12 +301,12 @@ pub(crate) fn task_detail_content(
 }
 
 pub(crate) fn plan_approval_content(
-    p: &PlanApprovalOverlay,
+    p: &PlanApprovalPromptState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    // Cap the plan preview so the overlay stays readable when the plan
+    // Cap the plan preview so the state stays readable when the plan
     // body is very long. Full content is still on disk at
-    // `p.plan_file_path` for the leader to inspect outside the overlay.
+    // `p.plan_file_path` for the leader to inspect outside the state.
     const MAX_PREVIEW_LINES: usize = 18;
     let preview: String = p
         .plan_content
@@ -357,10 +345,7 @@ pub(crate) fn plan_approval_content(
     )
 }
 
-pub(crate) fn feedback_content(
-    f: &FeedbackOverlay,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
+pub(crate) fn feedback_content(f: &FeedbackState, styles: UiStyles<'_>) -> (String, String, Color) {
     let items: Vec<String> = f
         .options
         .iter()

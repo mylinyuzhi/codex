@@ -20,7 +20,6 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::state::AppState;
 use crate::state::FocusTarget;
-use crate::state::Overlay;
 use crate::widgets::InputRenderModel;
 
 /// What the cursor should look like at the end of this frame.
@@ -38,7 +37,7 @@ pub struct CursorClaim {
 /// Decide where (and whether) the cursor goes for the next frame.
 ///
 /// Single decision point: the input widget is the only base cursor source
-/// today. Modal overlays hide that base cursor unless they explicitly mirror
+/// today. Modals hide that base cursor unless they explicitly mirror
 /// input text, as the command palette does. Returning `None` tells
 /// `Tui::draw` to hide the cursor explicitly — see module docs for why hide
 /// alone isn't enough on iTerm2 / macOS Terminal.
@@ -46,11 +45,7 @@ pub fn compute_cursor(state: &AppState, input_area: Rect) -> Option<CursorClaim>
     if state.ui.focus != FocusTarget::Input {
         return None;
     }
-    if state
-        .ui
-        .active_overlay()
-        .is_some_and(|overlay| !matches!(overlay, Overlay::CommandPalette(_)))
-    {
+    if state.ui.has_blocking_interaction() {
         return None;
     }
     if input_area.width == 0 || input_area.height == 0 {
@@ -70,17 +65,13 @@ pub fn compute_cursor(state: &AppState, input_area: Rect) -> Option<CursorClaim>
 /// always has a defined home.
 fn compute_input_xy(state: &AppState, area: Rect) -> (u16, u16) {
     let is_streaming = state.is_streaming();
-    let command_palette_filter: Option<&str> = match state.ui.active_overlay() {
-        Some(Overlay::CommandPalette(cp)) => Some(cp.filter.as_str()),
-        _ => None,
-    };
     let model = InputRenderModel::build(
         &state.ui.input,
         is_streaming,
         state.is_plan_mode(),
         state.session.prompt_suggestions.last().map(String::as_str),
         !state.session.queued_commands.is_empty(),
-        command_palette_filter,
+        None,
     );
 
     // The indicator span ("❯ " / "! " / "~ ") is always 2 cols.

@@ -1,4 +1,4 @@
-//! Rewind overlay presentation.
+//! Rewind state presentation.
 
 use ratatui::prelude::Color;
 
@@ -8,24 +8,24 @@ use crate::constants;
 use crate::i18n::t;
 use crate::state::DiffStatsPreview;
 use crate::state::rewind::RestoreType;
-use crate::state::rewind::RewindOverlay;
 use crate::state::rewind::RewindPhase;
+use crate::state::rewind::RewindState;
 use crate::state::rewind::RewindableMessage;
 
-pub(crate) fn rewind_overlay_content(
-    overlay: &RewindOverlay,
+pub(crate) fn rewind_surface_content(
+    state: &RewindState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    match overlay.phase {
-        RewindPhase::MessageSelect => message_select(overlay, styles),
-        RewindPhase::RestoreOptions => restore_options(overlay, styles),
-        RewindPhase::SummarizeFeedback => summarize_feedback(overlay, styles),
-        RewindPhase::Confirming => confirming(overlay, styles),
+    match state.phase {
+        RewindPhase::MessageSelect => message_select(state, styles),
+        RewindPhase::RestoreOptions => restore_options(state, styles),
+        RewindPhase::SummarizeFeedback => summarize_feedback(state, styles),
+        RewindPhase::Confirming => confirming(state, styles),
     }
 }
 
-fn confirming(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
-    let body = if overlay.pending_summarize.is_some() {
+fn confirming(state: &RewindState, styles: UiStyles<'_>) -> (String, String, Color) {
+    let body = if state.pending_summarize.is_some() {
         t!("dialog.rewind_summarizing")
     } else {
         t!("dialog.rewind_in_progress")
@@ -37,12 +37,12 @@ fn confirming(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, String,
     )
 }
 
-fn summarize_feedback(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
+fn summarize_feedback(state: &RewindState, styles: UiStyles<'_>) -> (String, String, Color) {
     let prompt = t!("dialog.rewind_summarize_prompt");
-    let typed = if overlay.summarize_feedback.is_empty() {
+    let typed = if state.summarize_feedback.is_empty() {
         t!("dialog.rewind_summarize_placeholder").into_owned()
     } else {
-        overlay.summarize_feedback.clone()
+        state.summarize_feedback.clone()
     };
     (
         t!("dialog.title_rewind").to_string(),
@@ -54,8 +54,8 @@ fn summarize_feedback(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String,
     )
 }
 
-fn message_select(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
-    if picker_is_empty(overlay) {
+fn message_select(state: &RewindState, styles: UiStyles<'_>) -> (String, String, Color) {
+    if picker_is_empty(state) {
         return (
             t!("dialog.title_rewind").to_string(),
             format!(
@@ -67,13 +67,13 @@ fn message_select(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, Str
         );
     }
 
-    let selected = layout::selected_in_bounds(overlay.selected, overlay.messages.len());
+    let selected = layout::selected_in_bounds(state.selected, state.messages.len());
     let visible = layout::visible_window(
         selected.unwrap_or(0),
-        overlay.messages.len(),
+        state.messages.len(),
         constants::REWIND_MAX_VISIBLE as usize,
     );
-    let items: Vec<String> = overlay.messages[visible.clone()]
+    let items: Vec<String> = state.messages[visible.clone()]
         .iter()
         .enumerate()
         .map(|(offset, msg)| {
@@ -88,7 +88,7 @@ fn message_select(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, Str
             }
 
             let mut line = format!("{marker} {} ({})", msg.display_text, msg.relative_time);
-            if overlay.file_history_enabled
+            if state.file_history_enabled
                 && let Some(stats_line) = row_diff_stats_line(msg)
             {
                 line.push_str(&format!("\n    {stats_line}"));
@@ -97,13 +97,13 @@ fn message_select(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, Str
         })
         .collect();
 
-    let scroll_hint = if overlay.messages.len() > visible.len() {
+    let scroll_hint = if state.messages.len() > visible.len() {
         let selected_row = selected.unwrap_or(0) + 1;
-        format!("\n  ({selected_row}/{})", overlay.messages.len())
+        format!("\n  ({selected_row}/{})", state.messages.len())
     } else {
         String::new()
     };
-    let prompt_key = if overlay.file_history_enabled {
+    let prompt_key = if state.file_history_enabled {
         "dialog.rewind_select_with_files"
     } else {
         "dialog.rewind_select_no_files"
@@ -121,8 +121,8 @@ fn message_select(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, Str
     )
 }
 
-fn picker_is_empty(overlay: &RewindOverlay) -> bool {
-    !overlay.messages.iter().any(|msg| !msg.is_current_prompt)
+fn picker_is_empty(state: &RewindState) -> bool {
+    !state.messages.iter().any(|msg| !msg.is_current_prompt)
 }
 
 fn row_diff_stats_line(msg: &RewindableMessage) -> Option<String> {
@@ -178,10 +178,10 @@ fn file_label(stats: &DiffStatsPreview) -> Option<String> {
     }
 }
 
-fn restore_options(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, String, Color) {
+fn restore_options(state: &RewindState, styles: UiStyles<'_>) -> (String, String, Color) {
     let selected_option =
-        layout::selected_in_bounds(overlay.option_selected, overlay.available_options.len());
-    let items: Vec<String> = overlay
+        layout::selected_in_bounds(state.option_selected, state.available_options.len());
+    let items: Vec<String> = state
         .available_options
         .iter()
         .enumerate()
@@ -191,15 +191,15 @@ fn restore_options(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, St
         })
         .collect();
 
-    let message_block = match layout::selected_in_bounds(overlay.selected, overlay.messages.len())
-        .and_then(|idx| overlay.messages.get(idx))
+    let message_block = match layout::selected_in_bounds(state.selected, state.messages.len())
+        .and_then(|idx| state.messages.get(idx))
     {
         Some(msg) => format!("  │ {}\n  │ ({})", msg.display_text, msg.relative_time),
         None => String::new(),
     };
 
     let focused = selected_option
-        .and_then(|idx| overlay.available_options.get(idx))
+        .and_then(|idx| state.available_options.get(idx))
         .cloned()
         .unwrap_or(RestoreType::Nevermind);
 
@@ -212,7 +212,7 @@ fn restore_options(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, St
 
     let code_line = match &focused {
         RestoreType::SummarizeFrom { .. } | RestoreType::SummarizeUpTo { .. } => String::new(),
-        RestoreType::Both | RestoreType::CodeOnly => match &overlay.diff_stats {
+        RestoreType::Both | RestoreType::CodeOnly => match &state.diff_stats {
             Some(stats) if stats.files_changed > 0 => {
                 let stats_text = t!(
                     "dialog.rewind_diff_stats_short",
@@ -242,12 +242,12 @@ fn restore_options(overlay: &RewindOverlay, styles: UiStyles<'_>) -> (String, St
         }
     };
 
-    let confirm_prompt_key = if overlay.has_file_changes {
+    let confirm_prompt_key = if state.has_file_changes {
         "dialog.rewind_confirm_prompt"
     } else {
         "dialog.rewind_confirm_prompt_conv"
     };
-    let manual_warning = if overlay.file_history_enabled && overlay.has_file_changes {
+    let manual_warning = if state.file_history_enabled && state.has_file_changes {
         format!("\n\n{}", t!("dialog.rewind_manual_warning"))
     } else {
         String::new()

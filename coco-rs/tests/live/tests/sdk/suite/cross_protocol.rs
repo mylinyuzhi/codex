@@ -8,20 +8,20 @@
 //!   regressions.
 //! - [`run_session_switch`] — builds a single accumulated message
 //!   history that *alternates* protocols turn-by-turn. Validates that
-//!   coco-rs's seam-aliased `LanguageModelMessage` shape serializes /
+//!   coco-rs's seam-aliased `LlmMessage` shape serializes /
 //!   deserializes identically across both wire formats. This is what
 //!   "switching DeepSeek API forms mid-conversation" looks like at the
 //!   inference layer.
 
 use anyhow::Result;
-use coco_inference::LanguageModelMessage;
 use coco_inference::QueryParams;
+use coco_llm_types::LlmMessage;
 
 use crate::common::LiveTarget;
 use crate::common::extract_text;
 use crate::common::usage_report;
 
-fn factual_params(prompt: Vec<LanguageModelMessage>, scenario: &str) -> QueryParams {
+fn factual_params(prompt: Vec<LlmMessage>, scenario: &str) -> QueryParams {
     QueryParams {
         prompt,
         max_tokens: Some(96),
@@ -42,8 +42,8 @@ fn factual_params(prompt: Vec<LanguageModelMessage>, scenario: &str) -> QueryPar
 pub async fn run(openai_target: &LiveTarget, anthropic_target: &LiveTarget) -> Result<()> {
     let prompt = || {
         vec![
-            LanguageModelMessage::system("You are a concise assistant."),
-            LanguageModelMessage::user_text(
+            LlmMessage::system("You are a concise assistant."),
+            LlmMessage::user_text(
                 "What is the capital of France? Respond with just the city name.",
             ),
         ]
@@ -95,7 +95,7 @@ pub async fn run(openai_target: &LiveTarget, anthropic_target: &LiveTarget) -> R
 ///
 /// Three protocol switches, each carrying the accumulated assistant
 /// content from the *other* protocol. Validates the seam-aliased
-/// `LanguageModelMessage` shape is wire-stable across both APIs.
+/// `LlmMessage` shape is wire-stable across both APIs.
 pub async fn run_session_switch(
     openai_target: &LiveTarget,
     anthropic_target: &LiveTarget,
@@ -104,10 +104,8 @@ pub async fn run_session_switch(
 
     // Turn 1 — openai protocol
     let mut history = vec![
-        LanguageModelMessage::system(system),
-        LanguageModelMessage::user_text(
-            "What is the capital of France? Respond with just the city name.",
-        ),
+        LlmMessage::system(system),
+        LlmMessage::user_text("What is the capital of France? Respond with just the city name."),
     ];
     let r1 = openai_target
         .client
@@ -128,8 +126,8 @@ pub async fn run_session_switch(
     );
 
     // Turn 2 — anthropic protocol, picking up the openai assistant reply
-    history.push(LanguageModelMessage::assistant_text(t1_text.trim()));
-    history.push(LanguageModelMessage::user_text(
+    history.push(LlmMessage::assistant_text(t1_text.trim()));
+    history.push(LlmMessage::user_text(
         "Now: what is the capital of Portugal? Respond with just the city name.",
     ));
     let r2 = anthropic_target
@@ -151,8 +149,8 @@ pub async fn run_session_switch(
     );
 
     // Turn 3 — back to openai, must remember BOTH prior facts
-    history.push(LanguageModelMessage::assistant_text(t2_text.trim()));
-    history.push(LanguageModelMessage::user_text(
+    history.push(LlmMessage::assistant_text(t2_text.trim()));
+    history.push(LlmMessage::user_text(
         "List the two capitals you just told me, separated by a comma. \
          Respond with just `<city1>, <city2>` and nothing else.",
     ));

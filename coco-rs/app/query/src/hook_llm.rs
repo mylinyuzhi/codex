@@ -65,11 +65,11 @@ use async_trait::async_trait;
 use coco_hooks::HookEvaluationResult;
 use coco_hooks::HookLlmHandle;
 use coco_inference::ApiClient;
-use coco_inference::AssistantContentPart;
-use coco_inference::LanguageModelMessage;
 use coco_inference::QueryParams;
 use coco_inference::RoleClientCache;
-use coco_inference::UserContentPart;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::UserContentPart;
 use coco_types::ModelRole;
 use serde::Deserialize;
 
@@ -278,13 +278,13 @@ impl HookLlmHandle for QueryHookLlm {
 /// (verbatim from TS `execPromptHook.ts`); `User` carries the user's
 /// hook prompt with `$ARGUMENTS` already substituted upstream by
 /// `run_hook_via_handle_or_fallback`.
-fn build_prompt(user_prompt: &str) -> Vec<LanguageModelMessage> {
+fn build_prompt(user_prompt: &str) -> Vec<LlmMessage> {
     vec![
-        LanguageModelMessage::System {
+        LlmMessage::System {
             content: vec![UserContentPart::text(HOOK_PROMPT_SYSTEM)],
             provider_options: None,
         },
-        LanguageModelMessage::User {
+        LlmMessage::User {
             content: vec![UserContentPart::text(user_prompt)],
             provider_options: None,
         },

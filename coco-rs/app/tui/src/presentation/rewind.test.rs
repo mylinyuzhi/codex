@@ -19,8 +19,8 @@ fn message(id: &str, text: &str) -> RewindableMessage {
     }
 }
 
-fn overlay_with_messages(messages: Vec<RewindableMessage>) -> RewindOverlay {
-    RewindOverlay {
+fn state_with_messages(messages: Vec<RewindableMessage>) -> RewindState {
+    RewindState {
         phase: RewindPhase::MessageSelect,
         messages,
         selected: 0,
@@ -42,9 +42,9 @@ fn rewind_message_select_renders_empty_state_when_only_current_row_exists() {
     let theme = Theme::default();
     let mut current = message("", "(current)");
     current.is_current_prompt = true;
-    let overlay = overlay_with_messages(vec![current]);
+    let state = state_with_messages(vec![current]);
 
-    let (title, body, border) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = rewind_surface_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Rewind ");
     assert_eq!(border, theme.accent);
@@ -65,10 +65,10 @@ fn rewind_message_select_renders_diff_metadata_and_scroll_hint() {
         deletions: 1,
         file_paths: vec!["src/main.rs".to_string()],
     });
-    let mut overlay = overlay_with_messages(messages);
-    overlay.selected = 6;
+    let mut state = state_with_messages(messages);
+    state.selected = 6;
 
-    let (_, body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
+    let (_, body, _) = rewind_surface_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("Restore the code and/or conversation"));
     assert!(body.contains("> message 6 (2 minutes ago)"));
@@ -81,22 +81,22 @@ fn rewind_message_select_renders_diff_metadata_and_scroll_hint() {
 fn rewind_restore_options_describes_code_restore_and_manual_warning() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let mut overlay = overlay_with_messages(vec![message("msg-1", "fix bug")]);
-    overlay.phase = RewindPhase::RestoreOptions;
-    overlay.available_options = vec![
+    let mut state = state_with_messages(vec![message("msg-1", "fix bug")]);
+    state.phase = RewindPhase::RestoreOptions;
+    state.available_options = vec![
         RestoreType::Both,
         RestoreType::ConversationOnly,
         RestoreType::Nevermind,
     ];
-    overlay.diff_stats = Some(DiffStatsPreview {
+    state.diff_stats = Some(DiffStatsPreview {
         files_changed: 2,
         insertions: 10,
         deletions: 4,
         file_paths: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()],
     });
-    overlay.has_file_changes = true;
+    state.has_file_changes = true;
 
-    let (_, body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
+    let (_, body, _) = rewind_surface_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("Confirm you want to restore"));
     assert!(body.contains("> Restore code and conversation"));
@@ -109,13 +109,13 @@ fn rewind_restore_options_describes_code_restore_and_manual_warning() {
 fn rewind_restore_options_clamps_negative_selection() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let mut overlay = overlay_with_messages(vec![message("msg-1", "fix bug")]);
-    overlay.phase = RewindPhase::RestoreOptions;
-    overlay.selected = -5;
-    overlay.option_selected = -2;
-    overlay.available_options = vec![RestoreType::Both, RestoreType::Nevermind];
+    let mut state = state_with_messages(vec![message("msg-1", "fix bug")]);
+    state.phase = RewindPhase::RestoreOptions;
+    state.selected = -5;
+    state.option_selected = -2;
+    state.available_options = vec![RestoreType::Both, RestoreType::Nevermind];
 
-    let (_, body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
+    let (_, body, _) = rewind_surface_content(&state, UiStyles::new(&theme));
 
     assert!(body.contains("│ fix bug"));
     assert!(body.contains("> Restore code and conversation"));
@@ -125,19 +125,19 @@ fn rewind_restore_options_clamps_negative_selection() {
 fn rewind_summarize_feedback_and_confirming_use_pending_state() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let mut overlay = overlay_with_messages(vec![message("msg-1", "fix bug")]);
-    overlay.phase = RewindPhase::SummarizeFeedback;
+    let mut state = state_with_messages(vec![message("msg-1", "fix bug")]);
+    state.phase = RewindPhase::SummarizeFeedback;
 
-    let (_, empty_body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
+    let (_, empty_body, _) = rewind_surface_content(&state, UiStyles::new(&theme));
     assert!(empty_body.contains("add context (optional)"));
     assert!(empty_body.contains("(empty submit cancels)"));
 
-    overlay.summarize_feedback = "keep errors".to_string();
-    let (_, typed_body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
+    state.summarize_feedback = "keep errors".to_string();
+    let (_, typed_body, _) = rewind_surface_content(&state, UiStyles::new(&theme));
     assert!(typed_body.contains("> keep errors"));
 
-    overlay.phase = RewindPhase::Confirming;
-    overlay.pending_summarize = Some(SummarizeDirection::From);
-    let (_, confirming_body, _) = rewind_overlay_content(&overlay, UiStyles::new(&theme));
+    state.phase = RewindPhase::Confirming;
+    state.pending_summarize = Some(SummarizeDirection::From);
+    let (_, confirming_body, _) = rewind_surface_content(&state, UiStyles::new(&theme));
     assert!(confirming_body.contains("Summarizing"));
 }

@@ -2,15 +2,15 @@
 
 use std::collections::HashMap;
 
+use coco_llm_types::LlmMessage;
+use coco_llm_types::LlmPrompt;
+use coco_llm_types::ProviderOptions;
+use coco_llm_types::UserContentPart;
 use coco_types::ProviderApi;
 use serde::Deserialize;
 use serde::Serialize;
 use vercel_ai_provider::JSONValue;
-use vercel_ai_provider::LanguageModelV4Message;
-use vercel_ai_provider::LanguageModelV4Prompt;
 use vercel_ai_provider::LanguageModelV4Tool;
-use vercel_ai_provider::ProviderOptions;
-use vercel_ai_provider::UserContentPart;
 use vercel_ai_provider::Warning;
 
 use crate::cache_detection::canonical_extra_body_hash;
@@ -23,7 +23,7 @@ pub type PromptPart = UserContentPart;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptEnvelope {
     pub sections: Vec<PromptSection>,
-    pub history: Vec<LanguageModelV4Message>,
+    pub history: Vec<LlmMessage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,24 +152,21 @@ pub fn take_layout_options(opts: &ProviderOptions) -> Option<PromptLayoutOptions
 /// re-walking the prompt stream itself.
 ///
 /// Today the engine still emits the entire prompt shell as a single
-/// `LanguageModelV4Message::System`, so the adapter places that text
+/// `LlmMessage::System`, so the adapter places that text
 /// verbatim in the chosen slot. When `app/query` later constructs a
 /// richer `PromptEnvelope` with semantic sections, the routing table in
 /// `docs/coco-rs/provider-prompt-role-architecture.md` §4 picks the
 /// destination per `(kind, family)`.
 pub fn build_prompt_layout_from_prompt(
-    prompt: &LanguageModelV4Prompt,
+    prompt: &LlmPrompt,
     api: ProviderApi,
     tools: Option<&[LanguageModelV4Tool]>,
 ) -> PromptLayoutOptions {
-    let (system_text, _) = collect_role_text(prompt, |m| {
-        matches!(m, LanguageModelV4Message::System { .. })
-    });
-    let (developer_text, _) = collect_role_text(prompt, |m| {
-        matches!(m, LanguageModelV4Message::Developer { .. })
-    });
+    let (system_text, _) = collect_role_text(prompt, |m| matches!(m, LlmMessage::System { .. }));
+    let (developer_text, _) =
+        collect_role_text(prompt, |m| matches!(m, LlmMessage::Developer { .. }));
     let (contextual_user_text, contextual_user_chars) =
-        collect_role_text(prompt, |m| matches!(m, LanguageModelV4Message::User { .. }));
+        collect_role_text(prompt, |m| matches!(m, LlmMessage::User { .. }));
 
     let mut layout = PromptLayoutOptions::default();
 
@@ -225,9 +222,9 @@ pub fn build_prompt_layout_from_prompt(
     layout
 }
 
-fn collect_role_text<F>(prompt: &LanguageModelV4Prompt, predicate: F) -> (String, i64)
+fn collect_role_text<F>(prompt: &LlmPrompt, predicate: F) -> (String, i64)
 where
-    F: Fn(&LanguageModelV4Message) -> bool,
+    F: Fn(&LlmMessage) -> bool,
 {
     let mut text = String::new();
     for msg in prompt {
@@ -235,9 +232,9 @@ where
             continue;
         }
         let parts: &[UserContentPart] = match msg {
-            LanguageModelV4Message::System { content, .. }
-            | LanguageModelV4Message::Developer { content, .. }
-            | LanguageModelV4Message::User { content, .. } => content,
+            LlmMessage::System { content, .. }
+            | LlmMessage::Developer { content, .. }
+            | LlmMessage::User { content, .. } => content,
             _ => continue,
         };
         if !text.is_empty() {

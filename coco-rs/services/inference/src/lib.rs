@@ -2,11 +2,16 @@
 //!
 //! `ApiClient` wraps any `Arc<dyn LanguageModel>` — real provider or mock.
 //!
-//! This crate is the **single re-export seam** between coco-rs and the
-//! `vercel-ai-provider` SDK. Upper layers must reach for AI SDK types via
-//! `coco_inference::*` (or `coco_inference::prelude::*`), never via
-//! `vercel_ai_provider::*` directly. When the SDK upgrades (V4 → V5),
-//! only the version-stripped aliases below need re-pointing.
+//! This crate is the **runtime seam** for vercel-ai. It owns the runtime
+//! contract (`LanguageModelV4` trait, `LanguageModelCallOptions`,
+//! GenerateResult / StreamResult, `Provider` trait) and the client
+//! machinery (`ApiClient`, retry, auth, prompt-cache detection).
+//!
+//! DTOs (message envelope, content parts, ProviderOptions, StopReason,
+//! Usage, …) live in `coco-llm-types`. Together they form the
+//! dual-seam: two narrow crates own direct `vercel-ai-provider`
+//! dependencies, an SDK upgrade edits both. See
+//! `scripts/check-vercel-ai-seam.sh`.
 
 pub mod auth;
 pub mod build_call_options;
@@ -42,11 +47,6 @@ pub use logging::ErrorLog;
 pub use logging::KnownGateway;
 pub use logging::RequestLog;
 pub use logging::ResponseLog;
-// Canonical typed stop reason — re-exported from vercel-ai-provider's
-// extended UnifiedFinishReason (single source of truth). See
-// `vercel-ai/provider/src/language_model/v4/finish_reason.rs` for the
-// 8 variants + multi-LLM mapping table. The deprecated `inference`-
-// local enum that lived in `logging.rs` has been removed.
 pub use logging::detect_gateway;
 pub use logging::format_request_log;
 pub use logging::format_response_log;
@@ -90,74 +90,46 @@ pub use tool_schemas::filter_schemas_by_model;
 pub use tool_schemas::generate_tool_schemas;
 pub use tool_schemas::merge_tool_schemas;
 pub use usage::UsageAccumulator;
-pub use vercel_ai_provider::UnifiedFinishReason as StopReason;
 
 // ─── Vercel-ai re-export hub ──────────────────────────────────────────────
 //
-// Version-free aliases: downstream crates import these names from
-// `coco_inference`. When `vercel-ai-provider` upgrades (e.g. V4 → V5),
-// only these aliases need updating — call sites stay byte-identical.
+// Runtime / client contract: things callers of `ApiClient` and the
+// generic agent loop name (`LanguageModel` trait, call options, results,
+// errors, usage). DTOs (message envelope, content parts, ProviderOptions)
+// live in `coco-llm-types` and are NOT re-exported here — see the
+// dual-seam rationale in `scripts/check-vercel-ai-seam.sh`.
 //
-// Naming convention:
-// - Types whose vercel-ai name carries a version digit (`LanguageModelV4`,
-//   `ProviderV4`, `LanguageModelV4Tool`, …) are renamed to strip the digit.
-// - Types whose vercel-ai name has no version digit (`AssistantContentPart`,
-//   `Usage`, `FinishReason`, …) are passed through unchanged.
-//
-// CI grep guard (`scripts/check-vercel-ai-seam.sh`) ensures no other crate
-// imports `vercel_ai_provider::*` directly.
+// Naming convention: types whose vercel-ai name carries a version
+// digit are renamed to strip the digit so `vercel-ai` upgrades (V4 → V5)
+// stay local to this file.
 
-// Language-model protocol family — version-stripped renames.
+// Language-model protocol family — runtime/contract surface.
 pub use vercel_ai_provider::LanguageModelV4 as LanguageModel;
 pub use vercel_ai_provider::LanguageModelV4CallOptions as LanguageModelCallOptions;
 pub use vercel_ai_provider::LanguageModelV4GenerateResult as LanguageModelGenerateResult;
-pub use vercel_ai_provider::LanguageModelV4Message as LanguageModelMessage;
-pub use vercel_ai_provider::LanguageModelV4Prompt as LanguageModelPrompt;
 pub use vercel_ai_provider::LanguageModelV4StreamResult as LanguageModelStreamResult;
 pub use vercel_ai_provider::LanguageModelV4Tool as LanguageModelTool;
 pub use vercel_ai_provider::ProviderV4 as Provider;
 pub use vercel_ai_provider::language_model::v4::LanguageModelV4FunctionTool as LanguageModelFunctionTool;
 
-// Content parts — pass-through, no version digit.
-pub use vercel_ai_provider::AssistantContentPart;
+// Provider-internal content variants not part of the DTO seam (used by
+// vercel-ai's own conversion code and by streaming-side rebuild logic
+// inside this crate — kept here, not promoted to coco-llm-types).
 pub use vercel_ai_provider::CustomPart;
-pub use vercel_ai_provider::DataContent;
-pub use vercel_ai_provider::FilePart;
 pub use vercel_ai_provider::FileRawData;
 pub use vercel_ai_provider::ReasoningFilePart;
-pub use vercel_ai_provider::ReasoningPart;
-pub use vercel_ai_provider::SharedV4FileData;
-pub use vercel_ai_provider::TextPart;
-pub use vercel_ai_provider::ToolCallPart;
-pub use vercel_ai_provider::ToolContentPart;
-pub use vercel_ai_provider::ToolResultContent;
-pub use vercel_ai_provider::ToolResultContentPart;
-pub use vercel_ai_provider::ToolResultPart;
-pub use vercel_ai_provider::UserContentPart;
 
-// Errors / metadata / usage / config knobs — pass-through.
+// Errors + primitive — runtime/error-shape, not DTO. Stay in inference.
 pub use vercel_ai_provider::AISdkError;
-pub use vercel_ai_provider::FinishReason;
 pub use vercel_ai_provider::JSONValue;
-pub use vercel_ai_provider::ProviderMetadata;
-pub use vercel_ai_provider::ProviderOptions;
-pub use vercel_ai_provider::ReasoningLevel;
-pub use vercel_ai_provider::ResponseFormat;
-pub use vercel_ai_provider::ResponseMetadata;
-pub use vercel_ai_provider::UnifiedFinishReason;
-pub use vercel_ai_provider::Usage;
 
 /// One-line `use coco_inference::prelude::*;` to bring the common subset
 /// of API client + LLM types into scope. Mirrors `cocode-inference::prelude`.
 pub mod prelude {
     pub use crate::ApiClient;
-    pub use crate::AssistantContentPart;
-    pub use crate::FinishReason;
     pub use crate::LanguageModel;
     pub use crate::LanguageModelCallOptions;
     pub use crate::LanguageModelGenerateResult;
-    pub use crate::LanguageModelMessage;
-    pub use crate::LanguageModelPrompt;
     pub use crate::LanguageModelStreamResult;
     pub use crate::LanguageModelTool;
     pub use crate::QueryParams;
@@ -165,8 +137,12 @@ pub mod prelude {
     pub use crate::StreamEvent;
     pub use crate::StreamMetrics;
     pub use crate::StreamProcessorConfig;
-    pub use crate::TextPart;
-    pub use crate::ToolCallPart;
-    pub use crate::Usage;
-    pub use crate::UserContentPart;
+    pub use coco_llm_types::AssistantContentPart;
+    pub use coco_llm_types::FinishReason;
+    pub use coco_llm_types::LlmMessage;
+    pub use coco_llm_types::LlmPrompt;
+    pub use coco_llm_types::TextPart;
+    pub use coco_llm_types::ToolCallPart;
+    pub use coco_llm_types::Usage;
+    pub use coco_llm_types::UserContentPart;
 }

@@ -15,7 +15,7 @@
 
 use coco_inference::LanguageModelFunctionTool;
 use coco_inference::LanguageModelTool;
-use coco_inference::ToolResultContent as LlmToolResultContent;
+use coco_llm_types::ToolResultContent as LlmToolResultContent;
 use tracing::info;
 
 use coco_messages::LlmMessage;
@@ -409,7 +409,7 @@ impl QueryEngine {
                 anthropic.insert("deferLoading".to_string(), serde_json::Value::Bool(true));
                 let mut po_map = std::collections::HashMap::new();
                 po_map.insert("anthropic".to_string(), anthropic);
-                Some(coco_inference::ProviderOptions(po_map))
+                Some(coco_llm_types::ProviderOptions(po_map))
             } else {
                 None
             };
@@ -631,7 +631,7 @@ fn project_tool_result_content(tr: &ToolResultMessage) -> Option<ProjectedToolRe
             let mut texts = Vec::new();
             for part in value {
                 match part {
-                    coco_inference::ToolResultContentPart::Text { text, .. } => {
+                    coco_llm_types::ToolResultContentPart::Text { text, .. } => {
                         texts.push(text.clone());
                     }
                     _ => return None,

@@ -195,16 +195,16 @@ impl SideQuery for SideQueryAdapter {
         // doesn't split them; `Error` / `Other` carry the wire
         // string in the `Other(_)` payload for diagnostic surfacing.
         let stop_reason = match result.stop_reason {
-            Some(coco_inference::StopReason::EndTurn) | None => SideQueryStopReason::EndTurn,
-            Some(coco_inference::StopReason::StopSequence) => SideQueryStopReason::StopSequence,
-            Some(coco_inference::StopReason::ToolUse) => SideQueryStopReason::ToolUse,
-            Some(coco_inference::StopReason::MaxTokens)
-            | Some(coco_inference::StopReason::ContextWindowExceeded) => {
+            Some(coco_llm_types::StopReason::EndTurn) | None => SideQueryStopReason::EndTurn,
+            Some(coco_llm_types::StopReason::StopSequence) => SideQueryStopReason::StopSequence,
+            Some(coco_llm_types::StopReason::ToolUse) => SideQueryStopReason::ToolUse,
+            Some(coco_llm_types::StopReason::MaxTokens)
+            | Some(coco_llm_types::StopReason::ContextWindowExceeded) => {
                 SideQueryStopReason::MaxTokens
             }
-            Some(other @ coco_inference::StopReason::ContentFilter)
-            | Some(other @ coco_inference::StopReason::Error)
-            | Some(other @ coco_inference::StopReason::Other) => {
+            Some(other @ coco_llm_types::StopReason::ContentFilter)
+            | Some(other @ coco_llm_types::StopReason::Error)
+            | Some(other @ coco_llm_types::StopReason::Other) => {
                 SideQueryStopReason::Other(other.as_wire_str().to_string())
             }
         };

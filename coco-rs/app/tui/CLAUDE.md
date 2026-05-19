@@ -77,3 +77,44 @@ Expansion is selected-cell UI state only:
 
 Do not reintroduce a user-facing transcript expansion budget, `Ctrl+E` show-all
 mode, or a full transcript `Vec<Line>`/`String` path for overlay rendering.
+
+## Transcript Invariants
+
+The unified transcript refactor
+(`docs/coco-rs/engine-tui-unified-transcript-plan.md`) pins three rules:
+
+- **I-1 Authority** — `coco_messages::MessageHistory` is the single source
+  of truth. Every transcript mutation emits one of:
+  `MessageAppended` / `MessageTruncated` / `SessionResetForResume`.
+  Helpers: `coco_query::history_sync::{history_push_and_emit,
+  history_clear_and_emit, history_clear_and_emit_session_reset,
+  history_replace_and_emit}`. Direct `history.clear()` / `history.messages = ...`
+  in production code is a bug — observers desync.
+- **I-2 Derived view** — `TranscriptView.cells` is a pure derivation
+  from `&Message` via `derive::message_to_cells`. Renderers read
+  cells; never mutate cells in place.
+- **I-3 UI-only state stays UI-only** — `ui.streaming`,
+  `session.tool_executions`, modals, toasts. Not part of transcript.
+
+### Tolerated I-2 exception: `TranscriptView::record_reasoning_tokens`
+
+The `TurnCompleted` handler walks the most recent `AssistantThinking`
+cell in `TranscriptView` and stamps `duration_ms` + `reasoning_tokens`
+in place. This is **not** a pure re-derivation from the source
+`Message` — the engine emits aggregate reasoning usage as a turn-level
+stat after the `Reasoning` content has already been streamed and
+committed, and there is no per-message metadata-attached event.
+
+Two equivalent fixes are open:
+1. Add a `ServerNotification::ReasoningMetadataAttached { message_uuid,
+   duration_ms, reasoning_tokens }` event so the engine pushes the
+   metadata through the wire like any other transcript-visible field.
+2. Have the engine include reasoning usage on the `AssistantMessage`
+   itself before the `MessageAppended` emit. Requires the engine to
+   know the final usage at push-time (it currently only sees
+   `inputUsage` mid-turn).
+
+Until either lands, the in-place cell mutation is the single tolerated
+exception. The mutation is idempotent and confined to one method, so
+re-deriving cells from `cell.source` after a future fix is a small
+refactor.

@@ -244,6 +244,25 @@
       ],
       "type": "object"
     },
+    "ApiError": {
+      "description": "API error attached to an assistant message.",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "status_code": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
     "ApplyPatchToolType": {
       "description": "How a model handles file editing / apply_patch tool.",
       "oneOf": [
@@ -388,6 +407,985 @@
         "tool_use_id"
       ],
       "type": "object"
+    },
+    "AssistantContentPart": {
+      "description": "Assistant message content parts.",
+      "oneOf": [
+        {
+          "description": "Text content.",
+          "properties": {
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "text": {
+              "description": "The text content.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "text"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "File content.",
+          "properties": {
+            "data": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/SharedV4FileData"
+                }
+              ],
+              "description": "The file data as a tagged discriminated union."
+            },
+            "filename": {
+              "description": "Optional filename.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mediaType": {
+              "description": "Either a full IANA media type (`type/subtype`) or just the top-level segment (e.g. `image`, `audio`).",
+              "type": "string"
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "file"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "mediaType",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Reasoning content (for thinking models).",
+          "properties": {
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "text": {
+              "description": "The reasoning text.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "reasoning"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Reasoning file content (file data that is part of reasoning).",
+          "properties": {
+            "data": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/LanguageModelV4FileData"
+                }
+              ],
+              "description": "The file data (raw bytes/base64 or URL)."
+            },
+            "mediaType": {
+              "description": "Either a full IANA media type (`type/subtype`) or just the top-level segment (e.g. `image`, `audio`).",
+              "type": "string"
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "reasoning-file"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "mediaType",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Custom content for provider-specific extensions.",
+          "properties": {
+            "kind": {
+              "description": "The kind of custom content.",
+              "type": "string"
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata (response-side).",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "providerOptions": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options (prompt-side).",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "custom"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tool call.",
+          "properties": {
+            "input": {
+              "description": "The tool arguments as JSON."
+            },
+            "providerExecuted": {
+              "description": "Whether the tool call will be executed by the provider. If this flag is not set or is false, the tool call will be executed by the client.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "toolCallId": {
+              "description": "The tool call ID.",
+              "type": "string"
+            },
+            "toolName": {
+              "description": "The tool name.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "tool-call"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "input",
+            "toolCallId",
+            "toolName",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tool result (when assistant receives tool results).",
+          "properties": {
+            "isError": {
+              "default": false,
+              "description": "Whether the tool call was successful.",
+              "type": "boolean"
+            },
+            "output": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ToolResultContent"
+                }
+              ],
+              "description": "The result content."
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "toolCallId": {
+              "description": "The tool call ID this result is for.",
+              "type": "string"
+            },
+            "toolName": {
+              "description": "The tool name.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "tool-result"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "output",
+            "toolCallId",
+            "toolName",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Source reference (for citations).",
+          "properties": {
+            "filename": {
+              "description": "Optional filename (for document sources).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "The source ID.",
+              "type": "string"
+            },
+            "mediaType": {
+              "description": "The MIME type (for document sources).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "sourceType": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/SourceType"
+                }
+              ],
+              "description": "The source type (url or document)."
+            },
+            "title": {
+              "description": "The source title.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "source"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "description": "The source URL (for URL sources).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "sourceType",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tool approval request (for provider-executed tools).",
+          "properties": {
+            "approvalId": {
+              "description": "ID of the approval request. This ID is referenced by the subsequent tool-approval-response (tool message) to approve or deny execution.",
+              "type": "string"
+            },
+            "context": {
+              "description": "Additional context about the tool call (optional).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "toolCallId": {
+              "description": "The tool call ID that this approval request is for.",
+              "type": "string"
+            },
+            "toolName": {
+              "description": "The tool name (optional).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "tool-approval-request"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "approvalId",
+            "toolCallId",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AttachmentBody": {
+      "description": "Typed payload for an [`AttachmentMessage`](super::AttachmentMessage).",
+      "oneOf": [
+        {
+          "description": "Pre-rendered `LlmMessage` — reaches the model when filtered in.",
+          "oneOf": [
+            {
+              "description": "A system message.",
+              "properties": {
+                "content": {
+                  "description": "The system message content parts.",
+                  "items": {
+                    "$ref": "#/definitions/UserContentPart"
+                  },
+                  "type": "array"
+                },
+                "provider_options": {
+                  "additionalProperties": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "description": "Provider-specific options.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "role": {
+                  "enum": [
+                    "system"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "role"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A developer message.",
+              "properties": {
+                "content": {
+                  "description": "The developer message content parts.",
+                  "items": {
+                    "$ref": "#/definitions/UserContentPart"
+                  },
+                  "type": "array"
+                },
+                "provider_options": {
+                  "additionalProperties": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "description": "Provider-specific options.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "role": {
+                  "enum": [
+                    "developer"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "role"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A user message.",
+              "properties": {
+                "content": {
+                  "description": "The user message content parts.",
+                  "items": {
+                    "$ref": "#/definitions/UserContentPart"
+                  },
+                  "type": "array"
+                },
+                "provider_options": {
+                  "additionalProperties": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "description": "Provider-specific options.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "role": {
+                  "enum": [
+                    "user"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "role"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "An assistant message.",
+              "properties": {
+                "content": {
+                  "description": "The assistant message content parts.",
+                  "items": {
+                    "$ref": "#/definitions/AssistantContentPart"
+                  },
+                  "type": "array"
+                },
+                "provider_options": {
+                  "additionalProperties": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "description": "Provider-specific options.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "role": {
+                  "enum": [
+                    "assistant"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "role"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A tool message.",
+              "properties": {
+                "content": {
+                  "description": "The tool message content parts.",
+                  "items": {
+                    "$ref": "#/definitions/ToolContentPart"
+                  },
+                  "type": "array"
+                },
+                "provider_options": {
+                  "additionalProperties": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "description": "Provider-specific options.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "role": {
+                  "enum": [
+                    "tool"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "role"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "body": {
+              "enum": [
+                "api"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "body"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Typed silent payload — UI/transcript only, never sent to the API.",
+          "oneOf": [
+            {
+              "description": "TS parity: `HookCancelledAttachment` (`utils/attachments.ts:396-403`).",
+              "properties": {
+                "command": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "duration_ms": {
+                  "format": "int64",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "hook_event": {
+                  "$ref": "#/definitions/HookEventType"
+                },
+                "hook_name": {
+                  "type": "string"
+                },
+                "tool_use_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "hook_cancelled"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "hook_event",
+                "hook_name",
+                "tool_use_id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "TS parity: `HookErrorDuringExecutionAttachment` (`utils/attachments.ts:405-414`).",
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "hook_event": {
+                  "$ref": "#/definitions/HookEventType"
+                },
+                "hook_name": {
+                  "type": "string"
+                },
+                "tool_use_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "hook_error_during_execution"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "hook_event",
+                "hook_name",
+                "tool_use_id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "TS parity: `HookNonBlockingErrorAttachment` (`utils/attachments.ts:429+`).",
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hook_event": {
+                  "$ref": "#/definitions/HookEventType"
+                },
+                "hook_name": {
+                  "type": "string"
+                },
+                "tool_use_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "hook_non_blocking_error"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "error",
+                "hook_event",
+                "hook_name",
+                "tool_use_id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "TS parity: `HookSystemMessageAttachment` (`utils/attachments.ts:388-394`).",
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "hook_event": {
+                  "$ref": "#/definitions/HookEventType"
+                },
+                "hook_name": {
+                  "type": "string"
+                },
+                "tool_use_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "hook_system_message"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "hook_event",
+                "hook_name",
+                "tool_use_id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "TS parity: `HookPermissionDecisionAttachment` (`utils/attachments.ts:381-386`).",
+              "properties": {
+                "decision": {
+                  "$ref": "#/definitions/HookPermissionDecision"
+                },
+                "hook_event": {
+                  "$ref": "#/definitions/HookEventType"
+                },
+                "tool_use_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "hook_permission_decision"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "decision",
+                "hook_event",
+                "tool_use_id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "TS parity: `command_permissions` (`utils/attachments.ts:605-608`).",
+              "properties": {
+                "allowed_tools": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "command_permissions"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "allowed_tools",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "TS parity: `structured_output` (`utils/attachments.ts:639+`, `services/tools/toolExecution.ts:1276`).",
+              "properties": {
+                "data": true,
+                "tool_name": {
+                  "type": "string"
+                },
+                "tool_use_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "structured_output"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "data",
+                "tool_name",
+                "tool_use_id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "TS parity: `dynamic_skill` (`utils/attachments.ts:525+`).",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "skill_name": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "dynamic_skill"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "skill_name",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "TS parity: `AlreadyReadFileAttachment` (`utils/attachments.ts:323-333`).\n\nTS carries the (potentially truncated) file content inline for UI display even though `normalizeAttachmentForAPI` returns `[]`. coco-rs follows suit — `content` is the last-known file body used by transcript viewers.",
+              "properties": {
+                "content": {
+                  "default": "",
+                  "description": "Cached content from `FileReadState` at dedup time.",
+                  "type": "string"
+                },
+                "display_path": {
+                  "description": "Path relative to CWD at creation time, for stable display.",
+                  "type": "string"
+                },
+                "filename": {
+                  "description": "Absolute or resolved path (engine-populated).",
+                  "type": "string"
+                },
+                "truncated": {
+                  "default": false,
+                  "description": "Whether the content was truncated due to size limits.",
+                  "type": "boolean"
+                },
+                "type": {
+                  "enum": [
+                    "already_read_file"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "display_path",
+                "filename",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "TS parity: `edited_image_file` (`utils/attachments.ts:456-460`).\n\nImage bytes can't be diffed textually; the UI renders a marker / thumbnail.",
+              "properties": {
+                "display_path": {
+                  "description": "Path relative to CWD at creation time.",
+                  "type": "string"
+                },
+                "filename": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "edited_image_file"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "display_path",
+                "filename",
+                "type"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "body": {
+              "enum": [
+                "silent"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "body"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Discriminator-only — for `FeatureGated` / `RuntimeBookkeeping` kinds.",
+          "properties": {
+            "body": {
+              "enum": [
+                "unit"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "body"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AttachmentKind": {
+      "description": "Every TS `Attachment.type` discriminator. 60 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]` to match TS `Attachment.type` exactly, so transcripts round-trip.",
+      "oneOf": [
+        {
+          "enum": [
+            "plan_mode",
+            "plan_mode_reentry",
+            "plan_mode_exit",
+            "auto_mode",
+            "auto_mode_exit",
+            "todo_reminder",
+            "task_reminder",
+            "compaction_reminder",
+            "date_change",
+            "verify_plan_reminder",
+            "ultrathink_effort",
+            "token_usage",
+            "budget_usd",
+            "output_token_usage",
+            "companion_intro",
+            "deferred_tools_delta",
+            "agent_listing_delta",
+            "mcp_instructions_delta",
+            "hook_success",
+            "hook_blocking_error",
+            "hook_additional_context",
+            "hook_stopped_continuation",
+            "async_hook_response",
+            "diagnostics",
+            "output_style",
+            "queued_command",
+            "task_status",
+            "skill_listing",
+            "invoked_skills",
+            "teammate_mailbox",
+            "team_context",
+            "mcp_resource",
+            "agent_mention",
+            "selected_lines_in_ide",
+            "opened_file_in_ide",
+            "nested_memory",
+            "relevant_memories",
+            "already_read_file",
+            "edited_image_file",
+            "file",
+            "directory",
+            "pdf_reference",
+            "compact_file_reference",
+            "plan_file_reference",
+            "edited_text_file",
+            "command_permissions",
+            "hook_cancelled",
+            "hook_error_during_execution",
+            "hook_non_blocking_error",
+            "hook_permission_decision",
+            "hook_system_message",
+            "structured_output",
+            "dynamic_skill",
+            "context_efficiency",
+            "skill_discovery",
+            "max_turns_reached",
+            "current_session_memory",
+            "teammate_shutdown_batch",
+            "bagel_console"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "TS: user-supplied per-turn critical instruction (`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).\n\n**coco-rs dual role**: also serves as the generic carrier kind for `coco_messages::create_meta_message` / `create_system_reminder_message` (post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The reminder-generator path reads `ctx.config.critical_instruction` for the TS-aligned case; engine-internal meta injection reuses the same kind because API-visible + UI-hidden wrapped text is exactly its visibility profile. Both paths land in `Message::Attachment` with `AttachmentBody::Api(LlmMessage)`.",
+          "enum": [
+            "critical_system_reminder"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "CancelReason": {
       "description": "Why a turn was interrupted. Lets the TUI distinguish \"user pressed Ctrl+C — restore the input if conditions match\" from \"system cancelled the in-flight turn to make room for `/clear` / `/compact` / `/rewind` / shutdown / next submit — leave the conversation alone\".\n\nMirrors TS `abortController.signal.reason` discrimination at `REPL.tsx:3001`. New variants default to non-user-initiated semantics at the consumer (no auto-restore), so adding e.g. `BudgetExhausted` or `Timeout` later is additive without breaking the TUI handler.",
@@ -1417,6 +2415,9 @@
       ],
       "type": "string"
     },
+    "FileRawData": {
+      "type": "string"
+    },
     "FilesPersistedParams": {
       "description": "Matches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).\n\nTS emits this when files are uploaded or persisted (e.g. after a successful `filesApi` operation).",
       "properties": {
@@ -1513,11 +2514,52 @@
       ],
       "type": "object"
     },
+    "HookEventType": {
+      "description": "27 hook event types matching TS `HOOK_EVENTS` (`src/entrypoints/sdk/coreSchemas.ts:355-383`).\n\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) — identical to TS settings.json keys. Variant names serialize as-is via serde default and strum default; do not add `rename_all`.\n\n`#[non_exhaustive]` so future TS additions can land without breaking match exhaustiveness in downstream crates.",
+      "enum": [
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "SessionStart",
+        "SessionEnd",
+        "Setup",
+        "Stop",
+        "StopFailure",
+        "SubagentStart",
+        "SubagentStop",
+        "UserPromptSubmit",
+        "PermissionRequest",
+        "PermissionDenied",
+        "Notification",
+        "Elicitation",
+        "ElicitationResult",
+        "PreCompact",
+        "PostCompact",
+        "TeammateIdle",
+        "TaskCreated",
+        "TaskCompleted",
+        "ConfigChange",
+        "InstructionsLoaded",
+        "CwdChanged",
+        "FileChanged",
+        "WorktreeCreate",
+        "WorktreeRemove"
+      ],
+      "type": "string"
+    },
     "HookOutcomeStatus": {
       "enum": [
         "success",
         "error",
         "cancelled"
+      ],
+      "type": "string"
+    },
+    "HookPermissionDecision": {
+      "description": "`allow` / `deny` decision, matching TS `'allow' | 'deny'`.",
+      "enum": [
+        "allow",
+        "deny"
       ],
       "type": "string"
     },
@@ -1958,6 +3000,230 @@
       "title": "JsonRpcResponse",
       "type": "object"
     },
+    "LanguageModelV4FileData": {
+      "description": "Generated file data — either raw bytes/base64 or a URL.\n\nMatches the 2-arm `SharedV4FileDataData | SharedV4FileDataUrl` tagged union from the TypeScript v4 spec.",
+      "oneOf": [
+        {
+          "description": "Raw bytes (Uint8Array) or base64-encoded string.",
+          "properties": {
+            "data": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/FileRawData"
+                }
+              ],
+              "description": "The raw data."
+            },
+            "type": {
+              "enum": [
+                "data"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A URL that points to the file.",
+          "properties": {
+            "type": {
+              "enum": [
+                "url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "description": "The URL string.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LanguageModelV4Message": {
+      "description": "A message in a language model prompt.",
+      "oneOf": [
+        {
+          "description": "A system message.",
+          "properties": {
+            "content": {
+              "description": "The system message content parts.",
+              "items": {
+                "$ref": "#/definitions/UserContentPart"
+              },
+              "type": "array"
+            },
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "role": {
+              "enum": [
+                "system"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "role"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A developer message.",
+          "properties": {
+            "content": {
+              "description": "The developer message content parts.",
+              "items": {
+                "$ref": "#/definitions/UserContentPart"
+              },
+              "type": "array"
+            },
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "role": {
+              "enum": [
+                "developer"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "role"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A user message.",
+          "properties": {
+            "content": {
+              "description": "The user message content parts.",
+              "items": {
+                "$ref": "#/definitions/UserContentPart"
+              },
+              "type": "array"
+            },
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "role": {
+              "enum": [
+                "user"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "role"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An assistant message.",
+          "properties": {
+            "content": {
+              "description": "The assistant message content parts.",
+              "items": {
+                "$ref": "#/definitions/AssistantContentPart"
+              },
+              "type": "array"
+            },
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "role": {
+              "enum": [
+                "assistant"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "role"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A tool message.",
+          "properties": {
+            "content": {
+              "description": "The tool message content parts.",
+              "items": {
+                "$ref": "#/definitions/ToolContentPart"
+              },
+              "type": "array"
+            },
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "role": {
+              "enum": [
+                "tool"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "role"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "LocalCommandOutputParams": {
       "description": "Matches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).\n\nTS emits this when the user runs a local bash command via the REPL `!` prefix (not a tool call). The `content` field is the command output; TS types it as the raw output structure (typically stdout/stderr).",
       "properties": {
@@ -2290,6 +3556,790 @@
         }
       ]
     },
+    "Message": {
+      "description": "Top-level message enum.",
+      "oneOf": [
+        {
+          "properties": {
+            "is_compact_summary": {
+              "default": false,
+              "type": "boolean"
+            },
+            "is_virtual": {
+              "default": false,
+              "description": "Not sent to API.",
+              "type": "boolean"
+            },
+            "is_visible_in_transcript_only": {
+              "default": false,
+              "type": "boolean"
+            },
+            "message": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/LanguageModelV4Message"
+                }
+              ],
+              "description": "LLM API layer — sent to API directly via .message field."
+            },
+            "origin": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessageOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "parent_tool_use_id": {
+              "description": "Parent tool-use id when this message was produced by a tool call's `new_messages` (e.g. inline skill expansion). Used by transcript grouping + as a marker that the message is transient until its parent tool_result resolves.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "permission_mode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PermissionMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "timestamp": {
+              "default": "",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "user"
+              ],
+              "type": "string"
+            },
+            "uuid": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "type",
+            "uuid"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "api_error": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ApiError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cost_usd": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "message": {
+              "$ref": "#/definitions/LanguageModelV4Message"
+            },
+            "model": {
+              "default": "",
+              "type": "string"
+            },
+            "request_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "stop_reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/UnifiedFinishReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "enum": [
+                "assistant"
+              ],
+              "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TokenUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "uuid": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "type",
+            "uuid"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "System messages have sub-types for different notification kinds. All system messages are `role: \"user\"` with `is_meta: true` for the API.",
+          "oneOf": [
+            {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "informational"
+                  ],
+                  "type": "string"
+                },
+                "level": {
+                  "$ref": "#/definitions/SystemMessageLevel"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "level",
+                "message",
+                "title",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "api_error"
+                  ],
+                  "type": "string"
+                },
+                "status_code": {
+                  "format": "int32",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "error",
+                "kind",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "compact_boundary"
+                  ],
+                  "type": "string"
+                },
+                "messages_summarized": {
+                  "description": "Number of messages that were summarized.",
+                  "format": "int32",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "pre_compact_discovered_tools": {
+                  "description": "Tools discovered before compaction (for delta re-announcement).",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "preserved_segment": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/PreservedSegment"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Preserved segment for partial/suffix-preserving compaction."
+                },
+                "tokens_after": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "tokens_before": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "trigger": {
+                  "allOf": [
+                    {
+                      "$ref": "#/definitions/CompactTrigger"
+                    }
+                  ],
+                  "default": "auto",
+                  "description": "How compaction was triggered."
+                },
+                "user_context": {
+                  "description": "User-supplied context for the compaction.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "tokens_after",
+                "tokens_before",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Micro-compaction boundary marker.\n\nReserved for future use. coco-rs aligns with TS: micro-compaction (client-side tool-result clearing + time-based MC) does NOT emit a user-visible boundary message — it broadcasts a `ContextCompacted` event with `trigger=TimeBased`/`Auto` instead, and the TUI renders a transient toast (`toast.micro_compaction`) rather than persisting a boundary in the transcript. The variant stays defined so wire transcripts that include one (e.g. cached-microcompact builds) can be parsed without errors.",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "microcompact_boundary"
+                  ],
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "command": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "local_command"
+                  ],
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "kind",
+                "output",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "permission_retry"
+                  ],
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message",
+                "tool_name",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "connected": {
+                  "type": "boolean"
+                },
+                "kind": {
+                  "enum": [
+                    "bridge_status"
+                  ],
+                  "type": "string"
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "connected",
+                "kind",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Surfaced to the user's transcript when the auto-memory subsystem has just landed new memory writes. TS parity: `utils/messages.ts::createMemorySavedMessage(writtenPaths)` + `services/autoDream/autoDream.ts:244-247` (which overrides `verb` to `\"Improved\"` for dream consolidations vs. the default `\"Saved\"` for extract).",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "memory_saved"
+                  ],
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "verb": {
+                  "default": "Saved",
+                  "description": "Display verb. `\"Saved\"` for extract; `\"Improved\"` for auto-dream consolidation. `#[serde(default)]` accepts older transcripts produced before this field was added.",
+                  "type": "string"
+                },
+                "written_paths": {
+                  "default": [],
+                  "description": "Paths the subagent wrote (or improved). TS `writtenPaths`. Excludes `MEMORY.md` — the index file is mechanical and not user-relevant.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "kind",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "away_summary"
+                  ],
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "summary",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "count": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "kind": {
+                  "enum": [
+                    "agents_killed"
+                  ],
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "count",
+                "kind",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "cost_usd": {
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "enum": [
+                    "api_metrics"
+                  ],
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "usage": {
+                  "$ref": "#/definitions/TokenUsage"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "model",
+                "usage",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "hook_name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "stop_hook_summary"
+                  ],
+                  "type": "string"
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "hook_name",
+                "kind",
+                "outcome",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "duration_ms": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "kind": {
+                  "enum": [
+                    "turn_duration"
+                  ],
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "duration_ms",
+                "kind",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "scheduled_task_fire"
+                  ],
+                  "type": "string"
+                },
+                "schedule": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "schedule",
+                "task_id",
+                "uuid"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "User cancellation marker. Replaces the legacy text-based `INTERRUPT_MESSAGE` / `INTERRUPT_MESSAGE_FOR_TOOL_USE` User messages with a typed variant. `for_tool_use` is computed once by the engine cancel finalizer and never recomputed downstream; see `engine-tui-unified-transcript-plan.md` §7.1.",
+              "properties": {
+                "for_tool_use": {
+                  "type": "boolean"
+                },
+                "kind": {
+                  "enum": [
+                    "user_interruption"
+                  ],
+                  "type": "string"
+                },
+                "uuid": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "for_tool_use",
+                "kind",
+                "uuid"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "system"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Attachment message: `kind` carries the TS-parity discriminant (60 variants), `body` carries the typed payload.\n\n**Invariant**: `kind` and `body` must agree — e.g. `kind = HookCancelled` must come with `body = Silent(SilentPayload::HookCancelled(..))`. Do **not** construct via struct literal; use the typed constructor helpers below.",
+          "properties": {
+            "body": {
+              "$ref": "#/definitions/AttachmentBody"
+            },
+            "kind": {
+              "$ref": "#/definitions/AttachmentKind"
+            },
+            "type": {
+              "enum": [
+                "attachment"
+              ],
+              "type": "string"
+            },
+            "uuid": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "body",
+            "kind",
+            "type",
+            "uuid"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "is_error": {
+              "default": false,
+              "type": "boolean"
+            },
+            "message": {
+              "$ref": "#/definitions/LanguageModelV4Message"
+            },
+            "tool_id": {
+              "$ref": "#/definitions/ToolId"
+            },
+            "tool_use_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "tool_result"
+              ],
+              "type": "string"
+            },
+            "uuid": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "tool_id",
+            "tool_use_id",
+            "type",
+            "uuid"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": true,
+            "parent_message_uuid": {
+              "format": "uuid",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tool_use_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "progress"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "tool_use_id",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "original_kind": {
+              "$ref": "#/definitions/MessageKind"
+            },
+            "type": {
+              "enum": [
+                "tombstone"
+              ],
+              "type": "string"
+            },
+            "uuid": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "original_kind",
+            "type",
+            "uuid"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Background `ModelRole::Fast` summary of a batch of tool uses.\n\nTS: `utils/messages.ts::createToolUseSummaryMessage` — `{ summary, precedingToolUseIds, uuid, timestamp }`. The TS shape carries `precedingToolUseIds: string[]` (plural) because one summary describes the whole tool batch from a single assistant turn. The internal Rust struct mirrors that wire shape so SDK emission via `ServerNotification::ToolUseSummary` is a 1:1 copy.",
+          "properties": {
+            "preceding_tool_use_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "tool_use_summary"
+              ],
+              "type": "string"
+            },
+            "uuid": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "preceding_tool_use_ids",
+            "summary",
+            "type",
+            "uuid"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MessageKind": {
+      "description": "Which message variant was tombstoned.",
+      "enum": [
+        "user",
+        "assistant",
+        "system",
+        "attachment",
+        "tool_result",
+        "progress",
+        "tombstone",
+        "tool_use_summary"
+      ],
+      "type": "string"
+    },
+    "MessageOrigin": {
+      "description": "Where a message originated.",
+      "enum": [
+        "user_input",
+        "system_injected",
+        "tool_result",
+        "compact_summary",
+        "subagent_reply"
+      ],
+      "type": "string"
+    },
     "ModelFallbackParams": {
       "properties": {
         "from_model": {
@@ -2410,6 +4460,9 @@
         "session/started",
         "session/result",
         "session/ended",
+        "history/messageAppended",
+        "history/messageTruncated",
+        "history/resetForResume",
         "turn/started",
         "turn/completed",
         "turn/failed",
@@ -2996,6 +5049,32 @@
       ],
       "type": "object"
     },
+    "PreservedSegment": {
+      "description": "Preserved message segment after partial compaction.",
+      "properties": {
+        "anchor_uuid": {
+          "description": "Summary or boundary anchor UUID.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "head_uuid": {
+          "description": "First kept message UUID.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "tail_uuid": {
+          "description": "Last kept message UUID.",
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "anchor_uuid",
+        "head_uuid",
+        "tail_uuid"
+      ],
+      "type": "object"
+    },
     "ProviderApi": {
       "description": "Which LLM provider implementation to use. Consumed by coco-config (ProviderInfo) and coco-inference (ProviderFactory).",
       "enum": [
@@ -3243,7 +5322,7 @@
       "type": "object"
     },
     "ServerNotification": {
-      "description": "Protocol-level notifications visible to all consumers.\n\n66 variants across 20 categories. See `event-system-design.md` Section 2. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
+      "description": "Protocol-level notifications visible to all consumers.\n\n69 variants across 21 categories. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
       "oneOf": [
         {
           "description": "New session started.",
@@ -3294,6 +5373,88 @@
             },
             "params": {
               "$ref": "#/definitions/SessionEndedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One Message appended to engine MessageHistory.",
+          "properties": {
+            "method": {
+              "enum": [
+                "history/messageAppended"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "properties": {
+                "message": {
+                  "$ref": "#/definitions/Message"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "MessageHistory truncated to `keep_count` entries (indices >= keep_count discarded). Emitted by explicit-rewind and auto-restore both, so SDK + TUI converge on engine truncation without separate private paths.",
+          "properties": {
+            "method": {
+              "enum": [
+                "history/messageTruncated"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "properties": {
+                "keep_count": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "keep_count"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Session reset for resume. TUI clears derived transcript view in preparation for a burst of `MessageAppended` that replays the loaded JSONL transcript.",
+          "properties": {
+            "method": {
+              "enum": [
+                "history/resetForResume"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "properties": {
+                "session_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "session_id"
+              ],
+              "type": "object"
             }
           },
           "required": [
@@ -5313,6 +7474,98 @@
       },
       "type": "object"
     },
+    "SharedV4FileData": {
+      "description": "File data as a tagged discriminated union (v4 spec).\n\n- `Data` — raw bytes or base64-encoded string. - `Url`  — a URL pointing to the file. - `Reference` — a provider reference (`{ [provider]: id }`). - `Text` — inline text content.",
+      "oneOf": [
+        {
+          "description": "Raw bytes (Uint8Array) or base64-encoded string.",
+          "properties": {
+            "data": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/FileRawData"
+                }
+              ],
+              "description": "The raw data."
+            },
+            "type": {
+              "enum": [
+                "data"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A URL that points to the file.",
+          "properties": {
+            "type": {
+              "enum": [
+                "url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "description": "The URL string.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A provider reference mapping provider names to file IDs.",
+          "properties": {
+            "reference": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Map of provider name → provider-specific file ID.",
+              "type": "object"
+            },
+            "type": {
+              "enum": [
+                "reference"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "reference",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Inline text content (e.g. an inline text document).",
+          "properties": {
+            "text": {
+              "description": "The text content.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "text"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "SlashCommandInfo": {
       "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of these at startup (and again after `/reload-plugins`) so the autocomplete popup and command palette can render and rank without reaching into [`CommandBase`] every time.\n\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a [`crate::TuiOnlyEvent`] variant — events are the only path between the agent driver and the TUI, and event payload types must be foundation-layer.",
       "properties": {
@@ -5450,6 +7703,25 @@
         }
       ]
     },
+    "SourceType": {
+      "description": "Types of sources.",
+      "oneOf": [
+        {
+          "description": "URL source referencing web content.",
+          "enum": [
+            "url"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Document source referencing files/documents.",
+          "enum": [
+            "document"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "StopTaskParams": {
       "description": "Matches TS `SDKControlStopTaskRequestSchema` (controlSchemas.ts:458-461).",
       "properties": {
@@ -5574,6 +7846,14 @@
         "summary_tokens"
       ],
       "type": "object"
+    },
+    "SystemMessageLevel": {
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ],
+      "type": "string"
     },
     "TaskCompletedParams": {
       "description": "Matches TS `SDKTaskNotificationMessage` (coreSchemas.ts:1694-1713). TS calls this `task/notification`; coco-rs uses `task/completed` as the wire method for brevity, but fields match TS exactly.",
@@ -6211,6 +8491,101 @@
       ],
       "type": "object"
     },
+    "ToolContentPart": {
+      "description": "Tool message content parts.",
+      "oneOf": [
+        {
+          "description": "Tool result.",
+          "properties": {
+            "isError": {
+              "default": false,
+              "description": "Whether the tool call was successful.",
+              "type": "boolean"
+            },
+            "output": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ToolResultContent"
+                }
+              ],
+              "description": "The result content."
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "toolCallId": {
+              "description": "The tool call ID this result is for.",
+              "type": "string"
+            },
+            "toolName": {
+              "description": "The tool name.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "tool-result"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "output",
+            "toolCallId",
+            "toolName",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tool approval response.",
+          "properties": {
+            "approvalId": {
+              "description": "ID of the approval request that this response refers to.",
+              "type": "string"
+            },
+            "approved": {
+              "description": "Whether the approval was granted (true) or denied (false).",
+              "type": "boolean"
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "reason": {
+              "description": "Optional reason for approval or denial.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "tool-approval-response"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "approvalId",
+            "approved",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ToolId": {
+      "type": "string"
+    },
     "ToolProgressParams": {
       "description": "Matches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).\n\nLong-running tool progress (Bash, PowerShell). TS throttles emission to ≤1 per 30 seconds per `parent_tool_use_id`. coco-rs StreamAccumulator may emit this independently from `AgentStreamEvent::ToolUseStarted`.",
       "properties": {
@@ -6243,6 +8618,375 @@
         "tool_use_id"
       ],
       "type": "object"
+    },
+    "ToolResultContent": {
+      "description": "Content of a tool result.\n\nThis matches the LanguageModelV4ToolResultOutput type from the v4 spec.",
+      "oneOf": [
+        {
+          "description": "Text tool output that should be directly sent to the API.",
+          "properties": {
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "text"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "The text content.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "JSON tool output.",
+          "properties": {
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "json"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "The JSON content."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Type when the user has denied the execution of the tool call.",
+          "properties": {
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "reason": {
+              "description": "Optional reason for the execution denial.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "execution-denied"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Error text output.",
+          "properties": {
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "error-text"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "The error message.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Error JSON output.",
+          "properties": {
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "error-json"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "The error JSON."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Multiple content parts.",
+          "properties": {
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "content"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "The content parts.",
+              "items": {
+                "$ref": "#/definitions/ToolResultContentPart"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ToolResultContentPart": {
+      "description": "A part of tool result content.\n\nMatches the `content` array items in `LanguageModelV4ToolResultOutput` from the v4 spec — TS source has 5 variants: `text`, `file-data`, `file-url`, `file-reference`, `custom`. Image / non-image are distinguished by `media_type` (image/png vs application/pdf etc.), not by separate variants.",
+      "oneOf": [
+        {
+          "description": "Text content.",
+          "properties": {
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "text": {
+              "description": "The text content.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "text"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "File data (base64 encoded).",
+          "properties": {
+            "data": {
+              "description": "Base-64 encoded media data.",
+              "type": "string"
+            },
+            "filename": {
+              "description": "Optional filename.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "media_type": {
+              "description": "IANA media type.",
+              "type": "string"
+            },
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "file-data"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "media_type",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "File URL reference.",
+          "properties": {
+            "media_type": {
+              "description": "IANA media type. TS spec carries this; Rust now honors it.",
+              "type": "string"
+            },
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "file-url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "description": "URL of the file.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "media_type",
+            "type",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Provider reference (cross-provider file identifier mapping). Replaces the old `FileId { file_id: ... }` variant; field is `providerReference` to match the TS spec exactly.",
+          "properties": {
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "provider_reference": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Provider-specific references for the file (e.g. `{ \"openai\": \"file-abc\", \"anthropic\": \"file-xyz\" }`).",
+              "type": "object"
+            },
+            "type": {
+              "enum": [
+                "file-reference"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider_reference",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Custom content part for provider-specific content.",
+          "properties": {
+            "provider_options": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "description": "Provider-specific options.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "custom"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "ToolUseSummaryParams": {
       "description": "Matches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).\n\nBackground Haiku-based summary of a batch of tool uses. TS uses this to compress verbose tool output before it's displayed or archived.",
@@ -7170,6 +9914,67 @@
       ],
       "type": "object"
     },
+    "UnifiedFinishReason": {
+      "description": "Unified finish reason for a completed LLM turn.\n\nMulti-LLM-stable: each `vercel-ai-<provider>` adapter maps its raw stop_reason into one of these variants. See module docs for the per-provider mapping table.",
+      "oneOf": [
+        {
+          "description": "Model finished a normal assistant turn (no tool calls, no stop sequence match). Covers Anthropic `end_turn`/`pause_turn`, OpenAI `stop` (when no stop_sequence matched), Google `STOP` (no tool calls).",
+          "enum": [
+            "end_turn"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Stop sequence matched. Coco-rs refinement of the spec's `Stop` bucket — provider raw is `stop_sequence` / `\"stop-sequence\"`.",
+          "enum": [
+            "stop_sequence"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Model invoked one or more tools and is awaiting results. Anthropic `tool_use`, OpenAI `tool_calls`, Google `STOP + has_tool_calls`.",
+          "enum": [
+            "tool_use"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Output-token budget exhausted. Anthropic `max_tokens`, OpenAI `length`, Google `MAX_TOKENS`. Engine drives 64k escalate + multi-turn recovery (`app/query/src/engine.rs`).",
+          "enum": [
+            "max_tokens"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Context-window limit hit. Coco-rs refinement of the `MaxTokens` bucket — provider raw is `model_context_window_exceeded`. Recovery path is shared with `MaxTokens`; the variant exists so the user-facing wording can distinguish \"context window\" vs \"output token maximum\". Wire string keeps the Anthropic-original `model_context_window_exceeded` form so transcripts that captured the raw value round-trip via the typed enum.",
+          "enum": [
+            "model_context_window_exceeded"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Provider blocked / refused / safety-filtered the response. Multi-LLM unified bucket — Anthropic `refusal`, OpenAI `content_filter`, Google `SAFETY` / `RECITATION` / `IMAGE_SAFETY`.",
+          "enum": [
+            "content_filter"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Provider reported an error during generation. Distinct from network / HTTP / auth errors which surface via separate error channels.",
+          "enum": [
+            "error"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Unspecified / unknown termination. Raw wire string is preserved on [`FinishReason::raw`] for diagnostics.",
+          "enum": [
+            "other"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "UpdateEnvParams": {
       "description": "Params for `control/updateEnv`.",
       "properties": {
@@ -7184,6 +9989,83 @@
         "env"
       ],
       "type": "object"
+    },
+    "UserContentPart": {
+      "description": "User message content parts.",
+      "oneOf": [
+        {
+          "description": "Text content.",
+          "properties": {
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "text": {
+              "description": "The text content.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "text"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "File content (image, document, etc.).",
+          "properties": {
+            "data": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/SharedV4FileData"
+                }
+              ],
+              "description": "The file data as a tagged discriminated union."
+            },
+            "filename": {
+              "description": "Optional filename.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mediaType": {
+              "description": "Either a full IANA media type (`type/subtype`) or just the top-level segment (e.g. `image`, `audio`).",
+              "type": "string"
+            },
+            "providerMetadata": {
+              "additionalProperties": true,
+              "description": "Provider-specific metadata.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "file"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "mediaType",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "UserInputResolveParams": {
       "description": "Params for `input/resolveUserInput`.",

@@ -1059,7 +1059,18 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
                     message_count += 1;
                 }
                 if first_prompt.is_empty() && t.entry_type == "user" {
-                    first_prompt = extract_text_content(t);
+                    let candidate = extract_text_content(t);
+                    // TS parity: `sessionStorage.ts:125`'s
+                    // `SKIP_FIRST_PROMPT_PATTERN` filters synthetic
+                    // interrupt markers so the resume picker shows the
+                    // user's real first prompt, not "[Request
+                    // interrupted by user]". Coco-rs uses literal
+                    // equality against the two interrupt markers from
+                    // `coco-messages::creation` — short-circuits any
+                    // legacy XML-prefix path too.
+                    if !is_synthetic_first_prompt_candidate(&candidate) {
+                        first_prompt = candidate;
+                    }
                 }
                 if t.is_sidechain {
                     is_sidechain = true;
@@ -1396,6 +1407,16 @@ fn extract_text_content(entry: &TranscriptEntry) -> String {
     }
 
     String::new()
+}
+
+/// Returns true if the candidate text should be skipped when picking
+/// the resume-picker's "first prompt" preview. Mirrors TS
+/// `sessionStorage.ts:125` `SKIP_FIRST_PROMPT_PATTERN`.
+fn is_synthetic_first_prompt_candidate(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed == coco_messages::INTERRUPT_MESSAGE
+        || trimmed == coco_messages::INTERRUPT_MESSAGE_FOR_TOOL_USE
+        || trimmed.starts_with("[Request interrupted by user")
 }
 
 /// Truncate a prompt string for display (matching TS 200-char limit).

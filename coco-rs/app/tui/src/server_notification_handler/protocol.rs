@@ -11,15 +11,17 @@
 //! TUI channel in the current architecture. See `event-system-design.md`
 //! §12 for the consumer routing matrix.
 
+use coco_messages::SystemMessageLevel;
 use coco_types::ServerNotification;
 
+use crate::command::SystemPushKind;
 use crate::i18n::t;
 use crate::state::AppState;
-use crate::state::session::ChatMessage;
+use crate::state::ModalState;
+use crate::state::PanePromptState;
 use crate::state::session::HookEntry;
 use crate::state::session::HookEntryStatus;
 use crate::state::session::McpServerStatus;
-use crate::state::session::MessageContent;
 use crate::state::session::RateLimitInfo;
 use crate::state::session::SubagentInstance;
 use crate::state::session::SubagentStatus;
@@ -76,31 +78,24 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.session.turn_count = p.turn_number;
             state.session.set_busy(true);
             state.session.stream_stall = false;
-            state.session.current_turn_message_start = Some(state.session.messages.len());
             state.session.current_turn_started_at = Some(std::time::Instant::now());
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
-            // Clear any leftover interrupt banner from the prior turn —
-            // the banner is "this turn was interrupted", not "ever was".
-            // TS parity: REPL.tsx resets the cancelled marker on the
-            // next turn boundary.
-            state.session.was_interrupted = false;
             true
         }
         ServerNotification::TurnCompleted(p) => on_turn_completed(state, p),
         ServerNotification::TurnFailed(p) => {
             state.session.set_busy(false);
-            state.session.current_turn_message_start = None;
             state.session.current_turn_started_at = None;
             state.ui.streaming = None;
             // Keep the toast for session history / notification log, AND
             // raise a modal error dialog so users can't miss the failure
-            // (PR-F1 P0). The toast auto-expires; the overlay blocks input
+            // (PR-F1 P0). The toast auto-expires; the state blocks input
             // until dismissed.
             state.ui.add_toast(Toast::error(
                 t!("toast.turn_failed_short", error = p.error.as_str()).to_string(),
             ));
             let body = crate::widgets::error_dialog::turn_failed_body(&p);
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
         ServerNotification::TurnInterrupted(p) => on_turn_interrupted(state, p),
@@ -114,7 +109,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             // acknowledgement before the user sends another prompt so
             // they notice it isn't silently continuing.
             let body = crate::widgets::error_dialog::format_error_body(&msg, Some("limit"), false);
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
 
@@ -193,11 +188,12 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                     )
                     .to_string(),
                 ));
-                // Push a TeammateMessage into session.messages so the
-                // teammate spinner-line preview (`showTeammateMessagePreview`)
-                // and the transcript overlay can pick it up. `is_meta=true`
-                // keeps it out of the regular chat scroll — it surfaces in
-                // the transcript and in the per-teammate preview only.
+                // Push a teammate message onto the engine transcript so
+                // the teammate spinner-line preview
+                // (`showTeammateMessagePreview`) and transcript reader
+                // can pick it up. Tagged as a meta system message so it
+                // stays out of the regular chat scroll — surfaces in the
+                // transcript reader and per-teammate preview only.
                 push_teammate_message(state, &p.agent_id, msg);
             }
             true
@@ -236,7 +232,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             // Mid-session prewarm completed (e.g. settings reload).
             // Flip the badge based on whether the new prewarm spawned
             // anything. SessionStarted carries the bootstrap value;
-            // this overlay handles subsequent state changes.
+            // this state handles subsequent state changes.
             state.session.lsp_active = !p.started.is_empty();
             true
         }
@@ -313,7 +309,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.add_toast(Toast::error(msg.clone()));
             let body =
                 crate::widgets::error_dialog::format_error_body(&msg, Some("compaction"), false);
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
         ServerNotification::ContextCleared(_) => {
@@ -368,15 +364,13 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             true
         }
         ServerNotification::PlanApprovalRequested(p) => {
-            let overlay = crate::state::PlanApprovalOverlay::new(
+            let prompt = crate::state::PlanApprovalPromptState::new(
                 p.request_id,
                 p.from,
                 p.plan_file_path,
                 p.plan_content,
             );
-            state
-                .ui
-                .set_overlay(crate::state::Overlay::PlanApproval(overlay));
+            state.ui.push_prompt(PanePromptState::PlanApproval(prompt));
             true
         }
         ServerNotification::AgentsKilled(p) => {
@@ -440,7 +434,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // === Permission ===
         ServerNotification::PermissionModeChanged(p) => {
             state.session.permission_mode = p.mode;
-            // Route the capability gate so the TUI overlay + Shift+Tab
+            // Route the capability gate so the TUI state + Shift+Tab
             // cycle reflect the session's current authorization state.
             // Without this, `session.bypass_permissions_available`
             // stayed at its init-time default and no client could ever
@@ -458,12 +452,12 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // === System ===
         ServerNotification::Error(p) => {
             // Retryable errors auto-recover; keep them as ephemeral toasts.
-            // Non-retryable errors escalate to a modal overlay so the user
+            // Non-retryable errors escalate to a modal state so the user
             // must acknowledge before continuing (PR-F1 P0).
             state.ui.add_toast(Toast::error(p.message.clone()));
             if !p.retryable {
                 let body = crate::widgets::error_dialog::error_body(&p);
-                state.ui.set_overlay(crate::state::Overlay::Error(body));
+                state.ui.show_modal(ModalState::Error(body));
             }
             true
         }
@@ -573,7 +567,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // === Cost ===
         ServerNotification::CostWarning(p) => {
             // Budget breach is a decision point — route through the modal
-            // `CostWarning` overlay (already defined) so users can stop
+            // `CostWarning` state (already defined) so users can stop
             // or continue explicitly. Keep the toast for the event log.
             let toast_msg = format!(
                 "Cost: ${:.2} / ${:.2} threshold",
@@ -581,8 +575,8 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                 p.threshold_cents as f64 / 100.0
             );
             state.ui.add_toast(Toast::warning(toast_msg));
-            state.ui.set_overlay(crate::state::Overlay::CostWarning(
-                crate::state::CostWarningOverlay {
+            state.ui.push_prompt(PanePromptState::CostWarning(
+                crate::state::CostWarningPromptState {
                     current_cost_cents: p.current_cost_cents,
                     threshold_cents: p.threshold_cents,
                 },
@@ -614,7 +608,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                 Some("sandbox"),
                 false,
             );
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
 
@@ -688,7 +682,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.add_toast(Toast::error(msg.clone()));
             let body =
                 crate::widgets::error_dialog::format_error_body(&msg, Some("summarize"), false);
-            state.ui.set_overlay(crate::state::Overlay::Error(body));
+            state.ui.show_modal(ModalState::Error(body));
             true
         }
 
@@ -739,17 +733,23 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             true
         }
         ServerNotification::ElicitationComplete(_) => {
-            state.ui.dismiss_overlay();
+            state.ui.dismiss_prompt();
             true
         }
         ServerNotification::ToolUseSummary(p) => {
-            state.session.add_message(ChatMessage::system_text(
-                format!(
-                    "summary-{}",
-                    p.preceding_tool_use_ids.first().unwrap_or(&String::new())
-                ),
-                p.summary,
-            ));
+            // Route through engine `MessageHistory` like every other
+            // TUI-originated transcript line. The previous "summary-{id}"
+            // synthetic message id is no longer needed (cell uuid is
+            // engine-minted) — the rewind picker never targeted these
+            // rows anyway.
+            state
+                .session
+                .pending_system_pushes
+                .push_back(SystemPushKind::Informational {
+                    level: SystemMessageLevel::Info,
+                    title: String::new(),
+                    message: p.summary,
+                });
             true
         }
         ServerNotification::ToolProgress(p) => {
@@ -770,6 +770,82 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.add_toast(Toast::info(
                 "Plugins changed. Run /reload-plugins to activate.".to_string(),
             ));
+            true
+        }
+
+        // === History lifecycle ===
+        //
+        // Engine MessageHistory authoritative-mutation events. These
+        // feed `session.transcript`, which the renderer pipeline reads
+        // exclusively.
+        ServerNotification::MessageAppended { message } => {
+            // Plan §6.4 atomic finalize: when the appended message is
+            // the assistant push that just ended the in-flight stream,
+            // the cell now owns the content — drop the overlay so the
+            // same text does not render twice for one frame. Subsequent
+            // stream deltas inside the same turn re-create the
+            // StreamingState lazily via `get_or_insert_with` in
+            // `stream.rs`.
+            //
+            // Single-agent model: every assistant push is the current
+            // stream. A future parallel-stream world would need an
+            // anchor UUID on StreamingState + an engine-side pre-
+            // allocated assistant UUID; no emitter for that exists
+            // today so the role check is the correct minimal fix.
+            let is_assistant = matches!(&message, coco_messages::Message::Assistant(_));
+            // D4: stamp any pending tool_executions whose `call_id`
+            // matches a `ToolCall` content block in this assistant
+            // message. Stamps the parent message UUID so the
+            // MessageTruncated handler can retain in-flight executions
+            // whose anchor survives the truncate.
+            if is_assistant {
+                state
+                    .session
+                    .stamp_tool_executions_with_assistant_uuid(&message);
+            }
+            state
+                .session
+                .transcript
+                .on_message_appended(std::sync::Arc::new(message));
+            if is_assistant {
+                state.ui.streaming = None;
+            }
+            true
+        }
+        ServerNotification::MessageTruncated { keep_count } => {
+            let n = keep_count.max(0) as usize;
+            state.session.transcript.on_message_truncated(n);
+            // D4: drop only tool overlays whose anchor message no
+            // longer survives. Unstamped executions (mid-stream, no
+            // committed assistant message yet) are kept — they belong
+            // to the live turn the user is interacting with. The
+            // streaming overlay is the live-turn anchor and is always
+            // cleared because truncate semantically ends the live turn.
+            let surviving_uuids: std::collections::HashSet<uuid::Uuid> = state
+                .session
+                .transcript
+                .cells()
+                .iter()
+                .map(|c| c.message_uuid)
+                .collect();
+            state
+                .session
+                .retain_tool_executions_for_messages(&surviving_uuids);
+            state.ui.streaming = None;
+            true
+        }
+        ServerNotification::SessionResetForResume { session_id } => {
+            // Plan §6.3: clear every piece of UI-only state that
+            // belonged to the prior session before the burst of
+            // MessageAppended replays the loaded history. Without this,
+            // tool panels and streaming text from the previous run
+            // leak into the resumed view.
+            state.session.transcript.on_session_reset();
+            state.session.tool_executions.clear();
+            state.ui.streaming = None;
+            // Conversation id rotates on resume so prompt-cache keys
+            // do not collide with the prior run's break points.
+            state.session.conversation_id = Some(session_id);
             true
         }
     }
@@ -816,19 +892,14 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
                     streaming.started_at.elapsed().as_millis().try_into().ok()
                 })
             });
-    let message_count_before_flush = state.session.messages.len();
-    let response_start = state
-        .session
-        .current_turn_message_start
-        .unwrap_or(message_count_before_flush);
     super::projection::flush_streaming_to_messages(state);
-    apply_reasoning_tokens_to_response(
-        state,
-        p.usage.reasoning_output_tokens(),
-        token_only_duration_ms,
-        response_start,
-    );
-    state.session.current_turn_message_start = None;
+    // Stamp reasoning metadata onto the most recent assistant
+    // `Thinking` cell so the renderer can show
+    // `Thinking · 1.3s · 15 reasoning tokens`.
+    state
+        .session
+        .transcript
+        .record_reasoning_tokens(p.usage.reasoning_output_tokens(), token_only_duration_ms);
     state.session.current_turn_started_at = None;
     state.session.tool_executions.retain(|t| {
         matches!(
@@ -839,70 +910,6 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
     true
 }
 
-fn apply_reasoning_tokens_to_response(
-    state: &mut AppState,
-    reasoning_tokens: i64,
-    duration_ms: Option<i64>,
-    response_start: usize,
-) {
-    if reasoning_tokens <= 0 {
-        return;
-    }
-    let response_start = response_start.min(state.session.messages.len());
-    if let Some(thinking_offset) = state.session.messages[response_start..]
-        .iter()
-        .position(|message| matches!(message.content, MessageContent::Thinking { .. }))
-    {
-        if let MessageContent::Thinking {
-            reasoning_tokens: tokens,
-            duration_ms: existing_duration_ms,
-            ..
-        } = &mut state.session.messages[response_start + thinking_offset].content
-        {
-            *tokens = Some(reasoning_tokens);
-            if existing_duration_ms.is_none() {
-                *existing_duration_ms = duration_ms;
-            }
-        }
-        return;
-    }
-
-    let Some(response_item_offset) =
-        state.session.messages[response_start..]
-            .iter()
-            .position(|message| {
-                matches!(
-                    message.content,
-                    MessageContent::AssistantText(_) | MessageContent::ToolUse { .. }
-                )
-            })
-    else {
-        return;
-    };
-
-    let thinking = ChatMessage {
-        id: format!(
-            "thinking-{}-{}",
-            state.session.turn_count,
-            state.session.messages.len()
-        ),
-        role: crate::state::ChatRole::Assistant,
-        content: MessageContent::Thinking {
-            content: String::new(),
-            duration_ms,
-            reasoning_tokens: Some(reasoning_tokens),
-        },
-        is_meta: false,
-        created_at_ms: crate::state::session::now_ms(),
-        is_compact_summary: false,
-        is_visible_in_transcript_only: false,
-        permission_mode: None,
-    };
-
-    let insert_at = response_start + response_item_offset;
-    state.session.messages.insert(insert_at, thinking);
-}
-
 /// Handle `TurnInterrupted`: clear streaming state, surface the banner,
 /// and run auto-restore when the cancel was user-initiated AND the idle
 /// guards + lossless-tail predicate hold.
@@ -911,33 +918,49 @@ fn apply_reasoning_tokens_to_response(
 /// after `abortController.abort('user-cancel')` resolves the query.
 fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParams) -> bool {
     state.session.set_busy(false);
-    state.session.current_turn_message_start = None;
     state.session.current_turn_started_at = None;
     state.ui.streaming = None;
-    state.session.was_interrupted = true;
-    state
-        .ui
-        .add_toast(Toast::warning(t!("toast.turn_interrupted").to_string()));
+
+    let user_cancel = matches!(p.reason, Some(coco_types::CancelReason::UserCancel));
 
     // Auto-restore is gated on:
     // - reason == UserCancel  → TS `signal.reason === 'user-cancel'`
     //   (treat None/legacy senders as non-user-initiated — conservative)
     // - empty input            → TS `inputValueRef.current === ''`
     // - empty queue            → TS `getCommandQueueLength() === 0`
-    // - no overlay             → coco-rs analogue of "not viewing a
+    // - no state             → coco-rs analogue of "not viewing a
     //                            teammate task" + "no modal up"
     // - lossless tail          → TS `messagesAfterAreOnlySynthetic`
-    let user_cancel = matches!(p.reason, Some(coco_types::CancelReason::UserCancel));
+    // Predicates walk the engine-authoritative cell list directly.
+    let cells = state.session.transcript.cells();
+    let mut auto_restored = false;
     if user_cancel
         && state.ui.input.is_empty()
         && state.session.queued_commands.is_empty()
-        && !state.ui.has_overlay()
-        && let Some(idx) =
-            crate::update_rewind::find_last_user_message_index(&state.session.messages)
-        && crate::update_rewind::messages_after_are_only_synthetic(&state.session.messages, idx)
+        && !state.ui.has_active_surface()
+        && let Some(idx) = crate::update_rewind::find_last_user_cell_index(cells)
+        && crate::update_rewind::cells_after_are_only_synthetic(cells, idx)
     {
+        // Snapshot the index so we can mutate state below without
+        // reborrowing `cells` (which would conflict with `state.ui`/
+        // `state.session` mutations).
         apply_auto_restore(state, idx);
+        auto_restored = true;
     }
+
+    // TS parity: `createUserInterruptionMessage` rendered as the dim
+    // `Interrupted · What should Claude do instead?` chat row
+    // (InterruptedByUser.tsx). Only fires for UserCancel — SystemPreempt
+    // means a sibling op (Clear/Compact/Rewind/Shutdown) is about to
+    // mutate history anyway. Skipped when auto-restore truncated to
+    // the last user prompt: the prompt is now back in the input and
+    // adding "you interrupted yourself" would be noise.
+    //
+    // The engine's `finalize_user_cancel` pushes a typed
+    // `SystemMessage::UserInterruption` with the authoritative
+    // `for_tool_use`; the MessageAppended event populates `transcript`,
+    // and the renderer surfaces it from there.
+    let _ = (user_cancel, auto_restored);
     true
 }
 
@@ -947,13 +970,30 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
 /// next turn starts a fresh cache key, and clears UI state that no
 /// longer corresponds to a real conversation tail.
 ///
-/// Does NOT round-trip through the backend (`UserCommand::Rewind` is
-/// the explicit-overlay path; this is the synchronous inline restore
-/// for the user-cancel case).
+/// Sets `pending_auto_restore_truncate` so the App loop can dispatch
+/// `UserCommand::Rewind { mode: AutoRestore }` after the handler
+/// returns. The engine truncates its authoritative history and emits
+/// `ServerNotification::MessageTruncated`, keeping engine + TUI + SDK
+/// converged on the same truncation event (see
+/// `engine-tui-unified-transcript-plan.md` §7.4).
 fn apply_auto_restore(state: &mut AppState, idx: usize) {
-    let input_text = state.session.messages[idx].text_content().to_string();
-    let perm = state.session.messages[idx].permission_mode;
-    state.session.messages.truncate(idx);
+    let cells = state.session.transcript.cells();
+    let Some(cell) = cells.get(idx) else {
+        return;
+    };
+    let target_message_id = cell.message_uuid.to_string();
+    let input_text = match &cell.kind {
+        crate::state::transcript_view::CellKind::UserText { text } => text.clone(),
+        _ => String::new(),
+    };
+    let perm = match cell.source.as_ref() {
+        coco_messages::Message::User(u) => u.permission_mode,
+        _ => None,
+    };
+    // Phase 3d (§5): the renderer reads from `transcript.cells()`
+    // directly. The engine emits `MessageTruncated` after our follow-up
+    // `UserCommand::Rewind { mode: AutoRestore }` dispatch, which
+    // truncates `transcript` to the same boundary.
     if let Some(mode) = perm {
         state.session.permission_mode = mode;
     }
@@ -967,13 +1007,15 @@ fn apply_auto_restore(state: &mut AppState, idx: usize) {
     state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;
     state.ui.user_scrolled = false;
+    state.session.pending_auto_restore_truncate = Some(target_message_id);
 }
 
-/// Push a teammate-attributed message into `session.messages` so the
+/// Queue a teammate-attributed message for engine round-trip so the
 /// per-teammate spinner-line preview (`UiState::show_teammate_message_preview`)
-/// and the transcript overlay can surface it. Empty / whitespace-only
+/// and the transcript state can surface it. Empty / whitespace-only
 /// content is dropped so progress pings without a body don't pollute
-/// the preview.
+/// the preview. Routed as `SystemMessage::Informational` with a
+/// `teammate:<agent>` title so the renderer can distinguish the row.
 fn push_teammate_message(state: &mut AppState, agent_id: &str, content: &str) {
     let trimmed = content.trim();
     if trimmed.is_empty() {
@@ -981,7 +1023,12 @@ fn push_teammate_message(state: &mut AppState, agent_id: &str, content: &str) {
     }
     state
         .session
-        .add_message(ChatMessage::teammate_message(agent_id, trimmed));
+        .pending_system_pushes
+        .push_back(SystemPushKind::Informational {
+            level: SystemMessageLevel::Info,
+            title: format!("teammate:{agent_id}"),
+            message: trimmed.to_string(),
+        });
 }
 
 #[cfg(test)]

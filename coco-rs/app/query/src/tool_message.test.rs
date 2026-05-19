@@ -14,7 +14,7 @@ use coco_types::ToolName;
 use pretty_assertions::assert_eq;
 // The inner "content shape" of `ToolResultPart.output` — a separate enum
 // from the outer `ToolResultContent` alias (which is `ToolResultPart`).
-use coco_inference::ToolResultContent as InnerToolResultContent;
+use coco_llm_types::ToolResultContent as InnerToolResultContent;
 
 use super::*;
 
@@ -31,7 +31,7 @@ fn tool_result_marker(tool_use_id: &str, output: &str, is_error: bool) -> Messag
     Message::ToolResult(ToolResultMessage {
         uuid: uuid::Uuid::new_v4(),
         message: LlmMessage::Tool {
-            content: vec![ToolContent::ToolResult(coco_inference::ToolResultPart {
+            content: vec![ToolContent::ToolResult(coco_llm_types::ToolResultPart {
                 tool_call_id: tool_use_id.into(),
                 tool_name: "Read".into(),
                 output: InnerToolResultContent::text(output),
@@ -54,7 +54,7 @@ fn marker_of(msg: &Message) -> String {
             LlmMessage::User { content, .. } => content
                 .iter()
                 .find_map(|p| match p {
-                    coco_inference::UserContentPart::Text(t) => Some(t.text.clone()),
+                    coco_llm_types::UserContentPart::Text(t) => Some(t.text.clone()),
                     _ => None,
                 })
                 .unwrap_or_default(),

@@ -13,7 +13,7 @@ fn make_tool_result(tool_use_id: &str, content: &str) -> Message {
                 coco_messages::ToolResultContent {
                     tool_call_id: tool_use_id.to_string(),
                     tool_name: String::new(),
-                    output: coco_inference::ToolResultContent::text(content.to_string()),
+                    output: coco_llm_types::ToolResultContent::text(content.to_string()),
                     is_error: false,
                     provider_metadata: None,
                 },
@@ -30,11 +30,11 @@ fn make_assistant_with_thinking(text: &str, thinking: &str) -> Message {
     Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
             content: vec![
-                coco_messages::AssistantContent::Reasoning(coco_inference::ReasoningPart {
+                coco_messages::AssistantContent::Reasoning(coco_llm_types::ReasoningPart {
                     text: thinking.to_string(),
                     provider_metadata: None,
                 }),
-                coco_messages::AssistantContent::Text(coco_inference::TextPart::new(
+                coco_messages::AssistantContent::Text(coco_llm_types::TextPart::new(
                     text.to_string(),
                 )),
             ],
@@ -54,7 +54,7 @@ fn make_assistant_text(text: &str) -> Message {
     Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
             content: vec![coco_messages::AssistantContent::Text(
-                coco_inference::TextPart::new(text.to_string()),
+                coco_llm_types::TextPart::new(text.to_string()),
             )],
             provider_options: None,
         },

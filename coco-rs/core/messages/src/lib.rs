@@ -9,21 +9,22 @@ pub mod history;
 pub mod lookups;
 pub mod normalize;
 pub mod predicates;
-pub mod types;
 pub mod wrapping;
 
-// Re-export the relocated Message-family types at the crate root so consumers
-// can write `coco_messages::Message` rather than `coco_messages::types::Message`.
-// The single source of truth for which symbols are exported is `types/mod.rs`.
-pub use types::*;
+// Message-family types live in `coco-types` (the wire-protocol crate
+// owns its payload shapes). Re-export at this crate root so the
+// established `coco_messages::Message` import path keeps working for
+// the operations layer that does normalization / filtering / history.
+pub use coco_types::messages::*;
 
 pub use cost::CostTracker;
 pub use cost::calculate_cost_usd;
 pub use cost::format_cost;
 pub use cost::get_model_pricing;
+pub use creation::INTERRUPT_MESSAGE;
+pub use creation::INTERRUPT_MESSAGE_FOR_TOOL_USE;
 pub use creation::create_assistant_error_message;
 pub use creation::create_assistant_message;
-pub use creation::create_cancellation_message;
 pub use creation::create_compact_boundary_message;
 pub use creation::create_error_tool_result;
 pub use creation::create_info_message;
@@ -32,6 +33,8 @@ pub use creation::create_permission_denied_message;
 pub use creation::create_progress_message;
 pub use creation::create_tool_result_message;
 pub use creation::create_tool_result_message_with_parts;
+pub use creation::create_user_interruption_message;
+pub use creation::create_user_interruption_system_message;
 pub use creation::create_user_message;
 pub use creation::create_user_message_with_parts;
 pub use creation::create_user_message_with_parts_and_uuid;

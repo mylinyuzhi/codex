@@ -1,8 +1,8 @@
 //! Basic text-generation tests via `coco_inference::ApiClient::query`.
 
 use anyhow::Result;
-use coco_inference::LanguageModelMessage;
 use coco_inference::QueryParams;
+use coco_llm_types::LlmMessage;
 
 use crate::common::LiveTarget;
 use crate::common::extract_text;
@@ -10,7 +10,7 @@ use crate::common::usage_report;
 
 const SYSTEM: &str = "You are a helpful assistant. Be concise.";
 
-fn params_for(prompt: Vec<LanguageModelMessage>, source: &str) -> QueryParams {
+fn params_for(prompt: Vec<LlmMessage>, source: &str) -> QueryParams {
     QueryParams {
         prompt,
         // 1024 leaves headroom for reasoning models (gpt-5 etc.) that
@@ -37,8 +37,8 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         .client
         .query(&params_for(
             vec![
-                LanguageModelMessage::system(SYSTEM),
-                LanguageModelMessage::user_text("Say 'hello' in exactly one word, nothing else."),
+                LlmMessage::system(SYSTEM),
+                LlmMessage::user_text("Say 'hello' in exactly one word, nothing else."),
             ],
             "coco-tests-live::sdk::basic::run",
         ))
@@ -63,8 +63,8 @@ pub async fn run_token_usage(target: &LiveTarget) -> Result<()> {
         .client
         .query(&params_for(
             vec![
-                LanguageModelMessage::system(SYSTEM),
-                LanguageModelMessage::user_text("Say 'hello'."),
+                LlmMessage::system(SYSTEM),
+                LlmMessage::user_text("Say 'hello'."),
             ],
             "coco-tests-live::sdk::basic::run_token_usage",
         ))
@@ -100,10 +100,10 @@ pub async fn run_multi_turn(target: &LiveTarget) -> Result<()> {
         .client
         .query(&params_for(
             vec![
-                LanguageModelMessage::system(SYSTEM),
-                LanguageModelMessage::user_text("My name is TestUser. Please remember it."),
-                LanguageModelMessage::assistant_text("Hello TestUser! I'll remember your name."),
-                LanguageModelMessage::user_text("What is my name?"),
+                LlmMessage::system(SYSTEM),
+                LlmMessage::user_text("My name is TestUser. Please remember it."),
+                LlmMessage::assistant_text("Hello TestUser! I'll remember your name."),
+                LlmMessage::user_text("What is my name?"),
             ],
             "coco-tests-live::sdk::basic::run_multi_turn",
         ))
@@ -133,41 +133,39 @@ pub async fn run_multi_turn(target: &LiveTarget) -> Result<()> {
 pub async fn run_long_multi_turn(target: &LiveTarget) -> Result<()> {
     // 6 fact-pairs (12 messages) + final recall question = 13 messages.
     let prompt = vec![
-        LanguageModelMessage::system(
+        LlmMessage::system(
             "You are a helpful assistant. Reply concisely. Always remember earlier facts.",
         ),
         // Turn 1
-        LanguageModelMessage::user_text(
+        LlmMessage::user_text(
             "Remember fact 1: my favorite color is teal. Acknowledge with one word.",
         ),
-        LanguageModelMessage::assistant_text("Acknowledged."),
+        LlmMessage::assistant_text("Acknowledged."),
         // Turn 2
-        LanguageModelMessage::user_text(
+        LlmMessage::user_text(
             "Remember fact 2: my dog's name is Mochi. Acknowledge with one word.",
         ),
-        LanguageModelMessage::assistant_text("Acknowledged."),
+        LlmMessage::assistant_text("Acknowledged."),
         // Turn 3
-        LanguageModelMessage::user_text(
-            "Remember fact 3: I work in Berlin. Acknowledge with one word.",
-        ),
-        LanguageModelMessage::assistant_text("Acknowledged."),
+        LlmMessage::user_text("Remember fact 3: I work in Berlin. Acknowledge with one word."),
+        LlmMessage::assistant_text("Acknowledged."),
         // Turn 4
-        LanguageModelMessage::user_text(
+        LlmMessage::user_text(
             "Remember fact 4: my coffee order is an oat-milk flat white. Acknowledge with one word.",
         ),
-        LanguageModelMessage::assistant_text("Acknowledged."),
+        LlmMessage::assistant_text("Acknowledged."),
         // Turn 5
-        LanguageModelMessage::user_text(
+        LlmMessage::user_text(
             "Remember fact 5: my preferred IDE is Helix. Acknowledge with one word.",
         ),
-        LanguageModelMessage::assistant_text("Acknowledged."),
+        LlmMessage::assistant_text("Acknowledged."),
         // Turn 6
-        LanguageModelMessage::user_text(
+        LlmMessage::user_text(
             "Remember fact 6: my keyboard is a Moonlander. Acknowledge with one word.",
         ),
-        LanguageModelMessage::assistant_text("Acknowledged."),
+        LlmMessage::assistant_text("Acknowledged."),
         // Recall — must reach back to fact 1.
-        LanguageModelMessage::user_text(
+        LlmMessage::user_text(
             "Now answer: what is my favorite color (fact 1)? Respond with just the color name.",
         ),
     ];

@@ -73,6 +73,18 @@ impl<'de> Deserialize<'de> for FileRawData {
     }
 }
 
+// Wire shape is always a string (base64). Match that in the schema
+// rather than letting schemars infer a tagged-enum shape.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for FileRawData {
+    fn schema_name() -> String {
+        "FileRawData".to_string()
+    }
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        <String as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+
 impl From<Vec<u8>> for FileRawData {
     fn from(bytes: Vec<u8>) -> Self {
         Self::Bytes(bytes)
@@ -97,6 +109,7 @@ impl From<&str> for FileRawData {
 /// - `Url`  — a URL pointing to the file.
 /// - `Reference` — a provider reference (`{ [provider]: id }`).
 /// - `Text` — inline text content.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SharedV4FileData {

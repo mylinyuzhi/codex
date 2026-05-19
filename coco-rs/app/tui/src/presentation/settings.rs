@@ -1,4 +1,4 @@
-//! Presentation for the settings overlay.
+//! Presentation for the settings state.
 
 use ratatui::prelude::Color;
 
@@ -8,7 +8,7 @@ use crate::widgets::settings_panel::SettingsPanelState;
 use crate::widgets::settings_panel::SettingsTab;
 use crate::widgets::settings_panel::syntax_highlighting_status_for_display;
 
-pub(crate) fn settings_overlay_content(
+pub(crate) fn settings_surface_content(
     s: &SettingsPanelState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {

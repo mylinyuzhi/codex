@@ -21,17 +21,17 @@ use std::sync::atomic::Ordering;
 
 use coco_inference::AISdkError;
 use coco_inference::ApiClient;
-use coco_inference::AssistantContentPart;
-use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
-use coco_inference::TextPart;
-use coco_inference::ToolCallPart;
-use coco_inference::UnifiedFinishReason;
-use coco_inference::Usage;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
+use coco_llm_types::StopReason;
+use coco_llm_types::TextPart;
+use coco_llm_types::ToolCallPart;
+use coco_llm_types::Usage;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueryResult;
@@ -97,7 +97,7 @@ impl MockResponse {
                     text,
                     provider_metadata: None,
                 })],
-                UnifiedFinishReason::EndTurn,
+                StopReason::EndTurn,
             ),
             Self::ToolCall { tool_name, input } => (
                 vec![AssistantContentPart::ToolCall(ToolCallPart {
@@ -107,7 +107,7 @@ impl MockResponse {
                     provider_executed: None,
                     provider_metadata: None,
                 })],
-                UnifiedFinishReason::ToolUse,
+                StopReason::ToolUse,
             ),
             Self::TextAndToolCalls { text, tool_calls } => {
                 let mut parts = vec![AssistantContentPart::Text(TextPart {
@@ -123,7 +123,7 @@ impl MockResponse {
                         provider_metadata: None,
                     }));
                 }
-                (parts, UnifiedFinishReason::ToolUse)
+                (parts, StopReason::ToolUse)
             }
             Self::MultiToolCall(calls) => {
                 let parts: Vec<_> = calls
@@ -139,7 +139,7 @@ impl MockResponse {
                         })
                     })
                     .collect();
-                (parts, UnifiedFinishReason::ToolUse)
+                (parts, StopReason::ToolUse)
             }
         };
 

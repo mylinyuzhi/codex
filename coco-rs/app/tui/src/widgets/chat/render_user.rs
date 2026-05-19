@@ -1,34 +1,34 @@
-//! User-side message renderers — text, images, bash input/output, plan
-//! markers, memory input, agent notifications, teammate messages,
-//! attachments, channel messages, MCP resource updates.
+//! User-side cell renderers — text input, attachments, bash invocations
+//! (`!cmd` echoed plus output), engine-pushed user interruption marker.
+//!
+//! Dispatches directly on `cell.kind` / `cell.source: Arc<Message>`.
+//! All emitted lines are `Line<'static>` (owned spans).
 
+use coco_messages::Message;
+use coco_messages::SystemMessage;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
 use super::ChatWidget;
-use super::format_resource_target;
-use super::parse_teammate_xml;
-use super::teammate_color_to_ratatui;
 use crate::i18n::t;
-use crate::state::session::MessageContent;
-use crate::state::session::PlanAction;
-use crate::state::session::ResourceUpdateKind;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
+use crate::state::transcript_view::SystemCellKind;
 
-pub(super) fn try_render<'a>(
-    w: &ChatWidget<'a>,
-    content: &'a MessageContent,
-    lines: &mut Vec<Line<'a>>,
+pub(super) fn try_render(
+    w: &ChatWidget<'_>,
+    cell: &RenderedCell,
+    lines: &mut Vec<Line<'static>>,
 ) -> Option<()> {
-    match content {
-        MessageContent::Text(text) => {
+    match &cell.kind {
+        CellKind::UserText { text } => {
             // Subtle background tint behind user prompt rows. TS parity:
             // `UserPromptMessage` wraps the body in `<Box
             // backgroundColor="userMessageBackground">`, which paints the
             // full row width rather than just the glyphs — the bg must
             // therefore live on the `Line`, not on individual spans.
-            let mut iter = text.lines();
-            for line in iter.by_ref() {
+            for line in text.lines() {
                 let span = Span::raw(format!("❯ {line}")).fg(w.styles.user_message());
                 let mut chat_line = Line::from(span);
                 if let Some(bg) = w.styles.user_message_bg() {
@@ -38,33 +38,58 @@ pub(super) fn try_render<'a>(
             }
             Some(())
         }
-        MessageContent::Image { path } => {
+        CellKind::UserAttachment | CellKind::Attachment => {
+            // Engine `Message::Attachment` lands here. The attachment
+            // kind / preview text isn't reliably typed yet — render a
+            // bare paperclip row so users know an attachment slot was
+            // populated.
             lines.push(Line::from(vec![
                 Span::raw("❯ ").fg(w.styles.user_message()),
                 Span::raw("📎 ").fg(w.styles.accent()),
-                Span::raw(path.as_str()).fg(w.styles.primary()).underlined(),
+                Span::raw("attachment".to_string()).fg(w.styles.dim()),
             ]));
             Some(())
         }
-        MessageContent::BashInput { command } => {
-            // TS `UserBashInputMessage` renders the leading `!` in
-            // `bashBorder` style. We re-use the input-area mode glyph so
-            // the chat echo visually matches the prompt the user typed.
+        CellKind::System(SystemCellKind::UserInterruption { for_tool_use }) => {
+            // Dim "Interrupted · …" row. The `for_tool_use` flag is
+            // the engine-authoritative answer to "was a tool in flight
+            // when the user cancelled?" (computed once in
+            // `finalize_user_cancel`). Surfaces a more specific
+            // wording for mid-tool cancellation so users see the
+            // distinction TS encodes via the
+            // `INTERRUPT_MESSAGE_FOR_TOOL_USE` text variant in
+            // persisted JSONL.
+            let key = if *for_tool_use {
+                "chat.interrupted_for_tool_use_marker"
+            } else {
+                "chat.interrupted_marker"
+            };
+            lines.push(Line::from(
+                Span::raw(t!(key).to_string()).fg(w.styles.dim()),
+            ));
+            Some(())
+        }
+        CellKind::System(SystemCellKind::LocalCommand) => {
+            // `!cmd` echo: render the command on the `! …` row and the
+            // captured stdout/stderr indented below it. Exit code isn't
+            // carried on `SystemLocalCommandMessage` yet — treat
+            // everything as success-styled.
+            let Message::System(SystemMessage::LocalCommand(lc)) = cell.source.as_ref() else {
+                return Some(());
+            };
+            // Bash input row — re-uses the input-area mode glyph so the
+            // chat echo visually matches the prompt the user typed.
             lines.push(Line::from(vec![
                 Span::raw("! ").fg(w.styles.accent()).bold(),
-                Span::raw(command.as_str()).fg(w.styles.accent()),
+                Span::raw(lc.command.clone()).fg(w.styles.accent()),
             ]));
-            Some(())
-        }
-        MessageContent::BashOutput { output, exit_code } => {
-            let color = if *exit_code == 0 {
-                w.styles.dim()
-            } else {
-                w.styles.error()
-            };
-            let mut iter = output.lines();
+            // Output body, capped at 20 visible rows with a "… truncated"
+            // hint below.
+            let mut iter = lc.output.lines();
             for line in iter.by_ref().take(20) {
-                lines.push(Line::from(Span::raw(format!("  {line}")).fg(color)));
+                lines.push(Line::from(
+                    Span::raw(format!("  {line}")).fg(w.styles.dim()),
+                ));
             }
             if iter.next().is_some() {
                 lines.push(Line::from(
@@ -73,126 +98,6 @@ pub(super) fn try_render<'a>(
                         .italic(),
                 ));
             }
-            if *exit_code != 0 {
-                lines.push(Line::from(
-                    Span::raw(t!("chat.exit_code", code = exit_code).to_string())
-                        .fg(w.styles.error()),
-                ));
-            }
-            Some(())
-        }
-        MessageContent::PlanMarker { action } => {
-            let text = match action {
-                PlanAction::Enter => t!("chat.plan_entered"),
-                PlanAction::Exit => t!("chat.plan_exited"),
-            };
-            lines.push(Line::from(
-                Span::raw(format!("  {text}")).fg(w.styles.plan()).italic(),
-            ));
-            Some(())
-        }
-        MessageContent::AgentNotification { agent_id, summary } => {
-            lines.push(Line::from(vec![
-                Span::raw("  🤖 ").fg(w.styles.accent()),
-                Span::raw(format!("[{agent_id}] ")).fg(w.styles.dim()),
-                Span::raw(summary.as_str()).fg(w.styles.text()),
-            ]));
-            Some(())
-        }
-        MessageContent::TeammateMessage { teammate, content } => {
-            let parsed = parse_teammate_xml(content);
-            if parsed.is_empty() {
-                lines.push(Line::from(vec![
-                    Span::raw(format!("  @{teammate}: ")).fg(w.styles.primary()),
-                    Span::raw(content.clone()).fg(w.styles.text()),
-                ]));
-            } else {
-                for part in parsed {
-                    let name_color = part
-                        .color
-                        .as_deref()
-                        .map(teammate_color_to_ratatui)
-                        .unwrap_or(w.styles.primary());
-                    let mut header =
-                        vec![Span::raw(format!("  @{}: ", part.teammate_id)).fg(name_color)];
-                    if let Some(summary) = part.summary {
-                        header.push(Span::raw(format!("({summary}) ")).dim());
-                    }
-                    lines.push(Line::from(header));
-                    for line in part.content.lines() {
-                        lines.push(Line::from(vec![
-                            Span::raw("    ".to_string()),
-                            Span::raw(line.to_string()).fg(w.styles.text()),
-                        ]));
-                    }
-                }
-            }
-            Some(())
-        }
-        MessageContent::Attachment {
-            attachment_type,
-            preview,
-        } => {
-            lines.push(Line::from(vec![
-                Span::raw("❯ ").fg(w.styles.user_message()),
-                Span::raw(format!("📎 [{attachment_type}] ")).fg(w.styles.accent()),
-                Span::raw(preview.as_str()).fg(w.styles.dim()),
-            ]));
-            Some(())
-        }
-        MessageContent::ChannelMessage {
-            source,
-            user,
-            content,
-        } => {
-            // TS UserChannelMessage: "source ⇢ [user] truncated-body"
-            let short_source = source.rsplit(':').next().unwrap_or(source);
-            let mut header = vec![
-                Span::raw("  ⇢ ").fg(w.styles.accent()),
-                Span::raw(short_source.to_string())
-                    .fg(w.styles.primary())
-                    .bold(),
-            ];
-            if let Some(u) = user {
-                header.push(Span::raw(format!(" [{u}]")).fg(w.styles.dim()));
-            }
-            lines.push(Line::from(header));
-            let body = content.split_whitespace().collect::<Vec<_>>().join(" ");
-            let truncated = if body.chars().count() > 60 {
-                let mut s = body.chars().take(59).collect::<String>();
-                s.push('…');
-                s
-            } else {
-                body
-            };
-            lines.push(Line::from(
-                Span::raw(format!("    {truncated}")).fg(w.styles.text()),
-            ));
-            Some(())
-        }
-        MessageContent::ResourceUpdate {
-            kind,
-            server,
-            target,
-            reason,
-        } => {
-            // TS UserResourceUpdateMessage: "↻ server · target (reason)"
-            let label = match kind {
-                ResourceUpdateKind::Resource => "resource",
-                ResourceUpdateKind::Polling => "polling",
-            };
-            let display_target = format_resource_target(target);
-            let mut parts = vec![
-                Span::raw("  ↻ ").fg(w.styles.accent()),
-                Span::raw(format!("{label} ")).fg(w.styles.dim()),
-                Span::raw(server.as_str()).fg(w.styles.primary()),
-                Span::raw(" · ").fg(w.styles.dim()),
-                Span::raw(display_target).fg(w.styles.text()),
-            ];
-            if let Some(r) = reason {
-                parts.push(Span::raw(format!(" ({r})")).fg(w.styles.dim()).italic());
-            }
-            lines.push(Line::from(parts));
             Some(())
         }
         _ => None,

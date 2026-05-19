@@ -113,10 +113,10 @@ async fn test_interrupt_teammate_current_work_cancels_task_token_only() {
     );
     assert!(observed.is_cancelled());
     assert!(
-        !handle
+        handle
             .interrupt_teammate_current_work("missing@test")
             .await
-            .is_ok(),
+            .is_err(),
         "unknown teammate should surface an error"
     );
 }

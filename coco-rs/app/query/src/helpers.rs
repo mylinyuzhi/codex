@@ -8,9 +8,9 @@
 #[path = "helpers.test.rs"]
 mod tests;
 
-use coco_inference::AssistantContentPart;
-use coco_inference::FilePart;
-use coco_inference::UserContentPart;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FilePart;
+use coco_llm_types::UserContentPart;
 use coco_messages::AssistantContent;
 use coco_messages::AttachmentMessage;
 use coco_messages::LlmMessage;
@@ -37,7 +37,7 @@ pub(crate) enum ToolCompletionEventMode {
 
 /// Convert between the two-name alias for `AssistantContent`.
 ///
-/// `coco_messages::AssistantContent` and `coco_inference::AssistantContentPart`
+/// `coco_messages::AssistantContent` and `coco_llm_types::AssistantContentPart`
 /// are the same type re-exported under two aliases (see `coco-types` re-export
 /// section). This wrapper exists only to make the conversion intent explicit.
 pub(crate) fn convert_to_assistant_content(part: AssistantContentPart) -> AssistantContent {
@@ -71,7 +71,12 @@ pub async fn drain_command_queue_into_history(
     }
     let ids_to_remove: Vec<uuid::Uuid> = queued.iter().map(|c| c.id).collect();
     for cmd in &queued {
-        history.push(queued_command_to_attachment(cmd));
+        crate::history_sync::history_push_and_emit(
+            history,
+            queued_command_to_attachment(cmd),
+            event_tx,
+        )
+        .await;
     }
     queue.remove_by_ids(&ids_to_remove).await;
     for id in &ids_to_remove {
@@ -166,7 +171,7 @@ pub(crate) fn budget_pct_used(budget: &BudgetTracker) -> i32 {
 /// Returned message has empty content (the partial real response was
 /// already pushed) and `api_error.message` carrying the human-readable
 /// explanation. The typed [`coco_messages::StopReason`] is the
-/// canonical 8-variant `UnifiedFinishReason` — `ContextWindowExceeded`
+/// canonical 8-variant `StopReason` — `ContextWindowExceeded`
 /// is a first-class variant (no raw-string sniffing needed). Message
 /// text stays provider-agnostic so it covers the multi-LLM unified
 /// bucket (Anthropic refusal, OpenAI content_filter, Google SAFETY /
@@ -275,12 +280,12 @@ pub(crate) async fn complete_tool_call_with_error_mode(
         )
         .await;
     }
-    history.push(create_error_tool_result(
-        tool_call_id,
-        tool_name,
-        tool_id.clone(),
-        output,
-    ));
+    crate::history_sync::history_push_and_emit(
+        history,
+        create_error_tool_result(tool_call_id, tool_name, tool_id.clone(), output),
+        event_tx,
+    )
+    .await;
 }
 
 /// Wrap a captured synthetic-error `tool_result` row into an

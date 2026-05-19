@@ -10,13 +10,15 @@ use std::time::Duration;
 /// Maximum height (rows) for the multi-line input box, including borders.
 pub const MAX_INPUT_HEIGHT: i32 = 10;
 
+/// Maximum width (cols) for the inline interaction prompt box, including
+/// borders. The box is left-anchored inside the available area so wide
+/// terminals don't stretch its border all the way across.
+pub const MAX_INTERACTION_PROMPT_WIDTH: u16 = 100;
+
 // ========== Display Limits ==========
 
 /// Maximum active toast notifications at once.
 pub const MAX_TOASTS: i32 = 5;
-
-/// Maximum queued overlays awaiting display.
-pub const MAX_OVERLAY_QUEUE: i32 = 16;
 
 /// Maximum command history entries retained.
 pub const MAX_HISTORY_ENTRIES: i32 = 100;
@@ -37,7 +39,7 @@ pub const TICK_INTERVAL: Duration = Duration::from_millis(250);
 /// Interval for spinner animation frames.
 pub const SPINNER_TICK_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Duration before an overlay transition gate drops.
+/// Duration before an state transition gate drops.
 pub const OVERLAY_TRANSITION_DURATION: Duration = Duration::from_millis(150);
 
 // ========== Toast Durations ==========
@@ -83,7 +85,7 @@ pub const TABLE_MIN_COL_WIDTH: i32 = 5;
 
 // ========== Search ==========
 
-/// Maximum search results shown in global search overlay.
+/// Maximum search results shown in global search state.
 pub const MAX_SEARCH_RESULTS: i32 = 50;
 
 // ========== Double-press ==========

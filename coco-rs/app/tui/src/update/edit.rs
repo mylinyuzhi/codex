@@ -4,318 +4,31 @@
 
 use tokio::sync::mpsc;
 
-use crate::command::ShutdownReason;
 use crate::command::UserCommand;
-use crate::i18n::t;
 use crate::state::AppState;
-use crate::state::Overlay;
 use crate::state::PromptMode;
-use crate::state::ui::Toast;
-use crate::update_rewind;
+use crate::state::SlashCommandName;
 
-/// Try to handle `trimmed` as a TUI-only slash command that must never reach
-/// the agent (`/copy`, `/rewind`, `/checkpoint`, `/theme`). Returns `true`
-/// when the input has been consumed locally; callers should skip their normal
-/// submit/queue path in that case.
-///
-/// Shared between [`submit`] (normal Enter) and the `QueueInput` handler
-/// (Enter while streaming) so the same commands behave identically in both
-/// states — without this shim `/copy` typed mid-stream would be queued to
-/// the agent as ordinary input.
-pub(super) fn try_local_command(state: &mut AppState, trimmed: &str) -> bool {
-    if trimmed == "/copy" {
-        super::clipboard::copy_last_message(state);
-        return true;
+pub(super) fn parse_slash_input(trimmed: &str) -> Option<(SlashCommandName, String)> {
+    let stripped = trimmed.strip_prefix('/')?;
+    if stripped.is_empty() {
+        return None;
     }
-    if trimmed == "/theme" || trimmed.starts_with("/theme ") {
-        handle_theme_command(state, trimmed);
-        return true;
-    }
-    if trimmed == "/rewind"
-        || trimmed == "/checkpoint"
-        || trimmed.starts_with("/rewind ")
-        || trimmed.starts_with("/checkpoint ")
-    {
-        let mut overlay = update_rewind::build_rewind_overlay(state);
-        if overlay.messages.is_empty() {
-            state
-                .ui
-                .add_toast(Toast::info(t!("toast.no_rewind_messages").to_string()));
-        } else {
-            let arg = trimmed.split_once(' ').map(|(_, a)| a.trim()).unwrap_or("");
-            if arg == "last" {
-                overlay.selected = overlay.messages.len().saturating_sub(1) as i32;
-            } else if let Ok(n) = arg.parse::<i32>() {
-                let idx = (n - 1).clamp(0, overlay.messages.len() as i32 - 1);
-                overlay.selected = idx;
-            }
-            state.ui.set_overlay(Overlay::Rewind(overlay));
-        }
-        return true;
-    }
-    // /clear family — handled via `try_local_clear`. We deliberately
-    // do NOT intercept those here; the caller funnels them through
-    // `submit()` which routes via the async `try_local_clear` path
-    // (needs the command channel).
-    false
-}
-
-fn handle_theme_command(state: &mut AppState, trimmed: &str) {
-    let name = trimmed.strip_prefix("/theme").map(str::trim).unwrap_or("");
-    if name.is_empty() {
-        let settings = crate::widgets::settings_panel::SettingsPanelState::new(
-            &state.ui.theme_state,
-            state.ui.display_settings,
-        );
-        state.ui.set_overlay(Overlay::Settings(settings));
-        return;
-    }
-
-    let setting = if name.eq_ignore_ascii_case("auto") {
-        crate::theme::ThemeSetting::Auto
-    } else {
-        crate::theme::ThemeSetting::Named(name.to_string())
+    let (name, args) = match stripped.split_once(char::is_whitespace) {
+        Some((name, rest)) => (name, rest.trim_start()),
+        None => (stripped, ""),
     };
-
-    match state.ui.apply_theme_setting(setting) {
-        Ok(()) => {
-            let saved_setting = state.ui.theme_state.setting.clone();
-            match crate::theme::save_theme_setting(&saved_setting) {
-                Ok(path) => state
-                    .ui
-                    .add_toast(Toast::success(format!("Theme saved to {}", path.display()))),
-                Err(err) => state
-                    .ui
-                    .add_toast(Toast::error(format!("Failed to save theme: {err}"))),
-            }
-        }
-        Err(err) => state
-            .ui
-            .add_toast(Toast::error(format!("Failed to apply theme: {err}"))),
-    }
-}
-
-/// Try to handle `trimmed` as `/exit` or `/quit`. Sends
-/// `UserCommand::Shutdown` so the runtime tears down cleanly. TS:
-/// `commands/exit/exit.tsx::call` exits the React process; coco-rs
-/// signals the runtime to shut down via the command channel.
-pub(super) async fn try_local_exit(trimmed: &str, command_tx: &mpsc::Sender<UserCommand>) -> bool {
-    if trimmed != "/exit" && trimmed != "/quit" {
-        return false;
-    }
-    tracing::info!(
-        exit_case = %ShutdownReason::SlashCommand,
-        "slash exit requested"
-    );
-    let _ = command_tx
-        .send(UserCommand::Shutdown {
-            reason: ShutdownReason::SlashCommand,
-        })
-        .await;
-    true
-}
-
-/// Try to handle `trimmed` as `/status`. Reads live session state
-/// (model / permission mode / fast mode / plan mode / mcp / plugins)
-/// and pushes it inline as a system message — the previous handler
-/// returned a canned string with placeholders. TS:
-/// `commands/status/index.ts` opens a status overlay component.
-/// Try to handle `trimmed` as `/help` (with optional command argument).
-///
-/// Renders a comprehensive markdown overview (commands, prompt prefixes,
-/// keyboard shortcuts, vim mode) using `crate::i18n::t!` so the same
-/// handler covers `en` and `zh-CN`. Supersedes the `coco-commands` crate
-/// handler — that crate has no i18n dependency and `/help` is an inherent
-/// presentation concern.
-pub(super) fn try_local_help(state: &mut AppState, trimmed: &str) -> bool {
-    let Some(rest) = trimmed
-        .strip_prefix("/help")
-        .or_else(|| trimmed.strip_prefix("/h"))
-        .or_else(|| trimmed.strip_prefix("/?"))
-    else {
-        return false;
-    };
-    // Guard against `/helpful` etc. matching the prefix.
-    if !rest.is_empty() && !rest.starts_with(' ') {
-        return false;
-    }
-    let arg = rest.trim();
-    let body = if arg.is_empty() {
-        crate::presentation::help_slash::render_overview()
-    } else {
-        crate::presentation::help_slash::render_command_detail(arg)
-            .unwrap_or_else(|| crate::presentation::help_slash::render_not_found(arg))
-    };
-    state
-        .session
-        .add_message(crate::state::session::ChatMessage::system_text(
-            uuid::Uuid::new_v4().to_string(),
-            body,
-        ));
-    true
-}
-
-pub(super) fn try_local_status(state: &mut AppState, trimmed: &str) -> bool {
-    if trimmed != "/status" && trimmed != "/st" {
-        return false;
-    }
-    let mode = format!("{:?}", state.session.permission_mode);
-    let model = if state.session.model.is_empty() {
-        "(default)".to_string()
-    } else {
-        state.session.model.clone()
-    };
-    let plan_mode = if state.session.permission_mode == coco_types::PermissionMode::Plan {
-        "on"
-    } else {
-        "off"
-    };
-    let fast = if state.session.fast_mode { "on" } else { "off" };
-    let mcp_count = state.session.mcp_servers.len();
-    let plugin_count = state.session.available_plugins.len();
-    let session_id = state
-        .session
-        .session_id
-        .as_deref()
-        .unwrap_or("(not yet assigned)");
-    let body = format!(
-        "Session status:\n\
-         Session ID: {session_id}\n\
-         Model: {model}\n\
-         Permission mode: {mode}\n\
-         Plan mode: {plan_mode}\n\
-         Fast mode: {fast}\n\
-         MCP servers: {mcp_count} connected\n\
-         Plugins: {plugin_count} loaded\n\
-         Bypass available: {}",
-        state.session.bypass_permissions_available,
-    );
-    state
-        .session
-        .add_message(crate::state::session::ChatMessage::system_text(
-            uuid::Uuid::new_v4().to_string(),
-            body,
-        ));
-    true
-}
-
-/// Try to handle `trimmed` as `/compact [instructions]`. Routes to
-/// the engine's manual compact entry-point so the user's directive
-/// flows into the summary prompt. TS: `commands/compact/compact.ts:40`.
-///
-/// Async because we need the command channel to dispatch the compact
-/// request to the agent driver.
-pub(super) async fn try_local_compact(
-    state: &mut AppState,
-    trimmed: &str,
-    command_tx: &mpsc::Sender<UserCommand>,
-) -> bool {
-    if trimmed != "/compact" && !trimmed.starts_with("/compact ") {
-        return false;
-    }
-    let instructions = trimmed
-        .strip_prefix("/compact")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-
-    // Show the standard "Compacting…" toast so the user sees immediate
-    // feedback even before the engine emits CompactionStarted.
-    state
-        .ui
-        .add_toast(Toast::info(t!("status.compacting").to_string()));
-
-    let _ = command_tx
-        .send(UserCommand::Compact {
-            custom_instructions: instructions,
-        })
-        .await;
-    true
-}
-
-/// Try to handle `trimmed` as a `/clear` variant. Called by [`submit`]
-/// with access to the core command channel so the engine-side reset
-/// can be kicked off asynchronously.
-///
-/// Scope (TS: `src/commands/clear/conversation.ts::clearConversation`):
-/// - `/clear`          — full TS-aligned reset (default)
-/// - `/clear all`      — alias of `/clear`
-/// - `/clear history`  — Rust-only lighter mode: transcript only,
-///   keep tools/files/plans
-pub(super) async fn try_local_clear(
-    state: &mut AppState,
-    trimmed: &str,
-    command_tx: &mpsc::Sender<UserCommand>,
-) -> bool {
-    let scope = match trimmed {
-        "/clear" | "/clear all" => {
-            // TS: clearAllPlanSlugs is unconditional. We mirror by
-            // always passing `clear_plan_state=true` here (deletes
-            // plan files on disk and clears the slug cache). Users
-            // wanting a lighter reset use `/clear history`.
-            do_clear_conversation(state, /*clear_plan_state*/ true);
-            crate::command::ClearScope::Conversation
-        }
-        "/clear history" => {
-            do_clear_conversation(state, /*clear_plan_state*/ false);
-            crate::command::ClearScope::History
-        }
-        _ => return false,
-    };
-    // Signal engine to reset its in-process plan-mode flags. Fire and
-    // forget — if the channel is full or closed the TUI is already in
-    // its own consistent state.
-    let _ = command_tx
-        .send(UserCommand::ClearConversation { scope })
-        .await;
-    true
-}
-
-/// Perform the local parts of `/clear` that don't require engine
-/// cooperation: wipe the TUI transcript, dismiss overlays/toasts, and
-/// (for `clear_plan_state=true`) remove plan files on disk + clear the
-/// slug cache for this session.
-fn do_clear_conversation(state: &mut AppState, clear_plan_state: bool) {
-    // 1. Transcript reset.
-    state.session.messages.clear();
-    state.session.last_agent_markdown = None;
-    // 2. Overlay + toast reset — avoid surfacing stale approval prompts
-    // or lifecycle banners against a now-empty transcript.
-    state.ui.clear_overlays();
-    state.ui.toasts.clear();
-    // 3. Plan-state reset (only /clear all).
-    if clear_plan_state {
-        if let Some(session_id) = state.session.session_id.clone() {
-            // Resolve plans dir using same precedence as the engine: env
-            // `COCO_HOME`/config dir, no project override (we're in TUI,
-            // settings aren't threaded here). Acceptable gap: if user set
-            // a project-local `plansDirectory`, TUI's cleanup misses the
-            // custom path. Engine-side SDK RPC would fix this cleanly.
-            if let Some(config_home) = dirs::home_dir().map(|h| h.join(".cocode")) {
-                let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
-                let _ = coco_context::delete_all_session_plan_files(&session_id, &plans_dir);
-            }
-            coco_context::clear_plan_slug(&session_id);
-        }
-        state
-            .ui
-            .add_toast(Toast::info(t!("toast.cleared_all").to_string()));
-    } else {
-        state
-            .ui
-            .add_toast(Toast::info(t!("toast.cleared_conversation").to_string()));
-    }
+    Some((SlashCommandName::new(name).ok()?, args.to_string()))
 }
 
 /// Handle a submission whose leading character is a prompt-mode prefix
-/// (`!` bash). Pushes the appropriate local `ChatMessage` so the user
-/// sees the input echoed immediately, then dispatches a typed
-/// `UserCommand` for the engine bridge to execute.
-///
-/// The bridge in `tui_runner` is responsible for emitting the matching
-/// follow-up `BashOutput` message. The TUI never touches the shell
-/// directly — keeps the permission model and side-effect surface in one
-/// place.
+/// (`!` bash). Dispatches a typed `UserCommand` for the engine bridge
+/// to execute; the bridge's `run_prompt_mode_bash` pushes a single
+/// `SystemMessage::LocalCommand { command, output }` via
+/// `history_push_and_emit` after the shell call completes, so the
+/// transcript view shows the invocation through the standard
+/// `MessageAppended` path. The TUI never touches the shell directly —
+/// keeps the permission model and side-effect surface in one place.
 async fn submit_prefixed(
     state: &mut AppState,
     command_tx: &mpsc::Sender<UserCommand>,
@@ -336,13 +49,6 @@ async fn submit_prefixed(
     state.ui.input.add_to_history(text.to_string());
 
     let user_message_id = uuid::Uuid::new_v4().to_string();
-    state
-        .session
-        .add_message(crate::state::session::ChatMessage::user_bash_input(
-            user_message_id.clone(),
-            &payload,
-        ));
-
     let _ = command_tx
         .send(UserCommand::SubmitBash {
             user_message_id,
@@ -358,16 +64,15 @@ async fn submit_prefixed(
     true
 }
 
-/// Submit current input (or intercept local-only slash commands via
-/// [`try_local_command`]). Returns `true` so the caller can propagate the
-/// "state changed" signal.
+/// Submit current input. Slash commands are sent as typed command requests
+/// and resolved by the command layer.
 pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) -> bool {
     let text = state.ui.input.take_input();
     if text.is_empty() {
         return true;
     }
 
-    // Prompt-mode routing happens BEFORE slash/local-command checks
+    // Prompt-mode routing happens BEFORE slash-command checks
     // because `!` and `#` are prefix-only — they can never collide with
     // `/foo` (different leading byte) so this ordering is safe and
     // matches TS's `getModeFromInput → if bash …` dispatch order.
@@ -377,62 +82,23 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     }
 
     let trimmed = text.trim();
-    if try_local_command(state, trimmed) {
-        return true;
-    }
-    // /clear needs the command channel to signal the engine; handle
-    // separately. Keep `try_local_command` sync for QueueInput callers.
-    if try_local_clear(state, trimmed, command_tx).await {
-        return true;
-    }
-    // /compact also needs the command channel; intercept before the
-    // raw text would otherwise be sent to the LLM.
-    if try_local_compact(state, trimmed, command_tx).await {
-        return true;
-    }
-    // /exit / /quit — clean shutdown via the command channel.
-    if try_local_exit(trimmed, command_tx).await {
-        return true;
-    }
-    // /status — read live session state directly (no engine round-trip).
-    if try_local_status(state, trimmed) {
-        return true;
-    }
-    // /help — i18n-aware overview rendered locally (the upstream
-    // `coco-commands` crate has no i18n dependency).
-    if try_local_help(state, trimmed) {
+    if let Some((name, args)) = parse_slash_input(trimmed) {
+        state.ui.input.add_to_history(text);
+        let _ = command_tx
+            .send(UserCommand::ExecuteSlashCommand { name, args })
+            .await;
         return true;
     }
 
     state.ui.input.add_to_history(text.clone());
     let resolved = state.ui.paste_manager.resolve_structured(&text);
 
-    // Mint the user-message UUID once at submit time so the TUI's
-    // ChatMessage, the agent driver's Message::User, the file-history
-    // snapshot, and the JSONL transcript all key off the same id.
-    // TS: REPL.tsx onSubmit calls createUserMessage() which mints the
-    // UUID before the agent loop runs.
+    // Mint the user-message UUID once at submit time so the agent
+    // driver's `Message::User`, the file-history snapshot, and the
+    // JSONL transcript all key off the same id. Engine
+    // `history_push_and_emit` emits `MessageAppended` carrying this
+    // uuid, which the `TranscriptView` then renders.
     let user_message_id = uuid::Uuid::new_v4().to_string();
-
-    // Push the user's input into the displayed conversation immediately
-    // (TS REPL: setMessages(prev => [...prev, userMsg]) on submit).
-    // The same id then flows through UserCommand::SubmitInput so rewind
-    // selections target the very message the user sees in the chat.
-    state
-        .session
-        .add_message(crate::state::session::ChatMessage {
-            id: user_message_id.clone(),
-            role: crate::state::session::ChatRole::User,
-            content: crate::state::session::MessageContent::Text(text.clone()),
-            is_meta: false,
-            created_at_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: Some(state.session.permission_mode),
-        });
 
     let _ = command_tx
         .send(UserCommand::SubmitInput {

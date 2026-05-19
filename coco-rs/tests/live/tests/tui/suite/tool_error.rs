@@ -5,8 +5,8 @@
 //!
 //! - `AgentStreamEvent::ToolUseCompleted` carries `is_error = true`
 //!   (`tool_completions()` surfaces it as `(name, true)`).
-//! - The stream handler folds that into a `MessageContent::ToolError`
-//!   chat entry — the user-visible "tool failed" line.
+//! - A `Message::ToolResult` cell with `is_error = true` lands on the
+//!   engine transcript — the user-visible "tool failed" row.
 //! - The engine recovers: it re-enters the loop with the tool result
 //!   and the next scripted reply lands as a normal assistant text.
 //! - `SessionResult.is_error` stays `false` — a failed *tool* is data,
@@ -18,8 +18,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use coco_tui::state::session::ChatRole;
-use coco_tui::state::session::MessageContent;
 use serde_json::json;
 
 use crate::tui::harness::TuiHarness;
@@ -73,34 +71,22 @@ pub async fn run() -> Result<()> {
          got {completions:?}",
     );
 
-    // AppState surface: a `ToolError` ChatMessage for `Read` is folded in.
-    let has_tool_error = harness.state.session.messages.iter().any(|m| {
-        matches!(
-            &m.content,
-            MessageContent::ToolError { tool_name, error }
-                if tool_name == "Read" && !error.is_empty()
+    // AppState surface: a tool-result cell for `Read` with `is_error=true`.
+    let read_result = harness.find_tool_result("Read");
+    let (error, is_error) = read_result.ok_or_else(|| {
+        anyhow::anyhow!(
+            "tool_error: missing tool-result cell for Read (cell count {})",
+            harness.cell_count(),
         )
-    });
+    })?;
     assert!(
-        has_tool_error,
-        "tool_error: missing MessageContent::ToolError(Read) in session.messages \
-         (got {} messages: {:?})",
-        harness.state.session.messages.len(),
-        harness
-            .state
-            .session
-            .messages
-            .iter()
-            .map(|m| (m.role, m.text_content().to_string()))
-            .collect::<Vec<_>>(),
+        is_error && !error.is_empty(),
+        "tool_error: Read result should be flagged is_error with non-empty body",
     );
 
     // Loop continued: the post-tool assistant text landed.
-    let saw_recovery = harness.state.session.messages.iter().any(|m| {
-        matches!(m.role, ChatRole::Assistant) && m.text_content().contains("the file is gone")
-    });
     assert!(
-        saw_recovery,
+        harness.assistant_text_contains("the file is gone"),
         "tool_error: post-tool assistant recovery message missing — \
          engine should have re-entered the loop after the tool error",
     );

@@ -3,14 +3,14 @@ use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
 use crate::presentation::styles::UiStyles;
-use crate::state::DiffViewOverlay;
+use crate::state::DiffViewState;
 use crate::theme::Theme;
 
 #[test]
 fn diff_view_content_formats_diff_lines_and_clamps_negative_scroll() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = DiffViewOverlay {
+    let state = DiffViewState {
         path: "src/lib.rs".to_string(),
         diff: "\
 --- a/src/lib.rs
@@ -23,7 +23,7 @@ fn diff_view_content_formats_diff_lines_and_clamps_negative_scroll() {
         scroll: -4,
     };
 
-    let (title, body, border) = diff_view_content(&overlay, UiStyles::new(&theme));
+    let (title, body, border) = diff_view_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Diff: src/lib.rs [1/6] ");
     assert_eq!(border, theme.primary);
@@ -38,7 +38,7 @@ fn diff_view_content_formats_diff_lines_and_clamps_negative_scroll() {
 fn diff_view_content_scrolls_and_caps_to_thirty_lines() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let overlay = DiffViewOverlay {
+    let state = DiffViewState {
         path: "src/lib.rs".to_string(),
         diff: (0..35)
             .map(|i| format!(" line-{i}"))
@@ -47,7 +47,7 @@ fn diff_view_content_scrolls_and_caps_to_thirty_lines() {
         scroll: 3,
     };
 
-    let (title, body, _) = diff_view_content(&overlay, UiStyles::new(&theme));
+    let (title, body, _) = diff_view_content(&state, UiStyles::new(&theme));
 
     assert_eq!(title, " Diff: src/lib.rs [4/35] ");
     assert!(body.lines().any(|line| line == "    line-3"));

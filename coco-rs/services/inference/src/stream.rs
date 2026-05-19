@@ -5,6 +5,10 @@
 //! (Gemini `thoughtSignature`, Anthropic `signature`, OpenAI `encrypted_content`)
 //! verbatim. See `docs/coco-rs/streaming-metadata-roundtrip-plan.md`.
 
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
+use coco_llm_types::ProviderMetadata;
+use coco_llm_types::Usage;
 use coco_types::TokenUsage;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -16,13 +20,9 @@ use tracing::trace;
 use tracing::warn;
 use vercel_ai::StreamProcessor;
 use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
 use vercel_ai_provider::LanguageModelV4FileData;
 use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::ProviderMetadata;
-use vercel_ai_provider::Usage;
 
 pub use vercel_ai::StreamMetrics;
 pub use vercel_ai::StreamProcessorConfig;
@@ -463,7 +463,7 @@ pub enum StreamEvent {
     /// block and the API will reject it with `content[].thinking must
     /// be passed back`. `None` for providers that don't ship metadata.
     ReasoningEnd {
-        provider_metadata: Option<crate::ProviderMetadata>,
+        provider_metadata: Option<coco_llm_types::ProviderMetadata>,
     },
     /// Tool call started.
     ToolCallStart { id: String, tool_name: String },
@@ -482,11 +482,11 @@ pub enum StreamEvent {
     Finish {
         usage: TokenUsage,
         /// Typed unified stop reason — the 8-variant
-        /// `UnifiedFinishReason` set at the vercel-ai-provider seam.
+        /// `StopReason` set at the vercel-ai-provider seam.
         /// All multi-LLM refinements (`ContextWindowExceeded`,
         /// `StopSequence`) are first-class variants; no separate raw
         /// string is needed for behavioral decisions.
-        stop_reason: crate::StopReason,
+        stop_reason: coco_llm_types::StopReason,
         /// Provider-original wire string preserved for diagnostics
         /// only (e.g. Anthropic `"refusal"` flowing through with
         /// `stop_reason: ContentFilter`). Not consulted for any
@@ -827,13 +827,13 @@ pub fn synthetic_stream_from_content(
                 // file references don't roundtrip through the stream's
                 // undifferentiated `data: String`.
                 let data = match &fp.data {
-                    vercel_ai_provider::SharedV4FileData::Data { data } => match data {
+                    coco_llm_types::SharedV4FileData::Data { data } => match data {
                         vercel_ai_provider::FileRawData::Base64(s) => s.clone(),
                         vercel_ai_provider::FileRawData::Bytes(_) => data.to_base64(),
                     },
-                    vercel_ai_provider::SharedV4FileData::Url { .. }
-                    | vercel_ai_provider::SharedV4FileData::Reference { .. }
-                    | vercel_ai_provider::SharedV4FileData::Text { .. } => {
+                    coco_llm_types::SharedV4FileData::Url { .. }
+                    | coco_llm_types::SharedV4FileData::Reference { .. }
+                    | coco_llm_types::SharedV4FileData::Text { .. } => {
                         trace!(
                             "Non-data File variant skipped in synthetic stream (Data-only path)"
                         );
