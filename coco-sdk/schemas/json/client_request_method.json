@@ -1,5 +1,5 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ClientRequestMethod",
   "description": "Wire-method identifier for every `ClientRequest` variant.\n\nCross-language protocol constant exported to the JSON schema bundle so Python / other SDK codegens obtain the same vocabulary. Consumers should reference `ClientRequestMethod::SessionStart` rather than compare against raw wire strings.",
   "type": "string",

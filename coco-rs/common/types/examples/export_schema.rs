@@ -14,12 +14,13 @@
 //! The bundled schema (`coco_app_server_protocol.schemas.json`) is built
 //! by registering a small set of **entry-point types** and letting
 //! `schemars` walk their `$ref` closure transitively. Concretely,
-//! `schema_for!(T)` returns a `RootSchema { schema, definitions }` where
-//! `definitions` already contains every type that `T` (recursively)
-//! references via `$ref`. We lift those flat into the bundle's outer
-//! `definitions` map. The result: any type reachable from any entry point
-//! appears in the bundle automatically — no per-type `bundle_entry` line
-//! to maintain, and no silent gaps for cross-language clients.
+//! `schema_for!(T)` returns a `Schema` (newtype on `serde_json::Value`)
+//! whose top-level `$defs` already contains every type that `T`
+//! (recursively) references via `$ref`. We lift those flat into the
+//! bundle's outer `$defs` map. The result: any type reachable from any
+//! entry point appears in the bundle automatically — no per-type
+//! `bundle_entry` line to maintain, and no silent gaps for cross-language
+//! clients.
 //!
 //! Adding a new wire type? Make sure it is reachable from one of the
 //! entry points below. If it is a brand-new top-level concept (not
@@ -72,17 +73,17 @@ fn write_schema<T: JsonSchema>(out_dir: &Path, name: &str) {
 /// Bundle accumulator with explicit-vs-transitive precedence.
 ///
 /// Each entry point is registered via `add::<T>(name)` which:
-///   1. inserts T's top-level schema (the metadata-rich form
-///      `schema_for!(T).schema`, with its embedded `definitions`
-///      stripped) under `name` — marked **explicit**.
-///   2. lifts every entry of `schema_for!(T).definitions` flat into
-///      the bundle — marked **transitive**.
+///   1. inserts T's top-level schema (the metadata-rich
+///      `schema_for!(T)` value, with its embedded `$defs` /
+///      `$schema` stripped) under `name` — marked **explicit**.
+///   2. lifts every entry of the top-level `$defs` flat into the
+///      bundle — marked **transitive**.
 ///
 /// Two precedence rules:
 ///   * **Explicit always wins**. When `ProviderApi` is registered
 ///     explicitly *and* reached transitively via `ModelSpec.api`,
-///     the richer top-level schema (with `title`, `$schema` etc.)
-///     wins; the leaner transitive copy is silently dropped.
+///     the richer top-level schema (with `title` etc.) wins; the
+///     leaner transitive copy is silently dropped.
 ///   * **First transitive wins**. When two unrelated entries both
 ///     reach the same inner type, the schemas are equal in every
 ///     case we have observed (schemars is deterministic), so we
@@ -110,15 +111,21 @@ impl BundleBuilder {
     /// Register an entry-point type and pull in its full transitive
     /// `$ref` closure. See struct docs for precedence rules.
     fn add<T: JsonSchema>(&mut self, name: &str) {
-        let root = schema_for!(T);
+        // `schema_for!(T)` returns `schemars::Schema` — a newtype on
+        // `serde_json::Value`. The top-level object carries the type's
+        // own schema plus a `$defs` map of every type reachable from
+        // `T` via `$ref` (default per JSON Schema 2020-12 settings).
+        let mut top = schema_for!(T).to_value();
 
-        // 1) Top-level schema → bundle[name], marked **explicit**.
-        //    Strip the embedded `definitions` field — we lift its
-        //    entries flat below, so keeping a nested copy would just
-        //    duplicate data.
-        let mut top = serde_json::to_value(&root.schema).expect("serialize top schema");
+        // 1) Split out `$defs` and shed envelope-level metadata
+        //    (`$schema`) that only makes sense on a standalone schema,
+        //    not on a nested entry inside the bundle.
+        let mut defs = serde_json::Map::new();
         if let Some(obj) = top.as_object_mut() {
-            obj.remove("definitions");
+            if let Some(Value::Object(map)) = obj.remove("$defs") {
+                defs = map;
+            }
+            obj.remove("$schema");
         }
         self.entries.insert(name.to_string(), top);
         self.explicit.insert(name.to_string(), ());
@@ -126,9 +133,8 @@ impl BundleBuilder {
         // 2) Every transitively-reachable type → bundle[X], marked
         //    **transitive** (loses to explicit, ties resolved
         //    first-write-wins with conflict detection).
-        for (inner_name, inner_schema) in &root.definitions {
-            let inner = serde_json::to_value(inner_schema).expect("serialize inner schema");
-            self.insert_transitive(inner_name, inner);
+        for (inner_name, inner_schema) in defs {
+            self.insert_transitive(&inner_name, inner_schema);
         }
     }
 
@@ -160,6 +166,10 @@ impl BundleBuilder {
 /// Walk every `$ref` in the bundle's definitions and return any that
 /// point at a name not present as a top-level definition. Each entry
 /// in the returned map is `(missing_target, [sources_that_referenced_it])`.
+///
+/// Accepts both `#/$defs/...` (schemars 1.x / JSON Schema 2020-12) and
+/// legacy `#/definitions/...` to stay resilient to future settings
+/// changes.
 fn find_dangling_refs(
     definitions: &serde_json::Map<String, Value>,
 ) -> BTreeMap<String, Vec<String>> {
@@ -170,7 +180,10 @@ fn find_dangling_refs(
         match value {
             Value::Object(map) => {
                 if let Some(Value::String(s)) = map.get("$ref") {
-                    if let Some(name) = s.strip_prefix("#/definitions/") {
+                    let name = s
+                        .strip_prefix("#/$defs/")
+                        .or_else(|| s.strip_prefix("#/definitions/"));
+                    if let Some(name) = name {
                         sink.push(name.to_string());
                     }
                 }
@@ -353,9 +366,9 @@ fn main() {
             --features schema --example export_schema`. Composition: a small \
             set of entry-point types + every type they transitively reference \
             via `$ref` (collected by `schemars::schema_for!` and flattened into \
-            `definitions`). To add a new type, ensure it is reachable from an \
+            `$defs`). To add a new type, ensure it is reachable from an \
             existing entry; only add a new entry if it is a true root.",
-        "definitions": definitions,
+        "$defs": definitions,
     });
 
     let bundle_path = out_dir.join("coco_app_server_protocol.schemas.json");

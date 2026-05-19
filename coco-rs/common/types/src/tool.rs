@@ -308,12 +308,22 @@ impl<'de> Deserialize<'de> for ToolId {
 // Wire shape is a flat string ("Read", "mcp__slack__send",
 // "my_plugin_tool"). Skip the auto-derive and emit the String schema
 // so SDK schema consumers don't see a tagged-enum shape.
+//
+// `inline_schema = true` keeps the schemars 0.8 behavior for this kind
+// of String-aliased newtype: parent schemas inline the
+// `{"type": "string"}` shape instead of emitting a `$ref` to a `ToolId`
+// entry in `$defs`. SDK codegen pipelines that map `$ref` names to
+// generated classes otherwise need a separate alias for what is
+// already-a-string on the wire.
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for ToolId {
-    fn schema_name() -> String {
-        "ToolId".to_string()
+    fn inline_schema() -> bool {
+        true
     }
-    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ToolId".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         <String as schemars::JsonSchema>::json_schema(generator)
     }
 }

@@ -11,7 +11,7 @@ DO NOT EDIT MANUALLY — changes will be overwritten by the generator.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Union
 
 from pydantic import BaseModel, Field
 
@@ -452,17 +452,17 @@ class WireApi(str, Enum):
 # Union type aliases
 # ---------------------------------------------------------------------------
 
-# Agent-loop stream events. Higher-level than `coco_types::StreamEvent` (which represents raw LLM inference deltas). Adds:
+# Agent-loop stream events. Higher-level than `coco_types::StreamEvent`
 AgentStreamEvent = dict[str, Any]
 
 # Assistant message content parts.
-AssistantContentPart = dict[str, Any]
+AssistantContentPart = Union["TextPart", "FilePart", "ReasoningPart", "ReasoningFilePart", "CustomPart", "ToolCallPart", "ToolResultPart", "SourcePart", "ToolApprovalRequestPart"]
 
 # Typed payload for an [`AttachmentMessage`](super::AttachmentMessage).
-AttachmentBody = dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any]
+AttachmentBody = Union["LanguageModelV4Message", "SilentPayload", "dict[str, Any]"]
 
-# Top-level wire message. SDK clients send these over stdin; coco-rs writes these to stdout. Consumers dispatch on the `ty
-JsonRpcMessage = dict[str, Any]
+# Top-level wire message. SDK clients send these over stdin; coco-rs
+JsonRpcMessage = Union["JsonRpcRequest", "JsonRpcResponse", "JsonRpcNotification", "JsonRpcError"]
 
 # Generated file data — either raw bytes/base64 or a URL.
 LanguageModelV4FileData = dict[str, Any]
@@ -474,7 +474,7 @@ LanguageModelV4Message = dict[str, Any]
 MemoryDialogRowKind = dict[str, Any]
 
 # Top-level message enum.
-Message = dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any]
+Message = Union["UserMessage", "AssistantMessage", "SystemMessage", "AttachmentMessage", "ToolResultMessage", "ProgressMessage", "TombstoneMessage", "ToolUseSummaryMessage"]
 
 # Bounded, UI-ready permission input display.
 PermissionDisplayInput = dict[str, Any]
@@ -482,17 +482,23 @@ PermissionDisplayInput = dict[str, Any]
 # A permission update action.
 PermissionUpdate = dict[str, Any]
 
-# Request identifier. Can be a string or integer per JSON-RPC 2.0. SDK clients typically use integers; coco-rs accepts bot
+# Request identifier. Can be a string or integer per JSON-RPC 2.0.
 RequestId = int | str
 
 # File data as a tagged discriminated union (v4 spec).
 SharedV4FileData = dict[str, Any]
 
-# Categorization of a `SlashCommandStatus` payload. Each variant maps to a `slash.status.*` key in the TUI locale catalog.
+# Typed payload for silent attachment kinds.
+SilentPayload = Union["HookCancelledPayload", "HookErrorDuringExecutionPayload", "HookNonBlockingErrorPayload", "HookSystemMessagePayload", "HookPermissionDecisionPayload", "CommandPermissionsPayload", "StructuredOutputPayload", "DynamicSkillPayload", "AlreadyReadFilePayload", "EditedImageFilePayload"]
+
+# Categorization of a `SlashCommandStatus` payload. Each variant maps to
 SlashCommandStatusKind = dict[str, Any]
 
+# System messages have sub-types for different notification kinds.
+SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "SystemCompactBoundaryMessage", "SystemMicrocompactBoundaryMessage", "SystemLocalCommandMessage", "SystemPermissionRetryMessage", "SystemBridgeStatusMessage", "SystemMemorySavedMessage", "SystemAwaySummaryMessage", "SystemAgentsKilledMessage", "SystemApiMetricsMessage", "SystemStopHookSummaryMessage", "SystemTurnDurationMessage", "SystemScheduledTaskFireMessage", "SystemUserInterruptionMessage"]
+
 # Tool message content parts.
-ToolContentPart = dict[str, Any]
+ToolContentPart = Union["ToolResultPart", "ToolApprovalResponsePart"]
 
 # Content of a tool result.
 ToolResultContent = dict[str, Any]
@@ -504,7 +510,7 @@ ToolResultContentPart = dict[str, Any]
 TuiOnlyEvent = dict[str, Any]
 
 # User message content parts.
-UserContentPart = dict[str, Any]
+UserContentPart = Union["TextPart", "FilePart"]
 
 
 # ---------------------------------------------------------------------------
@@ -1958,18 +1964,92 @@ class AgentInfo(BaseModel):
     name: str
     description: str | None = None
 
+class AlreadyReadFilePayload(BaseModel):
+    display_path: str
+    filename: str
+    content: str = ''
+    truncated: bool = False
+
 class ApiError(BaseModel):
     message: str
     status_code: int | None = None
+
+class AssistantMessage(BaseModel):
+    message: LanguageModelV4Message
+    uuid: str
+    api_error: ApiError | None = None
+    cost_usd: float | None = None
+    model: str = ''
+    request_id: str | None = None
+    stop_reason: UnifiedFinishReason | None = None
+    usage: TokenUsage | None = None
+
+class AttachmentMessage(BaseModel):
+    body: AttachmentBody
+    kind: AttachmentKind
+    uuid: str
+
+class CommandPermissionsPayload(BaseModel):
+    allowed_tools: list[str]
+    model: str | None = None
+
+class CustomPart(BaseModel):
+    kind: str
+    providerMetadata: ProviderMetadata | None = None
+    providerOptions: ProviderOptions | None = None
+
+class DynamicSkillPayload(BaseModel):
+    path: str
+    skill_name: str
+
+class EditedImageFilePayload(BaseModel):
+    display_path: str
+    filename: str
 
 class FileChangeInfo(BaseModel):
     kind: FileChangeKind
     path: str
 
+class FilePart(BaseModel):
+    data: SharedV4FileData
+    mediaType: str
+    filename: str | None = None
+    providerMetadata: ProviderMetadata | None = None
+
 class HookCallbackMatcher(BaseModel):
     hook_callback_ids: list[str]
     matcher: str | None = None
     timeout: int | None = None
+
+class HookCancelledPayload(BaseModel):
+    hook_event: HookEventType
+    hook_name: str
+    tool_use_id: str
+    command: str | None = None
+    duration_ms: int | None = None
+
+class HookErrorDuringExecutionPayload(BaseModel):
+    content: str
+    hook_event: HookEventType
+    hook_name: str
+    tool_use_id: str
+
+class HookNonBlockingErrorPayload(BaseModel):
+    error: str
+    hook_event: HookEventType
+    hook_name: str
+    tool_use_id: str
+
+class HookPermissionDecisionPayload(BaseModel):
+    decision: HookPermissionDecision
+    hook_event: HookEventType
+    tool_use_id: str
+
+class HookSystemMessagePayload(BaseModel):
+    content: str
+    hook_event: HookEventType
+    hook_name: str
+    tool_use_id: str
 
 class InputTokenDetails(BaseModel):
     cache_read_tokens: int = 0
@@ -2052,6 +2132,26 @@ class PreservedSegment(BaseModel):
     head_uuid: str
     tail_uuid: str
 
+class ProgressMessage(BaseModel):
+    data: Any
+    tool_use_id: str
+    parent_message_uuid: str | None = None
+
+class ProviderMetadata(BaseModel):
+    pass
+
+class ProviderOptions(BaseModel):
+    pass
+
+class ReasoningFilePart(BaseModel):
+    data: LanguageModelV4FileData
+    mediaType: str
+    providerMetadata: ProviderMetadata | None = None
+
+class ReasoningPart(BaseModel):
+    text: str
+    providerMetadata: ProviderMetadata | None = None
+
 class SessionModelUsage(BaseModel):
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
@@ -2067,6 +2167,96 @@ class SlashCommandInfo(BaseModel):
     aliases: list[str] | None = None
     argument_hint: str | None = None
     description: str | None = None
+
+class SourcePart(BaseModel):
+    id: str
+    sourceType: SourceType
+    filename: str | None = None
+    mediaType: str | None = None
+    providerMetadata: ProviderMetadata | None = None
+    title: str | None = None
+    url: str | None = None
+
+class StructuredOutputPayload(BaseModel):
+    data: Any
+    tool_name: str
+    tool_use_id: str
+
+class SystemAgentsKilledMessage(BaseModel):
+    count: int
+    uuid: str
+
+class SystemApiErrorMessage(BaseModel):
+    error: str
+    uuid: str
+    status_code: int | None = None
+
+class SystemApiMetricsMessage(BaseModel):
+    model: str
+    usage: TokenUsage
+    uuid: str
+    cost_usd: float | None = None
+
+class SystemAwaySummaryMessage(BaseModel):
+    summary: str
+    uuid: str
+
+class SystemBridgeStatusMessage(BaseModel):
+    connected: bool
+    uuid: str
+    message: str | None = None
+
+class SystemCompactBoundaryMessage(BaseModel):
+    tokens_after: int
+    tokens_before: int
+    uuid: str
+    messages_summarized: int | None = None
+    pre_compact_discovered_tools: list[str] | None = None
+    preserved_segment: PreservedSegment | None = None
+    trigger: CompactTrigger = 'auto'
+    user_context: str | None = None
+
+class SystemInformationalMessage(BaseModel):
+    level: SystemMessageLevel
+    message: str
+    title: str
+    uuid: str
+
+class SystemLocalCommandMessage(BaseModel):
+    command: str
+    output: str
+    uuid: str
+
+class SystemMemorySavedMessage(BaseModel):
+    uuid: str
+    verb: str = 'Saved'
+    written_paths: list[str] = []
+
+class SystemMicrocompactBoundaryMessage(BaseModel):
+    uuid: str
+
+class SystemPermissionRetryMessage(BaseModel):
+    message: str
+    tool_name: str
+    uuid: str
+
+class SystemScheduledTaskFireMessage(BaseModel):
+    schedule: str
+    task_id: str
+    uuid: str
+
+class SystemStopHookSummaryMessage(BaseModel):
+    hook_name: str
+    outcome: str
+    uuid: str
+
+class SystemTurnDurationMessage(BaseModel):
+    duration_ms: int
+    uuid: str
+
+class SystemUserInterruptionMessage(BaseModel):
+    for_tool_use: bool
+    uuid: str
 
 class TaskRecord(BaseModel):
     id: str
@@ -2084,6 +2274,10 @@ class TaskUsage(BaseModel):
     tool_uses: int
     total_tokens: int
 
+class TextPart(BaseModel):
+    text: str
+    providerMetadata: ProviderMetadata | None = None
+
 class ThinkingLevel(BaseModel):
     effort: ReasoningEffort
     budget_tokens: int | None = None
@@ -2100,3 +2294,57 @@ class TokenUsage(BaseModel):
     input_token_details: InputTokenDetails = {}
     output_token_details: OutputTokenDetails = {}
     total_tokens: int = 0
+
+class TombstoneMessage(BaseModel):
+    original_kind: MessageKind
+    uuid: str
+
+class ToolApprovalRequestPart(BaseModel):
+    approvalId: str
+    toolCallId: str
+    context: str | None = None
+    providerMetadata: ProviderMetadata | None = None
+    toolName: str | None = None
+
+class ToolApprovalResponsePart(BaseModel):
+    approvalId: str
+    approved: bool
+    providerMetadata: ProviderMetadata | None = None
+    reason: str | None = None
+
+class ToolCallPart(BaseModel):
+    input: Any
+    toolCallId: str
+    toolName: str
+    providerExecuted: bool | None = None
+    providerMetadata: ProviderMetadata | None = None
+
+class ToolResultMessage(BaseModel):
+    message: LanguageModelV4Message
+    tool_id: str
+    tool_use_id: str
+    uuid: str
+    is_error: bool = False
+
+class ToolResultPart(BaseModel):
+    output: ToolResultContent
+    toolCallId: str
+    toolName: str
+    isError: bool = False
+    providerMetadata: ProviderMetadata | None = None
+
+class ToolUseSummaryMessage(BaseModel):
+    preceding_tool_use_ids: list[str]
+    summary: str
+    uuid: str
+
+class UserMessage(BaseModel):
+    message: LanguageModelV4Message
+    uuid: str
+    is_compact_summary: bool = False
+    is_virtual: bool = False
+    is_visible_in_transcript_only: bool = False
+    origin: MessageOrigin | None = None
+    parent_tool_use_id: str | None = None
+    permission_mode: PermissionMode | None = None
+    timestamp: str = ''

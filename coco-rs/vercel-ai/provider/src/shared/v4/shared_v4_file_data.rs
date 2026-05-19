@@ -75,12 +75,18 @@ impl<'de> Deserialize<'de> for FileRawData {
 
 // Wire shape is always a string (base64). Match that in the schema
 // rather than letting schemars infer a tagged-enum shape.
+// `inline_schema = true` matches schemars 0.8 behavior: parents inline
+// the `{"type": "string"}` shape instead of `$ref`-ing a named alias
+// for what is already-a-string on the wire.
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for FileRawData {
-    fn schema_name() -> String {
-        "FileRawData".to_string()
+    fn inline_schema() -> bool {
+        true
     }
-    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "FileRawData".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         <String as schemars::JsonSchema>::json_schema(generator)
     }
 }
