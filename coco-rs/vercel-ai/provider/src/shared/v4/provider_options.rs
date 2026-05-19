@@ -10,6 +10,7 @@ use crate::json_value::JSONValue;
 ///
 /// This is a map of provider names to their specific options.
 /// For example: `{ "anthropic": { "thinking": { "type": "enabled" } } }`
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProviderOptions(pub HashMap<String, HashMap<String, JSONValue>>);

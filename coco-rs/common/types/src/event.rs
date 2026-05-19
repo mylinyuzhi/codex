@@ -295,14 +295,7 @@ matching `NotificationMethod` discriminant.",
     // See `engine-tui-unified-transcript-plan.md` §4.1.
 
     /// One Message appended to engine MessageHistory.
-    "history/messageAppended" => MessageAppended {
-        // Runtime is typed; SDK JSON Schema stays opaque because the
-        // vercel-ai DTOs Message embeds (`LlmMessage`, content parts)
-        // don't derive `JsonSchema`. Adding schemars across vercel-ai
-        // is a separate cross-crate feature-gate task.
-        #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
-        message: crate::messages::Message
-    },
+    "history/messageAppended" => MessageAppended { message: crate::messages::Message },
     /// MessageHistory truncated to `keep_count` entries (indices
     /// >= keep_count discarded). Emitted by explicit-rewind and
     /// auto-restore both, so SDK + TUI converge on engine truncation

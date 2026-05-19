@@ -7,6 +7,7 @@ use crate::UserType;
 use super::Message;
 
 /// Serialized message for log persistence (session replay, analytics).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedMessage {
     pub message: Message,

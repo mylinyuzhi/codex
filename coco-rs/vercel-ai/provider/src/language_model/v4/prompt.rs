@@ -14,6 +14,7 @@ use crate::shared::ProviderOptions;
 pub type LanguageModelV4Prompt = Vec<LanguageModelV4Message>;
 
 /// A message in a language model prompt.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum LanguageModelV4Message {

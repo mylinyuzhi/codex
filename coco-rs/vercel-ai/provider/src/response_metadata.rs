@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::shared::ProviderMetadata;
 
 /// Metadata about a model response.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseMetadata {
     /// The response ID from the provider.
@@ -54,6 +55,7 @@ impl ResponseMetadata {
 }
 
 /// Information about a model response.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseInfo {
     /// The response ID.

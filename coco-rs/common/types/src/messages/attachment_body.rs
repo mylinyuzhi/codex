@@ -25,6 +25,7 @@ use super::aliases::LlmMessage;
 // ─── AttachmentBody ─────────────────────────────────────────────────────
 
 /// Typed payload for an [`AttachmentMessage`](super::AttachmentMessage).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "body", rename_all = "snake_case")]
 pub enum AttachmentBody {
@@ -45,6 +46,7 @@ pub enum AttachmentBody {
 /// variant here — enforced by the constructor helpers on
 /// [`AttachmentMessage`](super::AttachmentMessage) +
 /// the `silent_kind_round_trips_through_payload` parity test.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SilentPayload {
@@ -64,6 +66,7 @@ pub enum SilentPayload {
 }
 
 /// TS parity: `HookCancelledAttachment` (`utils/attachments.ts:396-403`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookCancelledPayload {
     pub hook_name: String,
@@ -76,6 +79,7 @@ pub struct HookCancelledPayload {
 }
 
 /// TS parity: `HookErrorDuringExecutionAttachment` (`utils/attachments.ts:405-414`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookErrorDuringExecutionPayload {
     pub content: String,
@@ -85,6 +89,7 @@ pub struct HookErrorDuringExecutionPayload {
 }
 
 /// TS parity: `HookNonBlockingErrorAttachment` (`utils/attachments.ts:429+`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookNonBlockingErrorPayload {
     pub error: String,
@@ -94,6 +99,7 @@ pub struct HookNonBlockingErrorPayload {
 }
 
 /// TS parity: `HookSystemMessageAttachment` (`utils/attachments.ts:388-394`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookSystemMessagePayload {
     pub content: String,
@@ -103,6 +109,7 @@ pub struct HookSystemMessagePayload {
 }
 
 /// TS parity: `HookPermissionDecisionAttachment` (`utils/attachments.ts:381-386`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookPermissionDecisionPayload {
     pub decision: HookPermissionDecision,
@@ -111,6 +118,7 @@ pub struct HookPermissionDecisionPayload {
 }
 
 /// `allow` / `deny` decision, matching TS `'allow' | 'deny'`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HookPermissionDecision {
@@ -120,6 +128,7 @@ pub enum HookPermissionDecision {
 }
 
 /// TS parity: `command_permissions` (`utils/attachments.ts:605-608`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct CommandPermissionsPayload {
     pub allowed_tools: Vec<String>,
@@ -129,6 +138,7 @@ pub struct CommandPermissionsPayload {
 
 /// TS parity: `structured_output` (`utils/attachments.ts:639+`,
 /// `services/tools/toolExecution.ts:1276`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StructuredOutputPayload {
     pub tool_name: String,
@@ -137,6 +147,7 @@ pub struct StructuredOutputPayload {
 }
 
 /// TS parity: `dynamic_skill` (`utils/attachments.ts:525+`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DynamicSkillPayload {
     pub skill_name: String,
@@ -148,6 +159,7 @@ pub struct DynamicSkillPayload {
 /// TS carries the (potentially truncated) file content inline for UI display
 /// even though `normalizeAttachmentForAPI` returns `[]`. coco-rs follows
 /// suit — `content` is the last-known file body used by transcript viewers.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct AlreadyReadFilePayload {
     /// Absolute or resolved path (engine-populated).
@@ -165,6 +177,7 @@ pub struct AlreadyReadFilePayload {
 /// TS parity: `edited_image_file` (`utils/attachments.ts:456-460`).
 ///
 /// Image bytes can't be diffed textually; the UI renders a marker / thumbnail.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct EditedImageFilePayload {
     pub filename: PathBuf,

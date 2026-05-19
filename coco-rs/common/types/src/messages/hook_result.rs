@@ -7,6 +7,7 @@ use crate::PermissionBehavior;
 use super::Message;
 
 /// Result returned from a hook execution.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookResult {
     pub outcome: HookOutcome,

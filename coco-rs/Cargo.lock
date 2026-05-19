@@ -6784,6 +6784,7 @@ dependencies = [
  "schemars_derive 0.8.22",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -8704,6 +8705,7 @@ dependencies = [
  "chrono",
  "futures",
  "regex",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

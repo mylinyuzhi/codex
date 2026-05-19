@@ -23,6 +23,7 @@ use super::attachment_body::HookSystemMessagePayload;
 use super::attachment_body::StructuredOutputPayload;
 
 /// Top-level message enum.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
@@ -121,6 +122,7 @@ impl Message {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserMessage {
     /// LLM API layer — sent to API directly via .message field.
@@ -147,6 +149,7 @@ pub struct UserMessage {
     pub parent_tool_use_id: Option<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssistantMessage {
     pub message: LlmMessage,
@@ -173,6 +176,7 @@ pub struct AssistantMessage {
 pub use coco_llm_types::StopReason;
 
 /// API error attached to an assistant message.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
     pub message: String,
@@ -186,6 +190,7 @@ pub struct ApiError {
 /// **Invariant**: `kind` and `body` must agree — e.g. `kind = HookCancelled`
 /// must come with `body = Silent(SilentPayload::HookCancelled(..))`. Do **not**
 /// construct via struct literal; use the typed constructor helpers below.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentMessage {
     pub uuid: Uuid,
@@ -353,6 +358,7 @@ fn llm_message_text(msg: &LlmMessage) -> String {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultMessage {
     pub uuid: Uuid,
@@ -363,6 +369,7 @@ pub struct ToolResultMessage {
     pub is_error: bool,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressMessage {
     pub tool_use_id: String,
@@ -371,6 +378,7 @@ pub struct ProgressMessage {
     pub parent_message_uuid: Option<Uuid>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TombstoneMessage {
     pub uuid: Uuid,
@@ -378,6 +386,7 @@ pub struct TombstoneMessage {
 }
 
 /// Which message variant was tombstoned.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageKind {
@@ -399,6 +408,7 @@ pub enum MessageKind {
 /// summary describes the whole tool batch from a single assistant
 /// turn. The internal Rust struct mirrors that wire shape so SDK
 /// emission via `ServerNotification::ToolUseSummary` is a 1:1 copy.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolUseSummaryMessage {
     pub uuid: Uuid,
@@ -408,6 +418,7 @@ pub struct ToolUseSummaryMessage {
 
 /// System messages have sub-types for different notification kinds.
 /// All system messages are `role: "user"` with `is_meta: true` for the API.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SystemMessage {
@@ -455,6 +466,7 @@ impl SystemMessage {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SystemMessageLevel {
@@ -463,6 +475,7 @@ pub enum SystemMessageLevel {
     Error,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInformationalMessage {
     pub uuid: Uuid,
@@ -471,6 +484,7 @@ pub struct SystemInformationalMessage {
     pub message: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemApiErrorMessage {
     pub uuid: Uuid,
@@ -480,6 +494,7 @@ pub struct SystemApiErrorMessage {
 }
 
 /// Preserved message segment after partial compaction.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreservedSegment {
     /// First kept message UUID.
@@ -490,6 +505,7 @@ pub struct PreservedSegment {
     pub tail_uuid: Uuid,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemCompactBoundaryMessage {
     pub uuid: Uuid,
@@ -526,11 +542,13 @@ fn default_compact_trigger() -> CompactTrigger {
 /// a boundary in the transcript. The variant stays defined so wire
 /// transcripts that include one (e.g. cached-microcompact builds) can
 /// be parsed without errors.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemMicrocompactBoundaryMessage {
     pub uuid: Uuid,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemLocalCommandMessage {
     pub uuid: Uuid,
@@ -538,6 +556,7 @@ pub struct SystemLocalCommandMessage {
     pub output: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemPermissionRetryMessage {
     pub uuid: Uuid,
@@ -545,6 +564,7 @@ pub struct SystemPermissionRetryMessage {
     pub message: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemBridgeStatusMessage {
     pub uuid: Uuid,
@@ -559,6 +579,7 @@ pub struct SystemBridgeStatusMessage {
 /// `services/autoDream/autoDream.ts:244-247` (which overrides
 /// `verb` to `"Improved"` for dream consolidations vs. the default
 /// `"Saved"` for extract).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemMemorySavedMessage {
     pub uuid: Uuid,
@@ -577,18 +598,21 @@ fn default_memory_saved_verb() -> String {
     "Saved".to_string()
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemAwaySummaryMessage {
     pub uuid: Uuid,
     pub summary: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemAgentsKilledMessage {
     pub uuid: Uuid,
     pub count: i32,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemApiMetricsMessage {
     pub uuid: Uuid,
@@ -598,6 +622,7 @@ pub struct SystemApiMetricsMessage {
     pub cost_usd: Option<f64>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemStopHookSummaryMessage {
     pub uuid: Uuid,
@@ -605,12 +630,14 @@ pub struct SystemStopHookSummaryMessage {
     pub outcome: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemTurnDurationMessage {
     pub uuid: Uuid,
     pub duration_ms: i64,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemScheduledTaskFireMessage {
     pub uuid: Uuid,
@@ -623,6 +650,7 @@ pub struct SystemScheduledTaskFireMessage {
 /// here; every other consumer reads the field. This eliminates the
 /// engine ↔ TUI recomputation race that the legacy text-based interrupt
 /// markers exhibited.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemUserInterruptionMessage {
     pub uuid: Uuid,
@@ -630,6 +658,7 @@ pub struct SystemUserInterruptionMessage {
 }
 
 /// Where a message originated.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageOrigin {
@@ -641,6 +670,7 @@ pub enum MessageOrigin {
 }
 
 /// Direction hint for partial compaction.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PartialCompactDirection {

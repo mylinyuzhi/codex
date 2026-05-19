@@ -16,6 +16,7 @@ use crate::TaskSummaryEntry;
 use super::Message;
 
 /// Full transcript message (SerializedMessage + transcript metadata).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptMessage {
     pub message: Message,
@@ -46,6 +47,7 @@ pub struct TranscriptMessage {
 }
 
 /// Discriminated union of all transcript entry types.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TranscriptEntry {

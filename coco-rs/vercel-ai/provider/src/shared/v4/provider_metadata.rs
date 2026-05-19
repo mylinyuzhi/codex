@@ -9,6 +9,7 @@ use crate::json_value::JSONValue;
 /// Provider-specific metadata attached to responses or stream events.
 ///
 /// Similar to ProviderOptions but used for data returned from providers.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProviderMetadata(pub HashMap<String, JSONValue>);

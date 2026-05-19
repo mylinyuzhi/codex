@@ -12,6 +12,7 @@ use crate::json_value::JSONObject;
 ///
 /// Matches the TypeScript `LanguageModelV4Usage` type with nested
 /// `inputTokens` and `outputTokens` structures.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
@@ -88,6 +89,7 @@ impl Usage {
 }
 
 /// Breakdown of input (prompt) tokens.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputTokens {
@@ -106,6 +108,7 @@ pub struct InputTokens {
 }
 
 /// Breakdown of output (completion) tokens.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputTokens {

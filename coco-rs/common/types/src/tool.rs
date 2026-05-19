@@ -305,6 +305,19 @@ impl<'de> Deserialize<'de> for ToolId {
     }
 }
 
+// Wire shape is a flat string ("Read", "mcp__slack__send",
+// "my_plugin_tool"). Skip the auto-derive and emit the String schema
+// so SDK schema consumers don't see a tagged-enum shape.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ToolId {
+    fn schema_name() -> String {
+        "ToolId".to_string()
+    }
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        <String as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+
 impl From<ToolName> for ToolId {
     fn from(name: ToolName) -> Self {
         Self::Builtin(name)

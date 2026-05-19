@@ -10,8 +10,10 @@ workspace = true
 [features]
 default = []
 # Enable JSON Schema generation for the protocol types. Gated so the schemars
-# transitive deps (dyn-clone, etc.) don't ship in normal builds.
-schema = ["dep:schemars"]
+# transitive deps (dyn-clone, etc.) don't ship in normal builds. Activates
+# `coco-llm-types/schema` so JsonSchema reaches the embedded vercel-ai DTOs
+# (LlmMessage, content parts, …).
+schema = ["dep:schemars", "coco-llm-types/schema"]
 
 [dependencies]
 coco-llm-types.workspace = true
