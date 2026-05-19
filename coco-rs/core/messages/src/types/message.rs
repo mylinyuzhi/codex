@@ -166,11 +166,11 @@ pub struct AssistantMessage {
 }
 
 /// Canonical typed stop reason — re-exported from `coco-inference`'s
-/// extended `UnifiedFinishReason` (the single source of truth at the
+/// extended `StopReason` (the single source of truth at the
 /// vercel-ai-provider seam). 8 variants; see
 /// `vercel-ai/provider/src/language_model/v4/finish_reason.rs` for
 /// the multi-LLM mapping table.
-pub use coco_inference::StopReason;
+pub use coco_llm_types::StopReason;
 
 /// API error attached to an assistant message.
 #[derive(Debug, Clone, Serialize, Deserialize)]

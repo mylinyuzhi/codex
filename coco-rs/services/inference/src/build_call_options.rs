@@ -31,6 +31,7 @@ use crate::cache_convert;
 use crate::thinking_convert;
 use coco_llm_types::LlmPrompt;
 use coco_llm_types::ProviderOptions;
+use coco_llm_types::ReasoningLevel;
 use coco_types::Capability;
 use coco_types::PromptCacheConfig;
 use coco_types::ProviderApi;
@@ -40,7 +41,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use vercel_ai_provider::LanguageModelV4CallOptions;
 use vercel_ai_provider::LanguageModelV4Tool;
-use vercel_ai_provider::ReasoningLevel;
 use vercel_ai_provider_utils::merge_json_value;
 
 /// Per-call deltas applied on top of the resolved `ModelInfo`. Each

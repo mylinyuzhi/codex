@@ -4,18 +4,18 @@ use std::sync::atomic::Ordering;
 
 use coco_inference::AISdkError;
 use coco_inference::ApiClient;
-use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
-use coco_inference::UnifiedFinishReason;
-use coco_inference::Usage;
 use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
+use coco_llm_types::StopReason;
 use coco_llm_types::TextPart;
 use coco_llm_types::ToolCallPart;
 use coco_llm_types::ToolResultContent;
+use coco_llm_types::Usage;
 use coco_tool_runtime::ToolRegistry;
 use coco_tools::ExitPlanModeTool;
 use coco_tools::ReadTool;
@@ -53,7 +53,7 @@ impl LanguageModel for TextMock {
                 provider_metadata: None,
             })],
             usage: Usage::new(10, 5),
-            finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
             warnings: vec![],
             provider_metadata: None,
             request: None,
@@ -100,7 +100,7 @@ impl LanguageModel for TextThenErrorMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(10, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                finish_reason: FinishReason::new(StopReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -162,7 +162,7 @@ impl LanguageModel for ToolCallThenTextMock {
                     }),
                 ],
                 usage: Usage::new(20, 15),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                finish_reason: FinishReason::new(StopReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -176,7 +176,7 @@ impl LanguageModel for ToolCallThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(30, 10),
-                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                finish_reason: FinishReason::new(StopReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -227,7 +227,7 @@ impl LanguageModel for ExitPlanModeThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(20, 15),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                finish_reason: FinishReason::new(StopReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -240,7 +240,7 @@ impl LanguageModel for ExitPlanModeThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(10, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                finish_reason: FinishReason::new(StopReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -303,7 +303,7 @@ impl LanguageModel for MultiToolMock {
                     }),
                 ],
                 usage: Usage::new(15, 10),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                finish_reason: FinishReason::new(StopReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -316,7 +316,7 @@ impl LanguageModel for MultiToolMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(25, 8),
-                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                finish_reason: FinishReason::new(StopReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -372,7 +372,7 @@ impl LanguageModel for OneToolThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                finish_reason: FinishReason::new(StopReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -385,7 +385,7 @@ impl LanguageModel for OneToolThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                finish_reason: FinishReason::new(StopReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -757,7 +757,7 @@ async fn test_tool_execution_with_real_tools() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(10, 5),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                    finish_reason: FinishReason::new(StopReason::ToolUse),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -770,7 +770,7 @@ async fn test_tool_execution_with_real_tools() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(10, 5),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                    finish_reason: FinishReason::new(StopReason::EndTurn),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -853,7 +853,7 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(8, 4),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                    finish_reason: FinishReason::new(StopReason::ToolUse),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -866,7 +866,7 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(5, 3),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                    finish_reason: FinishReason::new(StopReason::EndTurn),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -2626,7 +2626,7 @@ impl LanguageModel for AskingToolCallMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(10, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                finish_reason: FinishReason::new(StopReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -2639,7 +2639,7 @@ impl LanguageModel for AskingToolCallMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 3),
-                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                finish_reason: FinishReason::new(StopReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -2910,7 +2910,7 @@ impl LanguageModel for AskingToolThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                finish_reason: FinishReason::new(StopReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -2923,7 +2923,7 @@ impl LanguageModel for AskingToolThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 5),
-                finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                finish_reason: FinishReason::new(StopReason::EndTurn),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,

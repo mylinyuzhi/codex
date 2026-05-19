@@ -10,17 +10,17 @@ use std::sync::atomic::Ordering;
 use coco_hooks::HookRegistry;
 use coco_inference::AISdkError;
 use coco_inference::ApiClient;
-use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
-use coco_inference::UnifiedFinishReason;
-use coco_inference::Usage;
 use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
+use coco_llm_types::StopReason;
 use coco_llm_types::TextPart;
 use coco_llm_types::ToolCallPart;
+use coco_llm_types::Usage;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_session::SessionManager;
@@ -82,7 +82,7 @@ impl LanguageModel for FullPathMock {
                         }),
                     ],
                     usage: Usage::new(100, 50),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                    finish_reason: FinishReason::new(StopReason::ToolUse),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -101,7 +101,7 @@ impl LanguageModel for FullPathMock {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(150, 30),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                    finish_reason: FinishReason::new(StopReason::ToolUse),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -118,7 +118,7 @@ impl LanguageModel for FullPathMock {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(200, 40),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                    finish_reason: FinishReason::new(StopReason::EndTurn),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -298,7 +298,7 @@ async fn test_full_path_with_bash_safety() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(30, 20),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                    finish_reason: FinishReason::new(StopReason::EndTurn),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,
@@ -316,7 +316,7 @@ async fn test_full_path_with_bash_safety() {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(20, 10),
-                finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                finish_reason: FinishReason::new(StopReason::ToolUse),
                 warnings: vec![],
                 provider_metadata: None,
                 request: None,
@@ -454,7 +454,7 @@ async fn test_full_path_glob_and_grep() {
                             provider_metadata: None,
                         })],
                         usage: Usage::new(20, 10),
-                        finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                        finish_reason: FinishReason::new(StopReason::ToolUse),
                         warnings: vec![],
                         provider_metadata: None,
                         request: None,
@@ -476,7 +476,7 @@ async fn test_full_path_glob_and_grep() {
                             provider_metadata: None,
                         })],
                         usage: Usage::new(30, 10),
-                        finish_reason: FinishReason::new(UnifiedFinishReason::ToolUse),
+                        finish_reason: FinishReason::new(StopReason::ToolUse),
                         warnings: vec![],
                         provider_metadata: None,
                         request: None,
@@ -489,7 +489,7 @@ async fn test_full_path_glob_and_grep() {
                         provider_metadata: None,
                     })],
                     usage: Usage::new(20, 15),
-                    finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+                    finish_reason: FinishReason::new(StopReason::EndTurn),
                     warnings: vec![],
                     provider_metadata: None,
                     request: None,

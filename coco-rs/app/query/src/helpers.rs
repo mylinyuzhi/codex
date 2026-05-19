@@ -171,7 +171,7 @@ pub(crate) fn budget_pct_used(budget: &BudgetTracker) -> i32 {
 /// Returned message has empty content (the partial real response was
 /// already pushed) and `api_error.message` carrying the human-readable
 /// explanation. The typed [`coco_messages::StopReason`] is the
-/// canonical 8-variant `UnifiedFinishReason` — `ContextWindowExceeded`
+/// canonical 8-variant `StopReason` — `ContextWindowExceeded`
 /// is a first-class variant (no raw-string sniffing needed). Message
 /// text stays provider-agnostic so it covers the multi-LLM unified
 /// bucket (Anthropic refusal, OpenAI content_filter, Google SAFETY /

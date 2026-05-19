@@ -118,11 +118,11 @@ pub struct QueryResult {
     pub usage: TokenUsage,
     pub model: String,
     /// Typed stop reason — the canonical 8-variant
-    /// [`UnifiedFinishReason`] (re-exported as [`crate::StopReason`])
+    /// [`StopReason`] (re-exported as [`coco_llm_types::StopReason`])
     /// from the vercel-ai-provider seam. Higher layers match on this
     /// enum directly; no wire-string parsing anywhere above this
     /// boundary.
-    pub stop_reason: Option<crate::StopReason>,
+    pub stop_reason: Option<coco_llm_types::StopReason>,
     pub request_id: Option<String>,
     pub retries: i32,
     pub total_duration_ms: i64,
@@ -430,7 +430,7 @@ impl ApiClient {
                     // warn so ops can spot truncation / content-filter
                     // events without scraping every info-level line.
                     // Happy-path set: `EndTurn` / `StopSequence` /
-                    // `ToolUse` (see [`UnifiedFinishReason::is_normal`]).
+                    // `ToolUse` (see [`StopReason::is_normal`]).
                     if let Some(reason) = result.stop_reason
                         && reason.is_abnormal()
                     {

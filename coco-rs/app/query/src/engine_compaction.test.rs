@@ -43,10 +43,8 @@ impl coco_inference::LanguageModel for CapturingModel {
                     provider_metadata: None,
                 },
             )],
-            usage: coco_inference::Usage::new(0, 0),
-            finish_reason: coco_inference::FinishReason::new(
-                coco_inference::UnifiedFinishReason::EndTurn,
-            ),
+            usage: coco_llm_types::Usage::new(0, 0),
+            finish_reason: coco_llm_types::FinishReason::new(coco_llm_types::StopReason::EndTurn),
             warnings: Vec::new(),
             provider_metadata: None,
             request: None,

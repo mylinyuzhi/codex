@@ -9,16 +9,16 @@ use std::time::Duration;
 
 use coco_config::FallbackRecoveryPolicy;
 use coco_inference::ApiClient;
-use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
-use coco_inference::UnifiedFinishReason;
-use coco_inference::Usage;
 use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
+use coco_llm_types::StopReason;
 use coco_llm_types::TextPart;
+use coco_llm_types::Usage;
 use pretty_assertions::assert_eq;
 
 use super::*;
@@ -45,7 +45,7 @@ impl LanguageModel for StubModel {
                 provider_metadata: None,
             })],
             usage: Usage::new(0, 0),
-            finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
             warnings: vec![],
             provider_metadata: None,
             request: None,

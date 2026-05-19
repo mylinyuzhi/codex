@@ -1311,8 +1311,8 @@ impl QueryEngine {
                 std::collections::HashMap::new();
             let mut stream_usage: Option<TokenUsage> = None;
             // Typed stop reason — set once by the provider-adapter
-            // seam (see `coco_inference::StopReason` = extended
-            // `UnifiedFinishReason`). The engine matches on the
+            // seam (see `coco_llm_types::StopReason` = extended
+            // `StopReason`). The engine matches on the
             // typed enum directly; no wire-string parsing.
             let mut stream_stop_reason: Option<coco_messages::StopReason> = None;
             let mut stream_error: Option<String> = None;
@@ -1965,7 +1965,7 @@ impl QueryEngine {
 
             // Typed StopReason flows straight from the stream — no
             // wire-string parsing. `stream_stop_reason` carries the
-            // canonical UnifiedFinishReason set at the
+            // canonical StopReason set at the
             // vercel-ai-provider seam.
             let parsed_stop_reason = stream_stop_reason;
             let assistant_msg = Message::Assistant(coco_messages::AssistantMessage {

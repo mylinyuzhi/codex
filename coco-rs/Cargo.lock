@@ -1519,7 +1519,6 @@ dependencies = [
 name = "coco-messages"
 version = "0.0.0"
 dependencies = [
- "coco-inference",
  "coco-llm-types",
  "coco-types",
  "pretty_assertions",

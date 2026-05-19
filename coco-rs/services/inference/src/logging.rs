@@ -11,8 +11,8 @@ use coco_types::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::StopReason;
 use crate::errors::InferenceError;
+use coco_llm_types::StopReason;
 
 // ---------------------------------------------------------------------------
 // Known gateways

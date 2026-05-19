@@ -43,7 +43,7 @@ pub use logging::KnownGateway;
 pub use logging::RequestLog;
 pub use logging::ResponseLog;
 // Canonical typed stop reason — re-exported from vercel-ai-provider's
-// extended UnifiedFinishReason (single source of truth). See
+// extended StopReason (single source of truth). See
 // `vercel-ai/provider/src/language_model/v4/finish_reason.rs` for the
 // 8 variants + multi-LLM mapping table. The deprecated `inference`-
 // local enum that lived in `logging.rs` has been removed.
@@ -90,7 +90,6 @@ pub use tool_schemas::filter_schemas_by_model;
 pub use tool_schemas::generate_tool_schemas;
 pub use tool_schemas::merge_tool_schemas;
 pub use usage::UsageAccumulator;
-pub use vercel_ai_provider::UnifiedFinishReason as StopReason;
 
 // ─── Vercel-ai re-export hub ──────────────────────────────────────────────
 //
@@ -120,22 +119,14 @@ pub use vercel_ai_provider::CustomPart;
 pub use vercel_ai_provider::FileRawData;
 pub use vercel_ai_provider::ReasoningFilePart;
 
-// Errors / metadata / usage / config knobs — pass-through.
+// Errors + primitive — runtime/error-shape, not DTO. Stay in inference.
 pub use vercel_ai_provider::AISdkError;
-pub use vercel_ai_provider::FinishReason;
 pub use vercel_ai_provider::JSONValue;
-pub use vercel_ai_provider::ProviderMetadata;
-pub use vercel_ai_provider::ReasoningLevel;
-pub use vercel_ai_provider::ResponseFormat;
-pub use vercel_ai_provider::ResponseMetadata;
-pub use vercel_ai_provider::UnifiedFinishReason;
-pub use vercel_ai_provider::Usage;
 
 /// One-line `use coco_inference::prelude::*;` to bring the common subset
 /// of API client + LLM types into scope. Mirrors `cocode-inference::prelude`.
 pub mod prelude {
     pub use crate::ApiClient;
-    pub use crate::FinishReason;
     pub use crate::LanguageModel;
     pub use crate::LanguageModelCallOptions;
     pub use crate::LanguageModelGenerateResult;
@@ -146,11 +137,12 @@ pub mod prelude {
     pub use crate::StreamEvent;
     pub use crate::StreamMetrics;
     pub use crate::StreamProcessorConfig;
-    pub use crate::Usage;
     pub use coco_llm_types::AssistantContentPart;
+    pub use coco_llm_types::FinishReason;
     pub use coco_llm_types::LlmMessage;
     pub use coco_llm_types::LlmPrompt;
     pub use coco_llm_types::TextPart;
     pub use coco_llm_types::ToolCallPart;
+    pub use coco_llm_types::Usage;
     pub use coco_llm_types::UserContentPart;
 }

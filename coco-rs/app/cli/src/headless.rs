@@ -21,17 +21,17 @@ use std::sync::atomic::Ordering;
 use anyhow::Result;
 use coco_inference::AISdkError;
 use coco_inference::ApiClient;
-use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::UnifiedFinishReason;
-use coco_inference::Usage;
 use coco_inference::model_factory::build_api_client;
 use coco_inference::model_factory::build_fallback_clients_for_role;
 use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
+use coco_llm_types::StopReason;
 use coco_llm_types::TextPart;
+use coco_llm_types::Usage;
 use coco_messages::CostTracker;
 use coco_query::ContinueReason;
 use coco_query::QueryEngine;
@@ -114,7 +114,7 @@ impl LanguageModel for MockModel {
                 provider_metadata: None,
             })],
             usage: Usage::new(user_text.len() as u64 / 4, 50),
-            finish_reason: FinishReason::new(UnifiedFinishReason::EndTurn),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
             warnings: vec![],
             provider_metadata: None,
             request: None,

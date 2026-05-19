@@ -43,10 +43,21 @@ pub use vercel_ai_provider::ToolResultContent;
 pub use vercel_ai_provider::ToolResultContentPart;
 pub use vercel_ai_provider::ToolResultPart;
 
-// === Provider-extension bag ===
+// === Provider-extension bags ===
 //
-// `ProviderOptions` is a typed key-value bag carried as an optional
-// field on content parts (e.g. `ToolResultContentPart::Custom`). It is
-// data — the schema of provider-specific extensions — not a runtime
-// interface. Belongs here.
+// Typed key-value bags carried on content parts / responses. Schema
+// for provider-specific extension data, not runtime interfaces.
+pub use vercel_ai_provider::ProviderMetadata;
 pub use vercel_ai_provider::ProviderOptions;
+
+// === Finish reasons / token usage / response shapes ===
+//
+// Result-side DTOs that flow back from a provider call and get
+// persisted in transcripts. Same DTO-only classification as message
+// content parts — single naming authority lives here.
+pub use vercel_ai_provider::FinishReason;
+pub use vercel_ai_provider::ReasoningLevel;
+pub use vercel_ai_provider::ResponseFormat;
+pub use vercel_ai_provider::ResponseMetadata;
+pub use vercel_ai_provider::UnifiedFinishReason as StopReason;
+pub use vercel_ai_provider::Usage;

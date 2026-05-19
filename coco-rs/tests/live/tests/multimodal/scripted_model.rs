@@ -21,18 +21,18 @@ use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use coco_inference::AISdkError;
-use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::UnifiedFinishReason;
-use coco_inference::Usage;
 use coco_inference::synthetic_stream_from_content;
 use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FinishReason;
 use coco_llm_types::LlmMessage;
+use coco_llm_types::StopReason;
 use coco_llm_types::TextPart;
 use coco_llm_types::ToolCallPart;
+use coco_llm_types::Usage;
 
 /// One scripted assistant reply. Same shape as `tui::scripted_model::Reply`
 /// but kept local so the multimodal suite doesn't depend on the
@@ -40,7 +40,7 @@ use coco_llm_types::ToolCallPart;
 #[derive(Debug, Clone)]
 pub struct Reply {
     pub blocks: Vec<AssistantContentPart>,
-    pub finish: UnifiedFinishReason,
+    pub finish: StopReason,
 }
 
 impl Reply {
@@ -48,7 +48,7 @@ impl Reply {
     pub fn text(body: impl Into<String>) -> Self {
         Self {
             blocks: vec![AssistantContentPart::Text(TextPart::new(body))],
-            finish: UnifiedFinishReason::EndTurn,
+            finish: StopReason::EndTurn,
         }
     }
 
@@ -63,7 +63,7 @@ impl Reply {
             blocks: vec![AssistantContentPart::ToolCall(ToolCallPart::new(
                 call_id, tool_name, input,
             ))],
-            finish: UnifiedFinishReason::ToolUse,
+            finish: StopReason::ToolUse,
         }
     }
 
@@ -71,7 +71,7 @@ impl Reply {
     pub fn stop() -> Self {
         Self {
             blocks: Vec::new(),
-            finish: UnifiedFinishReason::EndTurn,
+            finish: StopReason::EndTurn,
         }
     }
 }
