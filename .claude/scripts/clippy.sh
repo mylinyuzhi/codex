@@ -94,10 +94,20 @@ fi
 # ── Incremental mode ────────────────────────────────────────────────
 
 # Step 1: changed files (relative to repo root) limited to coco-rs/
+#
+# `git diff` only reports tracked files; brand-new files that haven't
+# been `git add`ed yet are invisible to it. `head` mode is what the Stop
+# hook and `quick-check` use, so we also fold in `ls-files --others
+# --exclude-standard` (untracked, gitignore-aware) so a fresh `.rs` test
+# file authored mid-iteration is still linted instead of silently skipped.
+# `staged` mode keeps the existing semantics — untracked is not staged.
 case "$DIFF_SOURCE" in
   head)
-    all_changed=$(git -C "$PROJECT_DIR" diff --name-only --diff-filter=ACMR HEAD 2>/dev/null \
-                    | grep -E '^coco-rs/' || true) ;;
+    diffed=$(git -C "$PROJECT_DIR" diff --name-only --diff-filter=ACMR HEAD 2>/dev/null \
+                | grep -E '^coco-rs/' || true)
+    untracked=$(git -C "$PROJECT_DIR" ls-files --others --exclude-standard 2>/dev/null \
+                | grep -E '^coco-rs/' || true)
+    all_changed=$(printf '%s\n%s' "$diffed" "$untracked" | awk 'NF' | sort -u) ;;
   staged)
     all_changed=$(git -C "$PROJECT_DIR" diff --cached --name-only --diff-filter=ACMR 2>/dev/null \
                     | grep -E '^coco-rs/' || true) ;;
