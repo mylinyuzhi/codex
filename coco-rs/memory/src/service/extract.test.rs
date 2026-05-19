@@ -27,7 +27,7 @@ fn turn_input(message_count: i32, has_writes: bool) -> TurnInput {
         }),
         message_count,
         last_message_id: Some("uuid".into()),
-        has_memory_writes: has_writes,
+        has_memory_writes: Box::new(move || has_writes),
     }
 }
 

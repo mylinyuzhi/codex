@@ -43,6 +43,22 @@ pub fn scan_memory_files(dir: &Path) -> Vec<ScannedMemory> {
 /// caller (recall ranker / extract subagent dispatch) is aborted.
 /// `None` means "no cancellation" — equivalent to passing a never-
 /// firing signal.
+///
+/// **Recursive** — TS uses `readdir(memoryDir, { recursive: true })`,
+/// so a topic file at `<memdir>/feedback/testing.md` is visible to
+/// both the ranker manifest and the heuristic fallback. `filename`
+/// holds the path *relative to* `dir` (e.g. `"feedback/testing.md"`),
+/// which is the form the ranker returns in its `selected_memories`
+/// list and the lookup HashMap keys on.
+///
+/// Hidden directories (leading `.`) and `team/` are skipped:
+///
+/// - `.consolidate-lock` and any other dotfile must not surface as a
+///   ranked memory.
+/// - The team subtree is a separate memory dir managed by the team-
+///   sync subsystem; surfacing those files in the personal recall
+///   pool would double-count and bypass the team-vs-personal
+///   distinction the system prompt sets up.
 pub fn scan_memory_files_with_cancel(
     dir: &Path,
     cancel: Option<&tokio_util::sync::CancellationToken>,
@@ -54,29 +70,43 @@ pub fn scan_memory_files_with_cancel(
     if cancel.is_some_and(tokio_util::sync::CancellationToken::is_cancelled) {
         return out;
     }
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return out,
-    };
-    for entry in entries.flatten() {
+    let walker = walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            // Skip hidden + the team subtree at any depth.
+            !(name.starts_with('.') || name == "team")
+        });
+    for entry in walker {
         if cancel.is_some_and(tokio_util::sync::CancellationToken::is_cancelled) {
             return Vec::new();
         }
-        let path = entry.path();
-        let filename = match path.file_name().and_then(|s| s.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
         };
-        if !filename.ends_with(".md") || filename == crate::store::ENTRYPOINT_NAME {
+        if !entry.file_type().is_file() {
             continue;
         }
+        let path = entry.path().to_path_buf();
+        let basename = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !basename.ends_with(".md") || basename == crate::store::ENTRYPOINT_NAME {
+            continue;
+        }
+        // Relative path from the scan root, normalized to forward
+        // slashes for cross-platform parity with TS strings.
+        let filename = match path.strip_prefix(dir) {
+            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+            Err(_) => basename.to_string(),
+        };
         let metadata = match entry.metadata() {
             Ok(m) => m,
             Err(_) => continue,
         };
-        if !metadata.is_file() {
-            continue;
-        }
         let mtime_ms = metadata
             .modified()
             .ok()
@@ -166,6 +196,23 @@ pub fn memory_age_string(mtime_ms: i64) -> String {
         1 => "yesterday".to_string(),
         n => format!("{n} days ago"),
     }
+}
+
+/// Stale-memory caveat prepended to surfaced content when the memory
+/// is older than one day. TS `memoryAge.ts:33-42 memoryFreshnessText`
+/// — surfaced via `attachments.ts:2328-2331`. The warning informs the
+/// model that referenced file paths / line numbers may be out of date.
+/// Returns an empty string for memories ≤1 day old (treat as fresh).
+pub fn memory_freshness_text(mtime_ms: i64) -> String {
+    let days = memory_age_days(mtime_ms);
+    if days <= 1 {
+        return String::new();
+    }
+    format!(
+        "This memory is {days} days old. Treat referenced file paths, \
+         line numbers, and code as potentially stale — verify before \
+         acting on them.\n\n"
+    )
 }
 
 /// Return mtime in ms since epoch, or `None` if the file is missing.

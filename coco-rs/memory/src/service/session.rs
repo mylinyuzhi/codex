@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
 
 use arc_swap::ArcSwap;
 use coco_paths::ProjectPaths;
@@ -586,8 +587,16 @@ impl SessionMemoryService {
             description: Some("session memory update".into()),
             subagent_type: Some("general-purpose".into()),
             constraints: Some(AgentSpawnConstraints {
-                // Session memory edits one file via a small fixed pass.
-                max_turns: Some(3),
+                // Section-by-section edits can legitimately span more
+                // turns than the original `Some(3)` allowed —
+                // tight cap silently truncated SM updates for models
+                // that prefer one-section-per-turn pacing. Match
+                // `extraction_max_turns = 5` (the auto-mem cap) so
+                // the two services use the same bound; TS has no
+                // explicit cap on `runForkedAgent` for SM and relies
+                // on the agent naturally stopping when it has nothing
+                // left to Edit.
+                max_turns: Some(self.config.extraction_max_turns.max(5)),
                 allowed_write_roots: file_path
                     .parent()
                     .map(|p| vec![p.to_path_buf()])
@@ -753,6 +762,129 @@ impl SessionMemoryService {
             .await
             .map_err(|e| format!("read session-memory after seed: {e}"))
     }
+}
+
+/// Default retention window for orphan session-memory cleanup —
+/// 30 days, mirroring [`coco_coordinator::worktree::AgentWorktreeManager::cleanup_stale`].
+/// A SM file untouched for 30 days belongs to a session the user has
+/// effectively abandoned; the on-disk seed template + 9-section body
+/// is just dead bytes at that point. Aggressive enough to bound
+/// growth (chatty users `/clear` dozens of times a month), permissive
+/// enough that `--resume <sid>` after a 2-week break still finds its
+/// SM file.
+pub const DEFAULT_SM_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 30);
+
+/// Sweep abandoned per-session SM files under `<project_dir>/`.
+///
+/// Mirrors [`coco_shell::snapshot::cleanup::cleanup_stale_snapshots`]
+/// and [`coco_coordinator::worktree::AgentWorktreeManager::cleanup_stale`]:
+/// fire-and-forget at session bootstrap, mtime-only, all errors
+/// swallowed so a wedged filesystem can't block startup.
+///
+/// Each `/clear` regenerates the session id (`SessionRuntime::adopt_session_id`),
+/// leaving the prior `<project_dir>/<old_sid>/session-memory/summary.md`
+/// orphaned forever — that's the bug this function plugs.
+///
+/// What we walk: `<project_dir>/*/session-memory/summary.md`. Each
+/// candidate's mtime is compared to `now - older_than`; stale entries
+/// have the **entire `session-memory/` subdir** removed (not the parent
+/// `<sid>/` dir, which may still hold `subagents/` / `remote-agents/` /
+/// `tool-results/` entries owned by other subsystems with their own GC
+/// cadences).
+///
+/// Returns the count removed. ENOENT on `project_dir` returns `Ok(0)`
+/// (cold-start case where the project never had a session run).
+pub async fn cleanup_stale_session_memories(
+    project_dir: &std::path::Path,
+    active_session_id: &str,
+    older_than: Duration,
+) -> std::io::Result<i32> {
+    let mut entries = match tokio::fs::read_dir(project_dir).await {
+        Ok(e) => e,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err),
+    };
+
+    let now = SystemTime::now();
+    let mut removed = 0i32;
+    while let Some(entry) = entries.next_entry().await? {
+        // Only sweep `<project_dir>/<sid>/` directories. Skips
+        // `<sid>.jsonl` transcripts and anything else.
+        let file_type = match entry.file_type().await {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let session_dir = entry.path();
+        let session_name = match session_dir.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        // Active session ALWAYS skipped, even on a fresh start where
+        // the active SM file's mtime is still beyond `older_than` (it
+        // wouldn't be after the first extraction, but the guard is
+        // cheap and protects against accidental wipe if retention is
+        // misconfigured to 0).
+        if session_name == active_session_id {
+            continue;
+        }
+
+        let sm_dir = session_dir.join("session-memory");
+        let summary = sm_dir.join("summary.md");
+
+        // Probe `summary.md` first — its mtime tells us when SM was
+        // last alive for this session. Missing summary = empty SM
+        // dir (seeded but never wrote), still reapable.
+        let modified = match tokio::fs::metadata(&summary).await {
+            Ok(m) => m.modified().ok(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // Fall back to the directory mtime.
+                tokio::fs::metadata(&sm_dir)
+                    .await
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+            }
+            Err(_) => continue,
+        };
+        let Some(modified) = modified else {
+            continue;
+        };
+
+        match now.duration_since(modified) {
+            Ok(age) if age >= older_than => {
+                match tokio::fs::remove_dir_all(&sm_dir).await {
+                    Ok(()) => {
+                        let age_days: u64 = age.as_secs() / 86_400;
+                        tracing::debug!(
+                            target: "coco_memory::session::cleanup",
+                            path = %sm_dir.display(),
+                            age_days,
+                            "removed orphan session-memory dir"
+                        );
+                        removed += 1;
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        // Raced with another GC pass — fine.
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "coco_memory::session::cleanup",
+                            path = %sm_dir.display(),
+                            error = %err,
+                            "failed to remove orphan session-memory dir"
+                        );
+                    }
+                }
+            }
+            _ => continue,
+        }
+    }
+
+    Ok(removed)
 }
 
 #[cfg(test)]

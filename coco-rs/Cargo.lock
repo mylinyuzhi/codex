@@ -1515,6 +1515,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

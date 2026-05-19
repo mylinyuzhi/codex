@@ -29,6 +29,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use super::secret_scanner::scan_for_secrets;
+use super::types::MAX_FILE_SIZE_BYTES;
 use super::types::MAX_PUT_BODY_BYTES;
 use super::types::SYNC_TIMEOUT_MS;
 use super::types::SkippedSecretFile;
@@ -211,9 +212,23 @@ pub async fn push(
 ) -> TeamMemorySyncPushResult {
     let mut result = TeamMemorySyncPushResult::default();
 
-    // Step 1: secret pre-scan.
+    // Step 1: secret pre-scan + per-entry size cap.
+    //
+    // Oversized entries are also dropped here — the server enforces the
+    // same cap but a 250 KB+ entry would land in our batch and trip the
+    // gateway 413 unstructured response (vs the app's structured
+    // too-many-entries 413). Better to filter client-side.
     let mut clean: Vec<&PushEntry> = Vec::new();
     for entry in entries {
+        if entry.content.len() > MAX_FILE_SIZE_BYTES {
+            tracing::warn!(
+                path = %entry.path,
+                size = entry.content.len(),
+                cap = MAX_FILE_SIZE_BYTES,
+                "team-memory-sync: dropping oversized entry from push batch"
+            );
+            continue;
+        }
         if let Some(skipped) = scan_for_secrets(&entry.path, &entry.content) {
             result.skipped_secrets.push(skipped);
             continue;
@@ -268,18 +283,27 @@ pub async fn push(
     }
 
     // Step 4: PUT each batch sequentially.
+    //
+    // `If-Match: "<last_known_checksum>"` is sent on every batch when
+    // we know the server's last checksum. TS parity: PUTs always
+    // include `If-Match` so the server can reject (412) stale writes
+    // that would clobber a teammate's concurrent push. Without this
+    // header, two teammates pushing simultaneously silently
+    // last-writer-wins and the loser's changes are lost.
     let mut uploaded = 0i32;
     for batch in batches {
         let body = serde_json::json!({
             "entries": batch,
         });
-        let put = client
+        let mut req = client
             .put(endpoint(base_url, repo_slug))
             .header("Authorization", format!("Bearer {bearer_token}"))
             .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await;
+            .json(&body);
+        if let Some(etag) = &state.last_known_checksum {
+            req = req.header("If-Match", format!("\"{}\"", etag.trim_matches('"')));
+        }
+        let put = req.send().await;
         match put {
             Ok(resp) if resp.status().is_success() => {
                 uploaded += batch.len() as i32;
@@ -332,20 +356,57 @@ pub fn scan_only(entries: &[PushEntry]) -> (Vec<&PushEntry>, Vec<SkippedSecretFi
 /// Existing local-only files are NOT removed (TS parity: deletions
 /// don't propagate). Errors during individual file writes are logged
 /// but don't abort the operation.
+///
+/// Three guarantees per entry, mirroring TS `writeRemoteEntriesToLocal`:
+///
+/// 1. **Path validation** via [`crate::path::team::validate_team_mem_key`]
+///    — null bytes, UNC `\\` / `//`, drive-root, unexpanded tilde,
+///    URL-encoded `%2e%2e`, fullwidth-NFKC traversal, planted symlinks
+///    pointing outside `dir`. Defense-in-depth against a malicious or
+///    compromised server.
+/// 2. **Per-entry size cap** — refuse any entry larger than
+///    [`MAX_FILE_SIZE_BYTES`] (250 KB). The server has the same cap
+///    but a bug or rogue server could deliver an oversized blob.
+/// 3. **Skip-if-equal** — read the existing file first and skip the
+///    write when the byte content already matches. Preserves mtime so
+///    a wired-up file-watcher doesn't trigger a spurious push-back
+///    (ping-pong: pull → watcher → push → 412 conflict loop).
 pub async fn apply_pulled_content(dir: &std::path::Path, content: &TeamMemoryContent) {
     if let Err(e) = tokio::fs::create_dir_all(dir).await {
         tracing::warn!(error = %e, dir = %dir.display(), "team-memory-sync: mkdir failed");
         return;
     }
     for (rel_path, body) in &content.entries {
-        // Defensive: reject anything containing parent traversals.
-        // The server validates but defense-in-depth — a malicious key
-        // shouldn't be able to write outside the team memory dir.
-        if rel_path.contains("..") || rel_path.starts_with('/') {
-            tracing::warn!(path = %rel_path, "team-memory-sync: rejected suspicious key");
+        // (1) Path validation — fails closed on any taxonomy hit.
+        let target = match crate::path::validate_team_mem_key(rel_path, dir) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    path = %rel_path,
+                    error = ?e,
+                    "team-memory-sync: rejected key (path validation)"
+                );
+                continue;
+            }
+        };
+        // (2) Size cap.
+        if body.len() > MAX_FILE_SIZE_BYTES {
+            tracing::warn!(
+                path = %rel_path,
+                size = body.len(),
+                cap = MAX_FILE_SIZE_BYTES,
+                "team-memory-sync: skipping oversized pulled entry"
+            );
             continue;
         }
-        let target = dir.join(rel_path);
+        // (3) Skip-if-equal — read current bytes, compare, skip write
+        // if matching. Missing file = no skip. Errors fall through to
+        // the write attempt.
+        if let Ok(existing) = tokio::fs::read(&target).await
+            && existing == body.as_bytes()
+        {
+            continue;
+        }
         if let Some(parent) = target.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }

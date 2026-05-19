@@ -25,6 +25,10 @@ pub enum PathValidationError {
     Tilde,
     #[error("path contains fullwidth or other Unicode-traversal characters")]
     UnicodeTraversal,
+    #[error("path is too short")]
+    TooShort,
+    #[error("path contains backslash separators")]
+    Backslash,
     #[error("path escapes the memory directory")]
     Escape,
 }
@@ -51,10 +55,23 @@ impl coco_error::ErrorExt for PathValidationError {
 
 /// Validate a relative memory file path.
 ///
-/// Rejects: empty, null bytes, UNC (`\\server\share`), absolute paths,
-/// Windows drive roots (`C:\foo` / `C:foo`), bare/relative tilde, `..`
-/// traversal (literal, URL-encoded `%2e%2e`, fullwidth `．．`), and
-/// fullwidth solidus `／`.
+/// Rejects, in order:
+///
+/// - empty / `len < 3` (a one- or two-byte string is never a
+///   legitimate memory file — TS `validateMemoryPath` rejects
+///   `.length < 3` after sep-strip).
+/// - null bytes
+/// - UNC (`\\server\share` AND POSIX-style `//server/share`)
+/// - absolute paths (`/foo`)
+/// - Windows drive roots (`C:\foo` / `C:foo`)
+/// - bare or non-home tilde, including `~/..`, `~/.` after lexical
+///   collapse (TS rejects any tilde-prefixed path that resolves
+///   outside `$HOME`)
+/// - fullwidth traversal characters AND any other character that
+///   normalizes (NFKC) into `..` / `/` / `\` / null
+/// - URL-encoded traversal (`%2e%2e`, `%2f`, mixed case)
+/// - traversal components after path-separator split (covers both
+///   `/` and `\`)
 pub fn validate_memory_path(path: &str) -> Result<(), PathValidationError> {
     if path.is_empty() {
         return Err(PathValidationError::Empty);
@@ -62,7 +79,10 @@ pub fn validate_memory_path(path: &str) -> Result<(), PathValidationError> {
     if path.contains('\0') {
         return Err(PathValidationError::NullByte);
     }
-    if path.starts_with("\\\\") {
+    // Reject both Windows UNC (`\\foo`) and POSIX-double-slash
+    // (`//foo` — RFC 3986 reserves the leading double-slash for
+    // network locations on POSIX-leaning toolchains).
+    if path.starts_with("\\\\") || path.starts_with("//") {
         return Err(PathValidationError::UncPath);
     }
     if path.starts_with('/') {
@@ -72,10 +92,47 @@ pub fn validate_memory_path(path: &str) -> Result<(), PathValidationError> {
     if bytes.len() >= 2 && bytes[1] == b':' && (bytes[0] as char).is_ascii_alphabetic() {
         return Err(PathValidationError::DriveRoot);
     }
-    // Tilde: TS only accepts `~/` and `~\\`. Bare `~` and `~/..` are out.
-    if path.starts_with('~') && !path.starts_with("~/") && !path.starts_with("~\\") {
-        return Err(PathValidationError::Tilde);
+    // Tilde: TS only accepts `~/` and `~\\` followed by something
+    // that doesn't lexically escape `$HOME`. Bare `~`, `~/..`,
+    // `~/.`, `~/../foo` are all out.
+    if path.starts_with('~') {
+        if !path.starts_with("~/") && !path.starts_with("~\\") {
+            return Err(PathValidationError::Tilde);
+        }
+        // Strip the `~/` (or `~\`) prefix; the remainder must not
+        // contain traversal that would escape `$HOME`.
+        let tail = &path[2..];
+        if tail.is_empty()
+            || tail == ".."
+            || tail == "."
+            || tail.split(['/', '\\']).any(|c| c == "..")
+        {
+            return Err(PathValidationError::Tilde);
+        }
     }
+    if path.len() < 3 {
+        return Err(PathValidationError::TooShort);
+    }
+    // NFKC-normalise first so `U+FF0E` (fullwidth full stop),
+    // `U+2024` (one dot leader), `U+2025` (two dot leader),
+    // `U+FE52` (small full stop), etc. all collapse into `..` and
+    // get caught by the same substring check. TS uses
+    // `String.prototype.normalize('NFKC')` for this attack class.
+    // We compare the *normalised* form to the original: any new `..`
+    // / `/` / `\` / null introduced by normalisation indicates the
+    // input was crafted to bypass a pre-normalisation check.
+    let normalised = coco_paths::nfc::normalize_nfkc(path);
+    if normalised != path
+        && (normalised.contains("..")
+            || normalised.contains('/')
+            || normalised.contains('\\')
+            || normalised.contains('\0'))
+    {
+        return Err(PathValidationError::UnicodeTraversal);
+    }
+    // Belt-and-braces: still reject the explicit fullwidth
+    // codepoints even if NFKC didn't catch them (older
+    // unicode-normalization versions had gaps).
     if path.contains('\u{FF0E}') || path.contains('\u{FF0F}') {
         return Err(PathValidationError::UnicodeTraversal);
     }

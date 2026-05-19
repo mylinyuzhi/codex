@@ -217,7 +217,11 @@ impl DreamService {
         }
 
         // Lock — kept under both paths so manual /dream and auto-dream
-        // never race over MEMORY.md edits.
+        // never race over MEMORY.md edits. Under `force` the lock is
+        // still acquired for concurrency (Rust's manual /dream runs as
+        // a fork, unlike TS's main-loop path) but we restore the
+        // mtime on completion so the 24h auto-dream gate isn't
+        // collapsed by a one-off user command.
         let prior_mtime_ms = match lock::try_acquire(&self.memory_dir) {
             LockOutcome::Acquired { prior_mtime_ms } => prior_mtime_ms,
             LockOutcome::Held => {
@@ -320,10 +324,21 @@ impl DreamService {
                         verb: crate::notice::NoticeVerb::Improved,
                     });
                 }
-                // Re-stamp the lock so its mtime reflects the actual
-                // completion time. `try_acquire` already wrote it, but
-                // long-running consolidations should record fresh mtime.
-                let _ = lock::record_consolidation(&self.memory_dir);
+                if force {
+                    // Manual /dream: TS parity is "manual run doesn't
+                    // perturb auto cadence" — restore the lock file's
+                    // mtime to its prior value so the 24h time gate
+                    // continues counting from the last *real* periodic
+                    // consolidation. `rollback` handles prior=0 by
+                    // unlinking, which is correct: no prior → no
+                    // periodic record to keep.
+                    lock::rollback(&self.memory_dir, prior_mtime_ms);
+                }
+                // Non-force success: `try_acquire` already wrote
+                // PID + mtime=now (which is what the next 24h gate
+                // reads). Don't re-stamp — the redundant second
+                // write only adds a race window without changing
+                // observed mtime granularity.
                 DreamOutcome::Completed { duration_ms }
             }
             Err(e) => {

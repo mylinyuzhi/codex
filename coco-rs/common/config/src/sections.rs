@@ -496,6 +496,15 @@ pub struct PartialMemorySettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryConfig {
     pub directory: Option<PathBuf>,
+    /// Memory **base** directory override — replaces the per-project
+    /// `<config_home>/projects/<slug>/memory/` layout's `<config_home>`
+    /// component, NOT the full memory directory. Project slug + the
+    /// `projects/` / `memory/` segments are still appended. TS parity:
+    /// `CLAUDE_CODE_REMOTE_MEMORY_DIR` participates only as the base
+    /// (`getMemoryBaseDir()` in `memdir/paths.ts`). `directory` (full
+    /// path override) takes precedence when both are set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_base_override: Option<PathBuf>,
     pub skip_index: bool,
     pub kairos_mode: bool,
 
@@ -531,6 +540,7 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             directory: None,
+            memory_base_override: None,
             skip_index: false,
             kairos_mode: false,
             extraction_enabled: true,
@@ -608,16 +618,27 @@ impl MemoryConfig {
             config.searching_past_context_enabled = v;
         }
 
-        // Path override: `CocoMemoryPathOverride` is the operator-facing
-        // local override; `CocoRemoteMemoryDir` is piped from the swarm
-        // leader into teammates so in-process members share a memory root
-        // without the operator having to re-export manually. Local
-        // override wins if both are set.
-        if let Some(dir) = env
-            .get_string(EnvKey::CocoMemoryPathOverride)
-            .or_else(|| env.get_string(EnvKey::CocoRemoteMemoryDir))
-        {
+        // Path overrides — two distinct semantics:
+        //
+        //  • `COCO_MEMORY_PATH_OVERRIDE` (operator): **full path** to the
+        //    personal memory directory. The `<projects>/<slug>/memory/`
+        //    layout is bypassed entirely. TS:
+        //    `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`.
+        //
+        //  • `COCO_REMOTE_MEMORY_DIR` (swarm leader → teammate
+        //    propagation): **base dir** that replaces `<config_home>`
+        //    in the default layout — the per-project slug + `memory/`
+        //    are still appended. Same project on both leader and
+        //    teammate (same canonical git root → same slug) resolves
+        //    to the same final memory dir. TS:
+        //    `CLAUDE_CODE_REMOTE_MEMORY_DIR`.
+        //
+        // The two MAY coexist; full override wins if both are set.
+        if let Some(dir) = env.get_string(EnvKey::CocoMemoryPathOverride) {
             config.directory = Some(PathBuf::from(dir));
+        }
+        if let Some(base) = env.get_string(EnvKey::CocoRemoteMemoryDir) {
+            config.memory_base_override = Some(PathBuf::from(base));
         }
 
         // Force-disable env overrides (truthy = disable). Settings can

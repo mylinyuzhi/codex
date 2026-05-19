@@ -605,6 +605,13 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             .extract
             .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
             .await;
+        // Also wait for any in-flight session-memory fork — a partial
+        // `summary.md` write would otherwise survive process exit and
+        // mislead the next session's compact short-circuit.
+        let _ = memory_runtime
+            .session_memory
+            .wait_for_extraction(coco_memory::service::session::DEFAULT_WAIT_TIMEOUT)
+            .await;
     }
     drop(session_runtime_guard);
 

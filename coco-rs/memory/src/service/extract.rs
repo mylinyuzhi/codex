@@ -131,16 +131,28 @@ pub enum SkipReason {
 /// serialize/deserialize round-trip across the trait boundary.
 pub type LazyForkMessages = Box<dyn FnOnce() -> Vec<Arc<Message>> + Send>;
 
+/// Lazy predicate for the "main agent wrote to memdir since the
+/// cursor" check. Evaluated at gate time so trailing runs — which
+/// fire after a primary run completes and may see new direct-writes
+/// that landed during the primary's window — get a fresh answer
+/// instead of the stale snapshot from when this `TurnInput` was first
+/// constructed. TS parity: `hasMemoryWritesSince` in
+/// `extractMemories.ts:121-148` is re-evaluated by every entry into
+/// `runExtraction`, not cached.
+pub type HasMemoryWritesFn = Box<dyn FnOnce() -> bool + Send>;
+
 /// Per-turn input: a lazy slice builder + turn-level signals.
 ///
-/// `has_memory_writes` is true when the main agent wrote to the
-/// memory directory during this turn — extraction stays out of the
-/// way to avoid stomping on user-curated edits.
+/// `has_memory_writes` is a **closure** rather than a boolean so the
+/// trailing run can re-check it against history that grew during the
+/// primary's window. Without this, a main-agent direct-write that
+/// landed mid-primary would slip past the trailing run's mutual-
+/// exclusion gate.
 pub struct TurnInput {
     pub fork_messages: LazyForkMessages,
     pub message_count: i32,
     pub last_message_id: Option<String>,
-    pub has_memory_writes: bool,
+    pub has_memory_writes: HasMemoryWritesFn,
 }
 
 impl Default for TurnInput {
@@ -149,7 +161,7 @@ impl Default for TurnInput {
             fork_messages: Box::new(Vec::new),
             message_count: 0,
             last_message_id: None,
-            has_memory_writes: false,
+            has_memory_writes: Box::new(|| false),
         }
     }
 }
@@ -208,16 +220,33 @@ impl ExtractService {
             return ExtractOutcome::Skipped(SkipReason::Disabled);
         }
 
+        // Destructure so we can evaluate `has_memory_writes` OUTSIDE
+        // the mutex critical section. The closure could in principle
+        // do non-trivial work (scan the message slice for tool calls)
+        // and we don't want to hold `state` across it.
+        let TurnInput {
+            fork_messages,
+            message_count,
+            last_message_id,
+            has_memory_writes,
+        } = input;
+
         {
             let mut state = self.state.lock().await;
             if state.in_progress {
-                let message_count = input.message_count;
                 // TS parity (`extractMemories.ts:557-563`): stash the
                 // **latest** context and let the trailing run use it.
                 // Overwrites any prior stash so we always replay the
                 // freshest message slice, not the one that triggered
-                // the in-flight run.
-                state.pending_trailing = Some(input);
+                // the in-flight run. Re-pack into a `TurnInput`
+                // because the closure is `FnOnce` and we've already
+                // moved its field out of `input`.
+                state.pending_trailing = Some(TurnInput {
+                    fork_messages,
+                    message_count,
+                    last_message_id,
+                    has_memory_writes,
+                });
                 tracing::debug!(
                     message_count,
                     "auto-memory extract skipped: in progress (queued trailing)"
@@ -225,21 +254,26 @@ impl ExtractService {
                 self.telemetry.emit(MemoryEvent::ExtractionCoalesced);
                 return ExtractOutcome::Skipped(SkipReason::InProgress);
             }
-            if input.has_memory_writes {
+            // Drop the state lock before invoking the user closure
+            // (it may walk message history). Re-acquire below.
+            drop(state);
+        }
+        let direct_write = has_memory_writes();
+        {
+            let mut state = self.state.lock().await;
+            if direct_write {
                 // TS parity (`extractMemories.ts:347-360`): when the
                 // main agent wrote memory directly this turn, skip
                 // the fork AND advance the cursor past the range so
                 // the next eligible turn doesn't re-consider these
                 // already-handled messages.
-                if let Some(ref id) = input.last_message_id {
+                if let Some(ref id) = last_message_id {
                     state.last_cursor = Some(id.clone());
                 }
                 self.telemetry
-                    .emit(MemoryEvent::ExtractionSkippedDirectWrite {
-                        message_count: input.message_count,
-                    });
+                    .emit(MemoryEvent::ExtractionSkippedDirectWrite { message_count });
                 tracing::debug!(
-                    message_count = input.message_count,
+                    message_count,
                     "auto-memory extract skipped: model wrote memory directly"
                 );
                 return ExtractOutcome::Skipped(SkipReason::DirectWrite);
@@ -257,16 +291,12 @@ impl ExtractService {
             state.in_progress = true;
         }
         tracing::info!(
-            message_count = input.message_count,
+            message_count,
             "auto-memory extract dispatch (forking agent)"
         );
 
-        // Primary run uses the caller's input. Decompose so we can
-        // advance the cursor + invoke the fork-messages closure once.
-        let primary_message_count = input.message_count;
-        let primary_last_id = input.last_message_id.clone();
-        let primary_fork_context = (input.fork_messages)();
-        let outcome = self.run(primary_message_count, primary_fork_context).await;
+        let primary_fork_context = fork_messages();
+        let outcome = self.run(message_count, primary_fork_context).await;
         tracing::info!(
             outcome = ?std::mem::discriminant(&outcome),
             "auto-memory extract done"
@@ -275,7 +305,11 @@ impl ExtractService {
         {
             let mut state = self.state.lock().await;
             state.in_progress = false;
-            if let Some(id) = primary_last_id {
+            // CLAUDE.md invariant: cursor only advances on a successful
+            // fold. On `Failed` the next eligible turn retries the same
+            // range (otherwise a transient subagent crash would silently
+            // skip messages from extraction forever).
+            if let (ExtractOutcome::Completed { .. }, Some(id)) = (&outcome, last_message_id) {
                 state.last_cursor = Some(id);
             }
         }
@@ -283,8 +317,10 @@ impl ExtractService {
         // Drain trailing runs in a loop. Each iteration takes the
         // latest stashed `TurnInput` (set during this primary's
         // window) and runs it against its own fresh fork-messages
-        // slice. Cursor advances per trailing input so the next
-        // primary's `last_cursor` reflects the most recent fold.
+        // slice. The trailing closure for `has_memory_writes` is
+        // re-evaluated against the now-newer history — TS parity for
+        // direct-write skip. Cursor advances per trailing input ONLY
+        // on success.
         loop {
             let pending = {
                 let mut state = self.state.lock().await;
@@ -293,17 +329,43 @@ impl ExtractService {
             let Some(trailing_input) = pending else {
                 break;
             };
+            let TurnInput {
+                fork_messages: trailing_fork_messages,
+                message_count: trailing_count,
+                last_message_id: trailing_last_id,
+                has_memory_writes: trailing_has_writes,
+            } = trailing_input;
+
+            // Re-check direct-write against history that grew during
+            // the primary's window. If the main agent wrote to memdir
+            // during that window, the trailing fork would step on the
+            // user's edits — skip + advance cursor.
+            if trailing_has_writes() {
+                let mut state = self.state.lock().await;
+                if let Some(id) = trailing_last_id {
+                    state.last_cursor = Some(id);
+                }
+                self.telemetry
+                    .emit(MemoryEvent::ExtractionSkippedDirectWrite {
+                        message_count: trailing_count,
+                    });
+                tracing::debug!(
+                    message_count = trailing_count,
+                    "auto-memory trailing extract skipped: model wrote memory directly"
+                );
+                continue;
+            }
             {
                 let mut state = self.state.lock().await;
                 state.in_progress = true;
             }
-            let trailing_count = trailing_input.message_count;
-            let trailing_last_id = trailing_input.last_message_id.clone();
-            let trailing_fork_context = (trailing_input.fork_messages)();
-            let _trailing = self.run(trailing_count, trailing_fork_context).await;
+            let trailing_fork_context = trailing_fork_messages();
+            let trailing_outcome = self.run(trailing_count, trailing_fork_context).await;
             let mut state = self.state.lock().await;
             state.in_progress = false;
-            if let Some(id) = trailing_last_id {
+            if let (ExtractOutcome::Completed { .. }, Some(id)) =
+                (&trailing_outcome, trailing_last_id)
+            {
                 state.last_cursor = Some(id);
             }
         }

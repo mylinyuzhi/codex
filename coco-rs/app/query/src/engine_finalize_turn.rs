@@ -474,16 +474,6 @@ impl QueryEngine {
             && self.config.agent_id.is_none()
         {
             let last_cursor = runtime.extract.last_cursor().await;
-            // Walk all assistant messages since the cursor — TS
-            // `hasMemoryWritesSince` (`extractMemories.ts:121-148`).
-            // Older single-turn-only behavior missed the case where
-            // an earlier assistant turn in the slice wrote memory
-            // and the latest didn't.
-            let has_memory_writes = main_agent_wrote_memory(
-                history.as_slice(),
-                runtime.personal_dir(),
-                last_cursor.as_deref(),
-            );
             // SessionMemory's cursor is independent of ExtractService's —
             // the two services advance their cursors at different
             // points (TS module-level `lastMemoryMessageUuid` per
@@ -515,13 +505,32 @@ impl QueryEngine {
             let extract_message_count =
                 count_model_visible_since(history.as_slice(), last_cursor.as_deref());
             let messages_for_fork = history.to_vec();
+            // Capture a second snapshot for the lazy `has_memory_writes`
+            // closure. TS `hasMemoryWritesSince` (`extractMemories.ts:121-148`)
+            // is re-evaluated by every entry into `runExtraction`, so
+            // the trailing run sees the freshest history. When this
+            // TurnInput is stashed for trailing, the captured snapshot
+            // reflects the messages at *stash* time (mid-primary
+            // window) — newer than the primary's own gate snapshot,
+            // catching any model-direct memory writes that landed
+            // during the primary fork.
+            let messages_for_writes_check = history.to_vec();
+            let memory_dir = runtime.personal_dir().to_path_buf();
+            let last_cursor_for_writes_check = last_cursor.clone();
+            let last_cursor_for_fork = last_cursor.clone();
             let extract_input = coco_memory::service::extract::TurnInput {
                 fork_messages: Box::new(move || {
-                    arc_messages_since(&messages_for_fork, last_cursor.as_deref())
+                    arc_messages_since(&messages_for_fork, last_cursor_for_fork.as_deref())
                 }),
                 message_count: extract_message_count,
                 last_message_id: last_msg_id.clone(),
-                has_memory_writes,
+                has_memory_writes: Box::new(move || {
+                    main_agent_wrote_memory(
+                        &messages_for_writes_check,
+                        &memory_dir,
+                        last_cursor_for_writes_check.as_deref(),
+                    )
+                }),
             };
             let extract = runtime.extract.clone();
             let dream_runtime = runtime.clone();

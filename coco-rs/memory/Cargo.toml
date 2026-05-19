@@ -34,6 +34,7 @@ thiserror.workspace = true
 filetime = "0.2"
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+walkdir.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

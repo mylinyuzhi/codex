@@ -786,13 +786,20 @@ pub async fn run_chat_with_options(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     drainer.abort();
 
-    // Wait for any in-flight auto-memory extraction to complete before
-    // we return so partial writes aren't dropped on process exit. TS
-    // parity: `print.ts` awaits `drainPendingExtraction(60_000)` here.
+    // Wait for any in-flight auto-memory extraction + session-memory
+    // fork to complete before we return so partial writes aren't
+    // dropped on process exit. TS parity: `print.ts` awaits
+    // `drainPendingExtraction(60_000)` here; we additionally cover SM
+    // via `waitForSessionMemoryExtraction(15_000)` so a half-written
+    // `summary.md` doesn't survive into the next `--resume`.
     if let Some(memory_runtime) = engine.memory_runtime() {
         let _ = memory_runtime
             .extract
             .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
+            .await;
+        let _ = memory_runtime
+            .session_memory
+            .wait_for_extraction(coco_memory::service::session::DEFAULT_WAIT_TIMEOUT)
             .await;
     }
 

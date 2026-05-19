@@ -12,7 +12,9 @@ use std::sync::Mutex;
 
 use crate::scan::ScannedMemory;
 use crate::scan::file_mtime_ms;
+use crate::scan::format_memory_manifest;
 use crate::scan::memory_age_string;
+use crate::scan::memory_freshness_text;
 
 /// Hard cap on relevant memories returned per turn.
 pub const MAX_RELEVANT: usize = 5;
@@ -89,62 +91,67 @@ impl PrefetchState {
 /// System prompt for the relevance-ranker side-query.
 ///
 /// TS: `findRelevantMemories.ts:SELECT_MEMORIES_SYSTEM_PROMPT`.
+/// Multi-LLM neutral wording (no "Claude Code" reference); the
+/// `with_skip_system_prefix(true)` on the request keeps the agent's
+/// preamble out of the ranker so this stays the only system context.
 pub const SELECT_MEMORIES_SYSTEM_PROMPT: &str = "\
-You are selecting memories that will be useful to Claude Code as it processes a user's query. \
-You will be given the user's query and a list of available memory files with their filenames \
-and descriptions.\n\
+You are selecting memories that will be useful to an AI coding assistant as it processes a \
+user's query. You will be given the user's query and a list of available memory files with \
+their filenames and descriptions.\n\
 \n\
 Return a JSON object: {\"selected_memories\": [\"filename.md\", ...]} listing up to 5 filenames \
 for memories that will clearly be useful. Only include memories you are certain will help.\n\
 - If unsure, leave it out. Be selective.\n\
 - If none clearly help, return an empty list.\n\
 - If a list of recently-used tools is provided, do NOT select API/usage references for those \
-tools (Claude is already exercising them). DO still select warnings, gotchas, or known issues \
-about those tools — active use is exactly when those matter.";
+tools (the assistant is already exercising them). DO still select warnings, gotchas, or known \
+issues about those tools — active use is exactly when those matter.";
 
 /// Build the user-side prompt for the recall ranker.
+///
+/// Layout (TS `findRelevantMemories.ts:105`):
+///
+/// ```text
+/// Query: <query>
+///
+/// Available memories:
+/// - [<type>] <filename> (<iso-ts>): <description>
+/// ...
+///
+/// Recently used tools: <tool>, <tool>
+/// ```
+///
+/// Uses [`format_memory_manifest`] for the bullet body so the manifest
+/// stays byte-equivalent with what TS sends — calibration of the
+/// ranker depends on this exact format. Already-surfaced files are
+/// filtered before formatting (the ranker wastes turns if it returns
+/// names the loader will then drop).
 pub fn build_selection_prompt(
     query: &str,
     scanned: &[ScannedMemory],
     state: &PrefetchState,
     recent_tools: &[String],
 ) -> String {
-    let mut lines = Vec::new();
-    lines.push(format!("User query: {query}"));
-    lines.push(String::new());
+    let visible: Vec<ScannedMemory> = scanned
+        .iter()
+        .filter(|m| !state.is_surfaced(&m.path.to_string_lossy()))
+        .cloned()
+        .collect();
+
+    let mut out = String::new();
+    out.push_str(&format!("Query: {query}\n\nAvailable memories:\n"));
+    if visible.is_empty() {
+        out.push_str("(none)");
+    } else {
+        out.push_str(&format_memory_manifest(&visible));
+    }
     if !recent_tools.is_empty() {
-        lines.push(format!("Recently-used tools: {}", recent_tools.join(", ")));
-        lines.push(String::new());
-    }
-    lines.push("## Available Memories".to_string());
-    if scanned.is_empty() {
-        lines.push("_(none)_".to_string());
-        return lines.join("\n");
-    }
-    for mem in scanned {
-        let path_str = mem.path.to_string_lossy();
-        if state.is_surfaced(&path_str) {
-            continue;
-        }
-        let name = mem
-            .frontmatter
-            .as_ref()
-            .map_or("unknown", |fm| fm.name.as_str());
-        let desc = mem
-            .frontmatter
-            .as_ref()
-            .map_or("", |fm| fm.description.as_str());
-        let ty = mem
-            .frontmatter
-            .as_ref()
-            .map_or("unknown", |fm| fm.memory_type.as_str());
-        let age = memory_age_string(mem.mtime_ms);
-        lines.push(format!(
-            "- `{}` — {name} ({ty}): {desc} [{age}]",
-            mem.filename
+        out.push_str(&format!(
+            "\n\nRecently used tools: {}",
+            recent_tools.join(", ")
         ));
     }
-    lines.join("\n")
+    out
 }
 
 /// Parse the selection response — a JSON object with a
@@ -197,7 +204,11 @@ pub fn load_relevant_memories(
             let cut = content[..MAX_BODY_BYTES]
                 .rfind('\n')
                 .unwrap_or(MAX_BODY_BYTES);
-            format!("{}\n... (truncated)", &content[..cut])
+            format!(
+                "{}\n\nThis memory file was truncated ({MAX_BODY_BYTES} byte limit). Use the \
+                 Read tool to view the complete file at: {path_str}",
+                &content[..cut]
+            )
         } else {
             content
         };
@@ -207,7 +218,11 @@ pub fn load_relevant_memories(
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
-        let header = format!("[{age}] {filename}");
+        // Freshness caveat (TS `memoryAge.ts:memoryFreshnessText`) is
+        // prepended for memories older than one day so the model
+        // doesn't blindly trust stale file/line references.
+        let freshness = memory_freshness_text(mtime_ms);
+        let header = format!("{freshness}[{age}] {filename}");
         let bytes = truncated.len() as i64;
         state.mark_surfaced(path_str, bytes);
         out.push(RelevantMemory {

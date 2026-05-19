@@ -27,6 +27,7 @@ use crate::scan::scan_memory_files;
 use crate::service::DreamService;
 use crate::service::ExtractService;
 use crate::service::SessionMemoryService;
+use crate::store::EntrypointTruncation;
 use crate::telemetry::MemoryEvent;
 use crate::telemetry::MemoryTelemetryEmitter;
 use crate::telemetry::NoopEmitter;
@@ -108,6 +109,10 @@ pub struct MemoryRuntime {
     /// `SystemMemorySavedMessage` into history. TS parity:
     /// `appendSystemMessage(createMemorySavedMessage(...))`.
     notices: crate::notice::NoticeInbox,
+    /// Telemetry emitter shared with the services. The runtime owns
+    /// a clone so [`Self::render_system_prompt_section`] can fire
+    /// `MemdirLoaded` directly — TS `tengu_memdir_loaded`.
+    telemetry: Arc<dyn MemoryTelemetryEmitter>,
 }
 
 impl std::fmt::Debug for MemoryRuntime {
@@ -217,19 +222,41 @@ impl MemoryRuntimeBuilder {
                 auto_compact_enabled: self.auto_compact_enabled,
             });
         }
+        // `memory_base` is the root of the per-project memory layout
+        // (`<base>/projects/<slug>/memory/`). `memory_base_override`
+        // (from `COCO_REMOTE_MEMORY_DIR`) shifts it without touching
+        // unrelated subsystems' paths — transcripts and the project
+        // session dir still use the caller-supplied `project_paths`
+        // unless this override is set, in which case we rebuild
+        // memory-scoped `ProjectPaths` on top of the new base. TS
+        // parity: `getMemoryBaseDir()` in `memdir/paths.ts:85-90`.
+        let memory_base: PathBuf = self
+            .config
+            .memory_base_override
+            .clone()
+            .unwrap_or_else(|| self.config_home.clone());
         let directories = MemoryDir::resolve(
-            &self.config_home,
+            &memory_base,
             &self.project_root,
             self.config.directory.as_deref(),
         );
-        // Reuse caller-supplied `ProjectPaths`, or derive once
-        // (canonical-git-root + slug). Session-memory writes go to
-        // `<projectDir>/<sid>/session-memory/summary.md` — TS layout.
-        let project_paths = self.project_paths.unwrap_or_else(|| {
+        // When `memory_base_override` is set, the caller's
+        // `project_paths` (computed from the default `config_home`)
+        // would point session-memory + dream-lock to the wrong base.
+        // Rebuild a memory-scoped `ProjectPaths` against the override
+        // so the SM file lives at `<override>/projects/<slug>/<sid>/
+        // session-memory/summary.md`.
+        let project_paths = if self.config.memory_base_override.is_some() {
             let canonical = coco_git::find_canonical_git_root(&self.project_root)
                 .unwrap_or_else(|| self.project_root.clone());
-            Arc::new(ProjectPaths::new(self.config_home.clone(), &canonical))
-        });
+            Arc::new(ProjectPaths::new(memory_base, &canonical))
+        } else {
+            self.project_paths.unwrap_or_else(|| {
+                let canonical = coco_git::find_canonical_git_root(&self.project_root)
+                    .unwrap_or_else(|| self.project_root.clone());
+                Arc::new(ProjectPaths::new(self.config_home.clone(), &canonical))
+            })
+        };
         // Master swappable cell — every service sees the same handle
         // and observes any later `install_agent` swap.
         let agent_slot: crate::service::extract::AgentSlot =
@@ -279,6 +306,7 @@ impl MemoryRuntimeBuilder {
             side_query: side_query_slot,
             session_enumerator: OnceLock::new(),
             notices,
+            telemetry: self.telemetry,
         }
     }
 }
@@ -415,22 +443,56 @@ impl MemoryRuntime {
             SystemPromptVariant::Auto
         };
 
-        let personal_index = read_index_file(&self.directories.personal_index())
-            .await
-            .map(|s| truncate_entrypoint_content(&s).content);
-        let team_index = if matches!(variant, SystemPromptVariant::Combined) {
+        // Truncate-and-keep-stats so we can emit `MemdirLoaded`. TS
+        // `tengu_memdir_loaded` fires every time the prompt section
+        // is built (`memdir.ts:298-305`) — without this dashboards
+        // can't measure how often / how large the memdir is per
+        // session, which is the load-bearing input for the recall
+        // budget heuristics.
+        let personal_trunc: Option<EntrypointTruncation> =
+            read_index_file(&self.directories.personal_index())
+                .await
+                .map(|s| truncate_entrypoint_content(&s));
+        let has_team = matches!(variant, SystemPromptVariant::Combined);
+        let team_trunc: Option<EntrypointTruncation> = if has_team {
             read_index_file(&self.directories.team_index())
                 .await
-                .map(|s| truncate_entrypoint_content(&s).content)
+                .map(|s| truncate_entrypoint_content(&s))
         } else {
             None
         };
+
+        // Emit per-dir telemetry — TS fires twice in combined mode
+        // (once per dir). One event with `has_team=true` summarizes
+        // the personal-side stats; team's stats ride on a second
+        // event so both surfaces stay measurable.
+        if let Some(trunc) = &personal_trunc {
+            self.telemetry.emit(MemoryEvent::MemdirLoaded {
+                line_count: trunc.line_count as i64,
+                byte_count: trunc.byte_count as i64,
+                was_truncated: trunc.line_truncated,
+                was_byte_truncated: trunc.byte_truncated,
+                has_team,
+            });
+        }
+        if let Some(trunc) = &team_trunc {
+            self.telemetry.emit(MemoryEvent::MemdirLoaded {
+                line_count: trunc.line_count as i64,
+                byte_count: trunc.byte_count as i64,
+                was_truncated: trunc.line_truncated,
+                was_byte_truncated: trunc.byte_truncated,
+                has_team: true,
+            });
+        }
+
+        let personal_index = personal_trunc.map(|t| t.content);
+        let team_index = team_trunc.map(|t| t.content);
 
         let transcript_dir = self.transcript_dir.as_deref();
         Some(build_system_prompt_section(
             variant,
             &self.directories.personal,
-            if matches!(variant, SystemPromptVariant::Combined) {
+            if has_team {
                 Some(&self.directories.team)
             } else {
                 None
@@ -461,12 +523,11 @@ impl MemoryRuntime {
         if query.trim().is_empty() {
             return Vec::new();
         }
-        // Cold-start short-circuit: with no MEMORY.md the directory
-        // either doesn't exist or holds nothing curated, so skip the
-        // full directory walk + 200 frontmatter reads.
-        if !self.directories.personal_index().exists() {
-            return Vec::new();
-        }
+        // Cold-start short-circuit: gate on the scan being empty, NOT
+        // on `MEMORY.md`'s presence. TS `findRelevantMemories.ts:46`
+        // short-circuits via `scanMemoryFiles(...).length === 0`. A
+        // user who has topic files but deleted (or never had) the
+        // `MEMORY.md` index still has memories worth surfacing.
         let scanned = scan_memory_files(&self.directories.personal);
         if scanned.is_empty() {
             return Vec::new();
@@ -506,7 +567,13 @@ impl MemoryRuntime {
                     tool,
                     RECALL_QUERY_SOURCE,
                 )
-                .with_model_role(ModelRole::Memory);
+                .with_model_role(ModelRole::Memory)
+                // TS `findRelevantMemories.ts:101`
+                // `skipSystemPromptPrefix: true` — ranker must not
+                // see the main agent's Claude Code preamble. The
+                // preamble describes tools/persona unrelated to
+                // memory selection and biases the ranker.
+                .with_skip_system_prefix(true);
                 match handle.query(request).await {
                     Ok(resp) => {
                         // Prefer the structured tool input; fall back

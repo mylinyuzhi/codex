@@ -11,6 +11,9 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryConfig {
     pub directory: Option<PathBuf>,
+    /// Memory base directory override (replaces `<config_home>` in the
+    /// default per-project layout). See `coco_config::MemoryConfig`.
+    pub memory_base_override: Option<PathBuf>,
     pub skip_index: bool,
     pub kairos_mode: bool,
 
@@ -44,6 +47,7 @@ impl From<coco_config::MemoryConfig> for MemoryConfig {
     fn from(c: coco_config::MemoryConfig) -> Self {
         Self {
             directory: c.directory,
+            memory_base_override: c.memory_base_override,
             skip_index: c.skip_index,
             kairos_mode: c.kairos_mode,
             extraction_enabled: c.extraction_enabled,
