@@ -2,11 +2,16 @@
 //!
 //! `ApiClient` wraps any `Arc<dyn LanguageModel>` — real provider or mock.
 //!
-//! This crate is the **single re-export seam** between coco-rs and the
-//! `vercel-ai-provider` SDK. Upper layers must reach for AI SDK types via
-//! `coco_inference::*` (or `coco_inference::prelude::*`), never via
-//! `vercel_ai_provider::*` directly. When the SDK upgrades (V4 → V5),
-//! only the version-stripped aliases below need re-pointing.
+//! This crate is the **runtime seam** for vercel-ai. It owns the runtime
+//! contract (`LanguageModelV4` trait, `LanguageModelCallOptions`,
+//! GenerateResult / StreamResult, `Provider` trait) and the client
+//! machinery (`ApiClient`, retry, auth, prompt-cache detection).
+//!
+//! DTOs (message envelope, content parts, ProviderOptions, StopReason,
+//! Usage, …) live in `coco-llm-types`. Together they form the
+//! dual-seam: two narrow crates own direct `vercel-ai-provider`
+//! dependencies, an SDK upgrade edits both. See
+//! `scripts/check-vercel-ai-seam.sh`.
 
 pub mod auth;
 pub mod build_call_options;
@@ -42,11 +47,6 @@ pub use logging::ErrorLog;
 pub use logging::KnownGateway;
 pub use logging::RequestLog;
 pub use logging::ResponseLog;
-// Canonical typed stop reason — re-exported from vercel-ai-provider's
-// extended StopReason (single source of truth). See
-// `vercel-ai/provider/src/language_model/v4/finish_reason.rs` for the
-// 8 variants + multi-LLM mapping table. The deprecated `inference`-
-// local enum that lived in `logging.rs` has been removed.
 pub use logging::detect_gateway;
 pub use logging::format_request_log;
 pub use logging::format_response_log;

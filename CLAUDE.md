@@ -145,8 +145,8 @@ Add for `None` / booleans / numeric literals. Skip for string/char literals unle
 │  Standalone:  bridge, retrieval                                      │
 │  Vercel AI:   ai → openai, openai-compatible, google, anthropic,     │
 │               bytedance (on provider + provider-utils)                │
-│  Common:      types, config, error, otel, stack-trace-macro,         │
-│               model-card                                              │
+│  Common:      types, llm-types, config, error, otel,                 │
+│               stack-trace-macro, model-card                           │
 │  Utils:       see Utils table below                                  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -198,7 +198,8 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 
 | Crate | Purpose |
 |-------|---------|
-| `types` | Foundation types (zero internal deps); re-exports vercel-ai aliases; wire-tagged unions |
+| `types` | Foundation types incl. Message family + wire-tagged unions. Source-level vercel-ai-free (DTOs reach via `coco-llm-types`). |
+| `llm-types` | DTO seam: pure re-export shim for `vercel-ai-provider` shapes (LlmMessage / content parts / StopReason / Usage / …). Paired with `services/inference` to form the dual-seam — SDK upgrade edits both crates. |
 | `config` | Layered config: JSON + env + runtime overrides + hot reload |
 | `error` | Unified errors with `StatusCode` classification (snafu + virtstack) |
 | `otel` | OpenTelemetry tracing and metrics |
@@ -496,7 +497,7 @@ Raw strings only for unconstrained input (user text, opaque external IDs, third-
 
 Every crate in `coco-rs/` has its own `CLAUDE.md` (path = `coco-rs/<layer>/<crate>/CLAUDE.md`).
 
-- **Common**: types, config, error ([codes](coco-rs/common/error/README.md)), otel, stack-trace-macro
+- **Common**: types, llm-types, config, error ([codes](coco-rs/common/error/README.md)), otel, stack-trace-macro
 - **Vercel AI**: ai, provider, provider-utils, openai, openai-compatible, google, anthropic, bytedance
 - **Services**: inference, compact, mcp, lsp
 - **Core**: tool-runtime, tools, permissions, messages, context, system-reminder, subagent
