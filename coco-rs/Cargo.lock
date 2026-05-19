@@ -1047,6 +1047,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "coco-config",
+ "coco-context",
  "coco-error",
  "coco-lsp",
  "coco-plugins",

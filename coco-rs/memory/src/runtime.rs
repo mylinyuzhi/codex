@@ -27,6 +27,9 @@ use crate::scan::scan_memory_files;
 use crate::service::DreamService;
 use crate::service::ExtractService;
 use crate::service::SessionMemoryService;
+use crate::service::dream::DreamOutcome;
+use crate::service::extract::ExtractOutcome;
+use crate::service::session::SessionMemoryOutcome;
 use crate::store::EntrypointTruncation;
 use crate::telemetry::MemoryEvent;
 use crate::telemetry::MemoryTelemetryEmitter;
@@ -113,6 +116,13 @@ pub struct MemoryRuntime {
     /// a clone so [`Self::render_system_prompt_section`] can fire
     /// `MemdirLoaded` directly — TS `tengu_memdir_loaded`.
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
+    /// Midnight-rollover latch for KAIROS mode. Inert outside KAIROS:
+    /// `finalize_turn` only consults it when `config.kairos_mode` is
+    /// set, so the watcher stays at its empty default and costs
+    /// nothing for sessions that don't opt in. TS parity: the KAIROS
+    /// arm of `getDateChangeAttachments`
+    /// (`utils/attachments.ts:1437-1441`).
+    kairos_rollover: crate::kairos::KairosRolloverWatcher,
 }
 
 impl std::fmt::Debug for MemoryRuntime {
@@ -307,6 +317,7 @@ impl MemoryRuntimeBuilder {
             session_enumerator: OnceLock::new(),
             notices,
             telemetry: self.telemetry,
+            kairos_rollover: crate::kairos::KairosRolloverWatcher::new(),
         }
     }
 }
@@ -359,6 +370,134 @@ impl MemoryRuntime {
     /// in `extractMemories.ts:495` and `autoDream.ts:243`.
     pub fn drain_user_notices(&self) -> Vec<crate::notice::MemoryUserNotice> {
         self.notices.drain()
+    }
+
+    /// Per-turn entry point for the memory subsystem. Aggregates the
+    /// three async services (session memory, extract, auto-dream) plus
+    /// future post-write inspection (Gap 4) and KAIROS rollover (Gap 2)
+    /// into a single black-box call from the engine.
+    ///
+    /// Architecture: engine pre-computes everything that needs the
+    /// `MessageHistory` (cursors, tool counts, fork closures) and
+    /// passes them through [`FinalizeTurnContext`]; this method does
+    /// the fan-out and post-processing and returns a typed
+    /// [`FinalizeTurnReport`] the engine then projects into history
+    /// (`SystemMemorySavedMessage` for each notice) and side effects
+    /// (KAIROS transcript archive).
+    ///
+    /// Subagent + bare-mode gating is centralised here so callers
+    /// don't need to remember the rules. Returns `skipped=true` when
+    /// the gate trips; no LLM call is made.
+    pub async fn finalize_turn(&self, ctx: FinalizeTurnContext) -> FinalizeTurnReport {
+        if ctx.bare_mode || ctx.is_subagent {
+            return FinalizeTurnReport::skipped();
+        }
+
+        let extract = self.extract.clone();
+        let session_memory = self.session_memory.clone();
+        let auto_compact_enabled = ctx.auto_compact_enabled;
+        let estimated_tokens = ctx.estimated_tokens;
+        let tool_calls_since_sm = ctx.tool_calls_since_sm_cursor;
+        let had_tool_calls_in_last_turn = ctx.tool_calls_last_turn > 0;
+        let last_msg_id = ctx.last_message_id.clone();
+        let extract_input = ctx.extract_input;
+        let now_ms = ctx.now_ms;
+
+        // Fan-out — three forks in parallel. Each service gates
+        // internally; the lazy `fork_messages` closure inside
+        // `extract_input` is only invoked once all extract gates pass.
+        // TS parity: `stopHooks.ts` dispatches the three concurrently.
+        let (sm_outcome, ex_outcome, dr_outcome) = tokio::join!(
+            async {
+                if auto_compact_enabled {
+                    session_memory
+                        .maybe_extract(
+                            estimated_tokens,
+                            tool_calls_since_sm,
+                            had_tool_calls_in_last_turn,
+                            last_msg_id,
+                        )
+                        .await
+                } else {
+                    SessionMemoryOutcome::Skipped(crate::service::session::SkipReason::Disabled)
+                }
+            },
+            extract.maybe_extract(extract_input),
+            self.tick_dream(now_ms),
+        );
+
+        // Post-write classification — when the main agent (or user
+        // through the `Edit`/`Write`/`NotebookEdit` tool) directly
+        // wrote a memory-managed file this turn, surface a
+        // `ManualEdit` notice. Dedup by path so a model that hits the
+        // same file 5 times only generates one toast. TS parity:
+        // `services/useMemoryUpdateNotification` +
+        // `utils/memoryFileDetection.ts::detectSessionFileType`.
+        let session_memory_file = self.session_memory.file_path();
+        let mut dedup: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut manual_edit_paths: Vec<String> = Vec::new();
+        for record in &ctx.recent_tool_writes {
+            if !record.succeeded {
+                continue;
+            }
+            match crate::path::classify_written_path(
+                &record.file_path,
+                &self.directories.personal,
+                Some(&session_memory_file),
+            ) {
+                crate::path::WriteClassification::TeamMem
+                | crate::path::WriteClassification::AutoMem
+                | crate::path::WriteClassification::Claudemd => {
+                    let key = record.file_path.display().to_string();
+                    if dedup.insert(key.clone()) {
+                        manual_edit_paths.push(key);
+                    }
+                }
+                // SessionMem updates come from the SM fork, which
+                // already produces its own paths via the engine's
+                // `SessionMemoryExtracted` event — no notice.
+                // Unrelated is a no-op.
+                _ => {}
+            }
+        }
+        if !manual_edit_paths.is_empty() {
+            self.notices.push(crate::notice::MemoryUserNotice {
+                written_paths: manual_edit_paths,
+                verb: crate::notice::NoticeVerb::ManualEdit,
+            });
+        }
+
+        // KAIROS rollover detection (Gap 2): poll the watcher only when
+        // KAIROS mode is on. The watcher seeds on its first tick, so
+        // calling it every turn outside KAIROS would spin the latch for
+        // no benefit; the conditional keeps the watcher inert until
+        // `kairos_mode` flips. Emit telemetry on rollover so dashboards
+        // pick it up; the engine receives `Some(yesterday)` and can act
+        // (archive a session-transcript bucket, etc.) — TS-private
+        // `sessionTranscript.flushOnDateChange` lives downstream of
+        // this signal.
+        let kairos_rollover = if self.config.kairos_mode {
+            let yesterday = self.kairos_rollover.tick(now_ms);
+            if let Some(prev) = yesterday {
+                let today = prev.succ_opt().unwrap_or(prev);
+                self.telemetry.emit(MemoryEvent::KairosRollover {
+                    yesterday: prev.format("%Y-%m-%d").to_string(),
+                    today: today.format("%Y-%m-%d").to_string(),
+                });
+            }
+            yesterday
+        } else {
+            None
+        };
+
+        FinalizeTurnReport {
+            skipped: false,
+            session_memory: Some(sm_outcome),
+            extract: Some(ex_outcome),
+            dream: Some(dr_outcome),
+            kairos_rollover,
+            notices: self.drain_user_notices(),
+        }
     }
 
     /// Per-turn auto-dream tick — TS parity with `executeAutoDream`
@@ -620,5 +759,91 @@ impl MemoryRuntime {
         };
 
         load_relevant_memories(&selected, &self.recall_state)
+    }
+}
+
+/// One main-agent tool call that may have written to disk. The engine
+/// extracts these from each finalised turn and passes them into
+/// [`MemoryRuntime::finalize_turn`] so memory's `classify_tool_write`
+/// pass (Gap 4) can decide whether to emit a `ManualEdit` notice.
+#[derive(Debug, Clone)]
+pub struct ToolWriteRecord {
+    pub tool_name: String,
+    pub file_path: PathBuf,
+    /// Whether the tool call returned success. Failed writes don't
+    /// produce notices (the file wasn't actually changed).
+    pub succeeded: bool,
+}
+
+/// Inputs to [`MemoryRuntime::finalize_turn`].
+///
+/// The engine pre-computes every field that depends on
+/// `MessageHistory` (cursors, tool-call counts, the fork-messages
+/// closure and the `has_memory_writes` closure inside `extract_input`)
+/// and hands them through this struct. The runtime then orchestrates
+/// the fan-out without re-walking history.
+pub struct FinalizeTurnContext {
+    /// Estimated token count of the current history (SM init/update gate).
+    pub estimated_tokens: i64,
+    /// Cumulative tool-call count since SM's last extraction cursor.
+    pub tool_calls_since_sm_cursor: i32,
+    /// Tool-call count in the last assistant turn — drives SM's
+    /// natural-break heuristic.
+    pub tool_calls_last_turn: i32,
+    /// UUID of the **last** message in history (any kind, not just
+    /// assistant). Becomes the new cursor on a successful extraction
+    /// for both SM and extract.
+    pub last_message_id: Option<String>,
+    /// `is_auto_compact_active` snapshot — when off, SM dispatch is
+    /// skipped entirely (its primary consumer is the SM-first compact
+    /// branch).
+    pub auto_compact_enabled: bool,
+    /// `--bare` / SDK headless mode flag. Suppresses every memory
+    /// fork so scripted invocations don't pay turn-end LLM costs.
+    pub bare_mode: bool,
+    /// True when this turn is running inside a subagent. Subagents
+    /// inherit but don't ADD to the parent's auto-memory.
+    pub is_subagent: bool,
+    /// Wall-clock at finalize time (passed in so tests stay
+    /// deterministic). Used for dream's time-gate + KAIROS rollover.
+    pub now_ms: i64,
+    /// Pre-built `TurnInput` for the extraction service. Holds the
+    /// lazy `fork_messages` and `has_memory_writes` closures the engine
+    /// captured against the history.
+    pub extract_input: crate::service::extract::TurnInput,
+    /// Main-agent writes this turn — picked up by Gap 4 toast.
+    pub recent_tool_writes: Vec<ToolWriteRecord>,
+}
+
+/// Result of one [`MemoryRuntime::finalize_turn`] call.
+///
+/// When `skipped == true` (bare mode or subagent), every other field
+/// is its `None` / empty default and the engine should not project
+/// anything into history.
+pub struct FinalizeTurnReport {
+    pub skipped: bool,
+    pub session_memory: Option<SessionMemoryOutcome>,
+    pub extract: Option<ExtractOutcome>,
+    pub dream: Option<DreamOutcome>,
+    /// Yesterday's date when KAIROS rollover fired this turn. The
+    /// engine archives the prior session transcript bucket on this
+    /// signal. Always `None` outside KAIROS mode.
+    pub kairos_rollover: Option<chrono::NaiveDate>,
+    /// User-visible "memory saved/improved/manually-edited/log-appended"
+    /// notices accumulated this turn. The engine projects one
+    /// `SystemMemorySavedMessage` per entry.
+    pub notices: Vec<crate::notice::MemoryUserNotice>,
+}
+
+impl FinalizeTurnReport {
+    pub fn skipped() -> Self {
+        Self {
+            skipped: true,
+            session_memory: None,
+            extract: None,
+            dream: None,
+            kairos_rollover: None,
+            notices: Vec::new(),
+        }
     }
 }

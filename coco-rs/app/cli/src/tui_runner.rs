@@ -2046,7 +2046,14 @@ async fn dispatch_slash_command(
                     let wire_entries: Vec<coco_types::MemoryDialogEntry> = entries
                         .into_iter()
                         .map(|e| {
-                            let exists = e.path.exists();
+                            let row_kind = if e.is_folder {
+                                coco_types::MemoryDialogRowKind::Folder { enabled: true }
+                            } else {
+                                coco_types::MemoryDialogRowKind::File {
+                                    exists: !e.is_new,
+                                    read_only: false,
+                                }
+                            };
                             coco_types::MemoryDialogEntry {
                                 path: e.path.display().to_string(),
                                 label: e.label,
@@ -2063,14 +2070,26 @@ async fn dispatch_slash_command(
                                     coco_commands::MemoryScope::ProjectLocal => {
                                         coco_types::MemoryDialogScope::ProjectLocal
                                     }
+                                    coco_commands::MemoryScope::ProjectConfig => {
+                                        coco_types::MemoryDialogScope::ProjectConfig
+                                    }
                                     coco_commands::MemoryScope::Subdir => {
                                         coco_types::MemoryDialogScope::Subdir
                                     }
+                                    coco_commands::MemoryScope::Imported => {
+                                        coco_types::MemoryDialogScope::Imported
+                                    }
+                                    coco_commands::MemoryScope::AutoMemFolder => {
+                                        coco_types::MemoryDialogScope::AutoMemFolder
+                                    }
+                                    coco_commands::MemoryScope::TeamMemFolder => {
+                                        coco_types::MemoryDialogScope::TeamMemFolder
+                                    }
+                                    coco_commands::MemoryScope::AgentMemFolder => {
+                                        coco_types::MemoryDialogScope::AgentMemFolder
+                                    }
                                 },
-                                row_kind: coco_types::MemoryDialogRowKind::File {
-                                    exists,
-                                    read_only: false,
-                                },
+                                row_kind,
                             }
                         })
                         .collect();

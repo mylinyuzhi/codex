@@ -25,8 +25,20 @@ use std::sync::Mutex;
 /// consolidations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticeVerb {
+    /// ExtractService wrote new memory files — primary turn-end
+    /// save event. TS: default `createMemorySavedMessage` verb.
     Saved,
+    /// DreamService merged / pruned existing memories — auto-dream
+    /// success. TS: `autoDream.ts:247` `verb: 'Improved'`.
     Improved,
+    /// Main agent (or user via `/memory` editor) directly edited a
+    /// memory file via `Edit`/`Write`/`NotebookEdit`. Emitted by the
+    /// engine's post-write classification pass — Gap 4 / TS
+    /// `useMemoryUpdateNotification`. Distinct from `Saved`/`Improved`
+    /// so the TUI can render it with a different color and copy
+    /// ("Memory updated: foo.md") that hints the user, not a subagent,
+    /// owned the change.
+    ManualEdit,
 }
 
 impl NoticeVerb {
@@ -34,6 +46,7 @@ impl NoticeVerb {
         match self {
             Self::Saved => "Saved",
             Self::Improved => "Improved",
+            Self::ManualEdit => "Updated",
         }
     }
 }

@@ -127,6 +127,19 @@ pub enum MemoryEvent {
     /// race on platforms where setting permissions atomically isn't
     /// always available.
     SessionMemoryPermsFailed { path: String },
+
+    /// KAIROS daily-log midnight rollover detected. The session
+    /// crossed midnight local time; the engine receives the
+    /// `Some(yesterday)` rollover signal so it can act on the date
+    /// flip. TS source-of-truth: `getDateChangeAttachments` +
+    /// `sessionTranscript.flushOnDateChange` (private TS module —
+    /// we mirror the *signal* only).
+    KairosRollover {
+        /// Day that just ended (`%Y-%m-%d`).
+        yesterday: String,
+        /// New active day (`%Y-%m-%d`).
+        today: String,
+    },
 }
 
 /// Reason auto-memory was disabled.
@@ -366,6 +379,12 @@ impl MemoryTelemetryEmitter for OtelEmitter {
             MemoryEvent::SessionMemoryPermsFailed { path: _ } => {
                 self.manager
                     .counter("coco_session_memory_perms_failed", 1, &[]);
+            }
+            MemoryEvent::KairosRollover {
+                yesterday: _,
+                today: _,
+            } => {
+                self.manager.counter("tengu_kairos_rollover", 1, &[]);
             }
         }
     }

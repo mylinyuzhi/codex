@@ -717,9 +717,12 @@ impl SwarmAgentHandle {
         // `dirs::home_dir()` can return `None` on minimal containers
         // (no `$HOME`, no passwd entry). The legacy code fell back to
         // `/tmp`, which silently routed memory lookups to the wrong
-        // directory. Skip per-agent memory injection entirely instead
-        // — better an empty memory section than fabricated paths.
-        let home = dirs::home_dir();
+        // User-scope per-agent memory follows `COCO_CONFIG_HOME` (via
+        // `global_config::config_home()`), NOT the system home dir.
+        // Multi-tenant / containerised setups where `~/.coco` is
+        // unwritable still get a usable agent-memory dir. Project /
+        // Local scopes are per-repo and ignore `config_home`.
+        let config_home = coco_config::global_config::config_home();
 
         // Per-agent memory block (TS parity:
         // `tools/AgentTool/loadAgentsDir.ts:484,728` + `loadPluginAgents.ts:207`).
@@ -732,24 +735,13 @@ impl SwarmAgentHandle {
         let memory_block = match (
             inject_memory,
             request.definition.as_deref().and_then(|d| d.memory_scope),
-            home.as_deref(),
         ) {
-            (true, Some(scope), Some(home_dir)) => {
-                Some(coco_memory::agent_memory::load_agent_memory_prompt(
-                    agent_type,
-                    scope,
-                    &cwd_for_prompt,
-                    home_dir,
-                ))
-            }
-            (true, Some(_), None) => {
-                tracing::warn!(
-                    target: "coco_coordinator",
-                    agent_type,
-                    "skipping per-agent memory injection: home_dir unavailable"
-                );
-                None
-            }
+            (true, Some(scope)) => Some(coco_memory::agent_memory::load_agent_memory_prompt(
+                agent_type,
+                scope,
+                &cwd_for_prompt,
+                &config_home,
+            )),
             _ => None,
         };
 

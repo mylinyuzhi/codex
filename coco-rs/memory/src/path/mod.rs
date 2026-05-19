@@ -9,6 +9,8 @@ mod validate;
 pub use resolve::MemoryDir;
 pub use scope::MemoryScope;
 pub use scope::SessionFileType;
+pub use scope::WriteClassification;
+pub use scope::classify_written_path;
 pub use scope::is_auto_managed_memory_file;
 pub use scope::is_auto_mem_file;
 pub use scope::memory_scope_for_path;
