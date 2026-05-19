@@ -460,6 +460,151 @@ impl TuiHarness {
             .collect()
     }
 
+    /// Number of cells in the engine-authoritative transcript. Tests
+    /// previously read `session.messages.len()` for the same probe;
+    /// after Phase 3d the legacy projection is gone and cells are the
+    /// only fact.
+    pub fn cell_count(&self) -> usize {
+        self.state.session.transcript.cells().len()
+    }
+
+    /// True iff the transcript has no cells.
+    pub fn cells_empty(&self) -> bool {
+        self.state.session.transcript.is_empty()
+    }
+
+    /// True iff any `UserText` cell exists. Synthetic XML wrappers
+    /// (`<local-command-stdout>` etc.) still count — same shape the
+    /// legacy `messages.iter().any(|m| m.role == User)` probe matched.
+    pub fn has_user_cell(&self) -> bool {
+        use coco_tui::state::CellKind;
+        self.state
+            .session
+            .transcript
+            .cells()
+            .iter()
+            .any(|c| matches!(c.kind, CellKind::UserText { .. }))
+    }
+
+    /// True iff any `AssistantText` cell exists.
+    pub fn has_assistant_text_cell(&self) -> bool {
+        use coco_tui::state::CellKind;
+        self.state
+            .session
+            .transcript
+            .cells()
+            .iter()
+            .any(|c| matches!(c.kind, CellKind::AssistantText { .. }))
+    }
+
+    /// Find the first `Message::ToolResult` cell whose `tool_name`
+    /// matches `name`. Returns `(output, is_error)` extracted from the
+    /// wrapped `LlmMessage::Tool` content. Equivalent to the legacy
+    /// probe `messages.iter().find_map(|m| match &m.content {
+    /// MessageContent::ToolSuccess { tool_name, output } if tool_name
+    /// == name => Some((output, false)), MessageContent::ToolError {
+    /// tool_name, error } if tool_name == name => Some((error, true)),
+    /// _ => None })`.
+    pub fn find_tool_result(&self, name: &str) -> Option<(String, bool)> {
+        use coco_messages::Message;
+        use coco_messages::ToolContent;
+        use coco_messages::ToolResultContentPart;
+        use coco_messages::ToolResultOutput;
+        use coco_tui::state::CellKind;
+        for cell in self.state.session.transcript.cells() {
+            if !matches!(cell.kind, CellKind::ToolResult { .. }) {
+                continue;
+            }
+            let Message::ToolResult(tr) = cell.source.as_ref() else {
+                continue;
+            };
+            let coco_messages::LlmMessage::Tool { content, .. } = &tr.message else {
+                continue;
+            };
+            let part = content.iter().find_map(|p| match p {
+                ToolContent::ToolResult(part) => Some(part),
+                _ => None,
+            });
+            let Some(part) = part else { continue };
+            if part.tool_name != name {
+                continue;
+            }
+            let output = match &part.output {
+                ToolResultOutput::Text { value, .. } => value.clone(),
+                ToolResultOutput::Json { value, .. } => value.to_string(),
+                ToolResultOutput::Content { value, .. } => value
+                    .iter()
+                    .filter_map(|p| match p {
+                        ToolResultContentPart::Text { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                ToolResultOutput::ErrorText { value, .. } => value.clone(),
+                ToolResultOutput::ErrorJson { value, .. } => value.to_string(),
+                ToolResultOutput::ExecutionDenied { reason, .. } => {
+                    reason.clone().unwrap_or_default()
+                }
+            };
+            return Some((output, tr.is_error));
+        }
+        None
+    }
+
+    /// Count of `Message::ToolResult` cells whose `tool_name` matches `name`.
+    pub fn tool_result_count(&self, name: &str) -> usize {
+        use coco_messages::Message;
+        use coco_messages::ToolContent;
+        use coco_tui::state::CellKind;
+        self.state
+            .session
+            .transcript
+            .cells()
+            .iter()
+            .filter(|cell| {
+                if !matches!(cell.kind, CellKind::ToolResult { .. }) {
+                    return false;
+                }
+                let Message::ToolResult(tr) = cell.source.as_ref() else {
+                    return false;
+                };
+                let coco_messages::LlmMessage::Tool { content, .. } = &tr.message else {
+                    return false;
+                };
+                content.iter().any(|p| match p {
+                    ToolContent::ToolResult(part) => part.tool_name == name,
+                    _ => false,
+                })
+            })
+            .count()
+    }
+
+    /// True iff any `AssistantText` cell's body contains `needle`.
+    pub fn assistant_text_contains(&self, needle: &str) -> bool {
+        use coco_tui::state::CellKind;
+        self.state.session.transcript.cells().iter().any(
+            |c| matches!(&c.kind, CellKind::AssistantText { text, .. } if text.contains(needle)),
+        )
+    }
+
+    /// `(role, text)` for every user/assistant text cell, in transcript
+    /// order. `role` is `"user"` or `"assistant"`. Tool cells, system
+    /// cells, and reasoning cells are skipped.
+    pub fn text_cells_in_order(&self) -> Vec<(&'static str, &str)> {
+        use coco_tui::state::CellKind;
+        self.state
+            .session
+            .transcript
+            .cells()
+            .iter()
+            .filter_map(|c| match &c.kind {
+                CellKind::UserText { text } => Some(("user", text.as_str())),
+                CellKind::AssistantText { text, .. } => Some(("assistant", text.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Path inside the harness workdir — useful for hooks that need
     /// to write a trace file outside the engine's view.
     pub fn workdir(&self) -> PathBuf {

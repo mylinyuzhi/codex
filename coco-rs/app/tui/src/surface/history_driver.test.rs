@@ -5,10 +5,12 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
+use uuid::Uuid;
 
 use super::*;
 use crate::display_settings::SyntaxHighlighting;
 use crate::presentation::styles::UiStyles;
+use crate::state::derive::test_helpers;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
 use crate::theme::Theme;
 
@@ -20,11 +22,11 @@ fn driver_emit_append_only_uses_finalized_transcript_renderer() {
     ]);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 6, 8, 1));
-    let messages = vec![ChatMessage::assistant_text("a1", "hello")];
+    let cells = vec![test_helpers::assistant_text_cell("hello")];
     let mut driver = SurfaceHistoryDriver::new();
 
     let outcome = driver
-        .emit_append_only(&mut terminal, header(), &messages, options(&theme, 8))
+        .emit_append_only(&mut terminal, header(), &cells, options(&theme, 8))
         .expect("emit");
 
     assert_eq!(
@@ -85,11 +87,11 @@ fn driver_replay_all_replaces_owned_history_and_marks_stream_replay() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 6, 8, 1));
     terminal.note_history_rows_inserted(6);
-    let messages = vec![ChatMessage::assistant_text("a1", "world")];
+    let cells = vec![test_helpers::assistant_text_cell("world")];
     let mut driver = SurfaceHistoryDriver::new();
 
     let outcome = driver
-        .replay_all(&mut terminal, header(), &messages, options(&theme, 8), true)
+        .replay_all(&mut terminal, header(), &cells, options(&theme, 8), true)
         .expect("replay");
 
     assert_eq!(
@@ -123,20 +125,14 @@ fn driver_replay_all_reanchors_viewport_to_replayed_history_bottom() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 26, 48, 4));
     terminal.note_history_rows_inserted(26);
-    let messages = vec![
-        ChatMessage::user_text("u1", "hello"),
-        ChatMessage::assistant_text("a1", "short reply"),
+    let cells = vec![
+        test_helpers::user_text_cell(Uuid::new_v4(), "hello"),
+        test_helpers::assistant_text_cell("short reply"),
     ];
     let mut driver = SurfaceHistoryDriver::new();
 
     let outcome = driver
-        .replay_all(
-            &mut terminal,
-            header(),
-            &messages,
-            options(&theme, 48),
-            false,
-        )
+        .replay_all(&mut terminal, header(), &cells, options(&theme, 48), false)
         .expect("replay");
 
     let HistoryEmissionOutcome::Replayed { rows, .. } = outcome else {

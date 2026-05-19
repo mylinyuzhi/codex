@@ -9,10 +9,22 @@ use coco_types::SlashCommandInfo;
 use coco_types::TuiOnlyEvent;
 
 use super::handle;
+use crate::command::SystemPushKind;
 use crate::state::AppState;
-use crate::state::MessageContent;
 use crate::state::SuggestionKind;
 use crate::state::ui::ToastSeverity;
+
+/// Probe: does `pending_system_pushes` carry an `Informational` push
+/// whose body contains `needle`? After Phase 3d (§3) the TUI handler
+/// enqueues a `SystemPushKind` for the App loop to dispatch as
+/// `UserCommand::PushSystemMessage`; the engine pushes the actual
+/// `SystemMessage::Informational` cell back through `MessageAppended`.
+/// Tests therefore peek at the enqueue point rather than `session.messages`.
+fn pending_system_push_contains(state: &AppState, needle: &str) -> bool {
+    state.session.pending_system_pushes.iter().any(
+        |p| matches!(p, SystemPushKind::Informational { message, .. } if message.contains(needle)),
+    )
+}
 
 fn slash(name: &str) -> SlashCommandInfo {
     SlashCommandInfo {
@@ -115,13 +127,7 @@ fn memory_file_opened_is_toast_and_transcript_visible() {
     assert!(consumed);
     assert_eq!(state.ui.toasts.len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Info);
-    assert!(
-        state
-            .session
-            .messages
-            .iter()
-            .any(|m| matches!(&m.content, MessageContent::SystemText(text) if text.contains("/tmp/CLAUDE.md")))
-    );
+    assert!(pending_system_push_contains(&state, "/tmp/CLAUDE.md"));
 }
 
 #[test]
@@ -138,13 +144,7 @@ fn memory_file_open_failed_is_toast_and_transcript_visible() {
     assert!(consumed);
     assert_eq!(state.ui.toasts.len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
-    assert!(
-        state
-            .session
-            .messages
-            .iter()
-            .any(|m| matches!(&m.content, MessageContent::SystemText(text) if text.contains("permission denied")))
-    );
+    assert!(pending_system_push_contains(&state, "permission denied"));
 }
 
 #[test]
@@ -160,9 +160,7 @@ fn plan_file_opened_is_toast_and_transcript_visible() {
     assert!(consumed);
     assert_eq!(state.ui.toasts.len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Info);
-    assert!(state.session.messages.iter().any(
-        |m| matches!(&m.content, MessageContent::SystemText(text) if text.contains("/tmp/plan.md"))
-    ));
+    assert!(pending_system_push_contains(&state, "/tmp/plan.md"));
 }
 
 #[test]
@@ -179,13 +177,7 @@ fn plan_file_open_failed_is_toast_and_transcript_visible() {
     assert!(consumed);
     assert_eq!(state.ui.toasts.len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
-    assert!(
-        state
-            .session
-            .messages
-            .iter()
-            .any(|m| matches!(&m.content, MessageContent::SystemText(text) if text.contains("editor missing")))
-    );
+    assert!(pending_system_push_contains(&state, "editor missing"));
 }
 
 #[test]

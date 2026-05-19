@@ -7,9 +7,9 @@ use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
-use crate::state::session::ChatMessage;
-use crate::state::session::ChatRole;
+use crate::state::derive::test_helpers;
 use crate::state::session::TokenUsage;
+use crate::state::transcript_view::CellKind;
 use crate::state::ui::Toast;
 
 // ── Permission-mode cycling ──
@@ -121,9 +121,8 @@ fn test_new_state_defaults() {
     assert!(!state.is_plan_mode());
     assert!(!state.session.fast_mode);
     assert_eq!(state.session.turn_count, 0);
-    assert_eq!(state.session.current_turn_message_start, None);
     assert_eq!(state.session.current_turn_started_at, None);
-    assert_eq!(state.session.messages.len(), 0);
+    assert!(state.session.transcript.is_empty());
 }
 
 #[test]
@@ -272,18 +271,15 @@ fn test_toast_lifecycle() {
 fn test_session_messages() {
     let mut state = AppState::new();
 
-    state
-        .session
-        .add_message(ChatMessage::user_text("1", "hello"));
-    state
-        .session
-        .add_message(ChatMessage::assistant_text("2", "hi there"));
+    test_helpers::push_user_text(&mut state.session, "1", "hello");
+    test_helpers::push_assistant_text(&mut state.session, "hi there");
 
-    assert_eq!(state.session.messages.len(), 2);
-    assert_eq!(
-        state.session.last_message().map(|m| m.role),
-        Some(ChatRole::Assistant)
-    );
+    let cells = state.session.transcript.cells();
+    assert_eq!(cells.len(), 2);
+    assert!(matches!(
+        cells.last().map(|c| &c.kind),
+        Some(CellKind::AssistantText { .. })
+    ));
 }
 
 #[test]

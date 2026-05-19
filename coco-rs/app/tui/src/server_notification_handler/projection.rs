@@ -1,12 +1,11 @@
 //! Shared projections from transient UI state into transcript messages.
 //!
-//! Phase 3c: streaming flushes that previously mirrored engine pushes
-//! into `session.messages` are gone. The engine's `Message::Assistant`
-//! pushes flow through `MessageAppended` → `TranscriptView`; the
-//! viewport merge in `surface/viewport.rs` renders them from
-//! transcript directly. This helper now only clears the
-//! `ui.streaming` overlay buffer so the streaming-tail widget stops
-//! drawing the live deltas once the engine has committed them.
+//! The engine's `Message::Assistant` pushes flow through
+//! `MessageAppended` → `TranscriptView`; the viewport merge in
+//! `surface/viewport.rs` renders them from transcript directly. This
+//! helper only clears the `ui.streaming` overlay buffer so the
+//! streaming-tail widget stops drawing the live deltas once the engine
+//! has committed them.
 
 use crate::state::AppState;
 

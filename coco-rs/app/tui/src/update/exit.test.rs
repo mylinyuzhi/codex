@@ -8,13 +8,12 @@ use super::on_interrupt;
 use super::on_request_exit;
 use crate::constants::DOUBLE_PRESS_TIMEOUT;
 use crate::state::AppState;
-use crate::state::ChatMessage;
+use crate::state::derive::test_helpers;
 
 fn idle_state_with_history() -> AppState {
     let mut s = AppState::new();
-    s.session.add_message(ChatMessage::user_text("u1", "hello"));
-    s.session
-        .add_message(ChatMessage::assistant_text("a1", "hi"));
+    test_helpers::push_user_text(&mut s.session, "u1", "hello");
+    test_helpers::push_assistant_text(&mut s.session, "hi");
     s
 }
 

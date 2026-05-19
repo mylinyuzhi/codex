@@ -7,7 +7,6 @@ use unicode_width::UnicodeWidthStr;
 use crate::constants;
 use crate::i18n::t;
 use crate::state::AppState;
-use crate::state::MessageContent;
 use crate::state::SubagentStatus;
 use crate::state::TokenUsage;
 use crate::state::session::TaskEntryStatus;
@@ -380,15 +379,16 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         lines.push(ActivityLine { spans });
 
         if state.ui.show_teammate_message_preview {
-            // Source from merged view so engine-pushed teammate
-            // Informational entries (Commit 2 routes them via
-            // `UserCommand::PushSystemMessage`) appear in the preview.
-            let messages = state.session.transcript_messages();
-            for preview in last_preview_lines(&messages, &agent.agent_id, 3) {
+            // Engine-pushed teammate Informational entries (Commit 2
+            // routes them via `UserCommand::PushSystemMessage` with
+            // `title = "teammate:<agent_id>"`) land in the engine's
+            // `MessageHistory` and surface as cells.
+            let cells = state.session.transcript.cells();
+            for preview in last_preview_lines(cells, &agent.agent_id, 3) {
                 lines.push(ActivityLine {
                     spans: vec![
                         ActivitySpan::raw("    "),
-                        ActivitySpan::tone(preview.to_string(), ActivityTone::Dim),
+                        ActivitySpan::tone(preview, ActivityTone::Dim),
                     ],
                 });
             }
@@ -474,20 +474,28 @@ fn append_tool_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
     lines.push(ActivityLine::blank());
 }
 
-fn last_preview_lines<'a>(
-    messages: &'a [crate::state::ChatMessage],
+/// Walk the engine-authoritative cells in reverse for the latest
+/// `n` non-blank teammate-attributed preview lines. Teammate messages
+/// arrive as `SystemMessage::Informational` cells whose title is
+/// `teammate:<agent_id>` — that convention is set in
+/// `server_notification_handler::protocol::push_teammate_message`.
+fn last_preview_lines(
+    cells: &[crate::state::transcript_view::RenderedCell],
     teammate_id: &str,
     n: usize,
-) -> Vec<&'a str> {
-    let mut lines: Vec<&str> = Vec::new();
-    for msg in messages.iter().rev() {
-        let MessageContent::TeammateMessage { teammate, content } = &msg.content else {
+) -> Vec<String> {
+    let prefix = format!("teammate:{teammate_id}");
+    let mut lines: Vec<String> = Vec::new();
+    for cell in cells.iter().rev() {
+        let coco_messages::Message::System(coco_messages::SystemMessage::Informational(info)) =
+            cell.source.as_ref()
+        else {
             continue;
         };
-        if teammate != teammate_id {
+        if info.title != prefix {
             continue;
         }
-        for line in content.lines().rev() {
+        for line in info.message.lines().rev() {
             if lines.len() >= n {
                 break;
             }
@@ -495,7 +503,7 @@ fn last_preview_lines<'a>(
             if trimmed.is_empty() {
                 continue;
             }
-            lines.push(trimmed);
+            lines.push(trimmed.to_string());
         }
         if lines.len() >= n {
             break;

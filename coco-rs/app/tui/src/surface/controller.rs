@@ -113,15 +113,12 @@ impl NativeSurfaceController {
 
         let options = history_options(state, width);
         let session_header = || session_header_lines(state, width);
-        // Phase 3c: feed the native history driver with the merged
-        // view (legacy session.messages + transcript-derived cells).
+        // Phase 3d (§4): feed the native history driver with the
+        // engine-authoritative `&[RenderedCell]` slice directly.
         // Engine-pushed content (cancel marker, resume scrollback,
-        // etc.) flows through transcript and becomes visible without
-        // a parallel TUI add_message push.
-        let merged_messages = crate::state::derive::merged_chat_messages(
-            &state.session.messages,
-            state.session.transcript.cells(),
-        );
+        // hooks, …) flows through `MessageAppended` → `TranscriptView`
+        // → `cells()` without a legacy `session.messages` overlay.
+        let cells = state.session.transcript.cells();
         let history = if !plan.native_history_enabled() {
             HistoryEmissionOutcome::Noop
         } else {
@@ -131,22 +128,19 @@ impl NativeSurfaceController {
                 self.history.replay_all_capped(
                     terminal,
                     session_header(),
-                    &merged_messages,
+                    cells,
                     options,
                     stream_active,
                 )?
             } else {
-                let outcome = self.history.emit_append_only(
-                    terminal,
-                    session_header(),
-                    &merged_messages,
-                    options,
-                )?;
+                let outcome =
+                    self.history
+                        .emit_append_only(terminal, session_header(), cells, options)?;
                 if matches!(outcome, HistoryEmissionOutcome::ReplayRequired) {
                     self.history.replay_all_capped(
                         terminal,
                         session_header(),
-                        &merged_messages,
+                        cells,
                         options,
                         stream_active,
                     )?

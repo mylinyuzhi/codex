@@ -1,10 +1,10 @@
 //! Empty-submit guard: `update::edit::submit` short-circuits when the
 //! input buffer is empty — no `UserCommand::SubmitInput` is sent, no
-//! user `ChatMessage` is appended, the engine never runs. Belt-and-
-//! suspenders defense against accidental Enter on an idle prompt.
+//! user cell is appended, the engine never runs. Belt-and-suspenders
+//! defense against accidental Enter on an idle prompt.
 //! Verifies all three:
 //!
-//! - `state.session.messages` stays empty (no phantom user entry).
+//! - Engine transcript stays empty (no phantom user cell).
 //! - `state.ui.input.text` stays empty (nothing to flush).
 //! - The event channel stays silent for a short grace window —
 //!   the engine should not have been invoked.
@@ -33,10 +33,10 @@ pub async fn run() -> Result<()> {
     // entry the production TUI uses).
     harness.submit("").await;
     assert!(
-        harness.state.session.messages.is_empty(),
-        "empty_submit: messages should stay empty after empty submit, \
-         got {} entries",
-        harness.state.session.messages.len(),
+        harness.cells_empty(),
+        "empty_submit: transcript should stay empty after empty submit, \
+         got {} cells",
+        harness.cell_count(),
     );
 
     // Path 2: a real Enter keystroke on an empty buffer.
@@ -46,10 +46,10 @@ pub async fn run() -> Result<()> {
     // all be absent.
     let _ = enter_changed;
     assert!(
-        harness.state.session.messages.is_empty(),
-        "empty_submit: empty Enter should not append a user message, \
-         got {} entries",
-        harness.state.session.messages.len(),
+        harness.cells_empty(),
+        "empty_submit: empty Enter should not append a user cell, \
+         got {} cells",
+        harness.cell_count(),
     );
     assert_eq!(
         harness.state.ui.input.text(),

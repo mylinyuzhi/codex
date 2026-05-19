@@ -14,7 +14,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use coco_tui::state::session::ChatRole;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
 
@@ -132,33 +131,17 @@ pub async fn run() -> Result<()> {
     assert!(ok, "input_editing: SessionResult flagged is_error");
 
     // Engine received the *edited* text — `hello`, not `hellp` or `hello xyz`.
-    let saw_edited = harness
-        .state
-        .session
-        .messages
+    let cells = harness.text_cells_in_order();
+    let saw_edited = cells
         .iter()
-        .any(|m| matches!(m.role, ChatRole::User) && m.text_content() == "hello");
+        .any(|(role, text)| *role == "user" && *text == "hello");
     assert!(
         saw_edited,
-        "input_editing: edited user prompt `hello` not in session.messages \
-         (got: {:?})",
-        harness
-            .state
-            .session
-            .messages
-            .iter()
-            .map(|m| (m.role, m.text_content().to_string()))
-            .collect::<Vec<_>>(),
+        "input_editing: edited user prompt `hello` not in transcript (got: {cells:?})",
     );
-    let saw_assistant = harness
-        .state
-        .session
-        .messages
-        .iter()
-        .any(|m| matches!(m.role, ChatRole::Assistant) && m.text_content().contains("got it"));
     assert!(
-        saw_assistant,
-        "input_editing: scripted assistant reply not in session.messages",
+        harness.assistant_text_contains("got it"),
+        "input_editing: scripted assistant reply not in transcript",
     );
     assert_eq!(
         harness.model.call_count(),

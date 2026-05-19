@@ -1,27 +1,26 @@
-//! Pure derivation of `RenderedCell`s from engine `Message`s, plus a
-//! lossy back-adapter that materializes `ChatMessage`s for the legacy
-//! render pipeline.
+//! Pure derivation of `RenderedCell`s from engine `Message`s.
 //!
 //! Hygiene rule: lives in `coco-tui`, not `coco-messages`. The adapter
 //! is one-directional (`Message` → cells) and does not mutate the
 //! source message. No theme / viewport / hover state is consulted —
 //! that lives in the renderer at draw time.
 //!
-//! See `engine-tui-unified-transcript-plan.md` §2 (Layer Ownership).
+//! Phase 3d (§4) note: the renderer pipeline consumes `&[RenderedCell]`
+//! end-to-end (ChatWidget, history_lines, surface controller/viewport).
+//! The legacy `ChatMessage` projection that used to live here is gone —
+//! engine `MessageHistory` is the only source of truth.
+//!
+//! See `engine-tui-unified-transcript-plan.md` §2 (Layer Ownership) and
+//! `engine-tui-phase3d-renderer-migration-plan.md` §4.
 
 use std::sync::Arc;
 
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
-use coco_messages::SystemMessage;
 use coco_messages::UserContent;
 use uuid::Uuid;
 
-use super::session::ChatMessage;
-use super::session::ChatRole;
-use super::session::MessageContent;
-use super::session::ToolUseStatus;
 use super::transcript_view::CellKind;
 use super::transcript_view::RenderedCell;
 use super::transcript_view::SystemCellKind;
@@ -49,13 +48,13 @@ pub fn message_to_cells(msg: Arc<Message>) -> Vec<RenderedCell> {
             )]
         }
         Message::ToolResult(tr) => {
-            // call_id retrieval depends on internal shape; surface the
-            // UUID for now so the cell renders. Renderer can re-fetch
-            // call_id from `cell.source` (Arc<Message>) when needed.
+            // `tool_use_id` is the canonical call_id field on
+            // `ToolResultMessage`; surfacing it on the cell lets the
+            // projection pair tool-use ↔ tool-result rows by id.
             vec![cell(
                 tr.uuid,
                 CellKind::ToolResult {
-                    call_id: String::new(),
+                    call_id: tr.tool_use_id.clone(),
                 },
                 msg.clone(),
             )]
@@ -119,6 +118,8 @@ fn assistant_cells(
                 } else {
                     CellKind::AssistantThinking {
                         text: r.text.clone(),
+                        duration_ms: None,
+                        reasoning_tokens: None,
                     }
                 }
             }
@@ -133,222 +134,355 @@ fn assistant_cells(
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Legacy back-adapter: RenderedCell → ChatMessage
-// ─────────────────────────────────────────────────────────────────────
-//
-// Until Phase 3d migrates the chat render path to consume `RenderedCell`
-// directly, the existing `ChatWidget` + `presentation::transcript`
-// pipeline reads `[ChatMessage]`. This adapter materializes a
-// ChatMessage shape from cells so the engine-pushed transcript stream
-// can flow into the legacy renderer unmodified.
-//
-// The conversion is lossy in fields CellKind doesn't track
-// (`input_preview`, exit codes, file diff hunks, …). The renderer
-// degrades gracefully — empty strings render as empty rows rather
-// than crashing.
-
-/// Render-friendly `ChatMessage` derived from a `RenderedCell`.
-/// Returns `None` for cell kinds that should not surface in the
-/// transcript (`Progress`, `Tombstone`, micro-compact boundaries).
-pub fn cell_to_chat_message(cell: &RenderedCell) -> Option<ChatMessage> {
-    use CellKind as CK;
-    use ChatRole as CR;
-    use MessageContent as MC;
-    use SystemCellKind as SK;
-
-    let (role, content) = match &cell.kind {
-        CK::UserText { text } => (CR::User, MC::Text(text.clone())),
-        CK::UserAttachment => (
-            CR::User,
-            MC::Attachment {
-                attachment_type: String::new(),
-                preview: String::new(),
-            },
-        ),
-        CK::AssistantText { text, .. } => (CR::Assistant, MC::AssistantText(text.clone())),
-        CK::AssistantThinking { text } => (
-            CR::Assistant,
-            MC::Thinking {
-                content: text.clone(),
-                duration_ms: None,
-                reasoning_tokens: None,
-            },
-        ),
-        CK::AssistantRedactedThinking => (CR::Assistant, MC::RedactedThinking),
-        CK::ToolUse { call_id, tool_name } => (
-            CR::Assistant,
-            MC::ToolUse {
-                tool_name: tool_name.clone(),
-                call_id: call_id.clone(),
-                input_preview: String::new(),
-                status: ToolUseStatus::Completed,
-            },
-        ),
-        CK::ToolResult { .. } => (
-            CR::Tool,
-            MC::ToolSuccess {
-                tool_name: String::new(),
-                output: String::new(),
-            },
-        ),
-        CK::Attachment => (
-            CR::User,
-            MC::Attachment {
-                attachment_type: String::new(),
-                preview: String::new(),
-            },
-        ),
-        CK::ToolUseSummary { summary } => (CR::System, MC::SystemText(summary.clone())),
-        CK::Progress | CK::Tombstone => return None,
-        CK::System(sk) => match sk {
-            SK::UserInterruption { for_tool_use } => (
-                CR::System,
-                MC::InterruptionMarker {
-                    for_tool_use: *for_tool_use,
-                },
-            ),
-            SK::CompactBoundary => (CR::System, MC::CompactBoundary),
-            SK::MicrocompactBoundary => return None,
-            SK::ApiError => extract_api_error(&cell.source)
-                .map(|c| (CR::System, c))
-                .unwrap_or((CR::System, MC::SystemText(String::new()))),
-            SK::Informational => extract_informational(&cell.source)
-                .map(|c| (CR::System, c))
-                .unwrap_or((CR::System, MC::SystemText(String::new()))),
-            SK::LocalCommand => extract_local_command(&cell.source)
-                .map(|c| (CR::User, c))
-                .unwrap_or((CR::System, MC::SystemText(String::new()))),
-            // The remaining SystemCellKind variants don't have a
-            // dedicated MessageContent variant — render them as
-            // SystemText with a generic body for now. Renderer
-            // refinement comes when the chat pipeline switches to
-            // CellKind dispatch directly.
-            _ => (CR::System, MC::SystemText(String::new())),
-        },
+/// Extract a compact textual preview of the tool call's input JSON for
+/// the row labelled `🔨 <tool>(<preview>)`. Walks the wrapping assistant
+/// message's content parts for the `ToolCallPart` whose `tool_call_id`
+/// matches and renders its JSON input as a single-line string. Returns
+/// an empty string when the cell source isn't an assistant message or
+/// the matching tool call cannot be found.
+pub(crate) fn extract_tool_call_input_preview(msg: &Message, call_id: &str) -> String {
+    let Message::Assistant(asst) = msg else {
+        return String::new();
     };
-
-    let (is_meta, is_compact_summary, is_visible_in_transcript_only, permission_mode) =
-        extract_message_metadata(&cell.source);
-
-    Some(ChatMessage {
-        id: cell.message_uuid.to_string(),
-        role,
-        content,
-        is_meta,
-        created_at_ms: 0,
-        is_compact_summary,
-        is_visible_in_transcript_only,
-        permission_mode,
-    })
+    let LlmMessage::Assistant { content, .. } = &asst.message else {
+        return String::new();
+    };
+    content
+        .iter()
+        .find_map(|part| match part {
+            AssistantContent::ToolCall(tc) if tc.tool_call_id == call_id => {
+                // Render JSON-string inputs unwrapped so the
+                // `🔨 Bash(ls -la)` row reads naturally — the JSON
+                // representation would surface as `"ls -la"` with
+                // literal quotes, which is noise for the user.
+                Some(match &tc.input {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
-/// Adapter wrapper: convert every cell that surfaces in the transcript
-/// into a ChatMessage. Cells that filter out (Progress / Tombstone /
-/// MicrocompactBoundary) are skipped.
-pub fn cells_to_chat_messages(cells: &[RenderedCell]) -> Vec<ChatMessage> {
-    cells.iter().filter_map(cell_to_chat_message).collect()
-}
+/// Extract `(tool_name, output_text)` from a `Message::ToolResult`.
+/// Pure data accessor — consumed by `render_tool::try_render` to
+/// build the result row without going through `MessageContent`.
+/// Concatenates the `ToolResultOutput` variants to text (JSON parts
+/// serialise to their string representation).
+pub(crate) fn tool_result_output(msg: &Message) -> Option<(String, String)> {
+    use coco_messages::ToolContent;
+    use coco_messages::ToolResultContentPart;
+    use coco_messages::ToolResultOutput;
 
-/// Render-time merge of legacy `session.messages` and transcript-
-/// derived cells. Engine-authoritative versions (from transcript)
-/// supersede TUI optimistic entries on matching `id`; transcript-only
-/// items (cells with no corresponding `session.messages` entry by id)
-/// append at the end. Used by the chat renderer call sites in
-/// `surface/viewport.rs` and `surface/history_lines.rs`.
-///
-/// Phase 3c: this is the bridge that lets engine-pushed content
-/// (`SystemMessage::UserInterruption`, resume-replayed `Message::User`
-/// / `Message::Assistant`, hook outputs, etc.) reach the legacy
-/// ChatMessage-based renderer without rewriting every `MessageContent`
-/// match arm. Phase 3d will switch renderers to consume `RenderedCell`
-/// directly and drop this adapter along with the
-/// `ChatMessage` / `MessageContent` types.
-pub fn merged_chat_messages(legacy: &[ChatMessage], cells: &[RenderedCell]) -> Vec<ChatMessage> {
-    use std::collections::HashMap;
-    use std::collections::HashSet;
-
-    let derived = cells_to_chat_messages(cells);
-    let derived_by_id: HashMap<&str, &ChatMessage> =
-        derived.iter().map(|m| (m.id.as_str(), m)).collect();
-    let legacy_ids: HashSet<&str> = legacy.iter().map(|m| m.id.as_str()).collect();
-
-    let mut out: Vec<ChatMessage> = Vec::with_capacity(legacy.len() + derived.len());
-    for tui_msg in legacy {
-        if let Some(d) = derived_by_id.get(tui_msg.id.as_str()) {
-            out.push((*d).clone());
-        } else {
-            out.push(tui_msg.clone());
-        }
-    }
-    for d in &derived {
-        if !legacy_ids.contains(d.id.as_str()) {
-            out.push(d.clone());
-        }
-    }
-    out
-}
-
-fn extract_message_metadata(
-    msg: &Message,
-) -> (bool, bool, bool, Option<coco_types::PermissionMode>) {
-    match msg {
-        Message::User(u) => (
-            u.is_virtual,
-            u.is_compact_summary,
-            u.is_visible_in_transcript_only,
-            u.permission_mode,
-        ),
-        Message::Assistant(_) => (false, false, false, None),
-        Message::System(_) => (true, false, false, None),
-        Message::Attachment(_) => (false, false, false, None),
-        Message::ToolResult(_) => (false, false, false, None),
-        Message::Progress(_) | Message::Tombstone(_) | Message::ToolUseSummary(_) => {
-            (false, false, false, None)
-        }
-    }
-}
-
-fn extract_api_error(msg: &Message) -> Option<MessageContent> {
-    let Message::System(SystemMessage::ApiError(e)) = msg else {
+    let Message::ToolResult(tr) = msg else {
         return None;
     };
-    Some(MessageContent::ApiError {
-        error: e.error.clone(),
-        retryable: false,
-        status_code: e.status_code,
-    })
-}
-
-fn extract_informational(msg: &Message) -> Option<MessageContent> {
-    let Message::System(SystemMessage::Informational(info)) = msg else {
+    let LlmMessage::Tool { content, .. } = &tr.message else {
         return None;
     };
-    let text = if info.title.is_empty() {
-        info.message.clone()
-    } else {
-        format!("{}: {}", info.title, info.message)
+    let part = content.iter().find_map(|p| match p {
+        ToolContent::ToolResult(part) => Some(part),
+        _ => None,
+    })?;
+    let tool_name = part.tool_name.clone();
+    let output = match &part.output {
+        ToolResultOutput::Text { value, .. } => value.clone(),
+        ToolResultOutput::Json { value, .. } => value.to_string(),
+        ToolResultOutput::Content { value, .. } => value
+            .iter()
+            .filter_map(|p| match p {
+                ToolResultContentPart::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        ToolResultOutput::ErrorText { value, .. } => value.clone(),
+        ToolResultOutput::ErrorJson { value, .. } => value.to_string(),
+        ToolResultOutput::ExecutionDenied { reason, .. } => reason.clone().unwrap_or_default(),
     };
-    Some(MessageContent::SystemText(text))
+    Some((tool_name, output))
 }
 
-/// Project `SystemMessage::LocalCommand { command, output }` into the
-/// legacy `MessageContent::BashOutput` shape so the existing renderer
-/// surfaces both the input + output of `!cmd` from a single engine
-/// message. Mirrors what the TUI used to do via two separate
-/// `add_message(user_bash_input + user_bash_output)` calls prior to
-/// `engine-tui-unified-transcript-plan.md` Commit 2.
-fn extract_local_command(msg: &Message) -> Option<MessageContent> {
-    let Message::System(SystemMessage::LocalCommand(lc)) = msg else {
-        return None;
-    };
-    let body = if lc.output.is_empty() {
-        format!("$ {}", lc.command)
-    } else {
-        format!("$ {}\n{}", lc.command, lc.output)
-    };
-    Some(MessageContent::BashOutput {
-        output: body,
-        exit_code: 0,
-    })
+/// Map a raw id string to a `Uuid`. Returns the parsed UUID when the
+/// string is a valid UUID; otherwise derives a deterministic v5 UUID
+/// from the bytes so test fixtures that use synthetic ids
+/// (`"msg-1"` / `"tool-call-1"`) land on stable cell UUIDs and
+/// downstream lookups (rewind picker, transcript anchor) can fall
+/// back to the same mapping. Production callers always pass valid
+/// UUIDs and take the early-return path.
+pub(crate) fn id_to_uuid(id: &str) -> Uuid {
+    Uuid::parse_str(id).unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, id.as_bytes()))
+}
+
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    //! Helpers for tests that need to construct `RenderedCell`s without
+    //! going through the engine `MessageHistory`.
+
+    use std::sync::Arc;
+
+    use coco_messages::AssistantContent;
+    use coco_messages::TextContent;
+    use coco_messages::create_assistant_message;
+    use coco_messages::create_user_message_with_uuid;
+    use coco_types::TokenUsage;
+    use uuid::Uuid;
+
+    use super::super::transcript_view::RenderedCell;
+    use super::message_to_cells;
+
+    /// One-cell `RenderedCell` for a user text turn keyed by `uuid`.
+    pub fn user_text_cell(uuid: Uuid, text: &str) -> RenderedCell {
+        let msg = create_user_message_with_uuid(uuid, text);
+        message_to_cells(Arc::new(msg))
+            .into_iter()
+            .next()
+            .expect("user message yields a cell")
+    }
+
+    /// Single-cell `RenderedCell` for a plain-text assistant turn.
+    pub fn assistant_text_cell(text: &str) -> RenderedCell {
+        let msg = create_assistant_message(
+            vec![AssistantContent::Text(TextContent::new(text))],
+            "test-model",
+            TokenUsage::default(),
+        );
+        message_to_cells(Arc::new(msg))
+            .into_iter()
+            .next()
+            .expect("assistant message yields a cell")
+    }
+
+    /// Single-cell `RenderedCell` for a `SystemMessage::Informational`
+    /// with the meta-preview marker set.
+    pub fn info_cell(title: &str, message: &str) -> RenderedCell {
+        let msg = coco_messages::create_info_message(title, message);
+        message_to_cells(Arc::new(msg))
+            .into_iter()
+            .next()
+            .expect("info message yields a cell")
+    }
+
+    /// Synthetic thinking-cell for tests that exercise the assistant
+    /// thinking renderer. The owned engine message carries the
+    /// reasoning text so renderers can rehydrate metadata via
+    /// `cell.source` if needed.
+    pub fn assistant_thinking_cell(text: &str) -> RenderedCell {
+        use coco_messages::ReasoningContent;
+        let msg = create_assistant_message(
+            vec![AssistantContent::Reasoning(ReasoningContent::new(text))],
+            "test-model",
+            TokenUsage::default(),
+        );
+        // Take the first (and only) cell — thinking content yields a
+        // single `AssistantThinking` cell.
+        message_to_cells(Arc::new(msg))
+            .into_iter()
+            .next()
+            .expect("thinking message yields a cell")
+    }
+
+    /// Synthetic thinking cell with reasoning-token metadata already
+    /// stamped (as if `TranscriptView::record_reasoning_tokens` had
+    /// fired). Used by renderer tests that need to assert on the full
+    /// `Thinking · <duration> · <tokens> reasoning tokens` header.
+    pub fn assistant_thinking_cell_with_metadata(
+        text: &str,
+        duration_ms: i64,
+        reasoning_tokens: i64,
+    ) -> RenderedCell {
+        let mut cell = assistant_thinking_cell(text);
+        if let super::super::transcript_view::CellKind::AssistantThinking {
+            duration_ms: dms,
+            reasoning_tokens: rt,
+            ..
+        } = &mut cell.kind
+        {
+            *dms = Some(duration_ms);
+            *rt = Some(reasoning_tokens);
+        }
+        cell
+    }
+
+    /// Override the message uuid on a freshly-constructed cell so tests
+    /// can correlate stable IDs across asserts. The wrapped `Message`
+    /// is left intact — that's the engine-authoritative copy and
+    /// renderers read `cell.message_uuid` separately.
+    pub fn with_uuid(mut cell: RenderedCell, uuid: Uuid) -> RenderedCell {
+        cell.message_uuid = uuid;
+        cell
+    }
+
+    /// Assistant `ToolUse` cell. `input` is rendered as JSON-encoded
+    /// args (matching engine wire shape). Tests typically pair this
+    /// with [`tool_result_cell`] using the same `call_id`.
+    pub fn tool_use_cell(call_id: &str, tool_name: &str, input: serde_json::Value) -> RenderedCell {
+        use coco_messages::ToolCallContent;
+        let msg = create_assistant_message(
+            vec![AssistantContent::ToolCall(ToolCallContent::new(
+                call_id, tool_name, input,
+            ))],
+            "test-model",
+            TokenUsage::default(),
+        );
+        message_to_cells(Arc::new(msg))
+            .into_iter()
+            .find(|c| {
+                matches!(
+                    c.kind,
+                    super::super::transcript_view::CellKind::ToolUse { .. }
+                )
+            })
+            .expect("tool-use yields a cell")
+    }
+
+    /// Tool result cell — text output, non-error.
+    pub fn tool_result_cell(call_id: &str, tool_name: &str, output: &str) -> RenderedCell {
+        use coco_messages::create_tool_result_message;
+        use coco_types::ToolId;
+        let msg = create_tool_result_message(
+            call_id,
+            tool_name,
+            ToolId::Custom("test".into()),
+            output,
+            /*is_error*/ false,
+        );
+        message_to_cells(Arc::new(msg))
+            .into_iter()
+            .next()
+            .expect("tool-result yields a cell")
+    }
+
+    // ── Push helpers ─────────────────────────────────────────────────
+    //
+    // Fixture-friendly wrappers that push a synthesized engine message
+    // straight into `SessionState::transcript`. The production write
+    // path (`MessageAppended` → `TranscriptView::on_message_appended`)
+    // is the only writer — these helpers reuse it so renderer tests
+    // see exactly what the live session would.
+
+    use super::super::session::SessionState;
+    use coco_messages::Message;
+
+    #[allow(dead_code)]
+    fn push(state: &mut SessionState, msg: Message) {
+        state.transcript.on_message_appended(Arc::new(msg));
+    }
+
+    /// Push a user text message using a deterministic UUID derived
+    /// from `id`. Returns the synthesized cell uuid so callers can
+    /// build `TranscriptCellId::message` anchors.
+    #[allow(dead_code)]
+    pub fn push_user_text(state: &mut SessionState, id: &str, text: &str) -> Uuid {
+        let uuid = super::id_to_uuid(id);
+        push(
+            state,
+            coco_messages::create_user_message_with_uuid(uuid, text),
+        );
+        uuid
+    }
+
+    /// Push an assistant text response. The cell uuid is auto-generated
+    /// and returned — callers rarely need it but a stable handle is
+    /// occasionally useful for anchor lookups.
+    #[allow(dead_code)]
+    pub fn push_assistant_text(state: &mut SessionState, text: &str) -> Uuid {
+        use coco_messages::AssistantContent;
+        use coco_messages::TextContent;
+        use coco_messages::create_assistant_message;
+        let msg = create_assistant_message(
+            vec![AssistantContent::Text(TextContent::new(text))],
+            "test-model",
+            coco_types::TokenUsage::default(),
+        );
+        let uuid = match &msg {
+            Message::Assistant(a) => a.uuid,
+            _ => unreachable!("create_assistant_message yields Assistant"),
+        };
+        push(state, msg);
+        uuid
+    }
+
+    /// Push an assistant `Thinking` cell with reasoning metadata.
+    /// Replays `TranscriptView::record_reasoning_tokens` so the cell
+    /// carries `duration_ms` + `reasoning_tokens` after derivation.
+    #[allow(dead_code)]
+    pub fn push_assistant_thinking(
+        state: &mut SessionState,
+        text: &str,
+        duration_ms: i64,
+        reasoning_tokens: i64,
+    ) -> Uuid {
+        use coco_messages::AssistantContent;
+        use coco_messages::ReasoningContent;
+        use coco_messages::create_assistant_message;
+        let msg = create_assistant_message(
+            vec![AssistantContent::Reasoning(ReasoningContent::new(text))],
+            "test-model",
+            coco_types::TokenUsage::default(),
+        );
+        let uuid = match &msg {
+            Message::Assistant(a) => a.uuid,
+            _ => unreachable!("create_assistant_message yields Assistant"),
+        };
+        push(state, msg);
+        state
+            .transcript
+            .record_reasoning_tokens(reasoning_tokens, Some(duration_ms));
+        uuid
+    }
+
+    /// Push an assistant tool-call invocation. `input_preview` is
+    /// encoded as a JSON string so `extract_tool_call_input_preview`
+    /// renders it unwrapped (matches what TS-side fixtures expect).
+    #[allow(dead_code)]
+    pub fn push_tool_use(
+        state: &mut SessionState,
+        call_id: &str,
+        tool_name: &str,
+        input_preview: &str,
+    ) {
+        use coco_messages::AssistantContent;
+        use coco_messages::ToolCallContent;
+        use coco_messages::create_assistant_message;
+        let input = serde_json::Value::String(input_preview.to_string());
+        let msg = create_assistant_message(
+            vec![AssistantContent::ToolCall(ToolCallContent::new(
+                call_id, tool_name, input,
+            ))],
+            "test-model",
+            coco_types::TokenUsage::default(),
+        );
+        push(state, msg);
+    }
+
+    /// Push a tool result. `is_error` toggles success vs error path.
+    #[allow(dead_code)]
+    pub fn push_tool_result(
+        state: &mut SessionState,
+        call_id: &str,
+        tool_name: &str,
+        output: &str,
+        is_error: bool,
+    ) {
+        use coco_messages::create_tool_result_message;
+        use coco_types::ToolId;
+        let msg = create_tool_result_message(
+            call_id,
+            tool_name,
+            ToolId::Custom("test".into()),
+            output,
+            is_error,
+        );
+        push(state, msg);
+    }
+
+    /// Push a `SystemMessage::Informational` cell with `Info` level.
+    /// `title` may be empty.
+    #[allow(dead_code)]
+    pub fn push_info(state: &mut SessionState, title: &str, message: &str) {
+        let msg = coco_messages::create_info_message(title, message);
+        push(state, msg);
+    }
 }

@@ -44,44 +44,40 @@ pub async fn run() -> Result<()> {
 
     // History order: U1, A1, U2, A2, U3, A3 — interleaving is what
     // makes the chat-panel render coherent.
-    let messages = &harness.state.session.messages;
-    let mut user_idxs = Vec::new();
-    let mut assistant_idxs = Vec::new();
-    for (i, m) in messages.iter().enumerate() {
-        match m.role {
-            coco_tui::state::session::ChatRole::User => user_idxs.push(i),
-            coco_tui::state::session::ChatRole::Assistant => assistant_idxs.push(i),
-            _ => {}
-        }
-    }
+    let text_cells = harness.text_cells_in_order();
+    let user_cells: Vec<&str> = text_cells
+        .iter()
+        .filter_map(|(role, text)| (*role == "user").then_some(*text))
+        .collect();
+    let assistant_cells: Vec<&str> = text_cells
+        .iter()
+        .filter_map(|(role, text)| (*role == "assistant").then_some(*text))
+        .collect();
     assert_eq!(
-        user_idxs.len(),
+        user_cells.len(),
         3,
-        "multi_turn: expected 3 user messages, got {} (all messages: {})",
-        user_idxs.len(),
-        messages.len()
+        "multi_turn: expected 3 user cells, got {} (all cells: {})",
+        user_cells.len(),
+        text_cells.len()
     );
     assert_eq!(
-        assistant_idxs.len(),
+        assistant_cells.len(),
         3,
-        "multi_turn: expected 3 assistant messages, got {}",
-        assistant_idxs.len()
+        "multi_turn: expected 3 assistant cells, got {}",
+        assistant_cells.len()
     );
 
     for (i, prompt) in prompts.iter().enumerate() {
-        let m = &messages[user_idxs[i]];
         assert_eq!(
-            m.text_content(),
-            *prompt,
-            "multi_turn: user message {i} text mismatch"
+            user_cells[i], *prompt,
+            "multi_turn: user cell {i} text mismatch"
         );
     }
     for (i, expected) in expected_replies.iter().enumerate() {
-        let m = &messages[assistant_idxs[i]];
         assert!(
-            m.text_content().contains(expected),
+            assistant_cells[i].contains(expected),
             "multi_turn: assistant {i} text missing `{expected}`, got `{}`",
-            m.text_content()
+            assistant_cells[i]
         );
     }
 

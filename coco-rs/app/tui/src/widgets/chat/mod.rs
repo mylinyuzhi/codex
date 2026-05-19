@@ -1,7 +1,10 @@
-//! Chat history widget — renders all 30+ message types.
+//! Chat history widget — renders the engine-authoritative
+//! `&[RenderedCell]` slice via per-category renderer submodules.
 //!
-//! TS: src/components/messages/ (41 files, 6K LOC) — each React component
-//! is replaced by a match arm in one of the `render_*` submodules.
+//! Phase 3d (§6): `ChatMessage` / `MessageContent` are gone. The widget
+//! and its renderers dispatch on `cell.kind` + `cell.source:
+//! Arc<Message>` directly; the back-projection adapter has been
+//! retired along with the duplicate type system.
 
 mod render_assistant;
 mod render_system;
@@ -30,8 +33,6 @@ use crate::presentation::thinking::format_duration_seconds;
 use crate::presentation::thinking::render_thinking_block;
 use crate::presentation::transcript::ActiveTranscriptCell;
 use crate::presentation::transcript::TRANSCRIPT_LINE_CHAR_CAP;
-use crate::presentation::transcript::TaskNotificationBatchKind;
-use crate::presentation::transcript::TaskNotificationTone;
 use crate::presentation::transcript::ToolOutputPreview;
 use crate::presentation::transcript::TranscriptCell;
 use crate::presentation::transcript::TranscriptPresentationInput;
@@ -39,39 +40,46 @@ use crate::presentation::transcript::TranscriptProjectionOptions;
 use crate::presentation::transcript::TranscriptSourceCell;
 use crate::presentation::transcript::tool_output_preview;
 use crate::presentation::transcript::transcript_presentation;
-use crate::state::session::ChatMessage;
-use crate::state::session::MessageContent;
 use crate::state::session::ToolExecution;
-use crate::state::session::ToolUseStatus;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
+use crate::state::transcript_view::SystemCellKind;
 use crate::state::ui::StreamingState;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
+
 pub(crate) const TOOL_OUTPUT_PREVIEW_ROWS: usize = 5;
 
 /// Chat history widget.
+///
+/// Phase 3d (§6): consumes the engine-authoritative `&[RenderedCell]`
+/// slice from `session.transcript.cells()` end-to-end. The per-category
+/// renderers (`render_user/_assistant/_tool/_system`) dispatch on
+/// `cell.kind` + `cell.source` directly.
 pub struct ChatWidget<'a> {
-    messages: &'a [ChatMessage],
+    cells: &'a [RenderedCell],
     scroll_offset: i32,
     streaming: Option<&'a StreamingState>,
     show_thinking: bool,
     show_system_reminders: bool,
     spinner_frame: &'a str,
-    tool_executions: &'a [ToolExecution],
+    pub(crate) tool_executions: &'a [ToolExecution],
     collapsed_tools: Option<&'a HashSet<String>>,
-    styles: UiStyles<'a>,
-    syntax_highlighting: SyntaxHighlighting,
-    width: u16,
+    pub(crate) styles: UiStyles<'a>,
+    pub(crate) syntax_highlighting: SyntaxHighlighting,
+    pub(crate) width: u16,
     /// Keybinding handle for rendering live shortcuts (e.g. the
     /// `…(<chord> to see full summary)` hint). `None` falls back to
     /// the default literal — used in tests that build a ChatWidget
     /// without an `AppState`.
     pub(crate) kb_handle: Option<&'a crate::keybinding_resolver::KeybindingHandle>,
+    pub(crate) show_thinking_internal: bool,
 }
 
 impl<'a> ChatWidget<'a> {
-    pub fn new(messages: &'a [ChatMessage], styles: UiStyles<'a>) -> Self {
+    pub fn new(cells: &'a [RenderedCell], styles: UiStyles<'a>) -> Self {
         Self {
-            messages,
+            cells,
             scroll_offset: 0,
             streaming: None,
             show_thinking: false,
@@ -83,6 +91,7 @@ impl<'a> ChatWidget<'a> {
             syntax_highlighting: SyntaxHighlighting::Enabled,
             width: 80,
             kb_handle: None,
+            show_thinking_internal: false,
         }
     }
 
@@ -101,6 +110,7 @@ impl<'a> ChatWidget<'a> {
     }
     pub fn show_thinking(mut self, show: bool) -> Self {
         self.show_thinking = show;
+        self.show_thinking_internal = show;
         self
     }
     pub fn show_system_reminders(mut self, show: bool) -> Self {
@@ -129,12 +139,12 @@ impl<'a> ChatWidget<'a> {
     }
     /// Build lines that own their text for native history emission.
     pub fn build_lines_owned(&self) -> Vec<Line<'static>> {
-        self.build_lines().into_iter().map(own_line).collect()
+        self.build_lines()
     }
 
-    fn build_lines(&self) -> Vec<Line<'a>> {
+    fn build_lines(&self) -> Vec<Line<'static>> {
         let presentation = transcript_presentation(TranscriptPresentationInput {
-            messages: self.messages,
+            cells: self.cells,
             options: TranscriptProjectionOptions {
                 show_system_reminders: self.show_system_reminders,
             },
@@ -142,7 +152,7 @@ impl<'a> ChatWidget<'a> {
             show_thinking: self.show_thinking,
             tool_executions: self.tool_executions,
         });
-        let mut lines: Vec<Line> = Vec::new();
+        let mut lines: Vec<Line<'static>> = Vec::new();
 
         for cell in presentation.cells {
             self.render_transcript_cell(&cell, false, false, &mut lines);
@@ -153,19 +163,23 @@ impl<'a> ChatWidget<'a> {
 
     fn render_transcript_cell(
         &self,
-        cell: &TranscriptSourceCell<'a>,
+        cell: &TranscriptSourceCell<'_>,
         expanded: bool,
         selected: bool,
-        lines: &mut Vec<Line<'a>>,
+        lines: &mut Vec<Line<'static>>,
     ) {
         let start_line = lines.len();
         match cell {
             TranscriptSourceCell::Committed(TranscriptCell::MetaPreview { index }) => {
-                self.render_meta_preview(&self.messages[*index], lines);
+                if let Some(c) = self.cells.get(*index) {
+                    self.render_meta_preview(c, lines);
+                }
             }
-            TranscriptSourceCell::Committed(TranscriptCell::Message { index }) => {
-                self.render_message_with_expansion(&self.messages[*index], expanded, lines);
-                lines.push(Line::default());
+            TranscriptSourceCell::Committed(TranscriptCell::Cell { index }) => {
+                if let Some(c) = self.cells.get(*index) {
+                    self.render_cell_with_expansion(c, expanded, lines);
+                    lines.push(Line::default());
+                }
             }
             TranscriptSourceCell::Committed(TranscriptCell::ToolCall {
                 invocation,
@@ -185,31 +199,11 @@ impl<'a> ChatWidget<'a> {
                     .dim(),
                 ));
                 for j in *start..*end {
-                    self.render_message(&self.messages[j], lines);
+                    if let Some(c) = self.cells.get(j) {
+                        self.render_cell(c, lines);
+                    }
                 }
                 lines.push(Line::default());
-            }
-            TranscriptSourceCell::Committed(TranscriptCell::HookBatch {
-                count,
-                hook_name,
-                has_error,
-                ..
-            }) => {
-                self.render_hook_batch(*count, hook_name, *has_error, lines);
-            }
-            TranscriptSourceCell::Committed(TranscriptCell::TaskNotification {
-                summary,
-                tone,
-                ..
-            }) => {
-                self.render_task_notification(summary, *tone, lines);
-            }
-            TranscriptSourceCell::Committed(TranscriptCell::TaskNotificationBatch {
-                count,
-                kind,
-                ..
-            }) => {
-                self.render_task_notification_batch(*count, *kind, lines);
             }
             TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(view)) => {
                 self.render_streaming(view.clone(), lines);
@@ -239,81 +233,77 @@ impl<'a> ChatWidget<'a> {
         invocation: Option<usize>,
         result: Option<usize>,
         expanded: bool,
-        lines: &mut Vec<Line<'a>>,
+        lines: &mut Vec<Line<'static>>,
     ) {
         if expanded {
-            if let Some(index) = invocation {
-                self.render_message(&self.messages[index], lines);
+            if let Some(index) = invocation
+                && let Some(c) = self.cells.get(index)
+            {
+                self.render_cell(c, lines);
             }
-            if let Some(index) = result {
-                self.render_message(&self.messages[index], lines);
+            if let Some(index) = result
+                && let Some(c) = self.cells.get(index)
+            {
+                self.render_cell(c, lines);
             }
             return;
         }
 
-        let invocation = invocation.and_then(|index| self.messages.get(index));
-        let result = result.and_then(|index| self.messages.get(index));
+        let invocation_cell = invocation.and_then(|index| self.cells.get(index));
+        let result_cell = result.and_then(|index| self.cells.get(index));
 
-        if let Some(msg) = invocation
-            && let MessageContent::ToolUse {
-                tool_name,
-                call_id,
-                input_preview,
-                status,
-            } = &msg.content
+        if let Some(cell) = invocation_cell
+            && let CellKind::ToolUse { tool_name, call_id } = &cell.kind
         {
-            self.render_tool_call_header(tool_name, call_id, input_preview, *status, lines);
-            if let Some(result) = result {
-                self.render_tool_result_summary(&result.content, lines);
+            self.render_tool_call_header(tool_name, call_id, &cell.source, lines);
+            if let Some(rc) = result_cell {
+                self.render_tool_result_summary(rc, lines);
             }
             return;
         }
 
-        if let Some(result) = result {
-            self.render_tool_result_summary(&result.content, lines);
+        if let Some(rc) = result_cell {
+            self.render_tool_result_summary(rc, lines);
         }
     }
 
-    fn render_message_with_expansion(
+    fn render_cell_with_expansion(
         &self,
-        msg: &'a ChatMessage,
+        cell: &RenderedCell,
         expanded: bool,
-        lines: &mut Vec<Line<'a>>,
+        lines: &mut Vec<Line<'static>>,
     ) {
         if !expanded {
-            match &msg.content {
-                MessageContent::Thinking { .. } => {
+            match &cell.kind {
+                CellKind::AssistantThinking { .. } => {
                     if !self.show_thinking {
-                        self.render_message(msg, lines);
+                        self.render_cell(cell, lines);
                         return;
                     }
                 }
-                MessageContent::ToolSuccess { .. }
-                | MessageContent::ToolError { .. }
-                | MessageContent::ToolRejected { .. }
-                | MessageContent::ToolCanceled { .. } => {
-                    self.render_tool_result_summary(&msg.content, lines);
+                CellKind::ToolResult { .. } => {
+                    self.render_tool_result_summary(cell, lines);
                     return;
                 }
                 _ => {}
             }
         }
-        self.render_message(msg, lines);
+        self.render_cell(cell, lines);
     }
 
     fn render_tool_call_header(
         &self,
         tool_name: &str,
         call_id: &str,
-        input_preview: &str,
-        _status: ToolUseStatus,
-        lines: &mut Vec<Line<'a>>,
+        source: &std::sync::Arc<coco_messages::Message>,
+        lines: &mut Vec<Line<'static>>,
     ) {
         let execution = self
             .tool_executions
             .iter()
             .find(|tool| tool.call_id == call_id);
-        let preview = single_line_capped(input_preview, 96);
+        let input_preview = crate::state::derive::extract_tool_call_input_preview(source, call_id);
+        let preview = single_line_capped(&input_preview, 96);
         let elapsed = execution
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
@@ -330,37 +320,32 @@ impl<'a> ChatWidget<'a> {
         lines.push(Line::from(spans));
     }
 
-    fn render_tool_result_summary(&self, content: &'a MessageContent, lines: &mut Vec<Line<'a>>) {
-        match content {
-            MessageContent::ToolSuccess { output, .. } => {
-                self.render_output_preview(output, lines);
-            }
-            MessageContent::ToolError { error, .. } => {
-                lines.push(result_line(
-                    format!(
-                        "error: {}",
-                        single_line_capped(error, TRANSCRIPT_LINE_CHAR_CAP)
-                    ),
-                    self.styles.error(),
-                ));
-            }
-            MessageContent::ToolRejected { reason, .. } => {
-                lines.push(result_line(
-                    format!(
-                        "rejected: {}",
-                        single_line_capped(reason, TRANSCRIPT_LINE_CHAR_CAP)
-                    ),
-                    self.styles.warning(),
-                ));
-            }
-            MessageContent::ToolCanceled { .. } => {
-                lines.push(result_line("canceled".to_string(), self.styles.dim()));
-            }
-            _ => {}
+    fn render_tool_result_summary(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
+        let CellKind::ToolResult { .. } = &cell.kind else {
+            return;
+        };
+        let coco_messages::Message::ToolResult(tr) = cell.source.as_ref() else {
+            return;
+        };
+        let Some((_tool_name, output)) =
+            crate::state::derive::tool_result_output(cell.source.as_ref())
+        else {
+            return;
+        };
+        if tr.is_error {
+            lines.push(result_line(
+                format!(
+                    "error: {}",
+                    single_line_capped(&output, TRANSCRIPT_LINE_CHAR_CAP)
+                ),
+                self.styles.error(),
+            ));
+        } else {
+            self.render_output_preview(&output, lines);
         }
     }
 
-    fn render_output_preview(&self, output: &'a str, lines: &mut Vec<Line<'a>>) {
+    pub(crate) fn render_output_preview(&self, output: &str, lines: &mut Vec<Line<'static>>) {
         match tool_output_preview(output, TOOL_OUTPUT_PREVIEW_ROWS) {
             ToolOutputPreview::Empty => {
                 lines.push(result_line("(no output)".to_string(), self.styles.dim()));
@@ -417,74 +402,13 @@ impl<'a> ChatWidget<'a> {
         format!("({chord} to expand)")
     }
 
-    fn render_hook_batch(
-        &self,
-        count: usize,
-        hook_name: &str,
-        has_error: bool,
-        lines: &mut Vec<Line<'a>>,
-    ) {
-        let color = if has_error {
-            self.styles.warning()
-        } else {
-            self.styles.accent()
-        };
-        lines.push(Line::from(vec![
-            Span::raw("  ⚙ ").fg(color),
-            Span::raw(hook_name.to_string()).fg(self.styles.dim()),
-            Span::raw(": ").fg(self.styles.dim()),
-            Span::raw(t!("chat.hook_batch", count = count).to_string()).fg(color),
-        ]));
-        lines.push(Line::default());
-    }
-
-    fn render_task_notification(
-        &self,
-        summary: &str,
-        tone: TaskNotificationTone,
-        lines: &mut Vec<Line<'a>>,
-    ) {
-        let color = match tone {
-            TaskNotificationTone::Completed => self.styles.success(),
-            TaskNotificationTone::Failed => self.styles.error(),
-            TaskNotificationTone::Killed => self.styles.warning(),
-            TaskNotificationTone::Unknown => self.styles.dim(),
-        };
-        lines.push(Line::from(vec![
-            Span::raw("  ● ").fg(color),
-            Span::raw(summary.to_string()).fg(color),
-        ]));
-        lines.push(Line::default());
-    }
-
-    fn render_task_notification_batch(
-        &self,
-        count: usize,
-        kind: TaskNotificationBatchKind,
-        lines: &mut Vec<Line<'a>>,
-    ) {
-        let label = match kind {
-            TaskNotificationBatchKind::BackgroundBashCompleted => {
-                t!("chat.background_bash_batch", count = count).to_string()
-            }
-            TaskNotificationBatchKind::TeammateShutdown => {
-                t!("chat.teammate_shutdown_batch", count = count).to_string()
-            }
-        };
-        lines.push(Line::from(vec![
-            Span::raw("  ● ").fg(self.styles.success()),
-            Span::raw(label).fg(self.styles.dim()),
-        ]));
-        lines.push(Line::default());
-    }
-
     /// Render a single-line collapsed preview for a meta (system reminder)
-    /// message. Keeps the user aware that system content exists without
+    /// cell. Keeps the user aware that system content exists without
     /// taking vertical space.
-    fn render_meta_preview(&self, msg: &'a ChatMessage, lines: &mut Vec<Line<'a>>) {
+    fn render_meta_preview(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
         const PREVIEW_CHARS: usize = 50;
-        let category = meta_category(&msg.content);
-        let raw = msg.text_content();
+        let category = meta_category(&cell.kind);
+        let raw = meta_preview_text(cell);
         let single_line: String = raw.lines().next().unwrap_or("").to_string();
         let trimmed: String = single_line.split_whitespace().collect::<Vec<_>>().join(" ");
         let preview = if trimmed.chars().count() > PREVIEW_CHARS {
@@ -500,17 +424,17 @@ impl<'a> ChatWidget<'a> {
         ]));
     }
 
-    fn render_message(&self, msg: &'a ChatMessage, lines: &mut Vec<Line<'a>>) {
+    fn render_cell(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
         // Dispatch to the first category whose renderer handles the variant.
         // Each submodule returns None when the variant is outside its scope,
         // keeping the individual match statements exhaustive-by-category.
-        render_user::try_render(self, &msg.content, lines)
-            .or_else(|| render_assistant::try_render(self, &msg.content, lines))
-            .or_else(|| render_tool::try_render(self, &msg.content, lines))
-            .or_else(|| render_system::try_render(self, &msg.content, lines));
+        render_user::try_render(self, cell, lines)
+            .or_else(|| render_assistant::try_render(self, cell, lines))
+            .or_else(|| render_tool::try_render(self, cell, lines))
+            .or_else(|| render_system::try_render(self, cell, lines));
     }
 
-    fn render_streaming(&self, view: StreamingTailView<'_>, lines: &mut Vec<Line<'a>>) {
+    fn render_streaming(&self, view: StreamingTailView<'_>, lines: &mut Vec<Line<'static>>) {
         for block in view.blocks {
             match block {
                 StreamingTailBlock::AssistantText(content) => {
@@ -534,7 +458,7 @@ impl<'a> ChatWidget<'a> {
         }
     }
 
-    fn render_streaming_text(&self, content: &str, lines: &mut Vec<Line<'a>>) {
+    fn render_streaming_text(&self, content: &str, lines: &mut Vec<Line<'static>>) {
         let mut md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
             content,
             self.styles,
@@ -577,110 +501,66 @@ impl Widget for ChatWidget<'_> {
 
 // ── Shared helpers ──
 
-fn own_line(line: Line<'_>) -> Line<'static> {
-    let spans: Vec<Span<'static>> = line
-        .spans
-        .into_iter()
-        .map(|s| Span::styled(s.content.into_owned(), s.style))
-        .collect();
-    Line::from(spans)
-        .style(line.style)
-        .alignment(line.alignment.unwrap_or_default())
-}
-
-/// Parsed teammate message from XML tags.
-///
-/// TS: `parseTeammateMessages(text)` in UserTeammateMessage.tsx
-pub(super) struct ParsedTeammateMessage {
-    pub(super) teammate_id: String,
-    pub(super) color: Option<String>,
-    pub(super) summary: Option<String>,
-    pub(super) content: String,
-}
-
-/// Parse XML-tagged teammate messages.
-///
-/// Format: `<teammate_message teammate_id="..." color="..." summary="...">content</teammate_message>`
-pub(super) fn parse_teammate_xml(text: &str) -> Vec<ParsedTeammateMessage> {
-    let mut results = Vec::new();
-    let mut remaining = text;
-
-    while let Some(start) = remaining.find("<teammate_message ") {
-        let after_start = &remaining[start..];
-        let Some(tag_end) = after_start.find('>') else {
-            break;
-        };
-        let tag = &after_start[..tag_end];
-
-        let teammate_id = extract_attr(tag, "teammate_id").unwrap_or_default();
-        let color = extract_attr(tag, "color");
-        let summary = extract_attr(tag, "summary");
-
-        let content_start = start + tag_end + 1;
-        let close_tag = "</teammate_message>";
-        let content_end = remaining[content_start..]
-            .find(close_tag)
-            .map(|pos| content_start + pos)
-            .unwrap_or(remaining.len());
-
-        let content = remaining[content_start..content_end].trim().to_string();
-
-        results.push(ParsedTeammateMessage {
-            teammate_id,
-            color,
-            summary,
-            content,
-        });
-
-        remaining = if content_end + close_tag.len() <= remaining.len() {
-            &remaining[content_end + close_tag.len()..]
-        } else {
-            ""
-        };
-    }
-
-    results
-}
-
-/// Extract an attribute value from an XML-like tag.
-fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
-    let pattern = format!("{attr_name}=\"");
-    let start = tag.find(&pattern)?;
-    let value_start = start + pattern.len();
-    let value_end = tag[value_start..].find('"')? + value_start;
-    Some(tag[value_start..value_end].to_string())
-}
-
-/// Short category label for a collapsed meta preview. Mirrors the
-/// bracketed prefix TS uses so users can identify what they hid (e.g.
-/// `[api]`, `[hook]`, `[system]`).
-fn meta_category(content: &MessageContent) -> &'static str {
-    match content {
-        MessageContent::SystemText(_) => "system",
-        MessageContent::ApiError { .. } => "api",
-        MessageContent::RateLimit { .. } => "rate-limit",
-        MessageContent::Shutdown { .. }
-        | MessageContent::ShutdownRequest { .. }
-        | MessageContent::ShutdownRejected { .. } => "shutdown",
-        MessageContent::HookSuccess { .. }
-        | MessageContent::HookNonBlockingError { .. }
-        | MessageContent::HookBlockingError { .. }
-        | MessageContent::HookCancelled { .. }
-        | MessageContent::HookSystemMessage { .. }
-        | MessageContent::HookAdditionalContext { .. }
-        | MessageContent::HookStoppedContinuation { .. }
-        | MessageContent::HookAsyncResponse { .. } => "hook",
-        MessageContent::PlanApproval { .. } => "plan",
-        MessageContent::CompactBoundary => "compact",
-        MessageContent::CompactSummary { .. } => "compact",
-        MessageContent::Advisor { .. } => "advisor",
-        MessageContent::TaskAssignment { .. } => "task",
-        MessageContent::ResourceUpdate { .. } => "mcp",
+/// Short category label for a meta-preview row. Categorizes by
+/// `CellKind` / system-cell sub-variant so users can identify what's
+/// hidden by the system-reminder collapse.
+fn meta_category(kind: &CellKind) -> &'static str {
+    match kind {
+        CellKind::System(SystemCellKind::Informational) => "system",
+        CellKind::System(SystemCellKind::ApiError) => "api",
+        CellKind::System(SystemCellKind::CompactBoundary) => "compact",
+        CellKind::System(SystemCellKind::PermissionRetry) => "permission",
+        CellKind::System(SystemCellKind::BridgeStatus) => "bridge",
+        CellKind::System(SystemCellKind::MemorySaved) => "memory",
+        CellKind::System(SystemCellKind::AwaySummary) => "away",
+        CellKind::System(SystemCellKind::AgentsKilled) => "agents",
+        CellKind::System(SystemCellKind::ApiMetrics) => "metrics",
+        CellKind::System(SystemCellKind::StopHookSummary) => "hook",
+        CellKind::System(SystemCellKind::TurnDuration) => "turn",
+        CellKind::System(SystemCellKind::ScheduledTaskFire) => "schedule",
+        CellKind::ToolUseSummary { .. } => "summary",
         _ => "meta",
     }
 }
 
-fn result_line<'a>(text: String, color: ratatui::style::Color) -> Line<'a> {
+/// Best-effort short text for the meta-preview row. Walks
+/// `cell.source` for the human-readable payload of each
+/// `SystemMessage` sub-variant.
+fn meta_preview_text(cell: &RenderedCell) -> String {
+    use coco_messages::Message;
+    use coco_messages::SystemMessage as SM;
+    if let CellKind::ToolUseSummary { summary } = &cell.kind {
+        return summary.clone();
+    }
+    let Message::System(sm) = cell.source.as_ref() else {
+        return String::new();
+    };
+    match sm {
+        SM::Informational(info) => {
+            if info.title.is_empty() {
+                info.message.clone()
+            } else {
+                format!("{}: {}", info.title, info.message)
+            }
+        }
+        SM::ApiError(e) => e.error.clone(),
+        SM::CompactBoundary(_) => String::new(),
+        SM::PermissionRetry(m) => format!("{} · {}", m.tool_name, m.message),
+        SM::BridgeStatus(m) => m.message.clone().unwrap_or_default(),
+        SM::LocalCommand(lc) => lc.command.clone(),
+        SM::UserInterruption(_)
+        | SM::MicrocompactBoundary(_)
+        | SM::MemorySaved(_)
+        | SM::AwaySummary(_)
+        | SM::AgentsKilled(_)
+        | SM::ApiMetrics(_)
+        | SM::StopHookSummary(_)
+        | SM::TurnDuration(_)
+        | SM::ScheduledTaskFire(_) => String::new(),
+    }
+}
+
+fn result_line(text: String, color: ratatui::style::Color) -> Line<'static> {
     Line::from(vec![Span::raw("  └ ").fg(color), Span::raw(text).fg(color)])
 }
 
@@ -698,7 +578,7 @@ fn tool_tone_color(
     }
 }
 
-fn output_result_line<'a>(text: String, color: ratatui::style::Color, first: bool) -> Line<'a> {
+fn output_result_line(text: String, color: ratatui::style::Color, first: bool) -> Line<'static> {
     let prefix = if first { "  └ " } else { "    " };
     Line::from(vec![Span::raw(prefix).fg(color), Span::raw(text).fg(color)])
 }
@@ -749,42 +629,6 @@ fn truncate_chars(text: &str, max: usize) -> String {
 
 pub(super) fn transcript_safe_line(line: &str) -> String {
     truncate_chars(line, TRANSCRIPT_LINE_CHAR_CAP)
-}
-
-/// Format a resource URI for display.
-///
-/// TS `formatUri()`: file:// URIs show just the filename; other URIs
-/// render truncated at 40 chars with a horizontal-ellipsis suffix.
-pub(super) fn format_resource_target(uri: &str) -> String {
-    if let Some(path) = uri.strip_prefix("file://") {
-        return path
-            .rsplit('/')
-            .find(|s| !s.is_empty())
-            .unwrap_or(path)
-            .to_string();
-    }
-    if uri.chars().count() > 40 {
-        let mut s = uri.chars().take(39).collect::<String>();
-        s.push('\u{2026}');
-        s
-    } else {
-        uri.to_string()
-    }
-}
-
-/// Map agent color name to ratatui Color.
-pub(super) fn teammate_color_to_ratatui(color_name: &str) -> ratatui::style::Color {
-    match color_name {
-        "red" => ratatui::style::Color::Red,
-        "blue" => ratatui::style::Color::Blue,
-        "green" => ratatui::style::Color::Green,
-        "yellow" => ratatui::style::Color::Yellow,
-        "purple" | "magenta" => ratatui::style::Color::Magenta,
-        "orange" => ratatui::style::Color::LightRed,
-        "pink" => ratatui::style::Color::LightMagenta,
-        "cyan" => ratatui::style::Color::Cyan,
-        _ => ratatui::style::Color::Reset,
-    }
 }
 
 #[cfg(test)]

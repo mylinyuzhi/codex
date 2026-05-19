@@ -25,7 +25,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use coco_tui::state::session::ChatRole;
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
 
@@ -59,23 +58,11 @@ pub async fn run() -> Result<()> {
     );
 
     // The final assistant text reached the chat.
-    let saw_body = harness
-        .state
-        .session
-        .messages
-        .iter()
-        .any(|m| matches!(m.role, ChatRole::Assistant) && m.text_content().contains(body));
     assert!(
-        saw_body,
+        harness.assistant_text_contains(body),
         "thinking_block: assistant text body `{body}` missing — \
-         got messages: {:?}",
-        harness
-            .state
-            .session
-            .messages
-            .iter()
-            .map(|m| (m.role, m.text_content().to_string()))
-            .collect::<Vec<_>>(),
+         got cells: {:?}",
+        harness.text_cells_in_order(),
     );
 
     // After TurnCompleted, the streaming buffer is `take()`'n. Any leak

@@ -6,15 +6,12 @@
 //! `MessageTruncated` / `SessionResetForResume` events. See
 //! `engine-tui-unified-transcript-plan.md` §6.1.
 //!
-//! Phase 3a status: this view is populated alongside the legacy
-//! `session.messages: Vec<ChatMessage>` but renderers still read from
-//! the legacy field. Phase 3b will flip render path to read here and
-//! delete the legacy field. The dual-write is intentional and
-//! temporary; do not rely on it in long-running designs.
+//! The renderer pipeline reads `cells()` directly — there is no
+//! parallel `session.messages` projection any more.
 //!
 //! Per-cell render layout (`cached_lines`, `cached_height`) is
-//! intentionally not part of this struct yet. Layout caching lives in
-//! the renderer once it switches over (Phase 3b).
+//! intentionally not part of this struct. Layout caching lives in the
+//! renderer at draw time.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -126,6 +123,40 @@ impl TranscriptView {
         self.by_uuid.clear();
     }
 
+    /// Stamp `reasoning_tokens` + `duration_ms` onto the most recent
+    /// `AssistantThinking` cell. Engines report turn-aggregate reasoning
+    /// usage via `TurnCompleted`, which arrives after the assistant
+    /// content stream has already produced its `Reasoning` cell — this
+    /// post-hoc update hangs the metadata on the live cell so the
+    /// renderer can show `Thinking · 1.3s · 15 reasoning tokens`
+    /// without a parallel side-table.
+    ///
+    /// Returns `true` when a thinking cell was found and updated.
+    pub fn record_reasoning_tokens(
+        &mut self,
+        reasoning_tokens: i64,
+        duration_ms: Option<i64>,
+    ) -> bool {
+        if reasoning_tokens <= 0 {
+            return false;
+        }
+        for cell in self.cells.iter_mut().rev() {
+            if let CellKind::AssistantThinking {
+                duration_ms: dms,
+                reasoning_tokens: rt,
+                ..
+            } = &mut cell.kind
+            {
+                *rt = Some(reasoning_tokens);
+                if dms.is_none() {
+                    *dms = duration_ms;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
     fn rebuild_index(&mut self) {
         self.by_uuid.clear();
         let mut last_uuid: Option<Uuid> = None;
@@ -171,7 +202,16 @@ pub enum CellKind {
     /// Assistant text fragment.
     AssistantText { text: String, model: String },
     /// Assistant reasoning / thinking content.
-    AssistantThinking { text: String },
+    ///
+    /// `duration_ms` + `reasoning_tokens` are populated by
+    /// [`TranscriptView::record_reasoning_tokens`] when the engine
+    /// emits the turn's aggregate usage. Until then they are `None`
+    /// and the renderer hides the trailing badge.
+    AssistantThinking {
+        text: String,
+        duration_ms: Option<i64>,
+        reasoning_tokens: Option<i64>,
+    },
     /// Assistant redacted thinking (encrypted, displayed as opaque).
     AssistantRedactedThinking,
     /// Assistant `tool_use` content block.

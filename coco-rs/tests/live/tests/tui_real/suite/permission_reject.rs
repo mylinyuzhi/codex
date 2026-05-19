@@ -99,16 +99,13 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
          got {completions:?}",
     );
 
-    // Rejection feedback should be captured somewhere in the message
-    // history so the next turn (and any rendered transcript) can see
-    // why it was denied. We read it off the runtime via the harness's
-    // SessionResult-driven AppState fold.
+    // Rejection feedback should be captured in the engine transcript
+    // so the next turn (and any rendered transcript) can see why it
+    // was denied. The harness folds `Message::ToolResult` cells from
+    // SessionResult / TurnCompleted notifications.
     let saw_feedback = harness
-        .state
-        .session
-        .messages
-        .iter()
-        .any(|m| m.text_content().contains(feedback));
+        .find_tool_result("Bash")
+        .is_some_and(|(out, _)| out.contains(feedback));
     assert!(
         saw_feedback,
         "{provider}/{model}: rejection feedback `{feedback}` should appear in chat",

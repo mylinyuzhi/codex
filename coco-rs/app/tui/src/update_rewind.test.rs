@@ -1,20 +1,27 @@
 use crate::state::AppState;
-use crate::state::ChatMessage;
+use crate::state::derive::test_helpers;
 use crate::state::rewind::RestoreType;
 use crate::state::rewind::RewindPhase;
 
 use super::*;
 
+/// Map a legacy test id ("msg-1") to the v5 UUID string that the
+/// cell-push helper produces. `m.message_id` on rewind rows is the
+/// stringified `cell.message_uuid`, so assertions that compare to a
+/// human-readable test id must route through the same derivation.
+fn test_id(s: &str) -> String {
+    crate::state::derive::id_to_uuid(s).to_string()
+}
+
 fn make_state_with_messages(count: i32) -> AppState {
     let mut state = AppState::new();
     for i in 0..count {
-        state.session.add_message(ChatMessage::user_text(
-            format!("msg-{i}"),
-            format!("Hello turn {i}"),
-        ));
-        state
-            .session
-            .add_message(ChatMessage::assistant_text(format!("resp-{i}"), "Hi there"));
+        test_helpers::push_user_text(
+            &mut state.session,
+            &format!("msg-{i}"),
+            &format!("Hello turn {i}"),
+        );
+        test_helpers::push_assistant_text(&mut state.session, "Hi there");
     }
     state
 }
@@ -47,7 +54,7 @@ fn test_build_rewind_state_appends_synthetic_current_row() {
     assert_eq!(state.selected, 3);
     assert_eq!(state.phase, RewindPhase::MessageSelect);
     // The last *real* message is at index N-1 = 2.
-    assert_eq!(state.messages[2].message_id, "msg-2");
+    assert_eq!(state.messages[2].message_id, test_id("msg-2"));
     assert!(!state.messages[2].is_current_prompt);
 }
 
@@ -109,7 +116,7 @@ fn test_handle_rewind_confirm_file_history_off_dispatches_directly() {
     handle_rewind_nav(&mut state, -1); // off the synthetic row
     let outcome = handle_rewind_confirm(&mut state);
     let (msg_id, restore_type) = expect_dispatch(outcome, "file_history_off");
-    assert_eq!(msg_id, "msg-1");
+    assert_eq!(msg_id, test_id("msg-1"));
     assert_eq!(restore_type, RestoreType::ConversationOnly);
     assert_eq!(state.phase, RewindPhase::MessageSelect);
 }
@@ -130,7 +137,7 @@ fn test_handle_rewind_confirm_returns_selection() {
     // Confirm first option (Both)
     let outcome = handle_rewind_confirm(&mut state);
     let (msg_id, restore_type) = expect_dispatch(outcome, "first option");
-    assert_eq!(msg_id, "msg-1");
+    assert_eq!(msg_id, test_id("msg-1"));
     assert_eq!(restore_type, RestoreType::Both);
 }
 
@@ -232,7 +239,7 @@ fn test_summarize_feedback_with_text_dispatches_rewind() {
     state.summarize_feedback = "trim me  ".to_string();
     let outcome = handle_rewind_confirm(&mut state);
     let (msg_id, restore) = expect_dispatch(outcome, "summarize feedback");
-    assert_eq!(msg_id, "msg-1");
+    assert_eq!(msg_id, test_id("msg-1"));
     match restore {
         RestoreType::SummarizeFrom { feedback } => {
             assert_eq!(feedback.as_deref(), Some("trim me"));
@@ -280,7 +287,7 @@ fn test_build_rewind_state_for_jumps_to_options_phase() {
     assert_eq!(state.phase, RewindPhase::RestoreOptions);
     assert!(state.preselected);
     let row = &state.messages[state.selected as usize];
-    assert_eq!(row.message_id, "msg-1");
+    assert_eq!(row.message_id, test_id("msg-1"));
     assert!(!row.is_current_prompt);
     assert!(!state.available_options.is_empty());
 }

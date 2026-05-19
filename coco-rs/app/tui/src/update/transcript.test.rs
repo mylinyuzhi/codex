@@ -1,7 +1,7 @@
 use super::toggle;
 use crate::state::AppState;
 use crate::state::ModalState;
-use crate::state::session::ChatMessage;
+use crate::state::derive::test_helpers;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript::TranscriptScrollPosition;
 
@@ -43,12 +43,8 @@ fn transcript_modal_defaults_to_cell_pager_state() {
 #[test]
 fn toggle_opens_transcript_on_latest_expandable_cell() {
     let mut state = AppState::new();
-    state
-        .session
-        .add_message(ChatMessage::tool_success("tool-old", "Read", "old\nlines"));
-    state
-        .session
-        .add_message(ChatMessage::tool_success("tool-new", "Read", "new\nlines"));
+    test_helpers::push_tool_result(&mut state.session, "old", "Read", "old\nlines", false);
+    test_helpers::push_tool_result(&mut state.session, "new", "Read", "new\nlines", false);
 
     toggle(&mut state);
 
@@ -68,11 +64,7 @@ fn toggle_opens_transcript_on_latest_expandable_cell() {
 #[test]
 fn select_and_enter_toggle_collapsed_cell() {
     let mut state = AppState::new();
-    state.session.add_message(ChatMessage::tool_success(
-        "tool-call-1",
-        "Read",
-        "alpha\nbeta",
-    ));
+    test_helpers::push_tool_result(&mut state.session, "call-1", "Read", "alpha\nbeta", false);
     toggle(&mut state);
 
     assert!(super::select_expandable(&mut state, 1));
@@ -106,14 +98,8 @@ fn select_and_enter_toggle_collapsed_cell() {
 #[test]
 fn select_expandable_wraps_at_edges() {
     let mut state = AppState::new();
-    state
-        .session
-        .add_message(ChatMessage::tool_success("tool-first", "Read", "one\ntwo"));
-    state.session.add_message(ChatMessage::tool_success(
-        "tool-last",
-        "Read",
-        "three\nfour",
-    ));
+    test_helpers::push_tool_result(&mut state.session, "first", "Read", "one\ntwo", false);
+    test_helpers::push_tool_result(&mut state.session, "last", "Read", "three\nfour", false);
     toggle(&mut state);
 
     assert!(super::select_expandable(&mut state, 1));
@@ -138,11 +124,7 @@ fn select_expandable_wraps_at_edges() {
 #[test]
 fn select_expandable_anchors_selected_cell_from_current_scroll() {
     let mut state = AppState::new();
-    state.session.add_message(ChatMessage::tool_success(
-        "tool-call-1",
-        "Read",
-        "alpha\nbeta",
-    ));
+    test_helpers::push_tool_result(&mut state.session, "call-1", "Read", "alpha\nbeta", false);
     toggle(&mut state);
     assert!(super::scroll_lines(&mut state, 40));
 

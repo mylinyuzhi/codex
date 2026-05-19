@@ -113,8 +113,6 @@ pub(crate) enum TranscriptCellId {
     ToolCall { call_id: String },
     Message { index: usize, message_id: String },
     ToolBatch { start: usize, end: usize },
-    HookBatch { start: usize, end: usize },
-    TaskNotificationBatch { start: usize, end: usize },
     ActiveTail,
 }
 
@@ -134,13 +132,5 @@ impl TranscriptCellId {
 
     pub(crate) fn tool_batch(start: usize, end: usize) -> Self {
         Self::ToolBatch { start, end }
-    }
-
-    pub(crate) fn hook_batch(start: usize, end: usize) -> Self {
-        Self::HookBatch { start, end }
-    }
-
-    pub(crate) fn task_notification_batch(start: usize, end: usize) -> Self {
-        Self::TaskNotificationBatch { start, end }
     }
 }

@@ -19,11 +19,9 @@ use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
-use crate::state::session::ChatMessage;
 use crate::state::session::HookEntry;
 use crate::state::session::HookEntryStatus;
 use crate::state::session::McpServerStatus;
-use crate::state::session::MessageContent;
 use crate::state::session::RateLimitInfo;
 use crate::state::session::SubagentInstance;
 use crate::state::session::SubagentStatus;
@@ -80,7 +78,6 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.session.turn_count = p.turn_number;
             state.session.set_busy(true);
             state.session.stream_stall = false;
-            state.session.current_turn_message_start = Some(state.session.messages.len());
             state.session.current_turn_started_at = Some(std::time::Instant::now());
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
             true
@@ -88,7 +85,6 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         ServerNotification::TurnCompleted(p) => on_turn_completed(state, p),
         ServerNotification::TurnFailed(p) => {
             state.session.set_busy(false);
-            state.session.current_turn_message_start = None;
             state.session.current_turn_started_at = None;
             state.ui.streaming = None;
             // Keep the toast for session history / notification log, AND
@@ -778,12 +774,9 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
 
         // === History lifecycle ===
         //
-        // Engine MessageHistory authoritative-mutation events. Phase 3a
-        // populates the new `TranscriptView` alongside the legacy
-        // `session.messages`. Renderers still read the legacy field so
-        // these handlers return `false` (no redraw needed). Phase 3b
-        // will flip render path to consume `session.transcript` and
-        // delete `session.messages`.
+        // Engine MessageHistory authoritative-mutation events. These
+        // feed `session.transcript`, which the renderer pipeline reads
+        // exclusively (no parallel `session.messages` projection).
         ServerNotification::MessageAppended { message } => {
             match serde_json::from_value::<coco_messages::Message>(message) {
                 Ok(msg) => {
@@ -857,19 +850,16 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
                     streaming.started_at.elapsed().as_millis().try_into().ok()
                 })
             });
-    let message_count_before_flush = state.session.messages.len();
-    let response_start = state
-        .session
-        .current_turn_message_start
-        .unwrap_or(message_count_before_flush);
     super::projection::flush_streaming_to_messages(state);
-    apply_reasoning_tokens_to_response(
-        state,
-        p.usage.reasoning_output_tokens(),
-        token_only_duration_ms,
-        response_start,
-    );
-    state.session.current_turn_message_start = None;
+    // Stamp reasoning metadata onto the most recent assistant
+    // `Thinking` cell so the renderer can show
+    // `Thinking · 1.3s · 15 reasoning tokens`. Replaces the deleted
+    // `apply_reasoning_tokens_to_response` which synthesised entries
+    // into the vestigial `session.messages` list.
+    state
+        .session
+        .transcript
+        .record_reasoning_tokens(p.usage.reasoning_output_tokens(), token_only_duration_ms);
     state.session.current_turn_started_at = None;
     state.session.tool_executions.retain(|t| {
         matches!(
@@ -880,70 +870,6 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
     true
 }
 
-fn apply_reasoning_tokens_to_response(
-    state: &mut AppState,
-    reasoning_tokens: i64,
-    duration_ms: Option<i64>,
-    response_start: usize,
-) {
-    if reasoning_tokens <= 0 {
-        return;
-    }
-    let response_start = response_start.min(state.session.messages.len());
-    if let Some(thinking_offset) = state.session.messages[response_start..]
-        .iter()
-        .position(|message| matches!(message.content, MessageContent::Thinking { .. }))
-    {
-        if let MessageContent::Thinking {
-            reasoning_tokens: tokens,
-            duration_ms: existing_duration_ms,
-            ..
-        } = &mut state.session.messages[response_start + thinking_offset].content
-        {
-            *tokens = Some(reasoning_tokens);
-            if existing_duration_ms.is_none() {
-                *existing_duration_ms = duration_ms;
-            }
-        }
-        return;
-    }
-
-    let Some(response_item_offset) =
-        state.session.messages[response_start..]
-            .iter()
-            .position(|message| {
-                matches!(
-                    message.content,
-                    MessageContent::AssistantText(_) | MessageContent::ToolUse { .. }
-                )
-            })
-    else {
-        return;
-    };
-
-    let thinking = ChatMessage {
-        id: format!(
-            "thinking-{}-{}",
-            state.session.turn_count,
-            state.session.messages.len()
-        ),
-        role: crate::state::ChatRole::Assistant,
-        content: MessageContent::Thinking {
-            content: String::new(),
-            duration_ms,
-            reasoning_tokens: Some(reasoning_tokens),
-        },
-        is_meta: false,
-        created_at_ms: crate::state::session::now_ms(),
-        is_compact_summary: false,
-        is_visible_in_transcript_only: false,
-        permission_mode: None,
-    };
-
-    let insert_at = response_start + response_item_offset;
-    state.session.messages.insert(insert_at, thinking);
-}
-
 /// Handle `TurnInterrupted`: clear streaming state, surface the banner,
 /// and run auto-restore when the cancel was user-initiated AND the idle
 /// guards + lossless-tail predicate hold.
@@ -952,7 +878,6 @@ fn apply_reasoning_tokens_to_response(
 /// after `abortController.abort('user-cancel')` resolves the query.
 fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParams) -> bool {
     state.session.set_busy(false);
-    state.session.current_turn_message_start = None;
     state.session.current_turn_started_at = None;
     state.ui.streaming = None;
 
@@ -966,26 +891,22 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
     // - no state             → coco-rs analogue of "not viewing a
     //                            teammate task" + "no modal up"
     // - lossless tail          → TS `messagesAfterAreOnlySynthetic`
-    // Auto-restore reads from the *merged* view of legacy
-    // `session.messages` and engine-derived `transcript` cells so the
-    // predicates still find the last user message after Commit 2
-    // stopped writing optimistic user echoes into `session.messages`.
-    // Commit 5 deletes the legacy field outright; until then the
-    // merged view is the only source that contains both pre-cell
-    // entries (resume scrollback, hooks) and engine pushes.
-    let merged = crate::state::derive::merged_chat_messages(
-        &state.session.messages,
-        state.session.transcript.cells(),
-    );
+    // Phase 3d (§4): auto-restore reads from `transcript.cells()` —
+    // the renderer pipeline's single source of truth. The predicates
+    // walk the engine-authoritative cell list directly.
+    let cells = state.session.transcript.cells();
     let mut auto_restored = false;
     if user_cancel
         && state.ui.input.is_empty()
         && state.session.queued_commands.is_empty()
         && !state.ui.has_active_surface()
-        && let Some(idx) = crate::update_rewind::find_last_user_message_index(&merged)
-        && crate::update_rewind::messages_after_are_only_synthetic(&merged, idx)
+        && let Some(idx) = crate::update_rewind::find_last_user_cell_index(cells)
+        && crate::update_rewind::cells_after_are_only_synthetic(cells, idx)
     {
-        apply_auto_restore(state, &merged, idx);
+        // Snapshot the index so we can mutate state below without
+        // reborrowing `cells` (which would conflict with `state.ui`/
+        // `state.session` mutations).
+        apply_auto_restore(state, idx);
         auto_restored = true;
     }
 
@@ -1019,22 +940,24 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
 /// `ServerNotification::MessageTruncated`, keeping engine + TUI + SDK
 /// converged on the same truncation event (see
 /// `engine-tui-unified-transcript-plan.md` §7.4).
-fn apply_auto_restore(state: &mut AppState, merged: &[ChatMessage], idx: usize) {
-    let target_message_id = merged[idx].id.clone();
-    let input_text = merged[idx].text_content().to_string();
-    let perm = merged[idx].permission_mode;
-    // session.messages can still hold legacy entries (resume scrollback
-    // path, …); truncate at the matching id when present so the
-    // dual-write surface stays in sync with the engine. Falls back to
-    // a no-op when the id only lives in the cells view.
-    if let Some(local_idx) = state
-        .session
-        .messages
-        .iter()
-        .position(|m| m.id == target_message_id)
-    {
-        state.session.messages.truncate(local_idx);
-    }
+fn apply_auto_restore(state: &mut AppState, idx: usize) {
+    let cells = state.session.transcript.cells();
+    let Some(cell) = cells.get(idx) else {
+        return;
+    };
+    let target_message_id = cell.message_uuid.to_string();
+    let input_text = match &cell.kind {
+        crate::state::transcript_view::CellKind::UserText { text } => text.clone(),
+        _ => String::new(),
+    };
+    let perm = match cell.source.as_ref() {
+        coco_messages::Message::User(u) => u.permission_mode,
+        _ => None,
+    };
+    // Phase 3d (§5): the renderer reads from `transcript.cells()`
+    // directly. The engine emits `MessageTruncated` after our follow-up
+    // `UserCommand::Rewind { mode: AutoRestore }` dispatch, which
+    // truncates `transcript` to the same boundary.
     if let Some(mode) = perm {
         state.session.permission_mode = mode;
     }

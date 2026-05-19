@@ -18,7 +18,6 @@ use crate::state::MemoryDialogEntry;
 use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
 use crate::state::MemoryDialogState;
-use crate::state::MessageContent;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::SlashCommandName;
@@ -36,20 +35,17 @@ async fn clear_screen_nulls_last_agent_markdown() {
     // just cleared.
     let mut state = AppState::new();
     state.session.last_agent_markdown = Some("yesterday's reply".to_string());
-    state
-        .session
-        .messages
-        .push(crate::state::session::ChatMessage::assistant_text(
-            "t0",
-            "yesterday's reply",
-        ));
+    crate::state::derive::test_helpers::push_assistant_text(
+        &mut state.session,
+        "yesterday's reply",
+    );
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::ClearScreen, &tx).await;
 
     assert!(
-        state.session.messages.is_empty(),
-        "ClearScreen should drop messages"
+        state.session.transcript.is_empty(),
+        "ClearScreen should drop cells from the engine-derived transcript"
     );
     assert_eq!(
         state.session.last_agent_markdown, None,
@@ -117,7 +113,7 @@ async fn submit_slash_dispatches_typed_command_without_chat_echo() {
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
 
     assert!(
-        state.session.messages.is_empty(),
+        state.session.transcript.is_empty(),
         "slash invocations are commands, not chat transcript entries"
     );
     match rx.try_recv() {
@@ -278,7 +274,7 @@ async fn clear_screen_preserves_active_surface() {
 
     handle_command(&mut state, TuiCommand::ClearScreen, &tx).await;
 
-    assert!(state.session.messages.is_empty());
+    assert!(state.session.transcript.is_empty());
     // Surface is intentionally preserved — ClearScreen scopes to transcript.
     assert!(state.ui.has_active_surface());
 }
@@ -298,7 +294,7 @@ async fn plan_exit_deny_renders_rejection_and_keeps_plan_mode() {
             plan_content: Some("# Plan\n- do stuff".into()),
             ..Default::default()
         }));
-    let (tx, _rx) = drained_channel();
+    let (tx, mut rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::Deny, &tx).await;
 
@@ -306,13 +302,17 @@ async fn plan_exit_deny_renders_rejection_and_keeps_plan_mode() {
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
     // Surface dismissed.
     assert!(!state.ui.has_active_surface());
-    // A "User rejected Claude's plan" system message was injected.
-    let last = state
-        .session
-        .messages
-        .last()
-        .expect("rejection message must be pushed");
-    let text = last.text_content();
+    // A "User rejected Claude's plan" system message was dispatched
+    // on the command channel for engine round-trip.
+    let push = rx
+        .try_recv()
+        .expect("PushSystemMessage must be dispatched on Deny");
+    let UserCommand::PushSystemMessage {
+        kind: crate::command::SystemPushKind::Informational { message: text, .. },
+    } = push
+    else {
+        panic!("expected PushSystemMessage::Informational, got {push:?}");
+    };
     assert!(text.contains("rejected"), "got: {text}");
     assert!(
         text.contains("do stuff"),
@@ -677,14 +677,10 @@ async fn esc_on_memory_dialog_records_transcript_result() {
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
 
     assert!(!state.ui.has_active_surface(), "memory dialog dismissed");
+    // Transient toast confirmation only — the duplicated transcript
+    // line was dropped in unified-transcript Commit 2.
     assert!(state.ui.toasts.iter().any(|t| {
         t.severity == ToastSeverity::Info && t.message.contains("Cancelled memory editing")
-    }));
-    assert!(state.session.messages.iter().any(|m| {
-        matches!(
-            &m.content,
-            MessageContent::SystemText(text) if text.contains("Cancelled memory editing")
-        )
     }));
 }
 

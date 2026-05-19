@@ -2,13 +2,16 @@
 //!
 //! TS: MessageSelector.tsx state management + restore option handling.
 
+use coco_messages::Message;
+
 use crate::state::AppState;
-use crate::state::ChatRole;
 use crate::state::rewind::RestoreType;
 use crate::state::rewind::RewindPhase;
 use crate::state::rewind::RewindState;
 use crate::state::rewind::RewindableMessage;
 use crate::state::rewind::build_restore_options;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
 
 /// Format an epoch-ms timestamp as a relative-time English phrase
 /// against a reference `now` (also epoch-ms). Mirrors TS
@@ -110,35 +113,24 @@ pub fn strip_ide_context_tags(text: &str) -> String {
     out.trim().to_string()
 }
 
-/// Check if a message is a selectable user message for the rewind picker.
+/// Check if a cell is a selectable user message for the rewind picker.
 ///
 /// TS: `selectableUserMessagesFilter()` in `MessageSelector.tsx:767-792`.
-/// Rejects tool results / synthetic messages / meta / compact-summary /
-/// transcript-only, plus content beginning with the synthetic XML
-/// wrappers used for command output / teammate / task / tick envelopes.
-fn is_selectable_user_message(msg: &crate::state::ChatMessage) -> bool {
-    if msg.role != ChatRole::User {
+/// Rejects tool results / synthetic messages / virtual user pushes /
+/// compact-summary / transcript-only rows, plus content beginning with
+/// the synthetic XML wrappers used for command output / teammate / task /
+/// tick envelopes.
+fn is_selectable_user_cell(cell: &RenderedCell) -> bool {
+    let CellKind::UserText { text } = &cell.kind else {
         return false;
-    }
-    if msg.is_meta || msg.is_compact_summary || msg.is_visible_in_transcript_only {
+    };
+    let Message::User(u) = cell.source.as_ref() else {
         return false;
-    }
-    // Reject every non-text user content variant — TS filters tool_result
-    // first-content-block (`MessageSelector.tsx:771`) and uses
-    // `isSyntheticMessage` (line 774) to drop most non-user-authored
-    // entries. In coco-rs that maps to: keep only `Text` / `Image` /
-    // `BashInput`; drop everything else (BashOutput, Attachment,
-    // ChannelMessage, ResourceUpdate, AgentNotification,
-    // TeammateMessage, PlanMarker, CompactBoundary, …).
-    use crate::state::MessageContent;
-    if !matches!(
-        msg.content,
-        MessageContent::Text(_) | MessageContent::Image { .. } | MessageContent::BashInput { .. }
-    ) {
+    };
+    if u.is_virtual || u.is_compact_summary || u.is_visible_in_transcript_only {
         return false;
     }
     // Filter out synthetic XML-wrapped content (TS: indexOf checks).
-    let text = msg.text_content();
     let trimmed = text.trim_start();
     for prefix in SYNTHETIC_XML_PREFIXES {
         if trimmed.starts_with(prefix) {
@@ -162,11 +154,15 @@ pub fn build_rewind_state_for(state: &AppState, preselect_message_id: Option<&st
     let Some(target_id) = preselect_message_id else {
         return state;
     };
-    let Some(row_idx) = state
-        .messages
-        .iter()
-        .position(|m| !m.is_current_prompt && m.message_id == target_id)
-    else {
+    // Production strings are valid UUIDs and match `m.message_id`
+    // directly; legacy test-fixture ids (`"msg-1"`) flow through the
+    // shared `id_to_uuid` helper so they pair up with the cells the
+    // engine-cell fixture produced. Cheap pure mapping — no branch on
+    // test cfg.
+    let target_uuid = crate::state::derive::id_to_uuid(target_id).to_string();
+    let Some(row_idx) = state.messages.iter().position(|m| {
+        !m.is_current_prompt && (m.message_id == target_id || m.message_id == target_uuid)
+    }) else {
         // Unknown id — fall back to the standard pick-list.
         return state;
     };
@@ -184,11 +180,10 @@ pub fn build_rewind_state_for(state: &AppState, preselect_message_id: Option<&st
 
 /// Build the initial RewindState from current session state.
 ///
-/// Sources from the merged transcript view (legacy `session.messages` +
-/// engine-derived cells) so engine-pushed user messages — the bulk of
-/// the live transcript after `engine-tui-unified-transcript-plan.md`
-/// Commit 2 — show up in the rewind picker. Prior to that, the picker
-/// only saw TUI optimistic echoes which no longer exist.
+/// Sources from the engine-authoritative `transcript.cells()` so
+/// engine-pushed user messages — the entire live transcript after
+/// `engine-tui-unified-transcript-plan.md` Commit 2 — show up in the
+/// rewind picker.
 /// TS: MessageSelector receives `messages` prop filtered by selectableUserMessagesFilter.
 pub fn build_rewind_state(state: &AppState) -> RewindState {
     build_rewind_state_internal(state)
@@ -203,11 +198,17 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    let messages = state.session.transcript_messages();
-    for (i, msg) in messages.iter().enumerate() {
-        if !is_selectable_user_message(msg) {
+    let cells = state.session.transcript.cells();
+    for (i, cell) in cells.iter().enumerate() {
+        if !is_selectable_user_cell(cell) {
             continue;
         }
+        let CellKind::UserText { text } = &cell.kind else {
+            continue;
+        };
+        let Message::User(user) = cell.source.as_ref() else {
+            continue;
+        };
 
         // TS `MessageSelector.tsx:618-624` substitutes the localized
         // `((empty message))` placeholder when `isEmptyMessageText`
@@ -216,8 +217,7 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
         // `<commit_analysis>...</commit_analysis>` still renders the
         // placeholder.
         let display_text = {
-            let raw = msg.text_content();
-            let stripped = strip_prompt_xml_tags(raw).trim().to_string();
+            let stripped = strip_prompt_xml_tags(text).trim().to_string();
             if stripped.is_empty() {
                 crate::i18n::t!("dialog.rewind_empty_message").to_string()
             } else if stripped.len() > 50 {
@@ -228,11 +228,11 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
         };
 
         rewindable.push(RewindableMessage {
-            message_id: msg.id.clone(),
+            message_id: cell.message_uuid.to_string(),
             message_index: i as i32,
             display_text,
-            relative_time: format_relative_time_ago(now, msg.created_at_ms),
-            permission_mode: msg.permission_mode,
+            relative_time: format_relative_time_ago(now, timestamp_to_ms(&user.timestamp)),
+            permission_mode: user.permission_mode,
             diff_stats: None,
             can_restore_code: None,
             is_current_prompt: false,
@@ -488,58 +488,92 @@ pub fn handle_rewind_cancel(state: &mut RewindState) -> bool {
     }
 }
 
-/// Check if all messages after `from_index` are synthetic/non-meaningful.
+/// Check if all cells after `from_index` are synthetic/non-meaningful.
 ///
-/// TS: `messagesAfterAreOnlySynthetic` in `MessageSelector.tsx:799`. We
-/// mirror its 6 skip predicates and 2 "meaningful → return false" arms
-/// byte-by-byte so auto-restore behavior matches across providers:
-/// - synthetic interrupt markers and user-meta rows are skipped
+/// TS: `messagesAfterAreOnlySynthetic` in `MessageSelector.tsx:799`.
+/// Cell-side predicates mirror the 2 "meaningful → return false" arms:
+/// - any virtual user message is skipped (synthetic engine push)
 /// - tool results / system / attachment / progress rows are skipped
-/// - assistant messages count as meaningful when they contain text OR
-///   any `tool_use` block (the latter mirrors TS's
-///   `block.type === 'tool_use'` short-circuit)
-/// - any other user message is meaningful → not safe to truncate
-pub fn messages_after_are_only_synthetic(
-    messages: &[crate::state::ChatMessage],
-    from_index: usize,
-) -> bool {
-    use crate::state::MessageContent;
-    for msg in messages.iter().skip(from_index + 1) {
-        match msg.role {
-            ChatRole::User => {
-                if msg.is_meta {
+/// - assistant text with non-empty body (and non-`[redacted]`) is meaningful
+/// - any `ToolUse` cell is meaningful even with empty text
+/// - any other real user message is meaningful → not safe to truncate
+pub fn cells_after_are_only_synthetic(cells: &[RenderedCell], from_index: usize) -> bool {
+    for cell in cells.iter().skip(from_index + 1) {
+        match &cell.kind {
+            CellKind::UserText { .. } => {
+                if matches!(cell.source.as_ref(), Message::User(u) if u.is_virtual) {
                     continue;
                 }
-                // Synthetic interruption marker — TS `isSyntheticMessage`
-                // matches text against `INTERRUPT_MESSAGE` /
-                // `INTERRUPT_MESSAGE_FOR_TOOL_USE` (utils/messages.ts:302).
-                if matches!(msg.content, MessageContent::InterruptionMarker { .. }) {
-                    continue;
-                }
-                // Real user message — not synthetic
                 return false;
             }
-            crate::state::ChatRole::Assistant => {
-                // Tool calls count as meaningful even with empty text
-                // (TS: `block.type === 'tool_use'`).
-                if matches!(msg.content, MessageContent::ToolUse { .. }) {
-                    return false;
-                }
-                let text = msg.text_content();
+            CellKind::AssistantText { text, .. } => {
                 if !text.is_empty() && text != "[redacted]" {
                     return false;
                 }
             }
-            // Tool results, system messages — synthetic
-            _ => continue,
+            CellKind::ToolUse { .. } => {
+                return false;
+            }
+            CellKind::AssistantThinking { .. }
+            | CellKind::AssistantRedactedThinking
+            | CellKind::ToolResult { .. }
+            | CellKind::System(_)
+            | CellKind::UserAttachment
+            | CellKind::Attachment
+            | CellKind::ToolUseSummary { .. }
+            | CellKind::Progress
+            | CellKind::Tombstone => continue,
         }
     }
     true
 }
 
 /// Find the last selectable user message index for auto-restore.
-pub fn find_last_user_message_index(messages: &[crate::state::ChatMessage]) -> Option<usize> {
-    messages.iter().rposition(is_selectable_user_message)
+pub fn find_last_user_cell_index(cells: &[RenderedCell]) -> Option<usize> {
+    cells.iter().rposition(is_selectable_user_cell)
+}
+
+/// Parse the engine `UserMessage.timestamp` string (ISO 8601 or epoch
+/// integer) into epoch-ms. Returns 0 for empty / unparseable values
+/// so the rewind picker renders "just now" rather than erroring out.
+fn timestamp_to_ms(ts: &str) -> i64 {
+    if ts.is_empty() {
+        return 0;
+    }
+    if let Ok(n) = ts.parse::<i64>() {
+        return n;
+    }
+    // Best-effort RFC 3339 parse: pull seconds via chrono if present,
+    // else fall back to 0. The engine emits ISO timestamps; tests
+    // typically leave this empty.
+    chrono_iso_to_ms(ts).unwrap_or(0)
+}
+
+/// Lightweight RFC 3339 → epoch-ms conversion. Mirrors what
+/// `chrono::DateTime::parse_from_rfc3339(...).timestamp_millis()` does
+/// without adding a `chrono` dependency: we accept a strict subset
+/// (`YYYY-MM-DDTHH:MM:SS[.frac][Z|±HH:MM]`). Returns `None` for
+/// anything else — callers fall back to 0.
+fn chrono_iso_to_ms(ts: &str) -> Option<i64> {
+    let bytes = ts.as_bytes();
+    if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
+        return None;
+    }
+    let year: i64 = ts.get(0..4)?.parse().ok()?;
+    let month: i64 = ts.get(5..7)?.parse().ok()?;
+    let day: i64 = ts.get(8..10)?.parse().ok()?;
+    let hour: i64 = ts.get(11..13)?.parse().ok()?;
+    let minute: i64 = ts.get(14..16)?.parse().ok()?;
+    let second: i64 = ts.get(17..19)?.parse().ok()?;
+    // Days since Unix epoch (1970-01-01) — civil-from-days algorithm.
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (month + (if month > 2 { -3 } else { 9 })) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let secs = days * 86400 + hour * 3600 + minute * 60 + second;
+    Some(secs * 1000)
 }
 
 #[cfg(test)]

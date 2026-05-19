@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Result;
-use coco_tui::state::session::MessageContent;
 use serde_json::json;
 
 use crate::tui::harness::TuiHarness;
@@ -106,23 +105,12 @@ pub async fn run() -> Result<()> {
     );
     assert_eq!(body_b.trim(), "beta-body", "parallel_tools: beta.txt body");
 
-    // Two `ToolSuccess` chat entries — the chat panel should render
+    // Two `Write` tool-result cells — the chat panel should render
     // both rows, regardless of the order they actually completed in.
-    let success_count = harness
-        .state
-        .session
-        .messages
-        .iter()
-        .filter(|m| {
-            matches!(
-                &m.content,
-                MessageContent::ToolSuccess { tool_name, .. } if tool_name == "Write",
-            )
-        })
-        .count();
+    let success_count = harness.tool_result_count("Write");
     assert_eq!(
         success_count, 2,
-        "parallel_tools: expected 2 ToolSuccess(Write) chat entries, got {success_count}",
+        "parallel_tools: expected 2 Write tool-result cells, got {success_count}",
     );
 
     harness.shutdown().await;

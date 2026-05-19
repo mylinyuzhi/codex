@@ -81,20 +81,13 @@ pub async fn run() -> Result<()> {
         "tool_chain: file body mismatch"
     );
 
-    // AppState surface: a ChatMessage::ToolSuccess for `Write` lives
-    // in the chat list. Folded by `server_notification_handler::stream`
+    // AppState surface: a tool-result cell for `Write` lives in the
+    // engine transcript. Folded by `server_notification_handler::stream`
     // on `AgentStreamEvent::ToolUseCompleted`.
-    let has_tool_msg = harness.state.session.messages.iter().any(|m| {
-        matches!(
-            &m.content,
-            coco_tui::state::session::MessageContent::ToolSuccess { tool_name, .. }
-                if tool_name == "Write"
-        )
-    });
-    assert!(
-        has_tool_msg,
-        "tool_chain: ChatMessage::ToolSuccess(Write) not folded into session.messages"
-    );
+    let (_, is_error) = harness
+        .find_tool_result("Write")
+        .ok_or_else(|| anyhow::anyhow!("tool_chain: missing Write tool-result cell"))?;
+    assert!(!is_error, "tool_chain: Write result flagged is_error");
 
     // Render side: the chat panel surfaces the tool name. Don't assert
     // on the assistant prose — different theme widths can wrap it.

@@ -146,16 +146,14 @@ pub async fn run() -> Result<()> {
     // History stayed intact — /rewind only opens an overlay, the actual
     // truncation happens later when the user picks a target.
     let user_count = harness
-        .state
-        .session
-        .messages
+        .text_cells_in_order()
         .iter()
-        .filter(|m| matches!(m.role, coco_tui::state::session::ChatRole::User))
+        .filter(|(role, _)| *role == "user")
         .count();
     assert_eq!(
         user_count, 3,
         "rewind_overlay: /rewind should NOT mutate history \
-         (got {user_count} user messages, expected 3)",
+         (got {user_count} user cells, expected 3)",
     );
 
     harness.shutdown().await;

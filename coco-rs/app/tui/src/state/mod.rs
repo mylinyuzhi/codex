@@ -33,13 +33,9 @@ pub use rewind::RestoreType;
 pub use rewind::RewindPhase;
 pub use rewind::RewindState;
 pub use rewind::RewindableMessage;
-pub use session::ChatMessage;
-pub use session::ChatRole;
 pub use session::McpServerStatus;
-pub use session::MessageContent;
 pub use session::ModelBinding;
 pub use session::ModelCatalogEntry;
-pub use session::PlanAction;
 pub use session::ProviderStatus;
 pub use session::ProviderUnavailableReason;
 pub use session::QueuedCommandDisplay;
@@ -51,7 +47,6 @@ pub use session::SubagentStatus;
 pub use session::TokenUsage;
 pub use session::ToolExecution;
 pub use session::ToolStatus;
-pub use session::ToolUseStatus;
 pub use surface_payloads::AutoModeOptInState;
 pub use surface_payloads::BridgeState;
 pub use surface_payloads::BypassPermissionsState;
@@ -181,9 +176,12 @@ impl AppState {
     /// must be empty, the session must have user-visible history, and
     /// no state can be occluding the cursor. Mirrors TS
     /// `PromptInput.tsx:1955` (`doublePressEscFromEmpty`).
+    ///
+    /// "Session has history" reads from the engine-authoritative
+    /// `transcript` view.
     pub fn rewind_available_from_input(&self) -> bool {
         self.ui.input.is_empty()
-            && !self.session.messages.is_empty()
+            && !self.session.transcript.is_empty()
             && !self.ui.has_active_surface()
     }
 

@@ -651,6 +651,55 @@ impl RealTuiHarness {
             .collect()
     }
 
+    /// First `Message::ToolResult` cell whose tool_name matches `name`.
+    /// Returns `(output, is_error)`. Used to probe denied / errored
+    /// tool calls without going through the deleted legacy projection.
+    pub fn find_tool_result(&self, name: &str) -> Option<(String, bool)> {
+        use coco_messages::Message;
+        use coco_messages::ToolContent;
+        use coco_messages::ToolResultContentPart;
+        use coco_messages::ToolResultOutput;
+        use coco_tui::state::CellKind;
+        for cell in self.state.session.transcript.cells() {
+            if !matches!(cell.kind, CellKind::ToolResult { .. }) {
+                continue;
+            }
+            let Message::ToolResult(tr) = cell.source.as_ref() else {
+                continue;
+            };
+            let coco_messages::LlmMessage::Tool { content, .. } = &tr.message else {
+                continue;
+            };
+            let part = content.iter().find_map(|p| match p {
+                ToolContent::ToolResult(part) => Some(part),
+                _ => None,
+            });
+            let Some(part) = part else { continue };
+            if part.tool_name != name {
+                continue;
+            }
+            let output = match &part.output {
+                ToolResultOutput::Text { value, .. } => value.clone(),
+                ToolResultOutput::Json { value, .. } => value.to_string(),
+                ToolResultOutput::Content { value, .. } => value
+                    .iter()
+                    .filter_map(|p| match p {
+                        ToolResultContentPart::Text { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                ToolResultOutput::ErrorText { value, .. } => value.clone(),
+                ToolResultOutput::ErrorJson { value, .. } => value.to_string(),
+                ToolResultOutput::ExecutionDenied { reason, .. } => {
+                    reason.clone().unwrap_or_default()
+                }
+            };
+            return Some((output, tr.is_error));
+        }
+        None
+    }
+
     /// Aggregate `TokenUsage` over the session — sourced from the
     /// final `SessionResult` notification (engine's own roll-up).
     /// Returns `None` if no `SessionResult` was emitted.

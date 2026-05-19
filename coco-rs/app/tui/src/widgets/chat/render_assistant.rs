@@ -1,6 +1,9 @@
-//! Assistant-side message renderers — plain text (markdown), thinking
-//! block (collapsible with token estimate), redacted thinking, tool-use
-//! call, advisor message.
+//! Assistant-side cell renderers — text (markdown), thinking
+//! (collapsible), redacted thinking, tool-use invocation.
+//!
+//! Phase 3d (§6): dispatches directly on `cell.kind` /
+//! `cell.source: Arc<Message>` — `ChatMessage` / `MessageContent` are
+//! gone. All emitted lines are `Line<'static>` (owned spans).
 
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -13,7 +16,8 @@ use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::format_duration_seconds;
 use crate::presentation::thinking::render_thinking_block;
-use crate::state::session::MessageContent;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
 
@@ -24,13 +28,13 @@ use crate::tool_display::tool_name_tone;
 /// keeps a consistent visual across platforms.
 const ASSISTANT_DOT: &str = "⏺";
 
-pub(super) fn try_render<'a>(
-    w: &ChatWidget<'a>,
-    content: &'a MessageContent,
-    lines: &mut Vec<Line<'a>>,
+pub(super) fn try_render(
+    w: &ChatWidget<'_>,
+    cell: &RenderedCell,
+    lines: &mut Vec<Line<'static>>,
 ) -> Option<()> {
-    match content {
-        MessageContent::AssistantText(text) => {
+    match &cell.kind {
+        CellKind::AssistantText { text, .. } => {
             // TS parity: `AssistantTextMessage` renders the body with a
             // leading `BLACK_CIRCLE` glyph on the first line as a turn
             // marker (`shouldShowDot` is true for the top assistant
@@ -77,14 +81,14 @@ pub(super) fn try_render<'a>(
             lines.extend(md_lines);
             Some(())
         }
-        MessageContent::Thinking {
-            content,
+        CellKind::AssistantThinking {
+            text,
             duration_ms,
             reasoning_tokens,
         } => {
             lines.extend(render_thinking_block(
                 ThinkingRenderInput {
-                    content,
+                    content: text,
                     duration_ms: *duration_ms,
                     reasoning_tokens: *reasoning_tokens,
                     display: if w.show_thinking {
@@ -100,7 +104,7 @@ pub(super) fn try_render<'a>(
             ));
             Some(())
         }
-        MessageContent::RedactedThinking => {
+        CellKind::AssistantRedactedThinking => {
             // ✻ (teardrop asterisk) signals "still thinking" — TS uses
             // this glyph for the redacted/in-flight variant so users
             // can tell at a glance the block isn't finalized.
@@ -112,19 +116,16 @@ pub(super) fn try_render<'a>(
             ));
             Some(())
         }
-        MessageContent::ToolUse {
-            tool_name,
-            call_id,
-            input_preview,
-            status: _,
-        } => {
+        CellKind::ToolUse { call_id, tool_name } => {
+            let input_preview =
+                crate::state::derive::extract_tool_call_input_preview(&cell.source, call_id);
             let preview = if input_preview.len() > constants::TOOL_DESCRIPTION_MAX_CHARS as usize {
                 format!(
                     "{}…",
                     &input_preview[..constants::TOOL_DESCRIPTION_MAX_CHARS as usize - 1]
                 )
             } else {
-                input_preview.clone()
+                input_preview
             };
             // Elapsed time badge: `(250ms)` / `(1.2s)` / `(3m 4s)`
             // tail-aligned after the preview. Sourced from the
@@ -148,25 +149,6 @@ pub(super) fn try_render<'a>(
             }
             spans.push(Span::raw(elapsed_badge).fg(w.styles.dim()).dim());
             lines.push(Line::from(spans));
-            Some(())
-        }
-        MessageContent::Advisor {
-            advisor_id,
-            content,
-        } => {
-            lines.push(Line::from(vec![
-                Span::raw("  📋 ").fg(w.styles.accent()),
-                Span::raw(format!("[advisor:{advisor_id}] "))
-                    .fg(w.styles.dim())
-                    .bold(),
-            ]));
-            let md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
-                content,
-                w.styles,
-                w.width,
-                w.syntax_highlighting,
-            );
-            lines.extend(md_lines);
             Some(())
         }
         _ => None,

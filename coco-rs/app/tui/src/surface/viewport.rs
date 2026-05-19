@@ -267,18 +267,17 @@ fn build_live_tail_lines(
     width: u16,
     plan: SurfaceFramePlan,
 ) -> Vec<Line<'static>> {
-    let merged_owned;
-    let committed_messages: &[crate::state::session::ChatMessage] =
+    // Phase 3d (§4): the renderer consumes engine cells directly.
+    // Compatibility-fallback mode keeps finalized history inside the
+    // viewport; otherwise the native scrollback owns it and this layer
+    // renders an empty tail.
+    let committed_cells: &[crate::state::transcript_view::RenderedCell] =
         if plan.finalized_history_in_viewport() {
-            merged_owned = crate::state::derive::merged_chat_messages(
-                &state.session.messages,
-                state.session.transcript.cells(),
-            );
-            &merged_owned
+            state.session.transcript.cells()
         } else {
             &[]
         };
-    let mut chat = crate::widgets::ChatWidget::new(committed_messages, styles)
+    let mut chat = crate::widgets::ChatWidget::new(committed_cells, styles)
         .scroll(state.ui.scroll_offset)
         .streaming(state.ui.streaming.as_ref())
         .show_thinking(state.ui.show_thinking)

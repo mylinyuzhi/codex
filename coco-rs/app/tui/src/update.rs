@@ -333,7 +333,11 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ClearScreen => {
-            state.session.messages.clear();
+            // Phase 3d (§5): clear the engine-derived transcript so the
+            // visible chat empties. The engine retains the full
+            // conversation; future `MessageAppended` events repopulate
+            // the cell view from the next turn forward.
+            state.session.transcript.on_session_reset();
             // Dropping messages also invalidates the copy cache — without this
             // Ctrl+O after /clear would surface the response the user just
             // wiped, which is surprising. Matches codex-rs's clear-on-reset.

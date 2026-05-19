@@ -1,241 +1,126 @@
-//! System-message renderers — plain system text, API errors, rate limits,
-//! session shutdown signals, hook progress/errors, plan approvals,
-//! compact boundaries, task assignments.
+//! System-cell renderers — informational rows, API errors, compaction
+//! boundaries, tool-use summaries.
+//!
+//! Phase 3d (§6): dispatches on `cell.kind` / `cell.source`.
+//! `MessageContent` variants that were never produced by the engine
+//! flow (`RateLimit`, `Shutdown*`, `Hook*`, `PlanApproval`,
+//! `CompactSummary`, `Advisor`, `TaskAssignment`) went away with the
+//! projection — those code paths were unreachable in production after
+//! Phase 3c moved system messages onto the engine `MessageHistory`.
 
+use coco_messages::Message;
+use coco_messages::SystemMessage;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
 use super::ChatWidget;
-use crate::i18n::t;
-use crate::state::session::MessageContent;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
+use crate::state::transcript_view::SystemCellKind;
 
-pub(super) fn try_render<'a>(
-    w: &ChatWidget<'a>,
-    content: &'a MessageContent,
-    lines: &mut Vec<Line<'a>>,
+pub(super) fn try_render(
+    w: &ChatWidget<'_>,
+    cell: &RenderedCell,
+    lines: &mut Vec<Line<'static>>,
 ) -> Option<()> {
-    match content {
-        MessageContent::SystemText(text) => {
-            let mut iter = text.lines();
-            for line in iter.by_ref() {
+    match &cell.kind {
+        CellKind::ToolUseSummary { summary } => {
+            for line in summary.lines() {
                 lines.push(Line::from(
                     Span::raw(format!("  # {line}")).fg(w.styles.system_message()),
                 ));
             }
             Some(())
         }
-        MessageContent::ApiError {
-            error,
-            retryable,
-            status_code,
-        } => {
-            let status = status_code.map(|c| format!(" [{c}]")).unwrap_or_default();
-            let retry = if *retryable { " (retrying...)" } else { "" };
+        CellKind::System(SystemCellKind::Informational) => {
+            let Message::System(SystemMessage::Informational(info)) = cell.source.as_ref() else {
+                return Some(());
+            };
+            let body = if info.title.is_empty() {
+                info.message.clone()
+            } else {
+                format!("{}: {}", info.title, info.message)
+            };
+            for line in body.lines() {
+                lines.push(Line::from(
+                    Span::raw(format!("  # {line}")).fg(w.styles.system_message()),
+                ));
+            }
+            Some(())
+        }
+        CellKind::System(SystemCellKind::ApiError) => {
+            let Message::System(SystemMessage::ApiError(e)) = cell.source.as_ref() else {
+                return Some(());
+            };
+            let status = e.status_code.map(|c| format!(" [{c}]")).unwrap_or_default();
             lines.push(Line::from(
                 Span::raw(format!(
-                    "  ⚠ {}",
-                    t!(
-                        "toast.api_error",
-                        status = status,
-                        error = error,
-                        retry = retry
-                    )
+                    "  ⚠{status} {error}",
+                    status = status,
+                    error = e.error
                 ))
                 .fg(w.styles.error()),
             ));
             Some(())
         }
-        MessageContent::RateLimit { message, resets_at } => {
-            let reset = resets_at
-                .map(|t| format!(" (resets at {t})"))
-                .unwrap_or_default();
-            lines.push(Line::from(
-                Span::raw(format!("  ⏱ {message}{reset}")).fg(w.styles.warning()),
-            ));
-            Some(())
-        }
-        MessageContent::Shutdown { reason } => {
-            lines.push(Line::from(
-                Span::raw(t!("chat.session_ended", reason = reason).to_string())
-                    .fg(w.styles.dim())
-                    .italic(),
-            ));
-            Some(())
-        }
-        MessageContent::ShutdownRequest { from, reason } => {
-            let reason_text = reason
-                .as_deref()
-                .map(|r| format!(": {r}"))
-                .unwrap_or_default();
-            lines.push(Line::from(
-                Span::raw(
-                    t!("chat.shutdown_requested", from = from, reason = reason_text).to_string(),
-                )
-                .fg(w.styles.error()),
-            ));
-            Some(())
-        }
-        MessageContent::ShutdownRejected { from, reason } => {
-            lines.push(Line::from(
-                Span::raw(t!("chat.shutdown_rejected", from = from, reason = reason).to_string())
-                    .fg(w.styles.dim()),
-            ));
-            Some(())
-        }
-        MessageContent::HookSuccess { hook_name, output } => {
-            lines.push(Line::from(vec![
-                Span::raw("  ⚙ ").fg(w.styles.accent()),
-                Span::raw(format!("{hook_name}: ")).dim(),
-                Span::raw(output.clone()).green(),
-            ]));
-            Some(())
-        }
-        MessageContent::HookNonBlockingError { hook_name, error } => {
-            lines.push(Line::from(vec![
-                Span::raw("  ⚠ ").fg(w.styles.warning()),
-                Span::raw(format!("{hook_name}: ")).fg(w.styles.dim()),
-                Span::raw(error.clone()).fg(w.styles.warning()),
-            ]));
-            Some(())
-        }
-        MessageContent::HookBlockingError {
-            hook_name,
-            error,
-            command,
-        } => {
-            lines.push(Line::from(vec![
-                Span::raw("  ✗ ").fg(w.styles.error()),
-                Span::raw(format!("{hook_name}: ")).fg(w.styles.dim()),
-                Span::raw(error.clone()).red(),
-            ]));
-            lines.push(Line::from(
-                Span::raw(format!("    command: {command}")).dim(),
-            ));
-            Some(())
-        }
-        MessageContent::HookCancelled { hook_name } => {
-            lines.push(Line::from(vec![
-                Span::raw(format!("  {hook_name}: ")).dim(),
-                Span::raw(t!("chat.cancelled").to_string()).dim(),
-            ]));
-            Some(())
-        }
-        MessageContent::HookSystemMessage { hook_name, message } => {
-            lines.push(Line::from(vec![
-                Span::raw(format!("  {hook_name}: ")).fg(w.styles.dim()),
-                Span::raw(message.clone()).cyan(),
-            ]));
-            Some(())
-        }
-        MessageContent::HookAdditionalContext { hook_name, context } => {
-            lines.push(Line::from(vec![
-                Span::raw(format!("  {hook_name}: ")).dim(),
-                Span::raw(context.clone()).fg(w.styles.text()),
-            ]));
-            Some(())
-        }
-        MessageContent::HookStoppedContinuation { hook_name, reason } => {
-            lines.push(Line::from(vec![
-                Span::raw(format!("  {hook_name}: ")).fg(w.styles.dim()),
-                Span::raw(reason.clone()).fg(w.styles.warning()),
-            ]));
-            Some(())
-        }
-        MessageContent::HookAsyncResponse { hook_name, output } => {
-            lines.push(Line::from(vec![
-                Span::raw("  ⚙ ").fg(w.styles.accent()),
-                Span::raw(format!("{hook_name}: ")).dim(),
-                Span::raw(output.clone()).fg(w.styles.text()),
-            ]));
-            Some(())
-        }
-        MessageContent::PlanApproval { plan, .. } => {
-            lines.push(Line::from(
-                Span::raw(t!("chat.plan_for_review").to_string())
-                    .fg(w.styles.plan())
-                    .bold(),
-            ));
-            for line in plan.lines().take(20) {
-                lines.push(Line::from(
-                    Span::raw(format!("  │ {line}")).fg(w.styles.text()),
-                ));
-            }
-            Some(())
-        }
-        MessageContent::CompactBoundary => {
+        CellKind::System(SystemCellKind::CompactBoundary) => {
             let border = "─".repeat(40);
             lines.push(Line::from(
                 Span::raw(format!("  {border}")).fg(w.styles.border()).dim(),
             ));
             Some(())
         }
-        MessageContent::CompactSummary {
-            summary,
-            messages_summarized,
-            user_context,
-            trigger,
-        } => {
-            // TS: components/CompactSummary.tsx
-            let heading = match trigger {
-                coco_types::CompactTrigger::SessionMemory => "Summarized via session memory",
-                coco_types::CompactTrigger::Reactive => "Summarized (PTL recovery)",
-                coco_types::CompactTrigger::TimeBased => "Summarized (idle gap)",
-                coco_types::CompactTrigger::ContextCollapse => "Summarized (context collapse)",
-                _ => "Conversation summary",
-            };
-            let mut hdr = vec![
-                Span::raw("  ✻ ").fg(w.styles.accent()),
-                Span::raw(heading).fg(w.styles.primary()).bold(),
-            ];
-            if let Some(n) = messages_summarized {
-                hdr.push(Span::raw(format!(" · {n} messages")).fg(w.styles.dim()));
+        // Remaining SystemCellKind sub-variants (PermissionRetry,
+        // BridgeStatus, MemorySaved, AwaySummary, AgentsKilled,
+        // ApiMetrics, StopHookSummary, TurnDuration, ScheduledTaskFire,
+        // MicrocompactBoundary) render as plain informational rows
+        // using the wrapped engine message's text content.
+        CellKind::System(_) => {
+            let body = system_message_summary(cell.source.as_ref()).unwrap_or_default();
+            if !body.is_empty() {
+                for line in body.lines() {
+                    lines.push(Line::from(
+                        Span::raw(format!("  # {line}")).fg(w.styles.system_message()),
+                    ));
+                }
             }
-            lines.push(Line::from(hdr));
-            if let Some(ctx) = user_context.as_ref().filter(|s| !s.is_empty()) {
-                lines.push(Line::from(
-                    Span::raw(format!("    focus: {ctx}")).fg(w.styles.dim()),
-                ));
-            }
-            for line in summary.lines().take(8) {
-                lines.push(Line::from(
-                    Span::raw(format!("    {line}")).fg(w.styles.text()),
-                ));
-            }
-            if summary.lines().count() > 8 {
-                // Render the actual user-bound shortcut for
-                // `app:toggleTranscript` (defaults to `ctrl+o`) so
-                // user customizations show through. Falls back to
-                // the default literal when nothing's bound.
-                let shortcut = w
-                    .kb_handle
-                    .and_then(|h| {
-                        h.display_for(
-                            &coco_keybindings::KeybindingAction::AppToggleTranscript,
-                            crate::keybinding_bridge::KeybindingContext::Chat,
-                        )
-                    })
-                    .unwrap_or_else(|| "ctrl+o".to_string());
-                lines.push(Line::from(
-                    Span::raw(format!("    …({shortcut} to see full summary)")).fg(w.styles.dim()),
-                ));
-            }
-            Some(())
-        }
-        MessageContent::TaskAssignment {
-            task_id,
-            assignee,
-            description,
-        } => {
-            lines.push(Line::from(vec![
-                Span::raw("  📌 ").fg(w.styles.accent()),
-                Span::raw(format!("Task {task_id} → @{assignee}: "))
-                    .fg(w.styles.primary())
-                    .bold(),
-                Span::raw(description.clone()).fg(w.styles.text()),
-            ]));
             Some(())
         }
         _ => None,
     }
+}
+
+/// Best-effort short summary of a [`SystemMessage`] for the
+/// generic fallback row. Each sub-variant has its own typed shape;
+/// this helper picks the most readable string field.
+fn system_message_summary(msg: &Message) -> Option<String> {
+    let Message::System(sm) = msg else {
+        return None;
+    };
+    Some(match sm {
+        SystemMessage::PermissionRetry(m) => {
+            format!("permission retry · {} · {}", m.tool_name, m.message)
+        }
+        SystemMessage::BridgeStatus(m) => match (m.connected, m.message.as_deref()) {
+            (true, Some(msg)) => format!("bridge connected · {msg}"),
+            (true, None) => "bridge connected".to_string(),
+            (false, Some(msg)) => format!("bridge disconnected · {msg}"),
+            (false, None) => "bridge disconnected".to_string(),
+        },
+        SystemMessage::MemorySaved(_) => "memory saved".to_string(),
+        SystemMessage::AwaySummary(_) => "away summary".to_string(),
+        SystemMessage::AgentsKilled(_) => "agents killed".to_string(),
+        SystemMessage::ApiMetrics(_) => "API metrics".to_string(),
+        SystemMessage::StopHookSummary(_) => "stop hook summary".to_string(),
+        SystemMessage::TurnDuration(_) => "turn duration".to_string(),
+        SystemMessage::ScheduledTaskFire(_) => "scheduled task".to_string(),
+        // Handled by their own match arms above.
+        SystemMessage::Informational(_)
+        | SystemMessage::ApiError(_)
+        | SystemMessage::CompactBoundary(_)
+        | SystemMessage::MicrocompactBoundary(_)
+        | SystemMessage::LocalCommand(_)
+        | SystemMessage::UserInterruption(_) => return None,
+    })
 }

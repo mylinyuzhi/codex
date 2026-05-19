@@ -137,20 +137,6 @@ pub(crate) fn now_ms() -> i64 {
 /// Agent-synchronized session state.
 #[derive(Debug)]
 pub struct SessionState {
-    /// Legacy TUI-local chat messages. Mostly vestigial after
-    /// `engine-tui-unified-transcript-plan.md` Commits 2/3 — the
-    /// engine `MessageHistory` is the source of truth and the TUI
-    /// derives cells from `MessageAppended` events into
-    /// [`Self::transcript`]. The few remaining direct writers
-    /// (`protocol.rs::apply_reasoning_tokens_to_response` synthesising
-    /// `MessageContent::Thinking` to carry duration / token metadata,
-    /// `update.rs` Ctrl+L clear, the rewind-picker truncate) are kept
-    /// for renderer-adapter convenience until a full `RenderedCell`
-    /// rewrite of the renderer chain (plan §4/§5) replaces
-    /// `ChatMessage` / `MessageContent` outright. All read paths
-    /// should source from [`Self::transcript_messages`] — that view
-    /// overlays engine cells on top of this slice.
-    pub messages: Vec<ChatMessage>,
     /// Engine-authoritative view of `MessageHistory`, populated by the
     /// `MessageAppended` / `MessageTruncated` / `SessionResetForResume`
     /// protocol handlers. Engines push every message through
@@ -259,11 +245,6 @@ pub struct SessionState {
     pub focused_subagent_index: Option<i32>,
     /// Current turn number (within multi-turn loop).
     pub current_turn_number: Option<i32>,
-    /// Transcript index where the current LLM response started.
-    /// Thinking token totals reported at `TurnCompleted` are scoped to
-    /// this response, even if its streaming thinking was flushed before
-    /// a tool call.
-    pub current_turn_message_start: Option<usize>,
     /// Wall-clock start for the current LLM response. Used when a
     /// provider reports reasoning tokens but hides the reasoning text.
     pub current_turn_started_at: Option<Instant>,
@@ -369,16 +350,6 @@ pub struct SessionState {
 }
 
 impl SessionState {
-    /// Add a chat message.
-    pub fn add_message(&mut self, message: ChatMessage) {
-        self.messages.push(message);
-    }
-
-    /// Get the last message.
-    pub fn last_message(&self) -> Option<&ChatMessage> {
-        self.messages.last()
-    }
-
     /// Whether the agent is busy.
     pub fn is_busy(&self) -> bool {
         self.busy
@@ -427,16 +398,10 @@ impl SessionState {
         } else {
             tracing::debug!(call_id, "run_tool: tool not found in tool_executions");
         }
-        self.set_tool_use_status(call_id, ToolUseStatus::Running);
     }
 
     /// Complete a tool execution.
     pub fn complete_tool(&mut self, call_id: &str, is_error: bool) {
-        let use_status = if is_error {
-            ToolUseStatus::Failed
-        } else {
-            ToolUseStatus::Completed
-        };
         if let Some(tool) = self
             .tool_executions
             .iter_mut()
@@ -451,35 +416,6 @@ impl SessionState {
         } else {
             tracing::debug!(call_id, "complete_tool: tool not found in tool_executions");
         }
-        self.set_tool_use_status(call_id, use_status);
-    }
-
-    fn set_tool_use_status(&mut self, call_id: &str, next_status: ToolUseStatus) {
-        for message in &mut self.messages {
-            if let MessageContent::ToolUse {
-                call_id: message_call_id,
-                status,
-                ..
-            } = &mut message.content
-                && message_call_id == call_id
-            {
-                *status = next_status;
-            }
-        }
-    }
-
-    /// Merged transcript view: legacy `session.messages` overlaid with
-    /// engine-derived cells from `session.transcript`. Engine-authoritative
-    /// entries supersede TUI optimistic ones on matching `id`; cells with
-    /// no `session.messages` counterpart append at the end. This is the
-    /// single source of truth for everything that wants to *render* the
-    /// chat (transcript modal, viewport, history_lines, …) — both
-    /// `session.messages` (which now receives almost no writes post
-    /// Commit 2) and `session.transcript` (engine-driven) on their own
-    /// are partial. Commit 4/5 will retire the legacy field and this
-    /// helper folds away.
-    pub fn transcript_messages(&self) -> Vec<ChatMessage> {
-        crate::state::derive::merged_chat_messages(&self.messages, self.transcript.cells())
     }
 
     /// Count of connected MCP servers.
@@ -491,7 +427,6 @@ impl SessionState {
 impl Default for SessionState {
     fn default() -> Self {
         Self {
-            messages: Vec::new(),
             transcript: super::transcript_view::TranscriptView::new(),
             pending_auto_restore_truncate: None,
             pending_system_pushes: std::collections::VecDeque::new(),
@@ -523,7 +458,6 @@ impl Default for SessionState {
             lsp_active: false,
             focused_subagent_index: None,
             current_turn_number: None,
-            current_turn_message_start: None,
             current_turn_started_at: None,
             queued_commands: VecDeque::new(),
             available_models: Vec::new(),
@@ -557,447 +491,6 @@ impl Default for SessionState {
             last_query_completion_at: None,
             last_user_interaction_at: Instant::now(),
             idle_prompt_fired: false,
-        }
-    }
-}
-
-/// A rendered chat message.
-/// A rendered chat message — rich enum matching TS's 30+ message types.
-///
-/// TS: src/components/messages/ (41 files)
-#[derive(Debug, Clone)]
-pub struct ChatMessage {
-    pub id: String,
-    pub role: ChatRole,
-    pub content: MessageContent,
-    pub is_meta: bool,
-    /// Creation timestamp (Unix epoch ms). Used by the rewind picker
-    /// to render `formatRelativeTimeAgo(ts)`. Defaults to "now" at
-    /// construction time.
-    pub created_at_ms: i64,
-    /// Compact-summary marker. The compact pipeline emits a synthetic
-    /// "summary" user message to seed the rolled-up history; rewind
-    /// must skip these because rewinding to a summary would lose the
-    /// archived turns. TS: `UserMessage.isCompactSummary` in messages.ts.
-    pub is_compact_summary: bool,
-    /// Transcript-only visibility — message is present in the JSONL
-    /// log for replay but not selectable in the rewind picker. TS:
-    /// `UserMessage.isVisibleInTranscriptOnly` in messages.ts.
-    pub is_visible_in_transcript_only: bool,
-    /// Permission mode active when this message was created (for rewind restoration).
-    /// TS: UserMessage.permissionMode in messages.ts
-    pub permission_mode: Option<PermissionMode>,
-}
-
-/// Message author role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChatRole {
-    User,
-    Assistant,
-    System,
-    Tool,
-}
-
-/// Rich message content variants aligned with TS component types.
-#[derive(Debug, Clone)]
-pub enum MessageContent {
-    // ── User messages (TS: 15 types) ──
-    /// Plain text from user.
-    Text(String),
-    /// User image attachment.
-    Image { path: String },
-    /// User bash input command.
-    BashInput { command: String },
-    /// User bash output display.
-    BashOutput { output: String, exit_code: i32 },
-    /// Plan mode entry/exit marker.
-    PlanMarker { action: PlanAction },
-    /// Agent notification summary.
-    AgentNotification { agent_id: String, summary: String },
-    /// Teammate message.
-    TeammateMessage { teammate: String, content: String },
-    /// Attachment display.
-    Attachment {
-        attachment_type: String,
-        preview: String,
-    },
-    /// Channel-scoped message (e.g., a plugin Slack/Discord bridge).
-    /// TS: UserChannelMessage.tsx — parses `<channel source user>body</channel>`.
-    ChannelMessage {
-        source: String,
-        user: Option<String>,
-        content: String,
-    },
-    /// MCP resource or tool-polling update notification.
-    /// TS: UserResourceUpdateMessage.tsx — parses `<mcp-resource-update ...>`
-    /// and `<mcp-polling-update ...>` blocks.
-    ResourceUpdate {
-        kind: ResourceUpdateKind,
-        server: String,
-        target: String,
-        reason: Option<String>,
-    },
-
-    // ── Assistant messages (TS: 5 types) ──
-    /// Assistant text response (rendered as markdown).
-    AssistantText(String),
-    /// Extended thinking content (collapsible).
-    Thinking {
-        content: String,
-        duration_ms: Option<i64>,
-        reasoning_tokens: Option<i64>,
-    },
-    /// Redacted thinking block.
-    RedactedThinking,
-    /// Tool use invocation display.
-    ToolUse {
-        tool_name: String,
-        call_id: String,
-        input_preview: String,
-        status: ToolUseStatus,
-    },
-
-    // ── Tool results (TS: 7 types) ──
-    /// Successful tool result.
-    ToolSuccess { tool_name: String, output: String },
-    /// Tool execution error.
-    ToolError { tool_name: String, error: String },
-    /// Tool use rejected by user.
-    ToolRejected { tool_name: String, reason: String },
-    /// Tool use canceled by user.
-    ToolCanceled { tool_name: String },
-    /// File edit with diff.
-    FileEditDiff {
-        path: String,
-        diff: String,
-        old_content: Option<String>,
-        new_content: Option<String>,
-    },
-    /// File write result.
-    FileWriteResult { path: String, bytes_written: i64 },
-
-    // ── System messages (TS: 8 types) ──
-    /// System text notice.
-    SystemText(String),
-    /// API error with retry info.
-    ApiError {
-        error: String,
-        retryable: bool,
-        status_code: Option<i32>,
-    },
-    /// Rate limit notification.
-    RateLimit {
-        message: String,
-        resets_at: Option<i64>,
-    },
-    /// Shutdown notice.
-    Shutdown { reason: String },
-    /// Teammate shutdown request.
-    ShutdownRequest {
-        from: String,
-        reason: Option<String>,
-    },
-    /// Teammate shutdown rejected.
-    ShutdownRejected { from: String, reason: String },
-    /// Hook completed successfully.
-    HookSuccess { hook_name: String, output: String },
-    /// Hook failed with a non-blocking error.
-    HookNonBlockingError { hook_name: String, error: String },
-    /// Hook failed with a blocking error that prevents continuation.
-    HookBlockingError {
-        hook_name: String,
-        error: String,
-        command: String,
-    },
-    /// Hook was cancelled.
-    HookCancelled { hook_name: String },
-    /// Hook emitted a system message.
-    HookSystemMessage { hook_name: String, message: String },
-    /// Hook provided additional context.
-    HookAdditionalContext { hook_name: String, context: String },
-    /// Hook stopped continuation with a reason.
-    HookStoppedContinuation { hook_name: String, reason: String },
-    /// Hook completed asynchronously.
-    HookAsyncResponse { hook_name: String, output: String },
-    /// Plan approval request.
-    PlanApproval { plan: String, request_id: String },
-    /// Compaction boundary marker.
-    CompactBoundary,
-    /// Compaction summary message — the LLM-or-SM-generated summary
-    /// that replaces the archived turns. TS: `CompactSummary.tsx`.
-    CompactSummary {
-        /// Summary text.
-        summary: String,
-        /// Number of messages summarized (None when unknown).
-        messages_summarized: Option<i32>,
-        /// User-supplied focus directive (from `/compact <text>` or
-        /// PreCompact hook). None means no metadata banner.
-        user_context: Option<String>,
-        /// How compaction was triggered. Drives the heading text:
-        /// "Summarized via session memory" vs "Conversation summary".
-        trigger: coco_types::CompactTrigger,
-    },
-    /// Advisor message from coordinator agent.
-    Advisor { advisor_id: String, content: String },
-    /// Task assignment notification.
-    TaskAssignment {
-        task_id: String,
-        assignee: String,
-        description: String,
-    },
-    /// Synthetic marker rendered after a Ctrl+C cancellation.
-    ///
-    /// TS parity: `[Request interrupted by user]` user message rendered
-    /// as `<InterruptedByUser />` (see `InterruptedByUser.tsx`). The
-    /// engine pushes the literal text to `MessageHistory` for next-turn
-    /// model context; the TUI's `on_turn_interrupted` handler appends
-    /// this variant for the visible chat row. `for_tool_use=true` mirrors
-    /// `createUserInterruptionMessage({toolUse: true})` and is set when
-    /// in-flight tool calls were interrupted.
-    InterruptionMarker { for_tool_use: bool },
-}
-
-/// Plan mode action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlanAction {
-    Enter,
-    Exit,
-}
-
-/// MCP update notification kind.
-///
-/// TS: UserResourceUpdateMessage.tsx distinguishes `<mcp-resource-update>`
-/// (resource content changed — e.g. a file or DB row) from
-/// `<mcp-polling-update>` (a polled tool's output changed).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceUpdateKind {
-    /// Resource changed (URI-addressed).
-    Resource,
-    /// Polled tool output changed.
-    Polling,
-}
-
-/// Tool use inline status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolUseStatus {
-    Queued,
-    Running,
-    Completed,
-    Failed,
-}
-
-impl ChatMessage {
-    /// Create a simple user text message.
-    pub fn user_text(id: impl Into<String>, text: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            role: ChatRole::User,
-            content: MessageContent::Text(text.into()),
-            is_meta: false,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: None,
-        }
-    }
-
-    /// Create a bash-input user message (rendered as `> $ <command>`).
-    /// TS parity: `UserBashInputMessage`.
-    pub fn user_bash_input(id: impl Into<String>, command: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            role: ChatRole::User,
-            content: MessageContent::BashInput {
-                command: command.into(),
-            },
-            is_meta: false,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: None,
-        }
-    }
-
-    /// Create a bash-output user message (rendered as indented body).
-    /// Same id as the matching `BashInput` so rewind groups them.
-    /// TS parity: `UserBashOutputMessage`.
-    pub fn user_bash_output(
-        id: impl Into<String>,
-        output: impl Into<String>,
-        exit_code: i32,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            role: ChatRole::User,
-            content: MessageContent::BashOutput {
-                output: output.into(),
-                exit_code,
-            },
-            is_meta: false,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: None,
-        }
-    }
-
-    /// Create a simple assistant text message.
-    pub fn assistant_text(id: impl Into<String>, text: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            role: ChatRole::Assistant,
-            content: MessageContent::AssistantText(text.into()),
-            is_meta: false,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: None,
-        }
-    }
-
-    /// Create a system text message.
-    pub fn system_text(id: impl Into<String>, text: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            role: ChatRole::System,
-            content: MessageContent::SystemText(text.into()),
-            is_meta: false,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: None,
-        }
-    }
-
-    /// Create the synthetic interrupt marker chat row. Mirrors TS
-    /// `<InterruptedByUser />`. `for_tool_use=true` when the cancel
-    /// happened while tools were running.
-    pub fn interruption_marker(id: impl Into<String>, for_tool_use: bool) -> Self {
-        Self {
-            id: id.into(),
-            role: ChatRole::User,
-            content: MessageContent::InterruptionMarker { for_tool_use },
-            is_meta: false,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: None,
-        }
-    }
-
-    /// Create a tool success result.
-    pub fn tool_success(
-        id: impl Into<String>,
-        tool_name: impl Into<String>,
-        output: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            role: ChatRole::Tool,
-            content: MessageContent::ToolSuccess {
-                tool_name: tool_name.into(),
-                output: output.into(),
-            },
-            is_meta: false,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: None,
-        }
-    }
-
-    /// Create a tool error result.
-    pub fn tool_error(
-        id: impl Into<String>,
-        tool_name: impl Into<String>,
-        error: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            role: ChatRole::Tool,
-            content: MessageContent::ToolError {
-                tool_name: tool_name.into(),
-                error: error.into(),
-            },
-            is_meta: false,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: false,
-            permission_mode: None,
-        }
-    }
-
-    /// Create a teammate-attributed message for the leader's view.
-    ///
-    /// Tagged `is_meta=true` so the chat widget hides it from the
-    /// regular scroll (the filter at `widgets/chat/mod.rs` skips
-    /// `is_meta && !show_system_reminders`); the transcript reader
-    /// renders with system reminders enabled so these surface there.
-    /// `is_visible_in_transcript_only=true` also marks the
-    /// message as a non-rewindable anchor (`update_rewind` skips it).
-    /// ID is `teammate:{agent}:{uuid}` so concurrent teammates
-    /// can't collide.
-    pub fn teammate_message(teammate: impl Into<String>, content: impl Into<String>) -> Self {
-        let teammate = teammate.into();
-        let uuid = uuid::Uuid::new_v4();
-        Self {
-            id: format!("teammate:{teammate}:{uuid}"),
-            role: ChatRole::User,
-            content: MessageContent::TeammateMessage {
-                teammate,
-                content: content.into(),
-            },
-            is_meta: true,
-            created_at_ms: now_ms(),
-            is_compact_summary: false,
-            is_visible_in_transcript_only: true,
-            permission_mode: None,
-        }
-    }
-
-    /// Get the text content for simple display.
-    pub fn text_content(&self) -> &str {
-        match &self.content {
-            MessageContent::Text(s)
-            | MessageContent::AssistantText(s)
-            | MessageContent::SystemText(s) => s,
-            MessageContent::BashInput { command } => command,
-            MessageContent::BashOutput { output, .. } => output,
-            MessageContent::ToolSuccess { output, .. } => output,
-            MessageContent::ToolError { error, .. } => error,
-            MessageContent::ToolRejected { reason, .. } => reason,
-            MessageContent::ToolCanceled { tool_name } => tool_name,
-            MessageContent::Thinking { content, .. } => content,
-            MessageContent::HookSuccess { output, .. }
-            | MessageContent::HookAsyncResponse { output, .. } => output,
-            MessageContent::HookNonBlockingError { error, .. }
-            | MessageContent::HookBlockingError { error, .. } => error,
-            MessageContent::HookCancelled { hook_name } => hook_name,
-            MessageContent::HookSystemMessage { message, .. } => message,
-            MessageContent::HookAdditionalContext { context, .. } => context,
-            MessageContent::HookStoppedContinuation { reason, .. } => reason,
-            MessageContent::PlanApproval { plan, .. } => plan,
-            MessageContent::RateLimit { message, .. } => message,
-            MessageContent::ApiError { error, .. } => error,
-            MessageContent::Shutdown { reason } => reason,
-            MessageContent::ShutdownRequest { from, .. } => from,
-            MessageContent::ShutdownRejected { reason, .. } => reason,
-            MessageContent::FileEditDiff { diff, .. } => diff,
-            MessageContent::FileWriteResult { path, .. } => path,
-            MessageContent::AgentNotification { summary, .. } => summary,
-            MessageContent::TeammateMessage { content, .. } => content,
-            MessageContent::Attachment { preview, .. } => preview,
-            MessageContent::Image { path } => path,
-            MessageContent::ToolUse { input_preview, .. } => input_preview,
-            MessageContent::RedactedThinking => "[redacted]",
-            MessageContent::PlanMarker { .. } => "",
-            MessageContent::CompactBoundary => "---",
-            MessageContent::CompactSummary { summary, .. } => summary,
-            MessageContent::Advisor { content, .. } => content,
-            MessageContent::TaskAssignment { description, .. } => description,
-            MessageContent::ChannelMessage { content, .. } => content,
-            MessageContent::ResourceUpdate { target, .. } => target,
-            MessageContent::InterruptionMarker { .. } => "",
         }
     }
 }

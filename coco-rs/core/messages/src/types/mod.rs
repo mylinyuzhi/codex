@@ -17,6 +17,7 @@ pub mod tool_result;
 pub mod transcript;
 
 pub use aliases::AssistantContent;
+pub use aliases::DataContent;
 pub use aliases::FileContent;
 pub use aliases::LlmMessage;
 pub use aliases::LlmPrompt;
@@ -26,6 +27,7 @@ pub use aliases::ToolCallContent;
 pub use aliases::ToolContent;
 pub use aliases::ToolResultContent;
 pub use aliases::ToolResultContentPart;
+pub use aliases::ToolResultOutput;
 pub use aliases::UserContent;
 pub use aliases::tool_reference_content_part;
 

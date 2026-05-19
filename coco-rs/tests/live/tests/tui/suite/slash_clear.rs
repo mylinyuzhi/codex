@@ -19,7 +19,7 @@
 //! through it, but we don't have `SessionRuntime` wired here). What
 //! we *can* assert is the local effect:
 //!
-//! - `session.messages` is empty after `/clear` (transcript wiped).
+//! - Engine transcript is empty after `/clear` (cells wiped).
 //! - `session.last_agent_markdown` is `None` (so a subsequent /copy
 //!   would correctly toast "no agent response").
 //! - Exactly one toast remains — the "cleared conversation" notice.
@@ -46,10 +46,10 @@ pub async fn run() -> Result<()> {
         assert!(ok, "slash_clear: setup turn `{prompt}` flagged is_error");
     }
     assert_eq!(
-        harness.state.session.messages.len(),
+        harness.cell_count(),
         4,
-        "slash_clear: setup expected 4 messages (U,A,U,A), got {}",
-        harness.state.session.messages.len(),
+        "slash_clear: setup expected 4 cells (U,A,U,A), got {}",
+        harness.cell_count(),
     );
     assert!(
         harness.state.session.last_agent_markdown.is_some(),
@@ -64,11 +64,11 @@ pub async fn run() -> Result<()> {
     // Submit /clear — pure local + a fire-and-forget UserCommand.
     harness.submit("/clear").await;
 
-    // Local effect 1: messages wiped.
+    // Local effect 1: transcript wiped.
     assert!(
-        harness.state.session.messages.is_empty(),
-        "slash_clear: messages should be empty after /clear, got {}",
-        harness.state.session.messages.len(),
+        harness.cells_empty(),
+        "slash_clear: transcript should be empty after /clear, got {} cells",
+        harness.cell_count(),
     );
     // Local effect 2: last_agent_markdown reset (so /copy after /clear
     // surfaces "no agent response", per do_clear_conversation).

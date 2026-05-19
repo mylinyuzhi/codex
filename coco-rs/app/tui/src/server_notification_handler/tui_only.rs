@@ -467,37 +467,53 @@ fn on_rewind_completed(
     let mut restored_input_text = None;
 
     let mut restored_image_path: Option<String> = None;
-    if !target_message_id.is_empty()
-        && let Some(target_msg) = state
-            .session
-            .messages
+    if !target_message_id.is_empty() {
+        // Phase 3d (§5): search the engine-authoritative cell list
+        // (single source of truth) for the rewound message. UI
+        // restoration reads `cell.source` directly — no projection
+        // hop through ChatMessage.
+        let cells = state.session.transcript.cells();
+        if let Some(target_cell) = cells
             .iter()
-            .find(|m| m.id == target_message_id)
-    {
-        restored_permission_mode = target_msg.permission_mode;
-        // TS `textForResubmit` (`utils/messages.ts:2873-2886`) strips
-        // IDE-injected context tags so the restored prompt doesn't
-        // leak `<ide_opened_file>` / `<ide_selection>` blocks.
-        let stripped = crate::update_rewind::strip_ide_context_tags(target_msg.text_content());
-        restored_input_text = Some(stripped).filter(|s| !s.is_empty());
-        // TS `restoreMessageSync` (`screens/REPL.tsx:3721-3737`) restores
-        // pasted images by reading them off the rewound message. Coco's
-        // ChatMessage carries `MessageContent::Image { path }` for
-        // pasted images — capture the path so we can re-inject below.
-        if let crate::state::MessageContent::Image { path } = &target_msg.content {
-            restored_image_path = Some(path.clone());
+            .find(|c| c.message_uuid.to_string() == target_message_id)
+        {
+            if let coco_messages::Message::User(u) = target_cell.source.as_ref() {
+                restored_permission_mode = u.permission_mode;
+            }
+            // TS `textForResubmit` (`utils/messages.ts:2873-2886`) strips
+            // IDE-injected context tags so the restored prompt doesn't
+            // leak `<ide_opened_file>` / `<ide_selection>` blocks.
+            let raw = match &target_cell.kind {
+                crate::state::transcript_view::CellKind::UserText { text } => text.as_str(),
+                _ => "",
+            };
+            let stripped = crate::update_rewind::strip_ide_context_tags(raw);
+            restored_input_text = Some(stripped).filter(|s| !s.is_empty());
+            // TS `restoreMessageSync` (`screens/REPL.tsx:3721-3737`)
+            // restores pasted images by reading them off the rewound
+            // message. The image path lives on
+            // `UserContentPart::File` with an `image/*` media type;
+            // we surface only the first one (matches TS shape).
+            if let coco_messages::Message::User(u) = target_cell.source.as_ref()
+                && let coco_messages::LlmMessage::User { content, .. } = &u.message
+            {
+                for part in content {
+                    if let coco_messages::UserContent::File(f) = part
+                        && f.media_type.starts_with("image/")
+                        && let Some(url) = f.data.as_url()
+                    {
+                        restored_image_path = Some(url.to_string());
+                        break;
+                    }
+                }
+            }
         }
     }
 
-    if !target_message_id.is_empty()
-        && let Some(idx) = state
-            .session
-            .messages
-            .iter()
-            .position(|m| m.id == target_message_id)
-    {
-        state.session.messages.truncate(idx);
-    }
+    // Phase 3d (§5): the engine emits `MessageTruncated` after this
+    // handler — that event truncates `state.session.transcript`, the
+    // single source of truth for rendering. The legacy
+    // `state.session.messages.truncate` parallel write is gone.
 
     if let Some(mode) = restored_permission_mode {
         state.session.permission_mode = mode;

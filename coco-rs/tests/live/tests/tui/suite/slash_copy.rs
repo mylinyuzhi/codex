@@ -14,13 +14,12 @@
 //! - A toast was appended (success or error — we don't depend on the
 //!   real clipboard surface; arboard/OSC52 may either succeed or fail
 //!   in a headless test runner, both produce a toast).
-//! - `/copy` is not folded into `session.messages` as a user prompt
+//! - `/copy` is not folded into the engine transcript as a user prompt
 //!   (it's a TUI-only command, not user content).
 
 use std::time::Duration;
 
 use anyhow::Result;
-use coco_tui::state::session::ChatRole;
 
 use crate::tui::harness::TuiHarness;
 use crate::tui::scripted_model::Reply;
@@ -48,7 +47,7 @@ pub async fn run() -> Result<()> {
          /copy has nothing to source",
     );
     let toasts_before = harness.state.ui.toasts.len();
-    let messages_before = harness.state.session.messages.len();
+    let cells_before = harness.cell_count();
 
     // The slash submission. Must short-circuit at `try_local_command`.
     harness.submit("/copy").await;
@@ -61,22 +60,20 @@ pub async fn run() -> Result<()> {
         harness.model.call_count(),
     );
 
-    // No new user `ChatMessage` was appended (slash commands aren't user prose).
+    // No new user cell was appended (slash commands aren't user prose).
     assert_eq!(
-        harness.state.session.messages.len(),
-        messages_before,
-        "slash_copy: /copy was folded into chat history (delta={})",
-        harness.state.session.messages.len() - messages_before,
+        harness.cell_count(),
+        cells_before,
+        "slash_copy: /copy was folded into transcript (delta={})",
+        harness.cell_count() - cells_before,
     );
     let saw_slash_text = harness
-        .state
-        .session
-        .messages
+        .text_cells_in_order()
         .iter()
-        .any(|m| matches!(m.role, ChatRole::User) && m.text_content() == "/copy");
+        .any(|(role, text)| *role == "user" && *text == "/copy");
     assert!(
         !saw_slash_text,
-        "slash_copy: `/copy` leaked into session.messages as a User entry",
+        "slash_copy: `/copy` leaked into transcript as a User cell",
     );
 
     // Exactly one toast appended (success on systems with clipboard,

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use coco_keybindings::KeybindingAction;
+use coco_messages::Message;
+use coco_messages::SystemMessage;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
@@ -27,21 +30,21 @@ use crate::presentation::transcript::TRANSCRIPT_COLLAPSED_PREVIEW_LINES;
 use crate::presentation::transcript::TRANSCRIPT_EXPANDED_CELL_LINE_CAP;
 use crate::presentation::transcript::TRANSCRIPT_LINE_CHAR_CAP;
 use crate::presentation::transcript::TRANSCRIPT_TRUNCATED_HINT;
-use crate::presentation::transcript::TaskNotificationBatchKind;
-use crate::presentation::transcript::TaskNotificationTone;
 use crate::presentation::transcript::ToolOutputPreview;
 use crate::presentation::transcript::TranscriptCell;
 use crate::presentation::transcript::TranscriptSourceCell;
 use crate::presentation::transcript::tool_output_preview;
-use crate::presentation::transcript::transcript_presentation_with_messages;
+use crate::presentation::transcript::transcript_presentation_with_cells;
 use crate::state::AppState;
-use crate::state::session::ChatMessage;
-use crate::state::session::MessageContent;
+use crate::state::derive::extract_tool_call_input_preview;
+use crate::state::derive::tool_result_output;
 use crate::state::session::ToolExecution;
-use crate::state::session::ToolUseStatus;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript::TranscriptScrollPosition;
 use crate::state::transcript::TranscriptState;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
+use crate::state::transcript_view::SystemCellKind;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
 
@@ -154,18 +157,17 @@ impl Widget for TranscriptStateWidget<'_> {
 
 impl TranscriptStateWidget<'_> {
     fn render_cells(&mut self, area: Rect, buf: &mut Buffer) {
-        // Derive the merged transcript view once and thread it through
-        // both the presentation projection and the renderer so cell
-        // indices line up. Engine-pushed cells are the authoritative
-        // source after Commit 2; legacy `session.messages` is the
-        // residual layer that the merged helper overlays.
-        let messages = self.state.session.transcript_messages();
-        let presentation = transcript_presentation_with_messages(self.state, &messages);
+        // Engine-authoritative cells are the single source of truth.
+        // `session.transcript.cells()` is the same slice the chat
+        // widget renders from, so the modal preserves visual parity
+        // with the inline chat.
+        let cells = self.state.session.transcript.cells();
+        let presentation = transcript_presentation_with_cells(self.state, cells);
         self.layout_index.begin_frame(
-            transcript_layout_generation(self.state, &messages),
+            transcript_layout_generation(self.state, cells),
             transcript_prefix_generation(
                 self.state,
-                &messages,
+                cells,
                 &presentation.cells,
                 area.width,
                 &self.transcript.collapsed_cell_ids,
@@ -178,12 +180,11 @@ impl TranscriptStateWidget<'_> {
             return;
         }
 
-        let mut renderer =
-            TranscriptCellRenderer::new(&messages, self.state, self.styles, area.width);
+        let mut renderer = TranscriptCellRenderer::new(cells, self.state, self.styles, area.width);
         let visible = {
             let mut pager = TranscriptPager::new(
                 &presentation.cells,
-                &messages,
+                cells,
                 &mut renderer,
                 &self.transcript.collapsed_cell_ids,
                 self.transcript.selected_cell_id.as_ref(),
@@ -210,7 +211,7 @@ impl TranscriptStateWidget<'_> {
                 continue;
             }
             let source = &presentation.cells[cell.index];
-            let id = source.cell_id(&messages);
+            let id = source.cell_id(cells);
             let expanded = id
                 .as_ref()
                 .is_none_or(|id| !self.transcript.collapsed_cell_ids.contains(id));
@@ -244,7 +245,7 @@ impl TranscriptStateWidget<'_> {
 }
 
 struct TranscriptCellRenderer<'a> {
-    messages: &'a [ChatMessage],
+    cells: &'a [RenderedCell],
     tool_executions: &'a [ToolExecution],
     width: u16,
     styles: UiStyles<'a>,
@@ -252,13 +253,13 @@ struct TranscriptCellRenderer<'a> {
 
 impl<'a> TranscriptCellRenderer<'a> {
     fn new(
-        messages: &'a [ChatMessage],
+        cells: &'a [RenderedCell],
         state: &'a AppState,
         styles: UiStyles<'a>,
         width: u16,
     ) -> Self {
         Self {
-            messages,
+            cells,
             tool_executions: &state.session.tool_executions,
             width,
             styles,
@@ -300,11 +301,15 @@ impl<'a> TranscriptCellRenderer<'a> {
         let mut lines = Vec::new();
         match cell {
             TranscriptSourceCell::Committed(TranscriptCell::MetaPreview { index }) => {
-                self.render_meta_preview(&self.messages[*index], &mut lines);
+                if let Some(c) = self.cells.get(*index) {
+                    self.render_meta_preview(c, &mut lines);
+                }
             }
-            TranscriptSourceCell::Committed(TranscriptCell::Message { index }) => {
-                self.render_message(&self.messages[*index], expanded, &mut lines);
-                lines.push(Line::default());
+            TranscriptSourceCell::Committed(TranscriptCell::Cell { index }) => {
+                if let Some(c) = self.cells.get(*index) {
+                    self.render_cell_content(c, expanded, &mut lines);
+                    lines.push(Line::default());
+                }
             }
             TranscriptSourceCell::Committed(TranscriptCell::ToolCall {
                 invocation,
@@ -324,26 +329,12 @@ impl<'a> TranscriptCellRenderer<'a> {
                     .dim(),
                 ));
                 for index in *start..*end {
-                    self.render_message(&self.messages[index], expanded, &mut lines);
+                    if let Some(c) = self.cells.get(index) {
+                        self.render_cell_content(c, expanded, &mut lines);
+                    }
                 }
                 lines.push(Line::default());
             }
-            TranscriptSourceCell::Committed(TranscriptCell::HookBatch {
-                count,
-                hook_name,
-                has_error,
-                ..
-            }) => self.render_hook_batch(*count, hook_name, *has_error, &mut lines),
-            TranscriptSourceCell::Committed(TranscriptCell::TaskNotification {
-                summary,
-                tone,
-                ..
-            }) => self.render_task_notification(summary, *tone, &mut lines),
-            TranscriptSourceCell::Committed(TranscriptCell::TaskNotificationBatch {
-                count,
-                kind,
-                ..
-            }) => self.render_task_notification_batch(*count, *kind, &mut lines),
             TranscriptSourceCell::Active(active) => match active {
                 crate::presentation::transcript::ActiveTranscriptCell::Streaming(view) => {
                     for block in &view.blocks {
@@ -396,61 +387,58 @@ impl<'a> TranscriptCellRenderer<'a> {
         expanded: bool,
         lines: &mut Vec<Line<'static>>,
     ) {
+        let invocation_cell = invocation.and_then(|index| self.cells.get(index));
+        let result_cell = result.and_then(|index| self.cells.get(index));
+
         if expanded {
-            let invocation = invocation.and_then(|index| self.messages.get(index));
-            let result = result.and_then(|index| self.messages.get(index));
-            if let Some(msg) = invocation
-                && let MessageContent::ToolUse {
-                    tool_name,
-                    call_id,
-                    input_preview,
-                    status,
-                } = &msg.content
+            if let Some(cell) = invocation_cell
+                && let CellKind::ToolUse { tool_name, call_id } = &cell.kind
             {
-                self.render_tool_call_header(tool_name, call_id, input_preview, *status, lines);
+                self.render_tool_call_header(tool_name, call_id, &cell.source, lines);
             }
-            if let Some(result) = result {
-                self.render_tool_result_full(&result.content, lines);
-            } else if let Some(msg) = invocation {
-                self.render_message(msg, expanded, lines);
+            if let Some(rc) = result_cell {
+                self.render_tool_result_full(rc, lines);
+            } else if let Some(cell) = invocation_cell {
+                self.render_cell_content(cell, expanded, lines);
             }
             return;
         }
 
-        let invocation = invocation.and_then(|index| self.messages.get(index));
-        let result = result.and_then(|index| self.messages.get(index));
-        if let Some(msg) = invocation
-            && let MessageContent::ToolUse {
-                tool_name,
-                call_id,
-                input_preview,
-                status,
-            } = &msg.content
+        if let Some(cell) = invocation_cell
+            && let CellKind::ToolUse { tool_name, call_id } = &cell.kind
         {
-            self.render_tool_call_header(tool_name, call_id, input_preview, *status, lines);
-            if let Some(result) = result {
-                self.render_tool_result_summary(&result.content, lines);
+            self.render_tool_call_header(tool_name, call_id, &cell.source, lines);
+            if let Some(rc) = result_cell {
+                self.render_tool_result_summary(rc, lines);
             }
             return;
         }
-        if let Some(result) = result {
-            self.render_tool_result_header(&result.content, lines);
-            self.render_tool_result_summary(&result.content, lines);
+        if let Some(rc) = result_cell {
+            self.render_tool_result_header(rc, lines);
+            self.render_tool_result_summary(rc, lines);
         }
     }
 
-    fn render_message(&self, msg: &ChatMessage, expanded: bool, lines: &mut Vec<Line<'static>>) {
-        match &msg.content {
-            MessageContent::Text(text) => self.render_text_block(">", text, lines),
-            MessageContent::AssistantText(text) => self.render_text_block("⏺", text, lines),
-            MessageContent::SystemText(text) => self.render_text_block("#", text, lines),
-            MessageContent::Thinking {
-                content,
+    /// Render a single cell's body — text / thinking / tool-use header /
+    /// tool-result / system row. Mirrors the chat-widget dispatch but
+    /// uses the modal's expansion conventions (capped expanded output,
+    /// "ctrl+o to expand" preview hint).
+    fn render_cell_content(
+        &self,
+        cell: &RenderedCell,
+        expanded: bool,
+        lines: &mut Vec<Line<'static>>,
+    ) {
+        match &cell.kind {
+            CellKind::UserText { text } => self.render_text_block(">", text, lines),
+            CellKind::AssistantText { text, .. } => self.render_text_block("⏺", text, lines),
+            CellKind::AssistantThinking {
+                text,
                 duration_ms,
                 reasoning_tokens,
             } => lines.extend(render_thinking_block(
                 ThinkingRenderInput {
-                    content,
+                    content: text,
                     duration_ms: *duration_ms,
                     reasoning_tokens: *reasoning_tokens,
                     display: if expanded {
@@ -464,48 +452,91 @@ impl<'a> TranscriptCellRenderer<'a> {
                 },
                 self.styles,
             )),
-            MessageContent::ToolUse {
-                tool_name,
-                call_id,
-                input_preview,
-                status,
-            } => self.render_tool_call_header(tool_name, call_id, input_preview, *status, lines),
-            MessageContent::ToolSuccess { tool_name, output } => {
-                lines.push(Line::from(vec![
-                    Span::raw("  ● ").fg(self.styles.tool_completed()),
-                    Span::raw(tool_name.clone()).fg(self.styles.text()).bold(),
-                ]));
-                self.render_capped_lines("    ", output, self.styles.text(), lines);
+            CellKind::AssistantRedactedThinking => lines.push(Line::from(
+                Span::raw(t!("chat.redacted_thinking").to_string())
+                    .fg(self.styles.thinking())
+                    .dim()
+                    .italic(),
+            )),
+            CellKind::ToolUse { call_id, tool_name } => {
+                self.render_tool_call_header(tool_name, call_id, &cell.source, lines);
             }
-            MessageContent::ToolError { tool_name, error } => {
-                lines.push(Line::from(vec![
-                    Span::raw("  ● ").fg(self.styles.tool_error()),
-                    Span::raw(tool_name.clone()).fg(self.styles.text()).bold(),
-                    Span::raw(": ").fg(self.styles.dim()),
-                    Span::raw(transcript_safe_line(error)).fg(self.styles.error()),
-                ]));
+            CellKind::ToolResult { .. } => {
+                self.render_tool_result_header(cell, lines);
+                if expanded {
+                    self.render_tool_result_full(cell, lines);
+                } else {
+                    self.render_tool_result_summary(cell, lines);
+                }
             }
-            MessageContent::ToolRejected { tool_name, reason } => {
+            CellKind::ToolUseSummary { summary } => {
+                self.render_text_block("#", summary, lines);
+            }
+            CellKind::UserAttachment | CellKind::Attachment => {
                 lines.push(Line::from(vec![
-                    Span::raw("  ⊘ ").fg(self.styles.warning()),
-                    Span::raw(t!("chat.tool_rejected", tool_name = tool_name).to_string())
-                        .fg(self.styles.dim()),
-                    Span::raw(transcript_safe_line(reason)).fg(self.styles.warning()),
+                    Span::raw("> ").fg(self.styles.dim()),
+                    Span::raw("📎 ").fg(self.styles.accent()),
+                    Span::raw("attachment".to_string()).fg(self.styles.dim()),
                 ]));
             }
-            MessageContent::ToolCanceled { tool_name } => {
-                lines.push(Line::from(
-                    Span::raw(t!("chat.tool_canceled", tool_name = tool_name).to_string())
-                        .fg(self.styles.dim())
-                        .italic(),
-                ));
-            }
-            MessageContent::InterruptionMarker { .. } => {
+            CellKind::Progress | CellKind::Tombstone => {}
+            CellKind::System(kind) => self.render_system_cell(kind, &cell.source, lines),
+        }
+    }
+
+    fn render_system_cell(
+        &self,
+        kind: &SystemCellKind,
+        source: &Arc<Message>,
+        lines: &mut Vec<Line<'static>>,
+    ) {
+        match kind {
+            SystemCellKind::UserInterruption { .. } => {
                 lines.push(Line::from(
                     Span::raw(t!("chat.interrupted_marker").to_string()).fg(self.styles.dim()),
                 ));
             }
-            _ => self.render_text_block("•", msg.text_content(), lines),
+            SystemCellKind::Informational => {
+                let Message::System(SystemMessage::Informational(info)) = source.as_ref() else {
+                    return;
+                };
+                let body = if info.title.is_empty() {
+                    info.message.clone()
+                } else {
+                    format!("{}: {}", info.title, info.message)
+                };
+                self.render_text_block("#", &body, lines);
+            }
+            SystemCellKind::ApiError => {
+                let Message::System(SystemMessage::ApiError(e)) = source.as_ref() else {
+                    return;
+                };
+                let status = e.status_code.map(|c| format!(" [{c}]")).unwrap_or_default();
+                lines.push(Line::from(
+                    Span::raw(format!("⚠{status} {error}", error = e.error))
+                        .fg(self.styles.error()),
+                ));
+            }
+            SystemCellKind::CompactBoundary => {
+                let border = "─".repeat(40);
+                lines.push(Line::from(Span::raw(border).fg(self.styles.border()).dim()));
+            }
+            SystemCellKind::LocalCommand => {
+                let Message::System(SystemMessage::LocalCommand(lc)) = source.as_ref() else {
+                    return;
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("! ").fg(self.styles.accent()).bold(),
+                    Span::raw(lc.command.clone()).fg(self.styles.accent()),
+                ]));
+                self.render_capped_lines("  ", &lc.output, self.styles.dim(), lines);
+            }
+            _ => {
+                let body = system_summary_text(source.as_ref()).unwrap_or_default();
+                if !body.is_empty() {
+                    self.render_text_block("#", &body, lines);
+                }
+            }
         }
     }
 
@@ -513,15 +544,15 @@ impl<'a> TranscriptCellRenderer<'a> {
         &self,
         tool_name: &str,
         call_id: &str,
-        input_preview: &str,
-        _status: ToolUseStatus,
+        source: &Arc<Message>,
         lines: &mut Vec<Line<'static>>,
     ) {
         let execution = self
             .tool_executions
             .iter()
             .find(|tool| tool.call_id == call_id);
-        let preview = single_line_capped(input_preview, 96);
+        let input_preview = extract_tool_call_input_preview(source, call_id);
+        let preview = single_line_capped(&input_preview, 96);
         let elapsed = execution
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
@@ -538,92 +569,63 @@ impl<'a> TranscriptCellRenderer<'a> {
         lines.push(Line::from(spans));
     }
 
-    fn render_tool_result_summary(&self, content: &MessageContent, lines: &mut Vec<Line<'static>>) {
-        match content {
-            MessageContent::ToolSuccess { output, .. } => self.render_output_preview(output, lines),
-            MessageContent::ToolError { error, .. } => {
-                lines.push(result_line(
-                    format!(
-                        "error: {}",
-                        single_line_capped(error, TRANSCRIPT_LINE_CHAR_CAP)
-                    ),
-                    self.styles.error(),
-                ));
-            }
-            MessageContent::ToolRejected { reason, .. } => {
-                lines.push(result_line(
-                    format!(
-                        "rejected: {}",
-                        single_line_capped(reason, TRANSCRIPT_LINE_CHAR_CAP)
-                    ),
-                    self.styles.warning(),
-                ));
-            }
-            MessageContent::ToolCanceled { .. } => {
-                lines.push(result_line("canceled".to_string(), self.styles.dim()));
-            }
-            _ => {}
+    fn render_tool_result_summary(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
+        let Message::ToolResult(tr) = cell.source.as_ref() else {
+            return;
+        };
+        let Some((_tool_name, output)) = tool_result_output(cell.source.as_ref()) else {
+            return;
+        };
+        if tr.is_error {
+            lines.push(result_line(
+                format!(
+                    "error: {}",
+                    single_line_capped(&output, TRANSCRIPT_LINE_CHAR_CAP)
+                ),
+                self.styles.error(),
+            ));
+            return;
         }
+        self.render_output_preview(&output, lines);
     }
 
-    fn render_tool_result_header(&self, content: &MessageContent, lines: &mut Vec<Line<'static>>) {
-        match content {
-            MessageContent::ToolSuccess { tool_name, .. } => {
-                lines.push(Line::from(vec![
-                    Span::raw("● ").fg(self.styles.tool_completed()),
-                    Span::raw(tool_name.clone()).fg(self.styles.text()).bold(),
-                ]));
-            }
-            MessageContent::ToolError { tool_name, .. } => {
-                lines.push(Line::from(vec![
-                    Span::raw("● ").fg(self.styles.tool_error()),
-                    Span::raw(tool_name.clone()).fg(self.styles.text()).bold(),
-                ]));
-            }
-            MessageContent::ToolRejected { tool_name, .. } => {
-                lines.push(Line::from(vec![
-                    Span::raw("⊘ ").fg(self.styles.warning()),
-                    Span::raw(t!("chat.tool_rejected", tool_name = tool_name).to_string())
-                        .fg(self.styles.dim()),
-                ]));
-            }
-            MessageContent::ToolCanceled { tool_name } => {
-                lines.push(Line::from(
-                    Span::raw(t!("chat.tool_canceled", tool_name = tool_name).to_string())
-                        .fg(self.styles.dim())
-                        .italic(),
-                ));
-            }
-            _ => {}
-        }
+    fn render_tool_result_header(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
+        let Message::ToolResult(tr) = cell.source.as_ref() else {
+            return;
+        };
+        let Some((tool_name, _)) = tool_result_output(cell.source.as_ref()) else {
+            return;
+        };
+        let glyph = if tr.is_error {
+            ("● ", self.styles.tool_error())
+        } else {
+            ("● ", self.styles.tool_completed())
+        };
+        lines.push(Line::from(vec![
+            Span::raw(glyph.0).fg(glyph.1),
+            Span::raw(tool_name).fg(self.styles.text()).bold(),
+        ]));
     }
 
-    fn render_tool_result_full(&self, content: &MessageContent, lines: &mut Vec<Line<'static>>) {
-        match content {
-            MessageContent::ToolSuccess { output, .. } => {
-                if output.is_empty() {
-                    lines.push(result_line("(no output)".to_string(), self.styles.dim()));
-                } else {
-                    self.render_capped_lines("    ", output, self.styles.text(), lines);
-                }
-            }
-            MessageContent::ToolError { error, .. } => {
-                lines.push(result_line(
-                    format!("error: {}", transcript_safe_line(error)),
-                    self.styles.error(),
-                ));
-            }
-            MessageContent::ToolRejected { reason, .. } => {
-                lines.push(result_line(
-                    format!("rejected: {}", transcript_safe_line(reason)),
-                    self.styles.warning(),
-                ));
-            }
-            MessageContent::ToolCanceled { .. } => {
-                lines.push(result_line("canceled".to_string(), self.styles.dim()));
-            }
-            _ => {}
+    fn render_tool_result_full(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
+        let Message::ToolResult(tr) = cell.source.as_ref() else {
+            return;
+        };
+        let Some((_tool_name, output)) = tool_result_output(cell.source.as_ref()) else {
+            return;
+        };
+        if tr.is_error {
+            lines.push(result_line(
+                format!("error: {}", transcript_safe_line(&output)),
+                self.styles.error(),
+            ));
+            return;
         }
+        if output.is_empty() {
+            lines.push(result_line("(no output)".to_string(), self.styles.dim()));
+            return;
+        }
+        self.render_capped_lines("    ", &output, self.styles.text(), lines);
     }
 
     fn render_output_preview(&self, output: &str, lines: &mut Vec<Line<'static>>) {
@@ -711,70 +713,9 @@ impl<'a> TranscriptCellRenderer<'a> {
         }
     }
 
-    fn render_hook_batch(
-        &self,
-        count: usize,
-        hook_name: &str,
-        has_error: bool,
-        lines: &mut Vec<Line<'static>>,
-    ) {
-        let color = if has_error {
-            self.styles.warning()
-        } else {
-            self.styles.accent()
-        };
-        lines.push(Line::from(vec![
-            Span::raw("  ").fg(color),
-            Span::raw(hook_name.to_string()).fg(self.styles.dim()),
-            Span::raw(": ").fg(self.styles.dim()),
-            Span::raw(t!("chat.hook_batch", count = count).to_string()).fg(color),
-        ]));
-        lines.push(Line::default());
-    }
-
-    fn render_task_notification(
-        &self,
-        summary: &str,
-        tone: TaskNotificationTone,
-        lines: &mut Vec<Line<'static>>,
-    ) {
-        let color = match tone {
-            TaskNotificationTone::Completed => self.styles.success(),
-            TaskNotificationTone::Failed => self.styles.error(),
-            TaskNotificationTone::Killed => self.styles.warning(),
-            TaskNotificationTone::Unknown => self.styles.dim(),
-        };
-        lines.push(Line::from(vec![
-            Span::raw("  ").fg(color),
-            Span::raw(summary.to_string()).fg(color),
-        ]));
-        lines.push(Line::default());
-    }
-
-    fn render_task_notification_batch(
-        &self,
-        count: usize,
-        kind: TaskNotificationBatchKind,
-        lines: &mut Vec<Line<'static>>,
-    ) {
-        let label = match kind {
-            TaskNotificationBatchKind::BackgroundBashCompleted => {
-                t!("chat.background_bash_batch", count = count).to_string()
-            }
-            TaskNotificationBatchKind::TeammateShutdown => {
-                t!("chat.teammate_shutdown_batch", count = count).to_string()
-            }
-        };
-        lines.push(Line::from(vec![
-            Span::raw("  ").fg(self.styles.success()),
-            Span::raw(label).fg(self.styles.dim()),
-        ]));
-        lines.push(Line::default());
-    }
-
-    fn render_meta_preview(&self, msg: &ChatMessage, lines: &mut Vec<Line<'static>>) {
+    fn render_meta_preview(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
         const PREVIEW_CHARS: usize = 50;
-        let raw = msg.text_content();
+        let raw = meta_preview_text(cell);
         let single_line = raw.lines().next().unwrap_or("");
         let trimmed = single_line.split_whitespace().collect::<Vec<_>>().join(" ");
         let preview = truncate_chars(&trimmed, PREVIEW_CHARS);
@@ -787,7 +728,7 @@ impl<'a> TranscriptCellRenderer<'a> {
 
 struct TranscriptPager<'cells, 'state, 'r> {
     cells: &'cells [TranscriptSourceCell<'state>],
-    messages: &'state [ChatMessage],
+    rendered_cells: &'state [RenderedCell],
     renderer: &'r mut TranscriptCellRenderer<'state>,
     collapsed_cell_ids: &'cells HashSet<TranscriptCellId>,
     layout_index: &'r mut TranscriptLayoutIndex,
@@ -815,7 +756,7 @@ struct VisibleScan {
 impl<'cells, 'state, 'r> TranscriptPager<'cells, 'state, 'r> {
     fn new(
         cells: &'cells [TranscriptSourceCell<'state>],
-        messages: &'state [ChatMessage],
+        rendered_cells: &'state [RenderedCell],
         renderer: &'r mut TranscriptCellRenderer<'state>,
         collapsed_cell_ids: &'cells HashSet<TranscriptCellId>,
         _selected_cell_id: Option<&'cells TranscriptCellId>,
@@ -823,7 +764,7 @@ impl<'cells, 'state, 'r> TranscriptPager<'cells, 'state, 'r> {
     ) -> Self {
         Self {
             cells,
-            messages,
+            rendered_cells,
             renderer,
             collapsed_cell_ids,
             layout_index,
@@ -878,7 +819,7 @@ impl<'cells, 'state, 'r> TranscriptPager<'cells, 'state, 'r> {
     fn cell_top(&mut self, cell_id: &TranscriptCellId) -> Option<usize> {
         for index in 0..self.cells.len() {
             if self.cells[index]
-                .cell_id(self.messages)
+                .cell_id(self.rendered_cells)
                 .as_ref()
                 .is_some_and(|id| id == cell_id)
             {
@@ -951,7 +892,7 @@ impl<'cells, 'state, 'r> TranscriptPager<'cells, 'state, 'r> {
 
     fn height(&mut self, index: usize) -> usize {
         let cell = &self.cells[index];
-        let id = cell.cell_id(self.messages);
+        let id = cell.cell_id(self.rendered_cells);
         let expanded = id
             .as_ref()
             .is_none_or(|id| !self.collapsed_cell_ids.contains(id));
@@ -1006,12 +947,12 @@ fn effective_scroll(
     }
 }
 
-fn transcript_layout_generation(state: &AppState, messages: &[ChatMessage]) -> u64 {
+fn transcript_layout_generation(state: &AppState, cells: &[RenderedCell]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    hash = mix_u64(hash, messages.len() as u64);
-    if let Some(last) = messages.last() {
-        hash = mix_str(hash, &last.id);
-        hash = mix_u64(hash, message_content_len(&last.content) as u64);
+    hash = mix_u64(hash, cells.len() as u64);
+    if let Some(last) = cells.last() {
+        hash = mix_str(hash, &last.message_uuid.to_string());
+        hash = mix_u64(hash, cell_content_len(last) as u64);
     }
     hash = mix_u64(hash, state.session.tool_executions.len() as u64);
     for tool in &state.session.tool_executions {
@@ -1023,15 +964,15 @@ fn transcript_layout_generation(state: &AppState, messages: &[ChatMessage]) -> u
 
 fn transcript_prefix_generation(
     state: &AppState,
-    messages: &[ChatMessage],
-    cells: &[TranscriptSourceCell<'_>],
+    cells: &[RenderedCell],
+    presentation_cells: &[TranscriptSourceCell<'_>],
     width: u16,
     collapsed_cell_ids: &HashSet<TranscriptCellId>,
 ) -> u64 {
-    let mut hash = transcript_layout_generation(state, messages);
+    let mut hash = transcript_layout_generation(state, cells);
     hash = mix_u64(hash, u64::from(width));
-    for cell in cells {
-        let Some(id) = cell.cell_id(messages) else {
+    for cell in presentation_cells {
+        let Some(id) = cell.cell_id(cells) else {
             continue;
         };
         if collapsed_cell_ids.contains(&id) {
@@ -1058,38 +999,101 @@ fn mix_cell_id(mut hash: u64, cell_id: &TranscriptCellId) -> u64 {
             hash = mix_u64(hash, *start as u64);
             mix_u64(hash, *end as u64)
         }
-        TranscriptCellId::HookBatch { start, end } => {
-            hash = mix_u64(hash, 4);
-            hash = mix_u64(hash, *start as u64);
-            mix_u64(hash, *end as u64)
-        }
-        TranscriptCellId::TaskNotificationBatch { start, end } => {
-            hash = mix_u64(hash, 5);
-            hash = mix_u64(hash, *start as u64);
-            mix_u64(hash, *end as u64)
-        }
-        TranscriptCellId::ActiveTail => mix_u64(hash, 6),
+        TranscriptCellId::ActiveTail => mix_u64(hash, 4),
     }
 }
 
-fn message_content_len(content: &MessageContent) -> usize {
-    match content {
-        MessageContent::Text(text)
-        | MessageContent::AssistantText(text)
-        | MessageContent::SystemText(text) => text.len(),
-        MessageContent::Thinking { content, .. } => content.len(),
-        MessageContent::ToolSuccess { output, .. } => output.len(),
-        MessageContent::ToolError { error, .. } => error.len(),
-        MessageContent::ToolRejected { reason, .. } => reason.len(),
-        MessageContent::ToolCanceled { tool_name } => tool_name.len(),
-        MessageContent::ToolUse {
-            tool_name,
-            call_id,
-            input_preview,
-            ..
-        } => tool_name.len() + call_id.len() + input_preview.len(),
-        _ => 0,
+/// Best-effort byte length of the rendered text inside a cell — used by
+/// the layout-invalidation hash. Mirrors the chat-widget's choice of
+/// summarising tool calls by name + preview rather than by output, so
+/// the modal redraws on the same boundaries as the inline chat.
+fn cell_content_len(cell: &RenderedCell) -> usize {
+    match &cell.kind {
+        CellKind::UserText { text }
+        | CellKind::AssistantText { text, .. }
+        | CellKind::AssistantThinking { text, .. } => text.len(),
+        CellKind::ToolUse {
+            call_id, tool_name, ..
+        } => {
+            let preview = extract_tool_call_input_preview(&cell.source, call_id);
+            tool_name.len() + call_id.len() + preview.len()
+        }
+        CellKind::ToolResult { call_id, .. } => {
+            let len = tool_result_output(&cell.source)
+                .map(|(name, output)| name.len() + output.len())
+                .unwrap_or(0);
+            call_id.len() + len
+        }
+        CellKind::ToolUseSummary { summary } => summary.len(),
+        CellKind::System(_) => meta_preview_text(cell).len(),
+        CellKind::UserAttachment
+        | CellKind::Attachment
+        | CellKind::AssistantRedactedThinking
+        | CellKind::Progress
+        | CellKind::Tombstone => 0,
     }
+}
+
+fn meta_preview_text(cell: &RenderedCell) -> String {
+    if let CellKind::ToolUseSummary { summary } = &cell.kind {
+        return summary.clone();
+    }
+    let Message::System(sm) = cell.source.as_ref() else {
+        return String::new();
+    };
+    match sm {
+        SystemMessage::Informational(info) => {
+            if info.title.is_empty() {
+                info.message.clone()
+            } else {
+                format!("{}: {}", info.title, info.message)
+            }
+        }
+        SystemMessage::ApiError(e) => e.error.clone(),
+        SystemMessage::LocalCommand(lc) => lc.command.clone(),
+        SystemMessage::PermissionRetry(m) => format!("{} · {}", m.tool_name, m.message),
+        SystemMessage::BridgeStatus(m) => m.message.clone().unwrap_or_default(),
+        SystemMessage::CompactBoundary(_)
+        | SystemMessage::MicrocompactBoundary(_)
+        | SystemMessage::UserInterruption(_)
+        | SystemMessage::MemorySaved(_)
+        | SystemMessage::AwaySummary(_)
+        | SystemMessage::AgentsKilled(_)
+        | SystemMessage::ApiMetrics(_)
+        | SystemMessage::StopHookSummary(_)
+        | SystemMessage::TurnDuration(_)
+        | SystemMessage::ScheduledTaskFire(_) => String::new(),
+    }
+}
+
+fn system_summary_text(msg: &Message) -> Option<String> {
+    let Message::System(sm) = msg else {
+        return None;
+    };
+    Some(match sm {
+        SystemMessage::PermissionRetry(m) => {
+            format!("permission retry · {} · {}", m.tool_name, m.message)
+        }
+        SystemMessage::BridgeStatus(m) => match (m.connected, m.message.as_deref()) {
+            (true, Some(msg)) => format!("bridge connected · {msg}"),
+            (true, None) => "bridge connected".to_string(),
+            (false, Some(msg)) => format!("bridge disconnected · {msg}"),
+            (false, None) => "bridge disconnected".to_string(),
+        },
+        SystemMessage::MemorySaved(_) => "memory saved".to_string(),
+        SystemMessage::AwaySummary(_) => "away summary".to_string(),
+        SystemMessage::AgentsKilled(_) => "agents killed".to_string(),
+        SystemMessage::ApiMetrics(_) => "API metrics".to_string(),
+        SystemMessage::StopHookSummary(_) => "stop hook summary".to_string(),
+        SystemMessage::TurnDuration(_) => "turn duration".to_string(),
+        SystemMessage::ScheduledTaskFire(_) => "scheduled task".to_string(),
+        SystemMessage::Informational(_)
+        | SystemMessage::ApiError(_)
+        | SystemMessage::CompactBoundary(_)
+        | SystemMessage::MicrocompactBoundary(_)
+        | SystemMessage::LocalCommand(_)
+        | SystemMessage::UserInterruption(_) => return None,
+    })
 }
 
 fn mix_str(mut hash: u64, value: &str) -> u64 {
