@@ -1,11 +1,11 @@
-//! Types relocated from `coco-types` to live with the message machinery.
+//! Message-family types — Message envelope, content aliases, attachment
+//! payloads, tool results, hook results, transcript persistence shapes.
 //!
-//! Foundational, provider-agnostic types still live in `coco-types`; anything
-//! that embeds an LLM body — `Message`, `ToolResult::new_messages`,
-//! `HookResult.message`, `TranscriptMessage.message`, … — lives here.
-//!
-//! All LLM types are aliased through `coco-inference` (the seam crate).
-//! Never reach for `vercel_ai_provider` directly.
+//! Lives in `coco-types` so wire-protocol envelopes (ServerNotification,
+//! CoreEvent) at the same crate can carry typed `Message` payloads
+//! without crossing a layer boundary. DTOs reach this module through
+//! `coco-llm-types` (the vercel-ai DTO seam); no `vercel_ai_provider::*`
+//! reference here.
 
 pub mod aliases;
 pub mod attachment_body;

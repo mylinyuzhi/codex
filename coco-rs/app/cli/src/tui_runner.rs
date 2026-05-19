@@ -350,21 +350,13 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             ))
             .await;
         for msg in &plan.prior_messages {
-            match serde_json::to_value(msg) {
-                Ok(payload) => {
-                    let _ = notification_tx
-                        .send(CoreEvent::Protocol(
-                            coco_types::ServerNotification::MessageAppended { message: payload },
-                        ))
-                        .await;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "resume: failed to serialize prior message; transcript cell skipped",
-                    );
-                }
-            }
+            let _ = notification_tx
+                .send(CoreEvent::Protocol(
+                    coco_types::ServerNotification::MessageAppended {
+                        message: msg.clone(),
+                    },
+                ))
+                .await;
         }
         eprintln!(
             "{} session {} ({} prior message(s))",

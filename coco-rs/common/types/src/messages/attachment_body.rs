@@ -1,6 +1,6 @@
 //! Typed payload carrier for [`AttachmentMessage`](super::AttachmentMessage).
 //!
-//! Pairs with [`AttachmentKind`](coco_types::AttachmentKind) (the 60-variant
+//! Pairs with [`AttachmentKind`](crate::AttachmentKind) (the 60-variant
 //! TS-parity discriminant): `kind` classifies per TS `Attachment.type`,
 //! `body` carries the data. `AttachmentBody` variants cover only kinds
 //! coco-rs actually produces, so `FeatureGated` / `RuntimeBookkeeping`
@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
-use coco_types::HookEventType;
+use crate::HookEventType;
 
 use super::aliases::LlmMessage;
 
@@ -40,7 +40,7 @@ pub enum AttachmentBody {
 
 /// Typed payload for silent attachment kinds.
 ///
-/// Variant names map 1:1 to the [`AttachmentKind`](coco_types::AttachmentKind)
+/// Variant names map 1:1 to the [`AttachmentKind`](crate::AttachmentKind)
 /// silent variants. Adding a new silent kind requires adding a matching
 /// variant here — enforced by the constructor helpers on
 /// [`AttachmentMessage`](super::AttachmentMessage) +

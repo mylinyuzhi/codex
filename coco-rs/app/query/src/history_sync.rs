@@ -19,34 +19,27 @@ use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::SystemMessage;
 use coco_messages::create_user_interruption_system_message;
-use coco_messages::message_appended;
 use coco_types::CoreEvent;
+use coco_types::ServerNotification;
 use tokio::sync::mpsc::Sender;
 
 use crate::emit::emit_protocol;
 
-/// Push `msg` into `history` and emit a `MessageAppended` protocol
-/// notification carrying its JSON-serialized body. Push happens first
-/// so a closed event channel cannot cause history desync.
+/// Push `msg` into `history` and emit a typed `MessageAppended` protocol
+/// notification. The notification clones the message so consumers
+/// receive a stable copy independent of the history's storage.
 pub async fn history_push_and_emit(
     history: &mut MessageHistory,
     msg: Message,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
-    let notif = match message_appended(&msg) {
-        Ok(n) => Some(n),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "failed to serialize Message for MessageAppended; pushing without notifying",
-            );
-            None
-        }
-    };
+    let notif_msg = msg.clone();
     history.push(msg);
-    if let Some(n) = notif {
-        let _delivered = emit_protocol(event_tx, n).await;
-    }
+    let _delivered = emit_protocol(
+        event_tx,
+        ServerNotification::MessageAppended { message: notif_msg },
+    )
+    .await;
 }
 
 /// Single writer for the user-cancel marker. Reads `in_flight_tool_calls`

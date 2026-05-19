@@ -2,16 +2,16 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
-use coco_types::AgentColorEntry;
-use coco_types::AgentNameEntry;
-use coco_types::AgentSettingEntry;
-use coco_types::AiTitleEntry;
-use coco_types::AttributionSnapshotEntry;
-use coco_types::CustomTitleEntry;
-use coco_types::PrLinkEntry;
-use coco_types::SummaryEntry;
-use coco_types::TagEntry;
-use coco_types::TaskSummaryEntry;
+use crate::AgentColorEntry;
+use crate::AgentNameEntry;
+use crate::AgentSettingEntry;
+use crate::AiTitleEntry;
+use crate::AttributionSnapshotEntry;
+use crate::CustomTitleEntry;
+use crate::PrLinkEntry;
+use crate::SummaryEntry;
+use crate::TagEntry;
+use crate::TaskSummaryEntry;
 
 use super::Message;
 

@@ -779,41 +779,28 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // feed `session.transcript`, which the renderer pipeline reads
         // exclusively.
         ServerNotification::MessageAppended { message } => {
-            match serde_json::from_value::<coco_messages::Message>(message) {
-                Ok(msg) => {
-                    // Plan §6.4 atomic finalize: when the appended
-                    // message is the assistant push that just ended
-                    // the in-flight stream, the cell now owns the
-                    // content — drop the overlay so the same text
-                    // does not render twice for one frame. Subsequent
-                    // stream deltas inside the same turn re-create
-                    // the StreamingState lazily via
-                    // `get_or_insert_with` in `stream.rs`.
-                    //
-                    // Single-agent model: every assistant push is the
-                    // current stream. A future parallel-stream world
-                    // would need an anchor UUID on StreamingState +
-                    // an engine-side pre-allocated assistant UUID; no
-                    // emitter for that exists today so the role check
-                    // is the correct minimal fix.
-                    let is_assistant = matches!(&msg, coco_messages::Message::Assistant(_));
-                    state
-                        .session
-                        .transcript
-                        .on_message_appended(std::sync::Arc::new(msg));
-                    if is_assistant {
-                        state.ui.streaming = None;
-                    }
-                    return true;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "MessageAppended deserialize failed; transcript skipped",
-                    );
-                }
+            // Plan §6.4 atomic finalize: when the appended message is
+            // the assistant push that just ended the in-flight stream,
+            // the cell now owns the content — drop the overlay so the
+            // same text does not render twice for one frame. Subsequent
+            // stream deltas inside the same turn re-create the
+            // StreamingState lazily via `get_or_insert_with` in
+            // `stream.rs`.
+            //
+            // Single-agent model: every assistant push is the current
+            // stream. A future parallel-stream world would need an
+            // anchor UUID on StreamingState + an engine-side pre-
+            // allocated assistant UUID; no emitter for that exists
+            // today so the role check is the correct minimal fix.
+            let is_assistant = matches!(&message, coco_messages::Message::Assistant(_));
+            state
+                .session
+                .transcript
+                .on_message_appended(std::sync::Arc::new(message));
+            if is_assistant {
+                state.ui.streaming = None;
             }
-            false
+            true
         }
         ServerNotification::MessageTruncated { keep_count } => {
             let n = keep_count.max(0) as usize;

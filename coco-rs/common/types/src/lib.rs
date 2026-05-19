@@ -1,9 +1,12 @@
 //! Foundation types shared across all coco-rs crates.
 //!
-//! **Zero LLM dependencies.** Provider-specific types (LlmMessage, content
-//! parts, Message-family structs, ToolResult, HookResult, SerializedMessage,
-//! TranscriptMessage) live in `coco-messages` and reach vercel-ai through the
-//! `coco-inference` seam. This crate stays provider-agnostic.
+//! **Source-level vercel-ai-free.** Provider DTOs (LlmMessage, content
+//! parts, ProviderOptions, StopReason, FinishReason, …) come in through
+//! `coco-llm-types`, the dedicated DTO seam. This crate names them but
+//! never imports `vercel_ai_provider::*` directly. Upgrading the SDK
+//! requires editing only `common/llm-types/src/lib.rs` plus the runtime
+//! seam in `services/inference`; this crate stays unchanged. See
+//! `scripts/check-vercel-ai-seam.sh`.
 
 // === Modules ===
 mod agent;
@@ -21,6 +24,13 @@ mod hook;
 mod id;
 mod jsonrpc;
 mod log;
+pub mod messages;
+// Flat re-export at the crate root: `coco_types::Message` reads better
+// than `coco_types::messages::Message`, and mirrors how every other
+// coco-types module is surfaced. The submodule path
+// (`coco_types::messages::*`) stays available for the operations-layer
+// re-export in `coco-messages`.
+pub use messages::*;
 mod permission;
 mod plugin;
 mod provider;

@@ -2206,6 +2206,7 @@ dependencies = [
 name = "coco-types"
 version = "0.0.0"
 dependencies = [
+ "coco-llm-types",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",

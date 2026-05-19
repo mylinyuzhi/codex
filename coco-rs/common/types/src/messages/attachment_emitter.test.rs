@@ -1,7 +1,7 @@
 use super::*;
+use crate::AttachmentKind;
 use crate::HookCancelledPayload;
-use coco_types::AttachmentKind;
-use coco_types::HookEventType;
+use crate::HookEventType;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 

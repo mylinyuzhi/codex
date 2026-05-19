@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use coco_types::Entrypoint;
-use coco_types::UserType;
+use crate::Entrypoint;
+use crate::UserType;
 
 use super::Message;
 

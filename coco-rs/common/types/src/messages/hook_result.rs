@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use coco_types::HookOutcome;
-use coco_types::PermissionBehavior;
+use crate::HookOutcome;
+use crate::PermissionBehavior;
 
 use super::Message;
 

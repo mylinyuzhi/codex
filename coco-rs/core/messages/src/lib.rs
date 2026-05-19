@@ -4,19 +4,18 @@
 
 pub mod cost;
 pub mod creation;
-pub mod event_helpers;
 pub mod filtering;
 pub mod history;
 pub mod lookups;
 pub mod normalize;
 pub mod predicates;
-pub mod types;
 pub mod wrapping;
 
-// Re-export the relocated Message-family types at the crate root so consumers
-// can write `coco_messages::Message` rather than `coco_messages::types::Message`.
-// The single source of truth for which symbols are exported is `types/mod.rs`.
-pub use types::*;
+// Message-family types live in `coco-types` (the wire-protocol crate
+// owns its payload shapes). Re-export at this crate root so the
+// established `coco_messages::Message` import path keeps working for
+// the operations layer that does normalization / filtering / history.
+pub use coco_types::messages::*;
 
 pub use cost::CostTracker;
 pub use cost::calculate_cost_usd;
@@ -40,8 +39,6 @@ pub use creation::create_user_message;
 pub use creation::create_user_message_with_parts;
 pub use creation::create_user_message_with_parts_and_uuid;
 pub use creation::create_user_message_with_uuid;
-pub use event_helpers::message_appended;
-pub use event_helpers::try_appended_message;
 pub use history::MessageHistory;
 pub use lookups::MessageLookups;
 pub use lookups::build_message_lookups;

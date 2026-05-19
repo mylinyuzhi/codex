@@ -2,11 +2,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
-use coco_types::AttachmentKind;
-use coco_types::CompactTrigger;
-use coco_types::PermissionMode;
-use coco_types::TokenUsage;
-use coco_types::ToolId;
+use crate::AttachmentKind;
+use crate::CompactTrigger;
+use crate::PermissionMode;
+use crate::TokenUsage;
+use crate::ToolId;
 
 use super::AttachmentBody;
 use super::SilentPayload;
@@ -218,8 +218,7 @@ impl AttachmentMessage {
         debug_assert!(
             matches!(
                 kind.coverage(),
-                coco_types::Coverage::FeatureGated { .. }
-                    | coco_types::Coverage::RuntimeBookkeeping { .. }
+                crate::Coverage::FeatureGated { .. } | crate::Coverage::RuntimeBookkeeping { .. }
             ),
             "AttachmentMessage::unit called with non-unit kind {kind:?}"
         );

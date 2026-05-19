@@ -1,8 +1,8 @@
 use super::*;
+use crate::AttachmentKind;
 use crate::AttachmentMessage;
-use coco_types::AttachmentKind;
-use coco_types::Coverage;
-use coco_types::HookEventType;
+use crate::Coverage;
+use crate::HookEventType;
 use pretty_assertions::assert_eq;
 
 #[test]

@@ -287,17 +287,22 @@ matching `NotificationMethod` discriminant.",
     //
     // Engine MessageHistory is single source of truth. These events let
     // TUI / SDK consumers maintain derived views without recomputing
-    // engine-side state. Payloads use `serde_json::Value` for the Message
-    // body because `coco-types` stays provider-agnostic and cannot
-    // reference `coco_messages::Message` (which embeds `LlmMessage`).
-    // Helpers in `coco-messages::event_helpers` bridge (de)serialization.
+    // engine-side state. The Message body is carried typed: coco-types
+    // now owns the Message family (relocated from coco-messages) and
+    // reaches vercel-ai DTOs through coco-llm-types, so the wire enum
+    // can name `Message` directly without bridging through Value.
     //
     // See `engine-tui-unified-transcript-plan.md` §4.1.
 
-    /// One Message appended to engine MessageHistory. The `message`
-    /// field is the JSON-serialized `coco_messages::Message` body —
-    /// consumers deserialize via `coco_messages::event_helpers::try_appended_message`.
-    "history/messageAppended" => MessageAppended { message: serde_json::Value },
+    /// One Message appended to engine MessageHistory.
+    "history/messageAppended" => MessageAppended {
+        // Runtime is typed; SDK JSON Schema stays opaque because the
+        // vercel-ai DTOs Message embeds (`LlmMessage`, content parts)
+        // don't derive `JsonSchema`. Adding schemars across vercel-ai
+        // is a separate cross-crate feature-gate task.
+        #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
+        message: crate::messages::Message
+    },
     /// MessageHistory truncated to `keep_count` entries (indices
     /// >= keep_count discarded). Emitted by explicit-rewind and
     /// auto-restore both, so SDK + TUI converge on engine truncation

@@ -1,5 +1,5 @@
-use coco_types::AppStatePatch;
-use coco_types::PermissionUpdate;
+use crate::AppStatePatch;
+use crate::PermissionUpdate;
 
 use super::Message;
 
@@ -10,7 +10,7 @@ use super::Message;
 ///   that the executor applies post-execute (serial) or post-batch
 ///   (concurrent). Tools MUST NOT mutate shared `ToolAppState` inline
 ///   during `execute()` — `ToolUseContext.app_state` is an
-///   [`AppStateReadHandle`](coco_types::AppStateReadHandle) with no
+///   [`AppStateReadHandle`](crate::AppStateReadHandle) with no
 ///   `.write()` method, so the compiler enforces the discipline.
 /// - `permission_updates` — declarative permission-rule deltas
 ///   (typically `PermissionUpdate::AddRules` with destination
