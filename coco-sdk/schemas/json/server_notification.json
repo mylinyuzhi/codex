@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ServerNotification",
-  "description": "Protocol-level notifications visible to all consumers.\n\n66 variants across 20 categories. See `event-system-design.md` Section 2. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
+  "description": "Protocol-level notifications visible to all consumers.\n\n69 variants across 21 categories. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
   "oneOf": [
     {
       "description": "New session started.",
@@ -57,6 +57,86 @@
         },
         "params": {
           "$ref": "#/definitions/SessionEndedParams"
+        }
+      }
+    },
+    {
+      "description": "One Message appended to engine MessageHistory. The `message` field is the JSON-serialized `coco_messages::Message` body — consumers deserialize via `coco_messages::event_helpers::try_appended_message`.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "history/messageAppended"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "message"
+          ],
+          "properties": {
+            "message": true
+          }
+        }
+      }
+    },
+    {
+      "description": "MessageHistory truncated to `keep_count` entries (indices >= keep_count discarded). Emitted by explicit-rewind and auto-restore both, so SDK + TUI converge on engine truncation without separate private paths.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "history/messageTruncated"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "keep_count"
+          ],
+          "properties": {
+            "keep_count": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Session reset for resume. TUI clears derived transcript view in preparation for a burst of `MessageAppended` that replays the loaded JSONL transcript.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "history/resetForResume"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "session_id"
+          ],
+          "properties": {
+            "session_id": {
+              "type": "string"
+            }
+          }
         }
       }
     },

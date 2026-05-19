@@ -164,6 +164,9 @@ class NotificationMethod(str, Enum):
     session_started = 'session/started'
     session_result = 'session/result'
     session_ended = 'session/ended'
+    history_messageAppended = 'history/messageAppended'
+    history_messageTruncated = 'history/messageTruncated'
+    history_resetForResume = 'history/resetForResume'
     turn_started = 'turn/started'
     turn_completed = 'turn/completed'
     turn_failed = 'turn/failed'
@@ -683,6 +686,15 @@ class WorktreeExitedParams(BaseModel):
     action: str
     worktree_path: str
 
+class HistoryMessageAppendedParams(BaseModel):
+    message: Any
+
+class HistoryMessageTruncatedParams(BaseModel):
+    keep_count: int
+
+class HistoryResetForResumeParams(BaseModel):
+    session_id: str
+
 class ItemStartedParams(BaseModel):
     item: ThreadItem
 
@@ -762,6 +774,9 @@ class NotificationMethod(str, Enum):
     SESSION_STARTED = 'session/started'
     SESSION_RESULT = 'session/result'
     SESSION_ENDED = 'session/ended'
+    HISTORY_MESSAGE_APPENDED = 'history/messageAppended'
+    HISTORY_MESSAGE_TRUNCATED = 'history/messageTruncated'
+    HISTORY_RESET_FOR_RESUME = 'history/resetForResume'
     TURN_STARTED = 'turn/started'
     TURN_COMPLETED = 'turn/completed'
     TURN_FAILED = 'turn/failed'
@@ -854,6 +869,21 @@ class ServerNotification(BaseModel):
     def as_session_ended(self) -> SessionEndedParams | None:
         if self.method == 'session/ended':
             return SessionEndedParams.model_validate(self.params)
+        return None
+
+    def as_history_message_appended(self) -> HistoryMessageAppendedParams | None:
+        if self.method == 'history/messageAppended':
+            return HistoryMessageAppendedParams.model_validate(self.params)
+        return None
+
+    def as_history_message_truncated(self) -> HistoryMessageTruncatedParams | None:
+        if self.method == 'history/messageTruncated':
+            return HistoryMessageTruncatedParams.model_validate(self.params)
+        return None
+
+    def as_history_reset_for_resume(self) -> HistoryResetForResumeParams | None:
+        if self.method == 'history/resetForResume':
+            return HistoryResetForResumeParams.model_validate(self.params)
         return None
 
     def as_turn_started(self) -> TurnStartedParams | None:
