@@ -35,10 +35,10 @@ use crate::helpers::convert_to_assistant_content;
 use crate::helpers::extract_last_assistant_text;
 use crate::helpers::should_continue_for_budget;
 
-use coco_inference::AssistantContentPart;
-use coco_inference::ReasoningPart;
-use coco_inference::TextPart;
-use coco_inference::ToolCallPart;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::ReasoningPart;
+use coco_llm_types::TextPart;
+use coco_llm_types::ToolCallPart;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;

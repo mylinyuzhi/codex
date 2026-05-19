@@ -36,6 +36,7 @@ pub use vercel_ai_provider::UserContentPart;
 pub use vercel_ai_provider::DataContent;
 pub use vercel_ai_provider::FilePart;
 pub use vercel_ai_provider::ReasoningPart;
+pub use vercel_ai_provider::SharedV4FileData;
 pub use vercel_ai_provider::TextPart;
 pub use vercel_ai_provider::ToolCallPart;
 pub use vercel_ai_provider::ToolResultContent;

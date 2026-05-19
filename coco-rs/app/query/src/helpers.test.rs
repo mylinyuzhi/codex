@@ -67,7 +67,7 @@ fn api_error_message_has_empty_content_carry() {
     let Message::Assistant(asst) = &msg else {
         panic!("expected Assistant message");
     };
-    let coco_inference::LanguageModelMessage::Assistant { content, .. } = &asst.message else {
+    let coco_llm_types::LlmMessage::Assistant { content, .. } = &asst.message else {
         panic!("expected Assistant LlmMessage variant");
     };
     assert!(

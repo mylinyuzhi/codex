@@ -4,8 +4,8 @@
 //! Used for compaction summaries, memory extraction, etc.
 
 use coco_inference::ApiClient;
-use coco_inference::LanguageModelPrompt;
 use coco_inference::QueryParams;
+use coco_llm_types::LlmPrompt;
 use coco_types::TokenUsage;
 use std::sync::Arc;
 
@@ -30,9 +30,9 @@ pub async fn single_turn_query(
 ) -> Result<SingleTurnResult, coco_error::BoxedError> {
     let start = std::time::Instant::now();
 
-    let prompt: LanguageModelPrompt = vec![
-        coco_inference::LanguageModelMessage::system(system_prompt),
-        coco_inference::LanguageModelMessage::user_text(user_message),
+    let prompt: LlmPrompt = vec![
+        coco_llm_types::LlmMessage::system(system_prompt),
+        coco_llm_types::LlmMessage::user_text(user_message),
     ];
 
     let params = QueryParams {
@@ -64,7 +64,7 @@ pub async fn single_turn_query(
         .content
         .iter()
         .filter_map(|part| {
-            if let coco_inference::AssistantContentPart::Text(t) = part {
+            if let coco_llm_types::AssistantContentPart::Text(t) = part {
                 Some(t.text.as_str())
             } else {
                 None

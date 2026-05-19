@@ -13,8 +13,8 @@ use crate::SystemUserInterruptionMessage;
 use crate::ToolContent;
 use crate::ToolResultMessage;
 use crate::UserMessage;
-use coco_inference::ToolResultContent;
-use coco_inference::UserContentPart;
+use coco_llm_types::ToolResultContent;
+use coco_llm_types::UserContentPart;
 use coco_types::TokenUsage;
 use coco_types::ToolId;
 use uuid::Uuid;
@@ -159,7 +159,7 @@ pub fn create_error_tool_result(
 /// Used by the executor when a tool's [`Tool::render_for_model`]
 /// returns more than a single Text part — e.g. `FileReadTool` reading
 /// a PNG returns one [`ToolResultContentPart::FileData`] block. The
-/// underlying SDK enum [`coco_inference::ToolResultContent::Content`]
+/// underlying SDK enum [`coco_llm_types::ToolResultContent::Content`]
 /// is the canonical multimodal carrier; provider crates already know
 /// how to translate it (Anthropic / Gemini 3+ pass through; OpenAI /
 /// OpenAI-Compatible degrade non-Text parts to a visible text marker).

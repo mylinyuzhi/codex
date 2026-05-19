@@ -1,15 +1,15 @@
+use coco_llm_types::LlmMessage;
+use coco_llm_types::ProviderOptions;
+use coco_llm_types::TextPart;
+use coco_llm_types::UserContentPart;
 use coco_types::ProviderApi;
 use pretty_assertions::assert_eq;
-use vercel_ai_provider::LanguageModelV4Message;
-use vercel_ai_provider::ProviderOptions;
-use vercel_ai_provider::TextPart;
-use vercel_ai_provider::UserContentPart;
 use vercel_ai_provider::Warning;
 
 use super::*;
 
-fn sys(text: &str) -> LanguageModelV4Message {
-    LanguageModelV4Message::System {
+fn sys(text: &str) -> LlmMessage {
+    LlmMessage::System {
         content: vec![UserContentPart::Text(TextPart {
             text: text.to_string(),
             provider_metadata: None,
@@ -18,8 +18,8 @@ fn sys(text: &str) -> LanguageModelV4Message {
     }
 }
 
-fn user(text: &str) -> LanguageModelV4Message {
-    LanguageModelV4Message::User {
+fn user(text: &str) -> LlmMessage {
+    LlmMessage::User {
         content: vec![UserContentPart::Text(TextPart {
             text: text.to_string(),
             provider_metadata: None,

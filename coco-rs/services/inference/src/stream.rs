@@ -5,6 +5,7 @@
 //! (Gemini `thoughtSignature`, Anthropic `signature`, OpenAI `encrypted_content`)
 //! verbatim. See `docs/coco-rs/streaming-metadata-roundtrip-plan.md`.
 
+use coco_llm_types::AssistantContentPart;
 use coco_types::TokenUsage;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -16,7 +17,6 @@ use tracing::trace;
 use tracing::warn;
 use vercel_ai::StreamProcessor;
 use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::FinishReason;
 use vercel_ai_provider::LanguageModelV4FileData;
 use vercel_ai_provider::LanguageModelV4StreamPart;
@@ -827,13 +827,13 @@ pub fn synthetic_stream_from_content(
                 // file references don't roundtrip through the stream's
                 // undifferentiated `data: String`.
                 let data = match &fp.data {
-                    vercel_ai_provider::SharedV4FileData::Data { data } => match data {
+                    coco_llm_types::SharedV4FileData::Data { data } => match data {
                         vercel_ai_provider::FileRawData::Base64(s) => s.clone(),
                         vercel_ai_provider::FileRawData::Bytes(_) => data.to_base64(),
                     },
-                    vercel_ai_provider::SharedV4FileData::Url { .. }
-                    | vercel_ai_provider::SharedV4FileData::Reference { .. }
-                    | vercel_ai_provider::SharedV4FileData::Text { .. } => {
+                    coco_llm_types::SharedV4FileData::Url { .. }
+                    | coco_llm_types::SharedV4FileData::Reference { .. }
+                    | coco_llm_types::SharedV4FileData::Text { .. } => {
                         trace!(
                             "Non-data File variant skipped in synthetic stream (Data-only path)"
                         );

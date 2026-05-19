@@ -45,7 +45,7 @@ fn build_prompt_renders_system_and_user_in_order() {
     assert_eq!(prompt.len(), 2);
 
     let user_text = match &prompt[1] {
-        LanguageModelMessage::User { content, .. } => content
+        LlmMessage::User { content, .. } => content
             .iter()
             .filter_map(|p| match p {
                 UserContentPart::Text(part) => Some(part.text.clone()),
@@ -78,7 +78,7 @@ fn build_prompt_omits_intent_prefix_when_no_assistant_text() {
     };
     let prompt = build_prompt(&input);
     let user_text = match &prompt[1] {
-        LanguageModelMessage::User { content, .. } => content
+        LlmMessage::User { content, .. } => content
             .iter()
             .filter_map(|p| match p {
                 UserContentPart::Text(part) => Some(part.text.clone()),
@@ -106,7 +106,7 @@ fn last_assistant_text_truncated_to_200_chars() {
     };
     let prompt = build_prompt(&input);
     let user_text = match &prompt[1] {
-        LanguageModelMessage::User { content, .. } => content
+        LlmMessage::User { content, .. } => content
             .iter()
             .filter_map(|p| match p {
                 UserContentPart::Text(part) => Some(part.text.clone()),
@@ -147,7 +147,7 @@ fn multi_tool_batch_separates_with_double_newline() {
     };
     let prompt = build_prompt(&input);
     let user_text = match &prompt[1] {
-        LanguageModelMessage::User { content, .. } => content
+        LlmMessage::User { content, .. } => content
             .iter()
             .filter_map(|p| match p {
                 UserContentPart::Text(part) => Some(part.text.clone()),
@@ -196,7 +196,7 @@ fn system_prompt_is_byte_for_byte_ts_port() {
 
 #[test]
 fn extract_assistant_text_concatenates_and_trims() {
-    use coco_inference::TextPart;
+    use coco_llm_types::TextPart;
     let parts = vec![
         AssistantContentPart::Text(TextPart::new("  hello")),
         AssistantContentPart::Text(TextPart::new(" world  ")),
@@ -211,7 +211,7 @@ fn extract_assistant_text_empty_returns_empty() {
 
 mod build_input_tests {
     use super::*;
-    use coco_inference::ToolCallPart;
+    use coco_llm_types::ToolCallPart;
     use coco_messages::Message;
     use coco_messages::create_assistant_message;
     use coco_messages::create_tool_result_message;

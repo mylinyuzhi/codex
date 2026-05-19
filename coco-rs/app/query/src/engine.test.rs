@@ -4,18 +4,18 @@ use std::sync::atomic::Ordering;
 
 use coco_inference::AISdkError;
 use coco_inference::ApiClient;
-use coco_inference::AssistantContentPart;
 use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
-use coco_inference::TextPart;
-use coco_inference::ToolCallPart;
-use coco_inference::ToolResultContent;
 use coco_inference::UnifiedFinishReason;
 use coco_inference::Usage;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::TextPart;
+use coco_llm_types::ToolCallPart;
+use coco_llm_types::ToolResultContent;
 use coco_tool_runtime::ToolRegistry;
 use coco_tools::ExitPlanModeTool;
 use coco_tools::ReadTool;
@@ -1181,7 +1181,7 @@ fn attachment_text_by_kind(
             return None;
         };
         content.iter().find_map(|part| match part {
-            coco_inference::UserContentPart::Text(text) => Some(text.text.clone()),
+            coco_llm_types::UserContentPart::Text(text) => Some(text.text.clone()),
             _ => None,
         })
     })
@@ -1214,7 +1214,7 @@ fn attachment_index_by_kind_and_text(
             return false;
         };
         content.iter().any(|part| match part {
-            coco_inference::UserContentPart::Text(text) => text.text.contains(needle),
+            coco_llm_types::UserContentPart::Text(text) => text.text.contains(needle),
             _ => false,
         })
     })
@@ -1232,7 +1232,7 @@ fn user_message_index_containing(
             return false;
         };
         content.iter().any(|part| match part {
-            coco_inference::UserContentPart::Text(text) => text.text.contains(needle),
+            coco_llm_types::UserContentPart::Text(text) => text.text.contains(needle),
             _ => false,
         })
     })

@@ -86,8 +86,8 @@ impl coco_inference::LanguageModel for DummyModel {
         _options: coco_inference::LanguageModelCallOptions,
     ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
         Ok(coco_inference::LanguageModelGenerateResult {
-            content: vec![coco_inference::AssistantContentPart::Text(
-                coco_inference::TextPart {
+            content: vec![coco_llm_types::AssistantContentPart::Text(
+                coco_llm_types::TextPart {
                     text: "unused".into(),
                     provider_metadata: None,
                 },

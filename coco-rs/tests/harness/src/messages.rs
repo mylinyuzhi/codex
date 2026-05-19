@@ -51,9 +51,9 @@ pub fn image_user() -> Message {
     Message::User(UserMessage {
         message: LlmMessage::User {
             content: vec![
-                UserContent::Text(coco_inference::TextPart::new("see this image")),
-                UserContent::File(coco_inference::FilePart {
-                    data: coco_inference::SharedV4FileData::data_base64("iVBORw0KGgo="),
+                UserContent::Text(coco_llm_types::TextPart::new("see this image")),
+                UserContent::File(coco_llm_types::FilePart {
+                    data: coco_llm_types::SharedV4FileData::data_base64("iVBORw0KGgo="),
                     media_type: "image/png".to_string(),
                     filename: Some("test.png".to_string()),
                     provider_metadata: None,
@@ -107,11 +107,11 @@ pub fn assistant_with_thinking(text: &str, thinking: &str) -> Message {
     Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
             content: vec![
-                AssistantContent::Reasoning(coco_inference::ReasoningPart {
+                AssistantContent::Reasoning(coco_llm_types::ReasoningPart {
                     text: thinking.to_string(),
                     provider_metadata: None,
                 }),
-                AssistantContent::Text(coco_inference::TextPart::new(text)),
+                AssistantContent::Text(coco_llm_types::TextPart::new(text)),
             ],
             provider_options: None,
         },
@@ -130,8 +130,8 @@ pub fn assistant_with_tool_call(tool_name: &str, input: serde_json::Value) -> Me
     Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
             content: vec![
-                AssistantContent::Text(coco_inference::TextPart::new(format!("Using {tool_name}"))),
-                AssistantContent::ToolCall(coco_inference::ToolCallPart {
+                AssistantContent::Text(coco_llm_types::TextPart::new(format!("Using {tool_name}"))),
+                AssistantContent::ToolCall(coco_llm_types::ToolCallPart {
                     tool_call_id: format!("call_{tool_name}"),
                     tool_name: tool_name.to_string(),
                     input,
@@ -161,7 +161,7 @@ pub fn tool_result(tool: ToolName, tool_use_id: &str, content: &str) -> Message 
             content: vec![ToolContent::ToolResult(ToolResultContent {
                 tool_call_id: tool_use_id.to_string(),
                 tool_name: tool.as_str().to_string(),
-                output: coco_inference::ToolResultContent::text(content),
+                output: coco_llm_types::ToolResultContent::text(content),
                 is_error: false,
                 provider_metadata: None,
             })],

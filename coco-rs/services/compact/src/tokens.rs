@@ -127,22 +127,22 @@ fn tool_content_chars(parts: &[ToolContent]) -> i64 {
         .sum()
 }
 
-fn tool_result_content_chars(output: &coco_inference::ToolResultContent) -> i64 {
+fn tool_result_content_chars(output: &coco_llm_types::ToolResultContent) -> i64 {
     match output {
-        coco_inference::ToolResultContent::Text { value, .. } => value.len() as i64,
-        coco_inference::ToolResultContent::Json { value, .. } => value.to_string().len() as i64,
-        coco_inference::ToolResultContent::Content { value, .. } => value
+        coco_llm_types::ToolResultContent::Text { value, .. } => value.len() as i64,
+        coco_llm_types::ToolResultContent::Json { value, .. } => value.to_string().len() as i64,
+        coco_llm_types::ToolResultContent::Content { value, .. } => value
             .iter()
             .map(|part| match part {
-                coco_inference::ToolResultContentPart::Text { text, .. } => text.len() as i64,
+                coco_llm_types::ToolResultContentPart::Text { text, .. } => text.len() as i64,
                 _ => 100, // file data, images — small estimate
             })
             .sum(),
-        coco_inference::ToolResultContent::ExecutionDenied { reason, .. } => {
+        coco_llm_types::ToolResultContent::ExecutionDenied { reason, .. } => {
             reason.as_ref().map_or(20, |r| r.len() as i64)
         }
-        coco_inference::ToolResultContent::ErrorText { value, .. } => value.len() as i64,
-        coco_inference::ToolResultContent::ErrorJson { value, .. } => {
+        coco_llm_types::ToolResultContent::ErrorText { value, .. } => value.len() as i64,
+        coco_llm_types::ToolResultContent::ErrorJson { value, .. } => {
             value.to_string().len() as i64
         }
     }
@@ -224,23 +224,23 @@ fn extract_llm_message_text(msg: &LlmMessage) -> Option<String> {
     }
 }
 
-fn tool_result_text(output: &coco_inference::ToolResultContent) -> String {
+fn tool_result_text(output: &coco_llm_types::ToolResultContent) -> String {
     match output {
-        coco_inference::ToolResultContent::Text { value, .. } => value.clone(),
-        coco_inference::ToolResultContent::Json { value, .. } => value.to_string(),
-        coco_inference::ToolResultContent::Content { value, .. } => value
+        coco_llm_types::ToolResultContent::Text { value, .. } => value.clone(),
+        coco_llm_types::ToolResultContent::Json { value, .. } => value.to_string(),
+        coco_llm_types::ToolResultContent::Content { value, .. } => value
             .iter()
             .filter_map(|p| match p {
-                coco_inference::ToolResultContentPart::Text { text, .. } => Some(text.as_str()),
+                coco_llm_types::ToolResultContentPart::Text { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()
             .join("\n"),
-        coco_inference::ToolResultContent::ExecutionDenied { reason, .. } => {
+        coco_llm_types::ToolResultContent::ExecutionDenied { reason, .. } => {
             reason.clone().unwrap_or_default()
         }
-        coco_inference::ToolResultContent::ErrorText { value, .. } => value.clone(),
-        coco_inference::ToolResultContent::ErrorJson { value, .. } => value.to_string(),
+        coco_llm_types::ToolResultContent::ErrorText { value, .. } => value.clone(),
+        coco_llm_types::ToolResultContent::ErrorJson { value, .. } => value.to_string(),
     }
 }
 

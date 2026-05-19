@@ -687,25 +687,25 @@ pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message> {
 /// Replace `FileData` parts inside `ToolResultContent::Content` with
 /// `[image]` / `[document]` text parts. Other variants pass through.
 fn strip_images_from_tool_result_content(
-    output: &coco_inference::ToolResultContent,
-) -> coco_inference::ToolResultContent {
-    let coco_inference::ToolResultContent::Content {
+    output: &coco_llm_types::ToolResultContent,
+) -> coco_llm_types::ToolResultContent {
+    let coco_llm_types::ToolResultContent::Content {
         value,
         provider_options,
     } = output
     else {
         return output.clone();
     };
-    let new_value: Vec<coco_inference::ToolResultContentPart> = value
+    let new_value: Vec<coco_llm_types::ToolResultContentPart> = value
         .iter()
         .map(|p| match p {
-            coco_inference::ToolResultContentPart::FileData { media_type, .. } => {
+            coco_llm_types::ToolResultContentPart::FileData { media_type, .. } => {
                 let placeholder = if media_type.starts_with("image/") {
                     "[image]"
                 } else {
                     "[document]"
                 };
-                coco_inference::ToolResultContentPart::Text {
+                coco_llm_types::ToolResultContentPart::Text {
                     text: placeholder.to_string(),
                     provider_options: None,
                 }
@@ -713,7 +713,7 @@ fn strip_images_from_tool_result_content(
             other => other.clone(),
         })
         .collect();
-    coco_inference::ToolResultContent::Content {
+    coco_llm_types::ToolResultContent::Content {
         value: new_value,
         provider_options: provider_options.clone(),
     }
@@ -1032,7 +1032,7 @@ pub fn render_summary_prompt_for_debug(
     conversation
 }
 
-fn is_image_media_type(file: &coco_inference::FilePart) -> bool {
+fn is_image_media_type(file: &coco_llm_types::FilePart) -> bool {
     file.media_type.starts_with("image/")
 }
 

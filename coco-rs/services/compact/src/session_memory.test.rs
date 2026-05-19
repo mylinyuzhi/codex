@@ -4,7 +4,7 @@ fn make_user_message(text: &str) -> Message {
     Message::User(coco_messages::UserMessage {
         message: coco_messages::LlmMessage::User {
             content: vec![coco_messages::UserContent::Text(
-                coco_inference::TextPart::new(text.to_string()),
+                coco_llm_types::TextPart::new(text.to_string()),
             )],
             provider_options: None,
         },
@@ -23,7 +23,7 @@ fn make_assistant_message(text: &str) -> Message {
     Message::Assistant(coco_messages::AssistantMessage {
         message: coco_messages::LlmMessage::Assistant {
             content: vec![coco_messages::AssistantContent::Text(
-                coco_inference::TextPart::new(text.to_string()),
+                coco_llm_types::TextPart::new(text.to_string()),
             )],
             provider_options: None,
         },

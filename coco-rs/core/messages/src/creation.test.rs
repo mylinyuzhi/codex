@@ -134,10 +134,10 @@ fn user_interruption_message_uses_canonical_text() {
     let Message::User(u) = &plain else {
         panic!("expected Message::User");
     };
-    let coco_inference::LanguageModelMessage::User { content, .. } = &u.message else {
+    let coco_llm_types::LlmMessage::User { content, .. } = &u.message else {
         panic!("expected LlmMessage::User");
     };
-    let [coco_inference::UserContentPart::Text(text)] = content.as_slice() else {
+    let [coco_llm_types::UserContentPart::Text(text)] = content.as_slice() else {
         panic!("expected single text content part");
     };
     assert_eq!(text.text, INTERRUPT_MESSAGE);
@@ -146,10 +146,10 @@ fn user_interruption_message_uses_canonical_text() {
     let Message::User(u) = &tool else {
         panic!("expected Message::User");
     };
-    let coco_inference::LanguageModelMessage::User { content, .. } = &u.message else {
+    let coco_llm_types::LlmMessage::User { content, .. } = &u.message else {
         panic!("expected LlmMessage::User");
     };
-    let [coco_inference::UserContentPart::Text(text)] = content.as_slice() else {
+    let [coco_llm_types::UserContentPart::Text(text)] = content.as_slice() else {
         panic!("expected single text content part");
     };
     assert_eq!(text.text, INTERRUPT_MESSAGE_FOR_TOOL_USE);

@@ -16,8 +16,8 @@
 //! TS parity references stay attached to each item so callers can locate the
 //! mirrored TS source quickly.
 
-use coco_inference::ToolResultContent;
-use coco_inference::UserContentPart;
+use coco_llm_types::ToolResultContent;
+use coco_llm_types::UserContentPart;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;

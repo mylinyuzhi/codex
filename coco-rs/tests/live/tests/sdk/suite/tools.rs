@@ -7,8 +7,8 @@
 //! `cli_deepseek` suite.
 
 use anyhow::Result;
-use coco_inference::LanguageModelMessage;
 use coco_inference::QueryParams;
+use coco_llm_types::LlmMessage;
 
 use crate::common::LiveTarget;
 use crate::common::has_tool_call_named;
@@ -22,12 +22,12 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         // 4096-token budget + imperative system prompt to keep
         // Gemini-3 reliably emitting the tool call.
         prompt: vec![
-            LanguageModelMessage::system(
+            LlmMessage::system(
                 "You are a helpful assistant. For weather questions you MUST call \
                  the get_weather tool — do not answer with prose, do not refuse, \
                  do not return an empty message.",
             ),
-            LanguageModelMessage::user_text(
+            LlmMessage::user_text(
                 "What's the weather in Tokyo? Call get_weather with city='Tokyo'.",
             ),
         ],

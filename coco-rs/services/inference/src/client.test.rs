@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use vercel_ai_provider::AssistantContentPart;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::TextPart;
 use vercel_ai_provider::FinishReason;
 use vercel_ai_provider::LanguageModelV4;
 use vercel_ai_provider::LanguageModelV4CallOptions;
 use vercel_ai_provider::LanguageModelV4GenerateResult;
-use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::TextPart;
 use vercel_ai_provider::UnifiedFinishReason;
 use vercel_ai_provider::Usage;
 
@@ -97,7 +97,7 @@ fn mock_client(text: &str) -> ApiClient {
 async fn test_client_returns_mock_text() {
     let client = mock_client("Hello from mock!");
     let params = QueryParams {
-        prompt: vec![LanguageModelV4Message::user_text("hi")],
+        prompt: vec![LlmMessage::user_text("hi")],
         max_tokens: Some(100),
         ..Default::default()
     };
@@ -123,7 +123,7 @@ async fn test_client_model_id() {
 async fn test_usage_accumulation() {
     let client = mock_client("test");
     let params = QueryParams {
-        prompt: vec![LanguageModelV4Message::user_text("hi")],
+        prompt: vec![LlmMessage::user_text("hi")],
         max_tokens: Some(100),
         ..Default::default()
     };
@@ -147,7 +147,7 @@ async fn test_error_model_fails() {
         },
     );
     let params = QueryParams {
-        prompt: vec![LanguageModelV4Message::user_text("hi")],
+        prompt: vec![LlmMessage::user_text("hi")],
         max_tokens: Some(100),
         ..Default::default()
     };
@@ -165,7 +165,7 @@ async fn test_provider_error_includes_provider_and_model_attribution() {
         },
     );
     let params = QueryParams {
-        prompt: vec![LanguageModelV4Message::user_text("hi")],
+        prompt: vec![LlmMessage::user_text("hi")],
         max_tokens: Some(100),
         ..Default::default()
     };

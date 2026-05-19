@@ -32,7 +32,7 @@ fn rendered_text_includes_id_status_path_and_is_sr_wrapped() {
         panic!("expected User LlmMessage");
     };
     let text = match &content[0] {
-        coco_inference::UserContentPart::Text(t) => &t.text,
+        coco_llm_types::UserContentPart::Text(t) => &t.text,
         _ => panic!("expected text part"),
     };
     assert!(
@@ -62,7 +62,7 @@ fn missing_delta_and_path_omits_lines() {
         panic!("expected User LlmMessage");
     };
     let text = match &content[0] {
-        coco_inference::UserContentPart::Text(t) => &t.text,
+        coco_llm_types::UserContentPart::Text(t) => &t.text,
         _ => panic!("expected text part"),
     };
     assert!(

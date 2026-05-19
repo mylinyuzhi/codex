@@ -103,7 +103,7 @@ pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> Microcompa
                 coco_messages::ToolResultContent {
                     tool_call_id: tr.tool_use_id.clone(),
                     tool_name: String::new(),
-                    output: coco_inference::ToolResultContent::text(CLEARED_TOOL_RESULT_MESSAGE),
+                    output: coco_llm_types::ToolResultContent::text(CLEARED_TOOL_RESULT_MESSAGE),
                     is_error: false,
                     provider_metadata: None,
                 },
@@ -176,7 +176,7 @@ fn is_already_cleared(tr: &coco_messages::ToolResultMessage) -> bool {
     if let LlmMessage::Tool { content, .. } = &tr.message
         && content.len() == 1
         && let coco_messages::ToolContent::ToolResult(part) = &content[0]
-        && let coco_inference::ToolResultContent::Text { value, .. } = &part.output
+        && let coco_llm_types::ToolResultContent::Text { value, .. } = &part.output
     {
         return value == CLEARED_TOOL_RESULT_MESSAGE;
     }

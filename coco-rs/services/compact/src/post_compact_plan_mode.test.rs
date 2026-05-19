@@ -32,7 +32,7 @@ fn returns_full_reminder_when_in_plan_mode() {
         panic!("attachment message should be a User LlmMessage");
     };
     let text = match &content[0] {
-        coco_inference::UserContentPart::Text(t) => &t.text,
+        coco_llm_types::UserContentPart::Text(t) => &t.text,
         _ => panic!("expected text part"),
     };
     assert!(
@@ -58,7 +58,7 @@ fn forces_reminder_type_full_regardless_of_input() {
         panic!("expected User LlmMessage");
     };
     let text = match &content[0] {
-        coco_inference::UserContentPart::Text(t) => &t.text,
+        coco_llm_types::UserContentPart::Text(t) => &t.text,
         _ => panic!("expected text part"),
     };
     // Full reminder mentions "Phase" of the workflow; Sparse doesn't.

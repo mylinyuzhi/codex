@@ -8,9 +8,9 @@
 #[path = "helpers.test.rs"]
 mod tests;
 
-use coco_inference::AssistantContentPart;
-use coco_inference::FilePart;
-use coco_inference::UserContentPart;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::FilePart;
+use coco_llm_types::UserContentPart;
 use coco_messages::AssistantContent;
 use coco_messages::AttachmentMessage;
 use coco_messages::LlmMessage;
@@ -37,7 +37,7 @@ pub(crate) enum ToolCompletionEventMode {
 
 /// Convert between the two-name alias for `AssistantContent`.
 ///
-/// `coco_messages::AssistantContent` and `coco_inference::AssistantContentPart`
+/// `coco_messages::AssistantContent` and `coco_llm_types::AssistantContentPart`
 /// are the same type re-exported under two aliases (see `coco-types` re-export
 /// section). This wrapper exists only to make the conversion intent explicit.
 pub(crate) fn convert_to_assistant_content(part: AssistantContentPart) -> AssistantContent {

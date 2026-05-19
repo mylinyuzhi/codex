@@ -5,7 +5,7 @@ use coco_hooks::HookRegistry;
 use coco_hooks::orchestration;
 use coco_hooks::orchestration::AggregatedHookResult;
 use coco_hooks::orchestration::OrchestrationContext;
-use coco_inference::ToolCallPart;
+use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_types::CoreEvent;
 use coco_types::PermissionBehavior;

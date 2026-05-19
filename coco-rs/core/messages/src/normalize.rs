@@ -330,9 +330,9 @@ const SYNTHETIC_TOOL_RESULT_PLACEHOLDER: &str = "[Tool result missing due to int
 /// `pub(crate)` so the test module can call it twice in a row to verify
 /// the idempotency invariant directly.
 pub(crate) fn synthesize_missing_tool_results(messages: &mut Vec<LlmMessage>) {
-    use coco_inference::ToolContentPart;
-    use coco_inference::ToolResultContent;
-    use coco_inference::ToolResultPart;
+    use coco_llm_types::ToolContentPart;
+    use coco_llm_types::ToolResultContent;
+    use coco_llm_types::ToolResultPart;
 
     let resolved: std::collections::HashSet<String> = messages
         .iter()
@@ -409,13 +409,13 @@ fn sanitize_error_tool_result_in_llm_messages(messages: &mut [LlmMessage]) {
             continue;
         };
         for part in content.iter_mut() {
-            let coco_inference::ToolContentPart::ToolResult(rp) = part else {
+            let coco_llm_types::ToolContentPart::ToolResult(rp) = part else {
                 continue;
             };
             if !rp.is_error {
                 continue;
             }
-            let coco_inference::ToolResultContent::Content {
+            let coco_llm_types::ToolResultContent::Content {
                 value,
                 provider_options,
             } = &rp.output
@@ -424,26 +424,26 @@ fn sanitize_error_tool_result_in_llm_messages(messages: &mut [LlmMessage]) {
             };
             if value
                 .iter()
-                .all(|p| matches!(p, coco_inference::ToolResultContentPart::Text { .. }))
+                .all(|p| matches!(p, coco_llm_types::ToolResultContentPart::Text { .. }))
             {
                 continue;
             }
             let texts: Vec<String> = value
                 .iter()
                 .filter_map(|p| match p {
-                    coco_inference::ToolResultContentPart::Text { text, .. } => Some(text.clone()),
+                    coco_llm_types::ToolResultContentPart::Text { text, .. } => Some(text.clone()),
                     _ => None,
                 })
                 .collect();
             let new_value = if texts.is_empty() {
                 Vec::new()
             } else {
-                vec![coco_inference::ToolResultContentPart::Text {
+                vec![coco_llm_types::ToolResultContentPart::Text {
                     text: texts.join("\n\n"),
                     provider_options: None,
                 }]
             };
-            rp.output = coco_inference::ToolResultContent::Content {
+            rp.output = coco_llm_types::ToolResultContent::Content {
                 value: new_value,
                 provider_options: provider_options.clone(),
             };
@@ -737,7 +737,7 @@ pub fn sanitize_error_tool_result_content(messages: &mut [Message]) {
             if !rp.is_error {
                 continue;
             }
-            let coco_inference::ToolResultContent::Content {
+            let coco_llm_types::ToolResultContent::Content {
                 value,
                 provider_options,
             } = &rp.output
@@ -746,26 +746,26 @@ pub fn sanitize_error_tool_result_content(messages: &mut [Message]) {
             };
             if value
                 .iter()
-                .all(|p| matches!(p, coco_inference::ToolResultContentPart::Text { .. }))
+                .all(|p| matches!(p, coco_llm_types::ToolResultContentPart::Text { .. }))
             {
                 continue;
             }
             let texts: Vec<String> = value
                 .iter()
                 .filter_map(|p| match p {
-                    coco_inference::ToolResultContentPart::Text { text, .. } => Some(text.clone()),
+                    coco_llm_types::ToolResultContentPart::Text { text, .. } => Some(text.clone()),
                     _ => None,
                 })
                 .collect();
-            let new_value: Vec<coco_inference::ToolResultContentPart> = if texts.is_empty() {
+            let new_value: Vec<coco_llm_types::ToolResultContentPart> = if texts.is_empty() {
                 Vec::new()
             } else {
-                vec![coco_inference::ToolResultContentPart::Text {
+                vec![coco_llm_types::ToolResultContentPart::Text {
                     text: texts.join("\n\n"),
                     provider_options: None,
                 }]
             };
-            rp.output = coco_inference::ToolResultContent::Content {
+            rp.output = coco_llm_types::ToolResultContent::Content {
                 value: new_value,
                 provider_options: provider_options.clone(),
             };
@@ -808,8 +808,8 @@ pub fn smoosh_system_reminder_into_tool_result(messages: &mut Vec<LlmMessage>) {
             &messages[i + 1],
             LlmMessage::User { content, .. }
                 if !content.is_empty()
-                    && content.iter().all(|p| matches!(p, coco_inference::UserContentPart::Text(_)))
-                    && matches!(content.first(), Some(coco_inference::UserContentPart::Text(t)) if t.text.starts_with("<system-reminder>"))
+                    && content.iter().all(|p| matches!(p, coco_llm_types::UserContentPart::Text(_)))
+                    && matches!(content.first(), Some(coco_llm_types::UserContentPart::Text(t)) if t.text.starts_with("<system-reminder>"))
         );
         let prev_is_tool = matches!(&messages[i], LlmMessage::Tool { .. });
         if !(prev_is_tool && next_is_user_with_sr) {
@@ -821,7 +821,7 @@ pub fn smoosh_system_reminder_into_tool_result(messages: &mut Vec<LlmMessage>) {
             LlmMessage::User { content, .. } => content
                 .iter()
                 .filter_map(|p| match p {
-                    coco_inference::UserContentPart::Text(t) => Some(t.text.clone()),
+                    coco_llm_types::UserContentPart::Text(t) => Some(t.text.clone()),
                     _ => None,
                 })
                 .collect(),
@@ -854,11 +854,11 @@ fn fold_text_into_last_tool_result(tool: &mut LlmMessage, sr_texts: &[String]) -
     // Walk back to find the last ToolResultPart.
     let Some(last_idx) = content
         .iter()
-        .rposition(|p| matches!(p, coco_inference::ToolContentPart::ToolResult(_)))
+        .rposition(|p| matches!(p, coco_llm_types::ToolContentPart::ToolResult(_)))
     else {
         return false;
     };
-    let coco_inference::ToolContentPart::ToolResult(rp) = &mut content[last_idx] else {
+    let coco_llm_types::ToolContentPart::ToolResult(rp) = &mut content[last_idx] else {
         return false;
     };
     let joined = sr_texts.join("\n\n");
@@ -866,7 +866,7 @@ fn fold_text_into_last_tool_result(tool: &mut LlmMessage, sr_texts: &[String]) -
         return false;
     }
     match &mut rp.output {
-        coco_inference::ToolResultContent::Text { value, .. } => {
+        coco_llm_types::ToolResultContent::Text { value, .. } => {
             if value.is_empty() {
                 *value = joined;
             } else {
@@ -875,15 +875,15 @@ fn fold_text_into_last_tool_result(tool: &mut LlmMessage, sr_texts: &[String]) -
             }
             true
         }
-        coco_inference::ToolResultContent::Content { value, .. } => {
-            if let Some(coco_inference::ToolResultContentPart::Text {
+        coco_llm_types::ToolResultContent::Content { value, .. } => {
+            if let Some(coco_llm_types::ToolResultContentPart::Text {
                 text: last_text, ..
             }) = value.last_mut()
             {
                 last_text.push_str("\n\n");
                 last_text.push_str(&joined);
             } else {
-                value.push(coco_inference::ToolResultContentPart::Text {
+                value.push(coco_llm_types::ToolResultContentPart::Text {
                     text: joined,
                     provider_options: None,
                 });
@@ -919,8 +919,8 @@ pub fn filter_trailing_thinking_from_last_assistant(messages: &mut [Message]) {
     }
     let last_is_reasoning = matches!(
         content.last(),
-        Some(coco_inference::AssistantContentPart::Reasoning(_))
-            | Some(coco_inference::AssistantContentPart::ReasoningFile(_))
+        Some(coco_llm_types::AssistantContentPart::Reasoning(_))
+            | Some(coco_llm_types::AssistantContentPart::ReasoningFile(_))
     );
     if !last_is_reasoning {
         return;
@@ -929,8 +929,8 @@ pub fn filter_trailing_thinking_from_last_assistant(messages: &mut [Message]) {
     let last_valid = content.iter().rposition(|p| {
         !matches!(
             p,
-            coco_inference::AssistantContentPart::Reasoning(_)
-                | coco_inference::AssistantContentPart::ReasoningFile(_)
+            coco_llm_types::AssistantContentPart::Reasoning(_)
+                | coco_llm_types::AssistantContentPart::ReasoningFile(_)
         )
     });
     match last_valid {
@@ -938,8 +938,8 @@ pub fn filter_trailing_thinking_from_last_assistant(messages: &mut [Message]) {
             content.truncate(idx + 1);
         }
         None => {
-            *content = vec![coco_inference::AssistantContentPart::Text(
-                coco_inference::TextPart::new("[No message content]"),
+            *content = vec![coco_llm_types::AssistantContentPart::Text(
+                coco_llm_types::TextPart::new("[No message content]"),
             )];
         }
     }
@@ -966,7 +966,7 @@ pub fn filter_whitespace_only_assistant_messages(messages: &mut Vec<Message>) {
         // Pure whitespace-only Text parts? drop. Any non-Text or any
         // non-whitespace Text? keep.
         let only_whitespace = content.iter().all(|p| match p {
-            coco_inference::AssistantContentPart::Text(t) => t.text.trim().is_empty(),
+            coco_llm_types::AssistantContentPart::Text(t) => t.text.trim().is_empty(),
             _ => false,
         });
         !only_whitespace
@@ -1000,8 +1000,8 @@ pub fn ensure_non_empty_assistant_content(messages: &mut [Message]) {
             continue;
         };
         if content.is_empty() {
-            *content = vec![coco_inference::AssistantContentPart::Text(
-                coco_inference::TextPart::new("[No message content]"),
+            *content = vec![coco_llm_types::AssistantContentPart::Text(
+                coco_llm_types::TextPart::new("[No message content]"),
             )];
         }
     }
@@ -1030,8 +1030,8 @@ pub fn filter_orphaned_thinking_only_messages(messages: &mut Vec<Message>) {
         let has_non_thinking = content.iter().any(|p| {
             !matches!(
                 p,
-                coco_inference::AssistantContentPart::Reasoning(_)
-                    | coco_inference::AssistantContentPart::ReasoningFile(_)
+                coco_llm_types::AssistantContentPart::Reasoning(_)
+                    | coco_llm_types::AssistantContentPart::ReasoningFile(_)
             )
         });
         if has_non_thinking && let Some(id) = asst.request_id.as_ref() {
@@ -1051,8 +1051,8 @@ pub fn filter_orphaned_thinking_only_messages(messages: &mut Vec<Message>) {
         let all_thinking = content.iter().all(|p| {
             matches!(
                 p,
-                coco_inference::AssistantContentPart::Reasoning(_)
-                    | coco_inference::AssistantContentPart::ReasoningFile(_)
+                coco_llm_types::AssistantContentPart::Reasoning(_)
+                    | coco_llm_types::AssistantContentPart::ReasoningFile(_)
             )
         });
         if !all_thinking {

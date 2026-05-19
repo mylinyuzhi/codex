@@ -3,9 +3,9 @@ use super::*;
 use std::sync::Arc;
 
 use coco_hooks::orchestration::OrchestrationContext;
-use coco_inference::LanguageModelMessage;
-use coco_inference::ToolContentPart;
-use coco_inference::ToolResultContent;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::ToolContentPart;
+use coco_llm_types::ToolResultContent;
 use coco_messages::ToolResult as CocoToolResult;
 use coco_messages::ToolResultContentPart;
 use coco_tool_runtime::DescriptionOptions;
@@ -95,7 +95,7 @@ fn tool_result_text(message: &Message) -> (&str, bool) {
     let Message::ToolResult(tr) = message else {
         panic!("expected tool result");
     };
-    let LanguageModelMessage::Tool { content, .. } = &tr.message else {
+    let LlmMessage::Tool { content, .. } = &tr.message else {
         panic!("expected tool-role message");
     };
     let ToolContentPart::ToolResult(result) = &content[0] else {

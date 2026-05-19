@@ -331,7 +331,7 @@ fn extract_discovered_tool_names_picks_up_toolsearch_input() {
 
     let messages = vec![Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
-            content: vec![AssistantContent::ToolCall(coco_inference::ToolCallPart {
+            content: vec![AssistantContent::ToolCall(coco_llm_types::ToolCallPart {
                 tool_call_id: "call_ts".into(),
                 tool_name: "ToolSearch".into(),
                 input: json!({"tools": ["Bash", "Edit"]}),
@@ -363,8 +363,8 @@ fn extract_discovered_tool_names_picks_up_toolsearch_input() {
 /// and re-trip prompt-too-long during compaction.
 #[test]
 fn strip_images_walks_tool_result_content() {
-    use coco_inference::ToolResultContent;
-    use coco_inference::ToolResultContentPart;
+    use coco_llm_types::ToolResultContent;
+    use coco_llm_types::ToolResultContentPart;
     use coco_messages::LlmMessage;
     use coco_messages::ToolContent;
     use coco_messages::ToolResultContent as InternalTrc;

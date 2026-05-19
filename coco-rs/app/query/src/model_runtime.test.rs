@@ -9,16 +9,16 @@ use std::time::Duration;
 
 use coco_config::FallbackRecoveryPolicy;
 use coco_inference::ApiClient;
-use coco_inference::AssistantContentPart;
 use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
-use coco_inference::TextPart;
 use coco_inference::UnifiedFinishReason;
 use coco_inference::Usage;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::TextPart;
 use pretty_assertions::assert_eq;
 
 use super::*;

@@ -156,7 +156,7 @@ async fn test_cross_protocol_deepseek() -> Result<()> {
 /// Continue one accumulated conversation across both DeepSeek API
 /// shapes — turns 1 + 3 ride the OpenAI-compat protocol, turn 2
 /// rides the Anthropic-shape protocol with the openai assistant
-/// reply embedded in history. Validates `LanguageModelMessage`
+/// reply embedded in history. Validates `LlmMessage`
 /// shape parity at the wire level.
 #[tokio::test]
 async fn test_cross_protocol_session_switch_deepseek() -> Result<()> {

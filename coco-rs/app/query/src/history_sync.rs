@@ -84,7 +84,7 @@ pub fn last_message_is_user_interruption(history: &MessageHistory) -> bool {
             let coco_messages::LlmMessage::User { content, .. } = &user.message else {
                 return false;
             };
-            let [coco_inference::UserContentPart::Text(text_part)] = content.as_slice() else {
+            let [coco_llm_types::UserContentPart::Text(text_part)] = content.as_slice() else {
                 return false;
             };
             text_part.text == coco_messages::INTERRUPT_MESSAGE

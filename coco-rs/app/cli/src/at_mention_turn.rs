@@ -25,8 +25,8 @@ use uuid::Uuid;
 use coco_context::Attachment;
 use coco_context::FileReadState;
 use coco_context::MentionResolveOptions;
-use coco_inference::FilePart;
-use coco_inference::UserContentPart;
+use coco_llm_types::FilePart;
+use coco_llm_types::UserContentPart;
 use coco_messages::Message;
 use coco_tui::ImageData;
 

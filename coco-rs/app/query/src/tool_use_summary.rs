@@ -48,11 +48,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use coco_inference::AssistantContentPart;
-use coco_inference::LanguageModelMessage;
 use coco_inference::QueryParams;
 use coco_inference::RoleClientCache;
-use coco_inference::UserContentPart;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::UserContentPart;
 use coco_messages::ToolUseSummaryMessage;
 use coco_types::ModelRole;
 
@@ -138,8 +138,8 @@ impl ToolUseSummaryInput {
 pub fn build_input_from_history(
     messages: &[coco_messages::Message],
 ) -> Option<ToolUseSummaryInput> {
-    use coco_inference::LanguageModelMessage;
-    use coco_inference::ToolContentPart;
+    use coco_llm_types::LlmMessage;
+    use coco_llm_types::ToolContentPart;
     use coco_messages::Message;
     use std::collections::HashMap;
 
@@ -152,7 +152,7 @@ pub fn build_input_from_history(
     };
 
     let assistant_content = match &last_assistant.message {
-        LanguageModelMessage::Assistant { content, .. } => content,
+        LlmMessage::Assistant { content, .. } => content,
         _ => return None,
     };
 
@@ -187,7 +187,7 @@ pub fn build_input_from_history(
         let Message::ToolResult(tr) = msg else {
             continue;
         };
-        let LanguageModelMessage::Tool { content, .. } = &tr.message else {
+        let LlmMessage::Tool { content, .. } = &tr.message else {
             continue;
         };
         let output = content
@@ -320,7 +320,7 @@ pub async fn generate_tool_use_summary(
 }
 
 /// Build the System + User prompt pair sent to `ModelRole::Fast`.
-fn build_prompt(input: &ToolUseSummaryInput) -> Vec<LanguageModelMessage> {
+fn build_prompt(input: &ToolUseSummaryInput) -> Vec<LlmMessage> {
     let mut user = String::new();
 
     if let Some(text) = input.last_assistant_text.as_deref() {
@@ -355,11 +355,11 @@ fn build_prompt(input: &ToolUseSummaryInput) -> Vec<LanguageModelMessage> {
     user.push_str("\n\nLabel:");
 
     vec![
-        LanguageModelMessage::System {
+        LlmMessage::System {
             content: vec![UserContentPart::text(TOOL_USE_SUMMARY_SYSTEM_PROMPT)],
             provider_options: None,
         },
-        LanguageModelMessage::User {
+        LlmMessage::User {
             content: vec![UserContentPart::text(&user)],
             provider_options: None,
         },

@@ -6,10 +6,10 @@
 //! only inspects whether the model emits a tool call — actual tool
 //! execution is covered end-to-end by the `cli_deepseek` suite.
 
-use coco_inference::AssistantContentPart;
 use coco_inference::LanguageModelFunctionTool;
 use coco_inference::LanguageModelTool;
 use coco_inference::QueryResult;
+use coco_llm_types::AssistantContentPart;
 
 /// `LanguageModelTool::Function` definition for a one-arg `get_weather`
 /// tool. Consumers feed this into `QueryParams.tools`.

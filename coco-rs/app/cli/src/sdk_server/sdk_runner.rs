@@ -315,18 +315,22 @@ impl TurnRunner for QueryEngineRunner {
                                         .iter()
                                         .rev()
                                         .find_map(|m| match m {
-                                            coco_messages::Message::Assistant(a) => match &a.message {
-                                                coco_inference::LanguageModelMessage::Assistant {
-                                                    content,
-                                                    ..
-                                                } => content.iter().rev().find_map(|p| match p {
-                                                    coco_inference::AssistantContentPart::Text(t) => {
-                                                        Some(t.text.clone())
-                                                    }
+                                            coco_messages::Message::Assistant(a) => {
+                                                match &a.message {
+                                                    coco_llm_types::LlmMessage::Assistant {
+                                                        content,
+                                                        ..
+                                                    } => content.iter().rev().find_map(|p| {
+                                                        match p {
+                                                    coco_llm_types::AssistantContentPart::Text(
+                                                        t,
+                                                    ) => Some(t.text.clone()),
                                                     _ => None,
-                                                }),
-                                                _ => None,
-                                            },
+                                                }
+                                                    }),
+                                                    _ => None,
+                                                }
+                                            }
                                             _ => None,
                                         })
                                         .unwrap_or_default();

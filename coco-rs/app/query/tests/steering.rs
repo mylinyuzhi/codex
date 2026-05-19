@@ -34,18 +34,18 @@ use std::time::Duration;
 
 use coco_inference::AISdkError;
 use coco_inference::ApiClient;
-use coco_inference::AssistantContentPart;
 use coco_inference::FinishReason;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
-use coco_inference::LanguageModelMessage;
 use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
-use coco_inference::TextPart;
-use coco_inference::ToolCallPart;
 use coco_inference::UnifiedFinishReason;
 use coco_inference::Usage;
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::TextPart;
+use coco_llm_types::ToolCallPart;
 use coco_query::CommandQueue;
 use coco_query::CoreEvent;
 use coco_query::QueryEngine;
@@ -68,7 +68,7 @@ const STEERING_MARKER: &str = "STEER-XYZ-7117";
 /// the test can assert the queued content reached the second prompt.
 struct SteeringMock {
     call_count: AtomicI32,
-    captured_prompts: Arc<Mutex<Vec<Vec<LanguageModelMessage>>>>,
+    captured_prompts: Arc<Mutex<Vec<Vec<LlmMessage>>>>,
     /// Time spent inside `do_generate` for the first call. Long enough
     /// for the producer task to wake and enqueue before the engine
     /// commits the assistant response and runs end-of-turn drain.
@@ -76,7 +76,7 @@ struct SteeringMock {
 }
 
 impl SteeringMock {
-    fn new(captured: Arc<Mutex<Vec<Vec<LanguageModelMessage>>>>) -> Self {
+    fn new(captured: Arc<Mutex<Vec<Vec<LlmMessage>>>>) -> Self {
         Self {
             call_count: AtomicI32::new(0),
             captured_prompts: captured,
@@ -192,39 +192,39 @@ fn bash_only_tools() -> Arc<ToolRegistry> {
 /// normalization (`smoosh_system_reminder_into_tool_result`) can fold
 /// our queued-command attachment into the preceding `Tool` message —
 /// only walking `User` would miss the steering content there.
-fn extract_all_text(msg: &LanguageModelMessage) -> String {
-    use coco_inference::AssistantContentPart;
-    use coco_inference::ToolContentPart;
-    use coco_inference::ToolResultContent;
-    use coco_inference::UserContentPart;
+fn extract_all_text(msg: &LlmMessage) -> String {
+    use coco_llm_types::AssistantContentPart;
+    use coco_llm_types::ToolContentPart;
+    use coco_llm_types::ToolResultContent;
+    use coco_llm_types::UserContentPart;
     let mut out = String::new();
     let mut push = |s: &str| {
         out.push_str(s);
         out.push('\n');
     };
     match msg {
-        LanguageModelMessage::User { content, .. } => {
+        LlmMessage::User { content, .. } => {
             for p in content {
                 if let UserContentPart::Text(t) = p {
                     push(&t.text);
                 }
             }
         }
-        LanguageModelMessage::Assistant { content, .. } => {
+        LlmMessage::Assistant { content, .. } => {
             for p in content {
                 if let AssistantContentPart::Text(t) = p {
                     push(&t.text);
                 }
             }
         }
-        LanguageModelMessage::Tool { content, .. } => {
+        LlmMessage::Tool { content, .. } => {
             for p in content {
                 if let ToolContentPart::ToolResult(r) = p {
                     match &r.output {
                         ToolResultContent::Text { value, .. } => push(value),
                         ToolResultContent::Content { value, .. } => {
                             for c in value {
-                                if let coco_inference::ToolResultContentPart::Text {
+                                if let coco_llm_types::ToolResultContentPart::Text {
                                     text, ..
                                 } = c
                                 {
@@ -237,8 +237,7 @@ fn extract_all_text(msg: &LanguageModelMessage) -> String {
                 }
             }
         }
-        LanguageModelMessage::System { content, .. }
-        | LanguageModelMessage::Developer { content, .. } => {
+        LlmMessage::System { content, .. } | LlmMessage::Developer { content, .. } => {
             for p in content {
                 if let UserContentPart::Text(t) = p {
                     push(&t.text);
@@ -251,7 +250,7 @@ fn extract_all_text(msg: &LanguageModelMessage) -> String {
 
 #[tokio::test]
 async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
-    let captured: Arc<Mutex<Vec<Vec<LanguageModelMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured: Arc<Mutex<Vec<Vec<LlmMessage>>>> = Arc::new(Mutex::new(Vec::new()));
     let model = Arc::new(SteeringMock::new(captured.clone()));
     let client = Arc::new(ApiClient::with_default_fingerprint(
         model,

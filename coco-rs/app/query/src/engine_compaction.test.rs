@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use coco_inference::LanguageModelMessage;
-use coco_inference::UserContentPart;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::UserContentPart;
 use coco_types::CacheSafeParams;
 use coco_types::ForkLabel;
 use coco_types::HookEventType;
@@ -37,8 +37,8 @@ impl coco_inference::LanguageModel for CapturingModel {
     ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
         *self.options.lock().expect("model options lock poisoned") = Some(options);
         Ok(coco_inference::LanguageModelGenerateResult {
-            content: vec![coco_inference::AssistantContentPart::Text(
-                coco_inference::TextPart {
+            content: vec![coco_llm_types::AssistantContentPart::Text(
+                coco_llm_types::TextPart {
                     text: "direct summary".into(),
                     provider_metadata: None,
                 },
@@ -318,7 +318,7 @@ async fn compact_summary_falls_back_to_direct_no_tools_call() {
     assert!(format!("{:?}", options.prompt[0]).contains("conversation context for api"));
     assert!(!format!("{:?}", options.prompt[0]).contains("conversation slice only"));
     match options.prompt.last() {
-        Some(LanguageModelMessage::User { content, .. }) => {
+        Some(LlmMessage::User { content, .. }) => {
             assert!(content.iter().any(|part| matches!(
                 part,
                 UserContentPart::Text(text) if text.text == "direct request"

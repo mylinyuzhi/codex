@@ -26,7 +26,7 @@ fn emits_attachment_with_ts_verbatim_template() {
         panic!("expected user message");
     };
     assert_eq!(parts.len(), 1);
-    let coco_inference::UserContentPart::Text(tp) = &parts[0] else {
+    let coco_llm_types::UserContentPart::Text(tp) = &parts[0] else {
         panic!("expected text part");
     };
     let text = tp.text.as_str();

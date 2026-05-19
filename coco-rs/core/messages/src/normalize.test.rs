@@ -205,8 +205,8 @@ fn test_merge_consecutive_assistant_messages_no_merge() {
 
 fn user_msg_with_image() -> Message {
     use crate::UserContent;
-    use coco_inference::FilePart;
-    use coco_inference::TextPart;
+    use coco_llm_types::FilePart;
+    use coco_llm_types::TextPart;
 
     Message::User(UserMessage {
         message: LlmMessage::User {
@@ -229,7 +229,7 @@ fn user_msg_with_image() -> Message {
 
 fn user_msg_image_only() -> Message {
     use crate::UserContent;
-    use coco_inference::FilePart;
+    use coco_llm_types::FilePart;
 
     Message::User(UserMessage {
         message: LlmMessage::User {
@@ -490,9 +490,9 @@ fn merge_assistants_with_no_request_id_stays_separate() {
 
 #[test]
 fn smoosh_folds_into_is_error_tool_result() {
-    use coco_inference::ToolContentPart;
-    use coco_inference::ToolResultContent;
-    use coco_inference::ToolResultPart;
+    use coco_llm_types::ToolContentPart;
+    use coco_llm_types::ToolResultContent;
+    use coco_llm_types::ToolResultPart;
 
     // Construct a Tool LlmMessage with an is_error=true tool_result whose
     // output is a Content array. TS smooshIntoToolResult filters incoming
@@ -511,7 +511,7 @@ fn smoosh_folds_into_is_error_tool_result() {
         provider_options: None,
     };
     let user_sr = LlmMessage::User {
-        content: vec![coco_inference::UserContentPart::text(
+        content: vec![coco_llm_types::UserContentPart::text(
             "<system-reminder>\nctx\n</system-reminder>",
         )],
         provider_options: None,
@@ -538,10 +538,10 @@ fn smoosh_folds_into_is_error_tool_result() {
 
 #[test]
 fn sanitize_strips_non_text_from_is_error_tool_result() {
-    use coco_inference::ToolContentPart;
-    use coco_inference::ToolResultContent;
-    use coco_inference::ToolResultContentPart;
-    use coco_inference::ToolResultPart;
+    use coco_llm_types::ToolContentPart;
+    use coco_llm_types::ToolResultContent;
+    use coco_llm_types::ToolResultContentPart;
+    use coco_llm_types::ToolResultPart;
 
     // is_error=true with a mixed Content array (text + image). The image
     // part must be stripped; surviving texts join with \n\n.
@@ -599,9 +599,9 @@ fn sanitize_strips_non_text_from_is_error_tool_result() {
 /// hit `unexpected tool_use_id`.
 #[test]
 fn normalize_synthesizes_missing_tool_result() {
-    use coco_inference::ToolCallPart;
-    use coco_inference::ToolContentPart;
-    use coco_inference::ToolResultContent;
+    use coco_llm_types::ToolCallPart;
+    use coco_llm_types::ToolContentPart;
+    use coco_llm_types::ToolResultContent;
     use coco_types::ToolId;
     use coco_types::ToolName;
 
@@ -609,7 +609,7 @@ fn normalize_synthesizes_missing_tool_result() {
     let assistant = Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
             content: vec![
-                AssistantContent::Text(coco_inference::TextPart {
+                AssistantContent::Text(coco_llm_types::TextPart {
                     text: "calling".into(),
                     provider_metadata: None,
                 }),
@@ -638,7 +638,7 @@ fn normalize_synthesizes_missing_tool_result() {
         uuid: Uuid::new_v4(),
         message: LlmMessage::Tool {
             content: vec![ToolContentPart::ToolResult(
-                coco_inference::ToolResultPart {
+                coco_llm_types::ToolResultPart {
                     tool_call_id: "tc1".into(),
                     tool_name: "Bash".into(),
                     output: ToolResultContent::text("a"),
@@ -689,8 +689,8 @@ fn normalize_synthesizes_missing_tool_result() {
 /// single normalize-call output.
 #[test]
 fn normalize_synthesis_is_idempotent() {
-    use coco_inference::ToolCallPart;
-    use coco_inference::ToolContentPart;
+    use coco_llm_types::ToolCallPart;
+    use coco_llm_types::ToolContentPart;
 
     // Build a Vec<LlmMessage> with one assistant tool_use and no
     // matching tool_result.
@@ -737,8 +737,8 @@ fn normalize_synthesis_is_idempotent() {
 /// synthesized independently — verifies the audit's edge case A2.
 #[test]
 fn normalize_synthesizes_for_multiple_assistants() {
-    use coco_inference::ToolCallPart;
-    use coco_inference::ToolContentPart;
+    use coco_llm_types::ToolCallPart;
+    use coco_llm_types::ToolContentPart;
     use coco_types::ToolId;
     use coco_types::ToolName;
 
@@ -765,10 +765,10 @@ fn normalize_synthesizes_for_multiple_assistants() {
         uuid: Uuid::new_v4(),
         message: LlmMessage::Tool {
             content: vec![ToolContentPart::ToolResult(
-                coco_inference::ToolResultPart {
+                coco_llm_types::ToolResultPart {
                     tool_call_id: "unrelated".into(),
                     tool_name: "Bash".into(),
-                    output: coco_inference::ToolResultContent::text("ok"),
+                    output: coco_llm_types::ToolResultContent::text("ok"),
                     is_error: false,
                     provider_metadata: None,
                 },
@@ -832,7 +832,7 @@ fn normalize_synthesizes_for_multiple_assistants() {
 // ── strip_observable_tool_input_for_api ──
 
 fn exit_plan_mode_assistant(input: serde_json::Value) -> Message {
-    use coco_inference::ToolCallPart;
+    use coco_llm_types::ToolCallPart;
     Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
             content: vec![AssistantContent::ToolCall(ToolCallPart::new(
@@ -907,7 +907,7 @@ fn normalize_leaves_exit_plan_mode_without_injected_fields_untouched() {
 
 #[test]
 fn normalize_does_not_strip_plan_field_from_other_tools() {
-    use coco_inference::ToolCallPart;
+    use coco_llm_types::ToolCallPart;
     // A non-ExitPlanMode tool that happens to carry a `plan` key keeps it.
     let assistant = Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use coco_inference::ToolCallPart;
+use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolRegistry;
