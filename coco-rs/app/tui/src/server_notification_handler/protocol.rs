@@ -188,11 +188,12 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                     )
                     .to_string(),
                 ));
-                // Push a TeammateMessage into session.messages so the
-                // teammate spinner-line preview (`showTeammateMessagePreview`)
-                // and the transcript state can pick it up. `is_meta=true`
-                // keeps it out of the regular chat scroll — it surfaces in
-                // the transcript and in the per-teammate preview only.
+                // Push a teammate message onto the engine transcript so
+                // the teammate spinner-line preview
+                // (`showTeammateMessagePreview`) and transcript reader
+                // can pick it up. Tagged as a meta system message so it
+                // stays out of the regular chat scroll — surfaces in the
+                // transcript reader and per-teammate preview only.
                 push_teammate_message(state, &p.agent_id, msg);
             }
             true
@@ -776,7 +777,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         //
         // Engine MessageHistory authoritative-mutation events. These
         // feed `session.transcript`, which the renderer pipeline reads
-        // exclusively (no parallel `session.messages` projection).
+        // exclusively.
         ServerNotification::MessageAppended { message } => {
             match serde_json::from_value::<coco_messages::Message>(message) {
                 Ok(msg) => {
@@ -853,9 +854,7 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
     super::projection::flush_streaming_to_messages(state);
     // Stamp reasoning metadata onto the most recent assistant
     // `Thinking` cell so the renderer can show
-    // `Thinking · 1.3s · 15 reasoning tokens`. Replaces the deleted
-    // `apply_reasoning_tokens_to_response` which synthesised entries
-    // into the vestigial `session.messages` list.
+    // `Thinking · 1.3s · 15 reasoning tokens`.
     state
         .session
         .transcript
@@ -891,9 +890,7 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
     // - no state             → coco-rs analogue of "not viewing a
     //                            teammate task" + "no modal up"
     // - lossless tail          → TS `messagesAfterAreOnlySynthetic`
-    // Phase 3d (§4): auto-restore reads from `transcript.cells()` —
-    // the renderer pipeline's single source of truth. The predicates
-    // walk the engine-authoritative cell list directly.
+    // Predicates walk the engine-authoritative cell list directly.
     let cells = state.session.transcript.cells();
     let mut auto_restored = false;
     if user_cancel
@@ -918,12 +915,10 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
     // the last user prompt: the prompt is now back in the input and
     // adding "you interrupted yourself" would be noise.
     //
-    // Phase 3c: the engine's `finalize_user_cancel` already pushed a
-    // typed `SystemMessage::UserInterruption` with the authoritative
-    // `for_tool_use` and the MessageAppended event populated
-    // `transcript`. The merged-view renderer in `viewport.rs` renders
-    // it directly; no need for the TUI to push a parallel
-    // `ChatMessage::interruption_marker` here.
+    // The engine's `finalize_user_cancel` pushes a typed
+    // `SystemMessage::UserInterruption` with the authoritative
+    // `for_tool_use`; the MessageAppended event populates `transcript`,
+    // and the renderer surfaces it from there.
     let _ = (user_cancel, auto_restored);
     true
 }

@@ -71,8 +71,8 @@ impl fmt::Display for ShutdownReason {
 /// [`coco_messages::SystemMessage`] sub-variant before calling
 /// `history_push_and_emit`. Lets TUI-originated transcript content
 /// (slash output, file-open notices, bash command results, …) flow
-/// through the engine instead of writing directly to a TUI-local
-/// `ChatMessage` list. See
+/// through the engine instead of being written directly into a
+/// TUI-local buffer. See
 /// `engine-tui-unified-transcript-plan.md` §3 Commit 2.
 #[derive(Debug, Clone)]
 pub enum SystemPushKind {
@@ -91,11 +91,10 @@ pub enum SystemPushKind {
 #[derive(Debug, Clone)]
 pub enum UserCommand {
     /// Submit a bash-mode entry (input started with `!`). The TUI has
-    /// already stripped the leading `!` and pushed a
-    /// `ChatMessage::BashInput` locally; the engine bridge in
+    /// already stripped the leading `!`; the engine bridge in
     /// `tui_runner` runs the command via `coco_shell::ShellExecutor`
-    /// and emits a `ChatMessage::BashOutput` back through the
-    /// `ServerNotification::Message` channel. TS parity:
+    /// and pushes a `SystemMessage::LocalCommand` (input + output) onto
+    /// the engine transcript via `history_push_and_emit`. TS parity:
     /// `LocalShellTask.tsx` — bypasses the model loop entirely.
     SubmitBash {
         /// User-message UUID minted at submit time so the BashInput
@@ -139,12 +138,12 @@ pub enum UserCommand {
     },
     /// Submit user input text with resolved paste data.
     SubmitInput {
-        /// User-message UUID minted at submit time. The TUI pushes a
-        /// `ChatMessage` carrying this id, the agent driver builds the
-        /// `Message::User` carrying the same id, and `FileHistoryState`
-        /// keys the per-turn snapshot on it. Single source of truth so
-        /// rewind picker selections, file-history snapshots, and the
-        /// JSONL transcript line up.
+        /// User-message UUID minted at submit time. The agent driver
+        /// builds the `Message::User` carrying this id and emits it via
+        /// `history_push_and_emit`; `FileHistoryState` keys the per-turn
+        /// snapshot on the same id. Single source of truth so rewind
+        /// picker selections, file-history snapshots, and the JSONL
+        /// transcript line up.
         ///
         /// TS parity: `screens/REPL.tsx`'s `onSubmit` mints
         /// `randomUUID()` once via `createUserMessage()` before the
@@ -290,7 +289,5 @@ pub enum UserCommand {
     /// `coco_messages::SystemMessage::*` from `kind` and calls
     /// `history_push_and_emit`, so the round-trip surfaces via the
     /// normal `MessageAppended` → `TranscriptView` → render path.
-    /// Replaces direct `state.session.add_message(ChatMessage::*)`
-    /// writes that bypassed the engine in earlier phases.
     PushSystemMessage { kind: SystemPushKind },
 }

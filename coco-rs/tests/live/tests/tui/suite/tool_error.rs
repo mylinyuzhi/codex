@@ -5,8 +5,8 @@
 //!
 //! - `AgentStreamEvent::ToolUseCompleted` carries `is_error = true`
 //!   (`tool_completions()` surfaces it as `(name, true)`).
-//! - The stream handler folds that into a `MessageContent::ToolError`
-//!   chat entry — the user-visible "tool failed" line.
+//! - A `Message::ToolResult` cell with `is_error = true` lands on the
+//!   engine transcript — the user-visible "tool failed" row.
 //! - The engine recovers: it re-enters the loop with the tool result
 //!   and the next scripted reply lands as a normal assistant text.
 //! - `SessionResult.is_error` stays `false` — a failed *tool* is data,

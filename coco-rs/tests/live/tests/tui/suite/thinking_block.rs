@@ -11,7 +11,8 @@
 //!                                                    ↓
 //!  TUI handler                      →  state.ui.streaming.{thinking, content}
 //!                                                    ↓
-//!  TurnCompleted                    →  flush content → ChatMessage::AssistantText
+//!  TurnCompleted                    →  engine pushes Message::Assistant via
+//!                                       MessageAppended → transcript cell
 //!                                       (thinking stays in the streaming buffer
 //!                                        and is dropped on `take()` — by design,
 //!                                        thinking is real-time-only)
@@ -19,7 +20,7 @@
 //!
 //! Verifies:
 //! - The wire carried a `ThinkingDelta` with the scripted reasoning text.
-//! - The final assistant text landed in `session.messages`.
+//! - The final assistant text landed as a cell on the transcript.
 //! - `state.ui.streaming` is `None` after the turn (took-and-flushed).
 
 use std::time::Duration;

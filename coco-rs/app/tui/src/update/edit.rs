@@ -97,8 +97,7 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     // driver's `Message::User`, the file-history snapshot, and the
     // JSONL transcript all key off the same id. Engine
     // `history_push_and_emit` emits `MessageAppended` carrying this
-    // uuid, which the `TranscriptView` then renders — no TUI-side
-    // optimistic ChatMessage is needed any more (Commit 2).
+    // uuid, which the `TranscriptView` then renders.
     let user_message_id = uuid::Uuid::new_v4().to_string();
 
     let _ = command_tx

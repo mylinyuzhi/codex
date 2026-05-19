@@ -1,10 +1,7 @@
 //! Tool-result cell renderer. Reads `tool_name`, `output`, and
-//! `is_error` from `cell.source: Arc<Message::ToolResult>`.
-//!
-//! Phase 3d (§6): dispatches on `cell.kind` / `cell.source`.
-//! `MessageContent::FileEditDiff`, `FileWriteResult`, `ToolRejected`,
-//! `ToolCanceled` were TUI-only variants that the engine flow never
-//! emits — their match arms went away with `MessageContent`.
+//! `is_error` from `cell.source: Arc<Message::ToolResult>`. The
+//! engine flow only emits ToolResult cells (success / error), so this
+//! renderer doesn't need separate file-diff / rejected / canceled arms.
 
 use coco_messages::Message;
 use ratatui::style::Stylize;

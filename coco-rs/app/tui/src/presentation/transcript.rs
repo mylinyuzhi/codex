@@ -1,12 +1,10 @@
 //! Transcript state presentation.
 //!
-//! Phase 3d (§6): consumes `&[RenderedCell]` directly. `TranscriptCell`
-//! indices point into the cells slice; batch detection (tool batches)
-//! dispatches on `CellKind`. Hook batching and task-notification
-//! batching were unreachable through the engine-cell flow after
-//! Phase 3c (hooks land via `Attachment`, not transcript; task
-//! notifications were XML-wrapped TUI conventions that the engine no
-//! longer emits), so those variants are gone with `ChatMessage`.
+//! Consumes `&[RenderedCell]` directly. `TranscriptCell` indices point
+//! into the cells slice; batch detection (tool batches) dispatches on
+//! `CellKind`. Hooks land via `Attachment`, not the transcript, and
+//! task notifications are no longer XML-wrapped — so there are no
+//! hook-batch or task-notification variants here.
 //!
 //! See `engine-tui-phase3d-renderer-migration-plan.md` §6.
 

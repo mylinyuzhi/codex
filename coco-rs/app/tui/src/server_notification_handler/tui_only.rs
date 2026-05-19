@@ -468,10 +468,8 @@ fn on_rewind_completed(
 
     let mut restored_image_path: Option<String> = None;
     if !target_message_id.is_empty() {
-        // Phase 3d (§5): search the engine-authoritative cell list
-        // (single source of truth) for the rewound message. UI
-        // restoration reads `cell.source` directly — no projection
-        // hop through ChatMessage.
+        // Search the engine-authoritative cell list for the rewound
+        // message. UI restoration reads `cell.source` directly.
         let cells = state.session.transcript.cells();
         if let Some(target_cell) = cells
             .iter()
@@ -510,10 +508,9 @@ fn on_rewind_completed(
         }
     }
 
-    // Phase 3d (§5): the engine emits `MessageTruncated` after this
-    // handler — that event truncates `state.session.transcript`, the
-    // single source of truth for rendering. The legacy
-    // `state.session.messages.truncate` parallel write is gone.
+    // The engine emits `MessageTruncated` after this handler — that
+    // event truncates `state.session.transcript`, the single source
+    // of truth for rendering.
 
     if let Some(mode) = restored_permission_mode {
         state.session.permission_mode = mode;
@@ -540,10 +537,9 @@ fn on_rewind_completed(
 
     // Paste buffer handling — TS `restoreMessageSync` rebuilds
     // `pastedContents` from the rewound message's image blocks
-    // (`screens/REPL.tsx:3721-3737`). Coco's ChatMessage stores at most
-    // one image per message; if present, re-attach it; otherwise clear
-    // any leftover paste-buffer state so it doesn't leak into the new
-    // turn.
+    // (`screens/REPL.tsx:3721-3737`). Each user message carries at most
+    // one image; if present, re-attach it; otherwise clear any leftover
+    // paste-buffer state so it doesn't leak into the new turn.
     state.ui.paste_manager.clear();
     if let Some(path) = restored_image_path {
         state.ui.paste_manager.add_image(path);

@@ -376,11 +376,9 @@ fn test_snapshot_plan_mode() {
     insta::assert_snapshot!("plan_mode", output);
 }
 
-// `test_snapshot_file_diff` was removed in Phase 3d (§6): the
-// `MessageContent::FileEditDiff` variant it exercised was a TUI-only
-// shape that the engine flow never emits. Edit tool results land as
-// `Message::ToolResult` cells and render through the generic
-// tool-result preview — covered by `test_snapshot_with_tool_result`.
+// Edit tool results land as `Message::ToolResult` cells and render
+// through the generic tool-result preview — covered by
+// `test_snapshot_with_tool_result`.
 
 #[test]
 fn test_snapshot_parallel_tool_batch() {

@@ -1,13 +1,8 @@
 //! User-side cell renderers — text input, attachments, bash invocations
 //! (`!cmd` echoed plus output), engine-pushed user interruption marker.
 //!
-//! Phase 3d (§6): dispatches directly on `cell.kind` /
-//! `cell.source: Arc<Message>` — `ChatMessage` / `MessageContent` are
-//! gone. Variants that were never produced by the engine flow
-//! (`PlanMarker`, `AgentNotification`, `TeammateMessage`,
-//! `ChannelMessage`, `ResourceUpdate`, `Image`) were dropped along
-//! with the projection. All emitted lines are `Line<'static>` (owned
-//! spans).
+//! Dispatches directly on `cell.kind` / `cell.source: Arc<Message>`.
+//! All emitted lines are `Line<'static>` (owned spans).
 
 use coco_messages::Message;
 use coco_messages::SystemMessage;

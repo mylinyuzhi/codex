@@ -9,8 +9,8 @@
 //! Exercised here:
 //! - Typing "hi" (two `Char` keys) builds the input buffer.
 //! - `Enter` flushes the buffer through `TuiCommand::SubmitInput`,
-//!   which both folds a user `ChatMessage` into AppState and emits
-//!   `UserCommand::SubmitInput` to the agent driver.
+//!   which emits `UserCommand::SubmitInput` to the agent driver;
+//!   the engine echoes a `Message::User` back via `MessageAppended`.
 //! - `Shift+Tab` cycles `permission_mode` and emits
 //!   `UserCommand::SetPermissionMode` (the gateway used by the
 //!   permission-cycling overlay flow).

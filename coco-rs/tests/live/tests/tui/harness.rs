@@ -343,10 +343,11 @@ impl TuiHarness {
         })
     }
 
-    /// Mimic the user typing `text` and pressing Enter. Pushes a
-    /// ChatMessage::User into the displayed conversation (matches what
-    /// `update::edit::submit` does in production) and sends
-    /// `UserCommand::SubmitInput` on the command channel.
+    /// Mimic the user typing `text` and pressing Enter. Matches what
+    /// `update::edit::submit` does in production — sets the input
+    /// buffer and sends `UserCommand::SubmitInput` on the command
+    /// channel; the engine echoes a `Message::User` back via
+    /// `MessageAppended` which the transcript view picks up.
     pub async fn submit(&mut self, text: &str) {
         // Set the input buffer so `TuiCommand::SubmitInput` picks it up.
         self.state.ui.input.textarea.insert_str(text);
@@ -460,10 +461,7 @@ impl TuiHarness {
             .collect()
     }
 
-    /// Number of cells in the engine-authoritative transcript. Tests
-    /// previously read `session.messages.len()` for the same probe;
-    /// after Phase 3d the legacy projection is gone and cells are the
-    /// only fact.
+    /// Number of cells in the engine-authoritative transcript.
     pub fn cell_count(&self) -> usize {
         self.state.session.transcript.cells().len()
     }
@@ -474,8 +472,7 @@ impl TuiHarness {
     }
 
     /// True iff any `UserText` cell exists. Synthetic XML wrappers
-    /// (`<local-command-stdout>` etc.) still count — same shape the
-    /// legacy `messages.iter().any(|m| m.role == User)` probe matched.
+    /// (`<local-command-stdout>` etc.) still count.
     pub fn has_user_cell(&self) -> bool {
         use coco_tui::state::CellKind;
         self.state
@@ -499,12 +496,7 @@ impl TuiHarness {
 
     /// Find the first `Message::ToolResult` cell whose `tool_name`
     /// matches `name`. Returns `(output, is_error)` extracted from the
-    /// wrapped `LlmMessage::Tool` content. Equivalent to the legacy
-    /// probe `messages.iter().find_map(|m| match &m.content {
-    /// MessageContent::ToolSuccess { tool_name, output } if tool_name
-    /// == name => Some((output, false)), MessageContent::ToolError {
-    /// tool_name, error } if tool_name == name => Some((error, true)),
-    /// _ => None })`.
+    /// wrapped `LlmMessage::Tool` content.
     pub fn find_tool_result(&self, name: &str) -> Option<(String, bool)> {
         use coco_messages::Message;
         use coco_messages::ToolContent;

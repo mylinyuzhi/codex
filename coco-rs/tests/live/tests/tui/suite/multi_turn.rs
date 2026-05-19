@@ -1,7 +1,7 @@
 //! Three sequential prompts against a scripted assistant. Verifies
 //! state accumulates correctly across turns — each turn appends a user
-//! message, drives one engine round-trip, and finalizes a fresh
-//! assistant `ChatMessage` without clobbering prior history.
+//! cell, drives one engine round-trip, and lands a fresh assistant
+//! text cell without clobbering prior history.
 
 use std::time::Duration;
 

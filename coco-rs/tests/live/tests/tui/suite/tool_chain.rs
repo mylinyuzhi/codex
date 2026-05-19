@@ -4,7 +4,8 @@
 //! the result back, and the model returns a final text reply. Verifies:
 //! - The agent loop drives a tool call through to completion.
 //! - `AgentStreamEvent::ToolUseStarted/Completed` fold into AppState's
-//!   `session.tool_executions` and produce a `ChatMessage::ToolSuccess`.
+//!   `session.tool_executions` and a `Message::ToolResult` cell lands
+//!   on the engine transcript.
 //! - The TUI's chat-panel surfaces the tool name in the rendered buffer.
 //! - The actual file landed on disk inside the harness workdir.
 

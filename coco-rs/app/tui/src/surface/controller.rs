@@ -113,11 +113,10 @@ impl NativeSurfaceController {
 
         let options = history_options(state, width);
         let session_header = || session_header_lines(state, width);
-        // Phase 3d (§4): feed the native history driver with the
-        // engine-authoritative `&[RenderedCell]` slice directly.
-        // Engine-pushed content (cancel marker, resume scrollback,
-        // hooks, …) flows through `MessageAppended` → `TranscriptView`
-        // → `cells()` without a legacy `session.messages` overlay.
+        // Feed the native history driver with the engine-authoritative
+        // `&[RenderedCell]` slice directly. Engine-pushed content
+        // (cancel marker, resume scrollback, hooks, …) flows through
+        // `MessageAppended` → `TranscriptView` → `cells()`.
         let cells = state.session.transcript.cells();
         let history = if !plan.native_history_enabled() {
             HistoryEmissionOutcome::Noop

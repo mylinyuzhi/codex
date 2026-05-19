@@ -1,12 +1,9 @@
 //! System-cell renderers — informational rows, API errors, compaction
 //! boundaries, tool-use summaries.
 //!
-//! Phase 3d (§6): dispatches on `cell.kind` / `cell.source`.
-//! `MessageContent` variants that were never produced by the engine
-//! flow (`RateLimit`, `Shutdown*`, `Hook*`, `PlanApproval`,
-//! `CompactSummary`, `Advisor`, `TaskAssignment`) went away with the
-//! projection — those code paths were unreachable in production after
-//! Phase 3c moved system messages onto the engine `MessageHistory`.
+//! Dispatches on `cell.kind` / `cell.source`. System messages reach
+//! the TUI through the engine `MessageHistory` flow — only variants
+//! the engine actually emits have renderer arms.
 
 use coco_messages::Message;
 use coco_messages::SystemMessage;

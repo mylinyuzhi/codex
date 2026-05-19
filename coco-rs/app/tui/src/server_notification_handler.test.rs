@@ -1,15 +1,10 @@
 //! Tests for server notification handler.
 //!
-//! Post WS-2: tests use CoreEvent directly instead of the deleted
-//! TuiNotification bridge type.
-//!
-//! Phase 3d (§5) note: tests that asserted the TUI handler synthesised
-//! `ChatMessage` entries on `TurnCompleted` / `ToolUseQueued` /
-//! `ToolUseCompleted` (turn-lifecycle and tool-use-lifecycle suites)
-//! were deleted with the projection cleanup. The engine now pushes the
-//! authoritative `Message::Assistant` / `Message::ToolResult` via
-//! `MessageAppended`; the TUI just renders the cells. Reasoning-token
-//! metadata that those tests covered is now stamped via
+//! Tests use `CoreEvent` directly. Turn-lifecycle and tool-use-lifecycle
+//! suites that asserted on TUI-synthesised buffer entries are gone —
+//! the engine pushes authoritative `Message::Assistant` /
+//! `Message::ToolResult` via `MessageAppended`; the TUI just renders
+//! the cells. Reasoning-token metadata is stamped via
 //! `TranscriptView::record_reasoning_tokens` — exercised by the cell
 //! renderer tests in `state::transcript_view` and `widgets`.
 

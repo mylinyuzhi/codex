@@ -6,8 +6,7 @@
 //! `MessageTruncated` / `SessionResetForResume` events. See
 //! `engine-tui-unified-transcript-plan.md` §6.1.
 //!
-//! The renderer pipeline reads `cells()` directly — there is no
-//! parallel `session.messages` projection any more.
+//! The renderer pipeline reads `cells()` directly.
 //!
 //! Per-cell render layout (`cached_lines`, `cached_height`) is
 //! intentionally not part of this struct. Layout caching lives in the

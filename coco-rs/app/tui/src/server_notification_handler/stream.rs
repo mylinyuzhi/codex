@@ -64,9 +64,7 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
         } => {
             state.session.complete_tool(&call_id, is_error);
             // Engine pushes Message::ToolResult → MessageAppended →
-            // transcript; the viewport merge renders it. No
-            // separate `ChatMessage::tool_success` / `tool_error`
-            // push needed.
+            // transcript; the renderer surfaces it from there.
             true
         }
         AgentStreamEvent::McpToolCallBegin {

@@ -15,11 +15,11 @@ use crate::state::SuggestionKind;
 use crate::state::ui::ToastSeverity;
 
 /// Probe: does `pending_system_pushes` carry an `Informational` push
-/// whose body contains `needle`? After Phase 3d (§3) the TUI handler
-/// enqueues a `SystemPushKind` for the App loop to dispatch as
+/// whose body contains `needle`? The TUI handler enqueues a
+/// `SystemPushKind` for the App loop to dispatch as
 /// `UserCommand::PushSystemMessage`; the engine pushes the actual
 /// `SystemMessage::Informational` cell back through `MessageAppended`.
-/// Tests therefore peek at the enqueue point rather than `session.messages`.
+/// Tests therefore peek at the enqueue point rather than the transcript.
 fn pending_system_push_contains(state: &AppState, needle: &str) -> bool {
     state.session.pending_system_pushes.iter().any(
         |p| matches!(p, SystemPushKind::Informational { message, .. } if message.contains(needle)),

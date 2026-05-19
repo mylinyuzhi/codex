@@ -1,9 +1,8 @@
 //! Assistant-side cell renderers — text (markdown), thinking
 //! (collapsible), redacted thinking, tool-use invocation.
 //!
-//! Phase 3d (§6): dispatches directly on `cell.kind` /
-//! `cell.source: Arc<Message>` — `ChatMessage` / `MessageContent` are
-//! gone. All emitted lines are `Line<'static>` (owned spans).
+//! Dispatches directly on `cell.kind` / `cell.source: Arc<Message>`.
+//! All emitted lines are `Line<'static>` (owned spans).
 
 use ratatui::style::Stylize;
 use ratatui::text::Line;

@@ -1,10 +1,9 @@
 //! Chat history widget — renders the engine-authoritative
 //! `&[RenderedCell]` slice via per-category renderer submodules.
 //!
-//! Phase 3d (§6): `ChatMessage` / `MessageContent` are gone. The widget
-//! and its renderers dispatch on `cell.kind` + `cell.source:
-//! Arc<Message>` directly; the back-projection adapter has been
-//! retired along with the duplicate type system.
+//! The widget and its renderers dispatch on `cell.kind` + `cell.source:
+//! Arc<Message>` directly — engine `MessageHistory` is the only source
+//! of truth, with no parallel TUI-side projection.
 
 mod render_assistant;
 mod render_system;

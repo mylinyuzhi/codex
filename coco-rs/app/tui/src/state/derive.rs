@@ -5,10 +5,9 @@
 //! source message. No theme / viewport / hover state is consulted —
 //! that lives in the renderer at draw time.
 //!
-//! Phase 3d (§4) note: the renderer pipeline consumes `&[RenderedCell]`
-//! end-to-end (ChatWidget, history_lines, surface controller/viewport).
-//! The legacy `ChatMessage` projection that used to live here is gone —
-//! engine `MessageHistory` is the only source of truth.
+//! The renderer pipeline consumes `&[RenderedCell]` end-to-end
+//! (ChatWidget, history_lines, surface controller/viewport). Engine
+//! `MessageHistory` is the only source of truth.
 //!
 //! See `engine-tui-unified-transcript-plan.md` §2 (Layer Ownership) and
 //! `engine-tui-phase3d-renderer-migration-plan.md` §4.
@@ -167,9 +166,8 @@ pub(crate) fn extract_tool_call_input_preview(msg: &Message, call_id: &str) -> S
 
 /// Extract `(tool_name, output_text)` from a `Message::ToolResult`.
 /// Pure data accessor — consumed by `render_tool::try_render` to
-/// build the result row without going through `MessageContent`.
-/// Concatenates the `ToolResultOutput` variants to text (JSON parts
-/// serialise to their string representation).
+/// build the result row. Concatenates the `ToolResultOutput` variants
+/// to text (JSON parts serialise to their string representation).
 pub(crate) fn tool_result_output(msg: &Message) -> Option<(String, String)> {
     use coco_messages::ToolContent;
     use coco_messages::ToolResultContentPart;
