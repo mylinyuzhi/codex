@@ -33,6 +33,68 @@ class ApprovalDecision(str, Enum):
     allow = 'allow'
     deny = 'deny'
 
+class AttachmentKind(str, Enum):
+    plan_mode = 'plan_mode'
+    plan_mode_reentry = 'plan_mode_reentry'
+    plan_mode_exit = 'plan_mode_exit'
+    auto_mode = 'auto_mode'
+    auto_mode_exit = 'auto_mode_exit'
+    todo_reminder = 'todo_reminder'
+    task_reminder = 'task_reminder'
+    compaction_reminder = 'compaction_reminder'
+    date_change = 'date_change'
+    verify_plan_reminder = 'verify_plan_reminder'
+    ultrathink_effort = 'ultrathink_effort'
+    token_usage = 'token_usage'
+    budget_usd = 'budget_usd'
+    output_token_usage = 'output_token_usage'
+    companion_intro = 'companion_intro'
+    deferred_tools_delta = 'deferred_tools_delta'
+    agent_listing_delta = 'agent_listing_delta'
+    mcp_instructions_delta = 'mcp_instructions_delta'
+    hook_success = 'hook_success'
+    hook_blocking_error = 'hook_blocking_error'
+    hook_additional_context = 'hook_additional_context'
+    hook_stopped_continuation = 'hook_stopped_continuation'
+    async_hook_response = 'async_hook_response'
+    diagnostics = 'diagnostics'
+    output_style = 'output_style'
+    queued_command = 'queued_command'
+    task_status = 'task_status'
+    skill_listing = 'skill_listing'
+    invoked_skills = 'invoked_skills'
+    teammate_mailbox = 'teammate_mailbox'
+    team_context = 'team_context'
+    mcp_resource = 'mcp_resource'
+    agent_mention = 'agent_mention'
+    selected_lines_in_ide = 'selected_lines_in_ide'
+    opened_file_in_ide = 'opened_file_in_ide'
+    nested_memory = 'nested_memory'
+    relevant_memories = 'relevant_memories'
+    already_read_file = 'already_read_file'
+    edited_image_file = 'edited_image_file'
+    file = 'file'
+    directory = 'directory'
+    pdf_reference = 'pdf_reference'
+    compact_file_reference = 'compact_file_reference'
+    plan_file_reference = 'plan_file_reference'
+    edited_text_file = 'edited_text_file'
+    command_permissions = 'command_permissions'
+    hook_cancelled = 'hook_cancelled'
+    hook_error_during_execution = 'hook_error_during_execution'
+    hook_non_blocking_error = 'hook_non_blocking_error'
+    hook_permission_decision = 'hook_permission_decision'
+    hook_system_message = 'hook_system_message'
+    structured_output = 'structured_output'
+    dynamic_skill = 'dynamic_skill'
+    context_efficiency = 'context_efficiency'
+    skill_discovery = 'skill_discovery'
+    max_turns_reached = 'max_turns_reached'
+    current_session_memory = 'current_session_memory'
+    teammate_shutdown_batch = 'teammate_shutdown_batch'
+    bagel_console = 'bagel_console'
+    critical_system_reminder = 'critical_system_reminder'
+
 class CancelReason(str, Enum):
     user_cancel = 'user_cancel'
     system_preempt = 'system_preempt'
@@ -124,10 +186,43 @@ class FileChangeKind(str, Enum):
     modify = 'modify'
     delete = 'delete'
 
+class HookEventType(str, Enum):
+    PreToolUse = 'PreToolUse'
+    PostToolUse = 'PostToolUse'
+    PostToolUseFailure = 'PostToolUseFailure'
+    SessionStart = 'SessionStart'
+    SessionEnd = 'SessionEnd'
+    Setup = 'Setup'
+    Stop = 'Stop'
+    StopFailure = 'StopFailure'
+    SubagentStart = 'SubagentStart'
+    SubagentStop = 'SubagentStop'
+    UserPromptSubmit = 'UserPromptSubmit'
+    PermissionRequest = 'PermissionRequest'
+    PermissionDenied = 'PermissionDenied'
+    Notification = 'Notification'
+    Elicitation = 'Elicitation'
+    ElicitationResult = 'ElicitationResult'
+    PreCompact = 'PreCompact'
+    PostCompact = 'PostCompact'
+    TeammateIdle = 'TeammateIdle'
+    TaskCreated = 'TaskCreated'
+    TaskCompleted = 'TaskCompleted'
+    ConfigChange = 'ConfigChange'
+    InstructionsLoaded = 'InstructionsLoaded'
+    CwdChanged = 'CwdChanged'
+    FileChanged = 'FileChanged'
+    WorktreeCreate = 'WorktreeCreate'
+    WorktreeRemove = 'WorktreeRemove'
+
 class HookOutcomeStatus(str, Enum):
     success = 'success'
     error = 'error'
     cancelled = 'cancelled'
+
+class HookPermissionDecision(str, Enum):
+    allow = 'allow'
+    deny = 'deny'
 
 class ItemStatus(str, Enum):
     in_progress = 'in_progress'
@@ -149,6 +244,23 @@ class MemoryDialogScope(str, Enum):
     project = 'project'
     project_local = 'project_local'
     subdir = 'subdir'
+
+class MessageKind(str, Enum):
+    user = 'user'
+    assistant = 'assistant'
+    system = 'system'
+    attachment = 'attachment'
+    tool_result = 'tool_result'
+    progress = 'progress'
+    tombstone = 'tombstone'
+    tool_use_summary = 'tool_use_summary'
+
+class MessageOrigin(str, Enum):
+    user_input = 'user_input'
+    system_injected = 'system_injected'
+    tool_result = 'tool_result'
+    compact_summary = 'compact_summary'
+    subagent_reply = 'subagent_reply'
 
 class ModelRole(str, Enum):
     main = 'main'
@@ -302,6 +414,15 @@ class SessionState(str, Enum):
     running = 'running'
     requires_action = 'requires_action'
 
+class SourceType(str, Enum):
+    url = 'url'
+    document = 'document'
+
+class SystemMessageLevel(str, Enum):
+    info = 'info'
+    warning = 'warning'
+    error = 'error'
+
 class TaskCompletionStatus(str, Enum):
     completed = 'completed'
     failed = 'failed'
@@ -311,6 +432,16 @@ class TaskListStatus(str, Enum):
     pending = 'pending'
     in_progress = 'in_progress'
     completed = 'completed'
+
+class UnifiedFinishReason(str, Enum):
+    end_turn = 'end_turn'
+    stop_sequence = 'stop_sequence'
+    tool_use = 'tool_use'
+    max_tokens = 'max_tokens'
+    model_context_window_exceeded = 'model_context_window_exceeded'
+    content_filter = 'content_filter'
+    error = 'error'
+    other = 'other'
 
 class WireApi(str, Enum):
     chat = 'chat'
@@ -324,11 +455,26 @@ class WireApi(str, Enum):
 # Agent-loop stream events. Higher-level than `coco_types::StreamEvent` (which represents raw LLM inference deltas). Adds:
 AgentStreamEvent = dict[str, Any]
 
+# Assistant message content parts.
+AssistantContentPart = dict[str, Any]
+
+# Typed payload for an [`AttachmentMessage`](super::AttachmentMessage).
+AttachmentBody = dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any]
+
 # Top-level wire message. SDK clients send these over stdin; coco-rs writes these to stdout. Consumers dispatch on the `ty
 JsonRpcMessage = dict[str, Any]
 
+# Generated file data — either raw bytes/base64 or a URL.
+LanguageModelV4FileData = dict[str, Any]
+
+# A message in a language model prompt.
+LanguageModelV4Message = dict[str, Any]
+
 # Semantic row kind for the `/memory` picker.
 MemoryDialogRowKind = dict[str, Any]
+
+# Top-level message enum.
+Message = dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any] | dict[str, Any]
 
 # Bounded, UI-ready permission input display.
 PermissionDisplayInput = dict[str, Any]
@@ -339,11 +485,26 @@ PermissionUpdate = dict[str, Any]
 # Request identifier. Can be a string or integer per JSON-RPC 2.0. SDK clients typically use integers; coco-rs accepts bot
 RequestId = int | str
 
+# File data as a tagged discriminated union (v4 spec).
+SharedV4FileData = dict[str, Any]
+
 # Categorization of a `SlashCommandStatus` payload. Each variant maps to a `slash.status.*` key in the TUI locale catalog.
 SlashCommandStatusKind = dict[str, Any]
 
+# Tool message content parts.
+ToolContentPart = dict[str, Any]
+
+# Content of a tool result.
+ToolResultContent = dict[str, Any]
+
+# A part of tool result content.
+ToolResultContentPart = dict[str, Any]
+
 # TUI-exclusive events.
 TuiOnlyEvent = dict[str, Any]
+
+# User message content parts.
+UserContentPart = dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -687,7 +848,7 @@ class WorktreeExitedParams(BaseModel):
     worktree_path: str
 
 class HistoryMessageAppendedParams(BaseModel):
-    message: Any
+    message: Message
 
 class HistoryMessageTruncatedParams(BaseModel):
     keep_count: int
@@ -1797,6 +1958,10 @@ class AgentInfo(BaseModel):
     name: str
     description: str | None = None
 
+class ApiError(BaseModel):
+    message: str
+    status_code: int | None = None
+
 class FileChangeInfo(BaseModel):
     kind: FileChangeKind
     path: str
@@ -1881,6 +2046,11 @@ class PluginInit(BaseModel):
     name: str
     path: str
     source: str | None = None
+
+class PreservedSegment(BaseModel):
+    anchor_uuid: str
+    head_uuid: str
+    tail_uuid: str
 
 class SessionModelUsage(BaseModel):
     cache_creation_input_tokens: int
