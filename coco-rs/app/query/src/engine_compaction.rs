@@ -734,6 +734,7 @@ impl QueryEngine {
             agentic: false,
             cache: None,
             stop_sequences: None,
+            response_format: None,
         };
 
         match self.client.query(&params).await {

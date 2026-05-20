@@ -299,11 +299,16 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
             )));
         }
 
-        // Tool calls
+        // Tool calls — route raw arguments through the
+        // caller-supplied parse callback (with `llm_json` repair
+        // wired by `coco-inference`). Failure → `invalid: true`.
         if let Some(ref tool_calls) = choice.message.tool_calls {
             for tc in tool_calls {
-                let input: serde_json::Value =
-                    serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                let parsed = vercel_ai_provider_utils::parse_tool_call_arguments(
+                    &tc.function.arguments,
+                    options.tool_input_parse_fn.as_ref(),
+                    &tc.function.name,
+                );
 
                 // Extract thought_signature from extra_content.google.thought_signature
                 let tc_provider_metadata = tc
@@ -332,8 +337,9 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
                         .clone()
                         .unwrap_or_else(|| vercel_ai_provider_utils::generate_id("call")),
                     tool_name: tc.function.name.clone(),
-                    input,
+                    input: parsed.value,
                     provider_executed: None,
+                    invalid: parsed.invalid,
                     provider_metadata: tc_provider_metadata,
                 }));
             }

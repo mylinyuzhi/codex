@@ -1,7 +1,37 @@
 //! Tool call repair functionality.
 //!
-//! This module provides functionality for repairing malformed tool calls
-//! when the model generates invalid JSON arguments or non-existent tool names.
+//! Provides the trait + dispatch helpers for repairing malformed tool
+//! calls when the model emits invalid JSON arguments or names a
+//! non-existent tool. **No default repair implementation ships with
+//! this module** — matching the upstream TypeScript Vercel AI SDK,
+//! where `repairToolCall` is a user-supplied callback (typically
+//! re-prompts the LLM to fix its own output) rather than a built-in
+//! JSON fixer. Callers wire in their preferred strategy via
+//! [`CustomRepairFunction`] or a custom impl of
+//! [`ToolCallRepairFunction`].
+//!
+//! # Example: local JSON repair
+//!
+//! ```ignore
+//! use std::sync::Arc;
+//! use vercel_ai::{CustomRepairFunction, ToolCall};
+//!
+//! let repair = Arc::new(CustomRepairFunction::new(|tool_call, error| {
+//!     // Implement repair logic here — e.g., call a JSON-repair crate
+//!     // (`llm_json`, `jsonrepair`) on `error.original_error`'s raw
+//!     // input, or re-prompt the LLM. Return `None` if not fixable.
+//!     None
+//! }));
+//!
+//! // Pass to `GenerateTextOptions::with_repair_tool_call(repair)`.
+//! ```
+//!
+//! # Example: LLM re-prompt
+//!
+//! The typical TS implementation feeds the failing `tool_call` +
+//! `inputSchema` + `error` back into the model and asks it to
+//! produce corrected arguments. That strategy lives at the caller
+//! layer — this module only provides the dispatch primitives.
 
 use std::sync::Arc;
 
@@ -29,32 +59,6 @@ pub trait ToolCallRepairFunction: Send + Sync {
     ///
     /// The repaired tool call, or None if repair is not possible.
     async fn repair(&self, tool_call: &ToolCall, error: &ToolCallRepairError) -> Option<ToolCall>;
-}
-
-/// A simple repair function that attempts to fix JSON parsing errors.
-pub struct JsonRepairFunction;
-
-#[async_trait::async_trait]
-impl ToolCallRepairFunction for JsonRepairFunction {
-    async fn repair(&self, tool_call: &ToolCall, error: &ToolCallRepairError) -> Option<ToolCall> {
-        // Check if this is an invalid tool input error
-        match &error.original_error {
-            ToolCallRepairOriginalError::InvalidToolInput(input_error) => {
-                // Try to fix common JSON issues in the tool input
-                if let Some(fixed) = try_fix_json(&input_error.tool_input) {
-                    return Some(ToolCall::new(
-                        &tool_call.tool_call_id,
-                        &tool_call.tool_name,
-                        fixed,
-                    ));
-                }
-            }
-            ToolCallRepairOriginalError::NoSuchTool(_) => {
-                // Can't repair a tool that doesn't exist
-            }
-        }
-        None
-    }
 }
 
 /// A repair function that uses a custom function to fix the tool call.
@@ -242,152 +246,6 @@ fn json_type_name(value: &JSONValue) -> &'static str {
     }
 }
 
-/// Try to fix common JSON issues.
-fn try_fix_json(raw: &str) -> Option<JSONValue> {
-    let trimmed = raw.trim();
-
-    // Try parsing as-is first
-    if let Ok(v) = serde_json::from_str::<JSONValue>(trimmed) {
-        return Some(v);
-    }
-
-    // Try adding missing quotes around keys
-    let fixed = fix_unquoted_keys(trimmed);
-    if let Ok(v) = serde_json::from_str::<JSONValue>(&fixed) {
-        return Some(v);
-    }
-
-    // Try fixing trailing commas
-    let fixed = fix_trailing_commas(trimmed);
-    if let Ok(v) = serde_json::from_str::<JSONValue>(&fixed) {
-        return Some(v);
-    }
-
-    // Try fixing missing closing brackets
-    let fixed = fix_missing_brackets(trimmed);
-    if let Ok(v) = serde_json::from_str::<JSONValue>(&fixed) {
-        return Some(v);
-    }
-
-    None
-}
-
-/// Fix unquoted keys in JSON.
-fn fix_unquoted_keys(json: &str) -> String {
-    // Simple regex-like replacement for unquoted keys
-    // This is a basic implementation; a full implementation would use a proper parser
-    let mut result = String::new();
-    let mut chars = json.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '{' || c == ',' {
-            result.push(c);
-            // Skip whitespace
-            while let Some(&next) = chars.peek() {
-                if next.is_whitespace() {
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            // Check if key is unquoted
-            if let Some(&next) = chars.peek()
-                && next != '"'
-                && next.is_alphabetic()
-            {
-                result.push('"');
-                while let Some(&next) = chars.peek() {
-                    if next.is_alphanumeric() || next == '_' {
-                        if let Some(c) = chars.next() {
-                            result.push(c);
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                result.push('"');
-                continue;
-            }
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
-}
-
-/// Fix trailing commas in JSON.
-fn fix_trailing_commas(json: &str) -> String {
-    // Remove trailing commas before ] and }
-    let mut result = String::new();
-    let mut chars = json.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == ',' {
-            // Check if next non-whitespace is ] or }
-            let mut temp = String::new();
-            while let Some(&next) = chars.peek() {
-                if next.is_whitespace() {
-                    if let Some(c) = chars.next() {
-                        temp.push(c);
-                    }
-                } else {
-                    break;
-                }
-            }
-            if let Some(&next) = chars.peek()
-                && (next == ']' || next == '}')
-            {
-                // Skip the comma
-                result.push_str(&temp);
-                continue;
-            }
-            result.push(c);
-            result.push_str(&temp);
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
-}
-
-/// Fix missing closing brackets.
-fn fix_missing_brackets(json: &str) -> String {
-    let mut result = json.to_string();
-    let mut open_braces = 0i32;
-    let mut open_brackets = 0i32;
-    let mut in_string = false;
-    let mut escape_next = false;
-
-    for c in json.chars() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        match c {
-            '\\' if in_string => escape_next = true,
-            '"' => in_string = !in_string,
-            '{' if !in_string => open_braces += 1,
-            '}' if !in_string => open_braces -= 1,
-            '[' if !in_string => open_brackets += 1,
-            ']' if !in_string => open_brackets -= 1,
-            _ => {}
-        }
-    }
-
-    // Close any open strings
-    if in_string {
-        result.push('"');
-    }
-
-    // Add missing closing brackets
-    for _ in 0..open_brackets {
-        result.push(']');
-    }
-    for _ in 0..open_braces {
-        result.push('}');
-    }
-
-    result
-}
+#[cfg(test)]
+#[path = "tool_call_repair.test.rs"]
+mod tests;

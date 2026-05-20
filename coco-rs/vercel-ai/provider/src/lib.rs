@@ -160,6 +160,7 @@ pub use embedding_model::EmbeddingType;
 pub use embedding_model::EmbeddingUsage;
 pub use embedding_model::EmbeddingValue;
 pub use image_model::ImageModelV4;
+pub use language_model::CustomToolInputParseFunction;
 pub use language_model::LanguageModelV4;
 pub use language_model::LanguageModelV4CallOptions;
 pub use language_model::LanguageModelV4GenerateResult;
@@ -172,6 +173,10 @@ pub use language_model::LanguageModelV4Tool;
 pub use language_model::LanguageModelV4ToolChoice;
 pub use language_model::ReasoningLevel;
 pub use language_model::ResponseFormat;
+pub use language_model::ToolInputParseError;
+pub use language_model::ToolInputParseFunction;
+pub use language_model::ToolInputParseHandle;
+pub use language_model::ToolInputParseResult;
 pub use provider::ProviderV4;
 pub use provider::SimpleProvider;
 

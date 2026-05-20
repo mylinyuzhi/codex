@@ -26,6 +26,7 @@ pub mod text;
 pub mod tool_approval_request;
 pub mod tool_call;
 pub mod tool_choice;
+pub mod tool_input_parse;
 pub mod tool_result;
 pub mod usage;
 
@@ -76,6 +77,11 @@ pub use tool::LanguageModelV4Tool;
 pub use tool_approval_request::LanguageModelV4ToolApprovalRequest;
 pub use tool_call::LanguageModelV4ToolCall;
 pub use tool_choice::LanguageModelV4ToolChoice;
+pub use tool_input_parse::CustomToolInputParseFunction;
+pub use tool_input_parse::ToolInputParseError;
+pub use tool_input_parse::ToolInputParseFunction;
+pub use tool_input_parse::ToolInputParseHandle;
+pub use tool_input_parse::ToolInputParseResult;
 pub use tool_result::LanguageModelV4ToolResult;
 
 // Legacy re-exports for backward compatibility (from stream.rs)

@@ -81,6 +81,7 @@ fn converts_assistant_tool_call() {
             input: serde_json::json!({"city": "SF"}),
             provider_executed: None,
             provider_metadata: None,
+            invalid: false,
         })],
         provider_options: None,
     }];
@@ -270,6 +271,7 @@ fn converts_provider_executed_server_tool_use() {
             input: json!({"query": "rust programming"}),
             provider_executed: Some(true),
             provider_metadata: None,
+            invalid: false,
         })],
         provider_options: None,
     }];
@@ -304,6 +306,7 @@ fn converts_mcp_tool_use_round_trip() {
                 input: json!({"arg": "value"}),
                 provider_executed: Some(true),
                 provider_metadata: Some(ProviderMetadata(mcp_meta)),
+                invalid: false,
             }),
             AssistantContentPart::ToolResult(vercel_ai_provider::content::ToolResultPart {
                 tool_call_id: "mcp_1".into(),
@@ -348,6 +351,7 @@ fn converts_code_execution_sub_tool() {
             input: json!({"type": "bash_code_execution", "command": "ls"}),
             provider_executed: Some(true),
             provider_metadata: None,
+            invalid: false,
         })],
         provider_options: None,
     }];
@@ -379,6 +383,7 @@ fn strips_programmatic_tool_call_type() {
             input: json!({"type": "programmatic-tool-call", "code": "print('hello')"}),
             provider_executed: Some(true),
             provider_metadata: None,
+            invalid: false,
         })],
         provider_options: None,
     }];
@@ -519,6 +524,7 @@ fn forwards_caller_info_in_regular_tool_call() {
             input: json!({}),
             provider_executed: None,
             provider_metadata: Some(ProviderMetadata(meta)),
+            invalid: false,
         })],
         provider_options: None,
     }];

@@ -1356,6 +1356,7 @@ dependencies = [
  "coco-llm-types",
  "coco-otel",
  "coco-types",
+ "coco-utils-json-repair",
  "futures",
  "pretty_assertions",
  "reqwest",
@@ -1501,6 +1502,7 @@ dependencies = [
  "coco-shell-parser",
  "coco-tool-runtime",
  "coco-types",
+ "coco-utils-json-repair",
  "filetime",
  "libc",
  "notify 8.2.0",
@@ -2108,6 +2110,7 @@ dependencies = [
  "coco-subagent",
  "coco-system-reminder",
  "coco-types",
+ "coco-utils-json-repair",
  "futures",
  "jsonschema",
  "pretty_assertions",
@@ -2278,6 +2281,16 @@ dependencies = [
  "mime_guess",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "coco-utils-json-repair"
+version = "0.0.0"
+dependencies = [
+ "llm_json",
+ "pretty_assertions",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4552,6 +4565,17 @@ name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
+
+[[package]]
+name = "llm_json"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e3a81b4dfc9cbadf5adde6e601f1b8ec0806d2b41da589e40cdc082e8e223b2"
+dependencies = [
+ "clap",
+ "serde_json",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "lock_api"

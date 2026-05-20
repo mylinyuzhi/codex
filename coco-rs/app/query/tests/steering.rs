@@ -138,6 +138,7 @@ impl LanguageModel for SteeringMock {
                         }),
                         provider_executed: None,
                         provider_metadata: None,
+                        invalid: false,
                     }),
                 ],
                 usage: Usage::new(50, 20),

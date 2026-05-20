@@ -137,6 +137,7 @@ pub fn assistant_with_tool_call(tool_name: &str, input: serde_json::Value) -> Me
                     input,
                     provider_executed: None,
                     provider_metadata: None,
+                    invalid: false,
                 }),
             ],
             provider_options: None,

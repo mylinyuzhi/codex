@@ -200,9 +200,10 @@ pub use to_response_messages::to_response_messages;
 pub use to_response_messages::to_response_messages_from_tool_calls;
 pub use to_response_messages::to_response_messages_with_text;
 
-// tool_call_repair
+// tool_call_repair — trait + dispatch only; no default fixer (SDK
+// parity with TS `@ai-sdk/ai`). Callers wire in their own repair
+// strategy via `CustomRepairFunction` or a custom impl.
 pub use tool_call_repair::CustomRepairFunction;
-pub use tool_call_repair::JsonRepairFunction;
 pub use tool_call_repair::RepairResult;
 pub use tool_call_repair::ToolCallRepairFunction;
 pub use tool_call_repair::repair_tool_call;

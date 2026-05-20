@@ -60,6 +60,11 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::ParallelToolCalls,
                     Capability::ServerSideToolReference,
                     Capability::ClientSideToolSearch,
+                    // Adapter `get_model_capabilities("claude-sonnet-4-6")`
+                    // returns `supports_structured_output: true` →
+                    // native `output_format` + `structured-outputs-2025-11-13`
+                    // beta is emitted on the wire.
+                    Capability::StructuredOutput,
                 ]),
                 supported_thinking_levels: Some(thinking.clone()),
                 default_thinking_level: Some(ReasoningEffort::Medium),
@@ -87,6 +92,14 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::ParallelToolCalls,
                     Capability::ServerSideToolReference,
                     Capability::ClientSideToolSearch,
+                    // Anthropic adapter does not yet have an explicit
+                    // entry for `claude-opus-4-7` in
+                    // `get_model_capabilities`, so it falls back to the
+                    // synthetic json-tool path. Recall reads
+                    // `tool_uses.first()` which handles that wire shape
+                    // — the capability gate still keeps the request
+                    // on the structured-output rail.
+                    Capability::StructuredOutput,
                 ]),
                 supported_thinking_levels: Some(thinking),
                 default_thinking_level: Some(ReasoningEffort::Medium),
@@ -113,6 +126,9 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     // so no ServerSideToolReference, but the client-side
                     // path has been validated.
                     Capability::ClientSideToolSearch,
+                    // Adapter `get_model_capabilities("claude-haiku-4-5")`
+                    // returns `supports_structured_output: true`.
+                    Capability::StructuredOutput,
                 ]),
                 ..Default::default()
             },

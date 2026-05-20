@@ -167,6 +167,23 @@ pub struct ToolCallPart {
     /// If this flag is not set or is false, the tool call will be executed by the client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_executed: Option<bool>,
+    /// `true` when the adapter could not parse the raw `arguments`
+    /// string against strict JSON (or repair via
+    /// [`crate::ToolInputParseFunction`] also failed). The `input`
+    /// field is [`JSONValue::Null`] in this case. Caller layers
+    /// (agent loop, side queries) read this flag and emit a
+    /// synthetic tool_result back to the LLM so the model can
+    /// self-correct on the next turn.
+    ///
+    /// **TS parity**: mirrors `invalid: boolean` on the SDK-level
+    /// `TypedToolCall` in `@ai-sdk/ai`
+    /// (`packages/ai/src/generate-text/parse-tool-call.ts`).
+    ///
+    /// **Backward compatible**: `#[serde(default)]` so legacy
+    /// transcripts that pre-date the field deserialise as
+    /// `invalid: false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invalid: bool,
     /// Provider-specific metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_metadata: Option<ProviderMetadata>,
@@ -184,6 +201,21 @@ impl ToolCallPart {
             tool_name: tool_name.into(),
             input,
             provider_executed: None,
+            invalid: false,
+            provider_metadata: None,
+        }
+    }
+
+    /// Construct an invalid tool call — used by adapters when the
+    /// raw `arguments` string failed to parse and no repair callback
+    /// recovered. Sets `input = JSONValue::Null, invalid = true`.
+    pub fn invalid(tool_call_id: impl Into<String>, tool_name: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            tool_name: tool_name.into(),
+            input: JSONValue::Null,
+            provider_executed: None,
+            invalid: true,
             provider_metadata: None,
         }
     }
@@ -191,6 +223,12 @@ impl ToolCallPart {
     /// Set whether the tool is executed by the provider.
     pub fn with_provider_executed(mut self, provider_executed: bool) -> Self {
         self.provider_executed = Some(provider_executed);
+        self
+    }
+
+    /// Mark the tool call as failed-to-parse.
+    pub fn with_invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
         self
     }
 

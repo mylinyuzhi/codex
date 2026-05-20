@@ -30,6 +30,7 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         agentic: false,
         cache: None,
         stop_sequences: None,
+        response_format: None,
     };
 
     let mut rx = target.client.query_stream(&params).await?;
@@ -111,6 +112,7 @@ pub async fn run_with_tools(target: &LiveTarget) -> Result<()> {
         agentic: false,
         cache: None,
         stop_sequences: None,
+        response_format: None,
     };
 
     let mut rx = target.client.query_stream(&params).await?;

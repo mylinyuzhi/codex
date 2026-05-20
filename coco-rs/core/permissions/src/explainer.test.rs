@@ -13,6 +13,7 @@ fn make_tool_response(tool_input: serde_json::Value) -> SideQueryResponse {
         tool_uses: vec![SideQueryToolUse {
             name: "explain_command".to_string(),
             input: tool_input,
+            invalid: false,
         }],
         stop_reason: SideQueryStopReason::ToolUse,
         usage: SideQueryUsage::default(),

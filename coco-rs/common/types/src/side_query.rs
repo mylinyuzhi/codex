@@ -63,8 +63,41 @@ pub struct SideQueryRequest {
     /// Skip the CLI system prompt prefix (for internal classifiers).
     pub skip_system_prefix: bool,
 
+    /// Native structured-output spec — translated by the side-query
+    /// implementation into [`vercel_ai_provider::ResponseFormat::Json`]
+    /// on `LanguageModelV4CallOptions.response_format`. Honored when the
+    /// resolved model declares [`crate::Capability::StructuredOutput`];
+    /// otherwise the implementation drops the field and any
+    /// [`Self::forced_tool`] / [`Self::tools`] path activates as the
+    /// multi-LLM fallback.
+    ///
+    /// TS analogue: `selectRelevantMemories`'s
+    /// `output_format: { type: 'json_schema', schema }`. Provider-
+    /// specific wire shapes (Anthropic `output_format` + beta header,
+    /// OpenAI `response_format.json_schema`, Gemini `responseSchema`)
+    /// are owned by the respective `vercel-ai-*` adapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<SideQueryOutputFormat>,
+
     /// Source label for telemetry (e.g. "permission_explainer", "auto_mode").
     pub query_source: String,
+}
+
+/// Native structured-output spec carried on [`SideQueryRequest`]. The
+/// side-query implementation maps this to each provider's structured-
+/// output API at request build time — `JSONSchema` is just a JSON
+/// `Value`, no `vercel-ai-provider` dep needed at this layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SideQueryOutputFormat {
+    /// JSON Schema describing the expected response shape.
+    pub schema: serde_json::Value,
+    /// Optional schema name (passed to providers that accept one —
+    /// OpenAI `json_schema.name`, Anthropic `structured-outputs` name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Optional human-readable schema description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// A message in a side-query conversation.
@@ -116,6 +149,18 @@ pub struct SideQueryResponse {
 pub struct SideQueryToolUse {
     pub name: String,
     pub input: serde_json::Value,
+    /// `true` when the adapter could not parse the raw `arguments`
+    /// JSON the model emitted (strict parse + repair callback both
+    /// failed). `input` is [`serde_json::Value::Null`] in this case.
+    /// Caller layers (recall ranker, future side-query consumers)
+    /// read this flag and treat it as a wire-level malformed
+    /// response — typically by triggering a fallback strategy
+    /// instead of consuming the broken tool input.
+    ///
+    /// `#[serde(default)]` for backward compat with on-disk
+    /// transcripts that pre-date the field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invalid: bool,
 }
 
 /// Why the LLM stopped generating.
@@ -157,6 +202,7 @@ impl SideQueryRequest {
             thinking_budget: None,
             stop_sequences: Vec::new(),
             skip_system_prefix: false,
+            output_format: None,
             query_source: query_source.to_string(),
         }
     }
@@ -184,8 +230,70 @@ impl SideQueryRequest {
             thinking_budget: None,
             stop_sequences: Vec::new(),
             skip_system_prefix: false,
+            output_format: None,
             query_source: query_source.to_string(),
         }
+    }
+
+    /// Query with a JSON-schema structured-output spec.
+    ///
+    /// Translated by the side-query implementation into the resolved
+    /// provider's structured-output API: OpenAI `response_format.json_schema`,
+    /// Gemini `responseSchema`, Anthropic `output_format` (with the
+    /// `structured-outputs-2025-11-13` beta) or synthetic-tool fallback.
+    /// When the resolved model lacks [`crate::Capability::StructuredOutput`]
+    /// the field is dropped and the caller's [`Self::forced_tool`] path
+    /// (if any) becomes the wire path — same multi-LLM fallback as before.
+    pub fn with_json_schema(
+        system: &str,
+        user_prompt: &str,
+        schema: serde_json::Value,
+        query_source: &str,
+    ) -> Self {
+        Self {
+            model: None,
+            model_role: None,
+            system: system.to_string(),
+            messages: vec![SideQueryMessage {
+                role: SideQueryRole::User,
+                content: user_prompt.to_string(),
+            }],
+            tools: Vec::new(),
+            forced_tool: None,
+            max_tokens: None,
+            temperature: None,
+            thinking_budget: None,
+            stop_sequences: Vec::new(),
+            skip_system_prefix: false,
+            output_format: Some(SideQueryOutputFormat {
+                schema,
+                name: None,
+                description: None,
+            }),
+            query_source: query_source.to_string(),
+        }
+    }
+
+    /// Attach a name to the JSON-schema output format. Passed through
+    /// to providers that accept one (OpenAI `json_schema.name`, Anthropic
+    /// `structured-outputs` name). No-op when [`Self::output_format`]
+    /// is unset.
+    #[must_use]
+    pub fn with_schema_name(mut self, name: impl Into<String>) -> Self {
+        if let Some(fmt) = self.output_format.as_mut() {
+            fmt.name = Some(name.into());
+        }
+        self
+    }
+
+    /// Attach a human-readable description to the JSON-schema output
+    /// format. No-op when [`Self::output_format`] is unset.
+    #[must_use]
+    pub fn with_schema_description(mut self, description: impl Into<String>) -> Self {
+        if let Some(fmt) = self.output_format.as_mut() {
+            fmt.description = Some(description.into());
+        }
+        self
     }
 
     /// Builder: pin this side-query to a specific [`ModelRole`].

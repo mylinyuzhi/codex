@@ -59,6 +59,7 @@ fn tool_call() -> ToolCallPart {
         tool_name: "Read".into(),
         input: json!({"file_path": "/main/foo.txt"}),
         provider_executed: None,
+        invalid: false,
         provider_metadata: None,
     }
 }

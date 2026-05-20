@@ -267,6 +267,7 @@ pub async fn generate_tool_use_summary(
         cache: None,
         agentic: false,
         stop_sequences: None,
+        response_format: None,
     };
 
     let result = tokio::time::timeout(TOOL_USE_SUMMARY_TIMEOUT, client.query(&params)).await;

@@ -3361,6 +3361,7 @@ fn spawn_auto_title_task(
             agentic: false,
             cache: None,
             stop_sequences: None,
+            response_format: None,
         };
 
         let raw = match client.query(&params).await {

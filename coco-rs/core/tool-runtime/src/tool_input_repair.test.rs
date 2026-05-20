@@ -23,24 +23,14 @@ fn clean_input_takes_fast_path() {
 fn unquoted_keys_repaired() {
     let (v, outcome) = parse_tool_input(r#"{path: "/tmp/foo"}"#).unwrap();
     assert_eq!(v, json!({"path": "/tmp/foo"}));
-    assert_eq!(
-        outcome,
-        ParseOutcome::Repaired {
-            repaired_with: RepairKind::UnquotedKeys
-        }
-    );
+    assert_eq!(outcome, ParseOutcome::Repaired);
 }
 
 #[test]
 fn trailing_commas_repaired() {
     let (v, outcome) = parse_tool_input(r#"{"a": 1, "b": 2,}"#).unwrap();
     assert_eq!(v, json!({"a": 1, "b": 2}));
-    assert_eq!(
-        outcome,
-        ParseOutcome::Repaired {
-            repaired_with: RepairKind::TrailingCommas
-        }
-    );
+    assert_eq!(outcome, ParseOutcome::Repaired);
 
     let (v, _) = parse_tool_input(r#"["x", "y",]"#).unwrap();
     assert_eq!(v, json!(["x", "y"]));
@@ -50,18 +40,26 @@ fn trailing_commas_repaired() {
 fn missing_closing_brackets_repaired() {
     let (v, outcome) = parse_tool_input(r#"{"path": "/tmp"#).unwrap();
     assert_eq!(v, json!({"path": "/tmp"}));
-    assert_eq!(
-        outcome,
-        ParseOutcome::Repaired {
-            repaired_with: RepairKind::MissingBrackets
-        }
-    );
+    assert_eq!(outcome, ParseOutcome::Repaired);
 }
 
 #[test]
-fn unrepairable_input_errors() {
-    let err = parse_tool_input("not even close to json").unwrap_err();
-    assert_eq!(err.raw, "not even close to json");
+fn single_quotes_repaired() {
+    // Expanded coverage from the previous hand-rolled fixer: `llm_json`
+    // converts single-quoted strings to JSON-compliant double quotes.
+    let (v, outcome) = parse_tool_input(r#"{'path': '/tmp/foo'}"#).unwrap();
+    assert_eq!(v, json!({"path": "/tmp/foo"}));
+    assert_eq!(outcome, ParseOutcome::Repaired);
+}
+
+#[test]
+fn markdown_fence_stripped() {
+    // Models occasionally wrap tool input in fenced code blocks despite
+    // the schema spec — `llm_json` strips the fence.
+    let raw = "```json\n{\"file_path\": \"/tmp\"}\n```";
+    let (v, outcome) = parse_tool_input(raw).unwrap();
+    assert_eq!(v, json!({"file_path": "/tmp"}));
+    assert_eq!(outcome, ParseOutcome::Repaired);
 }
 
 #[test]
@@ -81,11 +79,7 @@ fn repair_handles_escaped_quotes_in_strings() {
 fn repair_unclosed_string_then_closes_object() {
     // String never closed AND brace never closed.
     let (v, outcome) = parse_tool_input(r#"{"a": "open"#).unwrap();
+    // `llm_json` closes the string and brace at the truncation point.
     assert_eq!(v, json!({"a": "open"}));
-    assert_eq!(
-        outcome,
-        ParseOutcome::Repaired {
-            repaired_with: RepairKind::MissingBrackets
-        }
-    );
+    assert_eq!(outcome, ParseOutcome::Repaired);
 }

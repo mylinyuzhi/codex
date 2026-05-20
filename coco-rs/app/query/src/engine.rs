@@ -974,6 +974,10 @@ impl QueryEngine {
                 // (e.g. the auto-mode classifier's stage-1 `</block>`
                 // terminator).
                 stop_sequences: None,
+                // Native structured-output is a side-query / helper
+                // concept; the main agent loop never asks the model
+                // to emit a single JSON object.
+                response_format: None,
             };
 
             // ── Phase 9: Streaming tool scheduling ──
@@ -1467,33 +1471,48 @@ impl QueryEngine {
                             // brackets). Models occasionally emit these;
                             // the repair pass turns "drop the call" into
                             // "run with the obvious intent".
-                            let input: serde_json::Value = match coco_tool_runtime::parse_tool_input(
-                                &buf.input_json,
-                            ) {
-                                Ok((v, outcome)) => {
-                                    if let coco_tool_runtime::ParseOutcome::Repaired {
-                                        repaired_with,
-                                    } = outcome
-                                    {
-                                        tracing::info!(
+                            // Parse with repair (workspace's
+                            // `coco_utils_json_repair` via the
+                            // `parse_tool_input` shim). On failure
+                            // **do not drop the call** — Anthropic's
+                            // API requires every `tool_use` to have a
+                            // matching `tool_result`, and silently
+                            // dropping the call would leave history
+                            // in a state that fails validation on the
+                            // next request. Instead build a
+                            // `ToolCallPart` with `invalid: true` so
+                            // `prepare_one_pending_tool_call` can
+                            // synthesise an error `tool_result`
+                            // telling the LLM the arguments were
+                            // malformed. TS parity with
+                            // `parse-tool-call.ts:97-117`.
+                            let (input, input_invalid): (serde_json::Value, bool) =
+                                match coco_tool_runtime::parse_tool_input(&buf.input_json) {
+                                    Ok((v, outcome)) => {
+                                        if matches!(
+                                            outcome,
+                                            coco_tool_runtime::ParseOutcome::Repaired
+                                        ) {
+                                            tracing::info!(
+                                                tool_call_id = %id,
+                                                tool_name = %buf.tool_name,
+                                                "streaming tool input JSON repaired before execution",
+                                            );
+                                        }
+                                        (v, false)
+                                    }
+                                    Err(e) => {
+                                        warn!(
                                             tool_call_id = %id,
                                             tool_name = %buf.tool_name,
-                                            repaired_with = ?repaired_with,
-                                            "streaming tool input JSON repaired before execution",
+                                            error = %e,
+                                            raw_input = %buf.input_json,
+                                            "streaming tool input JSON parse failed; \
+                                             marking invalid so prep emits an error tool_result"
                                         );
+                                        (serde_json::Value::Null, true)
                                     }
-                                    v
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        tool_call_id = %id,
-                                        tool_name = %buf.tool_name,
-                                        error = %e,
-                                        "streaming tool input JSON parse failed; dropping call"
-                                    );
-                                    continue;
-                                }
-                            };
+                                };
                             let input =
                                 crate::tool_input_normalizer::normalize_observable_tool_input(
                                     &buf.tool_name,
@@ -1512,6 +1531,7 @@ impl QueryEngine {
                                 tool_name: buf.tool_name.clone(),
                                 input,
                                 provider_executed: None,
+                                invalid: input_invalid,
                                 provider_metadata: None,
                             };
                             let slice = std::slice::from_ref(&tcp);
@@ -2579,20 +2599,22 @@ fn assistant_content_from_snapshot(
                     warn!(tool_call_id = %tc.id, "tool call did not complete");
                     continue;
                 }
-                let input: serde_json::Value =
+                // Parse with repair — see streaming-path commentary
+                // above. Failure marks `invalid: true` so the
+                // preparer can emit a synthetic error `tool_result`;
+                // dropping the call would leave Anthropic's
+                // tool_use/tool_result pairing invariant violated.
+                let (input, input_invalid): (serde_json::Value, bool) =
                     match coco_tool_runtime::parse_tool_input(&tc.input_json) {
                         Ok((v, outcome)) => {
-                            if let coco_tool_runtime::ParseOutcome::Repaired { repaired_with } =
-                                outcome
-                            {
+                            if matches!(outcome, coco_tool_runtime::ParseOutcome::Repaired) {
                                 tracing::info!(
                                     tool_call_id = %tc.id,
                                     tool_name = %tc.tool_name,
-                                    repaired_with = ?repaired_with,
                                     "tool input JSON repaired before execution",
                                 );
                             }
-                            v
+                            (v, false)
                         }
                         Err(e) => {
                             warn!(
@@ -2600,9 +2622,10 @@ fn assistant_content_from_snapshot(
                                 tool_name = %tc.tool_name,
                                 error = %e,
                                 raw_input = %tc.input_json,
-                                "tool input JSON parse failed"
+                                "tool input JSON parse failed; \
+                                 marking invalid so prep emits an error tool_result"
                             );
-                            continue;
+                            (serde_json::Value::Null, true)
                         }
                     };
                 let input = crate::tool_input_normalizer::normalize_observable_tool_input(
@@ -2615,6 +2638,7 @@ fn assistant_content_from_snapshot(
                     tool_name: tc.tool_name.clone(),
                     input,
                     provider_executed: tc.provider_executed,
+                    invalid: input_invalid,
                     provider_metadata: tc.provider_metadata.clone(),
                 };
                 content_parts.push(AssistantContentPart::ToolCall(tcp.clone()));

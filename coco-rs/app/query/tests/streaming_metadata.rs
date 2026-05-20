@@ -182,6 +182,7 @@ async fn metadata_survives_reasoning_and_tool_call() {
             input: serde_json::json!({"command": "ls"}),
             provider_executed: None,
             provider_metadata: Some(tool_meta.clone()),
+            invalid: false,
         }),
     ];
 
@@ -257,6 +258,7 @@ async fn order_is_preserved_for_text_tool_text_interleaving() {
             input: serde_json::json!({"command": "ls"}),
             provider_executed: None,
             provider_metadata: Some(meta("google", "thoughtSignature", "MT")),
+            invalid: false,
         }),
         AssistantContentPart::Text(TextPart {
             text: "after".into(),

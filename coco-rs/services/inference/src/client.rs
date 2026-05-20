@@ -109,6 +109,20 @@ pub struct QueryParams {
     ///   * Gemini → `stopSequences`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+    /// Native structured-output spec. Threaded into
+    /// [`vercel_ai_provider::LanguageModelV4CallOptions::response_format`]
+    /// **only** when the resolved model declares
+    /// [`Capability::StructuredOutput`]; otherwise dropped with a
+    /// `debug!` log so the caller's
+    /// `forced_tool` / `tools` path (if any) becomes the multi-LLM
+    /// wire format.
+    ///
+    /// Per-provider wire shape is owned by the respective
+    /// `vercel-ai-*` adapter (OpenAI `response_format.json_schema`,
+    /// Gemini `responseSchema`, Anthropic `output_format` or synthetic
+    /// json tool fallback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<vercel_ai_provider::ResponseFormat>,
 }
 
 /// Result of a query.
@@ -718,6 +732,12 @@ impl ApiClient {
             {
                 options.stop_sequences = Some(stops.clone());
             }
+            // Mock path has no `ModelInfo` to query capabilities — accept
+            // `response_format` as-is so test doubles can exercise the
+            // structured-output codepath without registering a capability.
+            if let Some(fmt) = params.response_format.clone() {
+                options.response_format = Some(fmt);
+            }
             return (options, BTreeMap::new());
         };
 
@@ -768,6 +788,34 @@ impl ApiClient {
         let mut po = call.provider_options.unwrap_or_default();
         put_layout_options(&mut po, &layout);
         call.provider_options = Some(po);
+
+        // Native structured-output gate. The resolved provider adapter
+        // handles its own wire shape (OpenAI `response_format.json_schema`,
+        // Gemini `responseSchema`, Anthropic `output_format` with
+        // `structured-outputs-2025-11-13` beta or synthetic-tool
+        // fallback). We forward `response_format` only when the
+        // model declares [`Capability::StructuredOutput`] —
+        // OpenAI-compatible endpoints without this capability
+        // (Volcengine, ZAI, …) historically 400 on
+        // `response_format: json_schema`. Caller's `forced_tool` /
+        // `tools` path stays untouched and runs as the multi-LLM
+        // fallback when the capability isn't declared.
+        if let Some(fmt) = params.response_format.clone() {
+            let supports = info
+                .capabilities
+                .as_deref()
+                .unwrap_or(&[])
+                .contains(&Capability::StructuredOutput);
+            if supports {
+                call.response_format = Some(fmt);
+            } else {
+                debug!(
+                    target: "coco_inference::client",
+                    model_id = self.model.model_id(),
+                    "response_format requested but model lacks Capability::StructuredOutput; dropping (falling back to caller's tool path if any)"
+                );
+            }
+        }
 
         (call, merged_extra)
     }

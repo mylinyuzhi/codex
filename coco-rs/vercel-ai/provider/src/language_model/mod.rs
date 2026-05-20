@@ -5,6 +5,7 @@
 pub mod v4;
 
 // Re-export v4 types at this level for backward compatibility
+pub use v4::CustomToolInputParseFunction;
 pub use v4::FinishReason;
 pub use v4::InputTokens;
 pub use v4::LanguageModelV4;
@@ -29,5 +30,9 @@ pub use v4::Source;
 pub use v4::SourceType;
 pub use v4::StreamError;
 pub use v4::ToolApprovalRequest;
+pub use v4::ToolInputParseError;
+pub use v4::ToolInputParseFunction;
+pub use v4::ToolInputParseHandle;
+pub use v4::ToolInputParseResult;
 pub use v4::UnifiedFinishReason;
 pub use v4::Usage;

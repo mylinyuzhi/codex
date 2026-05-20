@@ -106,6 +106,7 @@ impl MockResponse {
                     input,
                     provider_executed: None,
                     provider_metadata: None,
+                    invalid: false,
                 })],
                 StopReason::ToolUse,
             ),
@@ -121,6 +122,7 @@ impl MockResponse {
                         input,
                         provider_executed: None,
                         provider_metadata: None,
+                        invalid: false,
                     }));
                 }
                 (parts, StopReason::ToolUse)
@@ -136,6 +138,7 @@ impl MockResponse {
                             input,
                             provider_executed: None,
                             provider_metadata: None,
+                            invalid: false,
                         })
                     })
                     .collect();

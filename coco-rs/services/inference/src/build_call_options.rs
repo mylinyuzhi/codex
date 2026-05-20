@@ -39,9 +39,48 @@ use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
+use vercel_ai_provider::CustomToolInputParseFunction;
 use vercel_ai_provider::LanguageModelV4CallOptions;
 use vercel_ai_provider::LanguageModelV4Tool;
+use vercel_ai_provider::ToolInputParseError;
+use vercel_ai_provider::ToolInputParseHandle;
+use vercel_ai_provider::ToolInputParseResult;
 use vercel_ai_provider_utils::merge_json_value;
+
+/// Build the [`ToolInputParseHandle`] every adapter receives via
+/// `LanguageModelV4CallOptions.tool_input_parse_fn`. Routes raw
+/// tool-call `arguments` through the workspace's single JSON-repair
+/// path ([`coco_utils_json_repair::parse_with_repair`]) so streaming
+/// and non-streaming consumers see identical repair semantics.
+///
+/// **Empty input policy**: `arguments == ""` (or whitespace-only)
+/// resolves to `{}` instead of error. Matches the engine-side
+/// `parse_tool_input` convention — some providers emit a tool call
+/// with no input deltas when the model invokes a parameterless tool,
+/// and we treat that as an empty arguments object rather than a
+/// parse failure.
+fn coco_utils_json_repair_parse_fn() -> ToolInputParseHandle {
+    Arc::new(CustomToolInputParseFunction::new(|raw: &str| {
+        match coco_utils_json_repair::parse_with_repair(raw) {
+            Ok((value, coco_utils_json_repair::RepairOutcome::Clean)) => {
+                Ok(ToolInputParseResult::clean(value))
+            }
+            Ok((value, coco_utils_json_repair::RepairOutcome::Repaired)) => {
+                Ok(ToolInputParseResult::repaired(value))
+            }
+            Err(coco_utils_json_repair::JsonRepairError::EmptyInput) => Ok(
+                ToolInputParseResult::clean(serde_json::Value::Object(Default::default())),
+            ),
+            Err(coco_utils_json_repair::JsonRepairError::Postparse(e)) => {
+                Err(ToolInputParseError::Parse(e.to_string()))
+            }
+            Err(coco_utils_json_repair::JsonRepairError::Repair(msg)) => {
+                Err(ToolInputParseError::Repair(msg))
+            }
+        }
+    }))
+}
 
 /// Per-call deltas applied on top of the resolved `ModelInfo`. Each
 /// field overrides the corresponding model-level value when `Some`.
@@ -120,6 +159,15 @@ pub fn build_call_options_with_extra(
         ..Default::default()
     };
     call.tools = tools;
+    // Wire the workspace's single JSON-repair source of truth into
+    // adapters as a [`vercel_ai_provider::ToolInputParseFunction`]
+    // callback. When the model emits malformed tool-call
+    // `arguments`, each adapter routes the raw bytes through this
+    // function before constructing `ToolCallPart` — failures
+    // propagate via `ToolCallPart.invalid = true` (not silent
+    // `Value::Null`), and repair-assisted parses emit a `warn!` log
+    // so dashboards can monitor repair frequency.
+    call.tool_input_parse_fn = Some(coco_utils_json_repair_parse_fn());
 
     // Lane A: typed sampling. `None` semantically means "let provider
     // default" — every typed body builder writes the field only on

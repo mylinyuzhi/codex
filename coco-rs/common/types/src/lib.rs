@@ -360,6 +360,7 @@ pub use tool_filter::ToolOverrides;
 // Side-query types (data only; async trait in coco-tool-runtime)
 pub use side_query::CacheSafeParams;
 pub use side_query::SideQueryMessage;
+pub use side_query::SideQueryOutputFormat;
 pub use side_query::SideQueryRequest;
 pub use side_query::SideQueryResponse;
 pub use side_query::SideQueryRole;

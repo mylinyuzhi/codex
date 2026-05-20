@@ -57,6 +57,7 @@ async fn synthetic_stream_emits_events_in_content_order() {
             input: serde_json::json!({"command": "echo hi"}),
             provider_executed: None,
             provider_metadata: None,
+            invalid: false,
         }),
     ];
 
@@ -285,6 +286,7 @@ async fn snapshot_preserves_provider_metadata_on_every_variant() {
             input: serde_json::json!({"command": "ls"}),
             provider_executed: None,
             provider_metadata: Some(tool_meta.clone()),
+            invalid: false,
         }),
     ];
 
@@ -654,6 +656,7 @@ async fn tool_input_round_trips_through_synthetic_stream() {
         tool_name: "Bash".into(),
         input: original_input.clone(),
         provider_executed: None,
+        invalid: false,
         provider_metadata: None,
     })];
 

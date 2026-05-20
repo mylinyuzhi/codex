@@ -128,6 +128,40 @@ pub(crate) async fn prepare_one_pending_tool_call(
 
     let tool_id = prepared.tool_id;
     let tool = prepared.tool;
+
+    // Invalid-arguments short-circuit. The adapter (non-streaming
+    // path) or `parse_tool_input` (streaming path) sets
+    // `ToolCallPart.invalid = true` when the raw `arguments` JSON
+    // failed strict parsing AND the `tool_input_parse_fn` repair
+    // callback also failed. Emit a synthetic error `tool_result`
+    // explaining the parse failure so:
+    //
+    //   1. The Anthropic API's `tool_use`↔`tool_result` pairing
+    //      invariant is satisfied on the next request.
+    //   2. The model sees an explicit error message and can
+    //      self-correct on the next turn instead of looping with the
+    //      same bad JSON.
+    //
+    // TS parity: `parse-tool-call.ts:97-117` keeps `invalid: true`
+    // tool calls in history; SDK consumers emit error results
+    // before continuing. Returning `None` from this function tells
+    // the caller (engine, streaming or batch path) to skip
+    // execution — same control-flow as a permission deny.
+    if tc.invalid {
+        crate::helpers::complete_tool_call_with_error_mode(
+            args.event_tx,
+            args.history,
+            &tc.tool_call_id,
+            &tc.tool_name,
+            &tool_id,
+            "Tool call could not be executed: the `arguments` JSON emitted by the model \
+             failed to parse, even after repair. Please retry the tool call with valid \
+             JSON arguments.",
+            args.completion_event_mode,
+        )
+        .await;
+        return None;
+    }
     // `tc.input` is already the observable input — both engine paths run
     // `normalize_observable_tool_input` when building this `ToolCallPart`.
 
@@ -536,6 +570,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                 // emit `<thinking>` and `<reason>` freely. TS parity:
                 // `yoloClassifier.ts:792`.
                 stop_sequences: req.stop_sequences,
+                response_format: None,
             };
             match client.query(&params).await {
                 Ok(result) => {
