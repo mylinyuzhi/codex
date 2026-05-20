@@ -1187,10 +1187,10 @@ fn extract_recent_tool_writes<M: std::borrow::Borrow<coco_messages::Message>>(
 
     // Index ToolResultMessages after the assistant turn by tool_use_id.
     // Tool results may arrive in any order; build a map then look up.
-    let mut results: HashMap<String, bool> = HashMap::new();
+    let mut results: HashMap<&str, bool> = HashMap::new();
     for msg in &messages[last_assistant_idx + 1..] {
         if let Message::ToolResult(tr) = msg.borrow() {
-            results.insert(tr.tool_use_id.clone(), !tr.is_error);
+            results.insert(tr.tool_use_id.as_str(), !tr.is_error);
         }
     }
 
