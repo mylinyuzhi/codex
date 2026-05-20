@@ -52,6 +52,7 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
                 coco_tui::server_notification_handler::handle_core_event(
                     &mut harness.state,
                     evt.clone(),
+                    &harness.command_tx,
                 );
                 harness.events.push(evt);
                 if started_bash {

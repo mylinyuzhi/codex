@@ -484,6 +484,10 @@ pub struct QueryResult {
     /// Final message history at the end of the turn, including the
     /// user prompt, any tool calls + results, and the final assistant
     /// reply. Used by multi-turn SDK sessions to thread context
-    /// forward into the next `turn/start`.
-    pub final_messages: Vec<Message>,
+    /// forward into the next `turn/start`, and by the TUI / SDK
+    /// runners to write-back into `SessionRuntime.history` via
+    /// `MessageHistory::push_arc` — no deep `Message` clone, no
+    /// re-Arc allocation across the engine→runtime seam (plan §11
+    /// F8 follow-up).
+    pub final_messages: Vec<std::sync::Arc<Message>>,
 }

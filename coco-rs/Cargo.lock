@@ -1364,6 +1364,7 @@ dependencies = [
  "snafu",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "vercel-ai",
  "vercel-ai-anthropic",
@@ -1492,6 +1493,7 @@ dependencies = [
  "coco-file-watch",
  "coco-frontmatter",
  "coco-git",
+ "coco-llm-types",
  "coco-otel",
  "coco-paths",
  "coco-secret-redact",
@@ -1963,6 +1965,7 @@ dependencies = [
  "coco-config",
  "coco-error",
  "coco-frontmatter",
+ "coco-llm-types",
  "coco-types",
  "pretty_assertions",
  "serde",
@@ -1970,6 +1973,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

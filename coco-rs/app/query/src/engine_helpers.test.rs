@@ -24,7 +24,8 @@ fn assistant_with_total(total: i64) -> Message {
 #[test]
 fn returns_false_on_empty_history() {
     // Cold start: no assistant turn yet — the swap should stay disabled.
-    assert!(!most_recent_assistant_exceeds(&[], 200_000));
+    let empty: &[Message] = &[];
+    assert!(!most_recent_assistant_exceeds(empty, 200_000));
 }
 
 #[test]

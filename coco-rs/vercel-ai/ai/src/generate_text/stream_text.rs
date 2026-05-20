@@ -927,11 +927,11 @@ async fn stream_text_inner(
         let effective_tools =
             build_call_options::filter_active_tools(&tool_definitions, &step_active_tools);
 
-        // Build call options using shared builder
+        // Build call options using shared builder. abort_signal flows
+        // separately to do_stream — not part of CallOptions.
         let call_options = build_call_options::build_call_options(
             &options.settings,
             &step_tool_choice,
-            &options.abort_signal,
             &effective_provider_options,
             &options.output,
             step_messages,
@@ -961,7 +961,7 @@ async fn stream_text_inner(
         // Execute with retry for stream initialization
         let stream_result = execute_stream_with_retry(
             effective_model,
-            call_options,
+            &call_options,
             retry_config.clone(),
             options.abort_signal.clone(),
         )
@@ -1468,26 +1468,28 @@ fn send_lazy_values(
 }
 
 /// Execute a streaming request with retry logic.
+///
+/// `call_options` is borrowed across attempts — no per-attempt clone of
+/// the prompt vector. `abort_signal` is `Arc`-backed (cheap refcount bump).
 async fn execute_stream_with_retry(
     model: &Arc<dyn vercel_ai_provider::LanguageModelV4>,
-    call_options: LanguageModelV4CallOptions,
+    call_options: &LanguageModelV4CallOptions,
     retry_config: RetryConfig,
     abort_signal: Option<CancellationToken>,
 ) -> Result<vercel_ai_provider::LanguageModelV4StreamResult, AIError> {
     use crate::util::retry::with_retry;
 
-    let model = model.clone();
     let provider_name = model.provider().to_string();
     let model_id_str = model.model_id().to_string();
 
-    with_retry(retry_config, abort_signal, || {
+    with_retry(retry_config, abort_signal.clone(), || {
         let model = model.clone();
-        let call_options = call_options.clone();
         let provider_name = provider_name.clone();
         let model_id_str = model_id_str.clone();
+        let abort_signal = abort_signal.clone();
         async move {
             model
-                .do_stream(call_options)
+                .do_stream(call_options, abort_signal)
                 .await
                 .map_err(|e| crate::prompt::wrap_gateway_error(e, &provider_name, &model_id_str))
         }

@@ -45,7 +45,8 @@ impl LanguageModel for TextMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         Ok(LanguageModelGenerateResult {
             content: vec![AssistantContentPart::Text(TextPart {
@@ -62,9 +63,10 @@ impl LanguageModel for TextMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -90,7 +92,8 @@ impl LanguageModel for TextThenErrorMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -113,9 +116,10 @@ impl LanguageModel for TextThenErrorMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -141,7 +145,8 @@ impl LanguageModel for ToolCallThenTextMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
 
@@ -187,9 +192,10 @@ impl LanguageModel for ToolCallThenTextMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -214,7 +220,8 @@ impl LanguageModel for ExitPlanModeThenTextMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -251,9 +258,10 @@ impl LanguageModel for ExitPlanModeThenTextMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -279,7 +287,8 @@ impl LanguageModel for MultiToolMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
 
@@ -327,9 +336,10 @@ impl LanguageModel for MultiToolMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -359,7 +369,8 @@ impl LanguageModel for OneToolThenTextMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -396,9 +407,10 @@ impl LanguageModel for OneToolThenTextMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -744,7 +756,8 @@ async fn test_tool_execution_with_real_tools() {
         }
         async fn do_generate(
             &self,
-            _options: LanguageModelCallOptions,
+            _options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelGenerateResult, AISdkError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             if call == 0 {
@@ -780,9 +793,10 @@ async fn test_tool_execution_with_real_tools() {
         }
         async fn do_stream(
             &self,
-            options: LanguageModelCallOptions,
+            options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelStreamResult, AISdkError> {
-            let result = self.do_generate(options).await?;
+            let result = self.do_generate(options, None).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
                 result.usage,
@@ -840,7 +854,8 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
         }
         async fn do_generate(
             &self,
-            _options: LanguageModelCallOptions,
+            _options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelGenerateResult, AISdkError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             if call == 0 {
@@ -876,9 +891,10 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
         }
         async fn do_stream(
             &self,
-            options: LanguageModelCallOptions,
+            options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelStreamResult, AISdkError> {
-            let result = self.do_generate(options).await?;
+            let result = self.do_generate(options, None).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
                 result.usage,
@@ -1077,12 +1093,12 @@ async fn collect_events_from_run(
     (result, events)
 }
 
-fn tool_result_error_text(
-    messages: &[coco_messages::Message],
+fn tool_result_error_text<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
     tool_use_id: &str,
 ) -> Option<String> {
     messages.iter().find_map(|message| {
-        let coco_messages::Message::ToolResult(result) = message else {
+        let coco_messages::Message::ToolResult(result) = message.borrow() else {
             return None;
         };
         if result.tool_use_id != tool_use_id {
@@ -1107,9 +1123,12 @@ fn tool_result_error_text(
     })
 }
 
-fn tool_result_text(messages: &[coco_messages::Message], tool_use_id: &str) -> Option<String> {
+fn tool_result_text<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
+    tool_use_id: &str,
+) -> Option<String> {
     messages.iter().find_map(|message| {
-        let coco_messages::Message::ToolResult(result) = message else {
+        let coco_messages::Message::ToolResult(result) = message.borrow() else {
             return None;
         };
         if result.tool_use_id != tool_use_id {
@@ -1133,12 +1152,12 @@ fn tool_result_text(messages: &[coco_messages::Message], tool_use_id: &str) -> O
     })
 }
 
-fn assistant_tool_input(
-    messages: &[coco_messages::Message],
+fn assistant_tool_input<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
     tool_use_id: &str,
 ) -> Option<serde_json::Value> {
     messages.iter().find_map(|message| {
-        let coco_messages::Message::Assistant(assistant) = message else {
+        let coco_messages::Message::Assistant(assistant) = message.borrow() else {
             return None;
         };
         let coco_messages::LlmMessage::Assistant { content, .. } = &assistant.message else {
@@ -1164,12 +1183,12 @@ fn queued_tool_input(events: &[CoreEvent], tool_use_id: &str) -> Option<serde_js
     })
 }
 
-fn attachment_text_by_kind(
-    messages: &[coco_messages::Message],
+fn attachment_text_by_kind<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
     kind: coco_types::AttachmentKind,
 ) -> Option<String> {
     messages.iter().find_map(|message| {
-        let coco_messages::Message::Attachment(attachment) = message else {
+        let coco_messages::Message::Attachment(attachment) = message.borrow() else {
             return None;
         };
         if attachment.kind != kind {
@@ -1187,22 +1206,25 @@ fn attachment_text_by_kind(
     })
 }
 
-fn tool_result_index(messages: &[coco_messages::Message], tool_use_id: &str) -> Option<usize> {
+fn tool_result_index<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
+    tool_use_id: &str,
+) -> Option<usize> {
     messages.iter().position(|message| {
-        let coco_messages::Message::ToolResult(result) = message else {
+        let coco_messages::Message::ToolResult(result) = message.borrow() else {
             return false;
         };
         result.tool_use_id == tool_use_id
     })
 }
 
-fn attachment_index_by_kind_and_text(
-    messages: &[coco_messages::Message],
+fn attachment_index_by_kind_and_text<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
     kind: coco_types::AttachmentKind,
     needle: &str,
 ) -> Option<usize> {
     messages.iter().position(|message| {
-        let coco_messages::Message::Attachment(attachment) = message else {
+        let coco_messages::Message::Attachment(attachment) = message.borrow() else {
             return false;
         };
         if attachment.kind != kind {
@@ -1220,12 +1242,12 @@ fn attachment_index_by_kind_and_text(
     })
 }
 
-fn user_message_index_containing(
-    messages: &[coco_messages::Message],
+fn user_message_index_containing<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
     needle: &str,
 ) -> Option<usize> {
     messages.iter().position(|message| {
-        let coco_messages::Message::User(user) = message else {
+        let coco_messages::Message::User(user) = message.borrow() else {
             return false;
         };
         let coco_messages::LlmMessage::User { content, .. } = &user.message else {
@@ -2613,7 +2635,8 @@ impl LanguageModel for AskingToolCallMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -2649,9 +2672,10 @@ impl LanguageModel for AskingToolCallMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -2897,7 +2921,8 @@ impl LanguageModel for AskingToolThenTextMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -2933,9 +2958,10 @@ impl LanguageModel for AskingToolThenTextMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -3131,11 +3157,11 @@ async fn query_result_final_messages_contains_full_roundtrip() {
     let has_user = result
         .final_messages
         .iter()
-        .any(|m| matches!(m, coco_messages::Message::User(_)));
+        .any(|m| matches!(m.as_ref(), coco_messages::Message::User(_)));
     let has_assistant = result
         .final_messages
         .iter()
-        .any(|m| matches!(m, coco_messages::Message::Assistant(_)));
+        .any(|m| matches!(m.as_ref(), coco_messages::Message::Assistant(_)));
     assert!(has_user && has_assistant);
 }
 
@@ -3383,7 +3409,10 @@ async fn run_with_messages_uses_last_user_message_for_history_key() {
     let new = coco_messages::create_user_message("current turn");
     let (tx, _rx) = tokio::sync::mpsc::channel::<CoreEvent>(16);
     let result = engine
-        .run_with_messages(vec![prior, new], tx)
+        .run_with_messages(
+            vec![std::sync::Arc::new(prior), std::sync::Arc::new(new)],
+            tx,
+        )
         .await
         .expect("should succeed");
 

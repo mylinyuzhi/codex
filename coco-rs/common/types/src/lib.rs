@@ -148,6 +148,7 @@ pub use event::PlanModeChangedParams;
 pub use event::PluginInit;
 pub use event::RateLimitParams;
 pub use event::RateLimitStatus;
+pub use event::ReasoningMetadataAttachedParams;
 pub use event::RewindCompletedParams;
 pub use event::SandboxStateChangedParams;
 pub use event::ServerNotification;

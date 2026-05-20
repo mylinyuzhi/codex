@@ -1129,7 +1129,7 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
     use coco_tool_runtime::AgentQueryResult;
 
     struct CapturingEngine {
-        captured: tokio::sync::Mutex<Option<Vec<serde_json::Value>>>,
+        captured: tokio::sync::Mutex<Option<Vec<std::sync::Arc<coco_messages::Message>>>>,
     }
     #[async_trait]
     impl AgentQueryEngine for CapturingEngine {
@@ -1157,14 +1157,15 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
     let mut handle = create_test_handle();
     handle.set_execution_engine(captured.clone());
 
-    let parent_messages = vec![serde_json::json!({
-        "role": "user",
-        "content": [{
-            "type": "tool_result",
-            "tool_use_id": "abc",
-            "content": "REAL TOOL OUTPUT - must survive",
-        }],
-    })];
+    // Build a typed ToolResultMessage that the engine stub can observe.
+    let tool_result_msg = std::sync::Arc::new(coco_messages::create_tool_result_message(
+        "abc",
+        "Bash",
+        "Bash".parse().unwrap(),
+        "REAL TOOL OUTPUT - must survive",
+        false,
+    ));
+    let parent_messages = vec![tool_result_msg];
     let request = AgentSpawnRequest {
         prompt: "follow up".into(),
         spawn_mode: coco_tool_runtime::SpawnMode::Resume {
@@ -1207,7 +1208,7 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
     struct CapturingEngine {
         captured_prompt: tokio::sync::Mutex<Option<String>>,
         captured_system: tokio::sync::Mutex<Option<String>>,
-        captured_messages: tokio::sync::Mutex<Option<Vec<serde_json::Value>>>,
+        captured_messages: tokio::sync::Mutex<Option<Vec<std::sync::Arc<coco_messages::Message>>>>,
     }
     #[async_trait]
     impl AgentQueryEngine for CapturingEngine {
@@ -1240,14 +1241,15 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
     handle.set_execution_engine(captured.clone());
     handle.set_hook_registry(Arc::new(coco_hooks::HookRegistry::new()));
 
-    let parent_messages = vec![serde_json::json!({
-        "role": "user",
-        "content": [{
-            "type": "tool_result",
-            "tool_use_id": "tu1",
-            "content": "noisy parent output",
-        }],
-    })];
+    let parent_messages = vec![std::sync::Arc::new(
+        coco_messages::create_tool_result_message(
+            "tu1",
+            "Bash",
+            "Bash".parse().unwrap(),
+            "noisy parent output",
+            false,
+        ),
+    )];
     let parent_snapshot = std::sync::Arc::new(coco_types::SubagentRuntimeSnapshot {
         provider: "anthropic".into(),
         api: coco_types::ProviderApi::Anthropic,
@@ -1298,10 +1300,9 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
     // runner injects only via the new user turn (not into parent
     // messages), so we synthesize the user message a downstream turn
     // would see and assert detection.
-    let downstream_history = vec![serde_json::json!({
-        "role": "user",
-        "content": [{"type": "text", "text": observed_prompt}],
-    })];
+    let downstream_history = vec![std::sync::Arc::new(coco_messages::create_user_message(
+        &observed_prompt,
+    ))];
     assert!(
         coco_subagent::is_in_fork_child(&downstream_history),
         "is_in_fork_child must detect the wrapped directive — without this, fork-of-fork is silently allowed",

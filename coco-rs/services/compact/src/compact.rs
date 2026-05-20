@@ -8,6 +8,8 @@
 //! - Post-compact attachment creation (file restore, plan, skills)
 //! - Pre/post compact hook points
 
+use std::sync::Arc;
+
 use coco_messages::Message;
 use coco_messages::PartialCompactDirection;
 use coco_messages::PreservedSegment;
@@ -129,7 +131,7 @@ pub type PostCompactAttachmentFn =
     ),
 )]
 pub async fn compact_conversation<F, Fut>(
-    messages: &[Message],
+    messages: &[Arc<Message>],
     config: &CompactRunOptions,
     summarize_fn: F,
     attachment_fn: Option<PostCompactAttachmentFn>,
@@ -139,11 +141,14 @@ where
     Fut: std::future::Future<Output = Result<CompactSummaryResponse, String>>,
 {
     tracing::info!("compaction begin (full)");
-    // Step 1: Strip images/documents to avoid prompt-too-long on media-heavy conversations
-    let stripped = strip_images_from_messages(messages);
-    let working_messages = strip_reinjected_attachments(&stripped);
 
-    // Step 2-3: Group and split
+    // Steps 1-2: strip images + reinjected attachments via the canonical
+    // pipeline. Arc-vec in, Arc-vec out — image/attachment-free messages
+    // refcount-bump through (zero `Message::clone`).
+    let working_messages = run_compact_strip_pipeline(messages);
+
+    // Step 3: Group and split. `group_messages_by_api_round` is generic
+    // over `Borrow<Message>` so it walks the Arc-vec directly.
     let rounds = group_messages_by_api_round(&working_messages);
 
     if rounds.len() <= config.keep_recent_rounds {
@@ -158,6 +163,8 @@ where
             raw_summary: None,
             summary_messages: vec![],
             attachments: vec![],
+            // Skip path: nothing to summarize, return the Arc-vec unchanged.
+            // N×Arc::clone (refcount bumps), zero Message clones.
             messages_to_keep: messages.to_vec(),
             hook_results: vec![],
             user_display_message: None,
@@ -185,10 +192,13 @@ where
         "compaction: rounds split, calling summarizer"
     );
 
-    let messages_to_summarize: Vec<Message> = old_rounds
-        .iter()
-        .flat_map(|round| round.iter().copied().cloned())
-        .collect();
+    // Recover Arc identity for the split: `recent_rounds` and
+    // `old_rounds` carry `&Message` refs into the Arc-vec, but rounds
+    // preserve input order so the first `prefix_len` messages of
+    // `working_messages` are in `old_rounds`, and the rest are in
+    // `recent_rounds`. Index back to share Arcs (zero `Message::clone`).
+    let prefix_len: usize = old_rounds.iter().map(Vec::len).sum();
+    let messages_to_summarize: Vec<Arc<Message>> = working_messages[..prefix_len].to_vec();
     let summary_request = crate::prompt::get_compact_prompt(config.custom_prompt.as_deref());
 
     // Step 5: Call LLM with retry on prompt-too-long
@@ -209,11 +219,10 @@ where
     // Format the summary
     let formatted = crate::prompt::format_compact_summary(&summary_text);
 
-    // Step 6: Build result messages
-    let messages_to_keep: Vec<Message> = recent_rounds
-        .iter()
-        .flat_map(|round| round.iter().copied().cloned())
-        .collect();
+    // Step 6: Build result messages. Mirror the summary split: the
+    // remaining suffix of `working_messages` (after the summarized
+    // prefix) is the kept set, shared as Arcs.
+    let messages_to_keep: Vec<Arc<Message>> = working_messages[prefix_len..].to_vec();
 
     let summary_user_msg = crate::prompt::get_compact_user_summary_message(
         &formatted,
@@ -323,7 +332,7 @@ where
     ),
 )]
 pub async fn partial_compact_conversation<F, Fut>(
-    all_messages: &[Message],
+    all_messages: &[Arc<Message>],
     pivot_index: usize,
     direction: PartialCompactDirection,
     user_feedback: Option<&str>,
@@ -348,7 +357,9 @@ where
         .fail();
     }
 
-    let (to_summarize, to_keep_raw): (Vec<Message>, Vec<Message>) = match direction {
+    // Split into summarized / kept halves. Both are Arc-shared with the
+    // input — zero `Message::clone` here.
+    let (to_summarize, to_keep_raw): (Vec<Arc<Message>>, Vec<Arc<Message>>) = match direction {
         PartialCompactDirection::Oldest => (
             all_messages[..pivot_index].to_vec(),
             all_messages[pivot_index..].to_vec(),
@@ -373,10 +384,10 @@ where
 
     // Filter progress + (for Oldest) old compact boundaries / summary
     // messages from `to_keep_raw` so a stale boundary doesn't shadow the
-    // new one. TS: compact.ts:790-800.
-    let to_keep: Vec<Message> = to_keep_raw
+    // new one. TS: compact.ts:790-800. Arc-share for kept entries.
+    let to_keep: Vec<Arc<Message>> = to_keep_raw
         .into_iter()
-        .filter(|m| match m {
+        .filter(|arc| match arc.as_ref() {
             Message::Progress(_) => false,
             Message::System(SystemMessage::CompactBoundary(_))
                 if direction == PartialCompactDirection::Oldest =>
@@ -406,20 +417,18 @@ where
 
     let prompt = crate::prompt::get_partial_compact_prompt(merged.as_deref(), direction);
 
-    // Strip media + attachments before summarizing.
-    let working = strip_reinjected_attachments(&strip_images_from_messages(&to_summarize));
+    // Strip media + attachments before summarizing — single canonical
+    // pipeline shared with `compact_conversation` and `compact_session_memory`.
+    let working = run_compact_strip_pipeline(&to_summarize);
     let initial_context_messages = match direction {
         PartialCompactDirection::Oldest => working.clone(),
-        PartialCompactDirection::Newest => {
-            strip_reinjected_attachments(&strip_images_from_messages(all_messages))
-        }
+        PartialCompactDirection::Newest => run_compact_strip_pipeline(all_messages),
     };
-    let rounds = group_messages_by_api_round(&working);
-
-    let messages_to_summarize: Vec<Message> = rounds
-        .iter()
-        .flat_map(|round| round.iter().copied().cloned())
-        .collect();
+    // `working` is already in input order and Arc-shared; `messages_to_summarize`
+    // is just an Arc-clone of it (refcount bumps, no `Message::clone`).
+    // The original code grouped + flat-mapped which round-tripped to the
+    // same set in the same order — eliminated as redundant.
+    let messages_to_summarize: Vec<Arc<Message>> = working.clone();
 
     let summary_text = call_with_ptl_retry(
         messages_to_summarize,
@@ -511,17 +520,20 @@ where
 /// the desired chain — for prefix-preserving compactions (full / partial
 /// `Newest`), this is the boundary itself; for suffix-preserving
 /// (partial `Oldest` / session-memory), it is the last summary message.
-pub fn annotate_boundary_with_preserved_segment(
+pub fn annotate_boundary_with_preserved_segment<M: std::borrow::Borrow<Message>>(
     boundary: &mut SystemCompactBoundaryMessage,
     anchor_uuid: Uuid,
-    messages_to_keep: &[Message],
+    messages_to_keep: &[M],
 ) {
     boundary.preserved_segment = build_preserved_segment(anchor_uuid, messages_to_keep);
 }
 
-fn build_preserved_segment(anchor_uuid: Uuid, kept: &[Message]) -> Option<PreservedSegment> {
-    let head_uuid = *kept.first().and_then(Message::uuid)?;
-    let tail_uuid = *kept.last().and_then(Message::uuid)?;
+fn build_preserved_segment<M: std::borrow::Borrow<Message>>(
+    anchor_uuid: Uuid,
+    kept: &[M],
+) -> Option<PreservedSegment> {
+    let head_uuid = *kept.first().and_then(|m| m.borrow().uuid())?;
+    let tail_uuid = *kept.last().and_then(|m| m.borrow().uuid())?;
     Some(PreservedSegment {
         head_uuid,
         anchor_uuid,
@@ -534,14 +546,21 @@ fn build_preserved_segment(anchor_uuid: Uuid, kept: &[Message]) -> Option<Preser
 /// TS: `buildPostCompactMessages(result)` in compact.ts:330. Order:
 /// boundary → summaries → kept → attachments → hook results. Caller wires
 /// this into the conversation history.
-pub fn build_post_compact_messages(result: &CompactResult) -> Vec<Message> {
+pub fn build_post_compact_messages(result: &CompactResult) -> Vec<Arc<Message>> {
     let mut out =
         Vec::with_capacity(2 + result.summary_messages.len() + result.messages_to_keep.len());
-    out.push(result.boundary_marker.clone());
-    out.extend(result.summary_messages.clone());
-    out.extend(result.messages_to_keep.clone());
-    out.extend(result.attachments.iter().cloned().map(Message::Attachment));
-    out.extend(result.hook_results.clone());
+    out.push(Arc::new(result.boundary_marker.clone()));
+    out.extend(result.summary_messages.iter().cloned().map(Arc::new));
+    // Kept messages are already Arc-shared — refcount bump, no Message clone.
+    out.extend(result.messages_to_keep.iter().cloned());
+    out.extend(
+        result
+            .attachments
+            .iter()
+            .cloned()
+            .map(|a| Arc::new(Message::Attachment(a))),
+    );
+    out.extend(result.hook_results.iter().cloned().map(Arc::new));
     out
 }
 
@@ -554,7 +573,7 @@ pub fn build_post_compact_messages(result: &CompactResult) -> Vec<Message> {
 pub fn build_partial_post_compact_messages(
     result: &CompactResult,
     direction: PartialCompactDirection,
-) -> Vec<Message> {
+) -> Vec<Arc<Message>> {
     match direction {
         PartialCompactDirection::Oldest => build_post_compact_messages(result),
         PartialCompactDirection::Newest => {
@@ -564,11 +583,17 @@ pub fn build_partial_post_compact_messages(
                     + result.attachments.len()
                     + result.hook_results.len(),
             );
-            out.push(result.boundary_marker.clone());
-            out.extend(result.messages_to_keep.clone());
-            out.extend(result.summary_messages.clone());
-            out.extend(result.attachments.iter().cloned().map(Message::Attachment));
-            out.extend(result.hook_results.clone());
+            out.push(Arc::new(result.boundary_marker.clone()));
+            out.extend(result.messages_to_keep.iter().cloned());
+            out.extend(result.summary_messages.iter().cloned().map(Arc::new));
+            out.extend(
+                result
+                    .attachments
+                    .iter()
+                    .cloned()
+                    .map(|a| Arc::new(Message::Attachment(a))),
+            );
+            out.extend(result.hook_results.iter().cloned().map(Arc::new));
             out
         }
     }
@@ -611,77 +636,110 @@ pub fn merge_hook_instructions(
 pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
-        .map(|msg| match msg {
-            Message::User(u) => {
-                if let coco_messages::LlmMessage::User {
-                    content,
-                    provider_options,
-                } = &u.message
-                {
-                    let stripped: Vec<UserContent> = content
-                        .iter()
-                        .map(|part| match part {
-                            UserContent::File(f) => {
-                                let placeholder = if is_image_media_type(f) {
-                                    "[image]"
-                                } else {
-                                    "[document]"
-                                };
-                                UserContent::text(placeholder)
-                            }
-                            other => other.clone(),
-                        })
-                        .collect();
-                    let mut new_u = u.clone();
-                    new_u.message = coco_messages::LlmMessage::User {
-                        content: stripped,
-                        provider_options: provider_options.clone(),
-                    };
-                    Message::User(new_u)
-                } else {
-                    msg.clone()
-                }
-            }
-            // TS-parity: tool_result content arrays may carry FileData
-            // (image/document) parts — those are common from BashTool when
-            // stdout is detected as binary image bytes (`bash.rs:isLikely
-            // ImageBytes` → `structuredContent`). Walk the inner
-            // `ToolResultContent::Content` and replace FileData parts with
-            // `[image]` / `[document]` Text parts.
-            Message::ToolResult(tr) => {
-                let coco_messages::LlmMessage::Tool {
-                    content,
-                    provider_options,
-                } = &tr.message
-                else {
-                    return msg.clone();
-                };
-                let stripped: Vec<coco_messages::ToolContent> = content
-                    .iter()
-                    .map(|part| match part {
-                        coco_messages::ToolContent::ToolResult(rp) => {
-                            let new_output = strip_images_from_tool_result_content(&rp.output);
-                            coco_messages::ToolContent::ToolResult(
-                                coco_messages::ToolResultContent {
-                                    output: new_output,
-                                    ..rp.clone()
-                                },
-                            )
-                        }
-                        // ToolApprovalResponse carries no media — pass through.
-                        other => other.clone(),
-                    })
-                    .collect();
-                let mut new_tr = tr.clone();
-                new_tr.message = coco_messages::LlmMessage::Tool {
-                    content: stripped,
-                    provider_options: provider_options.clone(),
-                };
-                Message::ToolResult(new_tr)
-            }
-            _ => msg.clone(),
-        })
+        .map(|m| strip_one_message_for_media_if_needed(m).unwrap_or_else(|| m.clone()))
         .collect()
+}
+
+/// Returns `Some(new)` if the message carried image/document content that
+/// was stripped, `None` if no media was present (caller can pass the input
+/// through unchanged).
+///
+/// Shared between the legacy owned [`strip_images_from_messages`] (used by
+/// [`partial_compact_conversation`]) and the [`compact_passes::StripImages`]
+/// [`MessagePass`] impl. The two-phase shape (fast-path scan + slow-path
+/// rebuild) keeps the common no-media case allocation-free.
+///
+/// [`MessagePass`]: coco_messages::pipeline::MessagePass
+fn strip_one_message_for_media_if_needed(msg: &Message) -> Option<Message> {
+    match msg {
+        Message::User(u) => {
+            let coco_messages::LlmMessage::User {
+                content,
+                provider_options,
+            } = &u.message
+            else {
+                return None;
+            };
+            // Fast path: bail before touching content if there is no media.
+            if !content.iter().any(|p| matches!(p, UserContent::File(_))) {
+                return None;
+            }
+            let stripped: Vec<UserContent> = content
+                .iter()
+                .map(|part| match part {
+                    UserContent::File(f) => {
+                        let placeholder = if is_image_media_type(f) {
+                            "[image]"
+                        } else {
+                            "[document]"
+                        };
+                        UserContent::text(placeholder)
+                    }
+                    other => other.clone(),
+                })
+                .collect();
+            let mut new_u = u.clone();
+            new_u.message = coco_messages::LlmMessage::User {
+                content: stripped,
+                provider_options: provider_options.clone(),
+            };
+            Some(Message::User(new_u))
+        }
+        // TS-parity: tool_result content arrays may carry FileData
+        // (image/document) parts — those are common from BashTool when
+        // stdout is detected as binary image bytes (`bash.rs:isLikely
+        // ImageBytes` → `structuredContent`). Walk the inner
+        // `ToolResultContent::Content` and replace FileData parts with
+        // `[image]` / `[document]` Text parts.
+        Message::ToolResult(tr) => {
+            let coco_messages::LlmMessage::Tool {
+                content,
+                provider_options,
+            } = &tr.message
+            else {
+                return None;
+            };
+            // Fast path: no embedded FileData → no rewrite needed.
+            if !content.iter().any(|p| match p {
+                coco_messages::ToolContent::ToolResult(rp) => {
+                    tool_result_content_has_file_data(&rp.output)
+                }
+                _ => false,
+            }) {
+                return None;
+            }
+            let stripped: Vec<coco_messages::ToolContent> = content
+                .iter()
+                .map(|part| match part {
+                    coco_messages::ToolContent::ToolResult(rp) => {
+                        let new_output = strip_images_from_tool_result_content(&rp.output);
+                        coco_messages::ToolContent::ToolResult(coco_messages::ToolResultContent {
+                            output: new_output,
+                            ..rp.clone()
+                        })
+                    }
+                    // ToolApprovalResponse carries no media — pass through.
+                    other => other.clone(),
+                })
+                .collect();
+            let mut new_tr = tr.clone();
+            new_tr.message = coco_messages::LlmMessage::Tool {
+                content: stripped,
+                provider_options: provider_options.clone(),
+            };
+            Some(Message::ToolResult(new_tr))
+        }
+        _ => None,
+    }
+}
+
+fn tool_result_content_has_file_data(output: &coco_llm_types::ToolResultContent) -> bool {
+    let coco_llm_types::ToolResultContent::Content { value, .. } = output else {
+        return false;
+    };
+    value
+        .iter()
+        .any(|p| matches!(p, coco_llm_types::ToolResultContentPart::FileData { .. }))
 }
 
 /// Replace `FileData` parts inside `ToolResultContent::Content` with
@@ -748,6 +806,80 @@ pub fn strip_reinjected_attachments(messages: &[Message]) -> Vec<Message> {
         .collect()
 }
 
+/// Canonical strip-and-clean pipeline for compact / partial / session-memory
+/// entries. Single sequence: `StripImages` → `StripReinjectedAttachments`.
+///
+/// Arc-vec in, Arc-vec out. Common case (no images, no expiring attachments)
+/// returns `input.to_vec()` — N atomic refcount bumps, zero `Message::clone`.
+/// When work is needed, materializes one `Vec<Message>`, runs both passes
+/// in TS order, re-wraps. Each pass's `would_mutate` predicate is colocated
+/// with its `apply` body in [`compact_passes`], so there is no central
+/// predicate to keep in sync.
+pub(crate) fn run_compact_strip_pipeline(input: &[Arc<Message>]) -> Vec<Arc<Message>> {
+    use coco_messages::pipeline::{MessagePass, borrow_refs, run_message_passes};
+    let refs = borrow_refs(input);
+    let needs_mutate = compact_passes::StripImages.would_mutate(&refs)
+        || compact_passes::StripReinjectedAttachments.would_mutate(&refs);
+    drop(refs);
+    run_message_passes(input, needs_mutate, |owned| {
+        compact_passes::StripImages.apply(owned);
+        compact_passes::StripReinjectedAttachments.apply(owned);
+    })
+}
+
+/// [`MessagePass`] impls for the two compact-side stripping steps. Used by
+/// the unified compact pipeline below ([`compact_conversation`],
+/// [`partial_compact_conversation`], [`compact_session_memory`]) via
+/// [`coco_messages::pipeline::run_message_passes`].
+///
+/// Each impl bundles a cheap `would_mutate` predicate alongside `apply`
+/// so the pipeline can skip the materialize when no work is needed —
+/// image-free / attachment-clean conversations cost zero
+/// [`Message::clone`] at this seam.
+///
+/// [`MessagePass`]: coco_messages::pipeline::MessagePass
+pub(crate) mod compact_passes {
+    use super::*;
+    use coco_messages::pipeline::MessagePass;
+
+    /// Strip image / document content out of `User` and `ToolResult`
+    /// messages. Reuses the shared `strip_one_message_for_media_if_needed`
+    /// helper for the per-message rewrite.
+    pub struct StripImages;
+    impl MessagePass for StripImages {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            messages
+                .iter()
+                .any(|m| strip_one_message_for_media_if_needed(m).is_some())
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            for m in messages.iter_mut() {
+                if let Some(new) = strip_one_message_for_media_if_needed(m) {
+                    *m = new;
+                }
+            }
+        }
+    }
+
+    /// Drop attachment messages whose `AttachmentKind` does NOT survive
+    /// compaction (skill listings, reminders, ephemeral silent events —
+    /// they regenerate post-compact via the deferred-state observers).
+    pub struct StripReinjectedAttachments;
+    impl MessagePass for StripReinjectedAttachments {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Attachment(a) if !a.kind.survives_compaction()))
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            messages.retain(|m| match m {
+                Message::Attachment(a) => a.kind.survives_compaction(),
+                _ => true,
+            });
+        }
+    }
+}
+
 /// Truncate oldest message groups when prompt-too-long error occurs.
 ///
 /// TS: `truncateHeadForPTLRetry()` (compact.ts:243-291) — drops oldest
@@ -764,13 +896,13 @@ pub fn strip_reinjected_attachments(messages: &[Message]) -> Vec<Message> {
 /// sees a `role=user` first message even if dropping group 0 left an
 /// assistant-leading sequence.
 pub fn truncate_head_for_ptl_retry(
-    messages: &[Message],
+    messages: &[Arc<Message>],
     token_gap: Option<i64>,
     drop_fraction: f64,
-) -> Option<Vec<Message>> {
+) -> Option<Vec<Arc<Message>>> {
     // Strip our own marker from a previous retry so it doesn't become its
     // own group 0 — TS: compact.ts:250-255.
-    let input: &[Message] = match messages.first() {
+    let input: &[Arc<Message>] = match messages.first().map(Arc::as_ref) {
         Some(Message::User(u)) if user_message_text_equals(u, PTL_RETRY_MARKER) => &messages[1..],
         _ => messages,
     };
@@ -784,8 +916,10 @@ pub fn truncate_head_for_ptl_retry(
         let mut acc: i64 = 0;
         let mut count = 0;
         for g in &group_refs {
-            let group_msgs: Vec<Message> = g.iter().map(|m| (*m).clone()).collect();
-            acc += tokens::estimate_tokens(&group_msgs);
+            // `g: Vec<&Message>` from `group_messages_by_api_round`.
+            // `estimate_tokens` is generic over `Borrow<Message>` — feed
+            // the &[&Message] slice directly, zero clone.
+            acc += tokens::estimate_tokens(g.as_slice());
             count += 1;
             if acc >= gap {
                 break;
@@ -802,20 +936,24 @@ pub fn truncate_head_for_ptl_retry(
         return None;
     }
 
-    let kept: Vec<Message> = group_refs[drop_count..]
-        .iter()
-        .flat_map(|g| g.iter().map(|m| (*m).clone()))
-        .collect();
+    // Recover survivor Arcs by indexing back into `input` — first
+    // `prefix_len` items belong to the dropped groups, the rest survive.
+    let prefix_len: usize = group_refs[..drop_count].iter().map(Vec::len).sum();
+    let survivors: &[Arc<Message>] = &input[prefix_len..];
 
     // Group 0 always starts with a user-ish preamble; subsequent groups
     // start with assistant messages. Dropping group 0 leaves assistant-
     // first, which the API rejects. Prepend a synthetic user marker.
-    let needs_marker = matches!(kept.first(), Some(Message::Assistant(_)));
-    let mut out = Vec::with_capacity(kept.len() + usize::from(needs_marker));
+    let needs_marker = matches!(
+        survivors.first().map(Arc::as_ref),
+        Some(Message::Assistant(_))
+    );
+    let mut out: Vec<Arc<Message>> =
+        Vec::with_capacity(survivors.len() + usize::from(needs_marker));
     if needs_marker {
-        out.push(make_ptl_marker_message());
+        out.push(Arc::new(make_ptl_marker_message()));
     }
-    out.extend(kept);
+    out.extend(survivors.iter().cloned());
     Some(out)
 }
 
@@ -863,8 +1001,8 @@ struct PtlRetryOptions {
 
 /// Call the summarize function with prompt-too-long retry logic.
 async fn call_with_ptl_retry<F, Fut>(
-    initial_messages: Vec<Message>,
-    initial_context_messages: Vec<Message>,
+    initial_messages: Vec<Arc<Message>>,
+    initial_context_messages: Vec<Arc<Message>>,
     options: PtlRetryOptions,
     summarize_fn: &F,
 ) -> Result<String, CompactError>
@@ -958,13 +1096,16 @@ where
     .fail()
 }
 
-fn retain_messages_present_in_context(summary: &[Message], context: &[Message]) -> Vec<Message> {
+fn retain_messages_present_in_context(
+    summary: &[Arc<Message>],
+    context: &[Arc<Message>],
+) -> Vec<Arc<Message>> {
     let context_ids: std::collections::HashSet<Uuid> =
-        context.iter().filter_map(Message::uuid).copied().collect();
+        context.iter().filter_map(|m| m.uuid().copied()).collect();
     summary
         .iter()
-        .filter(|m| {
-            m.uuid()
+        .filter(|arc| {
+            arc.uuid()
                 .is_none_or(|uuid| context_ids.is_empty() || context_ids.contains(uuid))
         })
         .cloned()

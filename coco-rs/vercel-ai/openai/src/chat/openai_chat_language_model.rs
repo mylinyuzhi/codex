@@ -371,9 +371,10 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
 
     async fn do_generate(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        let (body, warnings) = self.get_args(&options)?;
+        let (body, warnings) = self.get_args(options)?;
         let url = self.config.url("/chat/completions");
         let headers = self.config.get_headers();
 
@@ -383,7 +384,7 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
             &body,
             JsonResponseHandler::new(),
             OpenAIFailedResponseHandler,
-            options.abort_signal,
+            abort_signal,
             self.config.client.clone(),
         )
         .await?;
@@ -501,9 +502,10 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        let (mut body, warnings) = self.get_args(&options)?;
+        let (mut body, warnings) = self.get_args(options)?;
 
         // Enable streaming
         body["stream"] = Value::Bool(true);
@@ -518,7 +520,7 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
             &url,
             Some(headers),
             &body,
-            options.abort_signal,
+            abort_signal,
             self.config.client.clone(),
         )
         .await?;

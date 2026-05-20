@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
@@ -78,7 +79,7 @@ const SESSION_MEMORY_TRUNCATION_MARKER: &str =
 /// - The post-compact token count is still ≥ `auto_compact_threshold`
 ///   (caller should fall back to LLM-based compaction).
 pub fn compact_session_memory(
-    messages: &[Message],
+    messages: &[Arc<Message>],
     session_memory: &str,
     last_summarized_message_id: Option<uuid::Uuid>,
     config: &SessionMemoryCompactConfig,
@@ -119,10 +120,16 @@ pub fn compact_session_memory(
 
     // Filter out stale compact-boundary messages from the kept tail. Otherwise
     // a re-compact would re-introduce the old boundary and the loader's
-    // tail→head walk could prune the new summary.
-    let messages_to_keep: Vec<Message> = messages[adjusted_index..]
+    // tail→head walk could prune the new summary. Arc-share kept entries
+    // (refcount bump, zero `Message::clone`).
+    let messages_to_keep: Vec<Arc<Message>> = messages[adjusted_index..]
         .iter()
-        .filter(|m| !matches!(m, Message::System(SystemMessage::CompactBoundary(_))))
+        .filter(|arc| {
+            !matches!(
+                arc.as_ref(),
+                Message::System(SystemMessage::CompactBoundary(_))
+            )
+        })
         .cloned()
         .collect();
 
@@ -390,7 +397,7 @@ pub fn merge_similar_memories(memories: &[(String, String)]) -> Vec<(String, Str
 /// expanding past it would let the loader's tail→head walk bypass inner
 /// preserved messages and prune them.
 fn calculate_messages_to_keep_index(
-    messages: &[Message],
+    messages: &[Arc<Message>],
     last_summarized_index: Option<usize>,
     config: &SessionMemoryCompactConfig,
 ) -> usize {
@@ -410,7 +417,12 @@ fn calculate_messages_to_keep_index(
     // compaction's archive line.
     let floor = messages
         .iter()
-        .rposition(|m| matches!(m, Message::System(SystemMessage::CompactBoundary(_))))
+        .rposition(|m| {
+            matches!(
+                m.as_ref(),
+                Message::System(SystemMessage::CompactBoundary(_))
+            )
+        })
         .map(|i| i + 1)
         .unwrap_or(0);
 
@@ -418,8 +430,8 @@ fn calculate_messages_to_keep_index(
     let mut total_tokens: i64 = 0;
     let mut text_block_count: i32 = 0;
     for msg in &messages[start_index..] {
-        total_tokens += tokens::estimate_message_tokens(msg);
-        if has_text_blocks(msg) {
+        total_tokens += tokens::estimate_message_tokens(msg.as_ref());
+        if has_text_blocks(msg.as_ref()) {
             text_block_count += 1;
         }
     }
@@ -435,9 +447,9 @@ fn calculate_messages_to_keep_index(
     // hit the boundary floor.
     while start_index > floor {
         let i = start_index - 1;
-        let msg_tokens = tokens::estimate_message_tokens(&messages[i]);
+        let msg_tokens = tokens::estimate_message_tokens(messages[i].as_ref());
         total_tokens += msg_tokens;
-        if has_text_blocks(&messages[i]) {
+        if has_text_blocks(messages[i].as_ref()) {
             text_block_count += 1;
         }
         start_index = i;
@@ -503,7 +515,10 @@ pub(crate) fn is_session_memory_template_only(content: &str) -> bool {
 /// `message.id`) matches a kept assistant — those messages may contain
 /// thinking blocks that the API requires for tool-call validity on
 /// thinking-enabled models.
-pub fn adjust_index_to_preserve_api_invariants(messages: &[Message], start_index: usize) -> usize {
+pub fn adjust_index_to_preserve_api_invariants(
+    messages: &[Arc<Message>],
+    start_index: usize,
+) -> usize {
     if start_index == 0 || start_index >= messages.len() {
         return start_index;
     }
@@ -513,7 +528,7 @@ pub fn adjust_index_to_preserve_api_invariants(messages: &[Message], start_index
     // Step 1: tool_result → owning tool_use assistant messages.
     let mut needed_tool_use_ids: HashSet<String> = messages[adjusted..]
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|arc| match arc.as_ref() {
             Message::ToolResult(tr) => Some(tr.tool_use_id.clone()),
             _ => None,
         })
@@ -526,7 +541,7 @@ pub fn adjust_index_to_preserve_api_invariants(messages: &[Message], start_index
     let mut i = adjusted;
     while i > 0 && !needed_tool_use_ids.is_empty() {
         i -= 1;
-        let Message::Assistant(asst) = &messages[i] else {
+        let Message::Assistant(asst) = messages[i].as_ref() else {
             continue;
         };
         let LlmMessage::Assistant { content, .. } = &asst.message else {
@@ -550,7 +565,7 @@ pub fn adjust_index_to_preserve_api_invariants(messages: &[Message], start_index
     // is the closest stable identifier in our stream-collected messages.
     let kept_uuids: HashSet<uuid::Uuid> = messages[adjusted..]
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|arc| match arc.as_ref() {
             Message::Assistant(a) => Some(a.uuid),
             _ => None,
         })
@@ -559,7 +574,7 @@ pub fn adjust_index_to_preserve_api_invariants(messages: &[Message], start_index
     let mut i = adjusted;
     while i > 0 {
         i -= 1;
-        let Message::Assistant(asst) = &messages[i] else {
+        let Message::Assistant(asst) = messages[i].as_ref() else {
             continue;
         };
         if kept_uuids.contains(&asst.uuid) {
@@ -570,10 +585,10 @@ pub fn adjust_index_to_preserve_api_invariants(messages: &[Message], start_index
     adjusted
 }
 
-fn collect_tool_use_ids(messages: &[Message]) -> HashSet<String> {
+fn collect_tool_use_ids(messages: &[Arc<Message>]) -> HashSet<String> {
     let mut ids = HashSet::new();
-    for msg in messages {
-        let Message::Assistant(asst) = msg else {
+    for arc in messages {
+        let Message::Assistant(asst) = arc.as_ref() else {
             continue;
         };
         let LlmMessage::Assistant { content, .. } = &asst.message else {

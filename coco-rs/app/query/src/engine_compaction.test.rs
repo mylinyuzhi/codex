@@ -33,9 +33,10 @@ impl coco_inference::LanguageModel for CapturingModel {
 
     async fn do_generate(
         &self,
-        options: coco_inference::LanguageModelCallOptions,
+        options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
-        *self.options.lock().expect("model options lock poisoned") = Some(options);
+        *self.options.lock().expect("model options lock poisoned") = Some(options.clone());
         Ok(coco_inference::LanguageModelGenerateResult {
             content: vec![coco_llm_types::AssistantContentPart::Text(
                 coco_llm_types::TextPart {
@@ -54,9 +55,10 @@ impl coco_inference::LanguageModel for CapturingModel {
 
     async fn do_stream(
         &self,
-        options: coco_inference::LanguageModelCallOptions,
+        options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<coco_inference::LanguageModelStreamResult, coco_inference::AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -85,7 +87,7 @@ impl ForkDispatcher for CapturingCompactDispatcher {
         *self.options.lock().expect("options lock poisoned") = Some(options.clone());
         *self.prompt.lock().expect("prompt lock poisoned") = Some(prompt.to_string());
         Ok(ForkedAgentResult {
-            messages: vec![assistant_msg("fork summary")],
+            messages: vec![Arc::new(assistant_msg("fork summary"))],
             ..Default::default()
         })
     }
@@ -195,12 +197,12 @@ fn hook(event: HookEventType, command: &str) -> coco_hooks::HookDefinition {
 
 fn compact_attempt(summary_request: &str) -> coco_compact::CompactSummaryAttempt {
     coco_compact::CompactSummaryAttempt {
-        messages: vec![coco_messages::create_user_message(
+        messages: vec![std::sync::Arc::new(coco_messages::create_user_message(
             "conversation slice only",
-        )],
-        context_messages: vec![coco_messages::create_user_message(
+        ))],
+        context_messages: vec![std::sync::Arc::new(coco_messages::create_user_message(
             "conversation context for api",
-        )],
+        ))],
         summary_request: summary_request.to_string(),
         prompt_kind: coco_compact::CompactSummaryKind::Full,
         pre_compact_tokens: 42,
@@ -235,7 +237,9 @@ fn empty_cache() -> CacheSafeParams {
         model_id: "mock-model".into(),
         provider: "mock".into(),
         prompt_cache: None,
-        fork_context_messages: vec![serde_json::json!({"old":"parent cache"})],
+        fork_context_messages: vec![Arc::new(coco_messages::create_user_message(
+            "old parent cache",
+        ))],
     }
 }
 
@@ -283,7 +287,7 @@ async fn compact_summary_uses_cache_safe_fork_with_deny_all_tools() {
         serde_json::to_string(&cache.fork_context_messages).expect("fork context should serialize");
     assert!(serialized.contains("conversation context for api"));
     assert!(!serialized.contains("conversation slice only"));
-    assert!(!serialized.contains("parent cache"));
+    assert!(!serialized.contains("old parent cache"));
 }
 
 #[tokio::test]
@@ -340,14 +344,10 @@ async fn partial_compact_runs_hooks_and_inlines_session_start_results() {
     let engine = new_engine_with_hooks(model.clone(), hooks, sync.clone(), None);
 
     let mut history = coco_messages::MessageHistory::new();
-    history
-        .messages
-        .push(coco_messages::create_user_message("kept prefix"));
-    history.messages.push(assistant_msg("kept assistant"));
-    history
-        .messages
-        .push(coco_messages::create_user_message("summarize tail"));
-    history.messages.push(assistant_msg("tail assistant"));
+    history.push(coco_messages::create_user_message("kept prefix"));
+    history.push(assistant_msg("kept assistant"));
+    history.push(coco_messages::create_user_message("summarize tail"));
+    history.push(assistant_msg("tail assistant"));
 
     let outcome = engine
         .run_partial_compact(
@@ -372,7 +372,7 @@ async fn partial_compact_runs_hooks_and_inlines_session_start_results() {
     assert!(rendered_prompt.contains("pre-hook-instruction"));
     assert!(rendered_prompt.contains("focus user feedback"));
 
-    let rendered_history = format!("{:?}", history.messages);
+    let rendered_history = format!("{:?}", history.as_slice());
     assert!(rendered_history.contains("session-hook-output"));
     assert!(
         sync.drain().await.is_empty(),
@@ -393,14 +393,10 @@ async fn partial_compact_applies_session_start_aggregate_side_effects() {
     let engine = new_engine_with_hooks(model, hooks, sync.clone(), Some(sink.clone()));
 
     let mut history = coco_messages::MessageHistory::new();
-    history
-        .messages
-        .push(coco_messages::create_user_message("kept prefix"));
-    history.messages.push(assistant_msg("kept assistant"));
-    history
-        .messages
-        .push(coco_messages::create_user_message("summarize tail"));
-    history.messages.push(assistant_msg("tail assistant"));
+    history.push(coco_messages::create_user_message("kept prefix"));
+    history.push(assistant_msg("kept assistant"));
+    history.push(coco_messages::create_user_message("summarize tail"));
+    history.push(assistant_msg("tail assistant"));
 
     let outcome = engine
         .run_partial_compact(
@@ -414,7 +410,7 @@ async fn partial_compact_applies_session_start_aggregate_side_effects() {
         .await;
 
     assert_eq!(outcome, coco_compact::CompactOutcome::Applied);
-    let rendered_history = format!("{:?}", history.messages);
+    let rendered_history = format!("{:?}", history.as_slice());
     assert!(rendered_history.contains("hook initial turn"));
     let effects = sink
         .effects

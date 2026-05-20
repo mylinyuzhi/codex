@@ -9,6 +9,13 @@ use super::strip_images_from_messages;
 use super::strip_signature_blocks;
 use super::to_llm_prompt;
 
+/// Test helper: wrap a borrowed `&[Message]` (or `Vec<Message>` via deref)
+/// into the canonical `Vec<Arc<Message>>` shape that the post-refactor
+/// `normalize_messages_for_api` accepts. Caller keeps ownership.
+fn arc_vec(msgs: &[Message]) -> Vec<std::sync::Arc<Message>> {
+    msgs.iter().cloned().map(std::sync::Arc::new).collect()
+}
+
 fn user_msg(text: &str) -> Message {
     Message::User(UserMessage {
         message: LlmMessage::user_text(text),
@@ -66,21 +73,21 @@ fn tombstone_msg() -> Message {
 #[test]
 fn test_filters_virtual_messages() {
     let msgs = vec![user_msg("hello"), virtual_msg("ghost"), assistant_msg("hi")];
-    let result = normalize_messages_for_api(&msgs);
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
     assert_eq!(result.len(), 2); // virtual filtered out
 }
 
 #[test]
 fn test_filters_tombstones() {
     let msgs = vec![user_msg("hello"), tombstone_msg(), assistant_msg("hi")];
-    let result = normalize_messages_for_api(&msgs);
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
     assert_eq!(result.len(), 2); // tombstone filtered out
 }
 
 #[test]
 fn test_merges_consecutive_user_messages() {
     let msgs = vec![user_msg("hello"), user_msg("world"), assistant_msg("hi")];
-    let result = normalize_messages_for_api(&msgs);
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
     // Two user messages merged into one, plus assistant = 2
     assert_eq!(result.len(), 2);
 }
@@ -88,13 +95,14 @@ fn test_merges_consecutive_user_messages() {
 #[test]
 fn test_ensures_starts_with_user() {
     let msgs = vec![assistant_msg("hi")];
-    let result = normalize_messages_for_api(&msgs);
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
     assert!(matches!(&result[0], LlmMessage::User { .. }));
 }
 
 #[test]
 fn test_empty_input() {
-    let result = normalize_messages_for_api(&[]);
+    let empty: Vec<Message> = Vec::new();
+    let result = normalize_messages_for_api(&arc_vec(&empty));
     assert!(result.is_empty());
 }
 
@@ -109,7 +117,7 @@ fn test_progress_messages_filtered() {
         }),
         assistant_msg("hi"),
     ];
-    let result = normalize_messages_for_api(&msgs);
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
     assert_eq!(result.len(), 2); // progress filtered
 }
 
@@ -438,7 +446,7 @@ fn merge_assistants_by_request_id_keeps_distinct_ids_separate() {
         assistant_msg_with_request_id("first", "req-A"),
         assistant_msg_with_request_id("second", "req-B"),
     ];
-    let prompt = normalize_messages_for_api(&msgs);
+    let prompt = normalize_messages_for_api(&arc_vec(&msgs));
     // 1 user + 2 assistants (NOT merged, since request_ids differ).
     let asst_count = prompt
         .iter()
@@ -457,7 +465,7 @@ fn merge_assistants_by_request_id_merges_matching_ids() {
         assistant_msg_with_request_id("first", "req-A"),
         assistant_msg_with_request_id("second", "req-A"),
     ];
-    let prompt = normalize_messages_for_api(&msgs);
+    let prompt = normalize_messages_for_api(&arc_vec(&msgs));
     let asst_count = prompt
         .iter()
         .filter(|m| matches!(m, LlmMessage::Assistant { .. }))
@@ -477,7 +485,7 @@ fn merge_assistants_with_no_request_id_stays_separate() {
         assistant_msg("first"),  // request_id = None
         assistant_msg("second"), // request_id = None
     ];
-    let prompt = normalize_messages_for_api(&msgs);
+    let prompt = normalize_messages_for_api(&arc_vec(&msgs));
     let asst_count = prompt
         .iter()
         .filter(|m| matches!(m, LlmMessage::Assistant { .. }))
@@ -653,7 +661,8 @@ fn normalize_synthesizes_missing_tool_result() {
         is_error: false,
     });
 
-    let result = normalize_messages_for_api(&[user_msg("go"), assistant, tool_result_tc1]);
+    let result =
+        normalize_messages_for_api(&arc_vec(&[user_msg("go"), assistant, tool_result_tc1]));
 
     // Find the Tool message — it must now carry BOTH tc1 (real) and
     // tc2 (synthesized is_error). Order: real first (it predates the
@@ -797,7 +806,7 @@ fn normalize_synthesizes_for_multiple_assistants() {
         api_error: None,
     });
 
-    let result = normalize_messages_for_api(&[user_msg("go"), asst_a, unrelated, asst_b]);
+    let result = normalize_messages_for_api(&arc_vec(&[user_msg("go"), asst_a, unrelated, asst_b]));
 
     let collect_ids = |id: &str| {
         result
@@ -878,7 +887,7 @@ fn normalize_strips_injected_exit_plan_mode_fields_for_api() {
         "planFilePath": "/tmp/plans/slug.md",
         "allowedPrompts": [],
     }));
-    let result = normalize_messages_for_api(&[user_msg("go"), assistant]);
+    let result = normalize_messages_for_api(&arc_vec(&[user_msg("go"), assistant]));
 
     let input = exit_plan_mode_input(&result);
     assert_eq!(input.get("plan"), None, "plan must be stripped before API");
@@ -897,7 +906,7 @@ fn normalize_strips_injected_exit_plan_mode_fields_for_api() {
 #[test]
 fn normalize_leaves_exit_plan_mode_without_injected_fields_untouched() {
     let assistant = exit_plan_mode_assistant(serde_json::json!({"allowedPrompts": []}));
-    let result = normalize_messages_for_api(&[user_msg("go"), assistant]);
+    let result = normalize_messages_for_api(&arc_vec(&[user_msg("go"), assistant]));
 
     assert_eq!(
         exit_plan_mode_input(&result),
@@ -926,7 +935,7 @@ fn normalize_does_not_strip_plan_field_from_other_tools() {
         request_id: None,
         api_error: None,
     });
-    let result = normalize_messages_for_api(&[user_msg("go"), assistant]);
+    let result = normalize_messages_for_api(&arc_vec(&[user_msg("go"), assistant]));
 
     let input = result
         .iter()
@@ -942,4 +951,284 @@ fn normalize_does_not_strip_plan_field_from_other_tools() {
         input.get("plan"),
         Some(&serde_json::json!("not the exit tool"))
     );
+}
+
+// ── MessagePass trait contract (drift detection) ────────────────────
+//
+// The pipeline assumes: if `would_mutate` returns `false`, then `apply`
+// is a no-op. Violating this is a silent-failure mode — the fast path
+// would skip materialize when it shouldn't. The tests below run every
+// normalize pass against:
+//   (a) "clean" inputs (no trigger condition holds) → assert `would_mutate`
+//       is false AND `apply` leaves the Vec unchanged
+//   (b) "dirty" inputs (specific trigger holds) → assert `would_mutate`
+//       is true (we don't assert apply DOES mutate, because some passes
+//       are over-conservative — but we do assert the slow path runs).
+//
+// New pass impls MUST add a `clean` + `dirty` case here. Otherwise
+// `would_mutate` can silently drift away from `apply` body without any
+// existing test catching it.
+
+mod pipeline_invariants {
+    use super::*;
+    use crate::normalize::passes;
+    use crate::pipeline::MessagePass;
+
+    fn arc_refs(msgs: &[Message]) -> Vec<&Message> {
+        msgs.iter().collect()
+    }
+
+    /// Run a pass against "clean" input and assert the trait contract:
+    /// `would_mutate` is `false` AND `apply` leaves the slice unchanged.
+    ///
+    /// `Message` does not implement `PartialEq` (`AssistantContent` /
+    /// `LlmMessage` carry vercel-ai provider blobs that intentionally use
+    /// `serde_json::Value`), so we compare via canonical JSON
+    /// serialization — equivalent for our test purpose.
+    fn assert_clean<P: MessagePass>(pass: P, clean: Vec<Message>) {
+        let refs = arc_refs(&clean);
+        assert!(
+            !pass.would_mutate(&refs),
+            "would_mutate should be false on clean input"
+        );
+        drop(refs);
+        let before = serde_json::to_value(&clean).expect("clean serializable");
+        let mut owned = clean;
+        pass.apply(&mut owned);
+        let after = serde_json::to_value(&owned).expect("owned serializable");
+        assert_eq!(
+            before, after,
+            "apply must be a no-op when would_mutate returned false (pass contract violation)"
+        );
+    }
+
+    /// Run a pass against "dirty" input and assert `would_mutate` is `true`.
+    /// Apply behavior depends on the pass; we only enforce the predicate
+    /// fires so the slow path is taken.
+    fn assert_dirty<P: MessagePass>(pass: P, dirty: Vec<Message>) {
+        let refs = arc_refs(&dirty);
+        assert!(
+            pass.would_mutate(&refs),
+            "would_mutate should be true on dirty input"
+        );
+    }
+
+    // Helpers tailored for each pass's trigger condition.
+
+    fn asst_with_content(content: Vec<AssistantContent>) -> Message {
+        Message::Assistant(AssistantMessage {
+            message: LlmMessage::Assistant {
+                content,
+                provider_options: None,
+            },
+            uuid: Uuid::new_v4(),
+            model: "test".into(),
+            stop_reason: Some(StopReason::EndTurn),
+            usage: None,
+            cost_usd: None,
+            request_id: None,
+            api_error: None,
+        })
+    }
+
+    fn asst_with_req_id(content: Vec<AssistantContent>, req_id: &str) -> Message {
+        Message::Assistant(AssistantMessage {
+            message: LlmMessage::Assistant {
+                content,
+                provider_options: None,
+            },
+            uuid: Uuid::new_v4(),
+            model: "test".into(),
+            stop_reason: Some(StopReason::EndTurn),
+            usage: None,
+            cost_usd: None,
+            request_id: Some(req_id.to_string()),
+            api_error: None,
+        })
+    }
+
+    fn text_part(t: &str) -> AssistantContent {
+        AssistantContent::Text(TextContent {
+            text: t.into(),
+            provider_metadata: None,
+        })
+    }
+
+    fn reasoning_part(t: &str) -> AssistantContent {
+        AssistantContent::Reasoning(coco_llm_types::ReasoningPart::new(t.to_string()))
+    }
+
+    fn exit_plan_tool_call(injected: bool) -> AssistantContent {
+        let input = if injected {
+            serde_json::json!({"plan": "the plan"})
+        } else {
+            serde_json::json!({})
+        };
+        AssistantContent::ToolCall(coco_llm_types::ToolCallPart {
+            tool_call_id: "id1".into(),
+            tool_name: coco_types::ToolName::ExitPlanMode.as_str().to_string(),
+            input,
+            provider_executed: None,
+            provider_metadata: None,
+        })
+    }
+
+    // ── Pass 1: OrphanedThinkingOnly ────────────────────────────────
+
+    #[test]
+    fn orphaned_thinking_clean_is_no_op() {
+        assert_clean(
+            passes::OrphanedThinkingOnly,
+            vec![
+                user_msg("hi"),
+                asst_with_content(vec![text_part("hi back")]),
+            ],
+        );
+    }
+
+    #[test]
+    fn orphaned_thinking_dirty_triggers() {
+        assert_dirty(
+            passes::OrphanedThinkingOnly,
+            vec![asst_with_content(vec![reasoning_part("just thinking")])],
+        );
+    }
+
+    // ── Pass 2: TrailingThinking ────────────────────────────────────
+
+    #[test]
+    fn trailing_thinking_clean_is_no_op() {
+        assert_clean(
+            passes::TrailingThinking,
+            vec![
+                user_msg("hi"),
+                asst_with_content(vec![reasoning_part("think"), text_part("answer")]),
+            ],
+        );
+    }
+
+    #[test]
+    fn trailing_thinking_dirty_triggers() {
+        assert_dirty(
+            passes::TrailingThinking,
+            vec![asst_with_content(vec![
+                text_part("answer"),
+                reasoning_part("trailing"),
+            ])],
+        );
+    }
+
+    // ── Pass 3: WhitespaceOnly ──────────────────────────────────────
+
+    #[test]
+    fn whitespace_only_clean_is_no_op() {
+        assert_clean(
+            passes::WhitespaceOnly,
+            vec![user_msg("hi"), asst_with_content(vec![text_part("answer")])],
+        );
+    }
+
+    #[test]
+    fn whitespace_only_dirty_triggers() {
+        assert_dirty(
+            passes::WhitespaceOnly,
+            vec![asst_with_content(vec![text_part("   \n\t  ")])],
+        );
+    }
+
+    // ── Pass 4: EnsureNonEmptyContent ───────────────────────────────
+
+    #[test]
+    fn ensure_non_empty_clean_is_no_op() {
+        assert_clean(
+            passes::EnsureNonEmptyContent,
+            vec![user_msg("hi"), asst_with_content(vec![text_part("yes")])],
+        );
+    }
+
+    #[test]
+    fn ensure_non_empty_dirty_triggers() {
+        // Non-final assistant with empty content → triggers.
+        assert_dirty(
+            passes::EnsureNonEmptyContent,
+            vec![user_msg("hi"), asst_with_content(vec![]), user_msg("again")],
+        );
+    }
+
+    // ── Pass 5: MergeConsecutiveUsers ───────────────────────────────
+
+    #[test]
+    fn merge_users_clean_is_no_op() {
+        assert_clean(
+            passes::MergeConsecutiveUsers,
+            vec![user_msg("a"), asst_with_content(vec![text_part("b")])],
+        );
+    }
+
+    #[test]
+    fn merge_users_dirty_triggers() {
+        assert_dirty(
+            passes::MergeConsecutiveUsers,
+            vec![user_msg("a"), user_msg("b")],
+        );
+    }
+
+    // ── Pass 6: MergeAssistantsByRequestId ──────────────────────────
+
+    #[test]
+    fn merge_assistants_by_req_id_clean_is_no_op() {
+        // Two assistants but different request_id → no merge.
+        assert_clean(
+            passes::MergeAssistantsByRequestId,
+            vec![
+                user_msg("hi"),
+                asst_with_req_id(vec![text_part("a")], "req-1"),
+                asst_with_req_id(vec![text_part("b")], "req-2"),
+            ],
+        );
+    }
+
+    #[test]
+    fn merge_assistants_by_req_id_dirty_triggers() {
+        assert_dirty(
+            passes::MergeAssistantsByRequestId,
+            vec![
+                asst_with_req_id(vec![text_part("a")], "req-X"),
+                asst_with_req_id(vec![text_part("b")], "req-X"),
+            ],
+        );
+    }
+
+    // ── Pass 7: StripExitPlanModeInjectedFields ─────────────────────
+
+    #[test]
+    fn strip_exit_plan_mode_clean_is_no_op() {
+        // ExitPlanMode tool_call but no injected fields.
+        assert_clean(
+            passes::StripExitPlanModeInjectedFields,
+            vec![asst_with_content(vec![exit_plan_tool_call(false)])],
+        );
+    }
+
+    #[test]
+    fn strip_exit_plan_mode_dirty_triggers() {
+        assert_dirty(
+            passes::StripExitPlanModeInjectedFields,
+            vec![asst_with_content(vec![exit_plan_tool_call(true)])],
+        );
+    }
+
+    // ── Empty input is always a no-op ───────────────────────────────
+
+    #[test]
+    fn empty_input_no_pass_mutates() {
+        let empty: Vec<&Message> = Vec::new();
+        assert!(!passes::OrphanedThinkingOnly.would_mutate(&empty));
+        assert!(!passes::TrailingThinking.would_mutate(&empty));
+        assert!(!passes::WhitespaceOnly.would_mutate(&empty));
+        assert!(!passes::EnsureNonEmptyContent.would_mutate(&empty));
+        assert!(!passes::MergeConsecutiveUsers.would_mutate(&empty));
+        assert!(!passes::MergeAssistantsByRequestId.would_mutate(&empty));
+        assert!(!passes::StripExitPlanModeInjectedFields.would_mutate(&empty));
+    }
 }

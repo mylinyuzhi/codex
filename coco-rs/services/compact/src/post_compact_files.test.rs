@@ -125,7 +125,12 @@ fn test_create_post_compact_file_attachments_basic() {
         (file_b, make_entry("fn b() {}", 2)),
     ];
 
-    let atts = create_post_compact_file_attachments(&snapshot, &[], dir.path(), /*plan*/ None);
+    let atts = create_post_compact_file_attachments::<Message>(
+        &snapshot,
+        &[],
+        dir.path(),
+        /*plan*/ None,
+    );
     assert_eq!(atts.len(), 2, "should restore both files");
     assert_eq!(
         atts[0].kind,
@@ -171,7 +176,12 @@ fn test_create_post_compact_file_attachments_respects_max_files() {
         snapshot.push((file, make_entry(&format!("fn f{i}() {{}}"), i)));
     }
 
-    let atts = create_post_compact_file_attachments(&snapshot, &[], dir.path(), /*plan*/ None);
+    let atts = create_post_compact_file_attachments::<Message>(
+        &snapshot,
+        &[],
+        dir.path(),
+        /*plan*/ None,
+    );
     assert_eq!(
         atts.len(),
         POST_COMPACT_MAX_FILES_TO_RESTORE,

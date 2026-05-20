@@ -538,20 +538,22 @@ impl TranscriptStore {
         self.paths.session_dir(session_id)
     }
 
-    /// Append raw `Message` JSON values to a background agent's
-    /// per-spawn transcript, one entry per line. Used by
+    /// Append typed `Arc<Message>` entries to a background agent's
+    /// per-spawn transcript, one JSON line each. Used by
     /// `coco_coordinator::agent_handle_spawn` on bg-spawn
     /// completion to persist the conversation history for resume.
     ///
-    /// Each value is the serialised `coco_messages::Message` —
-    /// simpler than TS's full `TranscriptEntry` with parent_uuid
-    /// chain because coco-rs's `MessageHistory.messages` is in
-    /// conversation order; resume just reads back the Vec.
+    /// Serialises straight from `Message` to the JSONL byte stream —
+    /// no `serde_json::Value` intermediate — so the disk-write path
+    /// walks the message tree exactly once. Conversation order is
+    /// preserved by append order (coco-rs doesn't need TS's
+    /// parent_uuid chain because `MessageHistory.messages` is in
+    /// conversation order; resume just reads back the Vec).
     pub fn append_agent_messages(
         &self,
         session_id: &str,
         agent_id: &str,
-        messages: &[serde_json::Value],
+        messages: &[Arc<coco_messages::Message>],
     ) -> crate::Result<()> {
         if messages.is_empty() {
             return Ok(());
@@ -564,42 +566,35 @@ impl TranscriptStore {
             .create(true)
             .append(true)
             .open(&path)?;
-        use std::io::Write;
         for msg in messages {
-            let line = serde_json::to_string(msg)?;
+            let line = serde_json::to_string(msg.as_ref())?;
             writeln!(file, "{line}")?;
         }
         Ok(())
     }
 
     /// Load every line of a background agent's per-spawn transcript
-    /// in conversation order. Returns `Ok(None)` when the file
-    /// doesn't exist (no prior spawn). Lines that fail to parse
-    /// are dropped with a debug log — resume is best-effort, a
-    /// corrupted entry shouldn't take the whole spawn down.
+    /// into typed `Arc<Message>` in conversation order. Returns
+    /// `Ok(None)` when the file doesn't exist (no prior spawn).
+    /// Lines that fail to parse are dropped — resume is best-effort,
+    /// a corrupted entry shouldn't take the whole spawn down.
     pub fn load_agent_messages(
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> crate::Result<Option<Vec<serde_json::Value>>> {
+    ) -> crate::Result<Option<Vec<Arc<coco_messages::Message>>>> {
         let path = self.agent_transcript_path(session_id, agent_id);
         if !path.exists() {
             return Ok(None);
         }
         let content = std::fs::read_to_string(&path)?;
-        let mut out = Vec::new();
-        for (i, line) in content.lines().enumerate() {
+        let mut out: Vec<Arc<coco_messages::Message>> = Vec::new();
+        for line in content.lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            match serde_json::from_str::<serde_json::Value>(line) {
-                Ok(v) => out.push(v),
-                Err(_) => {
-                    // Malformed entry — best-effort skip; resume is
-                    // tolerant. `i` is intentionally unused to avoid
-                    // requiring tracing in this leaf crate.
-                    let _ = i;
-                }
+            if let Ok(m) = serde_json::from_str::<coco_messages::Message>(line) {
+                out.push(Arc::new(m));
             }
         }
         Ok(Some(out))

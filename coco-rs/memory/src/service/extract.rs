@@ -20,6 +20,7 @@ use std::time::Instant;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_types::messages::Message;
 use tokio::sync::Mutex;
 
 use crate::config::MemoryConfig;
@@ -122,13 +123,13 @@ pub enum SkipReason {
 /// Boxed lazy builder for the message slice the extraction agent
 /// analyzes. Invoked **only** when all gates pass and the service is
 /// actually about to spawn — turns where extraction is skipped
-/// (throttled, in-flight, direct-write) avoid the per-message
-/// `serde_json::to_value` allocations entirely.
+/// (throttled, in-flight, direct-write) avoid per-message allocations
+/// entirely.
 ///
-/// Carried as `serde_json::Value` so the request crosses the
-/// `coco-tool-runtime → coco-query` boundary without pulling message
-/// types into `coco-tool-runtime`.
-pub type LazyForkMessages = Box<dyn FnOnce() -> Vec<serde_json::Value> + Send>;
+/// Returns `Vec<Arc<Message>>` so the in-process spawn path shares
+/// the parent's authoritative history allocations directly — no
+/// serialize/deserialize round-trip across the trait boundary.
+pub type LazyForkMessages = Box<dyn FnOnce() -> Vec<Arc<Message>> + Send>;
 
 /// Per-turn input: a lazy slice builder + turn-level signals.
 ///
@@ -355,11 +356,7 @@ impl ExtractService {
         *state = ExtractState::default();
     }
 
-    async fn run(
-        &self,
-        message_count: i32,
-        fork_context: Vec<serde_json::Value>,
-    ) -> ExtractOutcome {
+    async fn run(&self, message_count: i32, fork_context: Vec<Arc<Message>>) -> ExtractOutcome {
         let start = Instant::now();
         let manifest = scan::format_memory_manifest(&scan::scan_memory_files(&self.memory_dir));
         let prompt = build_extract_prompt(

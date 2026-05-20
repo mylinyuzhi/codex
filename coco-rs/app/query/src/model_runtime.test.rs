@@ -37,7 +37,8 @@ impl LanguageModel for StubModel {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, coco_inference::AISdkError> {
         Ok(LanguageModelGenerateResult {
             content: vec![AssistantContentPart::Text(TextPart {
@@ -54,7 +55,8 @@ impl LanguageModel for StubModel {
     }
     async fn do_stream(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, coco_inference::AISdkError> {
         Err(coco_inference::AISdkError::new("no stream"))
     }

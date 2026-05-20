@@ -18,7 +18,8 @@ impl LanguageModelV4 for MockLanguageModel {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, crate::errors::AISdkError> {
         Ok(LanguageModelV4GenerateResult::text(
             "Mock response",
@@ -28,7 +29,8 @@ impl LanguageModelV4 for MockLanguageModel {
 
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, crate::errors::AISdkError> {
         unimplemented!("Mock stream not implemented")
     }

@@ -5,10 +5,16 @@
 //! TS: `tools/AgentTool/resumeAgent.ts` — `filterOrphanedThinkingOnlyMessages`
 //! + `filterUnresolvedToolUses` + `filterWhitespaceOnlyAssistantMessages`.
 //!
-//! Pure JSON munging — no tokio, no HTTP. The runner (PR #5,
-//! `root/coordinator`) calls `filter_transcript` before handing the messages
-//! back to the LLM.
+//! Pure logic over the typed message family — no tokio, no HTTP, no JSON
+//! shape inspection. The runner (`root/coordinator`) calls
+//! `filter_transcript` after deserializing JSONL transcript lines into
+//! typed `Arc<Message>`.
 
+use std::sync::Arc;
+
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::LlmMessage;
+use coco_types::messages::Message;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -37,108 +43,94 @@ pub struct AgentResumeState {
 
 /// Filter out incomplete or corrupted messages from a transcript.
 ///
-/// TS: filterOrphanedThinkingOnlyMessages() + filterUnresolvedToolUses()
-///     + filterWhitespaceOnlyAssistantMessages()
-pub fn filter_transcript(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    let mut filtered = Vec::with_capacity(messages.len());
+/// Three filter passes (TS:
+/// `filterOrphanedThinkingOnlyMessages` +
+/// `filterUnresolvedToolUses` +
+/// `filterWhitespaceOnlyAssistantMessages`):
+///
+/// 1. Drop assistant turns whose content is all whitespace text.
+/// 2. Drop assistant turns whose content is reasoning-only (no text,
+///    no tool call) — the resumed model has no use for the parent's
+///    private thinking with no follow-through.
+/// 3. Strip trailing assistant turns whose `ToolCall`s have no matching
+///    `Message::ToolResult` further on — the resumed conversation
+///    can't honour them so they'd just confuse the model.
+///
+/// Non-assistant entries (User, ToolResult, System, Attachment,
+/// Progress, Tombstone) pass through unchanged. `Arc` clones are
+/// cheap pointer bumps.
+pub fn filter_transcript(messages: &[Arc<Message>]) -> Vec<Arc<Message>> {
+    let mut filtered: Vec<Arc<Message>> = Vec::with_capacity(messages.len());
 
-    for msg in messages {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-
-        if role == "assistant" {
-            // Skip whitespace-only assistant messages
-            if is_whitespace_only_assistant(msg) {
+    for arc in messages {
+        if let Message::Assistant(a) = arc.as_ref()
+            && let LlmMessage::Assistant { content, .. } = &a.message
+        {
+            if is_whitespace_only_assistant(content) {
                 continue;
             }
-            // Skip thinking-only messages (no text or tool_use)
-            if is_thinking_only_assistant(msg) {
+            if is_thinking_only_assistant(content) {
                 continue;
             }
         }
-
-        filtered.push(msg.clone());
+        filtered.push(arc.clone());
     }
 
-    // Remove trailing unresolved tool uses
     strip_unresolved_tool_uses(&mut filtered);
-
     filtered
 }
 
-/// Check if an assistant message contains only whitespace text.
-fn is_whitespace_only_assistant(msg: &serde_json::Value) -> bool {
-    let Some(content) = msg.get("content").and_then(|c| c.as_array()) else {
-        // String content
-        return msg
-            .get("content")
-            .and_then(|c| c.as_str())
-            .is_some_and(|s| s.trim().is_empty());
-    };
-
-    content.iter().all(|block| {
-        let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        match block_type {
-            "text" => block
-                .get("text")
-                .and_then(|t| t.as_str())
-                .is_some_and(|s| s.trim().is_empty()),
-            "thinking" => true, // Thinking blocks don't count as content
-            _ => false,
-        }
+/// Assistant content is "whitespace-only" when every part is either a
+/// Reasoning block or a Text block whose `.trim()` is empty. ToolCall /
+/// File / Source / etc. count as substantive content.
+fn is_whitespace_only_assistant(content: &[AssistantContentPart]) -> bool {
+    content.iter().all(|part| match part {
+        AssistantContentPart::Text(t) => t.text.trim().is_empty(),
+        AssistantContentPart::Reasoning(_) | AssistantContentPart::ReasoningFile(_) => true,
+        _ => false,
     })
 }
 
-/// Check if an assistant message has only thinking blocks (no text or `tool_use`).
-fn is_thinking_only_assistant(msg: &serde_json::Value) -> bool {
-    let Some(content) = msg.get("content").and_then(|c| c.as_array()) else {
-        return false;
-    };
-
-    let has_substantive = content.iter().any(|block| {
-        let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        matches!(block_type, "text" | "tool_use")
-    });
-
-    !has_substantive
+/// Assistant content is "thinking-only" when it contains zero Text and
+/// zero ToolCall parts (only Reasoning / ReasoningFile / Custom /
+/// Source / etc.). Mirrors TS `filterOrphanedThinkingOnlyMessages`.
+fn is_thinking_only_assistant(content: &[AssistantContentPart]) -> bool {
+    !content.iter().any(|part| {
+        matches!(
+            part,
+            AssistantContentPart::Text(_) | AssistantContentPart::ToolCall(_)
+        )
+    })
 }
 
-/// Remove trailing assistant messages with `tool_use` blocks that have no
-/// corresponding `tool_result` in subsequent messages.
-fn strip_unresolved_tool_uses(messages: &mut Vec<serde_json::Value>) {
-    // Collect all tool_result IDs
-    let mut resolved_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for msg in messages.iter() {
-        if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
-            for block in content {
-                if block.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-                    && let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str())
-                {
-                    resolved_ids.insert(id.to_string());
-                }
-            }
-        }
-    }
+/// Strip trailing assistant messages whose `ToolCall`s have no
+/// downstream `Message::ToolResult` to resolve them. Walks forward
+/// first to collect every resolved `tool_use_id`, then pops trailing
+/// assistants with orphan calls.
+fn strip_unresolved_tool_uses(messages: &mut Vec<Arc<Message>>) {
+    // Owned String set — pop() needs a mutable borrow on `messages`,
+    // so we can't keep a borrow into the vec while mutating it.
+    let resolved_ids: std::collections::HashSet<String> = messages
+        .iter()
+        .filter_map(|arc| match arc.as_ref() {
+            Message::ToolResult(trm) => Some(trm.tool_use_id.clone()),
+            _ => None,
+        })
+        .collect();
 
-    // Strip trailing assistant messages with unresolved tool_use
     while let Some(last) = messages.last() {
-        let role = last.get("role").and_then(|r| r.as_str()).unwrap_or("");
-        if role != "assistant" {
+        let Message::Assistant(a) = last.as_ref() else {
             break;
-        }
-
-        let has_unresolved =
-            last.get("content")
-                .and_then(|c| c.as_array())
-                .is_some_and(|content| {
-                    content.iter().any(|block| {
-                        block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
-                            && block
-                                .get("id")
-                                .and_then(|v| v.as_str())
-                                .is_some_and(|id| !resolved_ids.contains(id))
-                    })
-                });
-
+        };
+        let LlmMessage::Assistant { content, .. } = &a.message else {
+            break;
+        };
+        let has_unresolved = content.iter().any(|part| {
+            matches!(
+                part,
+                AssistantContentPart::ToolCall(tc) if !resolved_ids.contains(&tc.tool_call_id)
+            )
+        });
         if has_unresolved {
             messages.pop();
         } else {

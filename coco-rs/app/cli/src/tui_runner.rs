@@ -323,6 +323,14 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // entries that are already on disk. TS parity:
     // `processResumedConversation()` + `adoptResumedSessionFile()`.
     if let Some(plan) = resume_plan {
+        tracing::info!(
+            target: "coco_cli::resume",
+            session_id = %plan.session_id,
+            source_session_id = %plan.source_session_id,
+            prior_messages = plan.prior_messages.len(),
+            is_fork = plan.is_fork,
+            "resume: hydrating session",
+        );
         runtime.start_new_session(plan.session_id.clone()).await;
         {
             let mut history = runtime.history.lock().await;
@@ -337,27 +345,41 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         runtime
             .seed_tool_result_replacement_state(&plan.prior_messages, &plan.session_id)
             .await;
-        // Phase 4: signal the TUI to reset its derived transcript view
-        // and replay every prior message as a normal `MessageAppended`
-        // event, so /resume scrollback flows through the same render
-        // path as live turns. SDK observers receive the same event
-        // stream. See `engine-tui-unified-transcript-plan.md` §7.3.
+        // Phase 4 hydration. Two events:
+        //   1. `SessionResetForResume` rotates the conversation id and
+        //      clears the prior session's UI-only state (streaming
+        //      overlay, tool widgets, side-caches).
+        //   2. `HistoryReplaced` carries the loaded JSONL transcript
+        //      in one shot so the TUI does a single cache-rebuild pass
+        //      instead of N `MessageAppended` round-trips. For a 5k-
+        //      message transcript that's the difference between one
+        //      vec extend and ~20 channel-bounded yields.
+        // Live appends after this still go through `MessageAppended` —
+        // the bulk path is modeled as a separate event because it IS
+        // a different operation (full replace vs. incremental
+        // append). See `engine-tui-unified-transcript-plan.md` §7.3.
         let _ = notification_tx
             .send(CoreEvent::Protocol(
                 coco_types::ServerNotification::SessionResetForResume {
                     session_id: plan.session_id.clone(),
+                    agent_id: None,
                 },
             ))
             .await;
-        for msg in &plan.prior_messages {
-            let _ = notification_tx
-                .send(CoreEvent::Protocol(
-                    coco_types::ServerNotification::MessageAppended {
-                        message: msg.clone(),
-                    },
-                ))
-                .await;
-        }
+        let _ = notification_tx
+            .send(CoreEvent::Protocol(
+                coco_types::ServerNotification::HistoryReplaced {
+                    messages: plan
+                        .prior_messages
+                        .iter()
+                        .cloned()
+                        .map(std::sync::Arc::new)
+                        .collect(),
+                    session_id: plan.session_id.clone(),
+                    agent_id: None,
+                },
+            ))
+            .await;
         eprintln!(
             "{} session {} ({} prior message(s))",
             if plan.is_fork { "Forked" } else { "Resumed" },
@@ -1028,28 +1050,32 @@ async fn run_agent_driver(
                 }
             }
 
-            UserCommand::Rewind {
-                message_id,
-                restore_type,
-                rewound_turn,
-                mode,
-            } => {
+            UserCommand::Rewind { message_id, mode } => {
                 // Drain first — rewind reads file_history snapshots
                 // and rewrites runtime.history; an in-flight turn that
                 // mutates either would race.
                 drain_active_turn(&active_turn).await;
-                handle_rewind(
-                    &restore_type,
-                    &message_id,
-                    rewound_turn,
-                    mode,
-                    &runtime.file_history,
-                    &runtime.config_home,
-                    &session_id,
-                    &event_tx,
-                    &runtime,
-                )
-                .await;
+                match mode {
+                    coco_tui::command::RewindMode::Explicit {
+                        restore_type,
+                        rewound_turn,
+                    } => {
+                        handle_rewind(
+                            &restore_type,
+                            &message_id,
+                            rewound_turn,
+                            &runtime.file_history,
+                            &runtime.config_home,
+                            &session_id,
+                            &event_tx,
+                            &runtime,
+                        )
+                        .await;
+                    }
+                    coco_tui::command::RewindMode::AutoRestore => {
+                        handle_auto_truncate(&message_id, &event_tx, &runtime).await;
+                    }
+                }
             }
 
             UserCommand::RequestDiffStats { message_id } => {
@@ -2283,8 +2309,8 @@ async fn run_manual_compact(
     let compact_cancel = CancellationToken::new();
     let engine = runtime.build_engine(compact_cancel).await;
     let mut history = coco_messages::MessageHistory::new();
-    for m in runtime.history.lock().await.as_slice().iter().cloned() {
-        history.push(m);
+    for arc in runtime.history.lock().await.as_slice().iter().cloned() {
+        history.push_arc(arc);
     }
     let event_tx_opt = Some(event_tx.clone());
     engine
@@ -2316,11 +2342,16 @@ async fn run_clear_conversation(
         return;
     }
     let notif = match scope {
-        ClearScope::History => ServerNotification::MessageTruncated { keep_count: 0 },
+        ClearScope::History => ServerNotification::MessageTruncated {
+            keep_count: 0,
+            session_id: String::new(),
+            agent_id: None,
+        },
         ClearScope::Conversation | ClearScope::All => {
             let new_session_id = runtime.current_session_id().await;
             ServerNotification::SessionResetForResume {
                 session_id: new_session_id,
+                agent_id: None,
             }
         }
     };
@@ -2788,13 +2819,18 @@ async fn process_submit_turn(
     // history_push_and_emit fires MessageAppended for each new turn
     // message so the TUI transcript view surfaces them via the standard
     // round-trip (replaces the legacy TUI-local optimistic add_message).
-    let messages: Vec<coco_messages::Message> = {
+    // `h.to_vec()` returns `Vec<Arc<Message>>` via cheap atomic
+    // refcount bumps — engine sees the same Arcs `MessageHistory`
+    // holds, no deep clone of message bodies (was `(**a).clone()` →
+    // `Arc::new` re-wrap, which deep-cloned every history entry per
+    // turn just to immediately re-Arc it).
+    let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
         let mut h = runtime.history.lock().await;
         let event_tx_opt = Some(event_tx.clone());
         for m in new_turn_messages.iter().cloned() {
             coco_query::history_sync::history_push_and_emit(&mut h, m, &event_tx_opt).await;
         }
-        h.as_slice().to_vec()
+        h.to_vec()
     };
 
     let engine = runtime.build_engine(turn_cancel.clone()).await;
@@ -2818,8 +2854,8 @@ async fn process_submit_turn(
         Ok(result) => {
             let mut h = runtime.history.lock().await;
             h.clear();
-            for m in result.final_messages {
-                h.push(m);
+            for arc in result.final_messages {
+                h.push_arc(arc);
             }
         }
         Err(e) => {
@@ -2901,19 +2937,78 @@ async fn maybe_spawn_auto_title(
     );
 }
 
-/// Handle a rewind command.
+/// Synchronous TUI-cancel cleanup.
 ///
-/// TS: REPL.tsx rewindConversationTo() + fileHistoryRewind()
-/// - Code rewind: calls file_history.rewind() to restore files
-/// - Conversation rewind: truncates the agent-side history_handle
-///   AND emits RewindCompleted so the TUI truncates its display.
-/// - Both: does both
+/// Truncates the runtime history at the target user message and emits
+/// the authoritative `MessageTruncated` event so SDK + TUI observers
+/// converge. Never touches the workspace — file rewind belongs to the
+/// explicit [`handle_rewind`] flow. See
+/// `engine-tui-unified-transcript-plan.md` §7.4.
+async fn handle_auto_truncate(
+    message_id: &str,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+) {
+    let mut h = runtime.history.lock().await;
+    let Some(idx) = h.as_slice().iter().position(|m| match m.as_ref() {
+        coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
+        _ => false,
+    }) else {
+        // Auto-restore is fire-and-forget; if the target uuid is gone
+        // (e.g. a compaction wiped it between TUI dispatch and engine
+        // handler), we'd rather skip silently than panic. `warn` so
+        // ops can correlate "auto-restore quietly did nothing" with
+        // an upstream truncation race.
+        tracing::warn!(
+            target: "coco_cli::auto_truncate",
+            message_id,
+            history_len = h.len(),
+            "AutoTruncate target message not found in history (likely raced with compaction)",
+        );
+        return;
+    };
+    let pre_count = h.len() as i32;
+    let removed = (pre_count - idx as i32).max(0);
+    h.truncate(idx);
+    tracing::info!(
+        target: "coco_cli::auto_truncate",
+        message_id,
+        keep_count = idx,
+        removed,
+        "AutoTruncate applied",
+    );
+    coco_otel::events::emit_conversation_rewind(
+        pre_count as i64,
+        h.len() as i64,
+        removed as i64,
+        idx as i64,
+    );
+    let _ = event_tx
+        .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
+            keep_count: idx as i64,
+            session_id: String::new(),
+            agent_id: None,
+        }))
+        .await;
+}
+
+/// Explicit `/rewind` command driver — picker-confirmed.
+///
+/// TS: REPL.tsx `rewindConversationTo()` + `fileHistoryRewind()`.
+/// Branches on `restore_type`:
+///
+/// - `Both` / `CodeOnly` — `file_history.rewind()` restores files.
+/// - `Both` / `ConversationOnly` — truncate history and emit
+///   `MessageTruncated`.
+/// - `SummarizeFrom` / `SummarizeUpTo` — dispatch to
+///   `handle_summarize_rewind` (partial compaction).
+///
+/// Always emits `RewindCompleted` so the TUI dismisses the picker overlay.
 #[allow(clippy::too_many_arguments)]
 async fn handle_rewind(
     restore_type: &coco_tui::state::RestoreType,
     message_id: &str,
     rewound_turn: i32,
-    mode: coco_tui::state::rewind::RewindMode,
     file_history: &Option<Arc<RwLock<FileHistoryState>>>,
     config_home: &std::path::Path,
     session_id: &str,
@@ -2921,39 +3016,17 @@ async fn handle_rewind(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
 ) {
     use coco_tui::state::RestoreType;
-    use coco_tui::state::rewind::RewindMode;
 
     let mut files_changed = 0i32;
     let mut messages_removed = 0i32;
 
-    // AutoRestore is the synchronous TUI-cancel cleanup path. It
-    // never touches the workspace and never emits the modal
-    // `RewindCompleted` overlay — only the authoritative
-    // `MessageTruncated` event so SDK + TUI converge. See
-    // `engine-tui-unified-transcript-plan.md` §7.4.
-    if matches!(mode, RewindMode::AutoRestore) {
-        let mut h = runtime.history.lock().await;
-        if let Some(idx) = h.as_slice().iter().position(|m| match m {
-            coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
-            _ => false,
-        }) {
-            let pre_count = h.len() as i32;
-            let removed = (pre_count - idx as i32).max(0);
-            h.truncate(idx);
-            coco_otel::events::emit_conversation_rewind(
-                pre_count as i64,
-                h.len() as i64,
-                removed as i64,
-                idx as i64,
-            );
-            let _ = event_tx
-                .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
-                    keep_count: idx as i64,
-                }))
-                .await;
-        }
-        return;
-    }
+    tracing::info!(
+        target: "coco_cli::rewind",
+        message_id,
+        rewound_turn,
+        ?restore_type,
+        "Explicit rewind: dispatching",
+    );
 
     // Summarize variants: dispatch to partial_compact_conversation
     // and replace the history with the resulting messages. TS:
@@ -3007,28 +3080,48 @@ async fn handle_rewind(
 
     if should_truncate {
         let mut h = runtime.history.lock().await;
-        if let Some(idx) = h.as_slice().iter().position(|m| match m {
+        match h.as_slice().iter().position(|m| match m.as_ref() {
             coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
             _ => false,
         }) {
-            let pre_count = h.len() as i32;
-            messages_removed = (pre_count - idx as i32).max(0);
-            h.truncate(idx);
-            // TS `tengu_conversation_rewind` (`screens/REPL.tsx:3665-3670`).
-            coco_otel::events::emit_conversation_rewind(
-                pre_count as i64,
-                h.len() as i64,
-                messages_removed as i64,
-                idx as i64,
-            );
-            // Explicit-rewind converges on the same `MessageTruncated`
-            // event the AutoRestore path emits, so SDK consumers see
-            // one authoritative truncation signal regardless of trigger.
-            let _ = event_tx
-                .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
-                    keep_count: idx as i64,
-                }))
-                .await;
+            Some(idx) => {
+                let pre_count = h.len() as i32;
+                messages_removed = (pre_count - idx as i32).max(0);
+                h.truncate(idx);
+                tracing::info!(
+                    target: "coco_cli::rewind",
+                    message_id,
+                    keep_count = idx,
+                    messages_removed,
+                    files_changed,
+                    "Explicit rewind: truncated history",
+                );
+                // TS `tengu_conversation_rewind` (`screens/REPL.tsx:3665-3670`).
+                coco_otel::events::emit_conversation_rewind(
+                    pre_count as i64,
+                    h.len() as i64,
+                    messages_removed as i64,
+                    idx as i64,
+                );
+                // Explicit-rewind converges on the same `MessageTruncated`
+                // event the AutoRestore path emits, so SDK consumers see
+                // one authoritative truncation signal regardless of trigger.
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
+                        keep_count: idx as i64,
+                        session_id: String::new(),
+                        agent_id: None,
+                    }))
+                    .await;
+            }
+            None => {
+                tracing::warn!(
+                    target: "coco_cli::rewind",
+                    message_id,
+                    history_len = h.len(),
+                    "Explicit rewind: target user message not found in history",
+                );
+            }
         }
     }
 
@@ -3079,14 +3172,14 @@ async fn handle_summarize_rewind(
         _ => return,
     };
 
-    let messages = {
+    let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
         let h = runtime.history.lock().await;
         h.as_slice().to_vec()
     };
 
     // Pivot index: position of the picked user message in the
     // history vec.
-    let pivot_index = match messages.iter().position(|m| match m {
+    let pivot_index = match messages.iter().position(|m| match m.as_ref() {
         coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
         _ => false,
     }) {
@@ -3111,8 +3204,8 @@ async fn handle_summarize_rewind(
 
     let engine = runtime.build_engine(CancellationToken::new()).await;
     let mut history = coco_messages::MessageHistory::new();
-    for message in messages {
-        history.push(message);
+    for arc in messages {
+        history.push_arc(arc);
     }
     let event_tx_opt = Some(event_tx.clone());
     let outcome = engine

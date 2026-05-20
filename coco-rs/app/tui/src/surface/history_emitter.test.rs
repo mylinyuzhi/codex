@@ -200,6 +200,7 @@ fn emit_append_only_accepts_finalized_transcript_renderer() {
                     show_system_reminders: false,
                     show_thinking: false,
                     kb_handle: None,
+                    reasoning_metadata: None,
                 },
             )
         })

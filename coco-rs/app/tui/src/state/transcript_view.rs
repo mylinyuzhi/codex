@@ -60,16 +60,28 @@ impl TranscriptView {
     /// so renderers can recover engine-side fields (`is_meta`,
     /// `permission_mode`, timestamp, …) without re-serializing.
     ///
-    /// Re-emission of an already-seen UUID is a no-op. The engine
-    /// re-pushes the full prior history at the top of every turn
-    /// (`run_session_loop` walks `turn_messages` and fires
-    /// `history_push_and_emit` for each), so without this dedup
-    /// multi-turn sessions would accumulate one duplicate copy of
-    /// every prior cell per turn.
+    /// Re-emission of an already-seen UUID is a no-op (defensive
+    /// dedup). The engine re-pushes the full prior history at the top
+    /// of every turn (`run_session_loop` walks `turn_messages` and
+    /// fires `history_push_and_emit` for each), so this guard
+    /// prevents multi-turn sessions from accumulating a duplicate
+    /// cell per turn. A `tracing::warn!` on the dedup path surfaces
+    /// truly-accidental double-emission upstream (e.g. resume burst
+    /// overlapping a live append, an engine bug pushing twice) so the
+    /// silent dedup doesn't paper over real bugs. The expected
+    /// turn-boundary re-emission shouldn't reach this branch because
+    /// `engine.rs:575` batch-loads `turn_messages` via direct
+    /// `MessageHistory::push` *before* the loop starts emitting; if
+    /// it does, the warn marks it for investigation.
     pub fn on_message_appended(&mut self, msg: Arc<Message>) {
         if let Some(uuid) = msg.uuid()
             && self.by_uuid.contains_key(uuid)
         {
+            tracing::warn!(
+                target: "coco_tui::transcript_view",
+                %uuid,
+                "duplicate MessageAppended dropped — upstream emitted a uuid already in the derived view",
+            );
             return;
         }
         let derived = message_to_cells(msg.clone());
@@ -122,38 +134,27 @@ impl TranscriptView {
         self.by_uuid.clear();
     }
 
-    /// Stamp `reasoning_tokens` + `duration_ms` onto the most recent
-    /// `AssistantThinking` cell. Engines report turn-aggregate reasoning
-    /// usage via `TurnCompleted`, which arrives after the assistant
-    /// content stream has already produced its `Reasoning` cell — this
-    /// post-hoc update hangs the metadata on the live cell so the
-    /// renderer can show `Thinking · 1.3s · 15 reasoning tokens`
-    /// without a parallel side-table.
-    ///
-    /// Returns `true` when a thinking cell was found and updated.
-    pub fn record_reasoning_tokens(
-        &mut self,
-        reasoning_tokens: i64,
-        duration_ms: Option<i64>,
-    ) -> bool {
-        if reasoning_tokens <= 0 {
-            return false;
-        }
-        for cell in self.cells.iter_mut().rev() {
-            if let CellKind::AssistantThinking {
-                duration_ms: dms,
-                reasoning_tokens: rt,
-                ..
-            } = &mut cell.kind
-            {
-                *rt = Some(reasoning_tokens);
-                if dms.is_none() {
-                    *dms = duration_ms;
-                }
-                return true;
+    /// Replace the entire derived view with cells derived from
+    /// `messages`. Use for `ServerNotification::HistoryReplaced` — the
+    /// bulk resume path that avoids N round-trips through the
+    /// per-message append path. Equivalent to
+    /// [`Self::on_session_reset`] + N
+    /// [`Self::on_message_appended`] calls but in a single
+    /// cache-rebuild pass.
+    pub fn replace_from_messages(&mut self, messages: &[Arc<Message>]) {
+        self.cells.clear();
+        self.by_uuid.clear();
+        for arc in messages {
+            let derived = message_to_cells(arc.clone());
+            if derived.is_empty() {
+                continue;
             }
+            let head_idx = self.cells.len();
+            if let Some(uuid) = arc.uuid() {
+                self.by_uuid.insert(*uuid, head_idx);
+            }
+            self.cells.extend(derived);
         }
-        false
     }
 
     fn rebuild_index(&mut self) {
@@ -202,15 +203,12 @@ pub enum CellKind {
     AssistantText { text: String, model: String },
     /// Assistant reasoning / thinking content.
     ///
-    /// `duration_ms` + `reasoning_tokens` are populated by
-    /// [`TranscriptView::record_reasoning_tokens`] when the engine
-    /// emits the turn's aggregate usage. Until then they are `None`
-    /// and the renderer hides the trailing badge.
-    AssistantThinking {
-        text: String,
-        duration_ms: Option<i64>,
-        reasoning_tokens: Option<i64>,
-    },
+    /// Reasoning metadata (`duration_ms`, `reasoning_tokens`) lives in
+    /// `SessionState.reasoning_metadata` keyed by `message_uuid` —
+    /// the engine reports it on `TurnCompleted`, after the cell has
+    /// already been derived from `&Message`. Side-cache keeps the
+    /// cell a pure function of the source message (I-2).
+    AssistantThinking { text: String },
     /// Assistant redacted thinking (encrypted, displayed as opaque).
     AssistantRedactedThinking,
     /// Assistant `tool_use` content block.
@@ -220,8 +218,6 @@ pub enum CellKind {
     /// Attachment message (system-reminder-wrapped queued command,
     /// hook payload, etc.).
     Attachment,
-    /// Tool-use summary (Fast-role-generated mobile label).
-    ToolUseSummary { summary: String },
     /// Progress meta-message (transient, often filtered).
     Progress,
     /// Tombstoned message (filtered from rendering normally).

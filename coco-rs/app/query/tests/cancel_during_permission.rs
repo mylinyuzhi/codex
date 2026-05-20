@@ -134,7 +134,7 @@ async fn cancelled_permission_synthesizes_error_tool_result() {
     let tool_result_count = result
         .final_messages
         .iter()
-        .filter(|m| matches!(m, coco_messages::Message::ToolResult(_)))
+        .filter(|m| matches!(m.as_ref(), coco_messages::Message::ToolResult(_)))
         .count();
     assert!(
         tool_result_count >= 1,
@@ -143,7 +143,7 @@ async fn cancelled_permission_synthesizes_error_tool_result() {
         result
             .final_messages
             .iter()
-            .map(message_kind)
+            .map(|m| message_kind(m.as_ref()))
             .collect::<Vec<_>>(),
     );
 }
@@ -158,6 +158,5 @@ fn message_kind(m: &coco_messages::Message) -> &'static str {
         coco_messages::Message::System(_) => "System",
         coco_messages::Message::Progress(_) => "Progress",
         coco_messages::Message::Tombstone(_) => "Tombstone",
-        coco_messages::Message::ToolUseSummary(_) => "ToolUseSummary",
     }
 }

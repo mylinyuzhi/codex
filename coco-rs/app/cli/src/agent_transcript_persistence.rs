@@ -71,11 +71,15 @@ impl AgentTranscriptStore for SessionAgentTranscriptStore {
         &self,
         session_id: &str,
         agent_id: &str,
-        messages: Vec<serde_json::Value>,
+        messages: &[Arc<coco_messages::Message>],
     ) -> Result<(), coco_error::BoxedError> {
         let store = self.store.clone();
         let session_id = session_id.to_string();
         let agent_id = agent_id.to_string();
+        // Move an owned snapshot into the blocking thread — the
+        // Arc-vec clone is cheap pointer bumps; serialisation to
+        // bytes happens once inside storage.
+        let messages = messages.to_vec();
         tokio::task::spawn_blocking(move || {
             store.append_agent_messages(&session_id, &agent_id, &messages)
         })
@@ -88,7 +92,7 @@ impl AgentTranscriptStore for SessionAgentTranscriptStore {
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> Result<Option<Vec<serde_json::Value>>, coco_error::BoxedError> {
+    ) -> Result<Option<Vec<Arc<coco_messages::Message>>>, coco_error::BoxedError> {
         let store = self.store.clone();
         let session_id = session_id.to_string();
         let agent_id = agent_id.to_string();

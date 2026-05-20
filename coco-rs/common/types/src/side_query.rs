@@ -7,8 +7,11 @@
 //! This split lets both `coco-permissions` and `coco-tool-runtime` share the
 //! same request/response types without circular dependencies.
 
+use std::sync::Arc;
+
 use crate::ModelRole;
 use crate::PromptCacheConfig;
+use crate::messages::Message;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -232,7 +235,7 @@ impl SideQueryResponse {
 /// All fields are owned strings / values so the slot can be safely
 /// cloned without lifetime entanglement with the parent's per-turn
 /// state.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheSafeParams {
     /// Pre-rendered system prompt bytes — must match the parent's
     /// last request verbatim. Mirrors the same threading used by
@@ -261,11 +264,12 @@ pub struct CacheSafeParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_cache: Option<PromptCacheConfig>,
     /// Parent message history that should prefix the fork's prompt.
-    /// Carried as serialized JSON so this DTO crosses layer
-    /// boundaries without pulling `coco-messages` into `coco-types`.
-    /// Same shape as `AgentQueryConfig.fork_context_messages`.
+    /// Shared via `Arc<Message>` so the cache slot, fork dispatcher, and
+    /// adapter all touch the same allocations — no serialize/deserialize
+    /// round-trip on the in-process path. Same shape as
+    /// `AgentQueryConfig.fork_context_messages`.
     #[serde(default)]
-    pub fork_context_messages: Vec<serde_json::Value>,
+    pub fork_context_messages: Vec<Arc<Message>>,
 }
 
 #[cfg(test)]

@@ -42,5 +42,6 @@ libc = "0.2"
 pretty_assertions.workspace = true
 tempfile.workspace = true
 async-trait.workspace = true
+coco-llm-types.workspace = true
 regex = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "fs", "macros", "rt-multi-thread"] }

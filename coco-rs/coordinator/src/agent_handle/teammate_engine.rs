@@ -104,26 +104,18 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
     /// sliding-window safety valve still bounds growth.
     async fn compact_messages(
         &self,
-        messages: Vec<serde_json::Value>,
+        messages: Vec<std::sync::Arc<coco_messages::Message>>,
         _total_tokens: i64,
-    ) -> crate::Result<Vec<serde_json::Value>> {
+    ) -> crate::Result<Vec<std::sync::Arc<coco_messages::Message>>> {
         const KEEP_RECENT_FOR_MICRO: usize = 5;
         const KEEP_RECENT_ROUNDS_FOR_FULL: usize = 2;
 
-        let mut typed: Vec<coco_messages::Message> = match messages
-            .iter()
-            .map(|v| serde_json::from_value::<coco_messages::Message>(v.clone()))
-            .collect::<Result<Vec<_>, _>>()
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "teammate compact_messages: malformed history; returning input unchanged"
-                );
-                return Ok(messages);
-            }
-        };
+        // `coco_compact::*` consumes owned `Vec<Message>` (it mutates
+        // in place during micro-compact). Unwrap the Arc-vec into
+        // owned messages — this is the only deep clone in the path
+        // and only fires when the auto-compact threshold trips.
+        let mut typed: Vec<coco_messages::Message> =
+            messages.iter().map(|arc| (**arc).clone()).collect();
 
         // Step 1 — micro-compact (no-LLM cleanup of resolved tool
         // results). Cheap and always safe; bounds the prompt fed
@@ -143,11 +135,10 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
                     model: String::new(),
                     max_turns: Some(1),
                     max_output_tokens: Some(attempt.max_summary_tokens),
-                    fork_context_messages: attempt
-                        .context_messages
-                        .iter()
-                        .filter_map(|m| serde_json::to_value(m).ok())
-                        .collect(),
+                    // `CompactSummaryAttempt.context_messages` is already
+                    // `Vec<Arc<Message>>` — Arc-share into the fork context
+                    // (refcount bump, no `Message::clone`).
+                    fork_context_messages: attempt.context_messages.clone(),
                     // Deliberately impossible allow-list: no tools
                     // during the summarization turn. The prompt itself
                     // is separate from structured fork context so we do
@@ -171,8 +162,15 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
             ..Default::default()
         };
 
+        // After in-place micro-compact, re-wrap the owned slice as an
+        // Arc-vec for the canonical Arc-shaped `compact_conversation`
+        // entry. One `Arc::new` per kept message — same alloc count as
+        // the pre-refactor `Arc::new(msg.clone())` step that used to live
+        // here, but the downstream pipeline now Arc-shares throughout.
+        let typed_arc: Vec<std::sync::Arc<coco_messages::Message>> =
+            typed.into_iter().map(std::sync::Arc::new).collect();
         let compact_result =
-            match coco_compact::compact_conversation(&typed, &opts, summarize, None).await {
+            match coco_compact::compact_conversation(&typed_arc, &opts, summarize, None).await {
                 Ok(result) => result,
                 Err(e) => {
                     tracing::warn!(
@@ -181,20 +179,15 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
                     );
                     // Return the micro-compacted history rather than
                     // the original — the micro pass still trimmed
-                    // tool results which buys some bound.
-                    return Ok(typed
-                        .iter()
-                        .map(|m| serde_json::to_value(m).unwrap_or_default())
-                        .collect());
+                    // tool results which buys some bound. Already Arc-shaped.
+                    return Ok(typed_arc);
                 }
             };
 
-        // Step 3 — assemble post-compact messages and serialise.
-        let post_compact = coco_compact::build_post_compact_messages(&compact_result);
-        Ok(post_compact
-            .iter()
-            .map(|m| serde_json::to_value(m).unwrap_or_default())
-            .collect())
+        // Step 3 — assemble post-compact messages. `build_post_compact_messages`
+        // already returns `Vec<Arc<Message>>`, so the runner-loop's preferred
+        // shape lands directly with no extra wrap.
+        Ok(coco_compact::build_post_compact_messages(&compact_result))
     }
 }
 

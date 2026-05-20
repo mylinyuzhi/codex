@@ -22,7 +22,18 @@ impl AgentExecutionEngine for MockEngine {
         _config: AgentQueryConfig,
     ) -> crate::Result<AgentQueryResult> {
         Ok(AgentQueryResult {
-            messages: vec![serde_json::json!({"role": "assistant", "content": self.response})],
+            messages: vec![std::sync::Arc::new(
+                coco_messages::create_assistant_message(
+                    vec![coco_messages::AssistantContent::Text(
+                        coco_messages::TextContent {
+                            text: self.response.clone(),
+                            provider_metadata: None,
+                        },
+                    )],
+                    "test-model",
+                    coco_types::TokenUsage::default(),
+                ),
+            )],
             token_count: 100,
             input_tokens: 60,
             output_tokens: 40,
@@ -489,8 +500,17 @@ impl AgentExecutionEngine for CompactingEngine {
     ) -> crate::Result<AgentQueryResult> {
         Ok(AgentQueryResult {
             messages: vec![
-                serde_json::json!({"role": "user", "content": "ask"}),
-                serde_json::json!({"role": "assistant", "content": self.response}),
+                std::sync::Arc::new(coco_messages::create_user_message("ask")),
+                std::sync::Arc::new(coco_messages::create_assistant_message(
+                    vec![coco_messages::AssistantContent::Text(
+                        coco_messages::TextContent {
+                            text: self.response.clone(),
+                            provider_metadata: None,
+                        },
+                    )],
+                    "test-model",
+                    coco_types::TokenUsage::default(),
+                )),
             ],
             token_count: self.input_tokens + self.output_tokens,
             input_tokens: self.input_tokens,
@@ -504,9 +524,9 @@ impl AgentExecutionEngine for CompactingEngine {
 
     async fn compact_messages(
         &self,
-        messages: Vec<serde_json::Value>,
+        messages: Vec<std::sync::Arc<coco_messages::Message>>,
         total_tokens: i64,
-    ) -> crate::Result<Vec<serde_json::Value>> {
+    ) -> crate::Result<Vec<std::sync::Arc<coco_messages::Message>>> {
         self.compact_calls.lock().await.push(total_tokens);
         // Return a strictly smaller history so the runner uses our
         // result instead of falling through to the safety valve.

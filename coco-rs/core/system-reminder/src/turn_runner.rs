@@ -294,7 +294,7 @@ pub async fn run_turn_reminders(
     // Pre-scan history for TS-parity turn counters. These are typed over
     // [`ToolName`] — no hardcoded tool-name strings anywhere in the engine
     // integration path.
-    let messages = &history.messages;
+    let messages = history.as_slice();
     let turns_since_last_todo_write =
         count_assistant_turns_since_tool(messages, ToolName::TodoWrite);
     let turns_since_last_task_tool =

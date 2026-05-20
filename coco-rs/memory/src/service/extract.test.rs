@@ -8,8 +8,23 @@ fn config() -> MemoryConfig {
 }
 
 fn turn_input(message_count: i32, has_writes: bool) -> TurnInput {
+    use coco_llm_types::LlmMessage;
+    use coco_types::messages::{Message, UserMessage};
+    use uuid::Uuid;
     TurnInput {
-        fork_messages: Box::new(|| vec![serde_json::json!({"role": "user", "content": "hi"})]),
+        fork_messages: Box::new(|| {
+            vec![std::sync::Arc::new(Message::User(UserMessage {
+                message: LlmMessage::user_text("hi"),
+                uuid: Uuid::new_v4(),
+                timestamp: String::new(),
+                is_visible_in_transcript_only: false,
+                is_virtual: false,
+                is_compact_summary: false,
+                permission_mode: None,
+                origin: None,
+                parent_tool_use_id: None,
+            }))]
+        }),
         message_count,
         last_message_id: Some("uuid".into()),
         has_memory_writes: has_writes,

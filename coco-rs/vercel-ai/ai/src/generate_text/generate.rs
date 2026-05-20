@@ -535,11 +535,11 @@ async fn generate_text_inner(
         )
         .await;
 
-        // Build call options using shared builder
+        // Build call options using shared builder. abort_signal is threaded
+        // separately to do_generate / do_stream — not part of CallOptions.
         let call_options = build_call_options::build_call_options(
             settings,
             &step_tool_choice,
-            abort_signal,
             &effective_provider_options,
             output,
             step_messages,
@@ -555,7 +555,7 @@ async fn generate_text_inner(
                 duration,
                 execute_with_retry(
                     effective_model,
-                    call_options,
+                    &call_options,
                     retry_config.clone(),
                     abort_signal.clone(),
                 ),
@@ -572,7 +572,7 @@ async fn generate_text_inner(
         } else {
             execute_with_retry(
                 effective_model,
-                call_options,
+                &call_options,
                 retry_config.clone(),
                 abort_signal.clone(),
             )
@@ -846,24 +846,27 @@ async fn generate_text_inner(
 }
 
 /// Execute a model call with retry logic.
+///
+/// `call_options` is borrowed across attempts — no per-attempt clone of
+/// the prompt vector. `abort_signal` is `Arc`-backed so cloning per
+/// attempt is a refcount bump.
 async fn execute_with_retry(
     model: &Arc<dyn vercel_ai_provider::LanguageModelV4>,
-    call_options: LanguageModelV4CallOptions,
+    call_options: &LanguageModelV4CallOptions,
     retry_config: RetryConfig,
     abort_signal: Option<CancellationToken>,
 ) -> Result<vercel_ai_provider::LanguageModelV4GenerateResult, AIError> {
-    let model = model.clone();
     let provider_name = model.provider().to_string();
     let model_id = model.model_id().to_string();
 
-    with_retry(retry_config, abort_signal, || {
+    with_retry(retry_config, abort_signal.clone(), || {
         let model = model.clone();
-        let call_options = call_options.clone();
         let provider_name = provider_name.clone();
         let model_id = model_id.clone();
+        let abort_signal = abort_signal.clone();
         async move {
             model
-                .do_generate(call_options)
+                .do_generate(call_options, abort_signal)
                 .await
                 .map_err(|e| crate::prompt::wrap_gateway_error(e, &provider_name, &model_id))
         }

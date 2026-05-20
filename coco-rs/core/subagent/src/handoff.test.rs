@@ -120,15 +120,62 @@ fn render_block_message_handles_empty_reason() {
 
 #[test]
 fn build_transcript_summary_compresses_tool_blocks() {
-    let messages = vec![
-        serde_json::json!({"role": "user", "content": "do the thing"}),
-        serde_json::json!({"role": "assistant", "content": [
-            {"type": "text", "text": "Let me search"},
-            {"type": "tool_use", "name": "Grep", "input": {}}
-        ]}),
-        serde_json::json!({"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "tu_1", "content": "file1.rs\nfile2.rs"}
-        ]}),
+    use coco_llm_types::AssistantContentPart;
+    use coco_llm_types::LlmMessage;
+    use coco_llm_types::ToolCallPart;
+    use coco_llm_types::ToolContentPart;
+    use coco_llm_types::ToolResultContent;
+    use coco_llm_types::ToolResultPart;
+    use coco_types::messages::{AssistantMessage, Message, ToolResultMessage, UserMessage};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    let messages: Vec<Arc<Message>> = vec![
+        Arc::new(Message::User(UserMessage {
+            message: LlmMessage::user_text("do the thing"),
+            uuid: Uuid::new_v4(),
+            timestamp: String::new(),
+            is_visible_in_transcript_only: false,
+            is_virtual: false,
+            is_compact_summary: false,
+            permission_mode: None,
+            origin: None,
+            parent_tool_use_id: None,
+        })),
+        Arc::new(Message::Assistant(AssistantMessage {
+            message: LlmMessage::Assistant {
+                content: vec![
+                    AssistantContentPart::text("Let me search"),
+                    AssistantContentPart::ToolCall(ToolCallPart::new(
+                        "tu_1",
+                        "Grep",
+                        serde_json::Value::Null,
+                    )),
+                ],
+                provider_options: None,
+            },
+            uuid: Uuid::new_v4(),
+            model: String::new(),
+            stop_reason: None,
+            usage: None,
+            cost_usd: None,
+            request_id: None,
+            api_error: None,
+        })),
+        Arc::new(Message::ToolResult(ToolResultMessage {
+            uuid: Uuid::new_v4(),
+            message: LlmMessage::Tool {
+                content: vec![ToolContentPart::ToolResult(ToolResultPart::new(
+                    "tu_1",
+                    "Grep",
+                    ToolResultContent::text("file1.rs\nfile2.rs"),
+                ))],
+                provider_options: None,
+            },
+            tool_use_id: "tu_1".into(),
+            tool_id: "Grep".parse().unwrap(),
+            is_error: false,
+        })),
     ];
     let summary = build_transcript_summary(&messages);
     assert!(summary.contains("[user] do the thing"));

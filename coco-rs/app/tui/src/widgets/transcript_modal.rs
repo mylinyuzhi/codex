@@ -247,6 +247,7 @@ impl TranscriptStateWidget<'_> {
 struct TranscriptCellRenderer<'a> {
     cells: &'a [RenderedCell],
     tool_executions: &'a [ToolExecution],
+    reasoning_metadata: &'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>,
     width: u16,
     styles: UiStyles<'a>,
 }
@@ -261,6 +262,7 @@ impl<'a> TranscriptCellRenderer<'a> {
         Self {
             cells,
             tool_executions: &state.session.tool_executions,
+            reasoning_metadata: &state.session.reasoning_metadata,
             width,
             styles,
         }
@@ -432,26 +434,25 @@ impl<'a> TranscriptCellRenderer<'a> {
         match &cell.kind {
             CellKind::UserText { text } => self.render_text_block(">", text, lines),
             CellKind::AssistantText { text, .. } => self.render_text_block("⏺", text, lines),
-            CellKind::AssistantThinking {
-                text,
-                duration_ms,
-                reasoning_tokens,
-            } => lines.extend(render_thinking_block(
-                ThinkingRenderInput {
-                    content: text,
-                    duration_ms: *duration_ms,
-                    reasoning_tokens: *reasoning_tokens,
-                    display: if expanded {
-                        ThinkingDisplay::Expanded {
-                            max_body_lines: TRANSCRIPT_EXPANDED_CELL_LINE_CAP,
-                            truncated_hint: TRANSCRIPT_TRUNCATED_HINT,
-                        }
-                    } else {
-                        ThinkingDisplay::Collapsed
+            CellKind::AssistantThinking { text } => {
+                let meta = self.reasoning_metadata.get(&cell.message_uuid);
+                lines.extend(render_thinking_block(
+                    ThinkingRenderInput {
+                        content: text,
+                        duration_ms: meta.and_then(|m| m.duration_ms),
+                        reasoning_tokens: meta.map(|m| m.reasoning_tokens),
+                        display: if expanded {
+                            ThinkingDisplay::Expanded {
+                                max_body_lines: TRANSCRIPT_EXPANDED_CELL_LINE_CAP,
+                                truncated_hint: TRANSCRIPT_TRUNCATED_HINT,
+                            }
+                        } else {
+                            ThinkingDisplay::Collapsed
+                        },
                     },
-                },
-                self.styles,
-            )),
+                    self.styles,
+                ));
+            }
             CellKind::AssistantRedactedThinking => lines.push(Line::from(
                 Span::raw(t!("chat.redacted_thinking").to_string())
                     .fg(self.styles.thinking())
@@ -468,9 +469,6 @@ impl<'a> TranscriptCellRenderer<'a> {
                 } else {
                     self.render_tool_result_summary(cell, lines);
                 }
-            }
-            CellKind::ToolUseSummary { summary } => {
-                self.render_text_block("#", summary, lines);
             }
             CellKind::UserAttachment | CellKind::Attachment => {
                 lines.push(Line::from(vec![
@@ -1024,7 +1022,6 @@ fn cell_content_len(cell: &RenderedCell) -> usize {
                 .unwrap_or(0);
             call_id.len() + len
         }
-        CellKind::ToolUseSummary { summary } => summary.len(),
         CellKind::System(_) => meta_preview_text(cell).len(),
         CellKind::UserAttachment
         | CellKind::Attachment
@@ -1035,9 +1032,6 @@ fn cell_content_len(cell: &RenderedCell) -> usize {
 }
 
 fn meta_preview_text(cell: &RenderedCell) -> String {
-    if let CellKind::ToolUseSummary { summary } = &cell.kind {
-        return summary.clone();
-    }
     let Message::System(sm) = cell.source.as_ref() else {
         return String::new();
     };

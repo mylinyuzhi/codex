@@ -1,5 +1,12 @@
 use super::*;
 
+/// Test helper: wrap a borrowed `&[Message]` into the canonical
+/// `Vec<Arc<Message>>` shape that the post-refactor `compact_session_memory`
+/// accepts. Caller keeps ownership of the source vec.
+fn arc_vec(msgs: &[Message]) -> Vec<std::sync::Arc<Message>> {
+    msgs.iter().cloned().map(std::sync::Arc::new).collect()
+}
+
 fn make_user_message(text: &str) -> Message {
     Message::User(coco_messages::UserMessage {
         message: coco_messages::LlmMessage::User {
@@ -48,7 +55,7 @@ fn test_compact_session_memory_produces_summary() {
     let session_memory = "## Key Decisions\n- Refactored parser into smaller functions\n\n## Context\n- User working on parser module";
     let config = SessionMemoryCompactConfig::default();
 
-    let result = compact_session_memory(&messages, session_memory, None, &config)
+    let result = compact_session_memory(&arc_vec(&messages), session_memory, None, &config)
         .expect("should not error")
         .expect("should produce a result");
 
@@ -76,11 +83,12 @@ fn test_compact_session_memory_empty_returns_none() {
     let messages = vec![make_user_message("hello")];
     let config = SessionMemoryCompactConfig::default();
 
-    let result = compact_session_memory(&messages, "", None, &config).expect("should not error");
+    let result =
+        compact_session_memory(&arc_vec(&messages), "", None, &config).expect("should not error");
     assert!(result.is_none(), "empty session memory should return None");
 
-    let result2 =
-        compact_session_memory(&messages, "   \n  ", None, &config).expect("should not error");
+    let result2 = compact_session_memory(&arc_vec(&messages), "   \n  ", None, &config)
+        .expect("should not error");
     assert!(
         result2.is_none(),
         "whitespace-only session memory should return None"
@@ -306,8 +314,8 @@ fn test_compact_session_memory_returns_none_for_template() {
     let messages = vec![make_user_message("hi"), make_assistant_message("hello")];
     let template = "# Session Memory\n\n## Decisions\n- _none yet_\n";
     let config = SessionMemoryCompactConfig::default();
-    let result =
-        compact_session_memory(&messages, template, None, &config).expect("should not error");
+    let result = compact_session_memory(&arc_vec(&messages), template, None, &config)
+        .expect("should not error");
     assert!(
         result.is_none(),
         "template-only content must short-circuit to None"
@@ -321,8 +329,13 @@ fn test_compact_session_memory_unrecognized_anchor_returns_none() {
     let messages = vec![make_user_message("hi"), make_assistant_message("hello")];
     let stale = uuid::Uuid::new_v4();
     let config = SessionMemoryCompactConfig::default();
-    let result = compact_session_memory(&messages, "real summary content", Some(stale), &config)
-        .expect("should not error");
+    let result = compact_session_memory(
+        &arc_vec(&messages),
+        "real summary content",
+        Some(stale),
+        &config,
+    )
+    .expect("should not error");
     assert!(
         result.is_none(),
         "unrecognized anchor must bail to LLM fallback"

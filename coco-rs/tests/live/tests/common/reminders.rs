@@ -27,10 +27,12 @@ use coco_types::AttachmentKind;
 /// Iterate every `Message::Attachment` in the slice, returning a pair
 /// of `(kind, body_text)`. `body_text` is the concatenated text content
 /// of the attachment's API body — empty string for non-text bodies.
-pub fn iter_reminders(messages: &[Message]) -> Vec<(AttachmentKind, String)> {
+pub fn iter_reminders<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+) -> Vec<(AttachmentKind, String)> {
     messages
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|m| match m.borrow() {
             Message::Attachment(a) => Some((a.kind, attachment_text(&a.body))),
             _ => None,
         })
@@ -38,7 +40,9 @@ pub fn iter_reminders(messages: &[Message]) -> Vec<(AttachmentKind, String)> {
 }
 
 /// All `AttachmentKind`s present, in turn order. Duplicates preserved.
-pub fn injected_reminder_kinds(messages: &[Message]) -> Vec<AttachmentKind> {
+pub fn injected_reminder_kinds<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+) -> Vec<AttachmentKind> {
     iter_reminders(messages)
         .into_iter()
         .map(|(k, _)| k)
@@ -47,7 +51,10 @@ pub fn injected_reminder_kinds(messages: &[Message]) -> Vec<AttachmentKind> {
 
 /// All wrapped text bodies for attachments matching `kind`, in turn
 /// order. Empty Vec if none.
-pub fn reminder_bodies_for(messages: &[Message], kind: AttachmentKind) -> Vec<String> {
+pub fn reminder_bodies_for<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+    kind: AttachmentKind,
+) -> Vec<String> {
     iter_reminders(messages)
         .into_iter()
         .filter(|(k, _)| *k == kind)
@@ -56,13 +63,17 @@ pub fn reminder_bodies_for(messages: &[Message], kind: AttachmentKind) -> Vec<St
 }
 
 /// `true` iff at least one reminder of `kind` is present.
-pub fn has_reminder(messages: &[Message], kind: AttachmentKind) -> bool {
+pub fn has_reminder<M: std::borrow::Borrow<Message>>(messages: &[M], kind: AttachmentKind) -> bool {
     iter_reminders(messages).iter().any(|(k, _)| *k == kind)
 }
 
 /// Panic with a helpful diagnostic if `kind` is missing — lists every
 /// reminder that was present so the test failure is debuggable.
-pub fn assert_reminder_present(messages: &[Message], kind: AttachmentKind, ctx: &str) {
+pub fn assert_reminder_present<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+    kind: AttachmentKind,
+    ctx: &str,
+) {
     if has_reminder(messages, kind) {
         return;
     }
@@ -78,8 +89,8 @@ pub fn assert_reminder_present(messages: &[Message], kind: AttachmentKind, ctx: 
 /// Assert at least one reminder of `kind` exists AND its body contains
 /// `needle`. Substring match (case-sensitive). Diagnostic shows up to
 /// the first 400 chars of the offending body.
-pub fn assert_reminder_contains(
-    messages: &[Message],
+pub fn assert_reminder_contains<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
     kind: AttachmentKind,
     needle: &str,
     ctx: &str,
@@ -140,7 +151,7 @@ fn attachment_text(body: &AttachmentBody) -> String {
 /// Pretty-print the reminder timeline for diagnostic prints (e.g. in
 /// failure messages of more involved scenarios). Truncates each body
 /// to keep output readable.
-pub fn debug_reminder_timeline(messages: &[Message]) -> String {
+pub fn debug_reminder_timeline<M: std::borrow::Borrow<Message>>(messages: &[M]) -> String {
     iter_reminders(messages)
         .iter()
         .enumerate()

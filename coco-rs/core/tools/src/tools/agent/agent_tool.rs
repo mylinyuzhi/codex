@@ -469,15 +469,25 @@ impl Tool for AgentTool {
                     source: None,
                 });
             };
-            let parent_messages_owned = ctx.messages.read().await.clone();
-            let parent_messages_json: Vec<serde_json::Value> = parent_messages_owned
-                .iter()
-                .filter_map(|m| serde_json::to_value(m).ok())
-                .collect();
+            // Snapshot the parent's history into shared `Arc<Message>`
+            // entries. `ctx.messages` is the immutable post-budget
+            // snapshot the engine threaded onto this turn's ctx —
+            // each entry is already `Arc<Message>`, so `.iter().cloned()`
+            // gives a `Vec<Arc<Message>>` via cheap atomic ref-count
+            // bumps. Downstream `build_fork_context` then only allocates
+            // fresh messages for the tool-result FORK_PLACEHOLDER
+            // rewrite; everything else stays shared.
+            //
+            // TS parity: `AgentTool.tsx:630` passes
+            // `toolUseContext.messages` verbatim as
+            // `forkContextMessages` and `AgentTool.tsx:332` reads the
+            // same array for the `isInForkChild` recursion guard.
+            let parent_messages: Vec<std::sync::Arc<coco_messages::Message>> =
+                ctx.messages.iter().cloned().collect();
             // Recursive-fork guard: TS `isInForkChild` rejects the fork
             // path when the parent's history already contains the
             // boilerplate tag.
-            if coco_subagent::is_in_fork_child(&parent_messages_json) {
+            if coco_subagent::is_in_fork_child(&parent_messages) {
                 return Err(ToolError::ExecutionFailed {
                     message: "Fork mode requested from inside a forked child — recursive \
                               forking is forbidden (TS `isInForkChild` guard)."
@@ -487,7 +497,7 @@ impl Tool for AgentTool {
             }
             coco_tool_runtime::SpawnMode::Fork {
                 rendered_system_prompt,
-                parent_messages: parent_messages_json,
+                parent_messages,
                 parent_snapshot,
             }
         } else {

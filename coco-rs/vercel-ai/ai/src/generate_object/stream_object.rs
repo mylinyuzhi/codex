@@ -385,7 +385,7 @@ async fn stream_object_inner<T: DeserializeOwned + Send + 'static>(
             call_options.tools = Some(vec![tool]);
             call_options.tool_choice =
                 Some(vercel_ai_provider::LanguageModelV4ToolChoice::required());
-            apply_call_settings(&mut call_options, &options.settings, &options.abort_signal);
+            apply_call_settings(&mut call_options, &options.settings);
             if let Some(ref provider_opts) = options.provider_options {
                 call_options.provider_options = Some(provider_opts.clone());
             }
@@ -403,7 +403,7 @@ async fn stream_object_inner<T: DeserializeOwned + Send + 'static>(
 
             let mut call_options = LanguageModelV4CallOptions::new(messages);
             call_options.response_format = Some(response_format);
-            apply_call_settings(&mut call_options, &options.settings, &options.abort_signal);
+            apply_call_settings(&mut call_options, &options.settings);
             if let Some(ref provider_opts) = options.provider_options {
                 call_options.provider_options = Some(provider_opts.clone());
             }
@@ -412,7 +412,9 @@ async fn stream_object_inner<T: DeserializeOwned + Send + 'static>(
         }
     };
 
-    let stream_result = model.do_stream(call_options).await?;
+    let stream_result = model
+        .do_stream(&call_options, options.abort_signal.clone())
+        .await?;
 
     // Capture response metadata from the stream result
     let response_metadata = stream_result.response.as_ref().map(|r| {

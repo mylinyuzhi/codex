@@ -3,7 +3,6 @@
 //! This module consolidates the duplicated call options building logic
 //! that was in both `generate_text.rs` and `stream_text.rs`.
 
-use tokio_util::sync::CancellationToken;
 use vercel_ai_provider::LanguageModelV4CallOptions;
 use vercel_ai_provider::LanguageModelV4Prompt;
 use vercel_ai_provider::LanguageModelV4Tool;
@@ -18,12 +17,10 @@ use super::output::Output;
 ///
 /// This mutates the provided `call_options` in place, setting max_tokens,
 /// temperature, top_p, top_k, stop_sequences, frequency_penalty,
-/// presence_penalty, seed, headers, and abort_signal from the settings.
-pub fn apply_call_settings(
-    call_options: &mut LanguageModelV4CallOptions,
-    settings: &CallSettings,
-    abort_signal: &Option<CancellationToken>,
-) {
+/// presence_penalty, seed, and headers from the settings. Note that
+/// `abort_signal` is **not** part of `LanguageModelV4CallOptions` — it
+/// flows as a separate parameter to `do_generate` / `do_stream`.
+pub fn apply_call_settings(call_options: &mut LanguageModelV4CallOptions, settings: &CallSettings) {
     if let Some(max_tokens) = settings.max_tokens {
         call_options.max_output_tokens = Some(max_tokens);
     }
@@ -51,21 +48,21 @@ pub fn apply_call_settings(
     if let Some(ref headers) = settings.headers {
         call_options.headers = Some(headers.clone());
     }
-    if let Some(signal) = abort_signal {
-        call_options.abort_signal = Some(signal.clone());
-    }
 }
 
 /// Build `LanguageModelV4CallOptions` from the shared set of parameters.
 ///
 /// This function applies all settings fields (max_tokens, temperature, top_p,
 /// top_k, stop_sequences, frequency_penalty, presence_penalty, seed, headers),
-/// tools, tool_choice, abort_signal, provider_options, and output/response_format.
+/// tools, tool_choice, provider_options, and output/response_format.
+///
+/// `abort_signal` is intentionally NOT part of `LanguageModelV4CallOptions`
+/// — it flows as a separate parameter to `do_generate` / `do_stream`. The
+/// caller threads it independently.
 #[allow(clippy::too_many_arguments)]
 pub fn build_call_options(
     settings: &CallSettings,
     tool_choice: &Option<LanguageModelV4ToolChoice>,
-    abort_signal: &Option<CancellationToken>,
     provider_options: &Option<ProviderOptions>,
     output: &Option<Output>,
     messages: LanguageModelV4Prompt,
@@ -73,8 +70,8 @@ pub fn build_call_options(
 ) -> LanguageModelV4CallOptions {
     let mut call_options = LanguageModelV4CallOptions::new(messages);
 
-    // Apply all settings + abort signal
-    apply_call_settings(&mut call_options, settings, abort_signal);
+    // Apply all settings.
+    apply_call_settings(&mut call_options, settings);
 
     // Add tools
     if let Some(defs) = tool_definitions {

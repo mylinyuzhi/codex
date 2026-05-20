@@ -256,10 +256,7 @@ pub(crate) fn active_transcript_cell<'a>(
 fn is_meta(cell: &RenderedCell) -> bool {
     // System cells are meta. Attachments (e.g. tool-summary) ride
     // through but render dim; treat them as meta by default.
-    matches!(
-        cell.kind,
-        CellKind::System(_) | CellKind::Attachment | CellKind::ToolUseSummary { .. }
-    )
+    matches!(cell.kind, CellKind::System(_) | CellKind::Attachment)
 }
 
 fn tool_batch_end(cells: &[RenderedCell], start: usize) -> usize {

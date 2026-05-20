@@ -163,6 +163,7 @@ fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
         show_system_reminders: false,
         show_thinking: false,
         kb_handle: None,
+        reasoning_metadata: None,
     }
 }
 

@@ -17,6 +17,8 @@
 //!
 //! [`GeneratorContext`]: crate::GeneratorContext
 
+use std::borrow::Borrow;
+
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
@@ -45,10 +47,13 @@ pub const TASK_MANAGEMENT_TOOLS: &[ToolName] = &[ToolName::TaskCreate, ToolName:
 /// If the tool is never found, returns the total number of assistant turns
 /// in `messages` (capped at `i32::MAX`). Callers treat this as "infinitely
 /// many turns ago" since any threshold below session length will pass.
-pub fn count_assistant_turns_since_any_tool(messages: &[Message], tools: &[ToolName]) -> i32 {
+pub fn count_assistant_turns_since_any_tool<M: Borrow<Message>>(
+    messages: &[M],
+    tools: &[ToolName],
+) -> i32 {
     let mut count: i32 = 0;
     for msg in messages.iter().rev() {
-        let Message::Assistant(a) = msg else {
+        let Message::Assistant(a) = msg.borrow() else {
             continue;
         };
         if is_thinking_only(&a.message) {
@@ -63,16 +68,16 @@ pub fn count_assistant_turns_since_any_tool(messages: &[Message], tools: &[ToolN
 }
 
 /// Convenience wrapper: single typed tool.
-pub fn count_assistant_turns_since_tool(messages: &[Message], tool: ToolName) -> i32 {
+pub fn count_assistant_turns_since_tool<M: Borrow<Message>>(messages: &[M], tool: ToolName) -> i32 {
     count_assistant_turns_since_any_tool(messages, &[tool])
 }
 
 /// Total number of assistant turns (non-thinking) in the history. Useful
 /// upper bound for turn-gated logic and for tests.
-pub fn total_assistant_turns(messages: &[Message]) -> i32 {
+pub fn total_assistant_turns<M: Borrow<Message>>(messages: &[M]) -> i32 {
     let mut count: i32 = 0;
     for msg in messages {
-        if let Message::Assistant(a) = msg
+        if let Message::Assistant(a) = msg.borrow()
             && !is_thinking_only(&a.message)
         {
             count = count.saturating_add(1);
@@ -91,12 +96,12 @@ pub fn total_assistant_turns(messages: &[Message]) -> i32 {
 /// Tool-result rounds within one human turn do NOT advance the counter
 /// because they aren't new `User` messages — each tool-call iteration
 /// shares the originating human turn.
-pub fn count_human_turns(messages: &[Message]) -> i32 {
+pub fn count_human_turns<M: Borrow<Message>>(messages: &[M]) -> i32 {
     let mut count: i32 = 0;
     for msg in messages {
         // Post-Phase-2: reminder-injected content is Message::Attachment,
         // so every `Message::User` is a genuine human turn.
-        if matches!(msg, Message::User(_)) {
+        if matches!(msg.borrow(), Message::User(_)) {
             count = count.saturating_add(1);
         }
     }
@@ -115,13 +120,16 @@ pub fn count_human_turns(messages: &[Message]) -> i32 {
 /// each `Message::User` is a genuine human turn with no meta filtering
 /// needed (TS has to filter `toolUseResult` because its tool results are
 /// `type:'user'`).
-pub fn count_human_turns_since_attachment(messages: &[Message], kind: AttachmentKind) -> i32 {
+pub fn count_human_turns_since_attachment<M: Borrow<Message>>(
+    messages: &[M],
+    kind: AttachmentKind,
+) -> i32 {
     let mut count: i32 = 0;
     for msg in messages.iter().rev() {
-        if matches!(msg, Message::User(_)) {
+        if matches!(msg.borrow(), Message::User(_)) {
             count = count.saturating_add(1);
         }
-        if let Message::Attachment(attachment) = msg
+        if let Message::Attachment(attachment) = msg.borrow()
             && attachment.kind == kind
         {
             return count;

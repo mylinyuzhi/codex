@@ -27,6 +27,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use coco_messages::Message;
 use coco_tool_runtime::TaskListHandleRef;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -60,8 +61,10 @@ pub struct AgentQueryConfig {
     /// the engine-side `coco_tool_runtime::AgentQueryConfig` so Layer 4
     /// of the filter pipeline narrows correctly.
     pub disallowed_tools: Vec<String>,
-    /// Prior conversation messages (for context forking).
-    pub fork_context_messages: Vec<serde_json::Value>,
+    /// Prior conversation messages (for context forking). Shared
+    /// `Arc<Message>` so each teammate turn re-uses the same
+    /// allocations across the loop — no serialize / deserialize hop.
+    pub fork_context_messages: Vec<Arc<Message>>,
     /// Whether to preserve full tool results (not previews).
     pub preserve_tool_use_results: bool,
     /// Parent session's bypass-permissions capability. Forwarded to the
@@ -101,8 +104,10 @@ pub struct AgentQueryConfig {
 /// Result from running a single query/turn.
 #[derive(Debug, Clone)]
 pub struct AgentQueryResult {
-    /// Messages produced during this query.
-    pub messages: Vec<serde_json::Value>,
+    /// Messages produced during this query. Shared `Arc<Message>` so
+    /// the runner_loop's accumulator extends without deep-cloning
+    /// every entry per turn.
+    pub messages: Vec<Arc<Message>>,
     /// Total token count for this query.
     pub token_count: i64,
     /// Input tokens used.
@@ -148,9 +153,9 @@ pub trait AgentExecutionEngine: Send + Sync {
     /// before D1.
     async fn compact_messages(
         &self,
-        messages: Vec<serde_json::Value>,
+        messages: Vec<Arc<Message>>,
         _total_tokens: i64,
-    ) -> crate::Result<Vec<serde_json::Value>> {
+    ) -> crate::Result<Vec<Arc<Message>>> {
         // No-op default: keep the input. Real engines should override.
         Ok(messages)
     }
@@ -292,7 +297,7 @@ pub async fn run_in_process_teammate(
         config.system_prompt_mode,
     );
 
-    let mut all_messages: Vec<serde_json::Value> = Vec::new();
+    let mut all_messages: Vec<Arc<Message>> = Vec::new();
     let mut current_prompt = teammate::format_as_teammate_message(
         TEAM_LEAD_NAME,
         &config.prompt,
@@ -448,7 +453,7 @@ pub async fn run_in_process_teammate(
         total_turns += query_result.turns;
         total_input_tokens += query_result.input_tokens;
         total_output_tokens += query_result.output_tokens;
-        all_messages.extend(query_result.messages.clone());
+        all_messages.extend(query_result.messages.iter().cloned());
 
         // Update task progress
         {

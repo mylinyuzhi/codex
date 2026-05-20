@@ -270,3 +270,49 @@ descriptions and exposes the encoder. `coco-query` checks
   `strip_reinjected_attachments`, `truncate_head_for_ptl_retry`,
   `extract_discovered_tool_names`, `estimate_tokens` /
   `estimate_tokens_conservative` / `estimate_message_tokens`.
+
+## Canonical API Shape
+
+All public mutation / transformation entries take **`&[Arc<Message>]`**
+and return **`Vec<Arc<Message>>`** (or `Vec<LlmMessage>` at the wire
+seam). Read-only utilities (`estimate_tokens`, `group_messages_by_api_round`,
+`extract_discovered_tool_names`) keep `<M: Borrow<Message>>` generic
+for flexibility with `&[&Message]` slices from internal iterators.
+
+| Function | Signature |
+|---|---|
+| `compact_conversation` | `&[Arc<Message>] -> CompactResult` |
+| `partial_compact_conversation` | `&[Arc<Message>] -> CompactResult` |
+| `compact_session_memory` | `&[Arc<Message>] -> Option<CompactResult>` |
+| `truncate_head_for_ptl_retry` | `&[Arc<Message>] -> Option<Vec<Arc<Message>>>` |
+| `peel_head_for_ptl_retry` | `&[Arc<Message>] -> Option<Vec<Arc<Message>>>` |
+| `build_post_compact_messages` | `&CompactResult -> Vec<Arc<Message>>` |
+| `CompactResult.messages_to_keep` | `Vec<Arc<Message>>` |
+| `CompactSummaryAttempt.messages` / `.context_messages` | `Vec<Arc<Message>>` |
+
+**No `ArcInput` trait, no `_arc` function variants, no `<M: ArcInput + Borrow<Message>>`
+composite bound.** The pre-pipeline-refactor band-aids are removed.
+
+## Pipeline Architecture
+
+Compact's two stripping passes (`StripImages`,
+`StripReinjectedAttachments`) live in `compact_passes` and implement
+[`coco_messages::pipeline::MessagePass`]. They are composed by the
+canonical `run_compact_strip_pipeline(&[Arc<Message>]) -> Vec<Arc<Message>>`
+helper, which all three compact entry points
+(`compact_conversation`, `partial_compact_conversation`,
+`compact_session_memory`) share verbatim. No more hand-written
+"Arc → owned → mutate → Arc" boilerplate per entry — and no central
+"`needs_X`" predicate to keep in sync with each pass body.
+
+Fast path (no images, no expiring attachments) returns the input
+Arc-vec via `to_vec()` (N×Arc::clone, zero `Message::clone`); slow
+path materializes one `Vec<Message>`, runs both passes in order, and
+re-wraps as Arc-vec. The TS-parity per-message rewrite helper
+`strip_one_message_for_media_if_needed` is shared between the
+legacy owned-input `strip_images_from_messages` (used by tests +
+backward-compat) and the `StripImages` pass body.
+
+See [docs/coco-rs/message-pipeline.md](../../docs/coco-rs/message-pipeline.md)
+for the cross-crate design (also drives the 7 normalize passes in
+`coco-messages`).

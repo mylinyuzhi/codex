@@ -127,7 +127,7 @@ fn test_agentic_session_multiple_rounds() {
 
 #[test]
 fn test_group_empty() {
-    let groups = group_messages_by_api_round(&[]);
+    let groups = group_messages_by_api_round::<Message>(&[]);
     assert!(groups.is_empty());
 }
 

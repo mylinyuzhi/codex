@@ -156,7 +156,18 @@ fn cancelled_turn_result() -> AgentQueryResult {
 
 fn successful_turn_result(text: &str) -> AgentQueryResult {
     AgentQueryResult {
-        messages: vec![serde_json::json!({"role": "assistant", "content": text})],
+        messages: vec![std::sync::Arc::new(
+            coco_messages::create_assistant_message(
+                vec![coco_messages::AssistantContent::Text(
+                    coco_messages::TextContent {
+                        text: text.into(),
+                        provider_metadata: None,
+                    },
+                )],
+                "test-model",
+                coco_types::TokenUsage::default(),
+            ),
+        )],
         token_count: 10,
         input_tokens: 6,
         output_tokens: 4,

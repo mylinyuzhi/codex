@@ -174,34 +174,51 @@ pub fn handoff_classifier_active(permission_mode: Option<&str>, feature_enabled:
 /// Strips tool-result bodies (only emits `tool_result` markers) so the
 /// classifier sees actions, not data, and the prompt stays bounded.
 ///
-/// TS: `agentToolUtils.ts:buildTranscriptForClassifier`.
-pub fn build_transcript_summary(messages: &[serde_json::Value]) -> String {
+/// TS: `agentToolUtils.ts:buildTranscriptForClassifier`. TS reads
+/// `tool_result` blocks out of a user message's content array; coco-rs
+/// stores them as the [`coco_types::messages::Message::ToolResult`]
+/// variant but tags them `[user]` in the summary so the prompt the
+/// classifier sees is byte-identical.
+pub fn build_transcript_summary(
+    messages: &[std::sync::Arc<coco_types::messages::Message>],
+) -> String {
+    use coco_llm_types::AssistantContentPart;
+    use coco_llm_types::LlmMessage;
+    use coco_llm_types::UserContentPart;
+    use coco_types::messages::Message;
+
     let mut summary = String::new();
-    for msg in messages {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("?");
-        if let Some(content) = msg.get("content") {
-            if let Some(text) = content.as_str() {
-                summary.push_str(&format!("[{role}] {text}\n"));
-            } else if let Some(blocks) = content.as_array() {
-                for block in blocks {
-                    let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                    match block_type {
-                        "text" => {
-                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                                summary.push_str(&format!("[{role}] {text}\n"));
-                            }
+    for arc in messages {
+        match arc.as_ref() {
+            Message::User(u) => {
+                if let LlmMessage::User { content, .. } = &u.message {
+                    for part in content {
+                        if let UserContentPart::Text(t) = part {
+                            summary.push_str(&format!("[user] {}\n", t.text));
                         }
-                        "tool_use" => {
-                            let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-                            summary.push_str(&format!("[{role}] tool_use: {name}\n"));
-                        }
-                        "tool_result" => {
-                            summary.push_str(&format!("[{role}] tool_result\n"));
-                        }
-                        _ => {}
                     }
                 }
             }
+            Message::Assistant(a) => {
+                if let LlmMessage::Assistant { content, .. } = &a.message {
+                    for part in content {
+                        match part {
+                            AssistantContentPart::Text(t) => {
+                                summary.push_str(&format!("[assistant] {}\n", t.text));
+                            }
+                            AssistantContentPart::ToolCall(tc) => {
+                                summary
+                                    .push_str(&format!("[assistant] tool_use: {}\n", tc.tool_name));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Message::ToolResult(_) => {
+                summary.push_str("[user] tool_result\n");
+            }
+            _ => {}
         }
     }
     summary

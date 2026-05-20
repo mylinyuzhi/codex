@@ -9,7 +9,6 @@ use coco_types::PromptCacheMode;
 use coco_types::TokenUsage;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -79,7 +78,7 @@ fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
             requested_betas: Default::default(),
             skip_cache_write: false,
         }),
-        fork_context_messages: vec![json!({"type": "user"})],
+        fork_context_messages: vec![Arc::new(coco_messages::create_user_message("parent turn"))],
     };
     let options = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
 
@@ -94,7 +93,11 @@ fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
         prompt_cache.skip_cache_write,
         "fire-and-forget fork must flip skip_cache_write without losing cache-key fields"
     );
-    assert_eq!(config.fork_context_messages, cache.fork_context_messages);
+    assert_eq!(config.fork_context_messages.len(), 1);
+    assert!(Arc::ptr_eq(
+        &config.fork_context_messages[0],
+        &cache.fork_context_messages[0],
+    ));
 }
 
 #[tokio::test]
@@ -104,7 +107,7 @@ async fn test_deny_all_handle_round_trip() {
         tool_use_id: "tu-1".into(),
         abort: CancellationToken::new(),
         require_can_use_tool: false,
-        messages: Arc::new(RwLock::new(Vec::<Message>::new())),
+        messages: Arc::new(Vec::<Arc<Message>>::new()),
     };
     let decision = handle.check("Bash", &json!({"command": "ls"}), &ctx).await;
     match decision {

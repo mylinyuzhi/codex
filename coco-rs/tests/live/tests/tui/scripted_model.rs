@@ -191,14 +191,16 @@ impl LanguageModel for ScriptedModel {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         Ok(self.build_result())
     }
 
     async fn do_stream(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.build_result();
         Ok(synthetic_stream_from_content(

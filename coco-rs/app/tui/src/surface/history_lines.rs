@@ -10,11 +10,14 @@
 // mode while the native history cell renderer is carved out.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+
 use ratatui::text::Line;
 
 use crate::display_settings::SyntaxHighlighting;
 use crate::keybinding_resolver::KeybindingHandle;
 use crate::presentation::styles::UiStyles;
+use crate::state::session::ReasoningMetadata;
 use crate::state::transcript_view::RenderedCell;
 use crate::widgets::ChatWidget;
 
@@ -28,6 +31,11 @@ pub(crate) struct HistoryLineRenderOptions<'a> {
     pub(crate) show_system_reminders: bool,
     pub(crate) show_thinking: bool,
     pub(crate) kb_handle: Option<&'a KeybindingHandle>,
+    /// TUI-side side-cache for reasoning metadata keyed by assistant
+    /// message UUID. `None` ⇒ thinking cells render without the
+    /// `· <duration> · <tokens>` badge (live append before
+    /// `TurnCompleted` arrives).
+    pub(crate) reasoning_metadata: Option<&'a HashMap<uuid::Uuid, ReasoningMetadata>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +55,9 @@ pub(crate) fn render_finalized_history_lines(
         .syntax_highlighting(options.syntax_highlighting);
     if let Some(kb_handle) = options.kb_handle {
         chat = chat.kb_handle(kb_handle);
+    }
+    if let Some(meta) = options.reasoning_metadata {
+        chat = chat.reasoning_metadata(meta);
     }
     chat.build_lines_owned()
 }

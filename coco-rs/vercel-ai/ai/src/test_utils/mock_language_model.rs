@@ -114,13 +114,15 @@ impl LanguageModelV4 for MockLanguageModel {
 
     async fn do_generate(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
         self.call_log.lock().unwrap().push(options.clone());
         self.generate_calls.lock().unwrap().push(options.clone());
 
         if let Some(ref handler) = self.generate_handler {
-            handler(options)
+            // Test handler retains the owned-options contract — clone here.
+            handler(options.clone())
         } else {
             Ok(default_generate_result(""))
         }
@@ -128,13 +130,14 @@ impl LanguageModelV4 for MockLanguageModel {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
         self.call_log.lock().unwrap().push(options.clone());
         self.stream_calls.lock().unwrap().push(options.clone());
 
         if let Some(ref handler) = self.stream_handler {
-            handler(options)
+            handler(options.clone())
         } else {
             // Return an empty stream by default
             let stream: Pin<

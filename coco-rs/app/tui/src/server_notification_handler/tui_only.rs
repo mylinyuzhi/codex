@@ -19,30 +19,42 @@ use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::ui::Toast;
 
-/// Queue a TUI-originated system message for engine round-trip.
-/// The App loop drains `state.session.pending_system_pushes` after
-/// each `handle_core_event` and dispatches `UserCommand::PushSystemMessage`.
+/// Dispatch a TUI-originated `Informational` system message directly
+/// via `command_tx`. The engine handles `UserCommand::PushSystemMessage`
+/// by calling `history_push_and_emit`, so the row surfaces in the
+/// derived view via the normal `MessageAppended` round-trip.
 fn enqueue_informational(
-    state: &mut AppState,
+    _state: &mut AppState,
     level: SystemMessageLevel,
     title: &str,
     message: String,
+    command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
 ) {
-    state
-        .session
-        .pending_system_pushes
-        .push_back(SystemPushKind::Informational {
+    if let Err(e) = command_tx.try_send(crate::command::UserCommand::PushSystemMessage {
+        kind: SystemPushKind::Informational {
             level,
             title: title.to_string(),
             message,
-        });
+        },
+    }) {
+        tracing::warn!(
+            target: "coco_tui::system_push",
+            title,
+            error = ?e,
+            "enqueue_informational: failed to dispatch PushSystemMessage",
+        );
+    }
 }
 
 #[cfg(test)]
 #[path = "tui_only.test.rs"]
 mod tests;
 
-pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
+pub(super) fn handle(
+    state: &mut AppState,
+    event: TuiOnlyEvent,
+    command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
+) -> bool {
     match event {
         TuiOnlyEvent::ApprovalRequired {
             request_id,
@@ -274,7 +286,7 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             // output via the standard `MessageAppended` path. The
             // renderer treats empty-title `Informational` as a bare
             // SystemText body.
-            enqueue_informational(state, SystemMessageLevel::Info, "", text);
+            enqueue_informational(state, SystemMessageLevel::Info, "", text, command_tx);
             true
         }
         // === Open the rewind picker state ===
@@ -310,25 +322,49 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         }
         TuiOnlyEvent::MemoryFileOpened { path } => {
             let text = t!("toast.memory_opened", path = path.as_str()).to_string();
-            enqueue_informational(state, SystemMessageLevel::Info, "", text.clone());
+            enqueue_informational(
+                state,
+                SystemMessageLevel::Info,
+                "",
+                text.clone(),
+                command_tx,
+            );
             state.ui.add_toast(Toast::info(text));
             true
         }
         TuiOnlyEvent::MemoryFileOpenFailed { path: _, error } => {
             let text = t!("toast.memory_open_failed", error = error.as_str()).to_string();
-            enqueue_informational(state, SystemMessageLevel::Warning, "", text.clone());
+            enqueue_informational(
+                state,
+                SystemMessageLevel::Warning,
+                "",
+                text.clone(),
+                command_tx,
+            );
             state.ui.add_toast(Toast::warning(text));
             true
         }
         TuiOnlyEvent::PlanFileOpened { path } => {
             let text = t!("toast.plan_opened", path = path.as_str()).to_string();
-            enqueue_informational(state, SystemMessageLevel::Info, "", text.clone());
+            enqueue_informational(
+                state,
+                SystemMessageLevel::Info,
+                "",
+                text.clone(),
+                command_tx,
+            );
             state.ui.add_toast(Toast::info(text));
             true
         }
         TuiOnlyEvent::PlanFileOpenFailed { path: _, error } => {
             let text = t!("toast.plan_open_failed", error = error.as_str()).to_string();
-            enqueue_informational(state, SystemMessageLevel::Warning, "", text.clone());
+            enqueue_informational(
+                state,
+                SystemMessageLevel::Warning,
+                "",
+                text.clone(),
+                command_tx,
+            );
             state.ui.add_toast(Toast::warning(text));
             true
         }
@@ -408,7 +444,7 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     t!("slash.permissions.usage_deny").to_string(),
                 ),
             };
-            enqueue_informational(state, level, "", text);
+            enqueue_informational(state, level, "", text, command_tx);
             true
         }
     }

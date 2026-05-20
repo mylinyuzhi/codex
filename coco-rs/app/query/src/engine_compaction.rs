@@ -55,7 +55,9 @@ impl QueryEngine {
             && self.config.compact.micro.enabled
             && self.config.compact.micro.count_based_enabled
         {
-            coco_compact::micro_compact(&mut history.messages, micro_keep);
+            history.with_owned_messages(|msgs| {
+                coco_compact::micro_compact(msgs, micro_keep);
+            });
         }
 
         // SM-first short-circuit + LLM fallback are both centralized in
@@ -143,7 +145,7 @@ impl QueryEngine {
             self.run_compact_summary_attempt(attempt).await
         };
         let result = coco_compact::partial_compact_conversation(
-            &history.messages,
+            history.as_slice(),
             pivot_index,
             direction,
             user_feedback.as_deref(),
@@ -262,7 +264,7 @@ impl QueryEngine {
                 result.attachments.extend(delta_attachments);
                 let new_messages =
                     coco_compact::build_partial_post_compact_messages(&result, direction);
-                let pre_len = history.messages.len() as i32;
+                let pre_len = history.len() as i32;
                 let post_len = new_messages.len() as i32;
                 let removed_messages = (pre_len - post_len).max(0);
                 // I-1 (Authority): partial compaction rewrites the
@@ -408,7 +410,7 @@ impl QueryEngine {
         };
 
         let mut result = match coco_compact::compact_session_memory(
-            &history.messages,
+            history.as_slice(),
             &memory_text,
             last_summarized,
             &sm_compact_cfg,
@@ -461,7 +463,7 @@ impl QueryEngine {
             .messages_to_keep
             .iter()
             .rev()
-            .find(|m| matches!(m, coco_messages::Message::Assistant(_)))
+            .find(|m| matches!(m.as_ref(), coco_messages::Message::Assistant(_)))
             .and_then(|m| m.uuid())
             .copied();
         if let Ok(mut guard) = self.last_summarized_message_id.lock() {
@@ -482,7 +484,7 @@ impl QueryEngine {
             .await;
         result.attachments.extend(delta_attachments);
         let new_messages = coco_compact::build_post_compact_messages(&result);
-        let pre_len = history.messages.len() as i32;
+        let pre_len = history.len() as i32;
         let post_len = new_messages.len() as i32;
         let removed_messages = (pre_len - post_len).max(0);
         // I-1 (Authority): session-memory compaction rewrites history.
@@ -555,8 +557,9 @@ impl QueryEngine {
                     fork_context_messages: Vec::new(),
                 }
             });
-            cache.fork_context_messages =
-                serialize_compact_attempt_messages(&attempt.context_messages);
+            // `CompactSummaryAttempt.context_messages` is already
+            // `Vec<Arc<Message>>` — Arc-share into the fork context.
+            cache.fork_context_messages = attempt.context_messages.clone();
 
             let mut options =
                 crate::forked_agent::ForkedAgentOptions::for_label(coco_types::ForkLabel::Compact);
@@ -673,9 +676,11 @@ impl QueryEngine {
             }
         }
 
-        let mut out = Vec::new();
-        let _display_only = coco_system_reminder::inject_reminders(reminders, &mut out);
-        out
+        // Compact-side reminders go into a scratch vector (no
+        // MessageHistory yet); event emission is not relevant here
+        // because the engine hasn't started the next turn. Just
+        // collect the materialized model-visible messages.
+        coco_system_reminder::inject_reminders(reminders).model_visible
     }
 
     async fn run_direct_compact_summary_attempt(
@@ -752,9 +757,9 @@ impl QueryEngine {
         }
     }
 
-    async fn create_post_compact_delta_attachments(
+    async fn create_post_compact_delta_attachments<M: std::borrow::Borrow<Message>>(
         &self,
-        preserved_history: &[Message],
+        preserved_history: &[M],
     ) -> (Vec<coco_messages::AttachmentMessage>, PostCompactDeltaState) {
         let app_state_snapshot = match &self.app_state {
             Some(state) => state.read().await.clone(),
@@ -855,10 +860,9 @@ impl QueryEngine {
             }
         }
 
-        let mut scratch = Vec::new();
-        let _display_only = coco_system_reminder::inject_reminders(reminders, &mut scratch);
+        let batch = coco_system_reminder::inject_reminders(reminders);
         let mut attachments = Vec::new();
-        for message in scratch {
+        for message in batch.model_visible {
             if let Message::Attachment(att) = message {
                 attachments.push(att);
             }
@@ -1007,7 +1011,7 @@ impl QueryEngine {
         fields(
             trigger = ?trigger,
             session_id = %self.config.session_id,
-            history_len = history.messages.len(),
+            history_len = history.len(),
             has_custom_instructions = custom_instructions.is_some(),
         ),
     )]
@@ -1322,7 +1326,7 @@ impl QueryEngine {
         };
 
         match coco_compact::compact_conversation(
-            &history.messages,
+            history.as_slice(),
             &compact_run_options,
             summarize_fn,
             Some(attachment_fn),
@@ -1416,15 +1420,16 @@ impl QueryEngine {
                     );
                 }
 
-                let (delta_attachments, delta_state) =
-                    self.create_post_compact_delta_attachments(&[]).await;
+                let (delta_attachments, delta_state) = self
+                    .create_post_compact_delta_attachments::<std::sync::Arc<Message>>(&[])
+                    .await;
                 result.attachments.extend(delta_attachments);
 
                 // TS-aligned order: boundary, summaryMessages, messagesToKeep,
                 // attachments, hookResults. Use the canonical helper.
                 let summary_tokens = result.post_compact_tokens as i32;
                 let new_messages = coco_compact::build_post_compact_messages(&result);
-                let pre_len = history.messages.len() as i32;
+                let pre_len = history.len() as i32;
                 let post_len = new_messages.len() as i32;
                 let removed_messages = (pre_len - post_len).max(0);
                 // I-1 (Authority): full LLM compaction rewrites the
@@ -1519,30 +1524,23 @@ impl QueryEngine {
     }
 }
 
-fn serialize_compact_attempt_messages(messages: &[Message]) -> Vec<serde_json::Value> {
-    messages
-        .iter()
-        .filter_map(|m| serde_json::to_value(m).ok())
-        .collect()
-}
-
 struct PostCompactDeltaState {
     current_deferred_tools: Vec<String>,
     current_agents: Vec<String>,
     current_mcp_instructions: HashMap<String, String>,
 }
 
-fn preserved_contains_attachment_kind(
-    messages: &[Message],
+fn preserved_contains_attachment_kind<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
     kind: coco_types::AttachmentKind,
 ) -> bool {
     messages
         .iter()
-        .any(|message| matches!(message, Message::Attachment(att) if att.kind == kind))
+        .any(|m| matches!(m.borrow(), Message::Attachment(att) if att.kind == kind))
 }
 
 fn extract_compact_summary_from_messages(
-    messages: &[Message],
+    messages: &[std::sync::Arc<Message>],
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<String, String> {
     if cancel.is_cancelled() {
@@ -1551,7 +1549,7 @@ fn extract_compact_summary_from_messages(
 
     let mut chunks = Vec::new();
     for message in messages {
-        let Message::Assistant(assistant) = message else {
+        let Message::Assistant(assistant) = message.as_ref() else {
             continue;
         };
         if let Some(api_error) = &assistant.api_error {

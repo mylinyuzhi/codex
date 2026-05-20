@@ -28,7 +28,7 @@ async fn cancel_no_tools_marks_for_tool_use_false_and_emits_one_event() {
 
     assert_eq!(history.len(), 1, "exactly one message pushed");
     let last = history.as_slice().last().expect("history non-empty");
-    let Message::System(SystemMessage::UserInterruption(m)) = last else {
+    let Message::System(SystemMessage::UserInterruption(m)) = last.as_ref() else {
         panic!("expected SystemMessage::UserInterruption, got {last:?}");
     };
     assert!(
@@ -37,10 +37,10 @@ async fn cancel_no_tools_marks_for_tool_use_false_and_emits_one_event() {
     );
 
     let event = rx.try_recv().expect("MessageAppended emitted");
-    let CoreEvent::Protocol(ServerNotification::MessageAppended { message }) = event else {
+    let CoreEvent::Protocol(ServerNotification::MessageAppended { message, .. }) = event else {
         panic!("expected CoreEvent::Protocol(MessageAppended)");
     };
-    let Message::System(SystemMessage::UserInterruption(emitted)) = message else {
+    let Message::System(SystemMessage::UserInterruption(emitted)) = message.as_ref() else {
         panic!("emitted payload wrong variant");
     };
     assert!(
@@ -62,7 +62,7 @@ async fn cancel_during_tool_marks_for_tool_use_true() {
     history_sync::finalize_user_cancel(&mut history, true, &Some(tx.clone())).await;
 
     let last = history.as_slice().last().expect("history non-empty");
-    let Message::System(SystemMessage::UserInterruption(m)) = last else {
+    let Message::System(SystemMessage::UserInterruption(m)) = last.as_ref() else {
         panic!("expected SystemMessage::UserInterruption");
     };
     assert!(
@@ -71,10 +71,10 @@ async fn cancel_during_tool_marks_for_tool_use_true() {
     );
 
     let event = rx.try_recv().expect("event emitted");
-    let CoreEvent::Protocol(ServerNotification::MessageAppended { message }) = event else {
+    let CoreEvent::Protocol(ServerNotification::MessageAppended { message, .. }) = event else {
         panic!("wrong event variant");
     };
-    let Message::System(SystemMessage::UserInterruption(emitted)) = message else {
+    let Message::System(SystemMessage::UserInterruption(emitted)) = message.as_ref() else {
         panic!("wrong payload variant");
     };
     assert!(emitted.for_tool_use);

@@ -34,17 +34,18 @@ use crate::classifier::is_safe_tool;
 // state machines, denial cache, classifier callback). Bundling them
 // would just rename the noise — kept individual to preserve clarity.
 #[allow(clippy::too_many_arguments)]
-pub async fn can_use_tool_in_auto_mode<F, Fut>(
+pub async fn can_use_tool_in_auto_mode<M, F, Fut>(
     tool_name: &str,
     input: &Value,
     is_read_only: bool,
     auto_state: &AutoModeState,
     denial_tracker: &mut DenialTracker,
-    messages: &[Message],
+    messages: &[M],
     rules: &AutoModeRules,
     classify_fn: F,
 ) -> Option<PermissionDecision>
 where
+    M: std::borrow::Borrow<Message>,
     F: Fn(ClassifyRequest) -> Fut,
     Fut: Future<Output = Result<String, String>>,
 {

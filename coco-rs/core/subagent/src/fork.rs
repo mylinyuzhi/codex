@@ -11,8 +11,13 @@
 //! (enabling prompt cache sharing) and receives the parent's conversation
 //! context with `tool_use` results replaced by [`FORK_PLACEHOLDER`].
 
-use serde::Deserialize;
-use serde::Serialize;
+use std::sync::Arc;
+
+use coco_llm_types::LlmMessage;
+use coco_llm_types::ToolContentPart;
+use coco_llm_types::ToolResultContent;
+use coco_llm_types::UserContentPart;
+use coco_types::messages::Message;
 
 /// XML tag wrapping the fork boilerplate rules.
 ///
@@ -50,12 +55,14 @@ pub const FORK_PLACEHOLDER: &str = "Fork started \u{2014} processing in backgrou
 ///
 /// TS: `forkSubagent.ts::buildForkedMessages` +
 /// `forkSubagent.ts::buildChildMessage`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ForkContext {
     /// Parent's conversation messages (with `tool_result` content
     /// replaced by [`FORK_PLACEHOLDER`]). Ready to thread into the
-    /// child's prior history.
-    pub messages: Vec<serde_json::Value>,
+    /// child's prior history. Shared via `Arc` so the rewrite only
+    /// allocates fresh messages for the tool-result variant; every
+    /// other entry is a cheap Arc-clone of the parent's history.
+    pub messages: Vec<Arc<Message>>,
     /// Directive captured from the AgentTool input. Use
     /// [`build_fork_child_message`] to wrap it into the boilerplate
     /// form before sending — this struct doesn't pre-wrap so the
@@ -65,44 +72,30 @@ pub struct ForkContext {
 
 /// Build a fork context from the parent's conversation history.
 ///
-/// Rewrites `tool_result` blocks to [`FORK_PLACEHOLDER`] so every fork
-/// child produces a byte-identical API request prefix (prompt-cache
-/// sharing). The returned [`ForkContext`] carries the rewritten
-/// messages plus the directive; the caller passes the directive
-/// through [`build_fork_child_message`] when constructing the new
-/// user turn.
+/// Rewrites `Message::ToolResult` bodies to [`FORK_PLACEHOLDER`] so
+/// every fork child produces a byte-identical API request prefix
+/// (prompt-cache sharing). Non-tool-result messages share the parent's
+/// `Arc<Message>` allocation directly; only the rewritten entries
+/// allocate.
 ///
 /// TS: `buildForkedMessages(directive, parentMessages)`.
-pub fn build_fork_context(parent_messages: &[serde_json::Value], directive: &str) -> ForkContext {
-    let mut forked = Vec::with_capacity(parent_messages.len());
+pub fn build_fork_context(parent_messages: &[Arc<Message>], directive: &str) -> ForkContext {
+    let mut forked: Vec<Arc<Message>> = Vec::with_capacity(parent_messages.len());
 
-    for msg in parent_messages {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-
-        if role == "user" {
-            // Replace tool_result content with placeholder
-            if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
-                let replaced: Vec<serde_json::Value> = content
-                    .iter()
-                    .map(|block| {
-                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
-                            let mut replaced_block = block.clone();
-                            replaced_block["content"] = serde_json::json!(FORK_PLACEHOLDER);
-                            replaced_block
-                        } else {
-                            block.clone()
+    for arc in parent_messages {
+        match arc.as_ref() {
+            Message::ToolResult(trm) => {
+                let mut new_trm = trm.clone();
+                if let LlmMessage::Tool { content, .. } = &mut new_trm.message {
+                    for part in content.iter_mut() {
+                        if let ToolContentPart::ToolResult(tr) = part {
+                            tr.output = ToolResultContent::text(FORK_PLACEHOLDER);
                         }
-                    })
-                    .collect();
-                let mut new_msg = msg.clone();
-                new_msg["content"] = serde_json::json!(replaced);
-                forked.push(new_msg);
-            } else {
-                forked.push(msg.clone());
+                    }
+                }
+                forked.push(Arc::new(Message::ToolResult(new_trm)));
             }
-        } else {
-            // Assistant and system messages pass through unchanged
-            forked.push(msg.clone());
+            _ => forked.push(arc.clone()),
         }
     }
 
@@ -172,30 +165,26 @@ pub fn build_worktree_notice(parent_cwd: &str, worktree_cwd: &str) -> String {
 
 /// Check if we are inside a fork child (prevents recursive forking).
 ///
-/// Scans messages for the [`FORK_BOILERPLATE_TAG`] which is only present
-/// in fork child contexts.
+/// Scans user-role messages for the [`FORK_BOILERPLATE_TAG`] inside
+/// any text content part — the tag is only present in fork child
+/// contexts (injected by [`build_fork_child_message`]).
 ///
 /// TS: isInForkChild(messages) in forkSubagent.ts
-pub fn is_in_fork_child(messages: &[serde_json::Value]) -> bool {
+pub fn is_in_fork_child(messages: &[Arc<Message>]) -> bool {
     let tag_marker = format!("<{FORK_BOILERPLATE_TAG}>");
-    messages.iter().any(|msg| {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-        if role != "user" {
+    messages.iter().any(|arc| {
+        let Message::User(user) = arc.as_ref() else {
             return false;
-        }
-        if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
-            content.iter().any(|block| {
-                block.get("type").and_then(|t| t.as_str()) == Some("text")
-                    && block
-                        .get("text")
-                        .and_then(|t| t.as_str())
-                        .is_some_and(|text| text.contains(&tag_marker))
-            })
-        } else if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
-            text.contains(&tag_marker)
-        } else {
-            false
-        }
+        };
+        let LlmMessage::User { content, .. } = &user.message else {
+            return false;
+        };
+        content.iter().any(|part| {
+            matches!(
+                part,
+                UserContentPart::Text(t) if t.text.contains(&tag_marker)
+            )
+        })
     })
 }
 
@@ -220,7 +209,7 @@ pub fn is_fork_enabled() -> bool {
 pub fn is_fork_allowed(
     query_depth: i32,
     subagent_type: Option<&str>,
-    messages: &[serde_json::Value],
+    messages: &[Arc<Message>],
 ) -> bool {
     is_fork_enabled() && query_depth == 0 && subagent_type.is_none() && !is_in_fork_child(messages)
 }

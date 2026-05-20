@@ -40,7 +40,7 @@ impl LanguageModelV4Middleware for ExtractReasoningMiddleware {
         &self,
         options: WrapGenerateOptions,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        let result = (options.do_generate)(options.params).await?;
+        let result = (options.do_generate)(options.params, options.abort_signal).await?;
 
         // Transform content to extract reasoning
         let transformed_content = self.extract_from_content(result.content.clone());
@@ -63,7 +63,7 @@ impl LanguageModelV4Middleware for ExtractReasoningMiddleware {
         // For streaming, we need to process the stream
         // This is a simplified implementation that passes through
         // A full implementation would buffer and transform stream parts
-        (options.do_stream)(options.params).await
+        (options.do_stream)(options.params, options.abort_signal).await
     }
 }
 

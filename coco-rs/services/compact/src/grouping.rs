@@ -17,6 +17,8 @@
 //! When no assistant messages exist, all messages land in a single group
 //! (matching TS behavior).
 
+use std::borrow::Borrow;
+
 use coco_messages::Message;
 
 /// Group messages by API round (assistant UUID boundaries).
@@ -24,12 +26,17 @@ use coco_messages::Message;
 /// A new group starts when we encounter an assistant message whose UUID
 /// differs from the last assistant UUID seen. This keeps all tool_use and
 /// tool_result messages from the same API response in one group.
-pub fn group_messages_by_api_round(messages: &[Message]) -> Vec<Vec<&Message>> {
+///
+/// Generic over `Borrow<Message>` so callers may pass either a slice of
+/// owned [`Message`] or a slice of `Arc<Message>` without materializing —
+/// the returned groups always carry `&Message` refs into the input.
+pub fn group_messages_by_api_round<M: Borrow<Message>>(messages: &[M]) -> Vec<Vec<&Message>> {
     let mut groups: Vec<Vec<&Message>> = Vec::new();
     let mut current_group: Vec<&Message> = Vec::new();
     let mut last_assistant_uuid: Option<uuid::Uuid> = None;
 
-    for msg in messages {
+    for m in messages {
+        let msg: &Message = m.borrow();
         if let Message::Assistant(asst) = msg {
             let this_uuid = asst.uuid;
             let is_new_round = last_assistant_uuid.is_some_and(|prev| prev != this_uuid);

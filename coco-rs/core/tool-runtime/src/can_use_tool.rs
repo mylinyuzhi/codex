@@ -46,7 +46,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use coco_messages::Message;
 use serde_json::Value;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 /// Reason field accompanying a [`CanUseToolDecision`]. Mirrors TS
@@ -134,11 +133,12 @@ pub struct CanUseToolCallContext {
     /// Speculation needs this so overlay path-rewriting always
     /// runs regardless of hook config.
     pub require_can_use_tool: bool,
-    /// Read-only view of the message history at call time. Used
-    /// by callbacks that need to inspect prior context (e.g.
-    /// session-mem can check that the parent transcript contains
-    /// the memory file path).
-    pub messages: Arc<RwLock<Vec<Message>>>,
+    /// Read-only post-budget message snapshot at call time. Used by
+    /// callbacks that need to inspect prior context (e.g. session-mem
+    /// can check that the parent transcript contains the memory file
+    /// path). Shares allocations with `ToolUseContext.messages` —
+    /// same `Arc<Vec<Arc<Message>>>` instance.
+    pub messages: Arc<Vec<Arc<Message>>>,
 }
 
 impl std::fmt::Debug for CanUseToolCallContext {

@@ -17,7 +17,7 @@ schema = ["dep:schemars", "coco-llm-types/schema"]
 
 [dependencies]
 coco-llm-types.workspace = true
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v4", "serde"] }
 strum = { workspace = true, features = ["derive"] }

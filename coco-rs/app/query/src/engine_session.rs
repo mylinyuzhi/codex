@@ -40,7 +40,7 @@ impl QueryEngine {
         user_prompt: &str,
         event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
     ) -> Result<QueryResult, coco_error::BoxedError> {
-        let user_msg = create_user_message(user_prompt);
+        let user_msg = std::sync::Arc::new(create_user_message(user_prompt));
         self.run_internal_with_messages(vec![user_msg], Some(event_tx))
             .await
     }
@@ -48,7 +48,7 @@ impl QueryEngine {
     /// Run the agent loop with pre-built messages (user + attachment messages).
     pub async fn run_with_messages(
         &self,
-        messages: Vec<Message>,
+        messages: Vec<std::sync::Arc<Message>>,
         event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
     ) -> Result<QueryResult, coco_error::BoxedError> {
         if messages.is_empty() {
@@ -63,7 +63,7 @@ impl QueryEngine {
 
     /// Run the agent loop with an initial user prompt (no event streaming).
     pub async fn run(&self, user_prompt: &str) -> Result<QueryResult, coco_error::BoxedError> {
-        let user_msg = create_user_message(user_prompt);
+        let user_msg = std::sync::Arc::new(create_user_message(user_prompt));
         self.run_internal_with_messages(vec![user_msg], None).await
     }
 
@@ -93,7 +93,7 @@ impl QueryEngine {
     )]
     pub(crate) async fn run_internal_with_messages(
         &self,
-        turn_messages: Vec<Message>,
+        turn_messages: Vec<std::sync::Arc<Message>>,
         event_tx: Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     ) -> Result<QueryResult, coco_error::BoxedError> {
         info!(
@@ -153,6 +153,9 @@ impl QueryEngine {
         // pulls the text out of `messages` at the call site). On success the
         // QueryResult already exposes `response_text`.
         let mut history = MessageHistory::new();
+        // Stamp F9 envelope so every emit from this engine invocation
+        // carries the active session + agent identity.
+        history.set_envelope(self.config.session_id.clone(), self.config.agent_id.clone());
         let result = self
             .run_session_loop(
                 turn_messages,

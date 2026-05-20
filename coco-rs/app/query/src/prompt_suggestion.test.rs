@@ -105,8 +105,8 @@ fn good_generation() -> Option<GenerationResult> {
     })
 }
 
-fn assistant_msg(text: &str, request_id: Option<&str>) -> Message {
-    Message::Assistant(AssistantMessage {
+fn assistant_msg(text: &str, request_id: Option<&str>) -> std::sync::Arc<Message> {
+    std::sync::Arc::new(Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
             content: vec![coco_messages::AssistantContent::Text(TextContent {
                 text: text.into(),
@@ -121,7 +121,7 @@ fn assistant_msg(text: &str, request_id: Option<&str>) -> Message {
         cost_usd: None,
         request_id: request_id.map(str::to_string),
         api_error: None,
-    })
+    }))
 }
 
 #[test]

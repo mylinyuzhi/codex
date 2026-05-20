@@ -29,6 +29,184 @@ pub const EXIT_PLAN_MODE_INJECTED_PLAN_FIELD: &str = "plan";
 /// See [`EXIT_PLAN_MODE_INJECTED_PLAN_FIELD`].
 pub const EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD: &str = "planFilePath";
 
+/// [`MessagePass`] impls for the seven TS-parity normalize steps (8 / 9 /
+/// 10 / 11 / 12a-b / 13a / 13a'). Each pass is a unit struct so the
+/// pipeline runner uses zero-overhead static dispatch.
+///
+/// `apply` delegates to the matching `pub(crate) fn` so internal tests
+/// that exercise the legacy function form still work; the trait impls
+/// are the canonical entry point used by [`normalize_messages_for_api`].
+///
+/// [`MessagePass`]: crate::pipeline::MessagePass
+pub(crate) mod passes {
+    use super::*;
+    use crate::pipeline::MessagePass;
+
+    /// Pass 1: drop assistant messages whose content is all `Reasoning` /
+    /// `ReasoningFile` and lack a sibling with matching `request_id` +
+    /// non-thinking content. Over-conservative scan — `would_mutate`
+    /// reports `true` whenever any all-thinking assistant exists; the
+    /// sibling-id keep rule is enforced inside `apply`.
+    pub struct OrphanedThinkingOnly;
+    impl MessagePass for OrphanedThinkingOnly {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            messages.iter().any(|m| match m {
+                Message::Assistant(asst) => match &asst.message {
+                    LlmMessage::Assistant { content, .. } => {
+                        !content.is_empty()
+                            && content.iter().all(|p| {
+                                matches!(
+                                    p,
+                                    crate::AssistantContent::Reasoning(_)
+                                        | crate::AssistantContent::ReasoningFile(_)
+                                )
+                            })
+                    }
+                    _ => false,
+                },
+                _ => false,
+            })
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            filter_orphaned_thinking_only_messages(messages);
+        }
+    }
+
+    /// Pass 2: trim trailing `Reasoning` parts off the last assistant.
+    pub struct TrailingThinking;
+    impl MessagePass for TrailingThinking {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            let Some(last) = messages.last() else {
+                return false;
+            };
+            let Message::Assistant(asst) = last else {
+                return false;
+            };
+            let LlmMessage::Assistant { content, .. } = &asst.message else {
+                return false;
+            };
+            matches!(
+                content.last(),
+                Some(crate::AssistantContent::Reasoning(_))
+                    | Some(crate::AssistantContent::ReasoningFile(_))
+            )
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            filter_trailing_thinking_from_last_assistant(messages);
+        }
+    }
+
+    /// Pass 3: drop assistants whose content is purely whitespace text.
+    pub struct WhitespaceOnly;
+    impl MessagePass for WhitespaceOnly {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            messages.iter().any(|m| match m {
+                Message::Assistant(asst) => match &asst.message {
+                    LlmMessage::Assistant { content, .. } => {
+                        !content.is_empty()
+                            && content.iter().all(|p| match p {
+                                crate::AssistantContent::Text(t) => t.text.trim().is_empty(),
+                                _ => false,
+                            })
+                    }
+                    _ => false,
+                },
+                _ => false,
+            })
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            filter_whitespace_only_assistant_messages(messages);
+        }
+    }
+
+    /// Pass 4: fill `[No message content]` into non-final assistants
+    /// whose content array is empty.
+    pub struct EnsureNonEmptyContent;
+    impl MessagePass for EnsureNonEmptyContent {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            if messages.len() <= 1 {
+                return false;
+            }
+            let last_idx = messages.len() - 1;
+            messages.iter().enumerate().any(|(i, m)| {
+                if i == last_idx {
+                    return false;
+                }
+                match m {
+                    Message::Assistant(asst) => matches!(
+                        &asst.message,
+                        LlmMessage::Assistant { content, .. } if content.is_empty()
+                    ),
+                    _ => false,
+                }
+            })
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            ensure_non_empty_assistant_content(messages);
+        }
+    }
+
+    /// Pass 5: merge consecutive `User` messages into one.
+    pub struct MergeConsecutiveUsers;
+    impl MessagePass for MergeConsecutiveUsers {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            messages
+                .windows(2)
+                .any(|w| matches!((w[0], w[1]), (Message::User(_), Message::User(_))))
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            merge_consecutive_user_messages(messages);
+        }
+    }
+
+    /// Pass 6: merge consecutive `Assistant` messages that share a
+    /// non-`None` `request_id`.
+    pub struct MergeAssistantsByRequestId;
+    impl MessagePass for MergeAssistantsByRequestId {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            messages.windows(2).any(|w| match (w[0], w[1]) {
+                (Message::Assistant(a), Message::Assistant(b)) => {
+                    a.request_id.is_some() && a.request_id == b.request_id
+                }
+                _ => false,
+            })
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            merge_consecutive_assistants_by_request_id(messages);
+        }
+    }
+
+    /// Pass 7: strip the query-layer-injected `plan` / `planFilePath`
+    /// fields out of any `ExitPlanMode` tool_call input.
+    pub struct StripExitPlanModeInjectedFields;
+    impl MessagePass for StripExitPlanModeInjectedFields {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            messages.iter().any(|m| match m {
+                Message::Assistant(asst) => match &asst.message {
+                    LlmMessage::Assistant { content, .. } => content.iter().any(|part| {
+                        let crate::AssistantContent::ToolCall(tc) = part else {
+                            return false;
+                        };
+                        if tc.tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
+                            return false;
+                        }
+                        let serde_json::Value::Object(map) = &tc.input else {
+                            return false;
+                        };
+                        map.contains_key(EXIT_PLAN_MODE_INJECTED_PLAN_FIELD)
+                            || map.contains_key(EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD)
+                    }),
+                    _ => false,
+                },
+                _ => false,
+            })
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            strip_observable_tool_input_for_api(messages);
+        }
+    }
+}
+
 /// Configurable filter knobs for the normalization pipeline.
 ///
 /// Callers pick a preset via the constructors below. Fields are public so
@@ -88,35 +266,42 @@ impl NormalizationOptions {
 
 /// Apply visibility / virtual / tombstone / whitespace filters per `opts`.
 ///
-/// Returns borrowed references preserving original message order. Callers
-/// that need further API-specific steps (tool-result pairing, consecutive
-/// merging, role-first enforcement) use [`normalize_messages_for_api`];
-/// callers that want a pre-filter for UI / persistence use this directly.
-pub fn filter_by_options(messages: &[Message], opts: NormalizationOptions) -> Vec<&Message> {
+/// Arc-shares each surviving message with the input — refcount bump per
+/// keep, zero `Message::clone`. Callers that need further API-specific
+/// steps (tool-result pairing, consecutive merging, role-first enforcement)
+/// use [`normalize_messages_for_api`]; callers that want a pre-filter
+/// for UI / persistence use this directly.
+pub fn filter_by_options(
+    messages: &[std::sync::Arc<Message>],
+    opts: NormalizationOptions,
+) -> Vec<std::sync::Arc<Message>> {
     messages
         .iter()
-        .filter(|m| {
-            if opts.skip_virtual && predicates::is_virtual_message(m) {
+        .filter(|arc| {
+            let msg: &Message = arc.as_ref();
+            if opts.skip_virtual && predicates::is_virtual_message(msg) {
                 return false;
             }
-            if opts.skip_tombstones && predicates::is_tombstone(m) {
+            if opts.skip_tombstones && predicates::is_tombstone(msg) {
                 return false;
             }
-            let Visibility { api, ui } = m.visibility();
+            let Visibility { api, ui } = msg.visibility();
             if opts.require_api_visible && !api {
                 return false;
             }
             if opts.require_ui_visible && !ui {
                 return false;
             }
-            if opts.skip_whitespace_user && predicates::is_user_message(m) {
-                let has_content = predicates::has_text_content(m) || predicates::is_meta_message(m);
+            if opts.skip_whitespace_user && predicates::is_user_message(msg) {
+                let has_content =
+                    predicates::has_text_content(msg) || predicates::is_meta_message(msg);
                 if !has_content {
                     return false;
                 }
             }
             true
         })
+        .cloned()
         .collect()
 }
 
@@ -149,7 +334,9 @@ pub fn filter_by_options(messages: &[Message], opts: NormalizationOptions) -> Ve
 /// Still missing (P3, gated and no current feature in coco-rs):
 ///   - `relocateToolReferenceSiblings` — Tool Reference feature isn't
 ///     ported, no callers can produce the offending pattern today.
-pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
+pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<LlmMessage> {
+    use crate::pipeline::{MessagePass, borrow_refs, run_message_passes};
+
     // Steps 1–5 collapse into one visibility-driven filter.
     //
     // - `require_api_visible` covers steps 3 (progress — UI_ONLY) and 4
@@ -160,13 +347,14 @@ pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
     // - `skip_virtual` covers step 1.
     // - `skip_tombstones` covers step 2.
     // - `skip_whitespace_user` covers step 5.
-    let mut filtered: Vec<&Message> = filter_by_options(messages, NormalizationOptions::for_api());
+    let mut filtered: Vec<std::sync::Arc<Message>> =
+        filter_by_options(messages, NormalizationOptions::for_api());
 
     // Step 6: Ensure tool result pairing
     // Collect tool_use_ids from assistant messages
     let tool_use_ids: std::collections::HashSet<String> = filtered
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|arc| match arc.as_ref() {
             Message::Assistant(a) => match &a.message {
                 LlmMessage::Assistant { content, .. } => {
                     let ids: Vec<String> = content
@@ -186,13 +374,13 @@ pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
         .collect();
 
     // Remove orphaned tool results
-    filtered.retain(|m| match m {
+    filtered.retain(|arc| match arc.as_ref() {
         Message::ToolResult(tr) => tool_use_ids.contains(&tr.tool_use_id),
         _ => true,
     });
 
     // Step 7: Strip empty assistant messages
-    filtered.retain(|m| match m {
+    filtered.retain(|arc| match arc.as_ref() {
         Message::Assistant(a) => match &a.message {
             LlmMessage::Assistant { content, .. } => !content.is_empty(),
             _ => true,
@@ -200,34 +388,46 @@ pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
         _ => true,
     });
 
-    // Steps 8-12: TS-parity assistant-content + tool_result fixups.
-    // These need to mutate `Message` (not `LlmMessage`) because the source
-    // structs carry `request_id` / `is_error` flags consulted by the passes.
-    let mut owned: Vec<Message> = filtered.iter().map(|m| (*m).clone()).collect();
-    filter_orphaned_thinking_only_messages(&mut owned);
-    // Order matters (TS messages.ts:2313): trailing-thinking BEFORE whitespace.
-    filter_trailing_thinking_from_last_assistant(&mut owned);
-    filter_whitespace_only_assistant_messages(&mut owned);
-    ensure_non_empty_assistant_content(&mut owned);
+    // Steps 8-13a: TS-parity assistant-content + tool_result fixups +
+    // role-merge + ExitPlanMode strip. Each pass is a [`MessagePass`]
+    // impl that bundles its `would_mutate` predicate alongside `apply`,
+    // so the per-pass trigger condition lives next to the algorithm —
+    // never a centrally maintained predicate that can drift.
+    //
+    // [`run_message_passes`] is the canonical "Arc → owned → mutate →
+    // Arc" bridge: when ALL pass predicates report no work, it returns
+    // `filtered.to_vec()` (refcount bumps only); otherwise materializes
+    // one `Vec<Message>`, applies the passes in TS order, then re-wraps.
+    //
+    // Order matters (TS messages.ts:2313): trailing-thinking BEFORE
+    // whitespace; merge-by-id AFTER the content fixups so empty-content
+    // siblings get a placeholder before merge tries to combine them.
+    let refs = borrow_refs(&filtered);
+    let needs_mutate = passes::OrphanedThinkingOnly.would_mutate(&refs)
+        || passes::TrailingThinking.would_mutate(&refs)
+        || passes::WhitespaceOnly.would_mutate(&refs)
+        || passes::EnsureNonEmptyContent.would_mutate(&refs)
+        || passes::MergeConsecutiveUsers.would_mutate(&refs)
+        || passes::MergeAssistantsByRequestId.would_mutate(&refs)
+        || passes::StripExitPlanModeInjectedFields.would_mutate(&refs);
+    drop(refs);
 
-    // Step 13a: merge consecutive Users (unconditional — TS `mergeUserMessages`)
-    // and consecutive Assistants WITH matching request_id (TS `messages.ts:2257-2261`
-    // — different message.id stays separate). Must happen at `Message` level so
-    // request_id is still readable; LlmMessage doesn't carry it.
-    merge_consecutive_user_messages(&mut owned);
-    merge_consecutive_assistants_by_request_id(&mut owned);
+    let passed = run_message_passes(&filtered, needs_mutate, |owned| {
+        passes::OrphanedThinkingOnly.apply(owned);
+        passes::TrailingThinking.apply(owned);
+        passes::WhitespaceOnly.apply(owned);
+        passes::EnsureNonEmptyContent.apply(owned);
+        passes::MergeConsecutiveUsers.apply(owned);
+        passes::MergeAssistantsByRequestId.apply(owned);
+        passes::StripExitPlanModeInjectedFields.apply(owned);
+    });
 
-    // Step 13a': strip the query-layer-injected `ExitPlanMode` observable
-    // fields (`plan` / `planFilePath`) before they reach the wire. TS
-    // parity: `normalizeToolInputForAPI` in `normalizeMessagesForAPI`'s
-    // assistant branch — the `ExitPlanMode` schema is an empty object;
-    // the injected fields exist only for hooks / SDK / transcript.
-    strip_observable_tool_input_for_api(&mut owned);
-
-    // Step 13b: Extract LlmMessage from each surviving message
-    let mut result: Vec<LlmMessage> = Vec::with_capacity(owned.len());
-    for msg in &owned {
-        if let Some(llm_msg) = extract_llm_message(msg) {
+    // Step 13b: Extract LlmMessage at the wire-DTO seam. Per-message
+    // `LlmMessage::clone` is unavoidable here — the provider call site
+    // owns the `Vec<LlmMessage>`.
+    let mut result: Vec<LlmMessage> = Vec::with_capacity(passed.len());
+    for arc in &passed {
+        if let Some(llm_msg) = extract_llm_message(arc.as_ref()) {
             result.push(llm_msg);
         }
     }
@@ -518,7 +718,7 @@ fn extract_llm_message(msg: &Message) -> Option<LlmMessage> {
             // They become LlmMessage::User with system-reminder wrapping
             None // handled by system-reminder injection, not normalization
         }
-        Message::Progress(_) | Message::Tombstone(_) | Message::ToolUseSummary(_) => None,
+        Message::Progress(_) | Message::Tombstone(_) => None,
     }
 }
 

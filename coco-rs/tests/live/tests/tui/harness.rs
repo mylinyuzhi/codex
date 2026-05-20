@@ -400,7 +400,7 @@ impl TuiHarness {
             // Fold into AppState so render_to_string reflects the
             // post-event view. Then stash for assertion-side
             // introspection.
-            handle_core_event(&mut self.state, next.clone());
+            handle_core_event(&mut self.state, next.clone(), &self.command_tx);
             let is_terminal = matches!(
                 &next,
                 CoreEvent::Protocol(ServerNotification::SessionResult(_))
@@ -637,7 +637,7 @@ impl TuiHarness {
                 }
                 Err(_) => continue,
             };
-            handle_core_event(&mut self.state, next.clone());
+            handle_core_event(&mut self.state, next.clone(), &self.command_tx);
             // Bail early if the session ended before an Ask fired —
             // the test's premise is that an approval *will* be requested.
             if matches!(
@@ -730,7 +730,7 @@ impl TuiHarness {
         loop {
             match tokio::time::timeout(quiet_for, self.event_rx.recv()).await {
                 Ok(Some(evt)) => {
-                    handle_core_event(&mut self.state, evt.clone());
+                    handle_core_event(&mut self.state, evt.clone(), &self.command_tx);
                     self.events.push(evt);
                     drained += 1;
                 }

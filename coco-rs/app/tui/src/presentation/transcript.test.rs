@@ -134,27 +134,29 @@ fn snapshot_transcript_modal_expanded_thinking_cell() {
     // source message, so we drive the engine API the same way the
     // runtime does — append messages, then stamp reasoning tokens
     // via `record_reasoning_tokens`).
+    let (thinking_cell, thinking_meta) = assistant_thinking_cell_with_metadata(
+        "The user wants me to run `ls` in the current working directory.\n\
+         I should call the Bash tool and then summarize the result.",
+        1300,
+        15,
+    );
+    let thinking_uuid = thinking_cell.message_uuid;
     push_cells(
         &mut app_state,
         [
             user_text_cell(Uuid::new_v4(), "bash ls"),
-            assistant_thinking_cell_with_metadata(
-                "The user wants me to run `ls` in the current working directory.\n\
-                 I should call the Bash tool and then summarize the result.",
-                1300,
-                15,
-            ),
+            thinking_cell,
             assistant_text_cell("I'll list the current directory."),
         ],
     );
-    // Re-record reasoning tokens so the thinking cell carries the
-    // duration+token metadata on `cell.kind` (push_cells dropped it
-    // during rederivation).
+    // Stamp the reasoning metadata in the side-cache by the thinking
+    // cell's message uuid so the renderer surfaces the
+    // `Thinking · 1.3s · 15` header (mirrors the production path
+    // where `on_turn_completed` inserts into `reasoning_metadata`).
     app_state
         .session
-        .transcript
-        .record_reasoning_tokens(15, Some(1300));
-    let thinking_uuid = app_state.session.transcript.cells()[1].message_uuid;
+        .reasoning_metadata
+        .insert(thinking_uuid, thinking_meta);
     let state = TranscriptState::new_with_anchor(Some(TranscriptCellId::message(
         1,
         thinking_uuid.to_string(),

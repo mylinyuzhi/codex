@@ -16,6 +16,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::errors::AISdkError;
 use crate::language_model::LanguageModelV4;
 use crate::language_model::LanguageModelV4CallOptions;
@@ -51,34 +53,57 @@ pub enum CallType {
 }
 
 /// Options for wrap_generate hook.
+///
+/// `params` is **owned** at the middleware layer because `transform_params`
+/// may produce a fresh modified copy. The middleware's `do_generate` closure
+/// receives the owned params + abort signal and is expected to forward
+/// `&params` to the leaf provider (zero further clone).
 pub struct WrapGenerateOptions {
-    /// The parameters for the call.
+    /// The transformed parameters for the call.
     pub params: LanguageModelV4CallOptions,
+    /// The cancellation handle for this call (live, not part of the spec).
+    pub abort_signal: Option<CancellationToken>,
     /// The model being called.
     pub model: Arc<dyn LanguageModelV4>,
     /// The function to call the next middleware or the actual model.
-    pub do_generate: Box<
-        dyn FnOnce(
-                LanguageModelV4CallOptions,
-            ) -> BoxFuture<Result<LanguageModelV4GenerateResult, AISdkError>>
-            + Send,
-    >,
+    pub do_generate: DoGenerateFn,
 }
 
+/// Closure signature used by middleware to call into the next layer in
+/// the chain for a generate request.
+#[allow(clippy::type_complexity)]
+pub type DoGenerateFn = Box<
+    dyn FnOnce(
+            LanguageModelV4CallOptions,
+            Option<CancellationToken>,
+        ) -> BoxFuture<Result<LanguageModelV4GenerateResult, AISdkError>>
+        + Send,
+>;
+
 /// Options for wrap_stream hook.
+///
+/// See [`WrapGenerateOptions`] for the ownership rationale.
 pub struct WrapStreamOptions {
-    /// The parameters for the call.
+    /// The transformed parameters for the call.
     pub params: LanguageModelV4CallOptions,
+    /// The cancellation handle for this call (live, not part of the spec).
+    pub abort_signal: Option<CancellationToken>,
     /// The model being called.
     pub model: Arc<dyn LanguageModelV4>,
     /// The function to call the next middleware or the actual model.
-    pub do_stream: Box<
-        dyn FnOnce(
-                LanguageModelV4CallOptions,
-            ) -> BoxFuture<Result<LanguageModelV4StreamResult, AISdkError>>
-            + Send,
-    >,
+    pub do_stream: DoStreamFn,
 }
+
+/// Closure signature used by middleware to call into the next layer in
+/// the chain for a stream request.
+#[allow(clippy::type_complexity)]
+pub type DoStreamFn = Box<
+    dyn FnOnce(
+            LanguageModelV4CallOptions,
+            Option<CancellationToken>,
+        ) -> BoxFuture<Result<LanguageModelV4StreamResult, AISdkError>>
+        + Send,
+>;
 
 /// Trait for language model middleware (V4).
 ///
@@ -131,7 +156,7 @@ pub trait LanguageModelV4Middleware: Send + Sync {
         &self,
         options: WrapGenerateOptions,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        (options.do_generate)(options.params).await
+        (options.do_generate)(options.params, options.abort_signal).await
     }
 
     /// Wrap a stream call.
@@ -142,7 +167,7 @@ pub trait LanguageModelV4Middleware: Send + Sync {
         &self,
         options: WrapStreamOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        (options.do_stream)(options.params).await
+        (options.do_stream)(options.params, options.abort_signal).await
     }
 }
 
@@ -203,24 +228,27 @@ impl LanguageModelV4 for MiddlewareWrapper {
 
     async fn do_generate(
         &self,
-        params: LanguageModelV4CallOptions,
+        params: &LanguageModelV4CallOptions,
+        abort_signal: Option<CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        // Transform params
+        // Transform params — middleware may produce a fresh modified copy.
         let transform_options = TransformParamsOptions {
             call_type: CallType::Generate,
-            params,
+            params: params.clone(),
             model: self.inner.clone(),
         };
         let transformed_params = self.middleware.transform_params(transform_options).await?;
 
-        // Wrap generate
+        // Wrap generate. The closure receives owned `params` + `abort_signal`
+        // and forwards `&params` to the leaf provider (zero further clone).
         let inner = self.inner.clone();
         let wrap_options = WrapGenerateOptions {
             params: transformed_params,
+            abort_signal,
             model: inner.clone(),
-            do_generate: Box::new(move |p| {
+            do_generate: Box::new(move |p, abort| {
                 let inner = inner.clone();
-                Box::pin(async move { inner.do_generate(p).await })
+                Box::pin(async move { inner.do_generate(&p, abort).await })
             }),
         };
         self.middleware.wrap_generate(wrap_options).await
@@ -228,24 +256,26 @@ impl LanguageModelV4 for MiddlewareWrapper {
 
     async fn do_stream(
         &self,
-        params: LanguageModelV4CallOptions,
+        params: &LanguageModelV4CallOptions,
+        abort_signal: Option<CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        // Transform params
+        // Transform params — middleware may produce a fresh modified copy.
         let transform_options = TransformParamsOptions {
             call_type: CallType::Stream,
-            params,
+            params: params.clone(),
             model: self.inner.clone(),
         };
         let transformed_params = self.middleware.transform_params(transform_options).await?;
 
-        // Wrap stream
+        // Wrap stream. Same pattern as `do_generate`.
         let inner = self.inner.clone();
         let wrap_options = WrapStreamOptions {
             params: transformed_params,
+            abort_signal,
             model: inner.clone(),
-            do_stream: Box::new(move |p| {
+            do_stream: Box::new(move |p, abort| {
                 let inner = inner.clone();
-                Box::pin(async move { inner.do_stream(p).await })
+                Box::pin(async move { inner.do_stream(&p, abort).await })
             }),
         };
         self.middleware.wrap_stream(wrap_options).await

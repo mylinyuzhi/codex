@@ -30,7 +30,11 @@ use crate::state::session::TaskEntryStatus;
 use crate::state::session::TokenUsage;
 use crate::state::ui::Toast;
 
-pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
+pub(super) fn handle(
+    state: &mut AppState,
+    notif: ServerNotification,
+    command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
+) -> bool {
     match notif {
         // === Session lifecycle ===
         ServerNotification::SessionStarted(p) => {
@@ -82,11 +86,38 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
             true
         }
-        ServerNotification::TurnCompleted(p) => on_turn_completed(state, p),
+        ServerNotification::TurnCompleted(p) => on_turn_completed(state, p, command_tx),
         ServerNotification::TurnFailed(p) => {
             state.session.set_busy(false);
             state.session.current_turn_started_at = None;
             state.ui.streaming = None;
+            // Drop in-flight tool widgets (status=Queued/Running, no
+            // stamped `message_uuid`): the turn failed before they
+            // could resolve to a finalized `Message::ToolResult`, so
+            // leaving them on screen renders ghost spinners that
+            // outlast the turn. Stamped executions belong to prior
+            // turns and stay.
+            let before = state.session.tool_executions.len();
+            state
+                .session
+                .tool_executions
+                .retain(|t| t.message_uuid.is_some());
+            let dropped = before.saturating_sub(state.session.tool_executions.len());
+            if dropped > 0 {
+                tracing::info!(
+                    target: "coco_tui::turn",
+                    dropped,
+                    remaining = state.session.tool_executions.len(),
+                    error = %p.error,
+                    "TurnFailed: dropped in-flight tool widgets",
+                );
+            } else {
+                tracing::warn!(
+                    target: "coco_tui::turn",
+                    error = %p.error,
+                    "TurnFailed",
+                );
+            }
             // Keep the toast for session history / notification log, AND
             // raise a modal error dialog so users can't miss the failure
             // (PR-F1 P0). The toast auto-expires; the state blocks input
@@ -98,7 +129,9 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.show_modal(ModalState::Error(body));
             true
         }
-        ServerNotification::TurnInterrupted(p) => on_turn_interrupted(state, p),
+        ServerNotification::TurnInterrupted(p) => on_turn_interrupted(state, p, command_tx),
+        // [F11 anchor] All remaining match arms below this point don't
+        // dispatch follow-up UserCommands; they're pure state folds.
         ServerNotification::MaxTurnsReached { max_turns } => {
             let msg = match max_turns {
                 Some(n) => t!("toast.max_turns_reached", n = n).to_string(),
@@ -164,7 +197,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             } else {
                 p.result.clone()
             };
-            push_teammate_message(state, &p.agent_id, &line);
+            push_teammate_message(state, &p.agent_id, &line, command_tx);
             true
         }
         ServerNotification::SubagentBackgrounded(p) => {
@@ -194,7 +227,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                 // can pick it up. Tagged as a meta system message so it
                 // stays out of the regular chat scroll — surfaces in the
                 // transcript reader and per-teammate preview only.
-                push_teammate_message(state, &p.agent_id, msg);
+                push_teammate_message(state, &p.agent_id, msg, command_tx);
             }
             true
         }
@@ -737,19 +770,36 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             true
         }
         ServerNotification::ToolUseSummary(p) => {
-            // Route through engine `MessageHistory` like every other
-            // TUI-originated transcript line. The previous "summary-{id}"
-            // synthetic message id is no longer needed (cell uuid is
-            // engine-minted) — the rewind picker never targeted these
-            // rows anyway.
-            state
-                .session
-                .pending_system_pushes
-                .push_back(SystemPushKind::Informational {
-                    level: SystemMessageLevel::Info,
-                    title: String::new(),
-                    message: p.summary,
-                });
+            // Side-cache the summary for the tool batch — UI-only
+            // overlay polish, intentionally NOT written to
+            // `MessageHistory` (I-3: UI-only state stays UI-only).
+            // Anchor on the first `preceding_tool_use_id` so the
+            // renderer can attach the label to the assistant turn
+            // that initiated the batch.
+            match p.preceding_tool_use_ids.first() {
+                Some(anchor) => {
+                    tracing::debug!(
+                        target: "coco_tui::tool_use_summary",
+                        anchor_call_id = %anchor,
+                        tool_count = p.preceding_tool_use_ids.len(),
+                        summary_chars = p.summary.len(),
+                        cache_size_after = state.session.tool_group_summaries.len() + 1,
+                        "tool-use summary cached",
+                    );
+                    state
+                        .session
+                        .tool_group_summaries
+                        .insert(anchor.clone(), p.summary);
+                }
+                None => {
+                    tracing::warn!(
+                        target: "coco_tui::tool_use_summary",
+                        summary_chars = p.summary.len(),
+                        "tool-use summary dropped: empty preceding_tool_use_ids \
+                         (engine produced a summary with no batch anchor)",
+                    );
+                }
+            }
             true
         }
         ServerNotification::ToolProgress(p) => {
@@ -778,7 +828,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // Engine MessageHistory authoritative-mutation events. These
         // feed `session.transcript`, which the renderer pipeline reads
         // exclusively.
-        ServerNotification::MessageAppended { message } => {
+        ServerNotification::MessageAppended { message, .. } => {
             // Plan §6.4 atomic finalize: when the appended message is
             // the assistant push that just ended the in-flight stream,
             // the cell now owns the content — drop the overlay so the
@@ -792,7 +842,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             // anchor UUID on StreamingState + an engine-side pre-
             // allocated assistant UUID; no emitter for that exists
             // today so the role check is the correct minimal fix.
-            let is_assistant = matches!(&message, coco_messages::Message::Assistant(_));
+            let is_assistant = matches!(message.as_ref(), coco_messages::Message::Assistant(_));
             // D4: stamp any pending tool_executions whose `call_id`
             // matches a `ToolCall` content block in this assistant
             // message. Stamps the parent message UUID so the
@@ -803,17 +853,17 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                     .session
                     .stamp_tool_executions_with_assistant_uuid(&message);
             }
-            state
-                .session
-                .transcript
-                .on_message_appended(std::sync::Arc::new(message));
+            state.session.transcript.on_message_appended(message);
             if is_assistant {
                 state.ui.streaming = None;
             }
             true
         }
-        ServerNotification::MessageTruncated { keep_count } => {
+        ServerNotification::MessageTruncated { keep_count, .. } => {
             let n = keep_count.max(0) as usize;
+            let cells_before = state.session.transcript.len();
+            let reasoning_before = state.session.reasoning_metadata.len();
+            let tool_widgets_before = state.session.tool_executions.len();
             state.session.transcript.on_message_truncated(n);
             // D4: drop only tool overlays whose anchor message no
             // longer survives. Unstamped executions (mid-stream, no
@@ -831,21 +881,102 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state
                 .session
                 .retain_tool_executions_for_messages(&surviving_uuids);
+            // Prune side-caches keyed by message uuid so they don't
+            // outlive their anchor message. `tool_group_summaries` is
+            // keyed by `preceding_tool_use_id` (call id) so it stays;
+            // it'll be cleared on session reset.
+            state
+                .session
+                .reasoning_metadata
+                .retain(|uuid, _| surviving_uuids.contains(uuid));
             state.ui.streaming = None;
+            tracing::info!(
+                target: "coco_tui::history",
+                keep_count = n,
+                cells_before,
+                cells_after = state.session.transcript.len(),
+                reasoning_cache_dropped = reasoning_before
+                    .saturating_sub(state.session.reasoning_metadata.len()),
+                tool_widgets_dropped = tool_widgets_before
+                    .saturating_sub(state.session.tool_executions.len()),
+                "MessageTruncated applied",
+            );
             true
         }
-        ServerNotification::SessionResetForResume { session_id } => {
+        ServerNotification::SessionResetForResume { session_id, .. } => {
             // Plan §6.3: clear every piece of UI-only state that
             // belonged to the prior session before the burst of
             // MessageAppended replays the loaded history. Without this,
             // tool panels and streaming text from the previous run
             // leak into the resumed view.
+            tracing::info!(
+                target: "coco_tui::history",
+                new_session_id = %session_id,
+                cells_cleared = state.session.transcript.len(),
+                tool_widgets_cleared = state.session.tool_executions.len(),
+                tool_summaries_cleared = state.session.tool_group_summaries.len(),
+                reasoning_cache_cleared = state.session.reasoning_metadata.len(),
+                "SessionResetForResume",
+            );
             state.session.transcript.on_session_reset();
             state.session.tool_executions.clear();
+            state.session.tool_group_summaries.clear();
+            state.session.reasoning_metadata.clear();
             state.ui.streaming = None;
             // Conversation id rotates on resume so prompt-cache keys
             // do not collide with the prior run's break points.
             state.session.conversation_id = Some(session_id);
+            true
+        }
+        ServerNotification::ReasoningMetadataAttached(p) => {
+            let Ok(uuid) = uuid::Uuid::parse_str(&p.message_uuid) else {
+                tracing::warn!(
+                    target: "coco_tui::reasoning",
+                    message_uuid = %p.message_uuid,
+                    "ReasoningMetadataAttached: invalid UUID, dropping",
+                );
+                return true;
+            };
+            tracing::debug!(
+                target: "coco_tui::reasoning",
+                %uuid,
+                reasoning_tokens = p.reasoning_tokens,
+                duration_ms = ?p.duration_ms,
+                "stamping reasoning metadata in side-cache (event-driven)",
+            );
+            state.session.reasoning_metadata.insert(
+                uuid,
+                crate::state::session::ReasoningMetadata {
+                    duration_ms: p.duration_ms,
+                    reasoning_tokens: p.reasoning_tokens,
+                },
+            );
+            true
+        }
+        ServerNotification::HistoryReplaced { messages, .. } => {
+            // Bulk resume hydration: a single replace instead of N
+            // MessageAppended events. UI-only side-caches that anchor
+            // on message uuids get cleared because the new transcript
+            // overwrites the old.
+            tracing::info!(
+                target: "coco_tui::history",
+                incoming = messages.len(),
+                cells_before = state.session.transcript.len(),
+                "HistoryReplaced (bulk hydration)",
+            );
+            state
+                .session
+                .transcript
+                .replace_from_messages(messages.as_slice());
+            state.session.tool_executions.clear();
+            state.session.tool_group_summaries.clear();
+            state.session.reasoning_metadata.clear();
+            state.ui.streaming = None;
+            tracing::debug!(
+                target: "coco_tui::history",
+                cells_after = state.session.transcript.len(),
+                "HistoryReplaced applied",
+            );
             true
         }
     }
@@ -857,7 +988,11 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
 /// Does NOT handle auto-restore — that lives in [`on_turn_interrupted`].
 /// `TurnCompleted` fires only on natural turn end; cancel paths emit
 /// `TurnInterrupted` separately (see `app/cli/src/tui_runner.rs`).
-fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -> bool {
+fn on_turn_completed(
+    state: &mut AppState,
+    p: coco_types::TurnCompletedParams,
+    _command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
+) -> bool {
     state.session.set_busy(false);
     // TS REPL.tsx:3901 — `updateLastInteractionTime(true)` also fires
     // here so the idle window starts ticking from "user has had a
@@ -882,7 +1017,10 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
             &t!("notification.turn_complete"),
         );
     }
-    let token_only_duration_ms =
+    // Telemetry-only — reasoning duration is now attached by the
+    // engine via `ReasoningMetadataAttached`. Keep the local
+    // computation for now in case future telemetry needs it.
+    let _token_only_duration_ms: Option<i64> =
         state
             .session
             .current_turn_started_at
@@ -893,13 +1031,9 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
                 })
             });
     super::projection::flush_streaming_to_messages(state);
-    // Stamp reasoning metadata onto the most recent assistant
-    // `Thinking` cell so the renderer can show
-    // `Thinking · 1.3s · 15 reasoning tokens`.
-    state
-        .session
-        .transcript
-        .record_reasoning_tokens(p.usage.reasoning_output_tokens(), token_only_duration_ms);
+    // F3 — reasoning aggregates are stamped by the dedicated
+    // `ReasoningMetadataAttached` handler (engine emits with the
+    // assistant message UUID), so no cell-walk anchoring here.
     state.session.current_turn_started_at = None;
     state.session.tool_executions.retain(|t| {
         matches!(
@@ -916,10 +1050,31 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
 ///
 /// Mirrors TS `REPL.tsx:3010-3022` — the `.finally` block that fires
 /// after `abortController.abort('user-cancel')` resolves the query.
-fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParams) -> bool {
+fn on_turn_interrupted(
+    state: &mut AppState,
+    p: coco_types::TurnInterruptedParams,
+    command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
+) -> bool {
     state.session.set_busy(false);
     state.session.current_turn_started_at = None;
     state.ui.streaming = None;
+    // Drop in-flight tool widgets — same rationale as `TurnFailed`.
+    // The cancel aborts the turn before tools could resolve to a
+    // `Message::ToolResult`, so any unstamped (= mid-turn) execution
+    // would otherwise leak across the interrupt boundary.
+    let before = state.session.tool_executions.len();
+    state
+        .session
+        .tool_executions
+        .retain(|t| t.message_uuid.is_some());
+    let dropped = before.saturating_sub(state.session.tool_executions.len());
+    tracing::info!(
+        target: "coco_tui::turn",
+        reason = ?p.reason,
+        tool_widgets_dropped = dropped,
+        tool_widgets_remaining = state.session.tool_executions.len(),
+        "TurnInterrupted",
+    );
 
     let user_cancel = matches!(p.reason, Some(coco_types::CancelReason::UserCancel));
 
@@ -944,7 +1099,7 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
         // Snapshot the index so we can mutate state below without
         // reborrowing `cells` (which would conflict with `state.ui`/
         // `state.session` mutations).
-        apply_auto_restore(state, idx);
+        apply_auto_restore(state, idx, command_tx);
         auto_restored = true;
     }
 
@@ -970,15 +1125,24 @@ fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParam
 /// next turn starts a fresh cache key, and clears UI state that no
 /// longer corresponds to a real conversation tail.
 ///
-/// Sets `pending_auto_restore_truncate` so the App loop can dispatch
-/// `UserCommand::Rewind { mode: AutoRestore }` after the handler
-/// returns. The engine truncates its authoritative history and emits
-/// `ServerNotification::MessageTruncated`, keeping engine + TUI + SDK
-/// converged on the same truncation event (see
+/// Dispatches `UserCommand::Rewind { mode: AutoRestore }` directly via
+/// `command_tx.try_send`. The engine truncates its authoritative
+/// history and emits `ServerNotification::MessageTruncated`, keeping
+/// engine + TUI + SDK converged (see
 /// `engine-tui-unified-transcript-plan.md` §7.4).
-fn apply_auto_restore(state: &mut AppState, idx: usize) {
+fn apply_auto_restore(
+    state: &mut AppState,
+    idx: usize,
+    command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
+) {
     let cells = state.session.transcript.cells();
     let Some(cell) = cells.get(idx) else {
+        tracing::warn!(
+            target: "coco_tui::auto_restore",
+            idx,
+            cells_len = cells.len(),
+            "apply_auto_restore: cell index out of bounds — skipping",
+        );
         return;
     };
     let target_message_id = cell.message_uuid.to_string();
@@ -992,8 +1156,16 @@ fn apply_auto_restore(state: &mut AppState, idx: usize) {
     };
     // Phase 3d (§5): the renderer reads from `transcript.cells()`
     // directly. The engine emits `MessageTruncated` after our follow-up
-    // `UserCommand::Rewind { mode: AutoRestore }` dispatch, which
-    // truncates `transcript` to the same boundary.
+    // `UserCommand::Rewind { mode: AutoRestore }` dispatch, which truncates
+    // `transcript` to the same boundary.
+    tracing::info!(
+        target: "coco_tui::auto_restore",
+        target_message_id = %target_message_id,
+        cell_idx = idx,
+        input_chars = input_text.len(),
+        permission_mode = ?perm,
+        "apply_auto_restore: queueing Rewind AutoRestore dispatch",
+    );
     if let Some(mode) = perm {
         state.session.permission_mode = mode;
     }
@@ -1007,7 +1179,21 @@ fn apply_auto_restore(state: &mut AppState, idx: usize) {
     state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;
     state.ui.user_scrolled = false;
-    state.session.pending_auto_restore_truncate = Some(target_message_id);
+    // Direct dispatch (no `pending_*` round-trip). `try_send` rather
+    // than blocking `send` — the channel has slack; if it's full the
+    // event loop is wedged for unrelated reasons and a dropped
+    // auto-restore is the right fallback.
+    if let Err(e) = command_tx.try_send(crate::command::UserCommand::Rewind {
+        message_id: target_message_id.clone(),
+        mode: crate::command::RewindMode::AutoRestore,
+    }) {
+        tracing::warn!(
+            target: "coco_tui::auto_restore",
+            target_message_id = %target_message_id,
+            error = ?e,
+            "apply_auto_restore: failed to dispatch Rewind AutoRestore",
+        );
+    }
 }
 
 /// Queue a teammate-attributed message for engine round-trip so the
@@ -1016,19 +1202,30 @@ fn apply_auto_restore(state: &mut AppState, idx: usize) {
 /// content is dropped so progress pings without a body don't pollute
 /// the preview. Routed as `SystemMessage::Informational` with a
 /// `teammate:<agent>` title so the renderer can distinguish the row.
-fn push_teammate_message(state: &mut AppState, agent_id: &str, content: &str) {
+fn push_teammate_message(
+    _state: &mut AppState,
+    agent_id: &str,
+    content: &str,
+    command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
+) {
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return;
     }
-    state
-        .session
-        .pending_system_pushes
-        .push_back(SystemPushKind::Informational {
+    if let Err(e) = command_tx.try_send(crate::command::UserCommand::PushSystemMessage {
+        kind: SystemPushKind::Informational {
             level: SystemMessageLevel::Info,
             title: format!("teammate:{agent_id}"),
             message: trimmed.to_string(),
-        });
+        },
+    }) {
+        tracing::warn!(
+            target: "coco_tui::teammate_message",
+            %agent_id,
+            error = ?e,
+            "push_teammate_message: failed to dispatch PushSystemMessage",
+        );
+    }
 }
 
 #[cfg(test)]

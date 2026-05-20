@@ -221,7 +221,7 @@ async fn generate_object_inner<T: DeserializeOwned>(
             call_options.tools = Some(vec![tool]);
             call_options.tool_choice =
                 Some(vercel_ai_provider::LanguageModelV4ToolChoice::required());
-            apply_call_settings(&mut call_options, &options.settings, &options.abort_signal);
+            apply_call_settings(&mut call_options, &options.settings);
             if let Some(ref provider_opts) = options.provider_options {
                 call_options.provider_options = Some(provider_opts.clone());
             }
@@ -232,10 +232,16 @@ async fn generate_object_inner<T: DeserializeOwned>(
             let result = {
                 let model = model.clone();
                 let abort_signal = options.abort_signal.clone();
-                with_retry(retry_config.clone(), abort_signal, || {
+                let call_options_ref = &call_options;
+                with_retry(retry_config.clone(), abort_signal.clone(), || {
                     let model = model.clone();
-                    let call_options = call_options.clone();
-                    async move { model.do_generate(call_options).await.map_err(AIError::from) }
+                    let abort_signal = abort_signal.clone();
+                    async move {
+                        model
+                            .do_generate(call_options_ref, abort_signal)
+                            .await
+                            .map_err(AIError::from)
+                    }
                 })
                 .await?
             };
@@ -260,7 +266,7 @@ async fn generate_object_inner<T: DeserializeOwned>(
 
             let mut call_options = LanguageModelV4CallOptions::new(messages);
             call_options.response_format = Some(response_format);
-            apply_call_settings(&mut call_options, &options.settings, &options.abort_signal);
+            apply_call_settings(&mut call_options, &options.settings);
             if let Some(ref provider_opts) = options.provider_options {
                 call_options.provider_options = Some(provider_opts.clone());
             }
@@ -271,10 +277,16 @@ async fn generate_object_inner<T: DeserializeOwned>(
             let result = {
                 let model = model.clone();
                 let abort_signal = options.abort_signal.clone();
-                with_retry(retry_config, abort_signal, || {
+                let call_options_ref = &call_options;
+                with_retry(retry_config, abort_signal.clone(), || {
                     let model = model.clone();
-                    let call_options = call_options.clone();
-                    async move { model.do_generate(call_options).await.map_err(AIError::from) }
+                    let abort_signal = abort_signal.clone();
+                    async move {
+                        model
+                            .do_generate(call_options_ref, abort_signal)
+                            .await
+                            .map_err(AIError::from)
+                    }
                 })
                 .await?
             };

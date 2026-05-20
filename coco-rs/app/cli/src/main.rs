@@ -298,7 +298,11 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
     }
     let opts = match plan {
         Some(p) => coco_cli::headless::RunChatOptions {
-            prior_messages: p.prior_messages,
+            prior_messages: p
+                .prior_messages
+                .into_iter()
+                .map(std::sync::Arc::new)
+                .collect(),
             session_id_override: Some(p.session_id),
             ..Default::default()
         },

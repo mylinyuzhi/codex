@@ -197,16 +197,17 @@ impl LanguageModelV4 for OpenAICompletionLanguageModel {
 
     async fn do_generate(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
         let openai_opts = extract_completion_options(&options.provider_options);
         let conversion = convert_to_completion_prompt(&options.prompt)?;
-        let warnings = collect_completion_warnings(&options);
+        let warnings = collect_completion_warnings(options);
 
         let body = build_completion_body(
             &self.model_id,
             &conversion.prompt,
-            &options,
+            options,
             &openai_opts,
             &conversion.stop_sequences,
             false,
@@ -221,7 +222,7 @@ impl LanguageModelV4 for OpenAICompletionLanguageModel {
             &body,
             JsonResponseHandler::new(),
             OpenAIFailedResponseHandler,
-            options.abort_signal,
+            abort_signal,
             self.config.client.clone(),
         )
         .await?;
@@ -267,16 +268,17 @@ impl LanguageModelV4 for OpenAICompletionLanguageModel {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
         let openai_opts = extract_completion_options(&options.provider_options);
         let conversion = convert_to_completion_prompt(&options.prompt)?;
-        let warnings = collect_completion_warnings(&options);
+        let warnings = collect_completion_warnings(options);
 
         let body = build_completion_body(
             &self.model_id,
             &conversion.prompt,
-            &options,
+            options,
             &openai_opts,
             &conversion.stop_sequences,
             true,
@@ -289,7 +291,7 @@ impl LanguageModelV4 for OpenAICompletionLanguageModel {
             &url,
             Some(headers),
             &body,
-            options.abort_signal,
+            abort_signal,
             self.config.client.clone(),
         )
         .await?;

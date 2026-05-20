@@ -223,10 +223,9 @@ pub(crate) fn hook_outcome_to_status(
 /// Extract the last assistant text from message history.
 pub(crate) fn extract_last_assistant_text(history: &MessageHistory) -> String {
     history
-        .messages
         .iter()
         .rev()
-        .find_map(|m| match m {
+        .find_map(|m| match m.as_ref() {
             Message::Assistant(a) => match &a.message {
                 LlmMessage::Assistant { content, .. } => content.iter().find_map(|c| {
                     if let AssistantContent::Text(t) = c {

@@ -385,50 +385,19 @@ impl App {
             needs_redraw = true;
         }
 
-        needs_redraw |= server_notification_handler::handle_core_event(&mut self.state, event);
+        needs_redraw |= server_notification_handler::handle_core_event(
+            &mut self.state,
+            event,
+            &self.command_tx,
+        );
         while let Some(deferred) = self.deferred_core_events.pop_front() {
-            needs_redraw |=
-                server_notification_handler::handle_core_event(&mut self.state, deferred);
+            needs_redraw |= server_notification_handler::handle_core_event(
+                &mut self.state,
+                deferred,
+                &self.command_tx,
+            );
         }
-        self.drain_pending_auto_restore_truncate().await;
-        self.drain_pending_system_pushes().await;
         Ok(needs_redraw)
-    }
-
-    /// Dispatch any pending auto-restore truncation as
-    /// `UserCommand::Rewind { mode: AutoRestore }`. Called once per
-    /// `handle_core_event` invocation so the engine truncation lags
-    /// the TUI in-place restore by at most one event cycle.
-    ///
-    /// See `engine-tui-unified-transcript-plan.md` §7.4.
-    async fn drain_pending_auto_restore_truncate(&mut self) {
-        let Some(message_id) = self.state.session.pending_auto_restore_truncate.take() else {
-            return;
-        };
-        let _ = self
-            .command_tx
-            .send(UserCommand::Rewind {
-                message_id,
-                restore_type: crate::state::rewind::RestoreType::ConversationOnly,
-                rewound_turn: 0,
-                mode: crate::state::rewind::RewindMode::AutoRestore,
-            })
-            .await;
-    }
-
-    /// Dispatch any TUI-originated system messages that notification
-    /// handlers queued during this `handle_core_event` cycle. Sends each
-    /// as a `UserCommand::PushSystemMessage` so the engine pushes via
-    /// `history_push_and_emit` and the transcript view sees the entry
-    /// via the standard round-trip. Mirrors
-    /// [`Self::drain_pending_auto_restore_truncate`].
-    async fn drain_pending_system_pushes(&mut self) {
-        while let Some(kind) = self.state.session.pending_system_pushes.pop_front() {
-            let _ = self
-                .command_tx
-                .send(UserCommand::PushSystemMessage { kind })
-                .await;
-        }
     }
 
     /// Fire a file/symbol search if the active trigger's (kind, query) pair

@@ -22,6 +22,12 @@ use std::sync::atomic::Ordering;
 const SUMMARY: &str =
     "<analysis>Analyzed the conversation.</analysis><summary>Key decisions made.</summary>";
 
+/// Test helper: wrap a `Vec<Message>` into the canonical `Vec<Arc<Message>>`
+/// shape that the post-refactor `compact_conversation` accepts.
+fn arc_vec(msgs: &[Message]) -> Vec<Arc<Message>> {
+    msgs.iter().cloned().map(Arc::new).collect()
+}
+
 #[tokio::test]
 async fn test_basic_compact() {
     let messages = conversation::simple(5);
@@ -30,9 +36,14 @@ async fn test_basic_compact() {
         ..Default::default()
     };
 
-    let result = compact_conversation(&messages, &config, mock::mock_summarize_ok(SUMMARY), None)
-        .await
-        .unwrap();
+    let result = compact_conversation(
+        &arc_vec(&messages),
+        &config,
+        mock::mock_summarize_ok(SUMMARY),
+        None,
+    )
+    .await
+    .unwrap();
 
     mock::assert_boundary_valid(&result);
     mock::assert_summary_valid(&result);
@@ -57,9 +68,14 @@ async fn test_nothing_to_compact() {
         ..Default::default()
     };
 
-    let result = compact_conversation(&messages, &config, mock::mock_summarize_ok(SUMMARY), None)
-        .await
-        .unwrap();
+    let result = compact_conversation(
+        &arc_vec(&messages),
+        &config,
+        mock::mock_summarize_ok(SUMMARY),
+        None,
+    )
+    .await
+    .unwrap();
 
     assert!(
         result.summary_messages.is_empty(),
@@ -80,7 +96,7 @@ async fn test_image_stripping() {
         ..Default::default()
     };
 
-    let _result = compact_conversation(&messages, &config, summarize, None)
+    let _result = compact_conversation(&arc_vec(&messages), &config, summarize, None)
         .await
         .unwrap();
 
@@ -116,7 +132,7 @@ async fn test_full_compact_summary_attempt_is_structured() {
         ..Default::default()
     };
 
-    let _result = compact_conversation(&messages, &config, summarize, None)
+    let _result = compact_conversation(&arc_vec(&messages), &config, summarize, None)
         .await
         .unwrap();
 
@@ -140,12 +156,15 @@ async fn test_full_compact_summary_attempt_is_structured() {
         "conversation should stay in structured messages, not a legacy rendered prompt"
     );
     assert!(!attempt.summary_request.trim().is_empty());
-    assert!(matches!(attempt.messages.first(), Some(Message::User(_))));
+    assert!(matches!(
+        attempt.messages.first().map(std::sync::Arc::as_ref),
+        Some(Message::User(_))
+    ));
     assert!(
         attempt
             .messages
             .iter()
-            .any(|message| matches!(message, Message::Assistant(_))),
+            .any(|message| matches!(message.as_ref(), Message::Assistant(_))),
         "structured attempt should preserve assistant-role messages"
     );
 }
@@ -181,7 +200,7 @@ async fn test_ptl_retry_updates_structured_attempt_messages() {
         }
     };
 
-    let result = compact_conversation(&messages, &config, summarize, None)
+    let result = compact_conversation(&arc_vec(&messages), &config, summarize, None)
         .await
         .expect("PTL retry should recover");
 
@@ -212,7 +231,7 @@ async fn test_ptl_retry_succeeds() {
 
     // First 2 calls fail with PTL, 3rd succeeds
     let result = compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         &config,
         mock::mock_summarize_ptl_then_ok(2, SUMMARY),
         None,
@@ -233,7 +252,7 @@ async fn test_ptl_exhausted() {
     };
 
     let err = compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         &config,
         mock::mock_summarize_always_fail("prompt_too_long: exceeds context"),
         None,
@@ -257,7 +276,7 @@ async fn test_stream_retry() {
 
     // First call fails with transient error, 2nd succeeds
     let result = compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         &config,
         mock::mock_summarize_fail_then_ok(1, SUMMARY),
         None,
@@ -277,7 +296,7 @@ async fn test_stream_exhausted() {
     };
 
     let err = compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         &config,
         mock::mock_summarize_always_fail("network timeout"),
         None,
@@ -299,9 +318,14 @@ async fn test_empty_summary_error() {
         ..Default::default()
     };
 
-    let err = compact_conversation(&messages, &config, mock::mock_summarize_ok(""), None)
-        .await
-        .unwrap_err();
+    let err = compact_conversation(
+        &arc_vec(&messages),
+        &config,
+        mock::mock_summarize_ok(""),
+        None,
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         matches!(err, CompactError::LlmCallFailed { .. }),
@@ -326,7 +350,7 @@ async fn test_attachment_callback() {
         });
 
     let result = compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         &config,
         mock::mock_summarize_ok(SUMMARY),
         Some(attachment_fn),
@@ -349,9 +373,14 @@ async fn test_boundary_fields() {
         ..Default::default()
     };
 
-    let result = compact_conversation(&messages, &config, mock::mock_summarize_ok(SUMMARY), None)
-        .await
-        .unwrap();
+    let result = compact_conversation(
+        &arc_vec(&messages),
+        &config,
+        mock::mock_summarize_ok(SUMMARY),
+        None,
+    )
+    .await
+    .unwrap();
 
     let Message::System(coco_messages::SystemMessage::CompactBoundary(ref b)) =
         result.boundary_marker
@@ -374,7 +403,7 @@ async fn test_custom_instructions() {
     };
 
     let (summarize, captured) = mock::mock_summarize_capturing(SUMMARY);
-    let _result = compact_conversation(&messages, &config, summarize, None)
+    let _result = compact_conversation(&arc_vec(&messages), &config, summarize, None)
         .await
         .unwrap();
 
@@ -395,9 +424,14 @@ async fn test_manual_trigger() {
         ..Default::default()
     };
 
-    let result = compact_conversation(&messages, &config, mock::mock_summarize_ok(SUMMARY), None)
-        .await
-        .unwrap();
+    let result = compact_conversation(
+        &arc_vec(&messages),
+        &config,
+        mock::mock_summarize_ok(SUMMARY),
+        None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.trigger, CompactTrigger::Manual);
     let Message::System(coco_messages::SystemMessage::CompactBoundary(ref b)) =
@@ -418,9 +452,14 @@ async fn test_agentic_grouping() {
         ..Default::default()
     };
 
-    let result = compact_conversation(&messages, &config, mock::mock_summarize_ok(SUMMARY), None)
-        .await
-        .unwrap();
+    let result = compact_conversation(
+        &arc_vec(&messages),
+        &config,
+        mock::mock_summarize_ok(SUMMARY),
+        None,
+    )
+    .await
+    .unwrap();
 
     mock::assert_boundary_valid(&result);
     mock::assert_summary_valid(&result);
@@ -453,9 +492,14 @@ async fn test_micro_then_full_compact() {
         keep_recent_rounds: 2,
         ..Default::default()
     };
-    let result = compact_conversation(&messages, &config, mock::mock_summarize_ok(SUMMARY), None)
-        .await
-        .unwrap();
+    let result = compact_conversation(
+        &arc_vec(&messages),
+        &config,
+        mock::mock_summarize_ok(SUMMARY),
+        None,
+    )
+    .await
+    .unwrap();
 
     mock::assert_boundary_valid(&result);
     mock::assert_summary_valid(&result);
@@ -478,7 +522,7 @@ async fn test_full_compact_summary_format() {
                        <summary>\n1. Primary intent: refactor parser\n2. Files: src/parser.rs\n</summary>";
 
     let result = compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         &config,
         mock::mock_summarize_ok(raw_summary),
         None,

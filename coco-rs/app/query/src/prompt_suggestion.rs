@@ -373,7 +373,7 @@ pub fn try_generate_suggestion(
 /// "model may loop (try tool → denied → text in next message)";
 /// this walk catches the text in turn 2 even when turn 1 was a
 /// (denied) tool call.
-pub fn extract_suggestion_text(messages: &[Message]) -> String {
+pub fn extract_suggestion_text(messages: &[std::sync::Arc<Message>]) -> String {
     extract_suggestion_generation(messages).text
 }
 
@@ -381,14 +381,14 @@ pub fn extract_suggestion_text(messages: &[Message]) -> String {
 ///
 /// TS captures the first assistant `requestId` for RL dataset joins,
 /// then walks messages forward for the first non-empty text block.
-pub fn extract_suggestion_generation(messages: &[Message]) -> ExtractedSuggestion {
-    let request_id = messages.iter().find_map(|m| match m {
+pub fn extract_suggestion_generation(messages: &[std::sync::Arc<Message>]) -> ExtractedSuggestion {
+    let request_id = messages.iter().find_map(|m| match m.as_ref() {
         coco_messages::Message::Assistant(a) => a.request_id.clone(),
         _ => None,
     });
     let text = messages
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|m| match m.as_ref() {
             coco_messages::Message::Assistant(a) => match &a.message {
                 coco_llm_types::LlmMessage::Assistant { content, .. } => Some(content),
                 _ => None,

@@ -999,9 +999,10 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
 
     async fn do_generate(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        let (body, headers, warnings) = self.get_args(&options, false)?;
+        let (body, headers, warnings) = self.get_args(options, false)?;
         let url = self.config.url("/messages");
 
         let response: AnthropicMessagesResponse = post_json_to_api_with_client(
@@ -1010,7 +1011,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
             &body,
             JsonResponseHandler::new(),
             AnthropicFailedResponseHandler,
-            options.abort_signal,
+            abort_signal,
             self.config.client.clone(),
         )
         .await?;
@@ -1437,9 +1438,10 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        let (body, headers, warnings) = self.get_args(&options, true)?;
+        let (body, headers, warnings) = self.get_args(options, true)?;
         let url = self.config.url("/messages");
         let include_raw = options.include_raw_chunks.unwrap_or(false);
 
@@ -1447,7 +1449,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
             &url,
             Some(headers),
             &body,
-            options.abort_signal,
+            abort_signal,
             self.config.client.clone(),
         )
         .await?;

@@ -26,6 +26,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde::Serialize;
 
+use coco_messages::Message;
 use coco_types::AgentDefinition;
 use coco_types::Features;
 use coco_types::SubagentRuntimeSnapshot;
@@ -111,8 +112,11 @@ pub enum SpawnMode {
         /// would only invite a fallible roundtrip that hides
         /// corruption behind `unwrap_or_default`.
         rendered_system_prompt: String,
-        /// Parent message history (cloned, not shared).
-        parent_messages: Vec<serde_json::Value>,
+        /// Parent message history. Shared via `Arc<Message>` so the
+        /// fork-context build only rewrites tool-result bodies; the
+        /// rest of the slice is a cheap Arc clone of the parent's
+        /// authoritative history.
+        parent_messages: Vec<Arc<Message>>,
         /// Parent's resolved provider+model identity at the moment of
         /// fork. **Non-optional by design** — fork mode's entire
         /// purpose is prompt-cache parity, which requires sending a
@@ -139,7 +143,7 @@ pub enum SpawnMode {
         /// `SwarmAgentHandle::resume_agent`) is expected to have already
         /// run `coco_subagent::filter_transcript` to drop unresolved
         /// tool uses + orphaned thinking + whitespace-only assistants.
-        parent_messages: Vec<serde_json::Value>,
+        parent_messages: Vec<Arc<Message>>,
     },
 }
 
@@ -249,13 +253,12 @@ pub struct AgentSpawnRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub constraints: Option<AgentSpawnConstraints>,
     /// Parent conversation slice prepended to the child's first turn
-    /// when `isolation == Some("fork")`. Each entry is a serialized
-    /// `coco_messages::Message` JSON value. Carried as
-    /// `serde_json::Value` so the boundary doesn't pull message types
-    /// into `coco-tool-runtime`. TS: `AgentTool.tsx:622-632`
+    /// when `isolation == Some("fork")`. Shared via `Arc<Message>`
+    /// — in-process spawns reuse parent allocations; remote transports
+    /// serialize once at the wire boundary. TS: `AgentTool.tsx:622-632`
     /// `forkContextMessages`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fork_context_messages: Vec<serde_json::Value>,
+    pub fork_context_messages: Vec<Arc<Message>>,
     /// How to construct the child's initial state. Defaults to
     /// [`SpawnMode::Fresh`]; switched to [`SpawnMode::Fork`] by the
     /// AgentTool callsite when `coco_subagent::is_fork_subagent_active`

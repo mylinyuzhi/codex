@@ -1245,7 +1245,7 @@ impl SessionRuntime {
             mailbox,
             permission_bridge,
             cancel: CancellationToken::new(),
-            session_id: Arc::new(RwLock::new(session_id)),
+            session_id: Arc::new(RwLock::new(session_id.clone())),
             engine_config: Arc::new(RwLock::new(engine_config)),
             orchestration_session_id,
             orchestration_engine_config,
@@ -1264,7 +1264,15 @@ impl SessionRuntime {
             sync_hook_buffer: coco_hooks::SyncHookEventBuffer::new(),
             async_hook_registry: Arc::new(coco_hooks::async_registry::AsyncHookRegistry::new()),
             file_changed_watcher: Arc::new(RwLock::new(None)),
-            history: Arc::new(Mutex::new(MessageHistory::new())),
+            history: Arc::new(Mutex::new({
+                let mut h = MessageHistory::new();
+                // Stamp F9 envelope onto history so every history_sync
+                // emit carries session_id automatically. agent_id is
+                // None for the main session; subagents stamp their own
+                // via a separate construction site in `engine_session`.
+                h.set_envelope(session_id, None);
+                h
+            })),
             file_history_sink_session_id,
             role_client_cache,
             // Late-bound — `attach_agent_handle()` installs after the

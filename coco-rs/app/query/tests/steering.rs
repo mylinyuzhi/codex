@@ -96,7 +96,8 @@ impl LanguageModel for SteeringMock {
 
     async fn do_generate(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
         // Snapshot the prompt for the assertion phase. The guard is
@@ -167,9 +168,10 @@ impl LanguageModel for SteeringMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -300,9 +302,9 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
         events
     });
 
-    let initial_messages = vec![coco_messages::create_user_message(
+    let initial_messages = vec![std::sync::Arc::new(coco_messages::create_user_message(
         "kick off a turn so we can steer it",
-    )];
+    ))];
     let result = engine
         .run_with_messages(initial_messages, event_tx)
         .await
@@ -323,7 +325,7 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
     let queued_attachments: Vec<_> = result
         .final_messages
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|m| match m.as_ref() {
             coco_messages::Message::Attachment(att)
                 if att.kind == AttachmentKind::QueuedCommand =>
             {
@@ -480,14 +482,13 @@ async fn e2e_steering_origin_framing_per_kind() {
     .await;
 
     assert_eq!(
-        history.messages.len(),
+        history.len(),
         4,
         "all four queued items should drain into history"
     );
     let bodies: Vec<String> = history
-        .messages
         .iter()
-        .map(coco_messages::wrapping::extract_text_from_message)
+        .map(|m| coco_messages::wrapping::extract_text_from_message(m))
         .collect();
 
     // Every body wraps the framing in <system-reminder>.

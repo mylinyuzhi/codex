@@ -490,7 +490,7 @@ impl RealTuiHarness {
                 }
                 Err(_) => continue,
             };
-            handle_core_event(&mut self.state, next.clone());
+            handle_core_event(&mut self.state, next.clone(), &self.command_tx);
             let auto_handled = self.maybe_auto_handle_question(&next).await;
             let is_terminal = matches!(
                 &next,
@@ -544,7 +544,7 @@ impl RealTuiHarness {
                 }
                 Err(_) => continue,
             };
-            handle_core_event(&mut self.state, next.clone());
+            handle_core_event(&mut self.state, next.clone(), &self.command_tx);
             // Auto-handle AskUserQuestion approvals when the harness
             // is configured for it — the test would otherwise see the
             // AskUserQuestion ApprovalRequired and treat it as the
@@ -729,7 +729,13 @@ impl RealTuiHarness {
     /// Reminders inject as `Message::Attachment` entries here and are
     /// not surfaced via the wire-protocol notification stream.
     pub async fn history_snapshot(&self) -> Vec<coco_messages::Message> {
-        self.runtime.history.lock().await.as_slice().to_vec()
+        self.runtime
+            .history
+            .lock()
+            .await
+            .iter()
+            .map(|a| (**a).clone())
+            .collect()
     }
 
     /// The engine's response text, accumulated from streaming `TextDelta`
@@ -845,12 +851,12 @@ async fn run_real_agent_driver(
                     // building the engine — same order as
                     // `process_submit_turn`.
                     let new_msgs = build_user_turn_messages(user_uuid, &content);
-                    let messages: Vec<coco_messages::Message> = {
+                    let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
                         let mut h = runtime_t.history.lock().await;
                         for m in new_msgs.iter().cloned() {
                             h.push(m);
                         }
-                        h.as_slice().to_vec()
+                        h.to_vec()
                     };
 
                     let engine = runtime_t.build_engine(turn_cancel.clone()).await;
@@ -868,8 +874,8 @@ async fn run_real_agent_driver(
                         Ok(result) => {
                             let mut h = runtime_t.history.lock().await;
                             h.clear();
-                            for m in result.final_messages {
-                                h.push(m);
+                            for arc in result.final_messages {
+                                h.push_arc(arc);
                             }
                         }
                         Err(e) => {

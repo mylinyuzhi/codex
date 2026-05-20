@@ -1,20 +1,20 @@
-//! Message creation, normalization, filtering, history, cost tracking, lookups.
+//! Message creation, normalization, history, cost tracking, lookups.
 //!
 //! TS: utils/messages.ts (~193K LOC), history.ts, cost-tracker.ts
 
 pub mod cost;
 pub mod creation;
-pub mod filtering;
 pub mod history;
 pub mod lookups;
 pub mod normalize;
+pub mod pipeline;
 pub mod predicates;
 pub mod wrapping;
 
 // Message-family types live in `coco-types` (the wire-protocol crate
 // owns its payload shapes). Re-export at this crate root so the
 // established `coco_messages::Message` import path keeps working for
-// the operations layer that does normalization / filtering / history.
+// the operations layer that does normalization / history.
 pub use coco_types::messages::*;
 
 pub use cost::CostTracker;

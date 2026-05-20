@@ -183,6 +183,13 @@ pub(crate) struct ToolContextOverrides {
     /// `ToolUseContext::tool_search_active()` then drives the
     /// runtime three-state activation.
     pub(crate) current_model_supports_client_side_tool_search: bool,
+    /// Post-budget message snapshot from `build_prompt`. Threaded onto
+    /// `ToolUseContext.messages` so tools observe the exact view this
+    /// turn's model just received. TS parity: `query.ts:548` sets
+    /// `toolUseContext.messages = messagesForQuery`. `None` falls back
+    /// to an empty snapshot for test stubs / pre-first-turn paths.
+    pub(crate) messages_snapshot:
+        Option<std::sync::Arc<Vec<std::sync::Arc<coco_messages::Message>>>>,
 }
 
 fn merge_rules_by_behavior(
@@ -372,7 +379,9 @@ impl ToolContextFactory {
                 coco_config::PlanModeWorkflow::Interview
             ),
             cancel: self.cancel.clone(),
-            messages: Arc::new(RwLock::new(Vec::new())),
+            messages: overrides
+                .messages_snapshot
+                .unwrap_or_else(|| Arc::new(Vec::new())),
             permission_context: ToolPermissionContext {
                 mode: live_mode,
                 // Per-session additional dirs from `/add-dir <path>`,

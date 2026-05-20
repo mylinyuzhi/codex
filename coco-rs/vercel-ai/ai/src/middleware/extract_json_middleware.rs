@@ -48,7 +48,7 @@ impl LanguageModelV4Middleware for ExtractJsonMiddleware {
         &self,
         options: WrapGenerateOptions,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        let result = (options.do_generate)(options.params).await?;
+        let result = (options.do_generate)(options.params, options.abort_signal).await?;
 
         // Transform text content
         let transformed_content: Vec<vercel_ai_provider::AssistantContentPart> = result
@@ -77,7 +77,7 @@ impl LanguageModelV4Middleware for ExtractJsonMiddleware {
         options: WrapStreamOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
         // For streaming, pass through (full implementation would buffer and transform)
-        (options.do_stream)(options.params).await
+        (options.do_stream)(options.params, options.abort_signal).await
     }
 }
 

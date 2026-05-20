@@ -10,6 +10,8 @@
     "history/messageAppended",
     "history/messageTruncated",
     "history/resetForResume",
+    "history/replaced",
+    "history/reasoningMetadataAttached",
     "turn/started",
     "turn/completed",
     "turn/failed",

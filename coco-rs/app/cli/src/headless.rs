@@ -81,7 +81,8 @@ impl LanguageModel for MockModel {
     }
     async fn do_generate(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> std::result::Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         let user_text: String = options
@@ -123,12 +124,13 @@ impl LanguageModel for MockModel {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> std::result::Result<LanguageModelStreamResult, AISdkError> {
         // Compose `do_generate` output into a synthetic stream so the
         // QueryEngine streaming path (which always calls `query_stream`)
         // works against the mock.
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, abort_signal).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -460,7 +462,7 @@ pub struct RunChatOutcome {
     /// or embedding callers can feed this into the next [`run_chat_with_options`]
     /// call (`opts.prior_messages = previous.final_messages`) to
     /// continue the conversation in-process.
-    pub final_messages: Vec<coco_messages::Message>,
+    pub final_messages: Vec<std::sync::Arc<coco_messages::Message>>,
     /// Working directory the engine actually used. Reflects the
     /// effective resolution: `--cwd <flag>` then `RunChatOptions::cwd`
     /// then `std::env::current_dir()`. Useful for tests asserting the
@@ -500,7 +502,7 @@ pub struct RunChatOptions {
     /// start a fresh conversation (the default `run_chat` behavior).
     /// Non-empty = continue from the prior turns; the engine drives
     /// `run_with_messages(prior + user_prompt)` instead of `run`.
-    pub prior_messages: Vec<coco_messages::Message>,
+    pub prior_messages: Vec<std::sync::Arc<coco_messages::Message>>,
     /// Override the engine's session id. Used by `--resume` /
     /// `--continue` / `--fork-session` so the resumed run writes
     /// transcript entries under the source (or fork) session id
@@ -730,7 +732,7 @@ pub async fn run_chat_with_options(
         let mut replacement_state =
             coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);
         for msg in &opts.prior_messages {
-            if let coco_messages::Message::ToolResult(tr) = msg {
+            if let coco_messages::Message::ToolResult(tr) = msg.as_ref() {
                 replacement_state.seen_ids.insert(tr.tool_use_id.clone());
             }
         }
@@ -758,11 +760,14 @@ pub async fn run_chat_with_options(
     let inputs =
         crate::at_mention_turn::resolve_turn_inputs_text_only(prompt, &cwd, &file_read_state).await;
     let new_turn_messages = crate::at_mention_turn::build_messages_for_turn(&inputs);
-    let messages: Vec<coco_messages::Message> = if opts.prior_messages.is_empty() {
+    let messages: Vec<std::sync::Arc<coco_messages::Message>> = if opts.prior_messages.is_empty() {
         new_turn_messages
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .collect()
     } else {
         let mut combined = opts.prior_messages;
-        combined.extend(new_turn_messages);
+        combined.extend(new_turn_messages.into_iter().map(std::sync::Arc::new));
         combined
     };
     if !inputs.mentioned_paths.is_empty() {

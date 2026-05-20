@@ -290,16 +290,14 @@ impl QueryEngine {
         if history.is_empty() {
             return;
         }
-        // Serialise the post-turn history so the slot can be
-        // observed without holding a parent-history reference. Same
-        // shape that `AgentQueryConfig.fork_context_messages`
-        // expects, so a future fork caller can thread it directly
-        // through the existing fork-context plumbing.
-        let fork_messages: Vec<serde_json::Value> = history
-            .as_slice()
-            .iter()
-            .filter_map(|m| serde_json::to_value(m).ok())
-            .collect();
+        // Snapshot the post-turn history into shared `Arc<Message>`
+        // entries so the slot can be observed without holding a
+        // parent-history reference. Same shape that
+        // `AgentQueryConfig.fork_context_messages` expects, so a fork
+        // caller threads it directly through the existing
+        // fork-context plumbing — no serialize / deserialize hop.
+        let fork_messages: Vec<std::sync::Arc<coco_messages::Message>> =
+            history.as_slice().to_vec();
         let rendered_system_prompt = self.config.system_prompt.clone().unwrap_or_default();
         // Provider instance name is captured at the same point as `model_id`
         // so post-turn forks can perform fast-mode-aware rate-limit selectivity
@@ -522,13 +520,25 @@ impl QueryEngine {
     /// Drain any silent attachments emitted since the last turn into
     /// `history`. Called at the head of each outer-loop iteration.
     /// Returns the number of drained attachments for telemetry.
-    pub(crate) async fn drain_attachment_inbox(&self, history: &mut MessageHistory) -> usize {
+    pub(crate) async fn drain_attachment_inbox(
+        &self,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    ) -> usize {
         let mut count = 0;
         let mut rx = self.attachment_rx.lock().await;
         while let Ok(att) = rx.try_recv() {
-            history
-                .messages
-                .push(coco_messages::Message::Attachment(att));
+            // I-1 (Authority): every transcript-visible append must
+            // emit so TUI's TranscriptView + SDK NDJSON observers
+            // track the new attachment. Drain happens at turn-start
+            // before the reminder pipeline so cross-crate-produced
+            // attachments land in history with full provenance.
+            crate::history_sync::history_push_and_emit(
+                history,
+                coco_messages::Message::Attachment(att),
+                event_tx,
+            )
+            .await;
             count += 1;
         }
         count

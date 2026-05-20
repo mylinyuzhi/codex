@@ -62,9 +62,24 @@ impl CompactionObserverRegistry {
     }
 
     /// Notify all observers with the final compacted messages.
-    pub async fn notify_post_compact(&self, compacted_messages: &[Message]) {
+    ///
+    /// Generic over `Borrow<Message>` so the engine can pass its
+    /// `&[Arc<Message>]` snapshot without a separate deep-clone bridge.
+    /// The trait method itself stays object-safe (`&[Message]`); we
+    /// materialize once per call (rare — fires only at compaction).
+    pub async fn notify_post_compact<M: std::borrow::Borrow<Message>>(
+        &self,
+        compacted_messages: &[M],
+    ) {
+        if self.observers.is_empty() {
+            return;
+        }
+        let owned: Vec<Message> = compacted_messages
+            .iter()
+            .map(|m| m.borrow().clone())
+            .collect();
         for observer in &self.observers {
-            if let Err(e) = observer.on_post_compact(compacted_messages).await {
+            if let Err(e) = observer.on_post_compact(&owned).await {
                 tracing::warn!("compaction observer on_post_compact error: {e}");
             }
         }

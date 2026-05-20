@@ -71,7 +71,8 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
 
     async fn do_generate(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
         let mut warnings = Vec::new();
         let provider_name = self.config.provider_options_name();
@@ -178,7 +179,7 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
                 &body,
                 JsonResponseHandler::new(),
                 self.config.error_handler.clone(),
-                options.abort_signal,
+                abort_signal,
                 self.config.client.clone(),
             )
             .await?;
@@ -235,7 +236,8 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
         let mut warnings = Vec::new();
         let provider_name = self.config.provider_options_name();
@@ -336,7 +338,7 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
             &url,
             Some(headers),
             &body,
-            options.abort_signal,
+            abort_signal,
             self.config.client.clone(),
         )
         .await?;

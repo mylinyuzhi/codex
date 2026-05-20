@@ -79,14 +79,16 @@ impl LanguageModelV4 for MockLanguageModel {
 
     async fn do_generate(
         &self,
-        _params: LanguageModelV4CallOptions,
+        _params: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, vercel_ai_provider::AISdkError> {
         unimplemented!()
     }
 
     async fn do_stream(
         &self,
-        _params: LanguageModelV4CallOptions,
+        _params: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, vercel_ai_provider::AISdkError> {
         unimplemented!()
     }

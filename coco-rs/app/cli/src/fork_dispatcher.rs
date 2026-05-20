@@ -177,17 +177,16 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             .await;
 
         // Drive the engine. `fork_context_messages` carries the
-        // parent's history verbatim, mirroring the cache-share path.
-        // Empty fork-context messages → run with the prompt only
-        // (rare; promptSuggestion etc. always pass parent history).
+        // parent's history verbatim (shared via `Arc<Message>`),
+        // mirroring the cache-share path. Empty fork-context messages
+        // → run with the prompt only (rare; promptSuggestion etc.
+        // always pass parent history).
         let result = if !agent_config.fork_context_messages.is_empty() {
-            let mut messages: Vec<coco_messages::Message> = Vec::new();
-            for v in &agent_config.fork_context_messages {
-                if let Ok(m) = serde_json::from_value::<coco_messages::Message>(v.clone()) {
-                    messages.push(m);
-                }
-            }
-            messages.push(coco_messages::create_user_message(prompt));
+            let mut messages: Vec<std::sync::Arc<coco_messages::Message>> =
+                agent_config.fork_context_messages.clone();
+            messages.push(std::sync::Arc::new(coco_messages::create_user_message(
+                prompt,
+            )));
             // Discard event stream — fork output goes back via the
             // returned text, not via the parent's CoreEvent channel.
             let (tx, _rx) = tokio::sync::mpsc::channel(8);
@@ -208,19 +207,12 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
 
         // Multi-message capture (TS parity:
         // `utils/forkedAgent.ts::runForkedAgent` returns the engine's
-        // actual `Vec<Message>`). The fork's full assistant +
-        // user-tool-result sequence lands here so callers
-        // (`promptSuggestion::extract_suggestion_text`) can walk
-        // "tool→denied→text" turn-2 fallback paths correctly.
-        //
-        // `QueryResult.final_messages` carries every assistant +
-        // tool-result message produced during the fork's run; we
-        // strip the parent-history prefix that the engine prepended
-        // so the caller only sees the fork's own emissions (TS
-        // `runForkedAgent` likewise returns just the fork's added
-        // messages, not the parent's).
+        // actual `Vec<Message>`). Strip the parent-history prefix +
+        // the user prompt the fork prepended so the caller only sees
+        // the fork's own emissions. Slicing an Arc-vec is a vec of
+        // pointer bumps — no deep clone of message bodies.
         let parent_msg_count = agent_config.fork_context_messages.len();
-        let fork_messages: Vec<coco_messages::Message> = result
+        let fork_messages: Vec<std::sync::Arc<coco_messages::Message>> = result
             .final_messages
             .iter()
             .skip(parent_msg_count + 1) // +1 for the user prompt the fork prepended

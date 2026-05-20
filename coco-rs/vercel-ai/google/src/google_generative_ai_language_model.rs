@@ -838,9 +838,10 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
 
     async fn do_generate(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        let (body, headers, warnings, provider_options_name) = self.get_args(&options)?;
+        let (body, headers, warnings, provider_options_name) = self.get_args(options)?;
 
         let model_path = get_model_path(&self.model_id);
         let url = format!(
@@ -855,7 +856,7 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
             &body,
             JsonResponseHandler::new(),
             GoogleFailedResponseHandler,
-            options.abort_signal.clone(),
+            abort_signal.clone(),
             self.config.client.clone(),
         )
         .await?;
@@ -963,9 +964,10 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        let (body, headers, warnings, provider_options_name) = self.get_args(&options)?;
+        let (body, headers, warnings, provider_options_name) = self.get_args(options)?;
         let include_raw = options.include_raw_chunks.unwrap_or(false);
 
         let model_path = get_model_path(&self.model_id);
@@ -979,7 +981,7 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
             &url,
             Some(headers),
             &body,
-            options.abort_signal.clone(),
+            abort_signal.clone(),
             self.config.client.clone(),
         )
         .await?;

@@ -62,7 +62,7 @@ pub async fn run() -> Result<()> {
             "assistant turn {i} — performed step {i} of a longer chain"
         )));
     }
-    let pre_message_count = history.messages.len();
+    let pre_message_count = history.len();
     assert_eq!(
         pre_message_count, 10,
         "compact_round_trip: setup expected 10 messages (5 U + 5 A), got {pre_message_count}",
@@ -105,16 +105,16 @@ pub async fn run() -> Result<()> {
     // payload), but it MUST be smaller than pre — otherwise compact
     // didn't actually do anything.
     assert!(
-        history.messages.len() < pre_message_count,
+        history.len() < pre_message_count,
         "compact_round_trip: history size should shrink after compact \
          (pre={pre_message_count}, post={})",
-        history.messages.len(),
+        history.len(),
     );
 
     // The summary text we scripted must appear somewhere in the new
     // history — that's the load-bearing evidence that the summarizer
     // ran and its output was folded back in.
-    let summary_in_history = history.messages.iter().any(message_contains_summary);
+    let summary_in_history = history.iter().any(|m| message_contains_summary(m));
     assert!(
         summary_in_history,
         "compact_round_trip: scripted summary `{SUMMARY_TEXT}` should appear \

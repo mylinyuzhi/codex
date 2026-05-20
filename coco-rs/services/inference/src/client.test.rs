@@ -38,7 +38,8 @@ impl LanguageModelV4 for MockModel {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, vercel_ai_provider::AISdkError> {
         Ok(LanguageModelV4GenerateResult {
             content: vec![AssistantContentPart::Text(TextPart {
@@ -56,7 +57,8 @@ impl LanguageModelV4 for MockModel {
 
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, vercel_ai_provider::AISdkError> {
         Err(vercel_ai_provider::AISdkError::new(
             "mock does not support streaming",
@@ -77,13 +79,15 @@ impl LanguageModelV4 for ErrorModel {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, vercel_ai_provider::AISdkError> {
         Err(vercel_ai_provider::AISdkError::new("simulated failure"))
     }
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, vercel_ai_provider::AISdkError> {
         Err(vercel_ai_provider::AISdkError::new("simulated failure"))
     }

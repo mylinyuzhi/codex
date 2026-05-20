@@ -1,5 +1,7 @@
 use super::*;
 
+const EMPTY_MESSAGES: &[coco_messages::Message] = &[];
+
 #[test]
 fn test_is_safe_tool() {
     assert!(is_safe_tool("Read"));
@@ -89,7 +91,7 @@ fn test_build_system_prompt_with_rules_and_xml_format() {
 #[tokio::test]
 async fn test_classify_safe_tool_skips_llm() {
     let result = classify_yolo_action(
-        &[],
+        EMPTY_MESSAGES,
         "Read",
         &serde_json::json!({"file_path": "foo.rs"}),
         &AutoModeRules::default(),
@@ -102,7 +104,7 @@ async fn test_classify_safe_tool_skips_llm() {
 #[tokio::test]
 async fn test_classify_stage1_allow_short_circuits() {
     let result = classify_yolo_action(
-        &[],
+        EMPTY_MESSAGES,
         "Bash",
         &serde_json::json!({"command": "ls -la"}),
         &AutoModeRules::default(),
@@ -125,7 +127,7 @@ async fn test_classify_stage1_block_escalates_to_stage2() {
     let call_count = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
     let cc = call_count.clone();
     let result = classify_yolo_action(
-        &[],
+        EMPTY_MESSAGES,
         "Bash",
         &serde_json::json!({"command": "rm -rf /"}),
         &AutoModeRules::default(),
@@ -157,7 +159,7 @@ async fn test_classify_stage1_unparseable_escalates_to_stage2() {
     let call_count = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
     let cc = call_count.clone();
     let result = classify_yolo_action(
-        &[],
+        EMPTY_MESSAGES,
         "Write",
         &serde_json::json!({"file_path": "/etc/passwd", "content": "hack"}),
         &AutoModeRules::default(),
@@ -181,7 +183,7 @@ async fn test_classify_stage1_unparseable_escalates_to_stage2() {
 #[tokio::test]
 async fn test_classify_stage2_unparseable_blocks_for_safety() {
     let result = classify_yolo_action(
-        &[],
+        EMPTY_MESSAGES,
         "Bash",
         &serde_json::json!({"command": "rm -rf /"}),
         &AutoModeRules::default(),
@@ -196,7 +198,7 @@ async fn test_classify_stage2_unparseable_blocks_for_safety() {
 #[tokio::test]
 async fn test_classify_error_defaults_to_block() {
     let result = classify_yolo_action(
-        &[],
+        EMPTY_MESSAGES,
         "Bash",
         &serde_json::json!({"command": "rm -rf /"}),
         &AutoModeRules::default(),

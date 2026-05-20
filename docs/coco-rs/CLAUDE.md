@@ -46,6 +46,7 @@ Each piece of information has exactly one owner. No duplication across docs.
 | Subagent invocation architecture: definition store, TS-first source precedence, AgentTool prompt/filter behavior, runtime ownership, background/worktree/fork phases | `subagent-refactor-plan.md` | `crate-coco-tools.md` owns the tool schema; this doc owns subagent runtime architecture |
 | Skills/commands/plugins parity gaps, including `/compact` command behavior and SkillTool command-source bridge | `parity-skills-commands-plugins.md` | crate plans reference gap details; this doc owns TS-verified parity deltas |
 | Prompt cache break detection, CacheScope, CacheBreakDetector | `crate-coco-inference.md` | |
+| Message mutation pipeline (`MessagePass` trait, `run_message_passes`, normalize + compact pass catalog, drift-detection invariant) | `message-pipeline.md` | `coco-rs/core/messages/CLAUDE.md` references; `coco-rs/services/compact/CLAUDE.md` references |
 | AgentTool architecture: spawn, fork, worktree, tool filtering, agent-as-task | `crate-coco-tools.md` | |
 | **Tool Result Budget** (Level 1 per-tool persist + Level 2 per-message budget) | `tool-result-budget-plan.md` | crate-coco-tool-runtime / crate-coco-tools / crate-coco-query / crate-coco-compact reference, not redefine |
 | **ToolSearch** deferred-tool lazy loading: query DSL, scoring, multi-provider promotion via `discovered_tool_names` | `tool-search-design.md` | crate-coco-tools / crate-coco-tool-runtime reference, not redefine |
@@ -668,6 +669,7 @@ Added in Round 2 review:
 | `ts-to-rust-mapping.md` | Every TS source directory -> Rust crate (version, strategy) |
 | `ts-utils-mapping.md` | All 338 TS `utils/*.ts` files -> Rust target |
 | `multi-provider-plan.md` | Multi-LLM architecture: flow, beta headers, provider branching |
+| `message-pipeline.md` | Unified message mutation pipeline: `MessagePass` trait, `run_message_passes` helper, normalize + compact pass catalog, drift-detection invariant, TS-parity mapping |
 | `tool-result-budget-plan.md` | Two-level Tool Result Budget plan: Level 1 per-tool persistence (`<persisted-output>` + 2KB preview + session-scoped storage) and Level 2 per-message aggregate budget (`ContentReplacementState` + `enforceToolResultBudget`). Owners: `coco-tool-runtime` + `coco-query` + `coco-session` (re-routed from `coco-context`). |
 | `parity-skills-commands-plugins.md` | Deep-review parity plan for `coco-skills` / `coco-commands` / `coco-plugins`: every P1/P2/P3 gap mirrors TS define/behavior/UI with file:line citations. Round 11 (May 2026). Cross-references `crate-coco-{skills,commands,plugins}.md` and `audit-gaps.md`. |
 | `ui/agent-console-design.md` | Final agent-console product architecture: TEA / `AppState`, transcript, streaming, activity, bottom pane, prompts, pickers, pagers, effects, and verification. |

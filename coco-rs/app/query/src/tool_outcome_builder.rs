@@ -404,9 +404,7 @@ fn render_hook_context_messages(
         .iter()
         .map(|ctx| SystemReminder::new(kind, format!("{hook_name} hook additional context: {ctx}")))
         .collect();
-    let mut scratch: Vec<Message> = Vec::new();
-    let _display_only = inject_reminders(reminders, &mut scratch);
-    scratch
+    inject_reminders(reminders).model_visible
 }
 
 fn render_hook_stopped_continuation_message(hook_name: &str, reason: &str) -> Option<Message> {
@@ -414,9 +412,7 @@ fn render_hook_stopped_continuation_message(hook_name: &str, reason: &str) -> Op
         ReminderAttachmentType::HookStoppedContinuation,
         format!("{hook_name} hook stopped continuation: {reason}"),
     )];
-    let mut scratch: Vec<Message> = Vec::new();
-    let _display_only = inject_reminders(reminders, &mut scratch);
-    scratch.into_iter().next()
+    inject_reminders(reminders).model_visible.into_iter().next()
 }
 
 #[cfg(test)]

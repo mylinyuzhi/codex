@@ -110,7 +110,13 @@ impl LiveSdkServer {
         let Some(handle) = guard.as_ref() else {
             return Vec::new();
         };
-        handle.history.lock().await.clone()
+        handle
+            .history
+            .lock()
+            .await
+            .iter()
+            .map(|a| (**a).clone())
+            .collect()
     }
 }
 

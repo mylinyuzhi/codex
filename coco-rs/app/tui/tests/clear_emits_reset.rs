@@ -23,7 +23,7 @@
 
 use coco_messages::create_user_message;
 use coco_tui::AppState;
-use coco_tui::handle_core_event;
+use coco_tui::handle_event_for_test as handle_core_event;
 use coco_tui::state::StreamingState;
 use coco_tui::state::ToolExecution;
 use coco_tui::state::ToolStatus;
@@ -71,7 +71,11 @@ async fn clear_full_emits_session_reset_and_wipes_state() {
         let m = create_user_message(&format!("prior {i}"));
         handle_core_event(
             &mut state,
-            protocol_evt(ServerNotification::MessageAppended { message: m }),
+            protocol_evt(ServerNotification::MessageAppended {
+                message: std::sync::Arc::new(m),
+                session_id: String::new(),
+                agent_id: None,
+            }),
         );
     }
     state.session.tool_executions.push(fake_running_tool("c1"));
@@ -84,12 +88,14 @@ async fn clear_full_emits_session_reset_and_wipes_state() {
     let (tx, mut rx) = mpsc::channel::<CoreEvent>(4);
     tx.send(protocol_evt(ServerNotification::SessionResetForResume {
         session_id: "post-clear-session".into(),
+        agent_id: None,
     }))
     .await
     .expect("channel accepts the event");
 
     let observed = rx.recv().await.expect("SDK observer receives event");
-    let CoreEvent::Protocol(ServerNotification::SessionResetForResume { session_id }) = &observed
+    let CoreEvent::Protocol(ServerNotification::SessionResetForResume { session_id, .. }) =
+        &observed
     else {
         panic!("expected Protocol(SessionResetForResume), got {observed:?}");
     };
@@ -123,7 +129,11 @@ async fn clear_history_scope_emits_truncate_to_zero() {
         let m = create_user_message(&format!("m{i}"));
         handle_core_event(
             &mut state,
-            protocol_evt(ServerNotification::MessageAppended { message: m }),
+            protocol_evt(ServerNotification::MessageAppended {
+                message: std::sync::Arc::new(m),
+                session_id: String::new(),
+                agent_id: None,
+            }),
         );
     }
     let pre_clear_conv_id = state.session.conversation_id.clone();
@@ -133,6 +143,8 @@ async fn clear_history_scope_emits_truncate_to_zero() {
         &mut state,
         roundtrip(protocol_evt(ServerNotification::MessageTruncated {
             keep_count: 0,
+            session_id: String::new(),
+            agent_id: None,
         })),
     );
 

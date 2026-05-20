@@ -73,7 +73,8 @@ impl LanguageModel for ScriptedCapacityMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let idx = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let outcome = self
@@ -104,9 +105,10 @@ impl LanguageModel for ScriptedCapacityMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -228,7 +230,12 @@ async fn test_engine_surfaces_error_when_chain_exhausted() {
     });
 
     let result = engine
-        .run_with_messages(vec![coco_messages::create_user_message("hello")], tx)
+        .run_with_messages(
+            vec![std::sync::Arc::new(coco_messages::create_user_message(
+                "hello",
+            ))],
+            tx,
+        )
         .await;
     assert!(result.is_err(), "exhausted chain must surface error");
 
