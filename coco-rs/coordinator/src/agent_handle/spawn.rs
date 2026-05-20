@@ -630,7 +630,14 @@ impl SwarmAgentHandle {
         // Spawn-time identity resolution (T3 + T7). Centralizes model +
         // role precedence in `coco_subagent`:
         //   model:  request.model > definition.model > role-resolved
-        //   role:   definition.model_role > subagent_type → role > Subagent
+        //   role:   request.model_role > definition.model_role
+        //         > subagent_type → role > Subagent
+        //
+        // Memory-crate forks (extract / dream / session-memory) set
+        // `request.model_role = Some(ModelRole::Memory)` so an operator
+        // configuring `settings.models.memory` actually steers them
+        // instead of falling through to `general-purpose →
+        // ModelRole::Subagent`.
         //
         // The definition flows through `AgentSpawnRequest.definition`,
         // populated by AgentTool from `ctx.agent_catalog`. When the catalog
@@ -642,6 +649,7 @@ impl SwarmAgentHandle {
             .map(|t| t.parse().expect("AgentTypeId::from_str is Infallible"));
         let selection = coco_subagent::resolve_subagent_selection(
             request.model.as_deref(),
+            request.model_role,
             request.definition.as_deref(),
             agent_type_id.as_ref(),
         );

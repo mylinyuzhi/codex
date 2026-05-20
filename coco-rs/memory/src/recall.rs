@@ -56,35 +56,42 @@ impl PrefetchState {
         Self::default()
     }
 
-    pub fn is_surfaced(&self, path: &str) -> bool {
+    /// `expect` semantics on poison: a poisoned `Mutex` means a panic
+    /// happened mid-write on `already_surfaced` or `total_bytes`,
+    /// leaving the inner state inconsistent. The previous silent-recovery
+    /// (`unwrap_or(false)` / `unwrap_or(true)`) masked the bug AND
+    /// produced wrong answers downstream (recall surfaces duplicates
+    /// or starves the budget). Library-internal invariants should
+    /// panic loudly so the bug surfaces in tests rather than
+    /// silently rotting recall behavior for the rest of the session.
+    fn lock(&self) -> std::sync::MutexGuard<'_, PrefetchInner> {
         self.inner
             .lock()
-            .map(|s| s.already_surfaced.contains(path))
-            .unwrap_or(false)
+            .expect("PrefetchState mutex poisoned — invariant broken")
+    }
+
+    pub fn is_surfaced(&self, path: &str) -> bool {
+        self.lock().already_surfaced.contains(path)
     }
 
     pub fn mark_surfaced(&self, path: &str, bytes: i64) {
-        if let Ok(mut s) = self.inner.lock() {
-            s.already_surfaced.insert(path.to_string());
-            s.total_bytes += bytes;
-        }
+        let mut s = self.lock();
+        s.already_surfaced.insert(path.to_string());
+        s.total_bytes += bytes;
     }
 
     pub fn is_budget_exhausted(&self) -> bool {
-        self.inner
-            .lock()
-            .map(|s| s.total_bytes >= MAX_SESSION_BYTES)
-            .unwrap_or(true)
+        self.lock().total_bytes >= MAX_SESSION_BYTES
     }
 
     /// Wipe the surfaced set + byte counter — call from
-    /// [`crate::MemoryRuntime::reset`] on `/clear` so the next
-    /// conversation starts fresh.
+    /// [`crate::MemoryRuntime::reset`] on `/clear` and from the
+    /// compact post-step so a fresh transcript can re-surface memory
+    /// without inheriting the prior session's dedup + 60 KB cap.
     pub fn reset(&self) {
-        if let Ok(mut s) = self.inner.lock() {
-            s.already_surfaced.clear();
-            s.total_bytes = 0;
-        }
+        let mut s = self.lock();
+        s.already_surfaced.clear();
+        s.total_bytes = 0;
     }
 }
 
@@ -235,16 +242,13 @@ pub fn load_relevant_memories(
     out
 }
 
-/// Recency-only fallback when no LLM is available — returns up to
-/// `MAX_RELEVANT` filenames newest-first, skipping already-surfaced.
-pub fn select_heuristic(scanned: &[ScannedMemory], state: &PrefetchState) -> Vec<String> {
-    scanned
-        .iter()
-        .filter(|m| !state.is_surfaced(&m.path.to_string_lossy()))
-        .take(MAX_RELEVANT)
-        .map(|m| m.path.to_string_lossy().into_owned())
-        .collect()
-}
+// Note: a previous `select_heuristic` fallback was deliberately
+// removed to mirror TS `findRelevantMemories.ts:131-140`. When the
+// ranker errors or no LLM handle is installed, recall stays silent
+// (returns empty) — surfacing arbitrarily-recent memories that
+// occupy attention budget and the 60 KB session byte cap is worse
+// than surfacing none. The runtime treats "ranker unavailable" the
+// same as "ranker returned no matches."
 
 #[cfg(test)]
 #[path = "recall.test.rs"]

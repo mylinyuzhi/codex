@@ -22,7 +22,6 @@ use crate::recall::SELECT_MEMORIES_SYSTEM_PROMPT;
 use crate::recall::build_selection_prompt;
 use crate::recall::load_relevant_memories;
 use crate::recall::parse_selection_response;
-use crate::recall::select_heuristic;
 use crate::scan::scan_memory_files;
 use crate::service::DreamService;
 use crate::service::ExtractService;
@@ -232,6 +231,18 @@ impl MemoryRuntimeBuilder {
                 auto_compact_enabled: self.auto_compact_enabled,
             });
         }
+        // NOTE: `MemdirDisabled` is NOT emitted from this builder.
+        // TS `tengu_memdir_disabled` (`memdir.ts:492-505`) fires when
+        // the **memdir feature itself** is off — at which point this
+        // builder wouldn't run. The session-runtime layer emits the
+        // `FeatureGate` variant directly via tracing when
+        // `Feature::AutoMemory` is off. Per-subsystem toggles
+        // (extraction / dream / session-memory) are a different
+        // semantic and do NOT trigger `tengu_memdir_disabled` in TS —
+        // their on/off state is visible from the absence/presence of
+        // the corresponding lifecycle events instead (e.g. no
+        // `tengu_extract_memories_extraction` ever firing in a
+        // session implies extraction was off).
         // `memory_base` is the root of the per-project memory layout
         // (`<base>/projects/<slug>/memory/`). `memory_base_override`
         // (from `COCO_REMOTE_MEMORY_DIR`) shifts it without touching
@@ -641,7 +652,7 @@ impl MemoryRuntime {
             self.config.skip_index,
             self.config.searching_past_context_enabled,
             transcript_dir,
-            None,
+            self.config.extra_guidelines.as_deref(),
         ))
     }
 
@@ -651,15 +662,36 @@ impl MemoryRuntime {
     /// [`ModelRole::Memory`] side-query that ranks the manifest and
     /// returns up to 5 filenames; the returned files are loaded with
     /// freshness headers and per-session byte-budget enforcement
-    /// applied via [`PrefetchState`]. When no handle is present (e.g.
-    /// the harness ran without inference), falls back to a recency
-    /// heuristic so memory still surfaces something rather than
-    /// nothing.
+    /// applied via [`PrefetchState`]. When no handle is present (or
+    /// the ranker errors) recall stays silent and returns empty — TS
+    /// parity (`findRelevantMemories.ts:131-140`). Surfacing
+    /// arbitrarily-recent memories would occupy attention budget and
+    /// the 60 KB session byte cap with no relevance signal.
     ///
     /// `recent_tools` lets the ranker deprioritize reference docs for
     /// tools the model is actively exercising — TS parity.
     pub async fn recall(&self, query: &str, recent_tools: &[String]) -> Vec<RelevantMemory> {
-        if query.trim().is_empty() {
+        // Pre-call gates — TS `attachments.ts:2378-2386` rejects
+        // before paying the LLM cost. Two cheap filters that make
+        // recall pull its weight on a per-turn basis:
+        //
+        // 1. Empty / whitespace-only query.
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        // 2. Single-token query — anything without inner whitespace
+        //    isn't a meaningful semantic query. TS:
+        //    `if (!/\s/.test(input.trim())) return undefined`. Saves
+        //    a side-query per quick-prompt session ("hi", "go", "thanks").
+        if !trimmed.contains(char::is_whitespace) {
+            return Vec::new();
+        }
+        // 3. Cumulative byte budget already saturated — every
+        //    selected memory would be dropped by `load_relevant_memories`
+        //    anyway. TS `attachments.ts:2384-2386` gates upstream of
+        //    `selectRelevantMemories`.
+        if self.recall_state.is_budget_exhausted() {
             return Vec::new();
         }
         // Cold-start short-circuit: gate on the scan being empty, NOT
@@ -672,93 +704,107 @@ impl MemoryRuntime {
             return Vec::new();
         }
 
-        let side_query = self.side_query.get().cloned();
-        let selected: Vec<String> = match side_query {
-            Some(handle) => {
-                let user_prompt =
-                    build_selection_prompt(query, &scanned, &self.recall_state, recent_tools);
-                // Force structured output via a synthetic
-                // `select_memories` tool — TS parity with
-                // `selectRelevantMemories.ts`'s `tool_choice: { type:
-                // "tool", name: "select_memories" }`. Strict JSON
-                // shape is more reliable than a permissive
-                // `parse_selection_response` regex over free text.
-                let tool = SideQueryToolDef {
-                    name: RECALL_TOOL_NAME.into(),
-                    description:
-                        "Return up to 5 memory filenames most relevant to the user's query.".into(),
-                    input_schema: serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "selected_memories": {
-                                "type": "array",
-                                "items": { "type": "string" },
-                                "maxItems": 5,
-                            }
-                        },
-                        "required": ["selected_memories"],
-                        "additionalProperties": false,
-                    }),
-                };
-                let request = SideQueryRequest::with_forced_tool(
-                    SELECT_MEMORIES_SYSTEM_PROMPT,
-                    &user_prompt,
-                    tool,
-                    RECALL_QUERY_SOURCE,
-                )
-                .with_model_role(ModelRole::Memory)
-                // TS `findRelevantMemories.ts:101`
-                // `skipSystemPromptPrefix: true` — ranker must not
-                // see the main agent's Claude Code preamble. The
-                // preamble describes tools/persona unrelated to
-                // memory selection and biases the ranker.
-                .with_skip_system_prefix(true);
-                match handle.query(request).await {
-                    Ok(resp) => {
-                        // Prefer the structured tool input; fall back
-                        // to text-mode parsing for providers that
-                        // don't honor `tool_choice` (TS legacy path).
-                        let names = resp
-                            .tool_uses
-                            .first()
-                            .and_then(|tu| tu.input.get("selected_memories"))
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|s| s.as_str().map(str::to_string))
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_else(|| {
-                                let text = resp.text.clone().unwrap_or_default();
-                                parse_selection_response(&text)
-                            });
-                        // Ranker returns filenames; resolve to absolute paths
-                        // by matching against the scanned manifest via a
-                        // hash index — O(k) instead of O(n·k).
-                        let by_name: std::collections::HashMap<&str, &str> = scanned
-                            .iter()
-                            .map(|m| (m.filename.as_str(), m.path.to_str().unwrap_or("")))
-                            .collect();
-                        names
-                            .into_iter()
-                            .filter_map(|name| {
-                                by_name
-                                    .get(name.as_str())
-                                    .filter(|p| !p.is_empty())
-                                    .map(|p| (*p).to_string())
-                            })
-                            .collect()
+        let Some(handle) = self.side_query.get().cloned() else {
+            // No LLM ranker — stay silent. TS contract preserved.
+            return Vec::new();
+        };
+
+        let user_prompt =
+            build_selection_prompt(query, &scanned, &self.recall_state, recent_tools);
+        // Force structured output via a synthetic
+        // `select_memories` tool — TS parity with
+        // `selectRelevantMemories.ts`'s `tool_choice: { type:
+        // "tool", name: "select_memories" }`. Strict JSON
+        // shape is more reliable than a permissive
+        // `parse_selection_response` regex over free text.
+        let tool = SideQueryToolDef {
+            name: RECALL_TOOL_NAME.into(),
+            description:
+                "Return up to 5 memory filenames most relevant to the user's query.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "selected_memories": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "maxItems": 5,
                     }
-                    Err(err) => {
-                        tracing::debug!("memory recall ranker failed, falling back: {err}");
-                        select_heuristic(&scanned, &self.recall_state)
-                    }
-                }
+                },
+                "required": ["selected_memories"],
+                "additionalProperties": false,
+            }),
+        };
+        let request = SideQueryRequest::with_forced_tool(
+            SELECT_MEMORIES_SYSTEM_PROMPT,
+            &user_prompt,
+            tool,
+            RECALL_QUERY_SOURCE,
+        )
+        .with_model_role(ModelRole::Memory)
+        // TS `findRelevantMemories.ts:101`
+        // `skipSystemPromptPrefix: true` — ranker must not
+        // see the main agent's Claude Code preamble. The
+        // preamble describes tools/persona unrelated to
+        // memory selection and biases the ranker.
+        .with_skip_system_prefix(true);
+        let selected: Vec<String> = match handle.query(request).await {
+            Ok(resp) => {
+                // Prefer the structured tool input; fall back
+                // to text-mode parsing for providers that
+                // don't honor `tool_choice` (TS legacy path).
+                let names = resp
+                    .tool_uses
+                    .first()
+                    .and_then(|tu| tu.input.get("selected_memories"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|s| s.as_str().map(str::to_string))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_else(|| {
+                        let text = resp.text.clone().unwrap_or_default();
+                        parse_selection_response(&text)
+                    });
+                // Ranker returns filenames; resolve to absolute paths
+                // by matching against the scanned manifest via a
+                // hash index — O(k) instead of O(n·k).
+                let by_name: std::collections::HashMap<&str, &str> = scanned
+                    .iter()
+                    .map(|m| (m.filename.as_str(), m.path.to_str().unwrap_or("")))
+                    .collect();
+                names
+                    .into_iter()
+                    .filter_map(|name| {
+                        by_name
+                            .get(name.as_str())
+                            .filter(|p| !p.is_empty())
+                            .map(|p| (*p).to_string())
+                    })
+                    .collect()
             }
-            None => select_heuristic(&scanned, &self.recall_state),
+            Err(err) => {
+                // TS parity: stay silent on ranker failure rather than
+                // surfacing arbitrary newest-first content.
+                tracing::debug!("memory recall ranker failed, suppressing: {err}");
+                return Vec::new();
+            }
         };
 
         load_relevant_memories(&selected, &self.recall_state)
+    }
+
+    /// Reset the recall state (already-surfaced set + byte budget).
+    /// Called from the compact post-step so a fresh, post-compact
+    /// transcript can re-surface memory without the prior session's
+    /// dedup + 60 KB cap blocking everything.
+    ///
+    /// TS gets this for free because `collectSurfacedMemories(messages)`
+    /// re-derives the state from the current message list every call;
+    /// in Rust we hold the state on the runtime and clear it
+    /// explicitly here.
+    pub fn reset_recall_state(&self) {
+        self.recall_state.reset();
     }
 }
 

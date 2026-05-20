@@ -793,6 +793,19 @@ impl SessionRuntime {
             // `getProjectDir(getOriginalCwd())` lives at
             // `<memory_base>/projects/<slug>/`.
             let transcript_root = project_paths.project_dir();
+            // Wire the production tracing-backed telemetry emitter so
+            // the ~17 MemoryEvent variants land in the global tracing
+            // subscriber (installed by app/cli's tracing_init). Without
+            // this every event silently no-ops via NoopEmitter.
+            let memory_telemetry: Arc<dyn coco_memory::telemetry::MemoryTelemetryEmitter> =
+                Arc::new(coco_memory::telemetry::TracingEmitter::new());
+            // Whether auto-compact is active for this session — surfaced
+            // by SessionMemoryInit so dashboards correlate SM activity
+            // with the compact gate. `is_active()` honors both the user
+            // toggle and the kill-switch envs (`COCO_COMPACT_DISABLE`,
+            // `COCO_COMPACT_DISABLE_AUTO`), so a session bootstrapped
+            // with compact off reports `auto_compact_enabled = false`.
+            let auto_compact_enabled = runtime_config.compact.auto.is_active();
             let runtime = coco_memory::runtime::MemoryRuntimeBuilder::new(
                 config_home.clone(),
                 cwd.clone(),
@@ -802,6 +815,8 @@ impl SessionRuntime {
             )
             .with_project_paths(project_paths.clone())
             .with_transcript_dir(transcript_root)
+            .with_telemetry(memory_telemetry)
+            .with_auto_compact_enabled(auto_compact_enabled)
             .build();
             info!(
                 personal_dir = %runtime.personal_dir().display(),
@@ -851,6 +866,19 @@ impl SessionRuntime {
             // subagent, and emit a spurious `AutoDreamFailed` event.
             Some(runtime_arc)
         } else {
+            // Feature gate off — emit MemdirDisabled so dashboards
+            // can split sessions that never bootstrapped memory from
+            // those that did. TS parity: `memdir.ts:492-505`'s
+            // `tengu_memdir_disabled` fires from the equivalent gate
+            // check. We emit directly here instead of through
+            // `MemoryRuntime` because no runtime exists at this
+            // point.
+            tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_memdir_disabled",
+                reason = "feature_gate",
+                "auto-memory feature gate off"
+            );
             None
         };
 

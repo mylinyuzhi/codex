@@ -1,6 +1,6 @@
 //! Spawn-time subagent identity resolution.
 //!
-//! Combines the three inputs that determine a subagent's model identity
+//! Combines the four inputs that determine a subagent's model identity
 //! into a single typed [`SubagentSelection`]. Pure logic — no IO, no
 //! tokio. Callers (coordinator's `SwarmAgentHandle`) read the selection
 //! and either thread the explicit `model` override into the child's
@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! model:  request_model > definition.model > None  (caller substitutes role-resolved spec)
-//! role:   definition.model_role > role_for_builtin(SubagentType) > ModelRole::Subagent
+//! role:   request_model_role > definition.model_role > role_for_builtin(SubagentType) > ModelRole::Subagent
 //! ```
 //!
 //! - **`request_model`** — the AgentTool input field, e.g.
@@ -19,8 +19,14 @@
 //! - **`definition.model`** — the agent `.md` frontmatter `model:` field.
 //!   Used only when the AgentTool input omits `model`. Already
 //!   normalized to lowercase / `"inherit"` by the frontmatter parser.
+//! - **`request_model_role`** — explicit role pin on the spawn request
+//!   itself. Memory-crate forks (extract / dream / session-memory) set
+//!   this to `ModelRole::Memory` so the operator can swap provider+model
+//!   via `settings.models.memory` without touching memory crate code.
+//!   Wins over both definition and built-in mapping.
 //! - **`definition.model_role`** — explicit role declaration on the
-//!   agent definition. Wins over the `subagent_type` mapping.
+//!   agent definition (the `.md` frontmatter `model_role:` field).
+//!   Wins over the `subagent_type` mapping.
 //! - **`subagent_type`** — the built-in classifier. Maps to a role via
 //!   [`crate::subagent_role::role_for_builtin`].
 //!
@@ -50,13 +56,17 @@ pub struct SubagentSelection {
 /// Pure resolver — see module doc for precedence rules.
 pub fn resolve_subagent_selection(
     request_model: Option<&str>,
+    request_model_role: Option<ModelRole>,
     definition: Option<&AgentDefinition>,
     subagent_type: Option<&AgentTypeId>,
 ) -> SubagentSelection {
     let model = request_model
         .map(str::to_owned)
         .or_else(|| definition.and_then(|d| d.model.clone()));
-    let model_role = resolve_subagent_role(definition, subagent_type);
+    // Explicit request_model_role wins (memory forks pin to Memory);
+    // otherwise fall through to definition / subagent_type mapping.
+    let model_role = request_model_role
+        .unwrap_or_else(|| resolve_subagent_role(definition, subagent_type));
     let model_selection =
         LlmModelSelection::from_model_and_role(model.as_deref(), Some(model_role));
     SubagentSelection {

@@ -62,7 +62,10 @@ async fn fires_at_init_with_template_seeded() {
     let calls = handle.calls();
     assert_eq!(calls.len(), 1);
     let constraints = calls[0].constraints.as_ref().unwrap();
-    assert_eq!(constraints.max_turns, Some(3));
+    // `extraction_max_turns.max(5)` — the old `Some(3)` cap silently
+    // truncated SM updates for models that prefer one-section-per-turn
+    // pacing. Now matches `extraction_max_turns` (default 5).
+    assert_eq!(constraints.max_turns, Some(5));
     // Seed file exists on disk with the 9-section template.
     let path = svc.file_path();
     let content = std::fs::read_to_string(&path).unwrap();

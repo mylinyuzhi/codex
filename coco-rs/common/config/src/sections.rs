@@ -480,6 +480,14 @@ pub struct PartialMemorySettings {
     // Optional "Searching past context" prompt block (TS
     // `buildSearchingPastContextSection`, gated by `tengu_coral_fern`).
     pub searching_past_context_enabled: Option<bool>,
+
+    /// Free-form policy text appended verbatim to the auto-memory
+    /// system-prompt block. Surfaced through
+    /// `coco_memory::MemoryRuntime::render_system_prompt_section` so
+    /// Cowork-style deployments can push operator-controlled memory
+    /// governance into context without modifying crate-bundled
+    /// prompts. TS parity: `CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES`.
+    pub extra_guidelines: Option<String>,
 }
 
 /// Resolved auto-memory configuration.
@@ -534,6 +542,17 @@ pub struct MemoryConfig {
     /// the auto-memory system-prompt section. Off by default, mirroring
     /// the TS `tengu_coral_fern` GrowthBook gate.
     pub searching_past_context_enabled: bool,
+
+    /// Free-form policy text appended verbatim to the auto-memory
+    /// system-prompt section (after the standard taxonomy /
+    /// how-to-save blocks, before the optional searching-past-context
+    /// block). `None` or empty after trim ⇒ no extra section.
+    ///
+    /// Resolution: `extra_guidelines` setting in `settings.memory`
+    /// (string) → env override `COCO_COWORK_MEMORY_EXTRA_GUIDELINES`
+    /// (env wins, mirroring TS `CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_guidelines: Option<String>,
 }
 
 impl Default for MemoryConfig {
@@ -557,6 +576,7 @@ impl Default for MemoryConfig {
             session_memory_per_section_tokens: 2_000,
             session_memory_total_tokens: 12_000,
             searching_past_context_enabled: false,
+            extra_guidelines: None,
         }
     }
 }
@@ -617,6 +637,11 @@ impl MemoryConfig {
         if let Some(v) = s.searching_past_context_enabled {
             config.searching_past_context_enabled = v;
         }
+        if let Some(v) = &s.extra_guidelines
+            && !v.trim().is_empty()
+        {
+            config.extra_guidelines = Some(v.clone());
+        }
 
         // Path overrides — two distinct semantics:
         //
@@ -654,6 +679,11 @@ impl MemoryConfig {
         }
         if env.is_truthy(EnvKey::CocoMemoryKairos) {
             config.kairos_mode = true;
+        }
+        if let Some(text) = env.get_string(EnvKey::CocoCoworkMemoryExtraGuidelines)
+            && !text.trim().is_empty()
+        {
+            config.extra_guidelines = Some(text);
         }
 
         // Clamps. Negative / zero values would break the gates.

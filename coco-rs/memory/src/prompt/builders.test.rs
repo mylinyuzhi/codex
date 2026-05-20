@@ -224,10 +224,14 @@ fn dream_prompt_appends_session_list_after_constraint() {
 }
 
 #[test]
-fn session_template_has_nine_section_headers() {
+fn session_template_has_ten_section_headers() {
+    // TS `DEFAULT_SESSION_MEMORY_TEMPLATE` (services/SessionMemory/prompts.ts:11-41)
+    // has exactly 10 H1 sections: Session Title, Current State, Task
+    // specification, Files and Functions, Workflow, Errors & Corrections,
+    // Codebase and System Documentation, Learnings, Key results, Worklog.
     let template = build_session_memory_template();
     let headers = template.lines().filter(|l| l.starts_with("# ")).count();
-    assert_eq!(headers, 10); // 9 sections + the title `# Session Title` is one of them; spot-check a few names.
+    assert_eq!(headers, 10);
     assert!(template.contains("# Session Title"));
     assert!(template.contains("# Current State"));
     assert!(template.contains("# Worklog"));

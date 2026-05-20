@@ -295,6 +295,18 @@ impl QueryEngine {
             .notify_compaction(qs, self.config.agent_id.as_deref())
             .await;
 
+        // Reactive compact also rewrites history (peels oldest API-round
+        // groups, drops attachments) — so it must reset the memory
+        // recall state AND clear the SM cache, same as the full / SM-first
+        // / partial compact paths. Without this, a long session that
+        // survives a PTL retry inherits a saturated `total_bytes` and
+        // stale `already_surfaced` set, silently killing recall for the
+        // rest of the session.
+        if let Some(rt) = &self.memory_runtime {
+            rt.reset_recall_state();
+            rt.session_memory.clear_after_compact().await;
+        }
+
         // TS `getUnifiedTaskAttachments(ctx)` only fires post-compaction; the
         // next reminder build consumes (and clears) this flag.
         self.pending_just_compacted

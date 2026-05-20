@@ -96,6 +96,65 @@ guard against future field-renaming drift.
 TS source: `services/extractMemories/extractMemories.ts::createAutoMemCanUseTool`
 + `services/SessionMemory/sessionMemory.ts::createSessionMemCanUseTool`.
 
+## Deferred design work
+
+Two gaps are documented but not yet implemented — both span multiple
+crates and need a coordinated change set rather than a memory-crate-only
+patch:
+
+### System-prompt `cache_control` plumbing (P0-5)
+
+**Problem**: `coco-context::SystemPrompt` carries `CacheBreakpoint`
+markers in its block list, but every downstream consumer calls
+`.full_text()` and discards them. The Anthropic adapter then
+`collapse_text_parts` flattens any multi-part system message into one
+block with `cache_control: None`. Result: any MEMORY.md edit, env-time
+tick, or attachment refresh invalidates the entire system-prompt
+prefix cache. TS splits at `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` so the
+static prefix (identity + tools + CLAUDE.md) caches independently of
+dynamic content.
+
+**Scope of fix**:
+1. `coco-context::SystemPrompt` — `full_text()` becomes optional;
+   add `into_parts()` returning `Vec<SystemPart { text, cache_control }>`.
+2. `coco-types::LlmMessage::system(...)` — accept multi-part input.
+3. `services/inference/prompt_layout` — preserve cache markers when
+   materializing `AnthropicSystemBlock`.
+4. `vercel-ai-anthropic/messages/convert_to_anthropic_messages` —
+   stop unconditional `collapse_text_parts` when any part carries
+   `cache_control`.
+5. `coco-memory::MemoryRuntime::render_system_prompt_section` — split
+   the truncated `MEMORY.md` body off into its own
+   `SystemPart` (or push to attachment pipeline) so MEMORY.md edits
+   only refresh the dynamic tail.
+
+### Recall ranker: forced-tool → JSON schema (P1-9)
+
+**Problem**: `MemoryRuntime::recall` uses
+`SideQueryRequest::with_forced_tool` with a synthetic `select_memories`
+tool. Anthropic and OpenAI honor tool-forcing reliably; Google Gemini's
+function-calling shape is asymmetric. The current text-fallback path in
+`runtime.rs:732-734` handles the Gemini case but pays a wasted LLM
+call. TS uses `output_format: { type: 'json_schema', schema: {...} }`
+which is universally supported by structured-output APIs.
+
+**Scope of fix**:
+1. `coco-types::SideQueryRequest` — add
+   `output_format: Option<JsonSchema>` field with new constructor
+   `SideQueryRequest::with_json_schema(...)`.
+2. Each `vercel-ai-{openai,anthropic,google,bytedance,openai-compatible}`
+   provider — translate `JsonSchema` into the provider's structured-
+   output API at request build time.
+3. `services/inference/src/side_query_impl.rs` — thread `output_format`
+   through.
+4. `coco-memory::MemoryRuntime::recall` — switch from `with_forced_tool`
+   to `with_json_schema`. Drop the synthetic tool definition; keep
+   `parse_selection_response` as the response parser.
+
+Both gaps are real and need work — but they touch cross-crate seams
+that should be planned and reviewed in their own change sets rather
+than bundled into a memory-crate parity pass.
+
 ## What this crate does NOT own
 
 - The system-prompt assembly seam (`coco-context::build_system_prompt`) — memory only renders its block via `prompt::build_system_prompt_section` and hands it through.

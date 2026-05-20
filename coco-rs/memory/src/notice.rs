@@ -23,7 +23,7 @@ use std::sync::Mutex;
 /// `createMemorySavedMessage` default ("Saved") + the
 /// `autoDream.ts:247` override (`verb: 'Improved'`) for dream
 /// consolidations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NoticeVerb {
     /// ExtractService wrote new memory files — primary turn-end
     /// save event. TS: default `createMemorySavedMessage` verb.
@@ -49,6 +49,20 @@ impl NoticeVerb {
             Self::ManualEdit => "Updated",
         }
     }
+
+    /// Cross-source dedup priority — higher wins when the same path
+    /// shows up in multiple notices from one drain. A fork's
+    /// `Saved`/`Improved` is a more precise signal than the engine's
+    /// post-write `ManualEdit` classification (which fires for any
+    /// Edit/Write of a memory-managed file). When both fire for the
+    /// same path same turn the user should see one toast, not two.
+    fn priority(self) -> u8 {
+        match self {
+            Self::Saved => 3,
+            Self::Improved => 2,
+            Self::ManualEdit => 1,
+        }
+    }
 }
 
 /// One queued user-visible notice.
@@ -72,32 +86,101 @@ impl NoticeInbox {
         Self::default()
     }
 
-    /// Append a notice. Best-effort — silently drops on poisoned
-    /// mutex (the runtime is shutting down anyway).
+    /// Append a notice. **Panics on poisoned mutex** — a poisoned
+    /// `Mutex` means a prior `push`/`drain` panicked mid-write,
+    /// leaving the `Vec` in an unknown state. Silently dropping the
+    /// notice would lose user-visible "memory saved" toasts forever
+    /// (TODO at the prior call site explicitly acknowledged this).
+    /// Library-internal invariant — surface the bug at test time.
     pub fn push(&self, notice: MemoryUserNotice) {
-        if let Ok(mut g) = self.inner.lock() {
-            g.push(notice);
-        }
+        self.inner
+            .lock()
+            .expect("NoticeInbox mutex poisoned — invariant broken")
+            .push(notice);
     }
 
     /// Take everything queued and clear the inbox. Called by the
     /// engine once per turn from `finalize_turn_post_tools`.
+    ///
+    /// Cross-source dedup: when the same path appears under multiple
+    /// notices (e.g. extract's `Saved` and the engine's `ManualEdit`
+    /// for the same Edit call), keep the higher-priority verb
+    /// (`Saved > Improved > ManualEdit`). The original notice order is
+    /// preserved across distinct paths. This stops the TUI from
+    /// rendering both "Saved foo.md" and "Updated foo.md" in the same
+    /// turn — they describe the same write observed twice.
     pub fn drain(&self) -> Vec<MemoryUserNotice> {
-        self.inner
-            .lock()
-            .map(|mut g| std::mem::take(&mut *g))
-            .unwrap_or_default()
+        let raw = {
+            let mut g = self
+                .inner
+                .lock()
+                .expect("NoticeInbox mutex poisoned — invariant broken");
+            std::mem::take(&mut *g)
+        };
+
+        // First pass: pick the winning verb per path. Stored
+        // in a HashMap that's only read for membership / priority
+        // comparison — the second pass below preserves the original
+        // FIFO ordering of distinct paths.
+        let mut winners: std::collections::HashMap<String, NoticeVerb> =
+            std::collections::HashMap::new();
+        for notice in &raw {
+            for path in &notice.written_paths {
+                let new_pri = notice.verb.priority();
+                winners
+                    .entry(path.clone())
+                    .and_modify(|existing| {
+                        if new_pri > existing.priority() {
+                            *existing = notice.verb;
+                        }
+                    })
+                    .or_insert(notice.verb);
+            }
+        }
+
+        // Second pass: emit each unique path exactly once, under the
+        // winning verb. Group by verb so a single notice carries all
+        // paths sharing the same verb (matching the pre-dedup shape).
+        let mut grouped: std::collections::HashMap<NoticeVerb, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for notice in &raw {
+            for path in &notice.written_paths {
+                if !seen.insert(path.clone()) {
+                    continue;
+                }
+                let verb = winners.get(path).copied().unwrap_or(notice.verb);
+                grouped.entry(verb).or_default().push(path.clone());
+            }
+        }
+
+        // Emit in the verb priority order so the user sees real
+        // memory saves before manual edits — keeps the higher-signal
+        // notices on top.
+        let mut out: Vec<MemoryUserNotice> = Vec::new();
+        for verb in [NoticeVerb::Saved, NoticeVerb::Improved, NoticeVerb::ManualEdit] {
+            if let Some(paths) = grouped.remove(&verb)
+                && !paths.is_empty()
+            {
+                out.push(MemoryUserNotice {
+                    written_paths: paths,
+                    verb,
+                });
+            }
+        }
+        out
     }
 
     /// Test helper — peek the count without draining.
     #[cfg(test)]
     pub fn len(&self) -> usize {
-        self.inner.lock().map(|g| g.len()).unwrap_or(0)
+        self.inner
+            .lock()
+            .expect("NoticeInbox mutex poisoned — invariant broken")
+            .len()
     }
 
-    /// Test helper — `true` when no notices are queued. Mirrors the
-    /// `Vec::is_empty` ergonomic alongside `len` so clippy stays happy
-    /// (`len_without_is_empty`).
+    /// Test helper — `true` when no notices are queued.
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0

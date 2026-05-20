@@ -294,6 +294,17 @@ impl QueryEngine {
                 self.client
                     .notify_compaction(qs, self.config.agent_id.as_deref())
                     .await;
+                // See `try_session_memory_compact` for the matching
+                // reset on the SM-first path. The partial-compact path
+                // rewrites history just like full LLM compact does, so
+                // dropped attachment messages must reset the recall
+                // state's already-surfaced + 60 KB byte budget AND
+                // clear the SM in-memory cache so the next SM-first
+                // short-circuit doesn't read pre-compact content.
+                if let Some(rt) = &self.memory_runtime {
+                    rt.reset_recall_state();
+                    rt.session_memory.clear_after_compact().await;
+                }
                 let _ = emit_protocol(
                     event_tx,
                     ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
@@ -524,6 +535,23 @@ impl QueryEngine {
         self.client
             .notify_compaction(qs, self.config.agent_id.as_deref())
             .await;
+        // Reset the memory recall state — TS gets this for free because
+        // `collectSurfacedMemories(messages)` re-derives the dedup set
+        // and 60 KB budget from message history each call, and compact
+        // strips the relevant-memory attachments. Rust persists the
+        // state on the runtime, so without this explicit reset the
+        // post-compact session would inherit a saturated byte budget
+        // and never re-surface memory.
+        //
+        // Also clear SM's in-memory text cache so the next extract
+        // re-reads the file fresh — TS `clearAfterCompact` semantics
+        // (`sessionMemoryCompact.ts:65 notifyCompaction()`). Without
+        // this the SM-first compact short-circuit could serve a
+        // stale cached body to the next compaction.
+        if let Some(rt) = &self.memory_runtime {
+            rt.reset_recall_state();
+            rt.session_memory.clear_after_compact().await;
+        }
         let _ = emit_protocol(
             event_tx,
             ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
@@ -1482,6 +1510,17 @@ impl QueryEngine {
                 self.client
                     .notify_compaction(qs, self.config.agent_id.as_deref())
                     .await;
+                // Full LLM-summarized compact path — same reasoning as
+                // the SM-first and partial paths: relevant-memory
+                // attachments are dropped from history, so the recall
+                // state's dedup set and 60 KB byte budget must reset
+                // to match. ALSO clear the SM in-memory cache — the
+                // pre-compact content is no longer the right baseline
+                // for the next SM-first short-circuit attempt.
+                if let Some(rt) = &self.memory_runtime {
+                    rt.reset_recall_state();
+                    rt.session_memory.clear_after_compact().await;
+                }
 
                 let _delivered = emit_protocol(
                     event_tx,
