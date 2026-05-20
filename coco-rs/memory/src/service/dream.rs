@@ -45,8 +45,12 @@ pub enum DreamOutcome {
 pub enum SkipReason {
     Disabled,
     KairosMode,
-    TimeGate { hours_since: i64 },
-    SessionGate { sessions_seen: i32 },
+    TimeGate {
+        hours_since: i64,
+    },
+    SessionGate {
+        sessions_seen: i32,
+    },
     LockHeld,
     ScanThrottled,
     /// Another dream from THIS process is already in-flight. With
@@ -261,7 +265,7 @@ impl DreamService {
             let mut last = self
                 .last_scan_at
                 .lock()
-                .expect("dream last_scan_at mutex poisoned — invariant broken");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(t) = *last
                 && t.elapsed() < SCAN_THROTTLE
             {
@@ -278,9 +282,7 @@ impl DreamService {
         // pay the directory walk on time-gated / scan-throttled turns.
         let sessions_since_last = enumerate_sessions();
 
-        if !force
-            && (sessions_since_last.len() as i32) < self.config.dream_min_sessions
-        {
+        if !force && (sessions_since_last.len() as i32) < self.config.dream_min_sessions {
             let sessions_seen = sessions_since_last.len() as i32;
             // Roll back the scan-throttle stamp — no consolidation
             // actually fired, so the next gate-pass should be allowed
@@ -346,12 +348,10 @@ impl DreamService {
             // JSONL transcript.
             skip_transcript: true,
             // TS `autoDream.ts:224` `canUseTool: createAutoMemCanUseTool(memoryRoot)`.
-            can_use_tool: Some(
-                crate::can_use_tool::create_auto_mem_handle_with_telemetry(
-                    self.memory_dir.clone(),
-                    self.telemetry.clone(),
-                ),
-            ),
+            can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle_with_telemetry(
+                self.memory_dir.clone(),
+                self.telemetry.clone(),
+            )),
             require_can_use_tool: false,
             fork_label: Some(coco_types::ForkLabel::AutoDream),
             ..Default::default()
@@ -459,7 +459,7 @@ impl DreamService {
         let mut last = self
             .last_scan_at
             .lock()
-            .expect("dream last_scan_at mutex poisoned — invariant broken");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *last = prior;
     }
 

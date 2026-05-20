@@ -224,12 +224,10 @@ impl SessionMemoryService {
     /// Try to atomically claim the `in_progress` slot. Returns a Drop
     /// guard on success, `None` if a fork is already running.
     fn try_claim(&self) -> Option<InProgressGuard> {
-        match self.in_progress.compare_exchange(
-            false,
-            true,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
+        match self
+            .in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        {
             Ok(_) => {
                 let _ = self.in_progress_tx.send_replace(true);
                 Some(InProgressGuard {

@@ -65,8 +65,8 @@ pub fn resolve_subagent_selection(
         .or_else(|| definition.and_then(|d| d.model.clone()));
     // Explicit request_model_role wins (memory forks pin to Memory);
     // otherwise fall through to definition / subagent_type mapping.
-    let model_role = request_model_role
-        .unwrap_or_else(|| resolve_subagent_role(definition, subagent_type));
+    let model_role =
+        request_model_role.unwrap_or_else(|| resolve_subagent_role(definition, subagent_type));
     let model_selection =
         LlmModelSelection::from_model_and_role(model.as_deref(), Some(model_role));
     SubagentSelection {

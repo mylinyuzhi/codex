@@ -67,7 +67,7 @@ impl PrefetchState {
     fn lock(&self) -> std::sync::MutexGuard<'_, PrefetchInner> {
         self.inner
             .lock()
-            .expect("PrefetchState mutex poisoned — invariant broken")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn is_surfaced(&self, path: &str) -> bool {

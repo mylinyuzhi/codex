@@ -95,7 +95,7 @@ impl NoticeInbox {
     pub fn push(&self, notice: MemoryUserNotice) {
         self.inner
             .lock()
-            .expect("NoticeInbox mutex poisoned — invariant broken")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(notice);
     }
 
@@ -114,7 +114,7 @@ impl NoticeInbox {
             let mut g = self
                 .inner
                 .lock()
-                .expect("NoticeInbox mutex poisoned — invariant broken");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::take(&mut *g)
         };
 
@@ -158,7 +158,11 @@ impl NoticeInbox {
         // memory saves before manual edits — keeps the higher-signal
         // notices on top.
         let mut out: Vec<MemoryUserNotice> = Vec::new();
-        for verb in [NoticeVerb::Saved, NoticeVerb::Improved, NoticeVerb::ManualEdit] {
+        for verb in [
+            NoticeVerb::Saved,
+            NoticeVerb::Improved,
+            NoticeVerb::ManualEdit,
+        ] {
             if let Some(paths) = grouped.remove(&verb)
                 && !paths.is_empty()
             {

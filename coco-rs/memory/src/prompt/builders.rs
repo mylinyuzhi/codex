@@ -13,10 +13,7 @@ const HOW_TO_SAVE_SKIP_INDEX: &str = include_str!("text/how_to_save_skipindex.md
 /// `{MAX_ENTRYPOINT_LINES}` placeholder substituted. One truth-of-record
 /// for the line cap.
 fn how_to_save() -> String {
-    HOW_TO_SAVE_TEMPLATE.replace(
-        "{MAX_ENTRYPOINT_LINES}",
-        &MAX_ENTRYPOINT_LINES.to_string(),
-    )
+    HOW_TO_SAVE_TEMPLATE.replace("{MAX_ENTRYPOINT_LINES}", &MAX_ENTRYPOINT_LINES.to_string())
 }
 const WHEN_TO_ACCESS: &str = include_str!("text/when_to_access.md");
 const EXTRACT_GUIDANCE: &str = include_str!("text/extract.md");

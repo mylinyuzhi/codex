@@ -166,10 +166,7 @@ impl std::fmt::Debug for ExtractService {
         f.debug_struct("ExtractService")
             .field("memory_dir", &self.memory_dir)
             .field("extraction_enabled", &self.config.extraction_enabled)
-            .field(
-                "in_progress",
-                &self.in_progress.load(Ordering::Acquire),
-            )
+            .field("in_progress", &self.in_progress.load(Ordering::Acquire))
             .finish()
     }
 }
@@ -294,12 +291,10 @@ impl ExtractService {
     /// guard on success (auto-releases on cancellation), `None` if
     /// another caller already holds the slot.
     fn try_claim(&self) -> Option<InProgressGuard> {
-        match self.in_progress.compare_exchange(
-            false,
-            true,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
+        match self
+            .in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        {
             Ok(_) => {
                 // Notify watchers — they may be parked in `wait_for_idle`.
                 let _ = self.in_progress_tx.send_replace(true);
@@ -458,8 +453,7 @@ impl ExtractService {
                     // Bump consecutive_failures to drive backoff so a
                     // permanently-failing handle stops burning a fork
                     // every turn.
-                    state.consecutive_failures =
-                        state.consecutive_failures.saturating_add(1);
+                    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
                 }
                 ExtractOutcome::Skipped(_) => {
                     // `run` never returns Skipped, but keep the match
@@ -525,8 +519,7 @@ impl ExtractService {
                         }
                     }
                     ExtractOutcome::Failed { .. } => {
-                        state.consecutive_failures =
-                            state.consecutive_failures.saturating_add(1);
+                        state.consecutive_failures = state.consecutive_failures.saturating_add(1);
                     }
                     ExtractOutcome::Skipped(_) => {}
                 }
@@ -572,8 +565,7 @@ impl ExtractService {
                     }
                 }
                 ExtractOutcome::Failed { .. } => {
-                    state.consecutive_failures =
-                        state.consecutive_failures.saturating_add(1);
+                    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
                 }
                 ExtractOutcome::Skipped(_) => {}
             }
@@ -685,12 +677,10 @@ impl ExtractService {
             // canUseTool gate runs at tool-runtime step 3.5,
             // composing with the `allowed_write_roots` fence above
             // (callback = inner ring; field = outer ring).
-            can_use_tool: Some(
-                crate::can_use_tool::create_auto_mem_handle_with_telemetry(
-                    self.memory_dir.clone(),
-                    self.telemetry.clone(),
-                ),
-            ),
+            can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle_with_telemetry(
+                self.memory_dir.clone(),
+                self.telemetry.clone(),
+            )),
             require_can_use_tool: false,
             fork_label: Some(coco_types::ForkLabel::ExtractMemories),
             ..Default::default()

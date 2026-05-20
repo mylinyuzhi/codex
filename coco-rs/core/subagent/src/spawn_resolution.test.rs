@@ -10,8 +10,12 @@ fn test_request_model_wins_over_definition_model() {
         ..Default::default()
     };
     let id = AgentTypeId::Builtin(SubagentType::Explore);
-    let sel =
-        resolve_subagent_selection(Some("anthropic/claude-opus-4-7"), None, Some(&def), Some(&id));
+    let sel = resolve_subagent_selection(
+        Some("anthropic/claude-opus-4-7"),
+        None,
+        Some(&def),
+        Some(&id),
+    );
     assert_eq!(
         sel,
         SubagentSelection {

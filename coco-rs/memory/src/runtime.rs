@@ -709,8 +709,7 @@ impl MemoryRuntime {
             return Vec::new();
         };
 
-        let user_prompt =
-            build_selection_prompt(query, &scanned, &self.recall_state, recent_tools);
+        let user_prompt = build_selection_prompt(query, &scanned, &self.recall_state, recent_tools);
         // Force structured output via a synthetic
         // `select_memories` tool — TS parity with
         // `selectRelevantMemories.ts`'s `tool_choice: { type:
@@ -719,8 +718,8 @@ impl MemoryRuntime {
         // `parse_selection_response` regex over free text.
         let tool = SideQueryToolDef {
             name: RECALL_TOOL_NAME.into(),
-            description:
-                "Return up to 5 memory filenames most relevant to the user's query.".into(),
+            description: "Return up to 5 memory filenames most relevant to the user's query."
+                .into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
