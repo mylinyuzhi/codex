@@ -135,7 +135,10 @@ impl ForkDispatcher for CapturingSuggestionDispatcher {
             .lock()
             .expect("system override lock is not poisoned") = Some(system_prompt_override);
         Ok(ForkedAgentResult {
-            messages: vec![assistant_msg("run cargo check", Some("req-suggest"))],
+            messages: vec![Arc::new(assistant_msg(
+                "run cargo check",
+                Some("req-suggest"),
+            ))],
             ..Default::default()
         })
     }
@@ -298,10 +301,8 @@ async fn maybe_spawn_prompt_suggestion_records_and_emits_protocol_event() {
 
     let mut cache = empty_cache("anthropic");
     cache.fork_context_messages = vec![
-        serde_json::to_value(assistant_msg("first turn", Some("req-parent-1")))
-            .expect("assistant message serializes"),
-        serde_json::to_value(assistant_msg("second turn", Some("req-parent-2")))
-            .expect("assistant message serializes"),
+        Arc::new(assistant_msg("first turn", Some("req-parent-1"))),
+        Arc::new(assistant_msg("second turn", Some("req-parent-2"))),
     ];
     engine.save_cache_safe_params(cache).await;
 

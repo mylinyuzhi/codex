@@ -242,9 +242,11 @@ pub fn build_query_config(
 #[derive(Debug, Clone, Default)]
 pub struct ForkedAgentResult {
     /// Every assistant + user message produced during the fork (in
-    /// emission order). Empty when the fork errored before
-    /// producing any output.
-    pub messages: Vec<Message>,
+    /// emission order). Carries the engine's authoritative
+    /// `Arc<Message>` so callers walk the same allocations the
+    /// engine wrote, no deep clone at the dispatcher boundary.
+    /// Empty when the fork errored before producing any output.
+    pub messages: Vec<Arc<Message>>,
     /// Accumulated token usage across the fork's turns.
     pub total_usage: TokenUsage,
     /// Stop reason from the model on the last turn (e.g. `end_turn`,

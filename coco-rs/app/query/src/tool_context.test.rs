@@ -638,3 +638,72 @@ async fn test_factory_uses_live_permission_mode_override() {
 
     assert_eq!(ctx.permission_context.mode, PermissionMode::AcceptEdits);
 }
+
+#[tokio::test]
+async fn test_factory_threads_messages_snapshot() {
+    // I7: post-budget messages snapshot from `build_prompt` reaches
+    // `ctx.messages` per turn. Verifies the field is no longer dead —
+    // without this, AgentTool fork-mode's `is_in_fork_child` recursion
+    // guard could never trigger and `parent_messages` was always empty.
+    //
+    // TS parity: `query.ts:548` sets `toolUseContext.messages =
+    // messagesForQuery` after `applyToolResultBudget` runs.
+    let parent_msg = Arc::new(coco_messages::create_user_message("parent turn 1"));
+    let snapshot = Arc::new(vec![parent_msg.clone()]);
+    let ctx = factory(test_config())
+        .build(ToolContextOverrides {
+            messages_snapshot: Some(snapshot.clone()),
+            ..Default::default()
+        })
+        .await;
+    assert_eq!(ctx.messages.len(), 1);
+    // Same Arc — no clone at the factory seam.
+    assert!(Arc::ptr_eq(&ctx.messages, &snapshot));
+    assert!(Arc::ptr_eq(&ctx.messages[0], &parent_msg));
+}
+
+#[tokio::test]
+async fn test_factory_defaults_messages_to_empty_when_no_snapshot() {
+    // Test stubs / pre-first-turn paths build a ctx without a
+    // snapshot. Factory must fall back to an empty `Arc<Vec<…>>` so
+    // existing read sites (e.g. `is_in_fork_child` on an empty vec)
+    // see deterministic empty state, not panic.
+    let ctx = factory(test_config()).build(Default::default()).await;
+    assert!(ctx.messages.is_empty());
+}
+
+#[tokio::test]
+async fn test_factory_messages_snapshot_supports_fork_recursion_guard() {
+    // I8: with the snapshot threaded, `coco_subagent::is_in_fork_child`
+    // correctly detects a parent history containing the
+    // `<fork-boilerplate>` tag. Without the per-turn injection this
+    // returned `false` on the empty default vec and fork-of-fork was
+    // silently allowed. TS parity: `AgentTool.tsx:332`.
+    let directive = coco_subagent::build_fork_child_message("ignored");
+    let in_fork_msg = Arc::new(coco_messages::create_user_message(&directive));
+    let plain_msg = Arc::new(coco_messages::create_user_message("hello"));
+
+    let ctx_in_fork = factory(test_config())
+        .build(ToolContextOverrides {
+            messages_snapshot: Some(Arc::new(vec![in_fork_msg])),
+            ..Default::default()
+        })
+        .await;
+    let view_in_fork: Vec<_> = ctx_in_fork.messages.iter().cloned().collect();
+    assert!(
+        coco_subagent::is_in_fork_child(&view_in_fork),
+        "recursion guard must fire when parent history carries the boilerplate tag",
+    );
+
+    let ctx_plain = factory(test_config())
+        .build(ToolContextOverrides {
+            messages_snapshot: Some(Arc::new(vec![plain_msg])),
+            ..Default::default()
+        })
+        .await;
+    let view_plain: Vec<_> = ctx_plain.messages.iter().cloned().collect();
+    assert!(
+        !coco_subagent::is_in_fork_child(&view_plain),
+        "normal user history must NOT trip the guard",
+    );
+}

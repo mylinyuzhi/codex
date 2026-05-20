@@ -59,7 +59,9 @@ impl SwarmAgentHandle {
         // Strip unresolved tool uses + orphaned thinking + whitespace-only
         // assistant messages so the resumed spawn doesn't trip on a partial
         // conversation. TS parity: `resumeAgent.ts:70-74` chains the same
-        // three filters.
+        // three filters. Storage now hands back typed `Arc<Message>`, so
+        // the filter pass walks the same Arcs the engine will see — no
+        // Value → Message round-trip at this seam.
         let filtered = coco_subagent::filter_transcript(&prior_messages);
 
         // If the worktree directory was removed out from under us, fall

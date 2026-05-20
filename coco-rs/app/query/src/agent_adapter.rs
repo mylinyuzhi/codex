@@ -294,24 +294,11 @@ impl AgentQueryEngine for QueryEngineAdapter {
         });
 
         let result = if !config.fork_context_messages.is_empty() {
-            // Deserialize each message JSON back into typed
-            // `Message`. Any entry that fails deserialization is
-            // dropped with a warn — fork context is best-effort
-            // (the child will simply lack that message).
-            let mut messages: Vec<std::sync::Arc<coco_messages::Message>> = Vec::new();
-            for (i, v) in config.fork_context_messages.iter().enumerate() {
-                match serde_json::from_value::<coco_messages::Message>(v.clone()) {
-                    Ok(m) => messages.push(std::sync::Arc::new(m)),
-                    Err(e) => {
-                        tracing::warn!(
-                            index = i,
-                            error = %e,
-                            "fork_context_messages[i] failed to deserialize; dropping"
-                        );
-                    }
-                }
-            }
-            // Append the new user prompt after the fork history.
+            // Parent history is already shared via `Arc<Message>`; just
+            // clone the Arc-slice (cheap pointer bumps) and append the
+            // new user prompt after the inherited history.
+            let mut messages: Vec<std::sync::Arc<coco_messages::Message>> =
+                config.fork_context_messages.clone();
             messages.push(std::sync::Arc::new(coco_messages::create_user_message(
                 prompt,
             )));
@@ -348,20 +335,13 @@ impl AgentQueryEngine for QueryEngineAdapter {
             .iter()
             .filter(|m| matches!(m.as_ref(), coco_messages::Message::ToolResult(_)))
             .count() as i64;
-        // Serialize the final history so the caller (SwarmAgentHandle,
-        // teammate runner) can route it through transcript / audit
-        // pipelines. `serde_json::Value` is the agreed boundary type
-        // on `AgentQueryResult` because this hop crosses the
-        // `coco-tool-runtime` → `coco-state` layer.
-        let messages = result
-            .final_messages
-            .iter()
-            .map(|m| serde_json::to_value(m.as_ref()).unwrap_or_default())
-            .collect();
-
+        // Return the engine's authoritative `Arc<Message>` history
+        // directly — callers (SwarmAgentHandle, teammate runner)
+        // forward the same Arcs through transcript / audit pipelines
+        // without paying a serialize / deserialize round-trip.
         Ok(AgentQueryResult {
             response_text: Some(result.response_text),
-            messages,
+            messages: result.final_messages,
             turns: result.turns,
             input_tokens: result.total_usage.input_tokens,
             output_tokens: result.total_usage.output_tokens,
@@ -380,48 +360,6 @@ fn effective_model_selection(config: &AgentQueryConfig) -> LlmModelSelection {
         (!config.model.trim().is_empty()).then_some(config.model.as_str()),
         config.model_role,
     )
-}
-
-/// Pure helper: micro-compact a teammate worker's serialized history.
-///
-/// Implements the body of [`coco_coordinator::runner_loop::AgentExecutionEngine::compact_messages`]
-/// for production engines that wrap a `coco-compact`-aware runtime.
-/// Lives here in `coco-query` (alongside the engine adapter) rather
-/// than in `coco-coordinator` so the coordinator stays free of the
-/// `coco-messages` / `coco-compact` deps.
-///
-/// Routes through [`coco_compact::micro_compact`] which clears
-/// resolved tool results while preserving recent compactable IDs — no
-/// API call needed. `keep_recent` is the TS default (5); engines that
-/// hold a `CompactConfig` should call `coco_compact::micro_compact`
-/// directly with the user's configured value instead of this helper.
-///
-/// Falls back to a no-op when message deserialization fails — a
-/// malformed history shouldn't break the runner's compaction path;
-/// the runner_loop's safety-valve sliding-window then kicks in.
-pub fn micro_compact_serialized_messages(
-    messages: Vec<serde_json::Value>,
-) -> Vec<serde_json::Value> {
-    const KEEP_RECENT: usize = 5;
-    let mut typed: Vec<coco_messages::Message> = match messages
-        .iter()
-        .map(|v| serde_json::from_value::<coco_messages::Message>(v.clone()))
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "micro_compact_serialized_messages: malformed history; returning input unchanged"
-            );
-            return messages;
-        }
-    };
-    let _result = coco_compact::micro_compact(&mut typed, KEEP_RECENT);
-    typed
-        .iter()
-        .map(|m| serde_json::to_value(m).unwrap_or_default())
-        .collect()
 }
 
 #[derive(Default)]

@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use coco_tool_runtime::{CanUseToolCallContext, CanUseToolDecision};
 use serde_json::json;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use super::{create_auto_mem_handle, create_session_mem_handle};
@@ -13,7 +12,7 @@ fn ctx() -> CanUseToolCallContext {
         tool_use_id: "test".into(),
         abort: CancellationToken::new(),
         require_can_use_tool: false,
-        messages: Arc::new(RwLock::new(Vec::new())),
+        messages: Arc::new(Vec::new()),
     }
 }
 

@@ -851,12 +851,12 @@ async fn run_real_agent_driver(
                     // building the engine — same order as
                     // `process_submit_turn`.
                     let new_msgs = build_user_turn_messages(user_uuid, &content);
-                    let messages: Vec<coco_messages::Message> = {
+                    let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
                         let mut h = runtime_t.history.lock().await;
                         for m in new_msgs.iter().cloned() {
                             h.push(m);
                         }
-                        h.iter().map(|a| (**a).clone()).collect()
+                        h.to_vec()
                     };
 
                     let engine = runtime_t.build_engine(turn_cancel.clone()).await;
@@ -870,8 +870,6 @@ async fn run_real_agent_driver(
                         }
                     });
 
-                    let messages: Vec<std::sync::Arc<coco_messages::Message>> =
-                        messages.into_iter().map(std::sync::Arc::new).collect();
                     match engine.run_with_messages(messages, core_event_tx).await {
                         Ok(result) => {
                             let mut h = runtime_t.history.lock().await;

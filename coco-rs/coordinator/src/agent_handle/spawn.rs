@@ -1531,14 +1531,11 @@ impl SwarmAgentHandle {
                 outcome.as_ref(),
             ) && !session_id_for_task.is_empty()
                 && !qr.messages.is_empty()
-            {
-                let messages = qr.messages.clone();
-                if let Err(e) = store
-                    .append_agent_messages(&session_id_for_task, tid, messages)
+                && let Err(e) = store
+                    .append_agent_messages(&session_id_for_task, tid, &qr.messages)
                     .await
-                {
-                    tracing::debug!(error = %e, "agent transcript write failed");
-                }
+            {
+                tracing::debug!(error = %e, "agent transcript write failed");
             }
             if let (Some(reg), Some(tid)) = (registry_for_task, task_id_for_task) {
                 match outcome {
@@ -1578,34 +1575,25 @@ impl SwarmAgentHandle {
     }
 }
 
-/// Walk the child agent's serialized message log and tally
-/// `tool_name` from every assistant tool-call block. Memory telemetry
-/// uses the `Write + Edit + NotebookEdit` count to populate
-/// `MemoryEvent::ExtractionCompleted::files_written` without
-/// re-running the LLM.
+/// Walk the child agent's message log and tally `tool_name` from every
+/// assistant tool-call block. Memory telemetry uses the
+/// `Write + Edit + NotebookEdit` count to populate
+/// `MemoryEvent::ExtractionCompleted::files_written` without re-running
+/// the LLM.
 fn count_tool_uses_in_messages(
-    messages: &[serde_json::Value],
+    messages: &[std::sync::Arc<coco_messages::Message>],
 ) -> std::collections::HashMap<String, i64> {
     let mut counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
-    for msg in messages {
-        // Accept either `{type: assistant, message: {content: [...]}}`
-        // (coco internal Message envelope) or a bare assistant LLM
-        // message. We look two levels deep.
-        let content = msg
-            .get("message")
-            .and_then(|m| m.get("content"))
-            .or_else(|| msg.get("content"))
-            .and_then(|v| v.as_array());
-        let Some(blocks) = content else {
+    for arc in messages {
+        let coco_messages::Message::Assistant(a) = arc.as_ref() else {
             continue;
         };
-        for block in blocks {
-            let ty = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if !ty.eq_ignore_ascii_case("tool_call") && !ty.eq_ignore_ascii_case("tool-call") {
-                continue;
-            }
-            if let Some(name) = block.get("tool_name").and_then(|v| v.as_str()) {
-                *counts.entry(name.to_string()).or_insert(0) += 1;
+        let coco_messages::LlmMessage::Assistant { content, .. } = &a.message else {
+            continue;
+        };
+        for part in content {
+            if let coco_messages::AssistantContent::ToolCall(tc) = part {
+                *counts.entry(tc.tool_name.clone()).or_insert(0) += 1;
             }
         }
     }

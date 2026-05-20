@@ -11,6 +11,7 @@
 //! an interactive prompt pattern. Stall is a notification event, NOT a status
 //! transition — the task remains Running.
 
+use coco_messages::Message;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
@@ -353,27 +354,31 @@ pub struct AgentSpawnMetadata {
 /// `writeAgentMetadata` / `readAgentMetadata` / `getAgentTranscript`.
 #[async_trait::async_trait]
 pub trait AgentTranscriptStore: Send + Sync {
-    /// Append `messages` (each a serialised `coco_messages::Message`)
-    /// to the per-agent JSONL transcript. Conversation order is
-    /// preserved by append order — coco-rs doesn't need TS's
-    /// parent_uuid chain because `MessageHistory.messages` is
-    /// already a Vec. Idempotent across multiple calls.
+    /// Append `messages` to the per-agent JSONL transcript. Each
+    /// `Arc<Message>` is serialised once at this seam (the disk wire
+    /// boundary); the in-memory share survives until the JSON is
+    /// emitted. Conversation order is preserved by append order —
+    /// coco-rs doesn't need TS's parent_uuid chain because
+    /// `MessageHistory.messages` is already a Vec. Idempotent across
+    /// multiple calls.
     async fn append_agent_messages(
         &self,
         session_id: &str,
         agent_id: &str,
-        messages: Vec<serde_json::Value>,
+        messages: &[Arc<Message>],
     ) -> Result<(), coco_error::BoxedError>;
 
     /// Read every persisted message for an agent in conversation
-    /// order. Returns `Ok(None)` when no transcript exists (no
-    /// prior spawn). Resume passes the result as
+    /// order. Returns `Ok(None)` when no transcript exists (no prior
+    /// spawn). Deserializes from disk directly into `Arc<Message>`
+    /// so callers don't pay a Value → Message round-trip on top of
+    /// the disk read. Resume passes the result as
     /// `AgentQueryConfig.fork_context_messages`.
     async fn load_agent_messages(
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> Result<Option<Vec<serde_json::Value>>, coco_error::BoxedError>;
+    ) -> Result<Option<Vec<Arc<Message>>>, coco_error::BoxedError>;
 
     /// Write the metadata sidecar for an agent.
     async fn write_agent_metadata(

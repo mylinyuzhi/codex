@@ -13,6 +13,8 @@
 //! Extracted from `engine.rs` so the multi-turn loop stays focused on flow
 //! control rather than per-turn data marshalling.
 
+use std::sync::Arc;
+
 use coco_inference::LanguageModelFunctionTool;
 use coco_inference::LanguageModelTool;
 use coco_llm_types::ToolResultContent as LlmToolResultContent;
@@ -27,9 +29,28 @@ use coco_types::ToolAppState;
 
 use crate::engine::QueryEngine;
 
+/// Per-turn prompt + the post-budget message snapshot the engine threads
+/// into every tool invocation's `ctx.messages`.
+///
+/// TS parity: `query.ts:548` sets `toolUseContext.messages =
+/// messagesForQuery` after `applyToolResultBudget` runs. Coco-rs returns
+/// the snapshot here so the engine can hand the same `Arc<Vec<Arc<Message>>>`
+/// to `ToolContextFactory::build` for the same turn.
+pub(crate) struct BuiltPrompt {
+    /// Normalized LLM messages — system prompt + per-turn working copy
+    /// after `apply_tool_result_budget_to_prompt`, ready for the API.
+    pub prompt: Vec<LlmMessage>,
+    /// Same working copy as `Vec<Arc<Message>>`, shared via outer `Arc` so
+    /// every tool ctx in this turn observes byte-identical history.
+    pub messages_snapshot: Arc<Vec<Arc<Message>>>,
+}
+
 impl QueryEngine {
-    /// Build the LLM prompt from message history.
-    pub(crate) async fn build_prompt(&self, history: &MessageHistory) -> Vec<LlmMessage> {
+    /// Build the LLM prompt + the post-budget message snapshot from
+    /// history. The snapshot is shared (via `Arc`) with every per-turn
+    /// `ToolUseContext.messages` so tools observe the same view the
+    /// model just received — TS parity `query.ts:548`.
+    pub(crate) async fn build_prompt(&self, history: &MessageHistory) -> BuiltPrompt {
         let mut prompt = Vec::new();
 
         // System prompt assembly:
@@ -62,7 +83,13 @@ impl QueryEngine {
         // archived range is a single placeholder rather than full turns.
         // TS: query.ts:441 `applyCollapsesIfNeeded()` runs before every
         // prompt build. No-op when collapse is inactive.
-        let mut messages_for_api: Vec<coco_messages::Message> = if self.is_collapse_active() {
+        //
+        // Default path (no collapse): `history.to_vec()` returns the
+        // engine's `Vec<Arc<Message>>` — N atomic refcount increments,
+        // no deep `Message` clones. TS parity: `[...messagesAfterCompactBoundary]`
+        // is JS shallow array copy (pointer-only), which is exactly
+        // what an Arc-vec clone gives us.
+        let mut messages_for_api: Vec<Arc<Message>> = if self.is_collapse_active() {
             if let Some(ledger) = &self.staged_ledger {
                 let commits: Vec<_> = match ledger.try_lock() {
                     Ok(g) => g.commits.clone(),
@@ -73,25 +100,43 @@ impl QueryEngine {
                 if applied > 0 {
                     info!(applied, "applied {applied} staged collapses to prompt");
                 }
-                collapsed
+                // Collapse returns owned `Vec<Message>` (the rewrite
+                // mutates content in place internally); wrap once.
+                collapsed.into_iter().map(Arc::new).collect()
             } else {
-                history.iter().map(|a| (**a).clone()).collect()
+                history.to_vec()
             }
         } else {
-            history.iter().map(|a| (**a).clone()).collect()
+            history.to_vec()
         };
 
+        // Budget rewrites: CoW — only the K messages with selected
+        // tool-result replacements pay a deep `Message` clone +
+        // `Arc::new`; the N-K unchanged entries keep the parent Arc.
         self.apply_tool_result_budget_to_prompt(&mut messages_for_api)
             .await;
 
-        // Convert history to LlmMessages
+        // Normalize takes `&[M] where M: Borrow<Message>`; `Arc<Message>`
+        // borrows directly so we hand the Arc-slice through without an
+        // extra materialization at this seam.
         let normalized = coco_messages::normalize_messages_for_api(&messages_for_api);
         prompt.extend(normalized);
 
-        prompt
+        BuiltPrompt {
+            prompt,
+            messages_snapshot: Arc::new(messages_for_api),
+        }
     }
 
-    async fn apply_tool_result_budget_to_prompt(&self, messages: &mut [Message]) {
+    /// Apply the per-message tool-result aggregate budget over the
+    /// turn's working copy. CoW: only the K messages with selected
+    /// replacements pay a deep `Message` clone + fresh `Arc::new`. The
+    /// remaining N-K entries keep the parent Arc that
+    /// `MessageHistory` still references — verbose bodies stay
+    /// available for transcript / resume reads. TS parity:
+    /// `replaceToolResultContents` in `toolResultStorage.ts:699-726`
+    /// passes unchanged messages through by reference.
+    async fn apply_tool_result_budget_to_prompt(&self, messages: &mut Vec<Arc<Message>>) {
         let budget = &self.config.compact.tool_result_budget;
         if !budget.enabled {
             return;
@@ -106,10 +151,10 @@ impl QueryEngine {
             state.per_message_chars = budget.per_message_chars;
         }
 
-        for group in collect_api_user_tool_result_groups(messages) {
+        for group in collect_api_user_tool_result_groups::<Arc<Message>>(messages.as_slice()) {
             let mut candidates = Vec::new();
             for idx in &group {
-                let Message::ToolResult(tr) = &messages[*idx] else {
+                let Message::ToolResult(tr) = messages[*idx].as_ref() else {
                     continue;
                 };
                 let Some(projected) = project_tool_result_content(tr) else {
@@ -180,12 +225,39 @@ impl QueryEngine {
                 continue;
             }
             for idx in &group {
-                let Message::ToolResult(tr) = &mut messages[*idx] else {
+                // Skip non-ToolResult entries and ToolResults without a
+                // selected replacement — both pass through unchanged
+                // (parent Arc preserved, no allocation).
+                let Message::ToolResult(orig) = messages[*idx].as_ref() else {
                     continue;
                 };
-                if let Some(replacement) = replacements.get(&tr.tool_use_id) {
-                    replace_tool_result_content(tr, replacement);
-                }
+                let Some(replacement) = replacements.get(&orig.tool_use_id) else {
+                    continue;
+                };
+                // CoW with no big-body memcpy: construct a fresh
+                // `ToolResultMessage` from `orig`'s small metadata
+                // (uuid / tool_use_id / tool_id / tool_name /
+                // provider_metadata) + the short replacement body.
+                // The original's verbose `output.value` (which can be
+                // megabytes for grep/find-style tools) is never
+                // memcopied — TS parity: `replaceToolResultContents`
+                // spreads `{...block, content: replacement}` without
+                // copying the discarded content string.
+                let new_msg = match rewrite_tool_result_to_placeholder(orig, replacement) {
+                    Some(rebuilt) => Message::ToolResult(rebuilt),
+                    None => {
+                        // Defensive fallback for unexpected message
+                        // shape (no matching block / non-Tool inner
+                        // message). Clone-then-mutate keeps semantics
+                        // identical to pre-optimization.
+                        let mut cloned = (*messages[*idx]).clone();
+                        if let Message::ToolResult(ref mut tr) = cloned {
+                            replace_tool_result_content(tr, replacement);
+                        }
+                        cloned
+                    }
+                };
+                messages[*idx] = Arc::new(new_msg);
             }
         }
     }
@@ -568,13 +640,15 @@ struct ProjectedToolResultContent {
     is_json: bool,
 }
 
-fn collect_api_user_tool_result_groups(messages: &[Message]) -> Vec<Vec<usize>> {
+fn collect_api_user_tool_result_groups<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+) -> Vec<Vec<usize>> {
     let mut groups = Vec::new();
     let mut current = Vec::new();
     let mut seen_assistant_ids = std::collections::HashSet::new();
 
     for (idx, msg) in messages.iter().enumerate() {
-        match msg {
+        match msg.borrow() {
             Message::Assistant(asst) => {
                 let assistant_id = asst
                     .request_id
@@ -664,3 +738,82 @@ fn replace_tool_result_content(tr: &mut ToolResultMessage, replacement: &str) ->
     }
     false
 }
+
+/// Build a fresh `ToolResultMessage` from `orig`'s metadata + a new
+/// short replacement body — without cloning the discarded
+/// `output.value` of the original. Skips the
+/// `(*messages[idx]).clone()` → `mutate` → drop-big-string anti-pattern
+/// that the legacy CoW path used (memcpy a 100 KB tool result then
+/// immediately overwrite it with a ~200-byte `<persisted-output>`
+/// preview).
+///
+/// Preserves TS-parity metadata (TS `replaceToolResultContents` spreads
+/// `{ ...block, content: replacement }`, keeping `tool_use_id` /
+/// `tool_name` / `cache_control` /etc.):
+///
+/// - `uuid` / `tool_use_id` / `tool_id` / `is_error` on the outer
+///   `ToolResultMessage` are copied / cheaply cloned.
+/// - For the inner content block whose `tool_call_id` matches
+///   `orig.tool_use_id`, build a fresh `ToolResultPart` keeping
+///   `tool_name` + `provider_metadata` and replacing only `output`.
+/// - Other content blocks (rare — coco-rs's
+///   `create_tool_result_message` produces single-block messages) are
+///   cloned verbatim.
+///
+/// Returns `None` when the original's `LlmMessage` isn't `Tool` or no
+/// matching block exists — caller falls back to the legacy
+/// clone-then-mutate path so we never silently lose a rewrite.
+fn rewrite_tool_result_to_placeholder(
+    orig: &ToolResultMessage,
+    replacement: &str,
+) -> Option<ToolResultMessage> {
+    let LlmMessage::Tool {
+        content: orig_content,
+        provider_options,
+    } = &orig.message
+    else {
+        return None;
+    };
+    if !orig_content.iter().any(|p| {
+        matches!(
+            p,
+            ToolContent::ToolResult(r) if r.tool_call_id == orig.tool_use_id
+        )
+    }) {
+        return None;
+    }
+    let new_content: Vec<ToolContent> = orig_content
+        .iter()
+        .map(|part| match part {
+            ToolContent::ToolResult(result) if result.tool_call_id == orig.tool_use_id => {
+                let new_output = if result.is_error {
+                    LlmToolResultContent::error_text(replacement)
+                } else {
+                    LlmToolResultContent::text(replacement)
+                };
+                ToolContent::ToolResult(coco_llm_types::ToolResultPart {
+                    tool_call_id: result.tool_call_id.clone(),
+                    tool_name: result.tool_name.clone(),
+                    output: new_output,
+                    is_error: result.is_error,
+                    provider_metadata: result.provider_metadata.clone(),
+                })
+            }
+            other => other.clone(),
+        })
+        .collect();
+    Some(ToolResultMessage {
+        uuid: orig.uuid,
+        message: LlmMessage::Tool {
+            content: new_content,
+            provider_options: provider_options.clone(),
+        },
+        tool_use_id: orig.tool_use_id.clone(),
+        tool_id: orig.tool_id.clone(),
+        is_error: orig.is_error,
+    })
+}
+
+#[cfg(test)]
+#[path = "engine_prompt.test.rs"]
+mod tests;

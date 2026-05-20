@@ -104,26 +104,18 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
     /// sliding-window safety valve still bounds growth.
     async fn compact_messages(
         &self,
-        messages: Vec<serde_json::Value>,
+        messages: Vec<std::sync::Arc<coco_messages::Message>>,
         _total_tokens: i64,
-    ) -> crate::Result<Vec<serde_json::Value>> {
+    ) -> crate::Result<Vec<std::sync::Arc<coco_messages::Message>>> {
         const KEEP_RECENT_FOR_MICRO: usize = 5;
         const KEEP_RECENT_ROUNDS_FOR_FULL: usize = 2;
 
-        let mut typed: Vec<coco_messages::Message> = match messages
-            .iter()
-            .map(|v| serde_json::from_value::<coco_messages::Message>(v.clone()))
-            .collect::<Result<Vec<_>, _>>()
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "teammate compact_messages: malformed history; returning input unchanged"
-                );
-                return Ok(messages);
-            }
-        };
+        // `coco_compact::*` consumes owned `Vec<Message>` (it mutates
+        // in place during micro-compact). Unwrap the Arc-vec into
+        // owned messages — this is the only deep clone in the path
+        // and only fires when the auto-compact threshold trips.
+        let mut typed: Vec<coco_messages::Message> =
+            messages.iter().map(|arc| (**arc).clone()).collect();
 
         // Step 1 — micro-compact (no-LLM cleanup of resolved tool
         // results). Cheap and always safe; bounds the prompt fed
@@ -146,7 +138,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
                     fork_context_messages: attempt
                         .context_messages
                         .iter()
-                        .filter_map(|m| serde_json::to_value(m).ok())
+                        .map(|m| std::sync::Arc::new(m.clone()))
                         .collect(),
                     // Deliberately impossible allow-list: no tools
                     // during the summarization turn. The prompt itself
@@ -182,19 +174,13 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
                     // Return the micro-compacted history rather than
                     // the original — the micro pass still trimmed
                     // tool results which buys some bound.
-                    return Ok(typed
-                        .iter()
-                        .map(|m| serde_json::to_value(m).unwrap_or_default())
-                        .collect());
+                    return Ok(typed.into_iter().map(std::sync::Arc::new).collect());
                 }
             };
 
-        // Step 3 — assemble post-compact messages and serialise.
+        // Step 3 — assemble post-compact messages.
         let post_compact = coco_compact::build_post_compact_messages(&compact_result);
-        Ok(post_compact
-            .iter()
-            .map(|m| serde_json::to_value(m).unwrap_or_default())
-            .collect())
+        Ok(post_compact.into_iter().map(std::sync::Arc::new).collect())
     }
 }
 

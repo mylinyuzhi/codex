@@ -92,30 +92,35 @@ impl NormalizationOptions {
 /// that need further API-specific steps (tool-result pairing, consecutive
 /// merging, role-first enforcement) use [`normalize_messages_for_api`];
 /// callers that want a pre-filter for UI / persistence use this directly.
-pub fn filter_by_options(messages: &[Message], opts: NormalizationOptions) -> Vec<&Message> {
+pub fn filter_by_options<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+    opts: NormalizationOptions,
+) -> Vec<&Message> {
     messages
         .iter()
-        .filter(|m| {
-            if opts.skip_virtual && predicates::is_virtual_message(m) {
-                return false;
+        .filter_map(|m| {
+            let msg: &Message = m.borrow();
+            if opts.skip_virtual && predicates::is_virtual_message(msg) {
+                return None;
             }
-            if opts.skip_tombstones && predicates::is_tombstone(m) {
-                return false;
+            if opts.skip_tombstones && predicates::is_tombstone(msg) {
+                return None;
             }
-            let Visibility { api, ui } = m.visibility();
+            let Visibility { api, ui } = msg.visibility();
             if opts.require_api_visible && !api {
-                return false;
+                return None;
             }
             if opts.require_ui_visible && !ui {
-                return false;
+                return None;
             }
-            if opts.skip_whitespace_user && predicates::is_user_message(m) {
-                let has_content = predicates::has_text_content(m) || predicates::is_meta_message(m);
+            if opts.skip_whitespace_user && predicates::is_user_message(msg) {
+                let has_content =
+                    predicates::has_text_content(msg) || predicates::is_meta_message(msg);
                 if !has_content {
-                    return false;
+                    return None;
                 }
             }
-            true
+            Some(msg)
         })
         .collect()
 }
@@ -149,7 +154,9 @@ pub fn filter_by_options(messages: &[Message], opts: NormalizationOptions) -> Ve
 /// Still missing (P3, gated and no current feature in coco-rs):
 ///   - `relocateToolReferenceSiblings` — Tool Reference feature isn't
 ///     ported, no callers can produce the offending pattern today.
-pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
+pub fn normalize_messages_for_api<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+) -> Vec<LlmMessage> {
     // Steps 1–5 collapse into one visibility-driven filter.
     //
     // - `require_api_visible` covers steps 3 (progress — UI_ONLY) and 4

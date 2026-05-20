@@ -1,51 +1,121 @@
+use std::sync::Arc;
+use uuid::Uuid;
+
+use coco_llm_types::AssistantContentPart;
+use coco_llm_types::LlmMessage;
+use coco_llm_types::ToolCallPart;
+use coco_llm_types::ToolContentPart;
+use coco_llm_types::ToolResultContent;
+use coco_llm_types::ToolResultPart;
+use coco_types::messages::AssistantMessage;
+use coco_types::messages::Message;
+use coco_types::messages::ToolResultMessage;
+use coco_types::messages::UserMessage;
+
 use super::*;
+
+fn assistant_with_tool_call(text: &str, tool_id: &str, tool_name: &str) -> Arc<Message> {
+    Arc::new(Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![
+                AssistantContentPart::text(text),
+                AssistantContentPart::ToolCall(ToolCallPart::new(
+                    tool_id,
+                    tool_name,
+                    serde_json::Value::Null,
+                )),
+            ],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: String::new(),
+        stop_reason: None,
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    }))
+}
+
+fn tool_result(tool_use_id: &str, output_text: &str) -> Arc<Message> {
+    Arc::new(Message::ToolResult(ToolResultMessage {
+        uuid: Uuid::new_v4(),
+        message: LlmMessage::Tool {
+            content: vec![ToolContentPart::ToolResult(ToolResultPart::new(
+                tool_use_id,
+                "Bash",
+                ToolResultContent::text(output_text),
+            ))],
+            provider_options: None,
+        },
+        tool_use_id: tool_use_id.to_string(),
+        tool_id: "Bash".parse().unwrap(),
+        is_error: false,
+    }))
+}
+
+fn user_text(text: &str) -> Arc<Message> {
+    Arc::new(Message::User(UserMessage {
+        message: LlmMessage::user_text(text),
+        uuid: Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    }))
+}
+
+fn extract_tool_result_text(arc: &Arc<Message>) -> &str {
+    let Message::ToolResult(trm) = arc.as_ref() else {
+        panic!("expected Message::ToolResult");
+    };
+    let LlmMessage::Tool { content, .. } = &trm.message else {
+        panic!("expected LlmMessage::Tool");
+    };
+    let ToolContentPart::ToolResult(tr) = &content[0] else {
+        panic!("expected ToolContentPart::ToolResult");
+    };
+    let ToolResultContent::Text { value, .. } = &tr.output else {
+        panic!("expected ToolResultContent::Text");
+    };
+    value
+}
 
 #[test]
 fn test_build_fork_context_replaces_tool_results() {
     let messages = vec![
-        serde_json::json!({
-            "role": "assistant",
-            "content": [
-                {"type": "text", "text": "Let me search"},
-                {"type": "tool_use", "id": "tu_1", "name": "Bash", "input": {"command": "ls"}}
-            ]
-        }),
-        serde_json::json!({
-            "role": "user",
-            "content": [
-                {"type": "tool_result", "tool_use_id": "tu_1", "content": "file1.rs\nfile2.rs"},
-                {"type": "text", "text": "Do this task"}
-            ]
-        }),
+        assistant_with_tool_call("Let me search", "tu_1", "Bash"),
+        tool_result("tu_1", "file1.rs\nfile2.rs"),
+        user_text("Do this task"),
     ];
 
     let ctx = build_fork_context(&messages, "Research the codebase");
-    assert_eq!(ctx.messages.len(), 2);
+    assert_eq!(ctx.messages.len(), 3);
     assert_eq!(ctx.directive, "Research the codebase");
 
-    let user_msg = &ctx.messages[1];
-    let content = user_msg["content"].as_array().unwrap();
-    let tool_result = &content[0];
-    assert_eq!(tool_result["content"].as_str().unwrap(), FORK_PLACEHOLDER);
+    // The tool-result body must be replaced with FORK_PLACEHOLDER.
+    assert_eq!(extract_tool_result_text(&ctx.messages[1]), FORK_PLACEHOLDER);
 
-    let text_block = &content[1];
-    assert_eq!(text_block["text"].as_str().unwrap(), "Do this task");
+    // Assistant + plain user messages share Arc with the parent — no
+    // allocation, identical pointer.
+    assert!(Arc::ptr_eq(&ctx.messages[0], &messages[0]));
+    assert!(Arc::ptr_eq(&ctx.messages[2], &messages[2]));
 }
 
 #[test]
 fn test_build_fork_context_preserves_assistant() {
-    let messages = vec![serde_json::json!({
-        "role": "assistant",
-        "content": [
-            {"type": "text", "text": "I found something"},
-            {"type": "tool_use", "id": "tu_2", "name": "Read", "input": {"path": "foo.rs"}}
-        ]
-    })];
+    let messages = vec![assistant_with_tool_call(
+        "I found something",
+        "tu_2",
+        "Read",
+    )];
 
     let ctx = build_fork_context(&messages, "Continue");
     assert_eq!(ctx.messages.len(), 1);
-    let content = ctx.messages[0]["content"].as_array().unwrap();
-    assert_eq!(content.len(), 2);
+    assert!(Arc::ptr_eq(&ctx.messages[0], &messages[0]));
 }
 
 #[test]
@@ -107,30 +177,35 @@ fn test_build_worktree_notice_ts_byte_faithful() {
 
 #[test]
 fn test_is_in_fork_child_detects_tag() {
-    let messages = vec![serde_json::json!({
-        "role": "user",
-        "content": [
-            {"type": "text", "text": format!("<{FORK_BOILERPLATE_TAG}>\nrules\n</{FORK_BOILERPLATE_TAG}>")}
-        ]
-    })];
+    let messages = vec![user_text(&format!(
+        "<{FORK_BOILERPLATE_TAG}>\nrules\n</{FORK_BOILERPLATE_TAG}>"
+    ))];
     assert!(is_in_fork_child(&messages));
 }
 
 #[test]
 fn test_is_in_fork_child_no_tag() {
-    let messages = vec![serde_json::json!({
-        "role": "user",
-        "content": [{"type": "text", "text": "normal message"}]
-    })];
+    let messages = vec![user_text("normal message")];
     assert!(!is_in_fork_child(&messages));
 }
 
 #[test]
 fn test_is_in_fork_child_assistant_messages_ignored() {
-    let messages = vec![serde_json::json!({
-        "role": "assistant",
-        "content": [{"type": "text", "text": format!("<{FORK_BOILERPLATE_TAG}>rules</{FORK_BOILERPLATE_TAG}>")}]
-    })];
+    let messages = vec![Arc::new(Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![AssistantContentPart::text(format!(
+                "<{FORK_BOILERPLATE_TAG}>rules</{FORK_BOILERPLATE_TAG}>"
+            ))],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: String::new(),
+        stop_reason: None,
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    }))];
     assert!(!is_in_fork_child(&messages));
 }
 
@@ -149,9 +224,10 @@ fn test_build_fork_context_empty_messages() {
 }
 
 #[test]
-fn test_build_fork_context_string_content() {
-    let messages = vec![serde_json::json!({"role": "user", "content": "plain text"})];
+fn test_build_fork_context_plain_user_passes_through() {
+    let messages = vec![user_text("plain text")];
     let ctx = build_fork_context(&messages, "test");
     assert_eq!(ctx.messages.len(), 1);
-    assert_eq!(ctx.messages[0]["content"].as_str().unwrap(), "plain text");
+    // Plain user message shares Arc with input — no allocation, no rewrite.
+    assert!(Arc::ptr_eq(&ctx.messages[0], &messages[0]));
 }

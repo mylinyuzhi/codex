@@ -862,8 +862,15 @@ impl QueryEngine {
                 })
                 .await;
 
-            // Build prompt from history
-            let prompt = self.build_prompt(history).await;
+            // Build prompt from history. `BuiltPrompt` carries the
+            // post-budget `Arc<Vec<Arc<Message>>>` snapshot so every
+            // tool ctx in this turn observes byte-identical history.
+            // TS parity: `query.ts:548` sets `toolUseContext.messages`
+            // to the same `messagesForQuery` after `applyToolResultBudget`.
+            let crate::engine_prompt::BuiltPrompt {
+                prompt,
+                messages_snapshot,
+            } = self.build_prompt(history).await;
             let tool_defs = self.build_tool_definitions(&app_state_snapshot).await;
 
             // StreamRequestStart has no direct protocol equivalent; it was
@@ -1000,6 +1007,7 @@ impl QueryEngine {
                         current_model_supports_tool_reference: current_supports_tool_reference,
                         current_model_supports_client_side_tool_search:
                             current_supports_client_side_tool_search,
+                        messages_snapshot: Some(messages_snapshot.clone()),
                     })
                     .await;
                 Some(Arc::new(base))
@@ -2449,6 +2457,7 @@ impl QueryEngine {
                     current_model_supports_tool_reference: ctx_supports_tool_reference,
                     current_model_supports_client_side_tool_search:
                         ctx_supports_client_side_tool_search,
+                    messages_snapshot: Some(messages_snapshot.clone()),
                 })
                 .await;
 

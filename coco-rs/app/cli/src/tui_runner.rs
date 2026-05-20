@@ -2819,13 +2819,18 @@ async fn process_submit_turn(
     // history_push_and_emit fires MessageAppended for each new turn
     // message so the TUI transcript view surfaces them via the standard
     // round-trip (replaces the legacy TUI-local optimistic add_message).
-    let messages: Vec<coco_messages::Message> = {
+    // `h.to_vec()` returns `Vec<Arc<Message>>` via cheap atomic
+    // refcount bumps — engine sees the same Arcs `MessageHistory`
+    // holds, no deep clone of message bodies (was `(**a).clone()` →
+    // `Arc::new` re-wrap, which deep-cloned every history entry per
+    // turn just to immediately re-Arc it).
+    let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
         let mut h = runtime.history.lock().await;
         let event_tx_opt = Some(event_tx.clone());
         for m in new_turn_messages.iter().cloned() {
             coco_query::history_sync::history_push_and_emit(&mut h, m, &event_tx_opt).await;
         }
-        h.iter().map(|a| (**a).clone()).collect()
+        h.to_vec()
     };
 
     let engine = runtime.build_engine(turn_cancel.clone()).await;
@@ -2845,8 +2850,6 @@ async fn process_submit_turn(
         }
     });
 
-    let messages: Vec<std::sync::Arc<coco_messages::Message>> =
-        messages.into_iter().map(std::sync::Arc::new).collect();
     match engine.run_with_messages(messages, core_event_tx).await {
         Ok(result) => {
             let mut h = runtime.history.lock().await;

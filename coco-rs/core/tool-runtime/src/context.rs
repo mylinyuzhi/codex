@@ -185,8 +185,19 @@ pub struct ToolUseContext {
     // ── Core State ──
     /// Cancellation token for aborting tool execution.
     pub cancel: CancellationToken,
-    /// Message history (shared, read via lock).
-    pub messages: Arc<RwLock<Vec<Message>>>,
+    /// Post-budget message snapshot the engine just sent to the model
+    /// this turn. Shared via outer `Arc` so every tool in the batch
+    /// observes byte-identical history; inner `Arc<Message>` lets
+    /// individual messages be shared with `MessageHistory` without
+    /// deep clones. Immutable for the lifetime of the ctx — tools never
+    /// mutate it (TS `Tool.ts:250` + every reader in TS `src/` is
+    /// read-only).
+    ///
+    /// TS parity: `query.ts:548` sets `toolUseContext.messages =
+    /// messagesForQuery` after `applyToolResultBudget` /
+    /// `microcompact` / `applyCollapses` / `autocompact`. Empty `Vec`
+    /// when no history has been built yet (test stubs, pre-first-turn).
+    pub messages: Arc<Vec<Arc<Message>>>,
     /// Permission context (mode + rules).
     pub permission_context: ToolPermissionContext,
 
@@ -774,7 +785,7 @@ impl ToolUseContext {
             model_supports_tool_reference: false,
             model_supports_client_side_tool_search: false,
             cancel: CancellationToken::new(),
-            messages: Arc::new(RwLock::new(Vec::new())),
+            messages: Arc::new(Vec::new()),
             permission_context: ToolPermissionContext {
                 mode: PermissionMode::BypassPermissions,
                 additional_dirs: HashMap::new(),

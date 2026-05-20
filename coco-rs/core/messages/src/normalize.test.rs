@@ -94,7 +94,8 @@ fn test_ensures_starts_with_user() {
 
 #[test]
 fn test_empty_input() {
-    let result = normalize_messages_for_api(&[]);
+    let empty: Vec<Message> = Vec::new();
+    let result = normalize_messages_for_api(&empty);
     assert!(result.is_empty());
 }
 

@@ -314,7 +314,7 @@ impl TurnRunner for QueryEngineRunner {
                                         .messages
                                         .iter()
                                         .rev()
-                                        .find_map(|m| match m {
+                                        .find_map(|m| match m.as_ref() {
                                             coco_messages::Message::Assistant(a) => {
                                                 match &a.message {
                                                     coco_llm_types::LlmMessage::Assistant {

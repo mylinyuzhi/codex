@@ -290,16 +290,14 @@ impl QueryEngine {
         if history.is_empty() {
             return;
         }
-        // Serialise the post-turn history so the slot can be
-        // observed without holding a parent-history reference. Same
-        // shape that `AgentQueryConfig.fork_context_messages`
-        // expects, so a future fork caller can thread it directly
-        // through the existing fork-context plumbing.
-        let fork_messages: Vec<serde_json::Value> = history
-            .as_slice()
-            .iter()
-            .filter_map(|m| serde_json::to_value(m).ok())
-            .collect();
+        // Snapshot the post-turn history into shared `Arc<Message>`
+        // entries so the slot can be observed without holding a
+        // parent-history reference. Same shape that
+        // `AgentQueryConfig.fork_context_messages` expects, so a fork
+        // caller threads it directly through the existing
+        // fork-context plumbing — no serialize / deserialize hop.
+        let fork_messages: Vec<std::sync::Arc<coco_messages::Message>> =
+            history.as_slice().to_vec();
         let rendered_system_prompt = self.config.system_prompt.clone().unwrap_or_default();
         // Provider instance name is captured at the same point as `model_id`
         // so post-turn forks can perform fast-mode-aware rate-limit selectivity

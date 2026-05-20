@@ -28,7 +28,7 @@ coco-subagent.workspace = true
 # One-way: coco-system-reminder does NOT depend on coco-tool-runtime.
 coco-system-reminder.workspace = true
 
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 async-trait.workspace = true
 futures = { workspace = true, features = ["alloc"] }

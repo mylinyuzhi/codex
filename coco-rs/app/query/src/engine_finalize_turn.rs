@@ -515,7 +515,7 @@ impl QueryEngine {
             let messages_for_fork = history.to_vec();
             let extract_input = coco_memory::service::extract::TurnInput {
                 fork_messages: Box::new(move || {
-                    serialize_messages_since(&messages_for_fork, last_cursor.as_deref())
+                    arc_messages_since(&messages_for_fork, last_cursor.as_deref())
                 }),
                 message_count: extract_message_count,
                 last_message_id: last_msg_id.clone(),
@@ -1101,18 +1101,16 @@ async fn build_suggestion_context(
     is_teammate: bool,
 ) -> crate::prompt_suggestion::SuggestionContext {
     let mut assistant_turn_count: u32 = 0;
-    let mut last_assistant_msg: Option<coco_messages::Message> = None;
-    for v in &cache.fork_context_messages {
-        if let Ok(m) = serde_json::from_value::<coco_messages::Message>(v.clone())
-            && matches!(m, coco_messages::Message::Assistant(_))
-        {
+    let mut last_assistant_msg: Option<&coco_messages::AssistantMessage> = None;
+    for arc in &cache.fork_context_messages {
+        if let coco_messages::Message::Assistant(a) = arc.as_ref() {
             assistant_turn_count = assistant_turn_count.saturating_add(1);
-            last_assistant_msg = Some(m);
+            last_assistant_msg = Some(a);
         }
     }
 
-    let (last_response_was_api_error, parent_uncached_tokens) = match &last_assistant_msg {
-        Some(coco_messages::Message::Assistant(a)) => {
+    let (last_response_was_api_error, parent_uncached_tokens) = match last_assistant_msg {
+        Some(a) => {
             let api_error = a.api_error.is_some();
             let usage = a.usage.unwrap_or_default();
             let tokens = crate::prompt_suggestion::parent_uncached_tokens(
@@ -1122,7 +1120,7 @@ async fn build_suggestion_context(
             );
             (api_error, tokens)
         }
-        _ => (false, 0),
+        None => (false, 0),
     };
 
     let snap = app_state.read().await;
@@ -1181,33 +1179,27 @@ async fn build_suggestion_context(
 }
 
 /// Slice the message history to "everything newer than `last_cursor`"
-/// and serialize as JSON for `AgentSpawnRequest::fork_context_messages`.
-/// When `last_cursor` is `None` (first extraction), return the full
-/// history.
+/// for `AgentSpawnRequest::fork_context_messages`. When `last_cursor`
+/// is `None` (first extraction), return the full history.
 ///
 /// TS parity: `messagesSinceCursor` in `services/extractMemories/`.
-/// We keep the slice as `serde_json::Value` so the boundary doesn't
-/// pull `coco_messages::Message` types into `coco-tool-runtime`.
-fn serialize_messages_since<M: std::borrow::Borrow<coco_messages::Message>>(
-    messages: &[M],
+/// Takes the engine's already-shared `Arc<Message>` slice and
+/// `Arc::clone`s each entry — no deep `Message` body clones at
+/// this seam.
+fn arc_messages_since(
+    messages: &[std::sync::Arc<coco_messages::Message>],
     last_cursor: Option<&str>,
-) -> Vec<serde_json::Value> {
+) -> Vec<std::sync::Arc<coco_messages::Message>> {
     let cursor_idx = last_cursor.and_then(|c| {
-        messages.iter().position(|m| {
-            m.borrow()
-                .uuid()
-                .map(|u| u.to_string() == c)
-                .unwrap_or(false)
-        })
+        messages
+            .iter()
+            .position(|m| m.uuid().map(|u| u.to_string() == c).unwrap_or(false))
     });
     let slice = match cursor_idx {
         Some(i) => &messages[i + 1..],
         None => messages,
     };
-    slice
-        .iter()
-        .filter_map(|m| serde_json::to_value(m.borrow()).ok())
-        .collect()
+    slice.to_vec()
 }
 
 /// Count user + assistant messages strictly after `since_uuid` —

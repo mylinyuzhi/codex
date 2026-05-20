@@ -18,6 +18,7 @@
 
 use std::sync::Arc;
 
+use coco_messages::Message;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -169,11 +170,12 @@ pub struct AgentQueryConfig {
     /// the child's turn. When non-empty, child runs with
     /// `forkContextMessages` + this prompt. TS parity:
     /// `AgentTool.tsx:622-632` (`isForkPath`: useExactTools,
-    /// forkContextMessages). Carried as serialized `Message` JSON
-    /// so it crosses the coco-tool → coco-query boundary without
-    /// pulling message types into coco-tool.
+    /// forkContextMessages). Shared via `Arc<Message>` so the
+    /// in-process spawn path doesn't pay a serialize → Value →
+    /// deserialize round-trip; cross-process transports serialize
+    /// once at the wire boundary instead.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fork_context_messages: Vec<serde_json::Value>,
+    pub fork_context_messages: Vec<Arc<Message>>,
     /// Which `ModelRole` this subagent runs under. The adapter
     /// resolves the role's primary + fallback chain from
     /// `ModelRoles` and installs them on the child engine so the
@@ -284,9 +286,12 @@ pub struct AgentQueryConfig {
 pub struct AgentQueryResult {
     /// Final response text from the agent.
     pub response_text: Option<String>,
-    /// Conversation messages produced during the query.
+    /// Conversation messages produced during the query. Carried as
+    /// `Arc<Message>` so the in-process subagent path returns its
+    /// final history without a deep clone or JSON round-trip;
+    /// remote transports serialize at the wire boundary.
     #[serde(default)]
-    pub messages: Vec<serde_json::Value>,
+    pub messages: Vec<Arc<Message>>,
     /// Number of turns executed.
     pub turns: i32,
     /// Input tokens consumed.

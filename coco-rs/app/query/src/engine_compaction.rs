@@ -557,8 +557,11 @@ impl QueryEngine {
                     fork_context_messages: Vec::new(),
                 }
             });
-            cache.fork_context_messages =
-                serialize_compact_attempt_messages(&attempt.context_messages);
+            cache.fork_context_messages = attempt
+                .context_messages
+                .iter()
+                .map(|m| std::sync::Arc::new(m.clone()))
+                .collect();
 
             let mut options =
                 crate::forked_agent::ForkedAgentOptions::for_label(coco_types::ForkLabel::Compact);
@@ -1522,13 +1525,6 @@ impl QueryEngine {
     }
 }
 
-fn serialize_compact_attempt_messages(messages: &[Message]) -> Vec<serde_json::Value> {
-    messages
-        .iter()
-        .filter_map(|m| serde_json::to_value(m).ok())
-        .collect()
-}
-
 struct PostCompactDeltaState {
     current_deferred_tools: Vec<String>,
     current_agents: Vec<String>,
@@ -1545,7 +1541,7 @@ fn preserved_contains_attachment_kind(
 }
 
 fn extract_compact_summary_from_messages(
-    messages: &[Message],
+    messages: &[std::sync::Arc<Message>],
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<String, String> {
     if cancel.is_cancelled() {
@@ -1554,7 +1550,7 @@ fn extract_compact_summary_from_messages(
 
     let mut chunks = Vec::new();
     for message in messages {
-        let Message::Assistant(assistant) = message else {
+        let Message::Assistant(assistant) = message.as_ref() else {
             continue;
         };
         if let Some(api_error) = &assistant.api_error {

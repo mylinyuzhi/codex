@@ -7,21 +7,27 @@ use coco_tool_runtime::AgentQueryEngine;
 
 #[test]
 fn test_agent_query_config_fork_context_messages_field_round_trips() {
-    // Lock in that fork_context_messages is serde-stable — it
-    // crosses the coco-tool-runtime → coco-query boundary as JSON via
-    // AgentQueryConfig.
+    // Lock in that fork_context_messages serializes through the
+    // boundary — `Vec<Arc<Message>>` round-trips via the serde `rc`
+    // feature (Arc<T> serializes transparently as T, deserializes as
+    // a fresh Arc).
+    let parent_msg = Arc::new(coco_messages::create_user_message("parent turn 1"));
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
         model: "m".into(),
         max_turns: Some(1),
         preserve_tool_use_results: true,
-        fork_context_messages: vec![serde_json::json!({"type":"user","content":"parent turn 1"})],
+        fork_context_messages: vec![parent_msg],
         ..Default::default()
     };
     let s = serde_json::to_string(&cfg).unwrap();
     let back: AgentQueryConfig = serde_json::from_str(&s).unwrap();
     assert!(back.preserve_tool_use_results);
     assert_eq!(back.fork_context_messages.len(), 1);
+    assert!(matches!(
+        back.fork_context_messages[0].as_ref(),
+        coco_messages::Message::User(_)
+    ));
 }
 
 #[tokio::test]

@@ -85,7 +85,7 @@ impl ForkDispatcher for CapturingCompactDispatcher {
         *self.options.lock().expect("options lock poisoned") = Some(options.clone());
         *self.prompt.lock().expect("prompt lock poisoned") = Some(prompt.to_string());
         Ok(ForkedAgentResult {
-            messages: vec![assistant_msg("fork summary")],
+            messages: vec![Arc::new(assistant_msg("fork summary"))],
             ..Default::default()
         })
     }
@@ -235,7 +235,9 @@ fn empty_cache() -> CacheSafeParams {
         model_id: "mock-model".into(),
         provider: "mock".into(),
         prompt_cache: None,
-        fork_context_messages: vec![serde_json::json!({"old":"parent cache"})],
+        fork_context_messages: vec![Arc::new(coco_messages::create_user_message(
+            "old parent cache",
+        ))],
     }
 }
 
@@ -283,7 +285,7 @@ async fn compact_summary_uses_cache_safe_fork_with_deny_all_tools() {
         serde_json::to_string(&cache.fork_context_messages).expect("fork context should serialize");
     assert!(serialized.contains("conversation context for api"));
     assert!(!serialized.contains("conversation slice only"));
-    assert!(!serialized.contains("parent cache"));
+    assert!(!serialized.contains("old parent cache"));
 }
 
 #[tokio::test]
