@@ -189,3 +189,21 @@ fn test_create_assistant_error_message_without_request_id() {
     assert!(a.usage.is_none());
     assert!(matches!(a.message, LlmMessage::Assistant { .. }));
 }
+
+/// Pin the legacy-text interrupt markers to the verbatim TS literals.
+///
+/// `last_message_is_user_interruption` (in `coco_query::history_sync`)
+/// dedups across the legacy-text form so older JSONL transcripts
+/// resume correctly. If these literals ever drift from the TS
+/// source, dedup silently breaks on imported transcripts.
+///
+/// TS source of truth: `utils/messages.ts:207-208` in
+/// claude-code-kim. Update both sides together if you change either.
+#[test]
+fn interrupt_message_constants_match_ts_literals() {
+    assert_eq!(INTERRUPT_MESSAGE, "[Request interrupted by user]");
+    assert_eq!(
+        INTERRUPT_MESSAGE_FOR_TOOL_USE,
+        "[Request interrupted by user for tool use]"
+    );
+}

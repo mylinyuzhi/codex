@@ -203,13 +203,13 @@ impl TurnRunner for QueryEngineRunner {
             // TS parity: REPL.tsx command dispatcher routes /compact
             // through `compactConversation` rather than chat input.
             if let Some(req) = coco_commands::handlers::compact::parse_compact_sentinel(&prompt) {
-                let combined: Vec<coco_messages::Message> = {
+                let combined: Vec<std::sync::Arc<coco_messages::Message>> = {
                     let h = history_handle.lock().await;
                     h.clone()
                 };
                 let mut history = MessageHistory::new();
-                for m in combined {
-                    history.push(m);
+                for arc in combined {
+                    history.push_arc(arc);
                 }
                 let custom_instructions = if req.custom_instructions.is_empty() {
                     None
@@ -249,7 +249,7 @@ impl TurnRunner for QueryEngineRunner {
             // session-memory update.
             if coco_commands::handlers::summary::parse_summary_sentinel(&prompt).is_some() {
                 if let Some(runtime) = engine.memory_runtime() {
-                    let combined: Vec<coco_messages::Message> = {
+                    let combined: Vec<std::sync::Arc<coco_messages::Message>> = {
                         let h = history_handle.lock().await;
                         h.clone()
                     };
@@ -348,7 +348,9 @@ impl TurnRunner for QueryEngineRunner {
                 // passes know it's not part of the main conversation.
                 {
                     let mut h = history_handle.lock().await;
-                    h.push(coco_messages::create_meta_message(&response_text));
+                    h.push(std::sync::Arc::new(coco_messages::create_meta_message(
+                        &response_text,
+                    )));
                 }
                 return Ok(());
             }
@@ -365,7 +367,7 @@ impl TurnRunner for QueryEngineRunner {
                     "UserPromptSubmit hook blocked the turn: {}\n\nOriginal prompt: {prompt}",
                     blocking.blocking_error,
                 );
-                let warning_msg = coco_messages::create_user_message(&warning);
+                let warning_msg = std::sync::Arc::new(coco_messages::create_user_message(&warning));
                 {
                     let mut h = history_handle.lock().await;
                     h.push(warning_msg.clone());
@@ -375,6 +377,8 @@ impl TurnRunner for QueryEngineRunner {
                     .send(CoreEvent::Protocol(
                         coco_types::ServerNotification::MessageAppended {
                             message: warning_msg,
+                            session_id: String::new(),
+                            agent_id: None,
                         },
                     ))
                     .await;
@@ -393,8 +397,9 @@ impl TurnRunner for QueryEngineRunner {
                     .clone()
                     .map(|r| format!("Operation stopped by hook: {r}"))
                     .unwrap_or_else(|| "Operation stopped by hook".to_string());
-                let prompt_msg = coco_messages::create_user_message(&prompt);
-                let stop_msg_obj = coco_messages::create_user_message(&stop_msg);
+                let prompt_msg = std::sync::Arc::new(coco_messages::create_user_message(&prompt));
+                let stop_msg_obj =
+                    std::sync::Arc::new(coco_messages::create_user_message(&stop_msg));
                 {
                     let mut h = history_handle.lock().await;
                     h.push(prompt_msg.clone());
@@ -405,6 +410,8 @@ impl TurnRunner for QueryEngineRunner {
                     .send(CoreEvent::Protocol(
                         coco_types::ServerNotification::MessageAppended {
                             message: prompt_msg,
+                            session_id: String::new(),
+                            agent_id: None,
                         },
                     ))
                     .await;
@@ -412,6 +419,8 @@ impl TurnRunner for QueryEngineRunner {
                     .send(CoreEvent::Protocol(
                         coco_types::ServerNotification::MessageAppended {
                             message: stop_msg_obj,
+                            session_id: String::new(),
+                            agent_id: None,
                         },
                     ))
                     .await;
@@ -445,13 +454,17 @@ impl TurnRunner for QueryEngineRunner {
             for m in new_msgs.iter().cloned() {
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::MessageAppended { message: m },
+                        coco_types::ServerNotification::MessageAppended {
+                            message: std::sync::Arc::new(m),
+                            session_id: String::new(),
+                            agent_id: None,
+                        },
                     ))
                     .await;
             }
-            let combined: Vec<coco_messages::Message> = {
+            let combined: Vec<std::sync::Arc<coco_messages::Message>> = {
                 let mut h = history_handle.lock().await;
-                h.extend(new_msgs.iter().cloned());
+                h.extend(new_msgs.iter().cloned().map(std::sync::Arc::new));
                 h.clone()
             };
             if !inputs.mentioned_paths.is_empty() {

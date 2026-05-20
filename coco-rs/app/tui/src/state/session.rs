@@ -144,22 +144,6 @@ pub struct SessionState {
     /// JSONL transcript on disk — this is the source of truth for
     /// "what is in the conversation".
     pub transcript: super::transcript_view::TranscriptView,
-    /// Message UUID set by `apply_auto_restore` when an auto-restore
-    /// fires. The App loop drains this after each `handle_core_event`
-    /// and dispatches `UserCommand::Rewind { mode: AutoRestore }` so
-    /// the engine truncates its authoritative history and emits
-    /// `ServerNotification::MessageTruncated`. Keeps engine ↔ TUI ↔
-    /// SDK converged on a single truncation signal.
-    ///
-    /// See `engine-tui-unified-transcript-plan.md` §7.4.
-    pub pending_auto_restore_truncate: Option<String>,
-    /// TUI-originated system messages waiting to be dispatched as
-    /// `UserCommand::PushSystemMessage` after the current
-    /// `handle_core_event` returns. Notification handlers don't have a
-    /// `command_tx` (pure-fold signature), so they enqueue here and the
-    /// App loop drains the queue in `drain_pending_system_pushes`.
-    /// Mirrors the `pending_auto_restore_truncate` pattern.
-    pub pending_system_pushes: std::collections::VecDeque<crate::command::SystemPushKind>,
     /// Active model id (e.g. `claude-sonnet-4-6`, `gpt-5`, `gemini-2.5-pro`).
     pub model: String,
     /// Active provider id for [`Self::model`] (e.g. `anthropic`, `openai`,
@@ -494,8 +478,6 @@ impl Default for SessionState {
     fn default() -> Self {
         Self {
             transcript: super::transcript_view::TranscriptView::new(),
-            pending_auto_restore_truncate: None,
-            pending_system_pushes: std::collections::VecDeque::new(),
             model: String::new(),
             provider: String::new(),
             model_catalog: Vec::new(),

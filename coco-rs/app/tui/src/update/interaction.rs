@@ -752,8 +752,10 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                         let _ = command_tx
                             .send(UserCommand::Rewind {
                                 message_id,
-                                restore_type: restore,
-                                rewound_turn,
+                                mode: crate::command::RewindMode::Explicit {
+                                    restore_type: restore,
+                                    rewound_turn,
+                                },
                             })
                             .await;
                     }

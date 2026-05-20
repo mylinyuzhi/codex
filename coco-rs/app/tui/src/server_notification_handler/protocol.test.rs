@@ -62,55 +62,83 @@ fn idle_with_meaningful_tail() -> AppState {
 /// Map a legacy test id ("u1") to the v5 UUID string the cell mirror
 /// produces. `apply_auto_restore` reads message ids from
 /// `transcript.cells()` (= `cell.message_uuid.to_string()`), so the
-/// expected `pending_auto_restore_truncate` value is the same
-/// derivation, not the raw fixture id.
+/// expected dispatched `Rewind { mode: AutoRestore }` carries the
+/// same derivation, not the raw fixture id.
 fn test_id(s: &str) -> String {
     crate::state::derive::id_to_uuid(s).to_string()
+}
+
+/// Channel pair scoped to one test. Caller drives `on_turn_interrupted`
+/// with `&tx` and observes `rx.try_recv()` for the dispatched
+/// `UserCommand::Rewind { mode: AutoRestore }`.
+fn channel() -> (
+    tokio::sync::mpsc::Sender<crate::command::UserCommand>,
+    tokio::sync::mpsc::Receiver<crate::command::UserCommand>,
+) {
+    tokio::sync::mpsc::channel(16)
+}
+
+/// True if the receiver got a `Rewind { mode: AutoRestore }`. Drains
+/// the channel; tests that need to inspect the message id should call
+/// `rx.try_recv()` directly.
+fn drained_auto_restore(
+    rx: &mut tokio::sync::mpsc::Receiver<crate::command::UserCommand>,
+) -> Option<String> {
+    while let Ok(cmd) = rx.try_recv() {
+        if let crate::command::UserCommand::Rewind {
+            message_id,
+            mode: crate::command::RewindMode::AutoRestore,
+        } = cmd
+        {
+            return Some(message_id);
+        }
+    }
+    None
 }
 
 #[test]
 fn user_cancel_with_lossless_tail_restores() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
-    on_turn_interrupted(&mut state, user_cancel());
+    let (tx, mut rx) = channel();
+    on_turn_interrupted(&mut state, user_cancel(), &tx);
 
-    // Auto-restore now lives entirely on the engine round-trip — the
-    // TUI sets `pending_auto_restore_truncate` and pulls the prompt
-    // back into the input; the actual transcript truncation happens
-    // when `MessageTruncated` arrives from the engine. We just verify
-    // the TUI-side outcome here.
+    // Auto-restore lives entirely on the engine round-trip — the TUI
+    // dispatches `UserCommand::Rewind { mode: AutoRestore }` directly
+    // and pulls the prompt back into the input; the actual transcript
+    // truncation happens when `MessageTruncated` arrives from the
+    // engine.
     assert_eq!(state.ui.input.text(), "original prompt");
     assert!(state.session.conversation_id.is_some());
     assert_eq!(
-        state.session.pending_auto_restore_truncate.as_deref(),
+        drained_auto_restore(&mut rx).as_deref(),
         Some(test_id("u1").as_str()),
     );
 }
 
 #[test]
-fn user_cancel_without_auto_restore_leaves_pending_none() {
-    // Meaningful tail → no auto-restore → no engine truncation
-    // expected → pending field stays None.
+fn user_cancel_without_auto_restore_leaves_no_dispatch() {
+    // Meaningful tail → no auto-restore → no Rewind dispatch.
     let mut state = idle_with_meaningful_tail();
-    on_turn_interrupted(&mut state, user_cancel());
-    assert!(state.session.pending_auto_restore_truncate.is_none());
+    let (tx, mut rx) = channel();
+    on_turn_interrupted(&mut state, user_cancel(), &tx);
+    assert!(drained_auto_restore(&mut rx).is_none());
 }
 
-/// Returns true if auto-restore fired — TUI-side signal is
-/// `pending_auto_restore_truncate` being set (the engine round-trip
-/// completes the truncation later).
-fn restored(state: &AppState) -> bool {
-    state.session.pending_auto_restore_truncate.is_some()
+/// True when an auto-restore Rewind landed on the channel.
+fn restored(rx: &mut tokio::sync::mpsc::Receiver<crate::command::UserCommand>) -> bool {
+    drained_auto_restore(rx).is_some()
 }
 
 #[test]
 fn user_cancel_with_meaningful_tail_does_not_restore() {
     let mut state = idle_with_meaningful_tail();
-    on_turn_interrupted(&mut state, user_cancel());
+    let (tx, mut rx) = channel();
+    on_turn_interrupted(&mut state, user_cancel(), &tx);
 
     // Auto-restore suppressed (meaningful tail). Engine pushes its
     // own `SystemMessage::UserInterruption` marker through
     // `MessageAppended` — tested at the renderer layer, not here.
-    assert!(!restored(&state));
+    assert!(!restored(&mut rx));
     assert_eq!(state.ui.input.text(), "", "input unchanged");
 }
 
@@ -118,11 +146,12 @@ fn user_cancel_with_meaningful_tail_does_not_restore() {
 fn user_cancel_with_nonempty_input_does_not_restore() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
     state.ui.input.textarea.set_text("user typed during cancel");
+    let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, user_cancel());
+    on_turn_interrupted(&mut state, user_cancel(), &tx);
 
     // No restore: nonempty input gates it off.
-    assert!(!restored(&state));
+    assert!(!restored(&mut rx));
     assert_eq!(
         state.ui.input.text(),
         "user typed during cancel",
@@ -134,10 +163,11 @@ fn user_cancel_with_nonempty_input_does_not_restore() {
 fn user_cancel_with_active_surface_does_not_restore() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
     state.ui.show_modal(ModalState::Help);
+    let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, user_cancel());
+    on_turn_interrupted(&mut state, user_cancel(), &tx);
 
-    assert!(!restored(&state));
+    assert!(!restored(&mut rx));
     assert_eq!(state.ui.input.text(), "");
 }
 
@@ -152,21 +182,23 @@ fn user_cancel_with_queued_command_does_not_restore() {
             id: "q1".into(),
             preview: "next".into(),
         });
+    let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, user_cancel());
+    on_turn_interrupted(&mut state, user_cancel(), &tx);
 
-    assert!(!restored(&state));
+    assert!(!restored(&mut rx));
     assert_eq!(state.ui.input.text(), "");
 }
 
 #[test]
 fn system_preempt_never_restores() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
+    let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, system_preempt());
+    on_turn_interrupted(&mut state, system_preempt(), &tx);
 
     assert!(
-        !restored(&state),
+        !restored(&mut rx),
         "Clear/Compact/Rewind/Shutdown drains must not auto-restore",
     );
     // SystemPreempt does NOT append the marker either — the
@@ -178,10 +210,11 @@ fn system_preempt_never_restores() {
 #[test]
 fn legacy_no_reason_is_treated_as_non_user_cancel() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
+    let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, legacy_no_reason());
+    on_turn_interrupted(&mut state, legacy_no_reason(), &tx);
 
-    assert!(!restored(&state));
+    assert!(!restored(&mut rx));
     assert_eq!(state.ui.input.text(), "");
 }
 
@@ -190,8 +223,9 @@ fn on_turn_interrupted_clears_streaming_and_busy() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
     state.ui.streaming = Some(crate::state::StreamingState::default());
     state.session.set_busy(true);
+    let (tx, _rx) = channel();
 
-    on_turn_interrupted(&mut state, user_cancel());
+    on_turn_interrupted(&mut state, user_cancel(), &tx);
 
     assert!(state.ui.streaming.is_none());
     assert!(!state.session.is_busy());

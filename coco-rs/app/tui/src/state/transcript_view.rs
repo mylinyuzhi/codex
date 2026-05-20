@@ -141,11 +141,10 @@ impl TranscriptView {
     /// [`Self::on_session_reset`] + N
     /// [`Self::on_message_appended`] calls but in a single
     /// cache-rebuild pass.
-    pub fn replace_from_messages(&mut self, messages: &[Message]) {
+    pub fn replace_from_messages(&mut self, messages: &[Arc<Message>]) {
         self.cells.clear();
         self.by_uuid.clear();
-        for msg in messages {
-            let arc = Arc::new(msg.clone());
+        for arc in messages {
             let derived = message_to_cells(arc.clone());
             if derived.is_empty() {
                 continue;

@@ -36,7 +36,7 @@ Extended (ported TS extensions): `AgentColorEntry`, `AttributionSnapshotEntry`, 
 
 ### Message family (in `messages/` submodule, flat re-exported at crate root)
 
-- **Envelope**: `Message` (8 variants), `UserMessage`, `AssistantMessage`, `ToolResultMessage`, `AttachmentMessage`, `ProgressMessage`, `TombstoneMessage`, `ToolUseSummaryMessage`.
+- **Envelope**: `Message` (7 variants), `UserMessage`, `AssistantMessage`, `ToolResultMessage`, `AttachmentMessage`, `ProgressMessage`, `TombstoneMessage`. Tool-use summaries are NOT a Message variant — they ride a `ServerNotification::ToolUseSummary` side-channel into `tool_group_summaries` (UI-only label cache, I-3).
 - **System**: `SystemMessage` + 15 sub-variants + `SystemMessageLevel`.
 - **Attachment payloads**: `AttachmentBody`, `SilentPayload`, 10 silent payload structs, `AttachmentEmitter`.
 - **Tool / hook result**: `ToolResult<T>`, `HookResult`.

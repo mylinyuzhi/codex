@@ -33,7 +33,7 @@ async fn mock_error(_req: ClassifyRequest) -> Result<String, String> {
 async fn test_inactive_returns_none() {
     let state = AutoModeState::new();
     let mut tracker = DenialTracker::new();
-    let result = can_use_tool_in_auto_mode(
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
         "Bash",
         &json!({"command": "ls"}),
         /*is_read_only*/ false,
@@ -52,7 +52,7 @@ async fn test_safe_tool_allows_without_classifier() {
     let state = AutoModeState::new();
     state.set_active(true);
     let mut tracker = DenialTracker::new();
-    let result = can_use_tool_in_auto_mode(
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
         "Read",
         &json!({"file_path": "/tmp/test"}),
         /*is_read_only*/ true,
@@ -71,7 +71,7 @@ async fn test_classifier_allow() {
     let state = AutoModeState::new();
     state.set_active(true);
     let mut tracker = DenialTracker::new();
-    let result = can_use_tool_in_auto_mode(
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
         "WebFetch",
         &json!({"url": "https://example.com"}),
         /*is_read_only*/ true,
@@ -90,7 +90,7 @@ async fn test_classifier_block() {
     let state = AutoModeState::new();
     state.set_active(true);
     let mut tracker = DenialTracker::new();
-    let result = can_use_tool_in_auto_mode(
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
         "Bash",
         &json!({"command": "rm -rf /"}),
         /*is_read_only*/ false,
@@ -116,7 +116,7 @@ async fn test_circuit_breaker_fallthrough() {
     }
     assert!(tracker.is_circuit_breaker_tripped());
 
-    let result = can_use_tool_in_auto_mode(
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
         "Bash",
         &json!({"command": "ls"}),
         /*is_read_only*/ false,
@@ -135,7 +135,7 @@ async fn test_classifier_error_blocks() {
     let state = AutoModeState::new();
     state.set_active(true);
     let mut tracker = DenialTracker::new();
-    let result = can_use_tool_in_auto_mode(
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
         "Bash",
         &json!({"command": "curl example.com"}),
         /*is_read_only*/ false,

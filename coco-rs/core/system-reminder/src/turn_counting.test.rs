@@ -246,7 +246,8 @@ fn total_assistant_turns_skips_thinking_and_non_assistant() {
 
 #[test]
 fn total_assistant_turns_empty() {
-    assert_eq!(total_assistant_turns(&[]), 0);
+    let empty: &[Message] = &[];
+    assert_eq!(total_assistant_turns(empty), 0);
 }
 
 // ── count_human_turns ──
@@ -271,7 +272,8 @@ fn count_human_turns_ignores_meta_attachments_and_non_user() {
 
 #[test]
 fn count_human_turns_empty_history_returns_zero() {
-    assert_eq!(count_human_turns(&[]), 0);
+    let empty: &[Message] = &[];
+    assert_eq!(count_human_turns(empty), 0);
 }
 
 // ── count_human_turns_since_attachment ──

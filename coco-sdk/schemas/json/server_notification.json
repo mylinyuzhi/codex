@@ -55,7 +55,7 @@
       ]
     },
     {
-      "description": "One Message appended to engine MessageHistory.",
+      "description": "One Message appended to engine MessageHistory.\n\n`session_id` + `agent_id` envelope (plan §11 F9): merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
       "type": "object",
       "properties": {
         "method": {
@@ -65,8 +65,18 @@
         "params": {
           "type": "object",
           "properties": {
+            "agent_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "message": {
               "$ref": "#/$defs/Message"
+            },
+            "session_id": {
+              "type": "string",
+              "default": ""
             }
           },
           "required": [
@@ -90,9 +100,19 @@
         "params": {
           "type": "object",
           "properties": {
+            "agent_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "keep_count": {
               "type": "integer",
               "format": "int64"
+            },
+            "session_id": {
+              "type": "string",
+              "default": ""
             }
           },
           "required": [
@@ -116,6 +136,12 @@
         "params": {
           "type": "object",
           "properties": {
+            "agent_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "session_id": {
               "type": "string"
             }
@@ -141,16 +167,43 @@
         "params": {
           "type": "object",
           "properties": {
+            "agent_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "messages": {
               "type": "array",
               "items": {
                 "$ref": "#/$defs/Message"
               }
+            },
+            "session_id": {
+              "type": "string",
+              "default": ""
             }
           },
           "required": [
             "messages"
           ]
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Reasoning aggregates attached to a specific assistant message.\nEngine emits this after `TurnCompleted` (when usage is known)\nso the TUI side-cache anchors `Thinking · <duration> · <tokens>`\nby the message UUID rather than re-walking transcript cells.\nEliminates the prior I-2 exception in `TranscriptView`.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "history/reasoningMetadataAttached"
+        },
+        "params": {
+          "$ref": "#/$defs/ReasoningMetadataAttachedParams"
         }
       },
       "required": [
@@ -3511,6 +3564,33 @@
       "required": [
         "data",
         "mediaType"
+      ]
+    },
+    "ReasoningMetadataAttachedParams": {
+      "description": "Reasoning aggregates anchored to a specific assistant message.\n\nEmitted by the engine right after `TurnCompleted` when the model\nreported non-zero `reasoning_tokens`. The TUI handler indexes its\n`reasoning_metadata` side-cache by `message_uuid`, eliminating the\nO(n) \"find latest `AssistantThinking` cell\" walk and removing the\nlast vestige of the I-2 exception.",
+      "type": "object",
+      "properties": {
+        "duration_ms": {
+          "description": "Token-only reasoning duration in milliseconds. `None` when the\nprovider didn't separate reasoning vs. content time.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "message_uuid": {
+          "description": "Assistant message UUID this metadata anchors to. String-form\nfor wire stability; `Uuid::parse_str` on the receiving side.",
+          "type": "string"
+        },
+        "reasoning_tokens": {
+          "description": "Cumulative reasoning tokens for the turn.",
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "message_uuid",
+        "reasoning_tokens"
       ]
     },
     "ReasoningPart": {

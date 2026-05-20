@@ -235,7 +235,8 @@ mod build_input_tests {
 
     #[test]
     fn empty_history_returns_none() {
-        assert!(build_input_from_history(&[]).is_none());
+        let msgs: &[coco_messages::Message] = &[];
+        assert!(build_input_from_history(msgs).is_none());
     }
 
     #[test]

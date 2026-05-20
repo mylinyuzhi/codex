@@ -114,7 +114,7 @@ pub async fn run() -> Result<()> {
     // The summary text we scripted must appear somewhere in the new
     // history — that's the load-bearing evidence that the summarizer
     // ran and its output was folded back in.
-    let summary_in_history = history.iter().any(message_contains_summary);
+    let summary_in_history = history.iter().any(|m| message_contains_summary(m));
     assert!(
         summary_in_history,
         "compact_round_trip: scripted summary `{SUMMARY_TEXT}` should appear \

@@ -5,14 +5,23 @@ use crate::MessageKind;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// In-memory message history with turn tracking.
 ///
+/// Storage is `Vec<Arc<Message>>` so the engine's authoritative
+/// transcript can be shared with wire emit payloads
+/// (`ServerNotification::MessageAppended`,
+/// `ServerNotification::HistoryReplaced`) and TUI derived cells
+/// without deep-cloning the `Message` body on every transcript
+/// mutation — see `engine-tui-unified-transcript-plan.md` §11 F8.
+///
 /// The backing storage is `pub(crate)` so internal helpers can do
 /// bulk operations cheaply; external callers go through the
-/// controlled API ([`push`](Self::push), [`truncate`](Self::truncate),
-/// [`clear`](Self::clear), [`iter`](Self::iter), [`as_slice`](Self::as_slice),
+/// controlled API ([`push`](Self::push), [`push_arc`](Self::push_arc),
+/// [`truncate`](Self::truncate), [`clear`](Self::clear),
+/// [`iter`](Self::iter), [`as_slice`](Self::as_slice),
 /// [`first`](Self::first), [`last`](Self::last), [`get`](Self::get))
 /// or the explicit escape hatch
 /// [`messages_mut`](Self::messages_mut) for raw in-place mutation
@@ -25,9 +34,18 @@ use uuid::Uuid;
 /// stream so TUI / SDK consumers stay coherent with engine state.
 #[derive(Debug, Default)]
 pub struct MessageHistory {
-    pub(crate) messages: Vec<Message>,
+    pub(crate) messages: Vec<Arc<Message>>,
     /// Message UUID -> index in messages vec.
     index: HashMap<Uuid, usize>,
+    /// Active session id stamped onto every transcript-lifecycle
+    /// emit (`MessageAppended`, `MessageTruncated`, `HistoryReplaced`,
+    /// `SessionResetForResume`). AgentTeams (plan §11 F9) consumers
+    /// read this off the wire to demux merged timelines. Empty for
+    /// legacy paths; set via [`set_envelope`](Self::set_envelope).
+    session_id: String,
+    /// Active agent id — `None` for the main agent, `Some` for
+    /// teammate / subagent emits. Forward-compat field for AgentTeams.
+    agent_id: Option<String>,
 }
 
 impl MessageHistory {
@@ -35,11 +53,44 @@ impl MessageHistory {
         Self::default()
     }
 
-    pub fn push(&mut self, msg: Message) {
-        if let Some(uuid) = msg.uuid() {
+    /// Stamp the session + agent identity onto this history so every
+    /// `history_sync::*` emit carries the envelope automatically.
+    /// Called once at history construction by the engine builder; no
+    /// other call site should need to touch it.
+    pub fn set_envelope(&mut self, session_id: String, agent_id: Option<String>) {
+        self.session_id = session_id;
+        self.agent_id = agent_id;
+    }
+
+    /// Active session id. Empty when [`set_envelope`](Self::set_envelope)
+    /// hasn't been called (legacy / test fixtures).
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Active agent id, if any.
+    pub fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
+    }
+
+    /// Push a message into the history and return the shared
+    /// [`Arc<Message>`] for emit reuse. The same Arc is stored in
+    /// history and returned to the caller, so a downstream
+    /// `MessageAppended` emit can ride the same allocation — no
+    /// deep `Message` clone.
+    pub fn push(&mut self, msg: Message) -> Arc<Message> {
+        self.push_arc(Arc::new(msg))
+    }
+
+    /// Push an already-constructed [`Arc<Message>`] into the history
+    /// and return it. Used by resume hydration paths that built the
+    /// Arc upstream (e.g. JSONL load).
+    pub fn push_arc(&mut self, arc: Arc<Message>) -> Arc<Message> {
+        if let Some(uuid) = arc.uuid() {
             self.index.insert(*uuid, self.messages.len());
         }
-        self.messages.push(msg);
+        self.messages.push(Arc::clone(&arc));
+        arc
     }
 
     /// Raw mutable access to the backing message vector. **Bypasses
@@ -58,32 +109,34 @@ impl MessageHistory {
     /// prefer [`push`](Self::push), [`truncate`](Self::truncate),
     /// [`clear`](Self::clear), or
     /// `coco_query::history_sync::history_push_and_emit`.
-    pub fn messages_mut(&mut self) -> &mut Vec<Message> {
+    pub fn messages_mut(&mut self) -> &mut Vec<Arc<Message>> {
         &mut self.messages
     }
 
     /// Read-only iterator over the underlying messages.
-    pub fn iter(&self) -> std::slice::Iter<'_, Message> {
+    pub fn iter(&self) -> std::slice::Iter<'_, Arc<Message>> {
         self.messages.iter()
     }
 
     /// First message, if any.
-    pub fn first(&self) -> Option<&Message> {
+    pub fn first(&self) -> Option<&Arc<Message>> {
         self.messages.first()
     }
 
     /// Last message, if any.
-    pub fn last(&self) -> Option<&Message> {
+    pub fn last(&self) -> Option<&Arc<Message>> {
         self.messages.last()
     }
 
     /// Indexed access; returns `None` if out of bounds.
-    pub fn get(&self, idx: usize) -> Option<&Message> {
+    pub fn get(&self, idx: usize) -> Option<&Arc<Message>> {
         self.messages.get(idx)
     }
 
-    /// Cloned snapshot of the underlying messages.
-    pub fn to_vec(&self) -> Vec<Message> {
+    /// Cloned snapshot of the underlying message Arcs.
+    /// Cheap — each entry is an `Arc::clone` (pointer copy), not a
+    /// deep `Message` clone.
+    pub fn to_vec(&self) -> Vec<Arc<Message>> {
         self.messages.clone()
     }
 
@@ -108,7 +161,14 @@ impl MessageHistory {
         if since_len >= self.messages.len() {
             return Vec::new();
         }
-        let captured: Vec<Message> = self.messages.drain(since_len..).collect();
+        // The drained Arcs are typically uniquely held (just popped out
+        // of storage); try_unwrap returns the Message without cloning
+        // when refcount is 1 and falls back to a deep clone otherwise.
+        let captured: Vec<Message> = self
+            .messages
+            .drain(since_len..)
+            .map(|a| Arc::try_unwrap(a).unwrap_or_else(|a| (*a).clone()))
+            .collect();
         self.rebuild_index();
         captured
     }
@@ -121,12 +181,12 @@ impl MessageHistory {
         self.messages.is_empty()
     }
 
-    pub fn find_by_uuid(&self, uuid: &Uuid) -> Option<&Message> {
+    pub fn find_by_uuid(&self, uuid: &Uuid) -> Option<&Arc<Message>> {
         self.index.get(uuid).and_then(|&i| self.messages.get(i))
     }
 
     /// Get messages as a slice.
-    pub fn as_slice(&self) -> &[Message] {
+    pub fn as_slice(&self) -> &[Arc<Message>] {
         &self.messages
     }
 
@@ -144,31 +204,34 @@ impl MessageHistory {
     /// preserved, multiple `Text` parts can appear interleaved with
     /// `ToolCall`s — the placeholder keeps downstream semantics intact.
     pub fn last_assistant_text(&self) -> Option<String> {
-        self.messages.iter().rev().find_map(|msg| match msg {
-            Message::Assistant(a) => match &a.message {
-                LlmMessage::Assistant { content, .. } => {
-                    let mut chunks: Vec<String> = Vec::new();
-                    for c in content {
-                        match c {
-                            AssistantContent::Text(t) if !t.text.is_empty() => {
-                                chunks.push(t.text.clone());
+        self.messages
+            .iter()
+            .rev()
+            .find_map(|msg| match msg.as_ref() {
+                Message::Assistant(a) => match &a.message {
+                    LlmMessage::Assistant { content, .. } => {
+                        let mut chunks: Vec<String> = Vec::new();
+                        for c in content {
+                            match c {
+                                AssistantContent::Text(t) if !t.text.is_empty() => {
+                                    chunks.push(t.text.clone());
+                                }
+                                AssistantContent::ToolCall(tc) => {
+                                    chunks.push(format!("[tool: {}]", tc.tool_name));
+                                }
+                                _ => {}
                             }
-                            AssistantContent::ToolCall(tc) => {
-                                chunks.push(format!("[tool: {}]", tc.tool_name));
-                            }
-                            _ => {}
+                        }
+                        if chunks.is_empty() {
+                            None
+                        } else {
+                            Some(chunks.join("\n"))
                         }
                     }
-                    if chunks.is_empty() {
-                        None
-                    } else {
-                        Some(chunks.join("\n"))
-                    }
-                }
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        })
+            })
     }
 
     /// Count messages of a given kind.
@@ -223,6 +286,21 @@ impl MessageHistory {
                 self.index.insert(*uuid, i);
             }
         }
+    }
+
+    /// Borrow the storage as a temporary `&mut Vec<Message>` for legacy
+    /// in-place mutating passes (`coco_compact::micro_compact` family).
+    ///
+    /// Materializes one `Vec<Message>` (deep-clone of N Arcs at entry),
+    /// runs `f`, then re-Arcs the result and rebuilds the index. The
+    /// per-emit hot path is unaffected — only mutating compaction passes
+    /// (rare: every ~50 turns) pay the bridge cost. See plan §11 F8.
+    pub fn with_owned_messages<R>(&mut self, f: impl FnOnce(&mut Vec<Message>) -> R) -> R {
+        let mut owned: Vec<Message> = self.messages.iter().map(|a| (**a).clone()).collect();
+        let result = f(&mut owned);
+        self.messages = owned.into_iter().map(Arc::new).collect();
+        self.rebuild_index();
+        result
     }
 }
 

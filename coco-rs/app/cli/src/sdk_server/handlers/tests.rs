@@ -1994,8 +1994,8 @@ impl TurnRunner for HistoryRecordingRunner {
                 params.prompt
             ));
             let mut h = handoff.history.lock().await;
-            h.push(user);
-            h.push(assistant);
+            h.push(std::sync::Arc::new(user));
+            h.push(std::sync::Arc::new(assistant));
             Ok(())
         })
     }

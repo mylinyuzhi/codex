@@ -173,7 +173,7 @@ pub struct TurnHandoff {
     pub session_id: String,
     pub cwd: String,
     pub model: String,
-    pub history: Arc<Mutex<Vec<coco_messages::Message>>>,
+    pub history: Arc<Mutex<Vec<std::sync::Arc<coco_messages::Message>>>>,
     /// Session-scoped shared state. Attached to every turn's engine
     /// via `with_app_state` so plan-mode cadence + live permission
     /// mode propagate across turns AND mid-session mode toggles
@@ -608,7 +608,7 @@ pub struct SessionHandle {
     /// with `QueryResult.final_messages`. The `Arc<Mutex<>>` wrapping
     /// lets the runner's detached turn task mutate it without holding
     /// the session write-lock for the whole turn.
-    pub history: Arc<Mutex<Vec<coco_messages::Message>>>,
+    pub history: Arc<Mutex<Vec<std::sync::Arc<coco_messages::Message>>>>,
 
     /// Session-scoped `ToolAppState` — TS parity:
     /// `appState.toolPermissionContext` and the plan-mode latches.

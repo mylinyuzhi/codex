@@ -261,12 +261,12 @@ async fn resolve_effective_input_from_pre_hook(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn resolve_permission_decision(
+async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     tool_call: &ToolCallPart,
     tool: &Arc<dyn Tool>,
     effective_input: &Value,
     ctx: &ToolUseContext,
-    history_messages: &[Message],
+    history_messages: &[M],
     hook_permission: (Option<coco_types::PermissionBehavior>, Option<String>),
     auto_mode_state: Option<&Arc<coco_permissions::AutoModeState>>,
     denial_tracker: Option<&Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
@@ -483,13 +483,13 @@ async fn evaluate_with_rules(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn try_classify_in_auto_mode(
+async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
     tool_name: &str,
     input: &Value,
     is_read_only: bool,
     state: &coco_permissions::AutoModeState,
     tracker: &mut coco_permissions::DenialTracker,
-    messages: &[Message],
+    messages: &[M],
     client: &Arc<ApiClient>,
     auto_mode_rules: &AutoModeRules,
 ) -> Option<PermissionDecision> {

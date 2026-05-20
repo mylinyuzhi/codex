@@ -66,6 +66,34 @@ impl fmt::Display for ShutdownReason {
     }
 }
 
+/// Rewind dispatch mode. ADT, not a flag — variants carry the
+/// parameters they need and only those parameters, so the type
+/// system rejects illegal combinations at compile time (e.g.
+/// `RestoreType` cannot leak into the `AutoRestore` path).
+///
+/// TS parity: there is no single TS analogue; this consolidates the
+/// React-side `rewindConversationTo()` (explicit) and the cancel-on-
+/// empty-input auto-restore branch in `REPL.tsx:3010-3022`.
+#[derive(Debug, Clone)]
+pub enum RewindMode {
+    /// Explicit `/rewind` flow from the picker. May restore files,
+    /// summarize, emit the `RewindCompleted` overlay, and run picker
+    /// confirmation.
+    Explicit {
+        restore_type: crate::state::rewind::RestoreType,
+        /// 1-based turn number the user picked, for the protocol-level
+        /// `rewind/completed` notification. TS doesn't carry this
+        /// (renders on the React side); coco-rs threads it through so
+        /// SDK consumers see it without a second query.
+        rewound_turn: i32,
+    },
+    /// TUI auto-restore on cancel-with-empty-input at a lossless tail
+    /// boundary. Synchronous history truncation only — no file
+    /// restoration, no modal overlay. The engine emits
+    /// `MessageTruncated` so SDK + TUI converge on engine authority.
+    AutoRestore,
+}
+
 /// Typed payload for [`UserCommand::PushSystemMessage`]. Each variant
 /// carries the fields the engine needs to construct the matching
 /// [`coco_messages::SystemMessage`] sub-variant before calling
@@ -239,30 +267,19 @@ pub enum UserCommand {
     /// the user's focus directive. TS: `commands/compact/compact.ts:40`
     /// passes `args.trim()` as `customInstructions`.
     Compact { custom_instructions: Option<String> },
-    /// Explicit `/rewind` flow from the picker. Carries the full
-    /// restore policy (`RestoreType`) — may restore files, emit the
-    /// `RewindCompleted` overlay, and run the picker confirmation.
-    /// TS: rewindConversationTo() + fileHistoryRewind() in REPL.tsx
+    /// Rewind to an earlier user message.
+    ///
+    /// `mode` is an ADT, not a flag — the `AutoRestore` variant
+    /// structurally cannot carry a `RestoreType`, so the
+    /// "auto-restore never touches files" invariant is enforced by
+    /// the type system, not by separate command variants.
+    ///
+    /// TS: rewindConversationTo() + fileHistoryRewind() in REPL.tsx.
+    /// See `engine-tui-unified-transcript-plan.md` §4.2 / §7.4.
     Rewind {
         message_id: String,
-        restore_type: crate::state::rewind::RestoreType,
-        /// 1-based turn number the user picked, for the protocol-level
-        /// `rewind/completed` notification. TS does not need this
-        /// (renders on the React side); coco-rs threads it through so
-        /// SDK consumers see it without a second query.
-        rewound_turn: i32,
+        mode: RewindMode,
     },
-    /// TUI-driven auto-restore: synchronous history truncation only.
-    /// Fired when the user hits Ctrl+C on an empty input at a lossless
-    /// tail boundary. No file restoration, no modal overlay — the
-    /// engine just truncates `MessageHistory` and emits
-    /// `MessageTruncated` so observers converge on the engine
-    /// authority. See `engine-tui-unified-transcript-plan.md` §7.4.
-    ///
-    /// Kept separate from `Rewind` so the engine doesn't need to
-    /// branch on a mode field and `RestoreType` cannot leak in (the
-    /// AutoRestore path explicitly never restores files).
-    AutoTruncate { message_id: String },
     /// Request diff stats for a message (async, response via ServerNotification).
     /// TS: fileHistoryGetDiffStats() called from MessageSelector useEffect.
     RequestDiffStats { message_id: String },

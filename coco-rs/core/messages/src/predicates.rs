@@ -155,10 +155,13 @@ pub fn tool_call_count(msg: &Message) -> usize {
 /// session-memory natural-break gate and by compact's SM-first
 /// short-circuit to decide whether the last turn ended on a tool
 /// call (orphan-risk for downstream summaries).
-pub fn count_tool_calls_in_last_assistant_turn(messages: &[Message]) -> i32 {
+pub fn count_tool_calls_in_last_assistant_turn<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+) -> i32 {
     for m in messages.iter().rev() {
-        if matches!(m, Message::Assistant(_)) {
-            return tool_call_count(m) as i32;
+        let msg = m.borrow();
+        if matches!(msg, Message::Assistant(_)) {
+            return tool_call_count(msg) as i32;
         }
     }
     0

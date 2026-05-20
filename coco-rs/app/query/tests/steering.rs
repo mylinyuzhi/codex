@@ -300,9 +300,9 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
         events
     });
 
-    let initial_messages = vec![coco_messages::create_user_message(
+    let initial_messages = vec![std::sync::Arc::new(coco_messages::create_user_message(
         "kick off a turn so we can steer it",
-    )];
+    ))];
     let result = engine
         .run_with_messages(initial_messages, event_tx)
         .await
@@ -323,7 +323,7 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
     let queued_attachments: Vec<_> = result
         .final_messages
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|m| match m.as_ref() {
             coco_messages::Message::Attachment(att)
                 if att.kind == AttachmentKind::QueuedCommand =>
             {
@@ -486,7 +486,7 @@ async fn e2e_steering_origin_framing_per_kind() {
     );
     let bodies: Vec<String> = history
         .iter()
-        .map(coco_messages::wrapping::extract_text_from_message)
+        .map(|m| coco_messages::wrapping::extract_text_from_message(m))
         .collect();
 
     // Every body wraps the framing in <system-reminder>.

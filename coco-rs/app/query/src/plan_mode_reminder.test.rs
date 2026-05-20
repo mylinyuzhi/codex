@@ -32,7 +32,7 @@ fn text_of(msg: &Message) -> Option<String> {
 }
 
 fn history_texts(history: &MessageHistory) -> Vec<String> {
-    history.iter().filter_map(text_of).collect()
+    history.iter().filter_map(|m| text_of(m)).collect()
 }
 
 // ── Mode reconciliation ──────────────────────────────────────────────

@@ -77,8 +77,8 @@ const SESSION_MEMORY_TRUNCATION_MARKER: &str =
 /// - The kept-tail anchor is unrecoverable;
 /// - The post-compact token count is still ≥ `auto_compact_threshold`
 ///   (caller should fall back to LLM-based compaction).
-pub fn compact_session_memory(
-    messages: &[Message],
+pub fn compact_session_memory<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
     session_memory: &str,
     last_summarized_message_id: Option<uuid::Uuid>,
     config: &SessionMemoryCompactConfig,
@@ -90,6 +90,10 @@ pub fn compact_session_memory(
     if is_session_memory_template_only(trimmed) {
         return Ok(None);
     }
+
+    // Materialize once at entry (see compact_conversation rationale).
+    let owned: Vec<Message> = messages.iter().map(|m| m.borrow().clone()).collect();
+    let messages: &[Message] = &owned;
 
     // Resolve the last-summarized boundary index. TS:
     //   - Some + found  → start after that index.

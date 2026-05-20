@@ -362,13 +362,21 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             .send(CoreEvent::Protocol(
                 coco_types::ServerNotification::SessionResetForResume {
                     session_id: plan.session_id.clone(),
+                    agent_id: None,
                 },
             ))
             .await;
         let _ = notification_tx
             .send(CoreEvent::Protocol(
                 coco_types::ServerNotification::HistoryReplaced {
-                    messages: plan.prior_messages.clone(),
+                    messages: plan
+                        .prior_messages
+                        .iter()
+                        .cloned()
+                        .map(std::sync::Arc::new)
+                        .collect(),
+                    session_id: plan.session_id.clone(),
+                    agent_id: None,
                 },
             ))
             .await;
@@ -1042,31 +1050,32 @@ async fn run_agent_driver(
                 }
             }
 
-            UserCommand::Rewind {
-                message_id,
-                restore_type,
-                rewound_turn,
-            } => {
+            UserCommand::Rewind { message_id, mode } => {
                 // Drain first — rewind reads file_history snapshots
                 // and rewrites runtime.history; an in-flight turn that
                 // mutates either would race.
                 drain_active_turn(&active_turn).await;
-                handle_rewind(
-                    &restore_type,
-                    &message_id,
-                    rewound_turn,
-                    &runtime.file_history,
-                    &runtime.config_home,
-                    &session_id,
-                    &event_tx,
-                    &runtime,
-                )
-                .await;
-            }
-
-            UserCommand::AutoTruncate { message_id } => {
-                drain_active_turn(&active_turn).await;
-                handle_auto_truncate(&message_id, &event_tx, &runtime).await;
+                match mode {
+                    coco_tui::command::RewindMode::Explicit {
+                        restore_type,
+                        rewound_turn,
+                    } => {
+                        handle_rewind(
+                            &restore_type,
+                            &message_id,
+                            rewound_turn,
+                            &runtime.file_history,
+                            &runtime.config_home,
+                            &session_id,
+                            &event_tx,
+                            &runtime,
+                        )
+                        .await;
+                    }
+                    coco_tui::command::RewindMode::AutoRestore => {
+                        handle_auto_truncate(&message_id, &event_tx, &runtime).await;
+                    }
+                }
             }
 
             UserCommand::RequestDiffStats { message_id } => {
@@ -2300,8 +2309,8 @@ async fn run_manual_compact(
     let compact_cancel = CancellationToken::new();
     let engine = runtime.build_engine(compact_cancel).await;
     let mut history = coco_messages::MessageHistory::new();
-    for m in runtime.history.lock().await.as_slice().iter().cloned() {
-        history.push(m);
+    for arc in runtime.history.lock().await.as_slice().iter().cloned() {
+        history.push_arc(arc);
     }
     let event_tx_opt = Some(event_tx.clone());
     engine
@@ -2333,11 +2342,16 @@ async fn run_clear_conversation(
         return;
     }
     let notif = match scope {
-        ClearScope::History => ServerNotification::MessageTruncated { keep_count: 0 },
+        ClearScope::History => ServerNotification::MessageTruncated {
+            keep_count: 0,
+            session_id: String::new(),
+            agent_id: None,
+        },
         ClearScope::Conversation | ClearScope::All => {
             let new_session_id = runtime.current_session_id().await;
             ServerNotification::SessionResetForResume {
                 session_id: new_session_id,
+                agent_id: None,
             }
         }
     };
@@ -2811,7 +2825,7 @@ async fn process_submit_turn(
         for m in new_turn_messages.iter().cloned() {
             coco_query::history_sync::history_push_and_emit(&mut h, m, &event_tx_opt).await;
         }
-        h.as_slice().to_vec()
+        h.iter().map(|a| (**a).clone()).collect()
     };
 
     let engine = runtime.build_engine(turn_cancel.clone()).await;
@@ -2831,12 +2845,14 @@ async fn process_submit_turn(
         }
     });
 
+    let messages: Vec<std::sync::Arc<coco_messages::Message>> =
+        messages.into_iter().map(std::sync::Arc::new).collect();
     match engine.run_with_messages(messages, core_event_tx).await {
         Ok(result) => {
             let mut h = runtime.history.lock().await;
             h.clear();
-            for m in result.final_messages {
-                h.push(m);
+            for arc in result.final_messages {
+                h.push_arc(arc);
             }
         }
         Err(e) => {
@@ -2931,7 +2947,7 @@ async fn handle_auto_truncate(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
 ) {
     let mut h = runtime.history.lock().await;
-    let Some(idx) = h.as_slice().iter().position(|m| match m {
+    let Some(idx) = h.as_slice().iter().position(|m| match m.as_ref() {
         coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
         _ => false,
     }) else {
@@ -2967,6 +2983,8 @@ async fn handle_auto_truncate(
     let _ = event_tx
         .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
             keep_count: idx as i64,
+            session_id: String::new(),
+            agent_id: None,
         }))
         .await;
 }
@@ -3059,7 +3077,7 @@ async fn handle_rewind(
 
     if should_truncate {
         let mut h = runtime.history.lock().await;
-        match h.as_slice().iter().position(|m| match m {
+        match h.as_slice().iter().position(|m| match m.as_ref() {
             coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
             _ => false,
         }) {
@@ -3088,6 +3106,8 @@ async fn handle_rewind(
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
                         keep_count: idx as i64,
+                        session_id: String::new(),
+                        agent_id: None,
                     }))
                     .await;
             }
@@ -3149,14 +3169,14 @@ async fn handle_summarize_rewind(
         _ => return,
     };
 
-    let messages = {
+    let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
         let h = runtime.history.lock().await;
         h.as_slice().to_vec()
     };
 
     // Pivot index: position of the picked user message in the
     // history vec.
-    let pivot_index = match messages.iter().position(|m| match m {
+    let pivot_index = match messages.iter().position(|m| match m.as_ref() {
         coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
         _ => false,
     }) {
@@ -3181,8 +3201,8 @@ async fn handle_summarize_rewind(
 
     let engine = runtime.build_engine(CancellationToken::new()).await;
     let mut history = coco_messages::MessageHistory::new();
-    for message in messages {
-        history.push(message);
+    for arc in messages {
+        history.push_arc(arc);
     }
     let event_tx_opt = Some(event_tx.clone());
     let outcome = engine

@@ -315,7 +315,7 @@ impl QueryEngine {
         // user-message UUID that has already been reminder-scanned
         // and skips re-parsing it so the user-input tier fires once
         // per human turn, not once per tool-result iteration.
-        let reminder_current_user_uuid = history.iter().rev().find_map(|m| match m {
+        let reminder_current_user_uuid = history.iter().rev().find_map(|m| match m.as_ref() {
             Message::User(u) => Some(u.uuid),
             _ => None,
         });
@@ -464,7 +464,7 @@ impl QueryEngine {
             turn_number: reminder_human_turn_number,
             agent_id: self.config.agent_id.clone(),
             user_input: reminder_user_input.clone(),
-            last_human_turn_uuid: history.iter().rev().find_map(|m| match m {
+            last_human_turn_uuid: history.iter().rev().find_map(|m| match m.as_ref() {
                 Message::User(u) => Some(u.uuid),
                 _ => None,
             }),
@@ -670,7 +670,7 @@ impl QueryEngine {
                     // tool-result rounds sharing the same UUID don't
                     // advance the counter (mirror of the old
                     // `observe_turn_and_count` behavior).
-                    if let Some(uuid) = history.iter().rev().find_map(|m| match m {
+                    if let Some(uuid) = history.iter().rev().find_map(|m| match m.as_ref() {
                         Message::User(u) => Some(u.uuid),
                         _ => None,
                     }) {
@@ -757,19 +757,22 @@ impl QueryEngine {
 /// Empty when no human turn has happened yet (no Message::User in
 /// history) or no tool produced a non-error result. Order is
 /// unspecified — the recall ranker uses set membership only.
-fn collect_recent_successful_tools(messages: &[Message]) -> Vec<String> {
+fn collect_recent_successful_tools<M: std::borrow::Borrow<Message>>(messages: &[M]) -> Vec<String> {
     use coco_messages::AssistantContent;
     use coco_messages::LlmMessage;
     use std::collections::HashMap;
 
-    let Some(last_user_idx) = messages.iter().rposition(|m| matches!(m, Message::User(_))) else {
+    let Some(last_user_idx) = messages
+        .iter()
+        .rposition(|m| matches!(m.borrow(), Message::User(_)))
+    else {
         return Vec::new();
     };
 
     let mut use_id_to_name: HashMap<String, String> = HashMap::new();
     let mut success_by_use_id: HashMap<String, bool> = HashMap::new();
     for m in &messages[last_user_idx..] {
-        match m {
+        match m.borrow() {
             Message::Assistant(a) => {
                 if let LlmMessage::Assistant { content, .. } = &a.message {
                     for block in content {

@@ -3,6 +3,8 @@
 //! Replaces the fragile `format!("{:?}")` approach with proper content-part
 //! traversal. Uses ~4 chars/token heuristic (same as TS).
 
+use std::borrow::Borrow;
+
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
@@ -16,14 +18,22 @@ pub fn estimate_message_tokens(msg: &Message) -> i64 {
 }
 
 /// Estimate tokens for a slice of messages.
-pub fn estimate_tokens(messages: &[Message]) -> i64 {
-    let total_chars: i64 = messages.iter().map(message_char_count).sum();
+///
+/// Generic over `Borrow<Message>` so callers can pass `&[Message]`
+/// (legacy / tests / freshly-built vectors) or `&[Arc<Message>]`
+/// (engine `MessageHistory` snapshots, see plan §11 F8) without a
+/// deep-clone bridge.
+pub fn estimate_tokens<M: Borrow<Message>>(messages: &[M]) -> i64 {
+    let total_chars: i64 = messages
+        .iter()
+        .map(|m| message_char_count(m.borrow()))
+        .sum();
     chars_to_tokens(total_chars)
 }
 
 /// Conservative token estimate: `(chars / 4) * 4 / 3` (~33% padding).
 /// Matches TS `estimateMessageTokens` padding.
-pub fn estimate_tokens_conservative(messages: &[Message]) -> i64 {
+pub fn estimate_tokens_conservative<M: Borrow<Message>>(messages: &[M]) -> i64 {
     let base = estimate_tokens(messages);
     base * 4 / 3
 }

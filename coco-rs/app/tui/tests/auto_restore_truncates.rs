@@ -20,7 +20,7 @@
 
 use coco_messages::create_user_message;
 use coco_tui::AppState;
-use coco_tui::handle_core_event;
+use coco_tui::handle_event_for_test as handle_core_event;
 use coco_tui::state::StreamingState;
 use coco_tui::state::ToolExecution;
 use coco_tui::state::ToolStatus;
@@ -71,7 +71,11 @@ async fn truncate_shrinks_transcript_and_drops_anchored_overlays() {
         msg_uuids.push(*m.uuid().unwrap());
         handle_core_event(
             &mut state,
-            protocol_evt(ServerNotification::MessageAppended { message: m }),
+            protocol_evt(ServerNotification::MessageAppended {
+                message: std::sync::Arc::new(m),
+                session_id: String::new(),
+                agent_id: None,
+            }),
         );
     }
     assert_eq!(state.session.transcript.len(), 3, "three cells seeded");
@@ -96,12 +100,15 @@ async fn truncate_shrinks_transcript_and_drops_anchored_overlays() {
     let (tx, mut rx) = mpsc::channel::<CoreEvent>(4);
     tx.send(protocol_evt(ServerNotification::MessageTruncated {
         keep_count: 1,
+        session_id: String::new(),
+        agent_id: None,
     }))
     .await
     .expect("channel accepts the event");
 
     let observed = rx.recv().await.expect("SDK observer receives event");
-    let CoreEvent::Protocol(ServerNotification::MessageTruncated { keep_count }) = &observed else {
+    let CoreEvent::Protocol(ServerNotification::MessageTruncated { keep_count, .. }) = &observed
+    else {
         panic!("expected Protocol(MessageTruncated), got {observed:?}");
     };
     assert_eq!(*keep_count, 1, "wire payload preserves keep_count");
@@ -141,7 +148,11 @@ async fn truncate_to_zero_empties_transcript() {
         let m = create_user_message(&format!("m{i}"));
         handle_core_event(
             &mut state,
-            protocol_evt(ServerNotification::MessageAppended { message: m }),
+            protocol_evt(ServerNotification::MessageAppended {
+                message: std::sync::Arc::new(m),
+                session_id: String::new(),
+                agent_id: None,
+            }),
         );
     }
     assert_eq!(state.session.transcript.len(), 2);
@@ -150,6 +161,8 @@ async fn truncate_to_zero_empties_transcript() {
         &mut state,
         roundtrip(protocol_evt(ServerNotification::MessageTruncated {
             keep_count: 0,
+            session_id: String::new(),
+            agent_id: None,
         })),
     );
 
@@ -165,7 +178,11 @@ async fn truncate_beyond_history_is_a_noop() {
     let m = create_user_message("only");
     handle_core_event(
         &mut state,
-        protocol_evt(ServerNotification::MessageAppended { message: m }),
+        protocol_evt(ServerNotification::MessageAppended {
+            message: std::sync::Arc::new(m),
+            session_id: String::new(),
+            agent_id: None,
+        }),
     );
 
     // keep_count larger than current len — the view must not panic or
@@ -174,6 +191,8 @@ async fn truncate_beyond_history_is_a_noop() {
         &mut state,
         roundtrip(protocol_evt(ServerNotification::MessageTruncated {
             keep_count: 99,
+            session_id: String::new(),
+            agent_id: None,
         })),
     );
 

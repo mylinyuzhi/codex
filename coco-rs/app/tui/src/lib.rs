@@ -70,6 +70,7 @@ pub use paste::PasteManager;
 pub use paste::ResolvedInput;
 pub use presentation::styles::UiStyles;
 pub use server_notification_handler::handle_core_event;
+pub use server_notification_handler::handle_event_for_test;
 pub use state::AppState;
 pub use state::FocusTarget;
 pub use state::RunningState;

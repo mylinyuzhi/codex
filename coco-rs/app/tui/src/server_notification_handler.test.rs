@@ -16,7 +16,7 @@ use coco_types::ServerNotification;
 
 use coco_types::AgentStreamEvent;
 
-use crate::server_notification_handler::handle_core_event;
+use crate::server_notification_handler::handle_event_for_test as handle_core_event;
 use crate::state::AppState;
 
 #[test]

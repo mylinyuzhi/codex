@@ -493,7 +493,7 @@ pub struct QueryEngine {
 impl QueryEngine {
     pub(crate) async fn run_session_loop(
         &self,
-        turn_messages: Vec<Message>,
+        turn_messages: Vec<std::sync::Arc<Message>>,
         event_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         state_tracker: &SessionStateTracker,
         hook_tx_opt: Option<tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
@@ -556,7 +556,7 @@ impl QueryEngine {
         let user_msg_uuid = turn_messages
             .iter()
             .rev()
-            .find_map(|m| match m {
+            .find_map(|m| match m.as_ref() {
                 Message::User(u) => Some(u.uuid.to_string()),
                 _ => None,
             })
@@ -571,8 +571,8 @@ impl QueryEngine {
         // copies after N turns). Subsequent push sites inside the loop
         // (new assistant turns, tool results, system messages) still
         // emit normally.
-        for msg in turn_messages {
-            history.push(msg);
+        for arc in turn_messages {
+            history.push_arc(arc);
         }
 
         // NOTE: `SessionStarted` + `SessionStateChanged(Running)` + the
@@ -2634,7 +2634,7 @@ fn make_query_result(
     api_time_ms: i64,
     stop_reason: Option<String>,
     permission_denials: Vec<coco_types::PermissionDenialInfo>,
-    final_messages: Vec<Message>,
+    final_messages: Vec<std::sync::Arc<Message>>,
 ) -> QueryResult {
     QueryResult {
         response_text,

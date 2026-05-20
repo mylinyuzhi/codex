@@ -160,8 +160,12 @@ pub fn calculate_drop_target(
 /// the caller can resend the API call without going through the LLM
 /// summarizer.
 #[must_use]
-pub fn peel_head_for_ptl_retry(messages: &[Message], tokens_to_free: i64) -> Option<Vec<Message>> {
-    let groups = crate::grouping::group_messages_by_api_round(messages);
+pub fn peel_head_for_ptl_retry<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+    tokens_to_free: i64,
+) -> Option<Vec<Message>> {
+    let owned: Vec<Message> = messages.iter().map(|m| m.borrow().clone()).collect();
+    let groups = crate::grouping::group_messages_by_api_round(&owned);
     if groups.len() < 2 {
         return None;
     }

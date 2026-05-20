@@ -279,6 +279,7 @@ class NotificationMethod(str, Enum):
     history_messageTruncated = 'history/messageTruncated'
     history_resetForResume = 'history/resetForResume'
     history_replaced = 'history/replaced'
+    history_reasoningMetadataAttached = 'history/reasoningMetadataAttached'
     turn_started = 'turn/started'
     turn_completed = 'turn/completed'
     turn_failed = 'turn/failed'
@@ -714,6 +715,11 @@ class RateLimitParams(BaseModel):
     status: RateLimitStatus | None = None
     utilization: float | None = None
 
+class ReasoningMetadataAttachedParams(BaseModel):
+    message_uuid: str
+    reasoning_tokens: int
+    duration_ms: int | None = None
+
 class RewindCompletedParams(BaseModel):
     messages_removed: int
     restored_files: int
@@ -855,15 +861,22 @@ class WorktreeExitedParams(BaseModel):
 
 class HistoryMessageAppendedParams(BaseModel):
     message: Message
+    agent_id: str | None = None
+    session_id: str = ''
 
 class HistoryMessageTruncatedParams(BaseModel):
     keep_count: int
+    agent_id: str | None = None
+    session_id: str = ''
 
 class HistoryResetForResumeParams(BaseModel):
     session_id: str
+    agent_id: str | None = None
 
 class HistoryReplacedParams(BaseModel):
     messages: list[Message]
+    agent_id: str | None = None
+    session_id: str = ''
 
 class ItemStartedParams(BaseModel):
     item: ThreadItem
@@ -948,6 +961,7 @@ class NotificationMethod(str, Enum):
     HISTORY_MESSAGE_TRUNCATED = 'history/messageTruncated'
     HISTORY_RESET_FOR_RESUME = 'history/resetForResume'
     HISTORY_REPLACED = 'history/replaced'
+    HISTORY_REASONING_METADATA_ATTACHED = 'history/reasoningMetadataAttached'
     TURN_STARTED = 'turn/started'
     TURN_COMPLETED = 'turn/completed'
     TURN_FAILED = 'turn/failed'
@@ -1060,6 +1074,11 @@ class ServerNotification(BaseModel):
     def as_history_replaced(self) -> HistoryReplacedParams | None:
         if self.method == 'history/replaced':
             return HistoryReplacedParams.model_validate(self.params)
+        return None
+
+    def as_history_reasoning_metadata_attached(self) -> ReasoningMetadataAttachedParams | None:
+        if self.method == 'history/reasoningMetadataAttached':
+            return ReasoningMetadataAttachedParams.model_validate(self.params)
         return None
 
     def as_turn_started(self) -> TurnStartedParams | None:

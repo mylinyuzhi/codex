@@ -75,10 +75,10 @@ impl QueryEngine {
                 }
                 collapsed
             } else {
-                history.to_vec()
+                history.iter().map(|a| (**a).clone()).collect()
             }
         } else {
-            history.to_vec()
+            history.iter().map(|a| (**a).clone()).collect()
         };
 
         self.apply_tool_result_budget_to_prompt(&mut messages_for_api)

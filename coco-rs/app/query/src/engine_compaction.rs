@@ -55,7 +55,9 @@ impl QueryEngine {
             && self.config.compact.micro.enabled
             && self.config.compact.micro.count_based_enabled
         {
-            coco_compact::micro_compact(history.messages_mut(), micro_keep);
+            history.with_owned_messages(|msgs| {
+                coco_compact::micro_compact(msgs, micro_keep);
+            });
         }
 
         // SM-first short-circuit + LLM fallback are both centralized in

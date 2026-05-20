@@ -228,7 +228,12 @@ async fn test_engine_surfaces_error_when_chain_exhausted() {
     });
 
     let result = engine
-        .run_with_messages(vec![coco_messages::create_user_message("hello")], tx)
+        .run_with_messages(
+            vec![std::sync::Arc::new(coco_messages::create_user_message(
+                "hello",
+            ))],
+            tx,
+        )
         .await;
     assert!(result.is_err(), "exhausted chain must surface error");
 

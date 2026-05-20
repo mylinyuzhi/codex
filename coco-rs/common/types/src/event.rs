@@ -295,16 +295,38 @@ matching `NotificationMethod` discriminant.",
     // See `engine-tui-unified-transcript-plan.md` §4.1.
 
     /// One Message appended to engine MessageHistory.
-    "history/messageAppended" => MessageAppended { message: crate::messages::Message },
+    ///
+    /// `session_id` + `agent_id` envelope (plan §11 F9): merged-timeline
+    /// consumers (AgentTeams) demux per session/agent off the same event
+    /// stream. `agent_id` is `None` for the main agent; `Some` for
+    /// teammates / subagents. Single-session SDK consumers may ignore
+    /// both fields (`#[serde(default)]` keeps the wire forward-compat).
+    "history/messageAppended" => MessageAppended {
+        message: std::sync::Arc<crate::messages::Message>,
+        #[serde(default)]
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+    },
     /// MessageHistory truncated to `keep_count` entries (indices
     /// >= keep_count discarded). Emitted by explicit-rewind and
     /// auto-restore both, so SDK + TUI converge on engine truncation
     /// without separate private paths.
-    "history/messageTruncated" => MessageTruncated { keep_count: i64 },
+    "history/messageTruncated" => MessageTruncated {
+        keep_count: i64,
+        #[serde(default)]
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+    },
     /// Session reset for resume. TUI clears derived transcript view
     /// in preparation for a burst of `MessageAppended` that replays
     /// the loaded JSONL transcript.
-    "history/resetForResume" => SessionResetForResume { session_id: String },
+    "history/resetForResume" => SessionResetForResume {
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+    },
     /// Bulk snapshot for resume hydration. Consumers replace the
     /// derived transcript view wholesale (one cache-rebuild pass)
     /// instead of processing N `MessageAppended` events sequentially.
@@ -313,7 +335,19 @@ matching `NotificationMethod` discriminant.",
     /// queue boundary and force the engine task to yield. Live
     /// appends still use `MessageAppended` — this variant models
     /// bulk replacement (a genuinely different operation).
-    "history/replaced" => HistoryReplaced { messages: Vec<crate::messages::Message> },
+    "history/replaced" => HistoryReplaced {
+        messages: Vec<std::sync::Arc<crate::messages::Message>>,
+        #[serde(default)]
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+    },
+    /// Reasoning aggregates attached to a specific assistant message.
+    /// Engine emits this after `TurnCompleted` (when usage is known)
+    /// so the TUI side-cache anchors `Thinking · <duration> · <tokens>`
+    /// by the message UUID rather than re-walking transcript cells.
+    /// Eliminates the prior I-2 exception in `TranscriptView`.
+    "history/reasoningMetadataAttached" => ReasoningMetadataAttached(ReasoningMetadataAttachedParams),
 
     // === Turn lifecycle (4) ===
 
@@ -816,6 +850,27 @@ pub struct TurnCompletedParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     pub usage: TokenUsage,
+}
+
+/// Reasoning aggregates anchored to a specific assistant message.
+///
+/// Emitted by the engine right after `TurnCompleted` when the model
+/// reported non-zero `reasoning_tokens`. The TUI handler indexes its
+/// `reasoning_metadata` side-cache by `message_uuid`, eliminating the
+/// O(n) "find latest `AssistantThinking` cell" walk and removing the
+/// last vestige of the I-2 exception.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningMetadataAttachedParams {
+    /// Assistant message UUID this metadata anchors to. String-form
+    /// for wire stability; `Uuid::parse_str` on the receiving side.
+    pub message_uuid: String,
+    /// Token-only reasoning duration in milliseconds. `None` when the
+    /// provider didn't separate reasoning vs. content time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    /// Cumulative reasoning tokens for the turn.
+    pub reasoning_tokens: i64,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

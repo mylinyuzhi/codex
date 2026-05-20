@@ -20,7 +20,7 @@
 use coco_messages::create_user_interruption_system_message;
 use coco_messages::create_user_message;
 use coco_tui::AppState;
-use coco_tui::handle_core_event;
+use coco_tui::handle_event_for_test as handle_core_event;
 use coco_tui::state::CellKind;
 use coco_tui::state::StreamingState;
 use coco_tui::state::SystemCellKind;
@@ -67,7 +67,11 @@ fn resume_clears_prior_overlays_then_rebuilds_transcript() {
     let stale_msg = create_user_message("stale prior-session prompt");
     handle_core_event(
         &mut state,
-        protocol_evt(ServerNotification::MessageAppended { message: stale_msg }),
+        protocol_evt(ServerNotification::MessageAppended {
+            message: std::sync::Arc::new(stale_msg),
+            session_id: String::new(),
+            agent_id: None,
+        }),
     );
     state.session.tool_executions.push(fake_running_tool());
     state.ui.streaming = Some(StreamingState::default());
@@ -82,6 +86,7 @@ fn resume_clears_prior_overlays_then_rebuilds_transcript() {
         &mut state,
         protocol_evt(ServerNotification::SessionResetForResume {
             session_id: "resumed-001".into(),
+            agent_id: None,
         }),
     );
 
@@ -111,11 +116,19 @@ fn resume_clears_prior_overlays_then_rebuilds_transcript() {
 
     handle_core_event(
         &mut state,
-        protocol_evt(ServerNotification::MessageAppended { message: m1 }),
+        protocol_evt(ServerNotification::MessageAppended {
+            message: std::sync::Arc::new(m1),
+            session_id: String::new(),
+            agent_id: None,
+        }),
     );
     handle_core_event(
         &mut state,
-        protocol_evt(ServerNotification::MessageAppended { message: m2 }),
+        protocol_evt(ServerNotification::MessageAppended {
+            message: std::sync::Arc::new(m2),
+            session_id: String::new(),
+            agent_id: None,
+        }),
     );
 
     let cells = state.session.transcript.cells();
@@ -149,6 +162,7 @@ fn resume_with_no_prior_state_still_sets_conversation_id() {
         &mut state,
         protocol_evt(ServerNotification::SessionResetForResume {
             session_id: "fresh-resume".into(),
+            agent_id: None,
         }),
     );
 

@@ -181,13 +181,15 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // Empty fork-context messages → run with the prompt only
         // (rare; promptSuggestion etc. always pass parent history).
         let result = if !agent_config.fork_context_messages.is_empty() {
-            let mut messages: Vec<coco_messages::Message> = Vec::new();
+            let mut messages: Vec<std::sync::Arc<coco_messages::Message>> = Vec::new();
             for v in &agent_config.fork_context_messages {
                 if let Ok(m) = serde_json::from_value::<coco_messages::Message>(v.clone()) {
-                    messages.push(m);
+                    messages.push(std::sync::Arc::new(m));
                 }
             }
-            messages.push(coco_messages::create_user_message(prompt));
+            messages.push(std::sync::Arc::new(coco_messages::create_user_message(
+                prompt,
+            )));
             // Discard event stream — fork output goes back via the
             // returned text, not via the parent's CoreEvent channel.
             let (tx, _rx) = tokio::sync::mpsc::channel(8);
@@ -220,11 +222,14 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // `runForkedAgent` likewise returns just the fork's added
         // messages, not the parent's).
         let parent_msg_count = agent_config.fork_context_messages.len();
+        // Slice off the fork's own emissions; deep-clone-once at this
+        // boundary to fit `ForkedAgentResult.messages: Vec<Message>`
+        // (the `coco-tool-runtime` boundary type).
         let fork_messages: Vec<coco_messages::Message> = result
             .final_messages
             .iter()
             .skip(parent_msg_count + 1) // +1 for the user prompt the fork prepended
-            .cloned()
+            .map(|a| (**a).clone())
             .collect();
 
         Ok(ForkedAgentResult {

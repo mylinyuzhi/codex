@@ -56,10 +56,13 @@ fn plan_file_path(config_home: &std::path::Path, session_id: &str) -> std::path:
 /// Count `Message::Attachment` whose rendered text contains `needle`.
 /// Cheap substring match is enough: each plan-mode banner has a
 /// distinctive top-level `## ...` heading.
-fn count_attachments_containing(messages: &[Message], needle: &str) -> usize {
+fn count_attachments_containing<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+    needle: &str,
+) -> usize {
     messages
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|m| match m.borrow() {
             Message::Attachment(a) => match a.as_api_message() {
                 Some(coco_messages::LlmMessage::User { content, .. }) => {
                     content.iter().find_map(|c| match c {

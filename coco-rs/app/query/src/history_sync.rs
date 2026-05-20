@@ -15,6 +15,8 @@
 //! that older JSONL transcripts may contain. Dedup works on both forms
 //! across resume boundaries.
 
+use std::sync::Arc;
+
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::SystemMessage;
@@ -33,18 +35,48 @@ use crate::emit::emit_protocol;
 /// chatter.
 const HISTORY_SYNC_TARGET: &str = "coco::history_sync";
 
+/// Read the F9 envelope (session_id + agent_id) off the history and
+/// stamp it onto a transcript-lifecycle event payload. AgentTeams
+/// consumers demux merged timelines by these two fields; single-session
+/// SDK consumers ignore them (forward-compat via `#[serde(default)]`).
+///
+/// Envelope lives on `MessageHistory` (set by the engine builder) so
+/// every helper here picks it up automatically — no per-call threading.
+fn envelope_from(history: &MessageHistory) -> (String, Option<String>) {
+    (
+        history.session_id().to_string(),
+        history.agent_id().map(str::to_string),
+    )
+}
+
 /// Push `msg` into `history` and emit a typed `MessageAppended` protocol
-/// notification. The notification clones the message so consumers
-/// receive a stable copy independent of the history's storage.
+/// notification. The push allocates one `Arc<Message>`; the same Arc
+/// is stored in history and forwarded on the wire — no deep `Message`
+/// clone (see `engine-tui-unified-transcript-plan.md` §11 F8).
+///
+/// The wire payload carries `session_id` + `agent_id` pulled from
+/// the history (§11 F9) — engine sets these once at history
+/// construction.
 pub async fn history_push_and_emit(
     history: &mut MessageHistory,
     msg: Message,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
-    let uuid = msg.uuid().copied();
-    let kind = msg.kind();
-    let notif_msg = msg.clone();
-    history.push(msg);
+    history_push_arc_and_emit(history, Arc::new(msg), event_tx).await;
+}
+
+/// Push an already-`Arc`-wrapped message — used for re-committing
+/// drained errors (`drain_pushed_since` round-trip) where the engine
+/// already owns the Arc and doesn't need to reallocate.
+pub async fn history_push_arc_and_emit(
+    history: &mut MessageHistory,
+    msg: Arc<Message>,
+    event_tx: &Option<Sender<CoreEvent>>,
+) {
+    let (session_id, agent_id) = envelope_from(history);
+    let arc = history.push_arc(msg);
+    let uuid = arc.uuid().copied();
+    let kind = arc.kind();
     tracing::debug!(
         target: HISTORY_SYNC_TARGET,
         ?uuid,
@@ -55,7 +87,11 @@ pub async fn history_push_and_emit(
     );
     let _delivered = emit_protocol(
         event_tx,
-        ServerNotification::MessageAppended { message: notif_msg },
+        ServerNotification::MessageAppended {
+            message: arc,
+            session_id,
+            agent_id,
+        },
     )
     .await;
 }
@@ -74,6 +110,7 @@ pub async fn history_clear_and_emit(
     history: &mut MessageHistory,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
+    let (session_id, agent_id) = envelope_from(history);
     let removed = history.len();
     history.clear();
     tracing::info!(
@@ -84,7 +121,11 @@ pub async fn history_clear_and_emit(
     );
     let _delivered = emit_protocol(
         event_tx,
-        ServerNotification::MessageTruncated { keep_count: 0 },
+        ServerNotification::MessageTruncated {
+            keep_count: 0,
+            session_id,
+            agent_id,
+        },
     )
     .await;
 }
@@ -99,6 +140,7 @@ pub async fn history_clear_and_emit_session_reset(
     new_session_id: String,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
+    let agent_id = history.agent_id().map(str::to_string);
     let removed = history.len();
     history.clear();
     tracing::info!(
@@ -112,48 +154,55 @@ pub async fn history_clear_and_emit_session_reset(
         event_tx,
         ServerNotification::SessionResetForResume {
             session_id: new_session_id,
+            agent_id,
         },
     )
     .await;
 }
 
-/// Replace `history.messages` wholesale and emit the event burst that
-/// makes the swap observable: a `MessageTruncated { keep_count: 0 }`
-/// followed by one `MessageAppended` per new message. Used by
-/// compaction (partial / session-memory / full / reactive head-trim) so
-/// the TUI's derived view tracks the engine-side rewrite.
+/// Replace `history.messages` wholesale and emit a single
+/// [`ServerNotification::HistoryReplaced`] carrying the new snapshot.
 ///
-/// Empty `new_messages` is allowed — equivalent to
-/// [`history_clear_and_emit`] in that case.
+/// Used by compaction (partial / session-memory / full / reactive
+/// head-trim) and any other "swap the whole transcript" path. The
+/// TUI's derived view processes this in one cache-rebuild pass via
+/// [`crate::TranscriptView::replace_from_messages`], avoiding the
+/// channel-bounded N-event burst the older `MessageTruncated{0}` +
+/// N×`MessageAppended` sequence required.
+///
+/// Empty `new_messages` is allowed — equivalent to emitting
+/// `HistoryReplaced { messages: vec![] }`, which clears the derived
+/// view exactly like [`history_clear_and_emit`] but without
+/// rotating the session id.
 pub async fn history_replace_and_emit(
     history: &mut MessageHistory,
     new_messages: Vec<Message>,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
+    let (session_id, agent_id) = envelope_from(history);
     let removed = history.len();
     let incoming = new_messages.len();
     history.clear();
+    let mut snapshot: Vec<Arc<Message>> = Vec::with_capacity(incoming);
+    for msg in new_messages {
+        snapshot.push(history.push(msg));
+    }
     tracing::info!(
         target: HISTORY_SYNC_TARGET,
         removed,
         incoming,
         has_tx = event_tx.is_some(),
-        "history replace: clear + N appends",
+        "history replace: single HistoryReplaced event",
     );
     let _delivered = emit_protocol(
         event_tx,
-        ServerNotification::MessageTruncated { keep_count: 0 },
+        ServerNotification::HistoryReplaced {
+            messages: snapshot,
+            session_id,
+            agent_id,
+        },
     )
     .await;
-    for msg in new_messages {
-        let notif_msg = msg.clone();
-        history.push(msg);
-        let _delivered = emit_protocol(
-            event_tx,
-            ServerNotification::MessageAppended { message: notif_msg },
-        )
-        .await;
-    }
 }
 
 /// Single writer for the user-cancel marker. Reads `in_flight_tool_calls`
@@ -178,7 +227,7 @@ pub async fn finalize_user_cancel(
         tracing::debug!(
             target: HISTORY_SYNC_TARGET,
             in_flight_tool_calls,
-            tail_kind = ?history.last().map(Message::kind),
+            tail_kind = ?history.last().map(|m| m.kind()),
             "finalize_user_cancel: dedup skipped (tail already an interruption marker)",
         );
         return;
@@ -207,7 +256,7 @@ pub async fn finalize_user_cancel(
 /// `UserInterruption`.
 pub fn last_message_is_user_interruption(history: &MessageHistory) -> bool {
     for msg in history.as_slice().iter().rev() {
-        match msg {
+        match msg.as_ref() {
             Message::Progress(_) | Message::Tombstone(_) => continue,
             Message::System(SystemMessage::UserInterruption(_)) => return true,
             Message::User(user) => {

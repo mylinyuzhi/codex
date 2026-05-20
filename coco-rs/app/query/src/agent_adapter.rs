@@ -298,10 +298,10 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // `Message`. Any entry that fails deserialization is
             // dropped with a warn — fork context is best-effort
             // (the child will simply lack that message).
-            let mut messages: Vec<coco_messages::Message> = Vec::new();
+            let mut messages: Vec<std::sync::Arc<coco_messages::Message>> = Vec::new();
             for (i, v) in config.fork_context_messages.iter().enumerate() {
                 match serde_json::from_value::<coco_messages::Message>(v.clone()) {
-                    Ok(m) => messages.push(m),
+                    Ok(m) => messages.push(std::sync::Arc::new(m)),
                     Err(e) => {
                         tracing::warn!(
                             index = i,
@@ -312,7 +312,9 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 }
             }
             // Append the new user prompt after the fork history.
-            messages.push(coco_messages::create_user_message(prompt));
+            messages.push(std::sync::Arc::new(coco_messages::create_user_message(
+                prompt,
+            )));
             engine
                 .run_with_messages(messages, event_tx)
                 .await
@@ -344,7 +346,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
         let tool_use_count = result
             .final_messages
             .iter()
-            .filter(|m| matches!(m, coco_messages::Message::ToolResult(_)))
+            .filter(|m| matches!(m.as_ref(), coco_messages::Message::ToolResult(_)))
             .count() as i64;
         // Serialize the final history so the caller (SwarmAgentHandle,
         // teammate runner) can route it through transcript / audit
@@ -354,7 +356,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
         let messages = result
             .final_messages
             .iter()
-            .map(|m| serde_json::to_value(m).unwrap_or_default())
+            .map(|m| serde_json::to_value(m.as_ref()).unwrap_or_default())
             .collect();
 
         Ok(AgentQueryResult {

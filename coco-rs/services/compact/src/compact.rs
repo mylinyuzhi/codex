@@ -128,17 +128,28 @@ pub type PostCompactAttachmentFn =
             .is_some_and(|i| i.is_recompaction),
     ),
 )]
-pub async fn compact_conversation<F, Fut>(
-    messages: &[Message],
+pub async fn compact_conversation<M, F, Fut>(
+    messages: &[M],
     config: &CompactRunOptions,
     summarize_fn: F,
     attachment_fn: Option<PostCompactAttachmentFn>,
 ) -> Result<CompactResult, CompactError>
 where
+    M: std::borrow::Borrow<Message>,
     F: Fn(CompactSummaryAttempt) -> Fut,
     Fut: std::future::Future<Output = Result<CompactSummaryResponse, String>>,
 {
     tracing::info!("compaction begin (full)");
+    // Materialize once at entry. `strip_images_from_messages` (the
+    // first pass below) already deep-clones every message to mutate
+    // content in-place, so threading `M` through the body would save
+    // nothing — the clone is unavoidable. The generic exists so the
+    // three engine call sites pass `&[Arc<Message>]` directly without
+    // an explicit `.iter().map(|a| (**a).clone()).collect()`
+    // boilerplate.
+    let owned: Vec<Message> = messages.iter().map(|m| m.borrow().clone()).collect();
+    let messages: &[Message] = &owned;
+
     // Step 1: Strip images/documents to avoid prompt-too-long on media-heavy conversations
     let stripped = strip_images_from_messages(messages);
     let working_messages = strip_reinjected_attachments(&stripped);
@@ -322,8 +333,8 @@ where
         message_count = all_messages.len(),
     ),
 )]
-pub async fn partial_compact_conversation<F, Fut>(
-    all_messages: &[Message],
+pub async fn partial_compact_conversation<M, F, Fut>(
+    all_messages: &[M],
     pivot_index: usize,
     direction: PartialCompactDirection,
     user_feedback: Option<&str>,
@@ -332,6 +343,7 @@ pub async fn partial_compact_conversation<F, Fut>(
     attachment_fn: Option<PostCompactAttachmentFn>,
 ) -> Result<CompactResult, CompactError>
 where
+    M: std::borrow::Borrow<Message>,
     F: Fn(CompactSummaryAttempt) -> Fut,
     Fut: std::future::Future<Output = Result<CompactSummaryResponse, String>>,
 {
@@ -347,6 +359,10 @@ where
         }
         .fail();
     }
+
+    // Materialize once at entry (see compact_conversation rationale).
+    let owned: Vec<Message> = all_messages.iter().map(|m| m.borrow().clone()).collect();
+    let all_messages: &[Message] = &owned;
 
     let (to_summarize, to_keep_raw): (Vec<Message>, Vec<Message>) = match direction {
         PartialCompactDirection::Oldest => (

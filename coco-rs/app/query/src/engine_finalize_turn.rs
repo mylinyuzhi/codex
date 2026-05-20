@@ -196,7 +196,9 @@ impl QueryEngine {
             // call sends the original (oversized) prompt + the payload;
             // Anthropic strips and bills accordingly.
         } else {
-            coco_compact::reactive::api_microcompact(history.messages_mut(), drop_target);
+            history.with_owned_messages(|msgs| {
+                coco_compact::reactive::api_microcompact(msgs, drop_target);
+            });
             let post_micro_tokens = coco_compact::estimate_tokens(history.as_slice());
             let freed = (pre_tokens - post_micro_tokens).max(0);
 
@@ -263,7 +265,7 @@ impl QueryEngine {
             raw_summary: None,
             summary_messages: Vec::new(),
             attachments: Vec::new(),
-            messages_to_keep: history.to_vec(),
+            messages_to_keep: history.as_slice().iter().map(|a| (**a).clone()).collect(),
             hook_results: Vec::new(),
             user_display_message: None,
             pre_compact_tokens: pre_tokens,
@@ -390,9 +392,9 @@ impl QueryEngine {
                 tb_cfg, now_ms, last_opt, /*is_main_thread*/ true,
             ) {
                 let pre_tb_tokens = coco_compact::estimate_tokens(history.as_slice());
-                if let Some(res) =
-                    coco_compact::time_based_microcompact(history.messages_mut(), &trigger)
-                {
+                if let Some(res) = history.with_owned_messages(|msgs| {
+                    coco_compact::time_based_microcompact(msgs, &trigger)
+                }) {
                     info!(
                         cleared = res.messages_cleared,
                         gap_min = trigger.gap_minutes,
@@ -438,7 +440,8 @@ impl QueryEngine {
         if self.config.compact.micro.enabled
             && self.config.compact.micro.clear_file_unchanged_stubs_enabled
         {
-            let _ = coco_compact::clear_file_unchanged_stubs(history.messages_mut());
+            let _ =
+                history.with_owned_messages(|msgs| coco_compact::clear_file_unchanged_stubs(msgs));
         }
 
         // Compute message-level stats once and share across the
@@ -585,7 +588,9 @@ impl QueryEngine {
             let pre_count = history.len() as i32;
             let pre_micro_tokens = estimated_tokens;
             if self.config.compact.micro.enabled && self.config.compact.micro.count_based_enabled {
-                coco_compact::micro_compact(history.messages_mut(), micro_keep);
+                history.with_owned_messages(|msgs| {
+                    coco_compact::micro_compact(msgs, micro_keep);
+                });
                 info!("auto micro-compaction triggered (keep_recent={micro_keep})");
             }
             let removed = (pre_count - history.len() as i32).max(0);
@@ -667,6 +672,11 @@ impl QueryEngine {
         usage: TokenUsage,
     ) {
         self.flush_successful_turn_state(history).await;
+        // F3: anchor reasoning aggregates by message UUID *before*
+        // TurnCompleted so the TUI side-cache is populated by the
+        // time the renderer reflects the completed turn.
+        self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
+            .await;
         self.emit_turn_completed(event_tx, turn_id, usage, history.len())
             .await;
     }
@@ -713,6 +723,40 @@ impl QueryEngine {
                 turn_id: Some(turn_id),
                 usage,
             }),
+        )
+        .await;
+    }
+
+    /// Emit `ReasoningMetadataAttached` so the TUI side-cache can anchor
+    /// reasoning aggregates by the assistant message UUID rather than
+    /// re-walking transcript cells. F3 of the unified-transcript plan
+    /// — eliminates the prior "find latest AssistantThinking cell"
+    /// scan in the TUI handler.
+    pub(crate) async fn emit_reasoning_metadata_for_last_assistant(
+        &self,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+        history: &MessageHistory,
+        usage: &TokenUsage,
+        duration_ms: Option<i64>,
+    ) {
+        if usage.reasoning_output_tokens() <= 0 {
+            return;
+        }
+        let Some(last_assistant_uuid) = history.iter().rev().find_map(|m| match m.as_ref() {
+            coco_messages::Message::Assistant(a) => Some(a.uuid),
+            _ => None,
+        }) else {
+            return;
+        };
+        let _ = emit_protocol(
+            event_tx,
+            ServerNotification::ReasoningMetadataAttached(
+                coco_types::ReasoningMetadataAttachedParams {
+                    message_uuid: last_assistant_uuid.to_string(),
+                    duration_ms,
+                    reasoning_tokens: usage.reasoning_output_tokens(),
+                },
+            ),
         )
         .await;
     }
@@ -1144,14 +1188,17 @@ async fn build_suggestion_context(
 /// TS parity: `messagesSinceCursor` in `services/extractMemories/`.
 /// We keep the slice as `serde_json::Value` so the boundary doesn't
 /// pull `coco_messages::Message` types into `coco-tool-runtime`.
-fn serialize_messages_since(
-    messages: &[coco_messages::Message],
+fn serialize_messages_since<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
     last_cursor: Option<&str>,
 ) -> Vec<serde_json::Value> {
     let cursor_idx = last_cursor.and_then(|c| {
-        messages
-            .iter()
-            .position(|m| m.uuid().map(|u| u.to_string() == c).unwrap_or(false))
+        messages.iter().position(|m| {
+            m.borrow()
+                .uuid()
+                .map(|u| u.to_string() == c)
+                .unwrap_or(false)
+        })
     });
     let slice = match cursor_idx {
         Some(i) => &messages[i + 1..],
@@ -1159,7 +1206,7 @@ fn serialize_messages_since(
     };
     slice
         .iter()
-        .filter_map(|m| serde_json::to_value(m).ok())
+        .filter_map(|m| serde_json::to_value(m.borrow()).ok())
         .collect()
 }
 
@@ -1174,19 +1221,28 @@ fn serialize_messages_since(
 /// message in `messages` (e.g. compaction trimmed the cursor), count
 /// the whole history — matches TS so a stale cursor doesn't permanently
 /// zero the count.
-fn count_model_visible_since(messages: &[coco_messages::Message], since_uuid: Option<&str>) -> i32 {
+fn count_model_visible_since<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
+    since_uuid: Option<&str>,
+) -> i32 {
     use coco_messages::Message;
     let is_visible = |m: &Message| matches!(m, Message::User(_) | Message::Assistant(_));
     let cursor_idx = since_uuid.and_then(|c| {
-        messages
-            .iter()
-            .position(|m| m.uuid().map(|u| u.to_string() == c).unwrap_or(false))
+        messages.iter().position(|m| {
+            m.borrow()
+                .uuid()
+                .map(|u| u.to_string() == c)
+                .unwrap_or(false)
+        })
     });
     let start = match cursor_idx {
         Some(i) => i + 1,
         None => 0,
     };
-    messages[start..].iter().filter(|m| is_visible(m)).count() as i32
+    messages[start..]
+        .iter()
+        .filter(|m| is_visible(m.borrow()))
+        .count() as i32
 }
 
 /// Count cumulative `tool_use` blocks across all assistant messages
@@ -1195,14 +1251,20 @@ fn count_model_visible_since(messages: &[coco_messages::Message], since_uuid: Op
 /// (`services/SessionMemory/sessionMemory.ts:108-132`) — the gate
 /// signal SessionMemoryService uses to decide if enough work has
 /// accumulated since the last extraction.
-fn count_tool_calls_since(messages: &[coco_messages::Message], since_uuid: Option<&str>) -> i32 {
+fn count_tool_calls_since<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
+    since_uuid: Option<&str>,
+) -> i32 {
     use coco_messages::AssistantContent;
     use coco_messages::LlmMessage;
     use coco_messages::Message;
     let cursor_idx = since_uuid.and_then(|c| {
-        messages
-            .iter()
-            .position(|m| m.uuid().map(|u| u.to_string() == c).unwrap_or(false))
+        messages.iter().position(|m| {
+            m.borrow()
+                .uuid()
+                .map(|u| u.to_string() == c)
+                .unwrap_or(false)
+        })
     });
     let start = match cursor_idx {
         Some(i) => i + 1,
@@ -1210,7 +1272,7 @@ fn count_tool_calls_since(messages: &[coco_messages::Message], since_uuid: Optio
     };
     let mut count: i32 = 0;
     for msg in &messages[start..] {
-        if let Message::Assistant(assistant) = msg
+        if let Message::Assistant(assistant) = msg.borrow()
             && let LlmMessage::Assistant { content, .. } = &assistant.message
         {
             for block in content {
@@ -1231,8 +1293,8 @@ fn count_tool_calls_since(messages: &[coco_messages::Message], since_uuid: Optio
 /// the cursor uuid isn't found, e.g. compaction trimmed it), walk the
 /// entire history — matches TS's fall-through that scans all
 /// messages so a stale cursor doesn't permanently mask writes.
-fn main_agent_wrote_memory(
-    messages: &[coco_messages::Message],
+fn main_agent_wrote_memory<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
     memory_dir: &std::path::Path,
     since_uuid: Option<&str>,
 ) -> bool {
@@ -1240,16 +1302,19 @@ fn main_agent_wrote_memory(
     use coco_messages::LlmMessage;
     use coco_messages::Message;
     let cursor_idx = since_uuid.and_then(|c| {
-        messages
-            .iter()
-            .position(|m| m.uuid().map(|u| u.to_string() == c).unwrap_or(false))
+        messages.iter().position(|m| {
+            m.borrow()
+                .uuid()
+                .map(|u| u.to_string() == c)
+                .unwrap_or(false)
+        })
     });
     let start = match cursor_idx {
         Some(i) => i + 1,
         None => 0,
     };
     for msg in &messages[start..] {
-        let Message::Assistant(assistant) = msg else {
+        let Message::Assistant(assistant) = msg.borrow() else {
             continue;
         };
         let LlmMessage::Assistant { content, .. } = &assistant.message else {

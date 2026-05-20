@@ -138,11 +138,18 @@ pub fn is_safe_tool(tool_name: &str) -> bool {
 }
 
 /// Build transcript entries from conversation messages for the classifier.
-pub fn build_transcript_entries(messages: &[coco_messages::Message]) -> Vec<TranscriptEntry> {
+///
+/// Generic over `Borrow<Message>` so engine call sites can pass
+/// `&[Arc<Message>]` from `MessageHistory::as_slice()` directly,
+/// avoiding the previous deep-clone bridge at the per-tool-call hot
+/// path (plan §11 F8 follow-up).
+pub fn build_transcript_entries<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
+) -> Vec<TranscriptEntry> {
     let mut entries = Vec::new();
 
     for msg in messages {
-        match msg {
+        match msg.borrow() {
             coco_messages::Message::User(u) => {
                 let text = extract_user_text(&u.message);
                 if !text.is_empty() {
@@ -279,14 +286,15 @@ pub struct ClassifyRequest {
 ///    * `<block>no</block>` → return Allow.
 ///    * `<block>yes</block>` → Block with reason.
 ///    * Unparseable → Block (safe default).
-pub async fn classify_yolo_action<F, Fut>(
-    messages: &[coco_messages::Message],
+pub async fn classify_yolo_action<M, F, Fut>(
+    messages: &[M],
     tool_name: &str,
     input: &serde_json::Value,
     rules: &AutoModeRules,
     classify_fn: F,
 ) -> YoloClassifierResult
 where
+    M: std::borrow::Borrow<coco_messages::Message>,
     F: Fn(ClassifyRequest) -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {

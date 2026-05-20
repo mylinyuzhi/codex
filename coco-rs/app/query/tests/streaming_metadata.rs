@@ -154,9 +154,9 @@ async fn capture_assistant_content(content: Vec<AssistantContentPart>) -> Vec<As
     result
         .final_messages
         .into_iter()
-        .find_map(|m| match m {
-            Message::Assistant(a) => match a.message {
-                LlmMessage::Assistant { content, .. } => Some(content),
+        .find_map(|m| match m.as_ref() {
+            Message::Assistant(a) => match &a.message {
+                LlmMessage::Assistant { content, .. } => Some(content.clone()),
                 _ => None,
             },
             _ => None,

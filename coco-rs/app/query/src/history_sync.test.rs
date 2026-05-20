@@ -24,7 +24,8 @@ async fn finalize_user_cancel_pushes_typed_marker_and_emits() {
     finalize_user_cancel(&mut history, true, &tx).await;
 
     assert_eq!(history.len(), 1);
-    let Message::System(SystemMessage::UserInterruption(m)) = history.first().expect("non-empty")
+    let Message::System(SystemMessage::UserInterruption(m)) =
+        history.first().expect("non-empty").as_ref()
     else {
         panic!("expected typed UserInterruption variant");
     };
@@ -113,7 +114,12 @@ async fn finalize_user_cancel_dedups_through_progress_interleave() {
     let interruptions = history
         .as_slice()
         .iter()
-        .filter(|m| matches!(m, Message::System(SystemMessage::UserInterruption(_))))
+        .filter(|m| {
+            matches!(
+                (**m).as_ref(),
+                Message::System(SystemMessage::UserInterruption(_))
+            )
+        })
         .count();
     assert_eq!(interruptions, 1, "duplicate UserInterruption past Progress");
 }
@@ -136,7 +142,12 @@ async fn finalize_user_cancel_dedups_through_tombstone_interleave() {
     let interruptions = history
         .as_slice()
         .iter()
-        .filter(|m| matches!(m, Message::System(SystemMessage::UserInterruption(_))))
+        .filter(|m| {
+            matches!(
+                (**m).as_ref(),
+                Message::System(SystemMessage::UserInterruption(_))
+            )
+        })
         .count();
     assert_eq!(
         interruptions, 1,

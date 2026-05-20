@@ -332,7 +332,7 @@ pub struct PlanModeTurnParams {
     pub plan_role_model: Option<Arc<dyn LanguageModel>>,
     /// Messages from prior turns (plus the new user prompt). When empty
     /// the helper creates a fresh user message from `prompt_if_empty`.
-    pub messages: Vec<coco_messages::Message>,
+    pub messages: Vec<std::sync::Arc<coco_messages::Message>>,
     /// Fallback prompt when `messages` is empty (first turn case).
     pub prompt_if_empty: String,
     /// Raise this for scenarios that need more than the default 10
@@ -389,10 +389,16 @@ impl PlanModeTurnParams {
 
     /// Feed the prior turn's `final_messages` + a new user message into
     /// the next run.
-    pub fn next_turn(mut self, prev_messages: Vec<coco_messages::Message>, prompt: &str) -> Self {
+    pub fn next_turn(
+        mut self,
+        prev_messages: Vec<std::sync::Arc<coco_messages::Message>>,
+        prompt: &str,
+    ) -> Self {
         self.messages = prev_messages;
         self.messages
-            .push(coco_messages::create_user_message(prompt));
+            .push(std::sync::Arc::new(coco_messages::create_user_message(
+                prompt,
+            )));
         self
     }
 }

@@ -254,14 +254,14 @@ pub fn placeholder_text(range: &StagedRange) -> String {
 ///     is how many commits actually rewrote at least one message.
 ///   - When `commits` is empty, returns the input unchanged with
 ///     `applied_count = 0`.
-pub fn apply_collapses_if_needed(
-    messages: &[Message],
+pub fn apply_collapses_if_needed<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
     commits: &[CommitEntry],
 ) -> (Vec<Message>, usize) {
+    let mut working: Vec<Message> = messages.iter().map(|m| m.borrow().clone()).collect();
     if commits.is_empty() {
-        return (messages.to_vec(), 0);
+        return (working, 0);
     }
-    let mut working: Vec<Message> = messages.to_vec();
     let mut applied = 0usize;
     for commit in commits {
         let Some(start) = working.iter().position(|m| {

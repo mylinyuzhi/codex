@@ -272,9 +272,12 @@ pub(crate) fn compute_tools_delta(
 /// `output_tokens` — matching TS's `inputTokens + cacheRead +
 /// cacheCreation + outputTokens` shape. Returns `false` when the
 /// history has no assistant message yet (cold start).
-pub(crate) fn most_recent_assistant_exceeds(messages: &[Message], threshold: i64) -> bool {
+pub(crate) fn most_recent_assistant_exceeds<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+    threshold: i64,
+) -> bool {
     for msg in messages.iter().rev() {
-        if let Message::Assistant(a) = msg
+        if let Message::Assistant(a) = msg.borrow()
             && let Some(usage) = &a.usage
         {
             let total = usage.input_tokens
@@ -294,7 +297,7 @@ pub(crate) fn most_recent_assistant_exceeds(messages: &[Message], threshold: i64
 /// session opened with a compacted summary).
 pub(crate) fn latest_user_input_text(history: &MessageHistory) -> Option<String> {
     for msg in history.iter().rev() {
-        let Message::User(u) = msg else {
+        let Message::User(u) = msg.as_ref() else {
             continue;
         };
         if let LlmMessage::User { content, .. } = &u.message {
