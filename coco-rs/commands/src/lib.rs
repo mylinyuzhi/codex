@@ -132,11 +132,32 @@ pub enum DialogSpec {
 }
 
 /// One row in the memory-file selector.
+///
+/// TS parity: `MemoryFileSelector.tsx::memoryOptions` — each row is a
+/// `(label, path, description)` triple. The Rust port keeps the same
+/// shape plus a `scope` discriminator (so TUI rendering can color by
+/// category) and explicit `is_new` / `is_folder` flags that TS
+/// inferred from the `exists` / `OPEN_FOLDER_PREFIX` runtime values.
 #[derive(Debug, Clone)]
 pub struct MemoryFileEntry {
     pub path: std::path::PathBuf,
     pub label: String,
     pub scope: MemoryScope,
+    /// Secondary text rendered next to the label.
+    ///
+    /// Empty string ⇒ render label-only. TS sets this via the inline
+    /// `description` branches in `MemoryFileSelector.tsx:87-105`
+    /// (`"@-imported"`, `"dynamically loaded"`,
+    /// `"Checked in at ./CLAUDE.md"`, etc.).
+    pub description: String,
+    /// True when the path doesn't yet exist on disk — selecting the
+    /// row creates it. TS: `exists: false` fallback inserted for the
+    /// canonical user / project paths when discovery doesn't find them.
+    pub is_new: bool,
+    /// True when the row points at a directory to open in the file
+    /// browser / editor instead of editing a single file. TS: the
+    /// `__open_folder__` prefix on the option value.
+    pub is_folder: bool,
 }
 
 /// Scope of a memory file (matches TS `MemoryFileSelector` ordering).
@@ -150,8 +171,18 @@ pub enum MemoryScope {
     Project,
     /// Project-local (`./CLAUDE.local.md`).
     ProjectLocal,
+    /// `<dir>/.claude/CLAUDE.md` — project-config-dir convention.
+    ProjectConfig,
     /// Subdirectory CLAUDE.md (auto-loaded under cwd).
     Subdir,
+    /// File loaded transitively via `@-import` from a parent memory file.
+    Imported,
+    /// Auto-memory directory entry (`<memdir>/`).
+    AutoMemFolder,
+    /// Team memory directory entry (`<memdir>/team/`).
+    TeamMemFolder,
+    /// Per-agent memory directory entry.
+    AgentMemFolder,
 }
 
 /// Feature-flag gate for conditionally enabled commands.

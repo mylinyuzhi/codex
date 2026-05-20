@@ -63,6 +63,11 @@ pub enum MemoryEvent {
     /// TS: `tengu_extract_memories_error`.
     ExtractionError { duration_ms: i64 },
 
+    /// `/extract` (or equivalent slash command) forced an extraction
+    /// bypassing throttle and direct-write gates. Lets dashboards
+    /// split auto vs manual cadence.
+    ExtractionManual,
+
     /// Auto-dream consolidation fired.
     /// TS: `tengu_auto_dream_fired`.
     AutoDreamFired {
@@ -88,6 +93,12 @@ pub enum MemoryEvent {
     /// back so the next time-gate window doesn't restart at "now".
     /// TS: `tengu_auto_dream_failed`.
     AutoDreamFailed,
+
+    /// `/dream` forced a consolidation bypassing the three gates. Lock
+    /// is still acquired (concurrency-safe) and the lock mtime is
+    /// rolled back on completion so the manual run doesn't perturb
+    /// the auto cadence.
+    AutoDreamManual,
 
     /// Session-memory extraction fired.
     /// TS: `tengu_session_memory_extraction`.
@@ -127,6 +138,19 @@ pub enum MemoryEvent {
     /// race on platforms where setting permissions atomically isn't
     /// always available.
     SessionMemoryPermsFailed { path: String },
+
+    /// KAIROS daily-log midnight rollover detected. The session
+    /// crossed midnight local time; the engine receives the
+    /// `Some(yesterday)` rollover signal so it can act on the date
+    /// flip. TS source-of-truth: `getDateChangeAttachments` +
+    /// `sessionTranscript.flushOnDateChange` (private TS module —
+    /// we mirror the *signal* only).
+    KairosRollover {
+        /// Day that just ended (`%Y-%m-%d`).
+        yesterday: String,
+        /// New active day (`%Y-%m-%d`).
+        today: String,
+    },
 }
 
 /// Reason auto-memory was disabled.
@@ -163,6 +187,195 @@ pub struct NoopEmitter;
 
 impl MemoryTelemetryEmitter for NoopEmitter {
     fn emit(&self, _event: MemoryEvent) {}
+}
+
+/// Lightweight emitter that fans every [`MemoryEvent`] into the global
+/// `tracing` subscriber. This is the production-aligned path used by
+/// `coco_otel::events::emit_*` — once `init_subscriber` is installed
+/// from the binary, structured events flow through the configured OTel
+/// exporters without any further wiring on the memory crate's side.
+///
+/// Cheap (no allocations beyond what the structured-field machinery
+/// requires) and dependency-free — no need to construct an
+/// [`coco_otel::OtelManager`] just to hand the crate an emitter. The
+/// payload field names match the TS `tengu_*` event payload keys, so
+/// dashboards keyed off those names keep working byte-for-byte.
+#[derive(Debug, Default)]
+pub struct TracingEmitter;
+
+impl TracingEmitter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl MemoryTelemetryEmitter for TracingEmitter {
+    fn emit(&self, event: MemoryEvent) {
+        match event {
+            MemoryEvent::MemdirLoaded {
+                line_count,
+                byte_count,
+                was_truncated,
+                was_byte_truncated,
+                has_team,
+            } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_memdir_loaded",
+                line_count,
+                byte_count,
+                was_truncated,
+                was_byte_truncated,
+                has_team,
+                "memdir loaded"
+            ),
+            MemoryEvent::MemdirDisabled { reason } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_memdir_disabled",
+                reason = reason.as_str(),
+                "memdir disabled"
+            ),
+            MemoryEvent::ExtractionToolDenied { tool_name } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_auto_mem_tool_denied",
+                tool = %tool_name,
+                "auto-mem tool denied"
+            ),
+            MemoryEvent::ExtractionSkippedDirectWrite { message_count } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_extract_memories_skipped_direct_write",
+                message_count,
+                "extract skipped — model wrote memory directly"
+            ),
+            MemoryEvent::ExtractionCoalesced => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_extract_memories_coalesced",
+                "extract coalesced — stashed for trailing run"
+            ),
+            MemoryEvent::ExtractionCompleted {
+                turn_count,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+                files_written,
+                duration_ms,
+            } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_extract_memories_extraction",
+                turn_count,
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens = cache_read_tokens,
+                cache_creation_input_tokens = cache_creation_tokens,
+                files_written,
+                duration_ms,
+                "extract completed"
+            ),
+            MemoryEvent::ExtractionError { duration_ms } => tracing::warn!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_extract_memories_error",
+                duration_ms,
+                "extract failed"
+            ),
+            MemoryEvent::ExtractionManual => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_extract_memories_manual",
+                "extract forced manually"
+            ),
+            MemoryEvent::AutoDreamFired {
+                hours_since_last,
+                sessions_since_last,
+            } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_auto_dream_fired",
+                hours_since_last,
+                sessions_since_last,
+                "auto-dream fired"
+            ),
+            MemoryEvent::AutoDreamCompleted {
+                sessions_reviewed,
+                files_changed,
+                cache_read_tokens,
+                cache_creation_tokens,
+                output_tokens,
+                duration_ms,
+            } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_auto_dream_completed",
+                sessions_reviewed,
+                files_changed,
+                cache_read = cache_read_tokens,
+                cache_created = cache_creation_tokens,
+                output = output_tokens,
+                duration_ms,
+                "auto-dream completed"
+            ),
+            MemoryEvent::AutoDreamFailed => tracing::warn!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_auto_dream_failed",
+                "auto-dream failed"
+            ),
+            MemoryEvent::AutoDreamManual => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_auto_dream_manual",
+                "auto-dream forced manually"
+            ),
+            MemoryEvent::SessionMemoryExtracted {
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+                duration_ms,
+            } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_session_memory_extraction",
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens = cache_read_tokens,
+                cache_creation_input_tokens = cache_creation_tokens,
+                duration_ms,
+                "session-memory extracted"
+            ),
+            MemoryEvent::SessionMemoryInit {
+                auto_compact_enabled,
+            } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_session_memory_init",
+                auto_compact_enabled,
+                "session-memory init"
+            ),
+            MemoryEvent::SessionMemoryFileRead { content_length } => tracing::debug!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_session_memory_file_read",
+                content_length,
+                "session-memory file read"
+            ),
+            MemoryEvent::SessionMemoryLoaded { content_length } => tracing::debug!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_session_memory_loaded",
+                content_length,
+                "session-memory loaded"
+            ),
+            MemoryEvent::SessionMemoryManualExtraction => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_session_memory_manual_extraction",
+                "session-memory forced manually"
+            ),
+            MemoryEvent::SessionMemoryPermsFailed { path } => tracing::warn!(
+                target: "coco_memory::telemetry",
+                event_type = "coco_session_memory_perms_failed",
+                path = %path,
+                "session-memory chmod failed"
+            ),
+            MemoryEvent::KairosRollover { yesterday, today } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_kairos_rollover",
+                yesterday = %yesterday,
+                today = %today,
+                "kairos rollover"
+            ),
+        }
+    }
 }
 
 /// Adapter that maps [`MemoryEvent`] onto an [`coco_otel::OtelManager`].
@@ -243,6 +456,10 @@ impl MemoryTelemetryEmitter for OtelEmitter {
                     &[("outcome", "error")],
                 );
             }
+            MemoryEvent::ExtractionManual => {
+                self.manager
+                    .counter("tengu_extract_memories_manual", 1, &[]);
+            }
             MemoryEvent::ExtractionCompleted {
                 turn_count,
                 input_tokens,
@@ -313,6 +530,9 @@ impl MemoryTelemetryEmitter for OtelEmitter {
             MemoryEvent::AutoDreamFailed => {
                 self.manager.counter("tengu_auto_dream_failed", 1, &[]);
             }
+            MemoryEvent::AutoDreamManual => {
+                self.manager.counter("tengu_auto_dream_manual", 1, &[]);
+            }
             MemoryEvent::SessionMemoryExtracted {
                 input_tokens,
                 output_tokens,
@@ -366,6 +586,12 @@ impl MemoryTelemetryEmitter for OtelEmitter {
             MemoryEvent::SessionMemoryPermsFailed { path: _ } => {
                 self.manager
                     .counter("coco_session_memory_perms_failed", 1, &[]);
+            }
+            MemoryEvent::KairosRollover {
+                yesterday: _,
+                today: _,
+            } => {
+                self.manager.counter("tengu_kairos_rollover", 1, &[]);
             }
         }
     }

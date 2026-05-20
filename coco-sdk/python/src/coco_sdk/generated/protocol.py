@@ -243,7 +243,12 @@ class MemoryDialogScope(str, Enum):
     user = 'user'
     project = 'project'
     project_local = 'project_local'
+    project_config = 'project_config'
     subdir = 'subdir'
+    imported = 'imported'
+    auto_mem_folder = 'auto_mem_folder'
+    team_mem_folder = 'team_mem_folder'
+    agent_mem_folder = 'agent_mem_folder'
 
 class MessageKind(str, Enum):
     user = 'user'

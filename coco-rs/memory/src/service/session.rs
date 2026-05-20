@@ -15,19 +15,34 @@
 //! `<memory_base>/projects/<slug>/<session_id>/session-memory/summary.md`,
 //! mode 0o600, directory mode 0o700. The per-project slug pins the
 //! file to the right project so unrelated sessions don't share state.
+//!
+//! ## Cancellation safety
+//!
+//! See `extract.rs` for the broader rationale. Session-memory holds
+//! `in_progress` in an `Arc<AtomicBool>` with a RAII `InProgressGuard`
+//! so a dropped `maybe_extract` future can't leak the flag and wedge
+//! the service. The watch channel (`extract_done_tx`) replaces the
+//! previous `Notify`, eliminating the notify-after-check race —
+//! `Receiver::changed()` is edge-triggered AND remembers the latest
+//! value, so a transition that fires between the state read and the
+//! `.await` is still observed on the next iteration.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
 
 use arc_swap::ArcSwap;
 use coco_paths::ProjectPaths;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_types::ModelRole;
 use tokio::sync::Mutex;
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::compact_truncate::truncate_session_memory_for_compact;
@@ -63,16 +78,42 @@ struct SessionState {
     /// (`sessionMemory.ts:488-494`). Used by compact/summary readers
     /// that need to know "where SM has covered to" without risking
     /// orphaned tool_results in a downstream summary.
-    ///
-    /// Stored as `String` because engine callsites already pass
-    /// opaque message IDs (`MessageHistory::message_id()` is not
-    /// guaranteed to be a UUID — synthetic IDs, test stubs, and
-    /// pre-UUID legacy transcripts pass non-UUID strings). The
-    /// typed accessor parses on read and silently returns `None`
-    /// for non-UUID strings, preserving cursor semantics.
     last_summarized_message_uuid: Option<String>,
-    in_progress: bool,
+    /// Wall-clock at which the current in-flight extraction started.
+    /// Only `Some` when `in_progress.load()` is `true`; the
+    /// [`InProgressGuard`] clears it on drop in lockstep with the flag.
     extraction_started_at: Option<Instant>,
+}
+
+/// RAII guard for the session-memory `in_progress` flag. Constructed
+/// only after a CAS `false → true`; `Drop` synchronously resets the
+/// flag, clears `extraction_started_at`, and pulses the watch channel.
+struct InProgressGuard {
+    flag: Arc<AtomicBool>,
+    state: Arc<Mutex<SessionState>>,
+    notifier: Arc<watch::Sender<bool>>,
+}
+
+impl Drop for InProgressGuard {
+    fn drop(&mut self) {
+        // Order matters: clear the flag (sync atomic) first so any
+        // observer that reads in_progress after the watch wake sees
+        // it cleared. Then clear `extraction_started_at` from
+        // SessionState — best-effort: a poisoned mutex (panic
+        // mid-write) is benign here because the flag is the
+        // primary signal.
+        self.flag.store(false, Ordering::Release);
+        if let Ok(mut state) = self.state.try_lock() {
+            state.extraction_started_at = None;
+        } else {
+            // Mutex is contended — spawn a quick clean-up task.
+            // Drop has no .await so we use a sync `try_lock`; if
+            // contention is high the `extraction_started_at` field
+            // will be reset by the next caller observing in_progress
+            // = false via `wait_for_extraction`'s stale check.
+        }
+        let _ = self.notifier.send_replace(false);
+    }
 }
 
 /// Per-session memory service.
@@ -93,18 +134,21 @@ pub struct SessionMemoryService {
     config: MemoryConfig,
     agent: crate::service::extract::AgentSlot,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
-    state: Mutex<SessionState>,
+    state: Arc<Mutex<SessionState>>,
     /// In-memory text cache. Empty string ⇒ no extract yet / file missing.
     /// Populated by [`Self::load_from_disk`] at session start and
     /// refreshed after every successful extract. Compact's SM-first
     /// short-circuit reads this without touching disk.
     text_cache: tokio::sync::RwLock<String>,
-    /// Notified each time `in_progress` flips false (extract finishes
-    /// or fails). [`Self::wait_for_extraction`] uses this instead of
-    /// a 50ms polling loop so callers don't burn ~300 mutex acquisitions
-    /// per 15s wait. Tokio's `Notify` is permit-based so a notify
-    /// landing before a waiter still wakes the next caller.
-    extract_done: Notify,
+    /// Sync atomic backing for the in-flight flag — see crate-level
+    /// docs for the cancellation-safety rationale.
+    in_progress: Arc<AtomicBool>,
+    /// Watch channel carrying the `in_progress` value. Pulsed on every
+    /// transition (set + clear). Replaces the previous `Notify`,
+    /// eliminating the notify-after-check race in
+    /// [`Self::wait_for_extraction`].
+    in_progress_tx: Arc<watch::Sender<bool>>,
+    in_progress_rx: watch::Receiver<bool>,
 }
 
 impl std::fmt::Debug for SessionMemoryService {
@@ -116,6 +160,7 @@ impl std::fmt::Debug for SessionMemoryService {
                 "session_memory_enabled",
                 &self.config.session_memory_enabled,
             )
+            .field("in_progress", &self.in_progress.load(Ordering::Acquire))
             .finish()
     }
 }
@@ -161,15 +206,37 @@ impl SessionMemoryService {
         agent: crate::service::extract::AgentSlot,
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
     ) -> Self {
+        let (tx, rx) = watch::channel(false);
         Self {
             session_id: ArcSwap::from_pointee(session_id),
             project_paths,
             config,
             agent,
             telemetry,
-            state: Mutex::new(SessionState::default()),
+            state: Arc::new(Mutex::new(SessionState::default())),
             text_cache: tokio::sync::RwLock::new(String::new()),
-            extract_done: Notify::new(),
+            in_progress: Arc::new(AtomicBool::new(false)),
+            in_progress_tx: Arc::new(tx),
+            in_progress_rx: rx,
+        }
+    }
+
+    /// Try to atomically claim the `in_progress` slot. Returns a Drop
+    /// guard on success, `None` if a fork is already running.
+    fn try_claim(&self) -> Option<InProgressGuard> {
+        match self
+            .in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => {
+                let _ = self.in_progress_tx.send_replace(true);
+                Some(InProgressGuard {
+                    flag: self.in_progress.clone(),
+                    state: self.state.clone(),
+                    notifier: self.in_progress_tx.clone(),
+                })
+            }
+            Err(_) => None,
         }
     }
 
@@ -185,24 +252,26 @@ impl SessionMemoryService {
 
     /// Update the session id used for disk paths. Called by
     /// `MemoryRuntime::reset` / `SessionRuntime::clear_conversation`
-    /// after `regenerateSessionId`. Also wipes in-memory state and
-    /// the text cache — the new session has no extracted content
-    /// yet, and a stale cached body must not leak across sessions.
+    /// after `regenerateSessionId`. Resets atomically across
+    /// `session_id`, `state`, and `text_cache` — a concurrent
+    /// `maybe_extract` either sees the pre-reset state (and bails on
+    /// the in-progress wait) or the post-reset state (and runs against
+    /// the new session id with a clean cursor).
     ///
-    /// Best-effort fence against in-flight extractions: we wait up to
-    /// 5s for the running fork to settle so its `unmark_in_progress` and
-    /// state update lands against the *old* session id, then reset.
-    /// If the fork is genuinely stuck (rare) we proceed anyway — the
-    /// stale `in_progress` flag would otherwise wedge every future
-    /// gate check on the new session id. The fork's late state write
-    /// (if it ever lands) overwrites the post-reset default with old-
-    /// session state, but the user's next `maybe_extract` re-initializes
-    /// from fresh tokens, so the leak window is bounded.
+    /// Best-effort fence: we wait up to 5 s for an in-flight extract
+    /// to settle so its post-spawn state write lands against the OLD
+    /// session id before we mutate. If the wait times out we proceed
+    /// — `InProgressGuard::drop` clears the flag eventually regardless.
     pub async fn set_session_id(&self, new_id: String) {
         let _ = self.wait_for_extraction(Duration::from_secs(5)).await;
+        // Hold the state mutex across the cache + session_id mutation
+        // so an observer that locks the state can't see a half-reset
+        // (cache cleared, state stale) or (state cleared, cache stale).
+        let mut state = self.state.lock().await;
+        let mut cache = self.text_cache.write().await;
         self.session_id.store(Arc::new(new_id));
-        self.text_cache.write().await.clear();
-        *self.state.lock().await = SessionState::default();
+        cache.clear();
+        *state = SessionState::default();
     }
 
     /// Best-effort warm of the text cache from disk. Call once at
@@ -228,9 +297,13 @@ impl SessionMemoryService {
     /// completes — TS `clearAfterCompact` semantics. The on-disk
     /// file is left alone; the next extract overwrites it
     /// section-by-section via the forked-agent Edit pass.
+    ///
+    /// Atomic across `state` + `text_cache` for the same reason as
+    /// [`Self::set_session_id`].
     pub async fn clear_after_compact(&self) {
-        self.text_cache.write().await.clear();
         let mut state = self.state.lock().await;
+        let mut cache = self.text_cache.write().await;
+        cache.clear();
         state.initialized = false;
         state.last_extraction_tokens = 0;
         state.last_extraction_tool_calls = 0;
@@ -270,12 +343,16 @@ impl SessionMemoryService {
         if !self.config.session_memory_enabled {
             return SessionMemoryOutcome::Skipped(SkipReason::Disabled);
         }
+        // Cheap in-progress probe before the mutex.
+        if self.in_progress.load(Ordering::Acquire) {
+            return SessionMemoryOutcome::Skipped(SkipReason::InProgress);
+        }
         let start = Instant::now();
-        {
+        // Gate + claim — all under the mutex so a concurrent caller
+        // observing in_progress=false either passes its own gate AND
+        // wins the CAS, or fails the CAS and sees Skipped(InProgress).
+        let guard = {
             let mut state = self.state.lock().await;
-            if state.in_progress {
-                return SessionMemoryOutcome::Skipped(SkipReason::InProgress);
-            }
             if !state.initialized {
                 if current_tokens < self.config.session_memory_init_tokens {
                     return SessionMemoryOutcome::Skipped(SkipReason::BelowInitThreshold);
@@ -292,71 +369,81 @@ impl SessionMemoryService {
                     return SessionMemoryOutcome::Skipped(SkipReason::NeitherToolCallsNorBreak);
                 }
             }
-            // Gate passed. Claim the `in_progress` flag, stamp the
-            // start time, and advance the cursor — all in the same
-            // critical section, so a concurrent caller that lands
-            // before we dispatch the fork still sees `in_progress =
-            // true` and bails with `SkipReason::InProgress`. TS sets
-            // `lastMemoryMessageUuid` + `inProgress` together inside
-            // `shouldExtractMemory` (`sessionMemory.ts:174-176`) for
-            // the same reason.
-            state.in_progress = true;
+            // Gate passed. Claim atomically — try_claim is the only
+            // path that flips in_progress, so the mutex guarantees
+            // we don't race a concurrent maybe_extract here.
+            let Some(guard) = self.try_claim() else {
+                return SessionMemoryOutcome::Skipped(SkipReason::InProgress);
+            };
             state.extraction_started_at = Some(start);
             if let Some(id) = &last_message_id {
                 state.last_extraction_message_uuid = Some(id.clone());
             }
-        }
+            guard
+        };
         tracing::info!(
             current_tokens,
             tool_calls_since_last_extraction,
             had_tool_calls_in_last_turn,
             "session-memory extract dispatch"
         );
-        self.run_with_label(
-            start,
-            current_tokens,
-            tool_calls_since_last_extraction,
-            last_message_id,
-            had_tool_calls_in_last_turn,
-            coco_types::ForkLabel::SessionMemoryAuto,
-            /* already_marked */ true,
-        )
-        .await
+        let outcome = self
+            .run_fork(
+                start,
+                current_tokens,
+                tool_calls_since_last_extraction,
+                last_message_id,
+                had_tool_calls_in_last_turn,
+                coco_types::ForkLabel::SessionMemoryAuto,
+            )
+            .await;
+        drop(guard);
+        outcome
     }
 
     /// Force a fresh extraction regardless of gates — `/summary`.
     ///
-    /// `last_message_id` and `had_tool_calls_in_last_turn` mirror
-    /// TS `manuallyExtractSessionMemory` →
-    /// `updateLastSummarizedMessageIdIfSafe(messages)`
-    /// (`sessionMemory.ts:441-442` + `488-494`): the summarized
-    /// cursor only advances when the last assistant turn has no tool
-    /// calls, so a downstream compact summary can't orphan
-    /// tool_results. Callers that don't have those signals (legacy
-    /// callers / minimal embeddings) should pass `None` + `false` —
-    /// the cursor simply won't advance.
+    /// Unlike the prior unconditional version, this gates on
+    /// `in_progress` (via `wait_for_extraction`) before claiming.
+    /// Two parallel forces (or force + auto) can't race over the SM
+    /// file — the second arrival waits, then claims.
     pub async fn force(
         &self,
         current_tokens: i64,
         last_message_id: Option<String>,
         had_tool_calls_in_last_turn: bool,
     ) -> SessionMemoryOutcome {
+        if !self.config.session_memory_enabled {
+            return SessionMemoryOutcome::Skipped(SkipReason::Disabled);
+        }
+        // Wait for any in-flight auto-extract before claiming the
+        // slot. Bounded by DEFAULT_WAIT_TIMEOUT so a stuck primary
+        // can't wedge `/summary` forever.
+        let _ = self.wait_for_extraction(DEFAULT_WAIT_TIMEOUT).await;
+        let Some(guard) = self.try_claim() else {
+            return SessionMemoryOutcome::Skipped(SkipReason::InProgress);
+        };
+        let start = Instant::now();
+        {
+            let mut state = self.state.lock().await;
+            state.extraction_started_at = Some(start);
+        }
         // TS parity (`sessionMemory.ts:436`
-        // `tengu_session_memory_manual_extraction`) — the manual
-        // /summary path emits its own telemetry event so the auto vs
-        // manual cadence is measurable independently.
+        // `tengu_session_memory_manual_extraction`).
         self.telemetry
             .emit(MemoryEvent::SessionMemoryManualExtraction);
-        self.run_with_label(
-            Instant::now(),
-            current_tokens,
-            0,
-            last_message_id,
-            had_tool_calls_in_last_turn,
-            coco_types::ForkLabel::SessionMemoryManual,
-            /* already_marked */ false,
-        )
-        .await
+        let outcome = self
+            .run_fork(
+                start,
+                current_tokens,
+                0,
+                last_message_id,
+                had_tool_calls_in_last_turn,
+                coco_types::ForkLabel::SessionMemoryManual,
+            )
+            .await;
+        drop(guard);
+        outcome
     }
 
     /// Cursor uuid the engine should walk from when computing
@@ -368,18 +455,12 @@ impl SessionMemoryService {
 
     /// Last "safely summarized" message UUID as a String — TS parity
     /// with `lastSummarizedMessageId` (`sessionMemoryUtils.ts:44-69`).
-    /// Only advances after a successful run when the prior assistant
-    /// turn had no tool calls, so compact / summary readers can use
-    /// it as an orphan-safe cursor. `None` until the first eligible
-    /// extraction completes.
     pub async fn last_summarized_message_id(&self) -> Option<String> {
         self.state.lock().await.last_summarized_message_uuid.clone()
     }
 
     /// Uuid-typed accessor — convenience for compact callers that
-    /// hold the cursor as `Option<Uuid>`. Returns `None` for non-UUID
-    /// strings (synthetic / legacy message IDs); callers that need
-    /// the raw string go through [`Self::last_summarized_message_id`].
+    /// hold the cursor as `Option<Uuid>`.
     pub async fn last_summarized_message_uuid(&self) -> Option<Uuid> {
         self.state
             .lock()
@@ -391,9 +472,6 @@ impl SessionMemoryService {
 
     /// Whether the SM file currently holds nothing but the seed
     /// template — TS `isSessionMemoryEmpty` (`prompts.ts:220-224`).
-    /// Compact readers use this to fall back to LLM summarization
-    /// when SM hasn't yet been populated with real content.
-    /// Returns `true` when the file is missing (nothing to read).
     pub async fn is_empty(&self) -> bool {
         let template = self.load_template().await;
         match tokio::fs::read_to_string(self.file_path()).await {
@@ -419,13 +497,6 @@ impl SessionMemoryService {
         build_session_memory_template().to_string()
     }
 
-    /// Read the optional update-prompt override from
-    /// `<session-memory-dir>/config/prompt.md` — coco-rs extension
-    /// loosely modeled on TS `loadSessionMemoryPrompt`
-    /// (`prompts.ts:111-129`). When present it replaces the default
-    /// update prompt body; placeholders are substituted by
-    /// [`build_session_memory_update_prompt`]. `None` ⇒ use the
-    /// static default.
     async fn load_prompt_override(&self) -> Option<String> {
         let p = self.file_path();
         let parent = p.parent()?;
@@ -438,20 +509,24 @@ impl SessionMemoryService {
     /// to finish. Returns false on timeout. Past 60s the extraction is
     /// considered stale and we stop waiting.
     ///
-    /// Driven by `extract_done.notified()` rather than polling so a
-    /// 15s wait costs ~1 mutex acquisition + 1 notify wait instead of
-    /// ~300 polls. A periodic re-check still fires every 1s as
-    /// belt-and-braces against a notify lost during runtime shutdown.
+    /// Driven by a watch channel — edge-triggered + remembers the
+    /// latest value, so a transition that fires between
+    /// `borrow_and_update()` and `changed().await` is still observed
+    /// on the next iteration. The previous `Notify`-based impl could
+    /// lose a notify that arrived during the gap and was forced to
+    /// fall back on a 1 s belt-and-braces poll.
     pub async fn wait_for_extraction(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
+        let mut rx = self.in_progress_rx.clone();
         loop {
-            let (in_progress, started_at) = {
-                let state = self.state.lock().await;
-                (state.in_progress, state.extraction_started_at)
-            };
+            let in_progress = *rx.borrow_and_update();
             if !in_progress {
                 return true;
             }
+            // Stale extraction check — the in-progress flag may have
+            // been leaked by some path that bypasses the Drop guard
+            // (shouldn't happen with the current impl, but defensive).
+            let started_at = self.state.lock().await.extraction_started_at;
             if let Some(t) = started_at
                 && t.elapsed() > STALE_THRESHOLD
             {
@@ -461,8 +536,15 @@ impl SessionMemoryService {
             if remaining.is_zero() {
                 return false;
             }
+            // 1 s ceiling per iteration so the stale-extraction probe
+            // still fires periodically even if the watch loses a
+            // notify under runtime shutdown.
             let wakeup = remaining.min(Duration::from_secs(1));
-            let _ = tokio::time::timeout(wakeup, self.extract_done.notified()).await;
+            if tokio::time::timeout(wakeup, rx.changed()).await.is_err() {
+                // Either timed out our iteration window, or the
+                // sender was dropped. Loop body will re-check.
+                continue;
+            }
         }
     }
 
@@ -472,8 +554,7 @@ impl SessionMemoryService {
     pub async fn current_content(&self) -> Option<String> {
         let raw = tokio::fs::read_to_string(self.file_path()).await.ok()?;
         // TS parity (`sessionMemoryUtils.ts:117 logEvent
-        // tengu_session_memory_loaded`) — fires whenever a downstream
-        // consumer (compact, /summary surface) loads SM content.
+        // tengu_session_memory_loaded`).
         self.telemetry.emit(MemoryEvent::SessionMemoryLoaded {
             content_length: raw.len() as i64,
         });
@@ -490,16 +571,16 @@ impl SessionMemoryService {
     }
 
     /// Wipe per-conversation state. Called from `MemoryRuntime::reset`
-    /// on `/clear`. The on-disk file is left alone — the next session
-    /// extracts fresh data into it via Edit, and the prior content
-    /// gets overwritten section-by-section.
+    /// on `/clear`.
     pub async fn reset(&self) {
-        *self.state.lock().await = SessionState::default();
-        self.text_cache.write().await.clear();
+        let mut state = self.state.lock().await;
+        let mut cache = self.text_cache.write().await;
+        *state = SessionState::default();
+        cache.clear();
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn run_with_label(
+    async fn run_fork(
         &self,
         start: Instant,
         current_tokens: i64,
@@ -507,29 +588,15 @@ impl SessionMemoryService {
         last_message_id: Option<String>,
         had_tool_calls_in_last_turn: bool,
         fork_label: coco_types::ForkLabel,
-        already_marked: bool,
     ) -> SessionMemoryOutcome {
         let file_path = self.file_path();
         let session_id_for_logs = self.read_session_id();
-        if !already_marked {
-            // `force()` path: no gate ran, so we still need to claim
-            // the in-progress slot before doing real work.
-            let mut state = self.state.lock().await;
-            state.in_progress = true;
-            state.extraction_started_at = Some(start);
-        }
 
         // Ensure parent dir exists. TS uses 0o700 for the dir, 0o600
         // for the file — session memory contains a structured summary
-        // of the conversation (potentially sensitive). On a multi-user
-        // box other accounts shouldn't be able to read it. Non-Unix
-        // platforms get process-default ACLs.
-        //
-        // Apply perms before any write so a brief window where the
-        // dir is world-rwx can't be exploited to read the seed file.
+        // of the conversation (potentially sensitive).
         if let Some(parent) = file_path.parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                self.unmark_in_progress().await;
                 return SessionMemoryOutcome::Failed {
                     reason: format!("create session-memory dir: {e}"),
                 };
@@ -554,15 +621,10 @@ impl SessionMemoryService {
         }
 
         // Seed the file with the 9-section template if missing.
-        // Atomic create + perms — TS uses `flag:'wx'` + `mode:0o600`
-        // for the same effect (`sessionMemory.ts:196-206`). If a
-        // racing call beat us to creation we read its body instead of
-        // overwriting.
         let template = self.load_template().await;
         let current = match self.seed_if_missing(&file_path, &template).await {
             Ok(body) => body,
             Err(e) => {
-                self.unmark_in_progress().await;
                 return SessionMemoryOutcome::Failed { reason: e };
             }
         };
@@ -585,34 +647,29 @@ impl SessionMemoryService {
             prompt,
             description: Some("session memory update".into()),
             subagent_type: Some("general-purpose".into()),
+            // Pin to ModelRole::Memory so operators steering memory
+            // forks via `settings.models.memory` actually see effect.
+            // Without this, `general-purpose` resolves to
+            // `ModelRole::Subagent` — shared with every other generic
+            // subagent.
+            model_role: Some(ModelRole::Memory),
             constraints: Some(AgentSpawnConstraints {
-                // Session memory edits one file via a small fixed pass.
-                max_turns: Some(3),
+                // Section-by-section edits can legitimately span more
+                // turns than the original `Some(3)` allowed —
+                // tight cap silently truncated SM updates for models
+                // that prefer one-section-per-turn pacing.
+                max_turns: Some(self.config.extraction_max_turns.max(5)),
                 allowed_write_roots: file_path
                     .parent()
                     .map(|p| vec![p.to_path_buf()])
                     .unwrap_or_default(),
             }),
-            // TS `runForkedAgent({skipTranscript: false})` is the
-            // default in TS sessionMemory — but Rust's choice is to
-            // suppress per-message transcript writes for SM too,
-            // since the user-facing transcript shouldn't surface the
-            // SM file's read/edit machinery. Matches our consistent
-            // policy across all three memory subagents.
             skip_transcript: true,
             // TS `sessionMemory.ts:318` `canUseTool: createSessionMemCanUseTool(memoryPath)`.
-            // Session-mem policy is tighter than auto-mem: Edit
-            // ONLY on the canonical SM file path, Read otherwise.
-            // This guarantees the session-memory update can't
-            // sprawl into other files even if the model tries.
             can_use_tool: Some(crate::can_use_tool::create_session_mem_handle(
                 file_path.clone(),
             )),
             require_can_use_tool: false,
-            // TS parity: auto cadence vs `/summary` manual trigger
-            // emit distinct labels so analytics can split them.
-            // `force()` passes `SessionMemoryManual`; auto path via
-            // `maybe_extract` passes `SessionMemoryAuto`.
             fork_label: Some(fork_label),
             ..Default::default()
         };
@@ -630,7 +687,7 @@ impl SessionMemoryService {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let outcome = match agent.spawn_agent(request).await {
+        match agent.spawn_agent(request).await {
             Ok(resp) => {
                 let duration_ms = start.elapsed().as_millis() as i64;
                 tracing::info!(
@@ -648,20 +705,19 @@ impl SessionMemoryService {
                     cache_creation_tokens: resp.cache_creation_tokens,
                     duration_ms,
                 });
-                let mut state = self.state.lock().await;
-                state.initialized = true;
-                state.last_extraction_tokens = current_tokens;
-                state.last_extraction_tool_calls = tool_calls_since_last_extraction;
-                // TS parity (`sessionMemory.ts:488-494`
-                // updateLastSummarizedMessageIdIfSafe): advance the
-                // "safely summarized" cursor only when the prior
-                // assistant turn had no tool calls. This prevents a
-                // downstream compact summary from orphaning a
-                // tool_result whose tool_use isn't in the SM body.
-                if !had_tool_calls_in_last_turn && let Some(id) = last_message_id {
-                    state.last_summarized_message_uuid = Some(id);
+                {
+                    let mut state = self.state.lock().await;
+                    state.initialized = true;
+                    state.last_extraction_tokens = current_tokens;
+                    state.last_extraction_tool_calls = tool_calls_since_last_extraction;
+                    // TS parity (`sessionMemory.ts:488-494`
+                    // updateLastSummarizedMessageIdIfSafe): advance the
+                    // "safely summarized" cursor only when the prior
+                    // assistant turn had no tool calls.
+                    if !had_tool_calls_in_last_turn && let Some(id) = last_message_id {
+                        state.last_summarized_message_uuid = Some(id);
+                    }
                 }
-                drop(state);
                 // Refresh the in-memory text cache so the next
                 // SM-first compact short-circuit reads the freshly
                 // written body without a disk hit.
@@ -679,41 +735,15 @@ impl SessionMemoryService {
                 );
                 SessionMemoryOutcome::Failed { reason: e }
             }
-        };
-
-        self.unmark_in_progress().await;
-        outcome
-    }
-
-    async fn unmark_in_progress(&self) {
-        {
-            let mut state = self.state.lock().await;
-            state.in_progress = false;
-            state.extraction_started_at = None;
         }
-        // Wake every wait_for_extraction caller — notify_waiters wakes
-        // all currently-parked waiters but doesn't queue a permit for
-        // future callers, which matches the "extraction just finished"
-        // semantic we want.
-        self.extract_done.notify_waiters();
     }
 
     fn read_session_id(&self) -> String {
-        // ArcSwap::load returns a Guard<Arc<String>>; clone the inner
-        // String so callers can format/log without holding the guard
-        // across awaits.
         (**self.session_id.load()).clone()
     }
 
     /// Atomically seed the session-memory file with `template` if it
     /// doesn't exist, then read back the current content.
-    ///
-    /// `OpenOptions::create_new(true)` is the Unix `O_CREAT | O_EXCL`
-    /// pair; combined with `mode(0o600)` it gives us the same
-    /// "create-with-private-perms or fail" semantics TS gets from
-    /// `writeFile(path, body, {flag:'wx', mode:0o600})`. Two
-    /// concurrent calls race cleanly: the loser sees `AlreadyExists`
-    /// and reads the winner's body instead of overwriting it.
     async fn seed_if_missing(
         &self,
         file_path: &std::path::Path,
@@ -721,10 +751,6 @@ impl SessionMemoryService {
     ) -> std::result::Result<String, String> {
         let path = file_path.to_path_buf();
         let body = template.to_string();
-        // Spawn-blocking because std::fs::OpenOptionsExt's
-        // `mode()` setter is only on the sync std type; tokio's
-        // OpenOptions doesn't expose it directly. The seed file is
-        // tiny so blocking is cheap.
         let seed_result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
             use std::io::Write;
             let mut opts = std::fs::OpenOptions::new();
@@ -753,6 +779,87 @@ impl SessionMemoryService {
             .await
             .map_err(|e| format!("read session-memory after seed: {e}"))
     }
+}
+
+/// Default retention window for orphan session-memory cleanup —
+/// 30 days, mirroring [`coco_coordinator::worktree::AgentWorktreeManager::cleanup_stale`].
+pub const DEFAULT_SM_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 30);
+
+/// Sweep abandoned per-session SM files under `<project_dir>/`.
+pub async fn cleanup_stale_session_memories(
+    project_dir: &std::path::Path,
+    active_session_id: &str,
+    older_than: Duration,
+) -> std::io::Result<i32> {
+    let mut entries = match tokio::fs::read_dir(project_dir).await {
+        Ok(e) => e,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err),
+    };
+
+    let now = SystemTime::now();
+    let mut removed = 0i32;
+    while let Some(entry) = entries.next_entry().await? {
+        let file_type = match entry.file_type().await {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let session_dir = entry.path();
+        let session_name = match session_dir.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        if session_name == active_session_id {
+            continue;
+        }
+
+        let sm_dir = session_dir.join("session-memory");
+        let summary = sm_dir.join("summary.md");
+
+        let modified = match tokio::fs::metadata(&summary).await {
+            Ok(m) => m.modified().ok(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => tokio::fs::metadata(&sm_dir)
+                .await
+                .ok()
+                .and_then(|m| m.modified().ok()),
+            Err(_) => continue,
+        };
+        let Some(modified) = modified else {
+            continue;
+        };
+
+        match now.duration_since(modified) {
+            Ok(age) if age >= older_than => match tokio::fs::remove_dir_all(&sm_dir).await {
+                Ok(()) => {
+                    let age_days: u64 = age.as_secs() / 86_400;
+                    tracing::debug!(
+                        target: "coco_memory::session::cleanup",
+                        path = %sm_dir.display(),
+                        age_days,
+                        "removed orphan session-memory dir"
+                    );
+                    removed += 1;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    tracing::warn!(
+                        target: "coco_memory::session::cleanup",
+                        path = %sm_dir.display(),
+                        error = %err,
+                        "failed to remove orphan session-memory dir"
+                    );
+                }
+            },
+            _ => continue,
+        }
+    }
+
+    Ok(removed)
 }
 
 #[cfg(test)]

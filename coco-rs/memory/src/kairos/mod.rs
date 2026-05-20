@@ -11,6 +11,8 @@
 //! [`crate::service::dream`].
 
 pub mod daily_log;
+pub mod rollover;
 
 pub use daily_log::DailyLogStore;
 pub use daily_log::daily_log_path;
+pub use rollover::KairosRolloverWatcher;

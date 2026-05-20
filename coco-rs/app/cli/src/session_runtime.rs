@@ -793,6 +793,19 @@ impl SessionRuntime {
             // `getProjectDir(getOriginalCwd())` lives at
             // `<memory_base>/projects/<slug>/`.
             let transcript_root = project_paths.project_dir();
+            // Wire the production tracing-backed telemetry emitter so
+            // the ~17 MemoryEvent variants land in the global tracing
+            // subscriber (installed by app/cli's tracing_init). Without
+            // this every event silently no-ops via NoopEmitter.
+            let memory_telemetry: Arc<dyn coco_memory::telemetry::MemoryTelemetryEmitter> =
+                Arc::new(coco_memory::telemetry::TracingEmitter::new());
+            // Whether auto-compact is active for this session — surfaced
+            // by SessionMemoryInit so dashboards correlate SM activity
+            // with the compact gate. `is_active()` honors both the user
+            // toggle and the kill-switch envs (`COCO_COMPACT_DISABLE`,
+            // `COCO_COMPACT_DISABLE_AUTO`), so a session bootstrapped
+            // with compact off reports `auto_compact_enabled = false`.
+            let auto_compact_enabled = runtime_config.compact.auto.is_active();
             let runtime = coco_memory::runtime::MemoryRuntimeBuilder::new(
                 config_home.clone(),
                 cwd.clone(),
@@ -802,6 +815,8 @@ impl SessionRuntime {
             )
             .with_project_paths(project_paths.clone())
             .with_transcript_dir(transcript_root)
+            .with_telemetry(memory_telemetry)
+            .with_auto_compact_enabled(auto_compact_enabled)
             .build();
             info!(
                 personal_dir = %runtime.personal_dir().display(),
@@ -843,20 +858,27 @@ impl SessionRuntime {
             // call site per slot); swallow the duplicate-install Err so
             // a future double-install in tests doesn't blow up startup.
             let _ = runtime_arc.install_session_enumerator(enumerator);
-            // Fire-and-forget gate-check at session start. With the
-            // enumerator installed, this can actually fire (vs the
-            // pre-wire empty-slice path that always tripped the
-            // session gate). TS parity: `initAutoDream` schedules on
-            // session start, then per-turn ticks via
-            // `executeAutoDream` from stop hooks.
-            let dream_clone = runtime_arc.clone();
-            tokio::spawn(async move {
-                let now_ms = coco_memory::service::dream::DreamService::now_ms();
-                let outcome = dream_clone.tick_dream(now_ms).await;
-                tracing::debug!(?outcome, "auto-dream gate check at session start");
-            });
+            // NOTE: the tick_dream fire-and-forget is intentionally
+            // deferred to AFTER `install_agent` below. Spawning it here
+            // (before the real `SwarmAgentHandle` lands in the slot)
+            // creates a multi-threaded race where the dream task can
+            // read the NoOp handle, fail to spawn the consolidation
+            // subagent, and emit a spurious `AutoDreamFailed` event.
             Some(runtime_arc)
         } else {
+            // Feature gate off — emit MemdirDisabled so dashboards
+            // can split sessions that never bootstrapped memory from
+            // those that did. TS parity: `memdir.ts:492-505`'s
+            // `tengu_memdir_disabled` fires from the equivalent gate
+            // check. We emit directly here instead of through
+            // `MemoryRuntime` because no runtime exists at this
+            // point.
+            tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_memdir_disabled",
+                reason = "feature_gate",
+                "auto-memory feature gate off"
+            );
             None
         };
 
@@ -920,6 +942,21 @@ impl SessionRuntime {
                     runtime_config.clone(),
                 ));
             let _ = runtime.install_side_query(side_query);
+
+            // Fire-and-forget auto-dream gate-check at session start.
+            // Deferred here (vs. inside the runtime build above) so
+            // the task observes the just-installed real
+            // `SwarmAgentHandle` — multi-threaded schedulers were
+            // racing the NoOp slot and emitting spurious
+            // `AutoDreamFailed` events. TS parity: `initAutoDream`
+            // schedules on session start; per-turn ticks via
+            // `executeAutoDream` from stop hooks.
+            let dream_clone = runtime.clone();
+            tokio::spawn(async move {
+                let now_ms = coco_memory::service::dream::DreamService::now_ms();
+                let outcome = dream_clone.tick_dream(now_ms).await;
+                tracing::debug!(?outcome, "auto-dream gate check at session start");
+            });
         }
 
         // Session-memory handle threaded into the engine. Same `Arc`
@@ -930,6 +967,33 @@ impl SessionRuntime {
         let session_memory_service = memory_runtime.as_ref().map(|r| r.session_memory.clone());
         if let Some(svc) = &session_memory_service {
             svc.load_from_disk().await;
+        }
+
+        // Reap abandoned per-session SM dirs (left behind by every
+        // prior `/clear`, which regenerates the session id). 30-day
+        // retention mirrors the worktree GC cadence; mtime-only, fire-
+        // and-forget so a wedged filesystem can't block startup.
+        if memory_runtime.is_some() {
+            let pdir = project_paths.project_dir();
+            let sid = session_id.clone();
+            tokio::spawn(async move {
+                match coco_memory::service::session::cleanup_stale_session_memories(
+                    &pdir,
+                    &sid,
+                    coco_memory::service::session::DEFAULT_SM_RETENTION,
+                )
+                .await
+                {
+                    Ok(n) if n > 0 => {
+                        info!(
+                            "reaped {n} orphan session-memory dirs under {}",
+                            pdir.display()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!("session-memory cleanup failed: {e}"),
+                }
+            });
         }
 
         // FileHistoryState — backed by JSONL transcript when enabled.

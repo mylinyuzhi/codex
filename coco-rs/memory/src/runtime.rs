@@ -22,11 +22,14 @@ use crate::recall::SELECT_MEMORIES_SYSTEM_PROMPT;
 use crate::recall::build_selection_prompt;
 use crate::recall::load_relevant_memories;
 use crate::recall::parse_selection_response;
-use crate::recall::select_heuristic;
 use crate::scan::scan_memory_files;
 use crate::service::DreamService;
 use crate::service::ExtractService;
 use crate::service::SessionMemoryService;
+use crate::service::dream::DreamOutcome;
+use crate::service::extract::ExtractOutcome;
+use crate::service::session::SessionMemoryOutcome;
+use crate::store::EntrypointTruncation;
 use crate::telemetry::MemoryEvent;
 use crate::telemetry::MemoryTelemetryEmitter;
 use crate::telemetry::NoopEmitter;
@@ -108,6 +111,17 @@ pub struct MemoryRuntime {
     /// `SystemMemorySavedMessage` into history. TS parity:
     /// `appendSystemMessage(createMemorySavedMessage(...))`.
     notices: crate::notice::NoticeInbox,
+    /// Telemetry emitter shared with the services. The runtime owns
+    /// a clone so [`Self::render_system_prompt_section`] can fire
+    /// `MemdirLoaded` directly — TS `tengu_memdir_loaded`.
+    telemetry: Arc<dyn MemoryTelemetryEmitter>,
+    /// Midnight-rollover latch for KAIROS mode. Inert outside KAIROS:
+    /// `finalize_turn` only consults it when `config.kairos_mode` is
+    /// set, so the watcher stays at its empty default and costs
+    /// nothing for sessions that don't opt in. TS parity: the KAIROS
+    /// arm of `getDateChangeAttachments`
+    /// (`utils/attachments.ts:1437-1441`).
+    kairos_rollover: crate::kairos::KairosRolloverWatcher,
 }
 
 impl std::fmt::Debug for MemoryRuntime {
@@ -217,19 +231,53 @@ impl MemoryRuntimeBuilder {
                 auto_compact_enabled: self.auto_compact_enabled,
             });
         }
+        // NOTE: `MemdirDisabled` is NOT emitted from this builder.
+        // TS `tengu_memdir_disabled` (`memdir.ts:492-505`) fires when
+        // the **memdir feature itself** is off — at which point this
+        // builder wouldn't run. The session-runtime layer emits the
+        // `FeatureGate` variant directly via tracing when
+        // `Feature::AutoMemory` is off. Per-subsystem toggles
+        // (extraction / dream / session-memory) are a different
+        // semantic and do NOT trigger `tengu_memdir_disabled` in TS —
+        // their on/off state is visible from the absence/presence of
+        // the corresponding lifecycle events instead (e.g. no
+        // `tengu_extract_memories_extraction` ever firing in a
+        // session implies extraction was off).
+        // `memory_base` is the root of the per-project memory layout
+        // (`<base>/projects/<slug>/memory/`). `memory_base_override`
+        // (from `COCO_REMOTE_MEMORY_DIR`) shifts it without touching
+        // unrelated subsystems' paths — transcripts and the project
+        // session dir still use the caller-supplied `project_paths`
+        // unless this override is set, in which case we rebuild
+        // memory-scoped `ProjectPaths` on top of the new base. TS
+        // parity: `getMemoryBaseDir()` in `memdir/paths.ts:85-90`.
+        let memory_base: PathBuf = self
+            .config
+            .memory_base_override
+            .clone()
+            .unwrap_or_else(|| self.config_home.clone());
         let directories = MemoryDir::resolve(
-            &self.config_home,
+            &memory_base,
             &self.project_root,
             self.config.directory.as_deref(),
         );
-        // Reuse caller-supplied `ProjectPaths`, or derive once
-        // (canonical-git-root + slug). Session-memory writes go to
-        // `<projectDir>/<sid>/session-memory/summary.md` — TS layout.
-        let project_paths = self.project_paths.unwrap_or_else(|| {
+        // When `memory_base_override` is set, the caller's
+        // `project_paths` (computed from the default `config_home`)
+        // would point session-memory + dream-lock to the wrong base.
+        // Rebuild a memory-scoped `ProjectPaths` against the override
+        // so the SM file lives at `<override>/projects/<slug>/<sid>/
+        // session-memory/summary.md`.
+        let project_paths = if self.config.memory_base_override.is_some() {
             let canonical = coco_git::find_canonical_git_root(&self.project_root)
                 .unwrap_or_else(|| self.project_root.clone());
-            Arc::new(ProjectPaths::new(self.config_home.clone(), &canonical))
-        });
+            Arc::new(ProjectPaths::new(memory_base, &canonical))
+        } else {
+            self.project_paths.unwrap_or_else(|| {
+                let canonical = coco_git::find_canonical_git_root(&self.project_root)
+                    .unwrap_or_else(|| self.project_root.clone());
+                Arc::new(ProjectPaths::new(self.config_home.clone(), &canonical))
+            })
+        };
         // Master swappable cell — every service sees the same handle
         // and observes any later `install_agent` swap.
         let agent_slot: crate::service::extract::AgentSlot =
@@ -279,6 +327,8 @@ impl MemoryRuntimeBuilder {
             side_query: side_query_slot,
             session_enumerator: OnceLock::new(),
             notices,
+            telemetry: self.telemetry,
+            kairos_rollover: crate::kairos::KairosRolloverWatcher::new(),
         }
     }
 }
@@ -331,6 +381,134 @@ impl MemoryRuntime {
     /// in `extractMemories.ts:495` and `autoDream.ts:243`.
     pub fn drain_user_notices(&self) -> Vec<crate::notice::MemoryUserNotice> {
         self.notices.drain()
+    }
+
+    /// Per-turn entry point for the memory subsystem. Aggregates the
+    /// three async services (session memory, extract, auto-dream) plus
+    /// future post-write inspection (Gap 4) and KAIROS rollover (Gap 2)
+    /// into a single black-box call from the engine.
+    ///
+    /// Architecture: engine pre-computes everything that needs the
+    /// `MessageHistory` (cursors, tool counts, fork closures) and
+    /// passes them through [`FinalizeTurnContext`]; this method does
+    /// the fan-out and post-processing and returns a typed
+    /// [`FinalizeTurnReport`] the engine then projects into history
+    /// (`SystemMemorySavedMessage` for each notice) and side effects
+    /// (KAIROS transcript archive).
+    ///
+    /// Subagent + bare-mode gating is centralised here so callers
+    /// don't need to remember the rules. Returns `skipped=true` when
+    /// the gate trips; no LLM call is made.
+    pub async fn finalize_turn(&self, ctx: FinalizeTurnContext) -> FinalizeTurnReport {
+        if ctx.bare_mode || ctx.is_subagent {
+            return FinalizeTurnReport::skipped();
+        }
+
+        let extract = self.extract.clone();
+        let session_memory = self.session_memory.clone();
+        let auto_compact_enabled = ctx.auto_compact_enabled;
+        let estimated_tokens = ctx.estimated_tokens;
+        let tool_calls_since_sm = ctx.tool_calls_since_sm_cursor;
+        let had_tool_calls_in_last_turn = ctx.tool_calls_last_turn > 0;
+        let last_msg_id = ctx.last_message_id.clone();
+        let extract_input = ctx.extract_input;
+        let now_ms = ctx.now_ms;
+
+        // Fan-out — three forks in parallel. Each service gates
+        // internally; the lazy `fork_messages` closure inside
+        // `extract_input` is only invoked once all extract gates pass.
+        // TS parity: `stopHooks.ts` dispatches the three concurrently.
+        let (sm_outcome, ex_outcome, dr_outcome) = tokio::join!(
+            async {
+                if auto_compact_enabled {
+                    session_memory
+                        .maybe_extract(
+                            estimated_tokens,
+                            tool_calls_since_sm,
+                            had_tool_calls_in_last_turn,
+                            last_msg_id,
+                        )
+                        .await
+                } else {
+                    SessionMemoryOutcome::Skipped(crate::service::session::SkipReason::Disabled)
+                }
+            },
+            extract.maybe_extract(extract_input),
+            self.tick_dream(now_ms),
+        );
+
+        // Post-write classification — when the main agent (or user
+        // through the `Edit`/`Write`/`NotebookEdit` tool) directly
+        // wrote a memory-managed file this turn, surface a
+        // `ManualEdit` notice. Dedup by path so a model that hits the
+        // same file 5 times only generates one toast. TS parity:
+        // `services/useMemoryUpdateNotification` +
+        // `utils/memoryFileDetection.ts::detectSessionFileType`.
+        let session_memory_file = self.session_memory.file_path();
+        let mut dedup: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut manual_edit_paths: Vec<String> = Vec::new();
+        for record in &ctx.recent_tool_writes {
+            if !record.succeeded {
+                continue;
+            }
+            match crate::path::classify_written_path(
+                &record.file_path,
+                &self.directories.personal,
+                Some(&session_memory_file),
+            ) {
+                crate::path::WriteClassification::TeamMem
+                | crate::path::WriteClassification::AutoMem
+                | crate::path::WriteClassification::Claudemd => {
+                    let key = record.file_path.display().to_string();
+                    if dedup.insert(key.clone()) {
+                        manual_edit_paths.push(key);
+                    }
+                }
+                // SessionMem updates come from the SM fork, which
+                // already produces its own paths via the engine's
+                // `SessionMemoryExtracted` event — no notice.
+                // Unrelated is a no-op.
+                _ => {}
+            }
+        }
+        if !manual_edit_paths.is_empty() {
+            self.notices.push(crate::notice::MemoryUserNotice {
+                written_paths: manual_edit_paths,
+                verb: crate::notice::NoticeVerb::ManualEdit,
+            });
+        }
+
+        // KAIROS rollover detection (Gap 2): poll the watcher only when
+        // KAIROS mode is on. The watcher seeds on its first tick, so
+        // calling it every turn outside KAIROS would spin the latch for
+        // no benefit; the conditional keeps the watcher inert until
+        // `kairos_mode` flips. Emit telemetry on rollover so dashboards
+        // pick it up; the engine receives `Some(yesterday)` and can act
+        // (archive a session-transcript bucket, etc.) — TS-private
+        // `sessionTranscript.flushOnDateChange` lives downstream of
+        // this signal.
+        let kairos_rollover = if self.config.kairos_mode {
+            let yesterday = self.kairos_rollover.tick(now_ms);
+            if let Some(prev) = yesterday {
+                let today = prev.succ_opt().unwrap_or(prev);
+                self.telemetry.emit(MemoryEvent::KairosRollover {
+                    yesterday: prev.format("%Y-%m-%d").to_string(),
+                    today: today.format("%Y-%m-%d").to_string(),
+                });
+            }
+            yesterday
+        } else {
+            None
+        };
+
+        FinalizeTurnReport {
+            skipped: false,
+            session_memory: Some(sm_outcome),
+            extract: Some(ex_outcome),
+            dream: Some(dr_outcome),
+            kairos_rollover,
+            notices: self.drain_user_notices(),
+        }
     }
 
     /// Per-turn auto-dream tick — TS parity with `executeAutoDream`
@@ -415,22 +593,56 @@ impl MemoryRuntime {
             SystemPromptVariant::Auto
         };
 
-        let personal_index = read_index_file(&self.directories.personal_index())
-            .await
-            .map(|s| truncate_entrypoint_content(&s).content);
-        let team_index = if matches!(variant, SystemPromptVariant::Combined) {
+        // Truncate-and-keep-stats so we can emit `MemdirLoaded`. TS
+        // `tengu_memdir_loaded` fires every time the prompt section
+        // is built (`memdir.ts:298-305`) — without this dashboards
+        // can't measure how often / how large the memdir is per
+        // session, which is the load-bearing input for the recall
+        // budget heuristics.
+        let personal_trunc: Option<EntrypointTruncation> =
+            read_index_file(&self.directories.personal_index())
+                .await
+                .map(|s| truncate_entrypoint_content(&s));
+        let has_team = matches!(variant, SystemPromptVariant::Combined);
+        let team_trunc: Option<EntrypointTruncation> = if has_team {
             read_index_file(&self.directories.team_index())
                 .await
-                .map(|s| truncate_entrypoint_content(&s).content)
+                .map(|s| truncate_entrypoint_content(&s))
         } else {
             None
         };
+
+        // Emit per-dir telemetry — TS fires twice in combined mode
+        // (once per dir). One event with `has_team=true` summarizes
+        // the personal-side stats; team's stats ride on a second
+        // event so both surfaces stay measurable.
+        if let Some(trunc) = &personal_trunc {
+            self.telemetry.emit(MemoryEvent::MemdirLoaded {
+                line_count: trunc.line_count as i64,
+                byte_count: trunc.byte_count as i64,
+                was_truncated: trunc.line_truncated,
+                was_byte_truncated: trunc.byte_truncated,
+                has_team,
+            });
+        }
+        if let Some(trunc) = &team_trunc {
+            self.telemetry.emit(MemoryEvent::MemdirLoaded {
+                line_count: trunc.line_count as i64,
+                byte_count: trunc.byte_count as i64,
+                was_truncated: trunc.line_truncated,
+                was_byte_truncated: trunc.byte_truncated,
+                has_team: true,
+            });
+        }
+
+        let personal_index = personal_trunc.map(|t| t.content);
+        let team_index = team_trunc.map(|t| t.content);
 
         let transcript_dir = self.transcript_dir.as_deref();
         Some(build_system_prompt_section(
             variant,
             &self.directories.personal,
-            if matches!(variant, SystemPromptVariant::Combined) {
+            if has_team {
                 Some(&self.directories.team)
             } else {
                 None
@@ -440,7 +652,7 @@ impl MemoryRuntime {
             self.config.skip_index,
             self.config.searching_past_context_enabled,
             transcript_dir,
-            None,
+            self.config.extra_guidelines.as_deref(),
         ))
     }
 
@@ -450,108 +662,233 @@ impl MemoryRuntime {
     /// [`ModelRole::Memory`] side-query that ranks the manifest and
     /// returns up to 5 filenames; the returned files are loaded with
     /// freshness headers and per-session byte-budget enforcement
-    /// applied via [`PrefetchState`]. When no handle is present (e.g.
-    /// the harness ran without inference), falls back to a recency
-    /// heuristic so memory still surfaces something rather than
-    /// nothing.
+    /// applied via [`PrefetchState`]. When no handle is present (or
+    /// the ranker errors) recall stays silent and returns empty — TS
+    /// parity (`findRelevantMemories.ts:131-140`). Surfacing
+    /// arbitrarily-recent memories would occupy attention budget and
+    /// the 60 KB session byte cap with no relevance signal.
     ///
     /// `recent_tools` lets the ranker deprioritize reference docs for
     /// tools the model is actively exercising — TS parity.
     pub async fn recall(&self, query: &str, recent_tools: &[String]) -> Vec<RelevantMemory> {
-        if query.trim().is_empty() {
+        // Pre-call gates — TS `attachments.ts:2378-2386` rejects
+        // before paying the LLM cost. Two cheap filters that make
+        // recall pull its weight on a per-turn basis:
+        //
+        // 1. Empty / whitespace-only query.
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
             return Vec::new();
         }
-        // Cold-start short-circuit: with no MEMORY.md the directory
-        // either doesn't exist or holds nothing curated, so skip the
-        // full directory walk + 200 frontmatter reads.
-        if !self.directories.personal_index().exists() {
+        // 2. Single-token query — anything without inner whitespace
+        //    isn't a meaningful semantic query. TS:
+        //    `if (!/\s/.test(input.trim())) return undefined`. Saves
+        //    a side-query per quick-prompt session ("hi", "go", "thanks").
+        if !trimmed.contains(char::is_whitespace) {
             return Vec::new();
         }
+        // 3. Cumulative byte budget already saturated — every
+        //    selected memory would be dropped by `load_relevant_memories`
+        //    anyway. TS `attachments.ts:2384-2386` gates upstream of
+        //    `selectRelevantMemories`.
+        if self.recall_state.is_budget_exhausted() {
+            return Vec::new();
+        }
+        // Cold-start short-circuit: gate on the scan being empty, NOT
+        // on `MEMORY.md`'s presence. TS `findRelevantMemories.ts:46`
+        // short-circuits via `scanMemoryFiles(...).length === 0`. A
+        // user who has topic files but deleted (or never had) the
+        // `MEMORY.md` index still has memories worth surfacing.
         let scanned = scan_memory_files(&self.directories.personal);
         if scanned.is_empty() {
             return Vec::new();
         }
 
-        let side_query = self.side_query.get().cloned();
-        let selected: Vec<String> = match side_query {
-            Some(handle) => {
-                let user_prompt =
-                    build_selection_prompt(query, &scanned, &self.recall_state, recent_tools);
-                // Force structured output via a synthetic
-                // `select_memories` tool — TS parity with
-                // `selectRelevantMemories.ts`'s `tool_choice: { type:
-                // "tool", name: "select_memories" }`. Strict JSON
-                // shape is more reliable than a permissive
-                // `parse_selection_response` regex over free text.
-                let tool = SideQueryToolDef {
-                    name: RECALL_TOOL_NAME.into(),
-                    description:
-                        "Return up to 5 memory filenames most relevant to the user's query.".into(),
-                    input_schema: serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "selected_memories": {
-                                "type": "array",
-                                "items": { "type": "string" },
-                                "maxItems": 5,
-                            }
-                        },
-                        "required": ["selected_memories"],
-                        "additionalProperties": false,
-                    }),
-                };
-                let request = SideQueryRequest::with_forced_tool(
-                    SELECT_MEMORIES_SYSTEM_PROMPT,
-                    &user_prompt,
-                    tool,
-                    RECALL_QUERY_SOURCE,
-                )
-                .with_model_role(ModelRole::Memory);
-                match handle.query(request).await {
-                    Ok(resp) => {
-                        // Prefer the structured tool input; fall back
-                        // to text-mode parsing for providers that
-                        // don't honor `tool_choice` (TS legacy path).
-                        let names = resp
-                            .tool_uses
-                            .first()
-                            .and_then(|tu| tu.input.get("selected_memories"))
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|s| s.as_str().map(str::to_string))
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_else(|| {
-                                let text = resp.text.clone().unwrap_or_default();
-                                parse_selection_response(&text)
-                            });
-                        // Ranker returns filenames; resolve to absolute paths
-                        // by matching against the scanned manifest via a
-                        // hash index — O(k) instead of O(n·k).
-                        let by_name: std::collections::HashMap<&str, &str> = scanned
-                            .iter()
-                            .map(|m| (m.filename.as_str(), m.path.to_str().unwrap_or("")))
-                            .collect();
-                        names
-                            .into_iter()
-                            .filter_map(|name| {
-                                by_name
-                                    .get(name.as_str())
-                                    .filter(|p| !p.is_empty())
-                                    .map(|p| (*p).to_string())
-                            })
-                            .collect()
+        let Some(handle) = self.side_query.get().cloned() else {
+            // No LLM ranker — stay silent. TS contract preserved.
+            return Vec::new();
+        };
+
+        let user_prompt = build_selection_prompt(query, &scanned, &self.recall_state, recent_tools);
+        // Force structured output via a synthetic
+        // `select_memories` tool — TS parity with
+        // `selectRelevantMemories.ts`'s `tool_choice: { type:
+        // "tool", name: "select_memories" }`. Strict JSON
+        // shape is more reliable than a permissive
+        // `parse_selection_response` regex over free text.
+        let tool = SideQueryToolDef {
+            name: RECALL_TOOL_NAME.into(),
+            description: "Return up to 5 memory filenames most relevant to the user's query."
+                .into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "selected_memories": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "maxItems": 5,
                     }
-                    Err(err) => {
-                        tracing::debug!("memory recall ranker failed, falling back: {err}");
-                        select_heuristic(&scanned, &self.recall_state)
-                    }
-                }
+                },
+                "required": ["selected_memories"],
+                "additionalProperties": false,
+            }),
+        };
+        let request = SideQueryRequest::with_forced_tool(
+            SELECT_MEMORIES_SYSTEM_PROMPT,
+            &user_prompt,
+            tool,
+            RECALL_QUERY_SOURCE,
+        )
+        .with_model_role(ModelRole::Memory)
+        // TS `findRelevantMemories.ts:101`
+        // `skipSystemPromptPrefix: true` — ranker must not
+        // see the main agent's Claude Code preamble. The
+        // preamble describes tools/persona unrelated to
+        // memory selection and biases the ranker.
+        .with_skip_system_prefix(true);
+        let selected: Vec<String> = match handle.query(request).await {
+            Ok(resp) => {
+                // Prefer the structured tool input; fall back
+                // to text-mode parsing for providers that
+                // don't honor `tool_choice` (TS legacy path).
+                let names = resp
+                    .tool_uses
+                    .first()
+                    .and_then(|tu| tu.input.get("selected_memories"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|s| s.as_str().map(str::to_string))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_else(|| {
+                        let text = resp.text.clone().unwrap_or_default();
+                        parse_selection_response(&text)
+                    });
+                // Ranker returns filenames; resolve to absolute paths
+                // by matching against the scanned manifest via a
+                // hash index — O(k) instead of O(n·k).
+                let by_name: std::collections::HashMap<&str, &str> = scanned
+                    .iter()
+                    .map(|m| (m.filename.as_str(), m.path.to_str().unwrap_or("")))
+                    .collect();
+                names
+                    .into_iter()
+                    .filter_map(|name| {
+                        by_name
+                            .get(name.as_str())
+                            .filter(|p| !p.is_empty())
+                            .map(|p| (*p).to_string())
+                    })
+                    .collect()
             }
-            None => select_heuristic(&scanned, &self.recall_state),
+            Err(err) => {
+                // TS parity: stay silent on ranker failure rather than
+                // surfacing arbitrary newest-first content.
+                tracing::debug!("memory recall ranker failed, suppressing: {err}");
+                return Vec::new();
+            }
         };
 
         load_relevant_memories(&selected, &self.recall_state)
+    }
+
+    /// Reset the recall state (already-surfaced set + byte budget).
+    /// Called from the compact post-step so a fresh, post-compact
+    /// transcript can re-surface memory without the prior session's
+    /// dedup + 60 KB cap blocking everything.
+    ///
+    /// TS gets this for free because `collectSurfacedMemories(messages)`
+    /// re-derives the state from the current message list every call;
+    /// in Rust we hold the state on the runtime and clear it
+    /// explicitly here.
+    pub fn reset_recall_state(&self) {
+        self.recall_state.reset();
+    }
+}
+
+/// One main-agent tool call that may have written to disk. The engine
+/// extracts these from each finalised turn and passes them into
+/// [`MemoryRuntime::finalize_turn`] so memory's `classify_tool_write`
+/// pass (Gap 4) can decide whether to emit a `ManualEdit` notice.
+#[derive(Debug, Clone)]
+pub struct ToolWriteRecord {
+    pub tool_name: String,
+    pub file_path: PathBuf,
+    /// Whether the tool call returned success. Failed writes don't
+    /// produce notices (the file wasn't actually changed).
+    pub succeeded: bool,
+}
+
+/// Inputs to [`MemoryRuntime::finalize_turn`].
+///
+/// The engine pre-computes every field that depends on
+/// `MessageHistory` (cursors, tool-call counts, the fork-messages
+/// closure and the `has_memory_writes` closure inside `extract_input`)
+/// and hands them through this struct. The runtime then orchestrates
+/// the fan-out without re-walking history.
+pub struct FinalizeTurnContext {
+    /// Estimated token count of the current history (SM init/update gate).
+    pub estimated_tokens: i64,
+    /// Cumulative tool-call count since SM's last extraction cursor.
+    pub tool_calls_since_sm_cursor: i32,
+    /// Tool-call count in the last assistant turn — drives SM's
+    /// natural-break heuristic.
+    pub tool_calls_last_turn: i32,
+    /// UUID of the **last** message in history (any kind, not just
+    /// assistant). Becomes the new cursor on a successful extraction
+    /// for both SM and extract.
+    pub last_message_id: Option<String>,
+    /// `is_auto_compact_active` snapshot — when off, SM dispatch is
+    /// skipped entirely (its primary consumer is the SM-first compact
+    /// branch).
+    pub auto_compact_enabled: bool,
+    /// `--bare` / SDK headless mode flag. Suppresses every memory
+    /// fork so scripted invocations don't pay turn-end LLM costs.
+    pub bare_mode: bool,
+    /// True when this turn is running inside a subagent. Subagents
+    /// inherit but don't ADD to the parent's auto-memory.
+    pub is_subagent: bool,
+    /// Wall-clock at finalize time (passed in so tests stay
+    /// deterministic). Used for dream's time-gate + KAIROS rollover.
+    pub now_ms: i64,
+    /// Pre-built `TurnInput` for the extraction service. Holds the
+    /// lazy `fork_messages` and `has_memory_writes` closures the engine
+    /// captured against the history.
+    pub extract_input: crate::service::extract::TurnInput,
+    /// Main-agent writes this turn — picked up by Gap 4 toast.
+    pub recent_tool_writes: Vec<ToolWriteRecord>,
+}
+
+/// Result of one [`MemoryRuntime::finalize_turn`] call.
+///
+/// When `skipped == true` (bare mode or subagent), every other field
+/// is its `None` / empty default and the engine should not project
+/// anything into history.
+pub struct FinalizeTurnReport {
+    pub skipped: bool,
+    pub session_memory: Option<SessionMemoryOutcome>,
+    pub extract: Option<ExtractOutcome>,
+    pub dream: Option<DreamOutcome>,
+    /// Yesterday's date when KAIROS rollover fired this turn. The
+    /// engine archives the prior session transcript bucket on this
+    /// signal. Always `None` outside KAIROS mode.
+    pub kairos_rollover: Option<chrono::NaiveDate>,
+    /// User-visible "memory saved/improved/manually-edited/log-appended"
+    /// notices accumulated this turn. The engine projects one
+    /// `SystemMemorySavedMessage` per entry.
+    pub notices: Vec<crate::notice::MemoryUserNotice>,
+}
+
+impl FinalizeTurnReport {
+    pub fn skipped() -> Self {
+        Self {
+            skipped: true,
+            session_memory: None,
+            extract: None,
+            dream: None,
+            kairos_rollover: None,
+            notices: Vec::new(),
+        }
     }
 }

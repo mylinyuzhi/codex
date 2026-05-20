@@ -623,6 +623,10 @@ impl Tool for AgentTool {
                 .map(String::from),
             subagent_type: request_subagent_type,
             model: if is_fork { None } else { caller_model },
+            // AgentTool spawns inherit role from definition / subagent_type;
+            // memory-crate forks (extract/dream/session-memory) are the
+            // only callers that pin an explicit `ModelRole::Memory`.
+            model_role: None,
             run_in_background,
             enable_summarization,
             session_id: ctx.session_id_for_history.clone().unwrap_or_default(),

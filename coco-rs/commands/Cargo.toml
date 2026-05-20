@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 coco-config.workspace = true
+coco-context.workspace = true
 coco-error.workspace = true
 coco-lsp.workspace = true
 coco-types.workspace = true

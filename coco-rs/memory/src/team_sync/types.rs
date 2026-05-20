@@ -79,6 +79,25 @@ pub struct TeamMemorySyncPushResult {
     #[serde(default, rename = "skippedSecrets")]
     pub skipped_secrets: Vec<SkippedSecretFile>,
     pub error: Option<String>,
+    /// `true` when the push terminated because of repeated 412
+    /// PreconditionFailed conflicts. Distinct from a generic failure —
+    /// the watcher uses it to throttle retries.
+    #[serde(default)]
+    pub conflict: bool,
+    /// Number of 412 conflict-retries actually attempted. `0` for
+    /// success-on-first-try; up to [`MAX_CONFLICT_RETRIES`] otherwise.
+    #[serde(default, rename = "conflictRetries")]
+    pub conflict_retries: i32,
+    /// When the server returned a structured 413 with an effective
+    /// cap on entry count, this carries the parsed value (also
+    /// written into `state.server_max_entries`). `None` otherwise.
+    #[serde(default, rename = "serverMaxEntries")]
+    pub server_max_entries: Option<i32>,
+    /// Local entry count dropped by client-side truncation because
+    /// `state.server_max_entries` was set. `0` ⇒ no truncation
+    /// happened. Drives the user-visible warning surface.
+    #[serde(default, rename = "truncatedCount")]
+    pub truncated_count: i32,
 }
 
 /// Result from a low-level upload chunk.
@@ -138,3 +157,39 @@ pub const MAX_PUT_BODY_BYTES: usize = 200_000;
 
 /// Sync request timeout (TS `TEAM_MEMORY_SYNC_TIMEOUT_MS`).
 pub const SYNC_TIMEOUT_MS: u64 = 30_000;
+
+/// Max attempts at refreshing `server_checksums` via `?view=hashes`
+/// after a 412 conflict before giving up. TS:
+/// `services/teamMemorySync/index.ts:91 MAX_CONFLICT_RETRIES`.
+pub const MAX_CONFLICT_RETRIES: i32 = 2;
+
+/// Structured 413 body (anthropic/anthropic#293258) — distinguished
+/// from the gateway's unstructured 413 (HTML page) by the presence of
+/// `error.details.error_code == "team_memory_too_many_entries"`.
+///
+/// We only care about `max_entries` (the effective server cap); the
+/// other fields are parsed for telemetry parity but not load-bearing.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TeamMemoryTooManyEntries {
+    pub error: TeamMemoryTooManyEntriesInner,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TeamMemoryTooManyEntriesInner {
+    pub details: TeamMemoryTooManyEntriesDetails,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TeamMemoryTooManyEntriesDetails {
+    /// Always `"team_memory_too_many_entries"` for the structured
+    /// rejection. Used to distinguish from gateway 413s.
+    #[serde(default)]
+    pub error_code: String,
+    /// Effective max-entries cap enforced by the server (may be
+    /// org-tuned).
+    pub max_entries: i32,
+    /// Count the server saw in the request that just got rejected.
+    /// Optional for forward-compat.
+    #[serde(default)]
+    pub received_entries: Option<i32>,
+}

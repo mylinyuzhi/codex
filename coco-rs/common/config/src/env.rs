@@ -95,6 +95,13 @@ pub enum EnvKey {
     CocoMemorySessionMemoryDisable,
     /// Force-enable KAIROS daily-log mode (assistant-mode append-only logs).
     CocoMemoryKairos,
+    /// Free-form policy / guidance text injected verbatim into the
+    /// auto-memory system-prompt section's "extra guidelines" slot.
+    /// Used by Cowork-style deployments to push operator-controlled
+    /// memory governance into the model's context without modifying
+    /// the crate-bundled prompt copy. TS source:
+    /// `memdir.ts:441-446` reads `CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES`.
+    CocoCoworkMemoryExtraGuidelines,
     CocoMcpToolTimeoutMs,
     CocoModel,
     CocoParentSessionId,
@@ -275,6 +282,7 @@ impl EnvKey {
             Self::CocoMemoryDreamDisable => "COCO_MEMORY_DREAM_DISABLE",
             Self::CocoMemorySessionMemoryDisable => "COCO_MEMORY_SESSION_MEMORY_DISABLE",
             Self::CocoMemoryKairos => "COCO_MEMORY_KAIROS",
+            Self::CocoCoworkMemoryExtraGuidelines => "COCO_COWORK_MEMORY_EXTRA_GUIDELINES",
             Self::CocoMcpToolTimeoutMs => "COCO_MCP_TOOL_TIMEOUT_MS",
             Self::CocoModel => "COCO_MODEL",
             Self::CocoParentSessionId => "COCO_PARENT_SESSION_ID",

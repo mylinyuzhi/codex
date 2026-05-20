@@ -1763,8 +1763,18 @@ pub enum MemoryDialogScope {
     Project,
     /// Project-local (`./CLAUDE.local.md`, gitignored).
     ProjectLocal,
+    /// `<dir>/.claude/CLAUDE.md` — project-config-dir convention.
+    ProjectConfig,
     /// Subdirectory CLAUDE.md (auto-loaded under cwd).
     Subdir,
+    /// File loaded transitively via `@-import` from a parent memory file.
+    Imported,
+    /// Auto-memory directory entry (`<memdir>/`).
+    AutoMemFolder,
+    /// Team memory directory entry (`<memdir>/team/`).
+    TeamMemFolder,
+    /// Per-agent memory directory entry.
+    AgentMemFolder,
 }
 
 /// Categorization of a `SlashCommandStatus` payload. Each variant maps to

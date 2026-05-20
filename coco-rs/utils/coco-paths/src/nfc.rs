@@ -21,6 +21,17 @@ pub fn normalize_nfc(s: &str) -> String {
     s.nfc().collect()
 }
 
+/// NFKC-normalise `s` (compatibility decomposition + canonical
+/// composition). Differs from [`normalize_nfc`]: fullwidth glyphs
+/// (`U+FF0E` "．"), one/two-dot leaders (`U+2024` "․" / `U+2025`
+/// "‥"), and small full stop (`U+FE52` "﹒") all collapse into ASCII
+/// `.`. Used by path validators to short-circuit Unicode-traversal
+/// attacks that would otherwise pass a literal-codepoint check.
+/// TS `String.prototype.normalize('NFKC')` parity.
+pub fn normalize_nfkc(s: &str) -> String {
+    s.nfkc().collect()
+}
+
 #[cfg(test)]
 #[path = "nfc.test.rs"]
 mod tests;

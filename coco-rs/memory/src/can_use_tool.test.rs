@@ -169,3 +169,58 @@ async fn test_session_mem_denies_other_tools() {
         assert_denied(&d, tool);
     }
 }
+
+// ── symlink-escape regression tests ────────────────────────────
+
+/// A symlink rooted inside the memdir that resolves OUTSIDE must be
+/// caught by the realpath layer. Before the fix, the lexical-only
+/// fallback would silently Allow the write.
+#[tokio::test]
+async fn test_auto_mem_denies_real_symlink_escape() {
+    let temp = tempfile::tempdir().unwrap();
+    let memdir = temp.path().join("memdir");
+    std::fs::create_dir_all(&memdir).unwrap();
+    let escape_target = temp.path().join("escape-target");
+    std::fs::write(&escape_target, "secret").unwrap();
+    let escape_link = memdir.join("escape");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&escape_target, &escape_link).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&escape_target, &escape_link).unwrap();
+
+    let h = create_auto_mem_handle(memdir.clone());
+    let d = h
+        .check(
+            "Edit",
+            &json!({"file_path": escape_link.display().to_string()}),
+            &ctx(),
+        )
+        .await;
+    assert_denied(
+        &d,
+        "symlink rooted inside memdir but resolving outside must be Denied",
+    );
+}
+
+/// A dangling symlink (target doesn't exist) inside the memdir is the
+/// case where lexical-only fallback was vulnerable. `realpath` returns
+/// `None` (dangling). The asymmetric-fail-closed branch must kick in.
+#[tokio::test]
+#[cfg(unix)]
+async fn test_auto_mem_denies_dangling_symlink_inside_memdir() {
+    let temp = tempfile::tempdir().unwrap();
+    let memdir = temp.path().join("memdir");
+    std::fs::create_dir_all(&memdir).unwrap();
+    let dangling = memdir.join("dangling");
+    std::os::unix::fs::symlink("/nonexistent/path/that/will/never/exist", &dangling).unwrap();
+
+    let h = create_auto_mem_handle(memdir.clone());
+    let d = h
+        .check(
+            "Edit",
+            &json!({"file_path": dangling.display().to_string()}),
+            &ctx(),
+        )
+        .await;
+    assert_denied(&d, "dangling symlink inside memdir must fail closed");
+}

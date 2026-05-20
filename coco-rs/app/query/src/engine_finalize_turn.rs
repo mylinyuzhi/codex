@@ -15,6 +15,8 @@
 //! orchestration. The full LLM / SM / manual compact paths live in
 //! `crate::engine_compaction`.
 
+use std::sync::Arc;
+
 use tracing::info;
 use tracing::warn;
 
@@ -293,6 +295,18 @@ impl QueryEngine {
             .notify_compaction(qs, self.config.agent_id.as_deref())
             .await;
 
+        // Reactive compact also rewrites history (peels oldest API-round
+        // groups, drops attachments) — so it must reset the memory
+        // recall state AND clear the SM cache, same as the full / SM-first
+        // / partial compact paths. Without this, a long session that
+        // survives a PTL retry inherits a saturated `total_bytes` and
+        // stale `already_surfaced` set, silently killing recall for the
+        // rest of the session.
+        if let Some(rt) = &self.memory_runtime {
+            rt.reset_recall_state();
+            rt.session_memory.clear_after_compact().await;
+        }
+
         // TS `getUnifiedTaskAttachments(ctx)` only fires post-compaction; the
         // next reminder build consumes (and clears) this flag.
         self.pending_just_compacted
@@ -460,106 +474,24 @@ impl QueryEngine {
         // background work after each turn.
         let bare_mode_active = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode);
 
-        // Auto-memory turn-end fan-out (TS feature `AutoMemory`): fire
-        // the 9-section session memory, the forked extraction service,
-        // and the auto-dream gate-check concurrently. All three gate
-        // internally; the lazy `fork_messages` closure defers
-        // per-message serialization until extraction actually fires,
-        // and `tick_dream` invokes its session enumerator only after
-        // its time+scan gates pass. TS parity: `handleStopHooks`
-        // dispatches `executeExtractMemories` + `executeAutoDream` on
-        // every turn-end alongside session-memory updates.
-        if !bare_mode_active
-            && let Some(runtime) = self.memory_runtime.clone()
-            && self.config.agent_id.is_none()
-        {
-            let last_cursor = runtime.extract.last_cursor().await;
-            // Walk all assistant messages since the cursor — TS
-            // `hasMemoryWritesSince` (`extractMemories.ts:121-148`).
-            // Older single-turn-only behavior missed the case where
-            // an earlier assistant turn in the slice wrote memory
-            // and the latest didn't.
-            let has_memory_writes = main_agent_wrote_memory(
-                history.as_slice(),
-                runtime.personal_dir(),
-                last_cursor.as_deref(),
-            );
-            // SessionMemory's cursor is independent of ExtractService's —
-            // the two services advance their cursors at different
-            // points (TS module-level `lastMemoryMessageUuid` per
-            // service). Compute cumulative tool calls since SM's
-            // cursor for the SM gate (TS
-            // `countToolCallsSince(messages, lastMemoryMessageUuid)`).
-            let session_memory = runtime.session_memory.clone();
-            let sm_cursor = session_memory.last_extraction_message_id().await;
-            let tool_calls_since_sm =
-                count_tool_calls_since(history.as_slice(), sm_cursor.as_deref());
-            // TS parity (`extractMemories.ts:432-434` /
-            // `sessionMemory.ts:173-176`): use the **last message** uuid
-            // (which can be tool_result / system / attachment), NOT the
-            // last assistant uuid. After `handleStopHooks` they're often
-            // the same (no-tool turn), but on tool-using turns the last
-            // message is the assistant's tool_use → following tool_result
-            // pair; the cursor needs to advance past the tool_result so
-            // the next gate's `countToolCallsSince` doesn't double-count.
-            let last_msg_id = history
-                .last()
-                .and_then(|m| m.uuid())
-                .map(uuid::Uuid::to_string);
-            // TS `countModelVisibleMessagesSince` (`extractMemories.ts:82-110`)
-            // — only user/assistant messages count; progress / system /
-            // attachment / tombstone are not "model-visible." The
-            // extraction prompt template surfaces this count to the
-            // subagent, so over-counting (history.len()) inflates the
-            // "analyze the most recent ~N messages" guidance.
-            let extract_message_count =
-                count_model_visible_since(history.as_slice(), last_cursor.as_deref());
-            let messages_for_fork = history.to_vec();
-            let extract_input = coco_memory::service::extract::TurnInput {
-                fork_messages: Box::new(move || {
-                    arc_messages_since(&messages_for_fork, last_cursor.as_deref())
-                }),
-                message_count: extract_message_count,
-                last_message_id: last_msg_id.clone(),
-                has_memory_writes,
-            };
-            let extract = runtime.extract.clone();
-            let dream_runtime = runtime.clone();
-            let now_ms = coco_memory::service::dream::DreamService::now_ms();
-            // TS `sessionMemory.ts:360-371`: SM is gated on auto-compact
-            // being enabled (its primary consumer is the SM-first
-            // compact branch). When auto-compact is off, skip SM
-            // dispatch entirely so we don't burn turns on a feature the
-            // operator has disabled.
-            let auto_compact_enabled = self.config.is_auto_compact_active();
-            let (_sm, _ex, _dr) = tokio::join!(
-                async {
-                    if auto_compact_enabled {
-                        session_memory
-                            .maybe_extract(
-                                estimated_tokens,
-                                tool_calls_since_sm,
-                                tool_calls_last_turn > 0,
-                                last_msg_id,
-                            )
-                            .await
-                    } else {
-                        coco_memory::service::session::SessionMemoryOutcome::Skipped(
-                            coco_memory::service::session::SkipReason::Disabled,
-                        )
-                    }
-                },
-                extract.maybe_extract(extract_input),
-                dream_runtime.tick_dream(now_ms),
-            );
-            // Drain user-visible save notices and inject one
-            // `SystemMemorySavedMessage` per notice. TS parity:
-            // `appendSystemMessage(createMemorySavedMessage(paths))`
-            // in `extractMemories.ts:495` and `autoDream.ts:243-247`.
-            // Empty `written_paths` lists are filtered upstream
-            // (services skip pushing when no topic file changed), so
-            // here we only see real save events.
-            for notice in runtime.drain_user_notices() {
+        // Auto-memory turn-end fan-out — black-boxed through
+        // `MemoryRuntime::finalize_turn`. The engine pre-computes
+        // everything that needs `MessageHistory` (cursors, counts,
+        // fork closures) and hands them through the context; the
+        // runtime does the SM + extract + dream fan-out and returns
+        // a typed report. Engine then projects notices into history
+        // and acts on the KAIROS rollover signal.
+        if let Some(runtime) = self.memory_runtime.clone() {
+            let report = self
+                .build_memory_finalize_ctx_and_run(
+                    history,
+                    estimated_tokens,
+                    tool_calls_last_turn,
+                    bare_mode_active,
+                    &runtime,
+                )
+                .await;
+            for notice in report.notices {
                 let msg =
                     coco_messages::Message::System(coco_messages::SystemMessage::MemorySaved(
                         coco_messages::SystemMemorySavedMessage {
@@ -569,6 +501,22 @@ impl QueryEngine {
                         },
                     ));
                 crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+            }
+            // KAIROS midnight-rollover signal. The memory crate has
+            // already advanced its latch and emitted
+            // `MemoryEvent::KairosRollover` telemetry; the engine logs
+            // the event under a dedicated target so resume / replay
+            // can correlate the day flip with downstream actions.
+            // The generic `date_change` system-reminder is independent
+            // (it fires for every session via `DateChangeGenerator`),
+            // so we don't need to inject a reminder here.
+            if let Some(yesterday) = report.kairos_rollover {
+                tracing::info!(
+                    target: "coco_query::kairos_rollover",
+                    yesterday = %yesterday.format("%Y-%m-%d"),
+                    session_id = %self.config.session_id,
+                    "KAIROS daily-log rollover detected",
+                );
             }
         }
         // Collapse-aware guard: when staged_compact is active it owns
@@ -1084,6 +1032,180 @@ impl QueryEngine {
             }
         });
     }
+
+    /// Build the `FinalizeTurnContext` from engine-side state and
+    /// dispatch into `MemoryRuntime::finalize_turn`. The runtime
+    /// black-boxes the SM + extract + dream + KAIROS-rollover +
+    /// post-write-classify fan-out and returns notices for the engine
+    /// to project into history. Subagent gating (`agent_id.is_some()`)
+    /// is folded into `is_subagent` rather than a guard at this layer
+    /// so the runtime owns the rule.
+    pub(crate) async fn build_memory_finalize_ctx_and_run(
+        &self,
+        history: &MessageHistory,
+        estimated_tokens: i64,
+        tool_calls_last_turn: i32,
+        bare_mode: bool,
+        runtime: &Arc<coco_memory::MemoryRuntime>,
+    ) -> coco_memory::runtime::FinalizeTurnReport {
+        // Pre-compute everything that needs `MessageHistory`. The
+        // runtime never re-walks history.
+        let last_cursor: Option<String> = runtime.extract.last_cursor().await;
+        let sm_cursor: Option<String> = runtime.session_memory.last_extraction_message_id().await;
+        let tool_calls_since_sm = count_tool_calls_since(history.as_slice(), sm_cursor.as_deref());
+        let last_msg_id = history
+            .last()
+            .and_then(|m| m.uuid())
+            .map(uuid::Uuid::to_string);
+        let extract_message_count =
+            count_model_visible_since(history.as_slice(), last_cursor.as_deref());
+
+        // Two fresh `messages` clones for the FnOnce closures inside
+        // TurnInput. fork_messages and has_memory_writes are evaluated
+        // lazily by ExtractService and may fire on the primary OR a
+        // trailing stash — both branches need an independent snapshot.
+        let messages_for_fork = history.to_vec();
+        let messages_for_writes_check = history.to_vec();
+        let memory_dir = runtime.personal_dir().to_path_buf();
+        let last_cursor_for_writes_check = last_cursor.clone();
+        let last_cursor_for_fork = last_cursor.clone();
+
+        let extract_input = coco_memory::service::extract::TurnInput {
+            fork_messages: Box::new(move || {
+                arc_messages_since(&messages_for_fork, last_cursor_for_fork.as_deref())
+            }),
+            message_count: extract_message_count,
+            last_message_id: last_msg_id.clone(),
+            has_memory_writes: Box::new(move || {
+                main_agent_wrote_memory(
+                    &messages_for_writes_check,
+                    &memory_dir,
+                    last_cursor_for_writes_check.as_deref(),
+                )
+            }),
+        };
+
+        // Gap 4 — direct-edit toast. Walk the just-finished assistant
+        // turn for Write/Edit/NotebookEdit calls and pair each with its
+        // matching ToolResult so memory's `classify_written_path` pass
+        // can decide whether to emit a `ManualEdit` notice. TS parity:
+        // `services/useMemoryUpdateNotification` (UI post-write hook).
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let recent_tool_writes = extract_recent_tool_writes(history.as_slice(), &cwd);
+
+        let ctx = coco_memory::runtime::FinalizeTurnContext {
+            estimated_tokens,
+            tool_calls_since_sm_cursor: tool_calls_since_sm,
+            tool_calls_last_turn,
+            last_message_id: last_msg_id,
+            auto_compact_enabled: self.config.is_auto_compact_active(),
+            bare_mode,
+            is_subagent: self.config.agent_id.is_some(),
+            now_ms: coco_memory::service::dream::DreamService::now_ms(),
+            extract_input,
+            recent_tool_writes,
+        };
+
+        runtime.finalize_turn(ctx).await
+    }
+}
+
+/// Walk the last assistant turn for Write / Edit / NotebookEdit tool
+/// calls and pair each with its matching `ToolResult` so memory's
+/// post-write classification (Gap 4) can decide whether the call
+/// produced a `ManualEdit` notice.
+///
+/// Why only the last assistant turn: notices fire once per turn, so
+/// older history was already classified on its own finalize. The
+/// matching cost would be `O(history.len())` if we walked the full
+/// transcript without buying any extra notices.
+///
+/// Success is read off `ToolResultMessage.is_error` — the only signal
+/// the engine reliably has post-execution. Skipping failed writes
+/// matches TS, which only fires the post-write hook on successful
+/// file mutations.
+///
+/// Relative paths are anchored to `cwd` so the downstream
+/// `is_within_memory_dir` check (which canonicalises) sees an absolute
+/// path. Mirrors the resolution rule already used by `main_agent_wrote_memory`.
+fn extract_recent_tool_writes<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
+    cwd: &std::path::Path,
+) -> Vec<coco_memory::runtime::ToolWriteRecord> {
+    use coco_messages::AssistantContent;
+    use coco_messages::LlmMessage;
+    use coco_messages::Message;
+    use std::collections::HashMap;
+
+    let Some(last_assistant_idx) = messages
+        .iter()
+        .rposition(|m| matches!(m.borrow(), Message::Assistant(_)))
+    else {
+        return Vec::new();
+    };
+    let Message::Assistant(last_assistant) = messages[last_assistant_idx].borrow() else {
+        return Vec::new();
+    };
+    let LlmMessage::Assistant { content, .. } = &last_assistant.message else {
+        return Vec::new();
+    };
+
+    // First pass: collect (tool_call_id, tool_name, file_path) from
+    // ToolCall parts that name a write tool with a parseable path.
+    // Compare against the typed `ToolName` constants — no raw literals.
+    let mut pending: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+    for part in content {
+        let AssistantContent::ToolCall(tc) = part else {
+            continue;
+        };
+        let name = tc.tool_name.as_str();
+        let is_write_tool = name == coco_types::ToolName::Write.as_str()
+            || name == coco_types::ToolName::Edit.as_str()
+            || name == coco_types::ToolName::NotebookEdit.as_str();
+        if !is_write_tool {
+            continue;
+        }
+        let Some(file_path_str) = tc
+            .input
+            .get("file_path")
+            .or_else(|| tc.input.get("notebook_path"))
+            .and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+        let path = std::path::Path::new(file_path_str);
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        };
+        pending.push((tc.tool_call_id.clone(), name.to_string(), absolute));
+    }
+    if pending.is_empty() {
+        return Vec::new();
+    }
+
+    // Index ToolResultMessages after the assistant turn by tool_use_id.
+    // Tool results may arrive in any order; build a map then look up.
+    let mut results: HashMap<&str, bool> = HashMap::new();
+    for msg in &messages[last_assistant_idx + 1..] {
+        if let Message::ToolResult(tr) = msg.borrow() {
+            results.insert(tr.tool_use_id.as_str(), !tr.is_error);
+        }
+    }
+
+    pending
+        .into_iter()
+        .map(
+            |(id, tool_name, file_path)| coco_memory::runtime::ToolWriteRecord {
+                tool_name,
+                file_path,
+                // No result yet ⇒ treat as failed; we only emit toasts
+                // for confirmed successful writes.
+                succeeded: results.get(id.as_str()).copied().unwrap_or(false),
+            },
+        )
+        .collect()
 }
 
 /// Build a [`crate::prompt_suggestion::SuggestionContext`] from the

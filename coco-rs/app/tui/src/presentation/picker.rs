@@ -347,7 +347,12 @@ fn memory_scope_tag(scope: MemoryDialogScope) -> &'static str {
         MemoryDialogScope::User => "[user]",
         MemoryDialogScope::Project => "[project]",
         MemoryDialogScope::ProjectLocal => "[project-local]",
+        MemoryDialogScope::ProjectConfig => "[project-config]",
         MemoryDialogScope::Subdir => "[subdir]",
+        MemoryDialogScope::Imported => "[@-imported]",
+        MemoryDialogScope::AutoMemFolder => "[auto-mem]",
+        MemoryDialogScope::TeamMemFolder => "[team-mem]",
+        MemoryDialogScope::AgentMemFolder => "[agent-mem]",
     }
 }
 

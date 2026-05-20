@@ -854,9 +854,34 @@
           "const": "project_local"
         },
         {
+          "description": "`<dir>/.claude/CLAUDE.md` — project-config-dir convention.",
+          "type": "string",
+          "const": "project_config"
+        },
+        {
           "description": "Subdirectory CLAUDE.md (auto-loaded under cwd).",
           "type": "string",
           "const": "subdir"
+        },
+        {
+          "description": "File loaded transitively via `@-import` from a parent memory file.",
+          "type": "string",
+          "const": "imported"
+        },
+        {
+          "description": "Auto-memory directory entry (`<memdir>/`).",
+          "type": "string",
+          "const": "auto_mem_folder"
+        },
+        {
+          "description": "Team memory directory entry (`<memdir>/team/`).",
+          "type": "string",
+          "const": "team_mem_folder"
+        },
+        {
+          "description": "Per-agent memory directory entry.",
+          "type": "string",
+          "const": "agent_mem_folder"
         }
       ]
     },

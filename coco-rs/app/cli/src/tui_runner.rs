@@ -1555,6 +1555,19 @@ async fn run_agent_driver(
 /// shuts down. TS parity: `print.ts` awaits
 /// `drainPendingExtraction(60_000)` before emitting the lifecycle exit.
 /// Silently no-ops when `Feature::AutoMemory` is off (no runtime).
+///
+/// Covers all three memory subagents:
+/// - **Extract** (`drain` polling, 60s default, TS
+///   `drainPendingExtraction(60_000)`).
+/// - **Session memory** (`wait_for_extraction`, 15s default, TS
+///   `waitForSessionMemoryExtraction`). An in-flight SM fork that
+///   doesn't drain leaves a half-written `summary.md` that the next
+///   compact reads as truth.
+/// - **Dream** is intentionally NOT drained — the PID-lock + rollback
+///   path covers the "killed mid-consolidation" case (next session
+///   sees stale mtime, retries cleanly). Blocking shutdown on a
+///   multi-minute consolidation would hurt UX more than the
+///   correctness gain.
 async fn drain_pending_memory_extraction(runtime: &Arc<crate::session_runtime::SessionRuntime>) {
     let Some(memory_runtime) = runtime.memory_runtime() else {
         return;
@@ -1565,6 +1578,16 @@ async fn drain_pending_memory_extraction(runtime: &Arc<crate::session_runtime::S
         .await
     {
         warn!("auto-memory extraction did not drain within timeout — continuing shutdown");
+    }
+    if !memory_runtime
+        .session_memory
+        .wait_for_extraction(coco_memory::service::session::DEFAULT_WAIT_TIMEOUT)
+        .await
+    {
+        warn!(
+            "session-memory extraction did not drain within timeout — continuing shutdown \
+             (summary.md may be partial; next compact will rebuild)"
+        );
     }
 }
 
@@ -2023,7 +2046,14 @@ async fn dispatch_slash_command(
                     let wire_entries: Vec<coco_types::MemoryDialogEntry> = entries
                         .into_iter()
                         .map(|e| {
-                            let exists = e.path.exists();
+                            let row_kind = if e.is_folder {
+                                coco_types::MemoryDialogRowKind::Folder { enabled: true }
+                            } else {
+                                coco_types::MemoryDialogRowKind::File {
+                                    exists: !e.is_new,
+                                    read_only: false,
+                                }
+                            };
                             coco_types::MemoryDialogEntry {
                                 path: e.path.display().to_string(),
                                 label: e.label,
@@ -2040,14 +2070,26 @@ async fn dispatch_slash_command(
                                     coco_commands::MemoryScope::ProjectLocal => {
                                         coco_types::MemoryDialogScope::ProjectLocal
                                     }
+                                    coco_commands::MemoryScope::ProjectConfig => {
+                                        coco_types::MemoryDialogScope::ProjectConfig
+                                    }
                                     coco_commands::MemoryScope::Subdir => {
                                         coco_types::MemoryDialogScope::Subdir
                                     }
+                                    coco_commands::MemoryScope::Imported => {
+                                        coco_types::MemoryDialogScope::Imported
+                                    }
+                                    coco_commands::MemoryScope::AutoMemFolder => {
+                                        coco_types::MemoryDialogScope::AutoMemFolder
+                                    }
+                                    coco_commands::MemoryScope::TeamMemFolder => {
+                                        coco_types::MemoryDialogScope::TeamMemFolder
+                                    }
+                                    coco_commands::MemoryScope::AgentMemFolder => {
+                                        coco_types::MemoryDialogScope::AgentMemFolder
+                                    }
                                 },
-                                row_kind: coco_types::MemoryDialogRowKind::File {
-                                    exists,
-                                    read_only: false,
-                                },
+                                row_kind,
                             }
                         })
                         .collect();

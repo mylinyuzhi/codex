@@ -747,7 +747,12 @@ pub enum MemoryDialogScope {
     User,
     Project,
     ProjectLocal,
+    ProjectConfig,
     Subdir,
+    Imported,
+    AutoMemFolder,
+    TeamMemFolder,
+    AgentMemFolder,
 }
 
 impl MemoryDialogScope {
@@ -758,7 +763,12 @@ impl MemoryDialogScope {
             coco_types::MemoryDialogScope::User => Self::User,
             coco_types::MemoryDialogScope::Project => Self::Project,
             coco_types::MemoryDialogScope::ProjectLocal => Self::ProjectLocal,
+            coco_types::MemoryDialogScope::ProjectConfig => Self::ProjectConfig,
             coco_types::MemoryDialogScope::Subdir => Self::Subdir,
+            coco_types::MemoryDialogScope::Imported => Self::Imported,
+            coco_types::MemoryDialogScope::AutoMemFolder => Self::AutoMemFolder,
+            coco_types::MemoryDialogScope::TeamMemFolder => Self::TeamMemFolder,
+            coco_types::MemoryDialogScope::AgentMemFolder => Self::AgentMemFolder,
         }
     }
 }

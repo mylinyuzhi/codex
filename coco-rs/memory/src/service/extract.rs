@@ -11,17 +11,38 @@
 //! - mutual exclusion (don't run while in-flight; stash + trailing run)
 //! - skip-if-main-already-wrote (`has_memory_writes_since`)
 //! - cursor advance after success
+//!
+//! ## Cancellation safety
+//!
+//! TS gets atomic `in_progress` reset via JS's `try/finally` — the
+//! `finally` block runs even when the awaiting Promise is rejected.
+//! Rust has no equivalent for awaiting tasks that get **dropped**
+//! (engine shutdown, `tokio::join!` sibling failure, cancellation
+//! token fires). Without a Drop guard the `in_progress` flag stays
+//! `true` for the rest of the session, wedging every subsequent
+//! `maybe_extract` call into `Skipped(InProgress)` until process
+//! restart.
+//!
+//! The fix: hold `in_progress` in a sync `Arc<AtomicBool>` and wrap
+//! it in [`InProgressGuard`] (RAII). The guard's `Drop` synchronously
+//! clears the flag, so a cancelled `maybe_extract` future can't leak
+//! the flag. The atomic also lets `wait_for_in_progress_clear` (and
+//! the watch channel signalling) read state without an `.await`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_types::ModelRole;
 use coco_types::messages::Message;
 use tokio::sync::Mutex;
+use tokio::sync::watch;
 
 use crate::config::MemoryConfig;
 use crate::prompt::build_extract_prompt;
@@ -33,7 +54,16 @@ use crate::telemetry::NoopEmitter;
 /// Drain timeout on shutdown — TS `drainPendingExtraction(60_000)`.
 pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Cross-turn extraction state.
+/// Max consecutive `Failed` outcomes before the throttle ceiling
+/// starts doubling per failure. Caps at `1 << MAX_BACKOFF_SHIFT`
+/// multiplier of the configured `extraction_throttle`. Prevents an
+/// `install_agent`-delayed SDK session from burning one fork per N
+/// turns forever — TS has no equivalent because TS doesn't have the
+/// "install handle later" lifecycle.
+const MAX_BACKOFF_SHIFT: u32 = 5;
+
+/// Cross-turn extraction state. Separates the `in_progress` flag (now
+/// an atomic with a Drop-safe guard) from the rest of the bookkeeping.
 #[derive(Default)]
 struct ExtractState {
     /// Last message UUID that's been folded into an extraction. The
@@ -41,8 +71,9 @@ struct ExtractState {
     last_cursor: Option<String>,
     /// Throttle counter — increments per eligible turn, resets on fire.
     turns_since_last: i32,
-    /// True while a fork is running. New triggers stash for trailing.
-    in_progress: bool,
+    /// Consecutive `Failed` outcomes — drives exponential backoff so a
+    /// delayed `install_agent` doesn't burn one fork per N turns.
+    consecutive_failures: u32,
     /// Latest stashed `TurnInput` queued during an in-flight run.
     /// TS parity (`extractMemories.ts:506-521`): the trailing run
     /// uses **the most recent** stashed context — overwriting prior
@@ -59,7 +90,7 @@ impl std::fmt::Debug for ExtractState {
         f.debug_struct("ExtractState")
             .field("last_cursor", &self.last_cursor)
             .field("turns_since_last", &self.turns_since_last)
-            .field("in_progress", &self.in_progress)
+            .field("consecutive_failures", &self.consecutive_failures)
             .field("pending_trailing", &self.pending_trailing.is_some())
             .finish()
     }
@@ -78,6 +109,30 @@ impl std::fmt::Debug for ExtractState {
 /// arc-swap's `RefCnt: Sized` bound; RwLock is the next-best primitive.
 pub type AgentSlot = Arc<std::sync::RwLock<AgentHandleRef>>;
 
+/// RAII guard for the `in_progress` flag. Constructed only after a
+/// successful CAS from `false → true`; `Drop` synchronously stores
+/// `false` and pulses the watch channel.
+///
+/// Holds an `Arc` clone so dropping the parent `ExtractService` mid-
+/// fork still leaves the guard valid (extremely rare — the runtime
+/// outlives the fork in normal use — but defensive).
+struct InProgressGuard {
+    flag: Arc<AtomicBool>,
+    notifier: Arc<watch::Sender<bool>>,
+}
+
+impl Drop for InProgressGuard {
+    fn drop(&mut self) {
+        // Release first so any concurrent CAS observer sees the
+        // cleared state before the watch wakes.
+        self.flag.store(false, Ordering::Release);
+        // `send_replace` is infallible (we own the only `Sender`'s
+        // Arc); broadcasts to every waiter that
+        // in_progress just transitioned. A dropped receiver is fine.
+        let _ = self.notifier.send_replace(false);
+    }
+}
+
 /// Turn-end extraction service.
 pub struct ExtractService {
     memory_dir: PathBuf,
@@ -89,7 +144,21 @@ pub struct ExtractService {
     /// `SystemMemorySavedMessage` into history. TS parity:
     /// `extractMemories.ts:491-496 appendSystemMessage(createMemorySavedMessage(...))`.
     notices: crate::notice::NoticeInbox,
+    /// State guarded by an async mutex — cursor + throttle counter +
+    /// pending-trailing slot. Excludes `in_progress` (see below).
     state: Mutex<ExtractState>,
+    /// `in_progress` lives in a sync atomic so the RAII Drop guard can
+    /// clear it without `.await`. A cancelled `maybe_extract` future
+    /// gets cleaned up by the guard's `Drop` — TS finally-block parity
+    /// for async-runtime cancellation.
+    in_progress: Arc<AtomicBool>,
+    /// Watch channel carrying the current `in_progress` value. Eliminates
+    /// the notify-after-check race in the polling `drain` path:
+    /// `Receiver::changed()` is edge-triggered AND remembers the latest
+    /// value, so a transition that fires between `borrow_and_update()`
+    /// and `changed().await` is still observed on the next call.
+    in_progress_tx: Arc<watch::Sender<bool>>,
+    in_progress_rx: watch::Receiver<bool>,
 }
 
 impl std::fmt::Debug for ExtractService {
@@ -97,6 +166,7 @@ impl std::fmt::Debug for ExtractService {
         f.debug_struct("ExtractService")
             .field("memory_dir", &self.memory_dir)
             .field("extraction_enabled", &self.config.extraction_enabled)
+            .field("in_progress", &self.in_progress.load(Ordering::Acquire))
             .finish()
     }
 }
@@ -118,6 +188,7 @@ pub enum SkipReason {
     InProgress,
     Throttled,
     DirectWrite,
+    BackoffActive,
 }
 
 /// Boxed lazy builder for the message slice the extraction agent
@@ -131,16 +202,28 @@ pub enum SkipReason {
 /// serialize/deserialize round-trip across the trait boundary.
 pub type LazyForkMessages = Box<dyn FnOnce() -> Vec<Arc<Message>> + Send>;
 
+/// Lazy predicate for the "main agent wrote to memdir since the
+/// cursor" check. Evaluated at gate time so trailing runs — which
+/// fire after a primary run completes and may see new direct-writes
+/// that landed during the primary's window — get a fresh answer
+/// instead of the stale snapshot from when this `TurnInput` was first
+/// constructed. TS parity: `hasMemoryWritesSince` in
+/// `extractMemories.ts:121-148` is re-evaluated by every entry into
+/// `runExtraction`, not cached.
+pub type HasMemoryWritesFn = Box<dyn FnOnce() -> bool + Send>;
+
 /// Per-turn input: a lazy slice builder + turn-level signals.
 ///
-/// `has_memory_writes` is true when the main agent wrote to the
-/// memory directory during this turn — extraction stays out of the
-/// way to avoid stomping on user-curated edits.
+/// `has_memory_writes` is a **closure** rather than a boolean so the
+/// trailing run can re-check it against history that grew during the
+/// primary's window. Without this, a main-agent direct-write that
+/// landed mid-primary would slip past the trailing run's mutual-
+/// exclusion gate.
 pub struct TurnInput {
     pub fork_messages: LazyForkMessages,
     pub message_count: i32,
     pub last_message_id: Option<String>,
-    pub has_memory_writes: bool,
+    pub has_memory_writes: HasMemoryWritesFn,
 }
 
 impl Default for TurnInput {
@@ -149,7 +232,7 @@ impl Default for TurnInput {
             fork_messages: Box::new(Vec::new),
             message_count: 0,
             last_message_id: None,
-            has_memory_writes: false,
+            has_memory_writes: Box::new(|| false),
         }
     }
 }
@@ -190,6 +273,7 @@ impl ExtractService {
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         notices: crate::notice::NoticeInbox,
     ) -> Self {
+        let (tx, rx) = watch::channel(false);
         Self {
             memory_dir,
             config,
@@ -197,7 +281,40 @@ impl ExtractService {
             telemetry,
             notices,
             state: Mutex::new(ExtractState::default()),
+            in_progress: Arc::new(AtomicBool::new(false)),
+            in_progress_tx: Arc::new(tx),
+            in_progress_rx: rx,
         }
+    }
+
+    /// Try to atomically claim the `in_progress` slot. Returns a Drop
+    /// guard on success (auto-releases on cancellation), `None` if
+    /// another caller already holds the slot.
+    fn try_claim(&self) -> Option<InProgressGuard> {
+        match self
+            .in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => {
+                // Notify watchers — they may be parked in `wait_for_idle`.
+                let _ = self.in_progress_tx.send_replace(true);
+                Some(InProgressGuard {
+                    flag: self.in_progress.clone(),
+                    notifier: self.in_progress_tx.clone(),
+                })
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// Compute the effective throttle ceiling, applying exponential
+    /// backoff on consecutive failures. Capped at `1 << MAX_BACKOFF_SHIFT`
+    /// (32×) so a permanently-failing handle still attempts
+    /// `extraction_throttle * 32` turns apart instead of every turn.
+    fn effective_throttle(&self, state: &ExtractState) -> i32 {
+        let base = self.config.extraction_throttle.max(1);
+        let shift = state.consecutive_failures.min(MAX_BACKOFF_SHIFT);
+        base.saturating_mul(1i32 << shift)
     }
 
     /// Run-or-skip decision keyed off [`TurnInput`]. The caller's
@@ -208,16 +325,33 @@ impl ExtractService {
             return ExtractOutcome::Skipped(SkipReason::Disabled);
         }
 
-        {
+        // Destructure so we can evaluate `has_memory_writes` OUTSIDE
+        // the mutex critical section.
+        let TurnInput {
+            fork_messages,
+            message_count,
+            last_message_id,
+            has_memory_writes,
+        } = input;
+
+        // Coalesce-or-fall-through under the mutex. The mutex
+        // serializes the in_progress check against the stash write,
+        // so a concurrent caller either:
+        //   (a) sees in_progress=true and stashes (us, in this
+        //       branch), or
+        //   (b) wins the CAS in try_claim below.
+        // The early-probe + re-check ordering avoids running
+        // `has_memory_writes()` (which may walk history) when we're
+        // certainly stashing.
+        if self.in_progress.load(Ordering::Acquire) {
             let mut state = self.state.lock().await;
-            if state.in_progress {
-                let message_count = input.message_count;
-                // TS parity (`extractMemories.ts:557-563`): stash the
-                // **latest** context and let the trailing run use it.
-                // Overwrites any prior stash so we always replay the
-                // freshest message slice, not the one that triggered
-                // the in-flight run.
-                state.pending_trailing = Some(input);
+            if self.in_progress.load(Ordering::Acquire) {
+                state.pending_trailing = Some(TurnInput {
+                    fork_messages,
+                    message_count,
+                    last_message_id,
+                    has_memory_writes,
+                });
                 tracing::debug!(
                     message_count,
                     "auto-memory extract skipped: in progress (queued trailing)"
@@ -225,121 +359,254 @@ impl ExtractService {
                 self.telemetry.emit(MemoryEvent::ExtractionCoalesced);
                 return ExtractOutcome::Skipped(SkipReason::InProgress);
             }
-            if input.has_memory_writes {
+            // Race-loser: in_progress flipped false between the early
+            // probe and the lock. Fall through to the regular gate
+            // logic below without releasing the state mutex prematurely.
+        }
+
+        // Evaluate direct-write outside the mutex (it may walk
+        // history). The result is consumed under the lock so a
+        // concurrent direct-write that lands mid-evaluation either:
+        //  - is observed here and we advance the cursor + skip; or
+        //  - is observed by the trailing run's re-check (TurnInput's
+        //    `has_memory_writes` is a fresh closure).
+        let direct_write = has_memory_writes();
+
+        // Gate + claim — all under the mutex so a concurrent
+        // `maybe_extract` either sees `in_progress=true` (and stashes)
+        // or sees the post-claim state and steps to its own gate
+        // checks. This is the load-bearing critical section.
+        let guard = {
+            let mut state = self.state.lock().await;
+            if direct_write {
                 // TS parity (`extractMemories.ts:347-360`): when the
                 // main agent wrote memory directly this turn, skip
                 // the fork AND advance the cursor past the range so
                 // the next eligible turn doesn't re-consider these
                 // already-handled messages.
-                if let Some(ref id) = input.last_message_id {
+                if let Some(ref id) = last_message_id {
                     state.last_cursor = Some(id.clone());
                 }
                 self.telemetry
-                    .emit(MemoryEvent::ExtractionSkippedDirectWrite {
-                        message_count: input.message_count,
-                    });
+                    .emit(MemoryEvent::ExtractionSkippedDirectWrite { message_count });
                 tracing::debug!(
-                    message_count = input.message_count,
+                    message_count,
                     "auto-memory extract skipped: model wrote memory directly"
                 );
                 return ExtractOutcome::Skipped(SkipReason::DirectWrite);
             }
             state.turns_since_last += 1;
-            if state.turns_since_last < self.config.extraction_throttle {
+            let ceiling = self.effective_throttle(&state);
+            if state.turns_since_last < ceiling {
                 tracing::debug!(
                     turns_since_last = state.turns_since_last,
-                    throttle = self.config.extraction_throttle,
-                    "auto-memory extract skipped: throttled"
+                    throttle = ceiling,
+                    consecutive_failures = state.consecutive_failures,
+                    "auto-memory extract skipped: throttled (with backoff)"
                 );
-                return ExtractOutcome::Skipped(SkipReason::Throttled);
+                let reason = if state.consecutive_failures > 0 {
+                    SkipReason::BackoffActive
+                } else {
+                    SkipReason::Throttled
+                };
+                return ExtractOutcome::Skipped(reason);
             }
             state.turns_since_last = 0;
-            state.in_progress = true;
-        }
+            // Claim the in_progress slot under the same lock so a racing
+            // call lands cleanly on the stash path above. If somebody
+            // beat us to the claim (extremely rare — would require an
+            // out-of-band caller bypassing this gate) treat it as
+            // InProgress.
+            let Some(guard) = self.try_claim() else {
+                state.turns_since_last = ceiling; // rewind the counter
+                return ExtractOutcome::Skipped(SkipReason::InProgress);
+            };
+            guard
+        };
         tracing::info!(
-            message_count = input.message_count,
+            message_count,
             "auto-memory extract dispatch (forking agent)"
         );
 
-        // Primary run uses the caller's input. Decompose so we can
-        // advance the cursor + invoke the fork-messages closure once.
-        let primary_message_count = input.message_count;
-        let primary_last_id = input.last_message_id.clone();
-        let primary_fork_context = (input.fork_messages)();
-        let outcome = self.run(primary_message_count, primary_fork_context).await;
+        let primary_fork_context = fork_messages();
+        let outcome = self.run(message_count, primary_fork_context).await;
         tracing::info!(
             outcome = ?std::mem::discriminant(&outcome),
             "auto-memory extract done"
         );
 
+        // Update cursor + failure counter under the mutex; drop the
+        // guard at the very end so a watcher observing `in_progress
+        // = false` also observes the cursor/counter updates.
         {
             let mut state = self.state.lock().await;
-            state.in_progress = false;
-            if let Some(id) = primary_last_id {
-                state.last_cursor = Some(id);
+            match &outcome {
+                ExtractOutcome::Completed { .. } => {
+                    state.consecutive_failures = 0;
+                    if let Some(id) = last_message_id.clone() {
+                        state.last_cursor = Some(id);
+                    }
+                }
+                ExtractOutcome::Failed { .. } => {
+                    // CLAUDE.md invariant: cursor preserved on failure
+                    // so the next eligible turn retries the same range.
+                    // Bump consecutive_failures to drive backoff so a
+                    // permanently-failing handle stops burning a fork
+                    // every turn.
+                    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+                }
+                ExtractOutcome::Skipped(_) => {
+                    // `run` never returns Skipped, but keep the match
+                    // exhaustive without resetting counters.
+                }
             }
         }
+        // Drop the primary's guard now — trailing runs claim their own.
+        drop(guard);
 
-        // Drain trailing runs in a loop. Each iteration takes the
-        // latest stashed `TurnInput` (set during this primary's
-        // window) and runs it against its own fresh fork-messages
-        // slice. Cursor advances per trailing input so the next
-        // primary's `last_cursor` reflects the most recent fold.
+        // Drain trailing runs in a loop. Each iteration atomically takes
+        // the pending slot AND claims `in_progress` so a fresh
+        // `maybe_extract` arriving mid-drain stashes (or no-ops once
+        // the slot frees again).
         loop {
-            let pending = {
+            let (trailing_input, trailing_guard) = {
                 let mut state = self.state.lock().await;
-                state.pending_trailing.take()
+                let Some(input) = state.pending_trailing.take() else {
+                    break;
+                };
+                let Some(guard) = self.try_claim() else {
+                    // The slot is somehow already claimed — re-stash
+                    // and let the holder drain when it finishes.
+                    state.pending_trailing = Some(input);
+                    break;
+                };
+                (input, guard)
             };
-            let Some(trailing_input) = pending else {
-                break;
-            };
+            let TurnInput {
+                fork_messages: trailing_fork_messages,
+                message_count: trailing_count,
+                last_message_id: trailing_last_id,
+                has_memory_writes: trailing_has_writes,
+            } = trailing_input;
+
+            if trailing_has_writes() {
+                let mut state = self.state.lock().await;
+                if let Some(id) = trailing_last_id {
+                    state.last_cursor = Some(id);
+                }
+                self.telemetry
+                    .emit(MemoryEvent::ExtractionSkippedDirectWrite {
+                        message_count: trailing_count,
+                    });
+                tracing::debug!(
+                    message_count = trailing_count,
+                    "auto-memory trailing extract skipped: model wrote memory directly"
+                );
+                // Drop guard; another iteration may pick up a fresh stash.
+                drop(trailing_guard);
+                continue;
+            }
+
+            let trailing_fork_context = trailing_fork_messages();
+            let trailing_outcome = self.run(trailing_count, trailing_fork_context).await;
             {
                 let mut state = self.state.lock().await;
-                state.in_progress = true;
+                match &trailing_outcome {
+                    ExtractOutcome::Completed { .. } => {
+                        state.consecutive_failures = 0;
+                        if let Some(id) = trailing_last_id {
+                            state.last_cursor = Some(id);
+                        }
+                    }
+                    ExtractOutcome::Failed { .. } => {
+                        state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+                    }
+                    ExtractOutcome::Skipped(_) => {}
+                }
             }
-            let trailing_count = trailing_input.message_count;
-            let trailing_last_id = trailing_input.last_message_id.clone();
-            let trailing_fork_context = (trailing_input.fork_messages)();
-            let _trailing = self.run(trailing_count, trailing_fork_context).await;
-            let mut state = self.state.lock().await;
-            state.in_progress = false;
-            if let Some(id) = trailing_last_id {
-                state.last_cursor = Some(id);
-            }
+            drop(trailing_guard);
         }
 
         outcome
     }
 
     /// Force a fresh extraction regardless of throttle / in-progress
-    /// flags — bound to a `/dream` or `/extract` slash command.
+    /// flags — bound to a `/extract` slash command (planned). Unlike
+    /// the previous unconditional version this gates on `in_progress`
+    /// before claiming, so two parallel forces can't race over the
+    /// memdir. TS `manuallyExtractMemories` has no production caller
+    /// today; the gate-then-claim shape mirrors what TS *should* do.
     pub async fn force(&self, input: TurnInput) -> ExtractOutcome {
-        {
-            let mut state = self.state.lock().await;
-            state.in_progress = true;
+        if !self.config.extraction_enabled {
+            return ExtractOutcome::Skipped(SkipReason::Disabled);
         }
+        // Wait for any in-flight run before claiming. Bounded so a
+        // stuck primary doesn't wedge the force.
+        let _ = self.wait_for_idle(DEFAULT_DRAIN_TIMEOUT).await;
+        let Some(guard) = self.try_claim() else {
+            return ExtractOutcome::Skipped(SkipReason::InProgress);
+        };
+        // TS `tengu_extract_memories_manual` — surfaced so dashboards
+        // can split auto vs manual cadence.
+        self.telemetry.emit(MemoryEvent::ExtractionManual);
         let fork_context = (input.fork_messages)();
         let outcome = self.run(input.message_count, fork_context).await;
-        let mut state = self.state.lock().await;
-        state.in_progress = false;
-        state.turns_since_last = 0;
+        // Reset the throttle window — a manual run is the freshest
+        // signal we have. Cursor advances only on success, same
+        // contract as the auto path.
+        {
+            let mut state = self.state.lock().await;
+            state.turns_since_last = 0;
+            match &outcome {
+                ExtractOutcome::Completed { .. } => {
+                    state.consecutive_failures = 0;
+                    if let Some(id) = input.last_message_id {
+                        state.last_cursor = Some(id);
+                    }
+                }
+                ExtractOutcome::Failed { .. } => {
+                    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+                }
+                ExtractOutcome::Skipped(_) => {}
+            }
+        }
+        drop(guard);
         outcome
+    }
+
+    /// Wait up to `timeout` for the in-flight slot to clear. Driven by
+    /// the watch channel so a notify lost between check and park is
+    /// still observed via `borrow_and_update()` on the next iteration.
+    /// Returns `true` when idle, `false` on timeout.
+    pub async fn wait_for_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut rx = self.in_progress_rx.clone();
+        loop {
+            if !*rx.borrow_and_update() {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            // `changed()` returns Err only if the sender is dropped —
+            // we hold an Arc to it on the service, so that's
+            // unreachable in practice. Map both cases to the timeout
+            // branch so a future refactor that introduces a real
+            // shutdown path can't accidentally loop forever.
+            if tokio::time::timeout(remaining, rx.changed()).await.is_err() {
+                return false;
+            }
+        }
     }
 
     /// Wait up to `timeout` for an in-flight extraction to complete.
     /// Used at session shutdown so partial writes don't get lost.
+    ///
+    /// Alias for [`Self::wait_for_idle`] — kept under the historical
+    /// name for callers in the SDK / TUI / headless runners.
     pub async fn drain(&self, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let in_progress = self.state.lock().await.in_progress;
-            if !in_progress {
-                return true;
-            }
-            if Instant::now() >= deadline {
-                return false;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        self.wait_for_idle(timeout).await
     }
 
     /// Last cursor (message UUID); call sites use this to compute the
@@ -373,14 +640,18 @@ impl ExtractService {
             "spawning extraction subagent"
         );
 
-        // Inherit the parent's resolved model role through the
-        // `Memory` slot. TS hardcodes Sonnet here; coco-rs goes
-        // through `ModelRoles::Memory` so the operator can swap
-        // provider+model without touching this crate.
         let request = AgentSpawnRequest {
             prompt,
             description: Some("memory extraction".into()),
             subagent_type: Some("general-purpose".into()),
+            // Pin the forked agent to `ModelRole::Memory`. Without this
+            // the spawn resolution falls back to `subagent_type`
+            // -> `ModelRole::Subagent`, so an operator who configured
+            // `settings.models.memory` would see no effect on extracts.
+            // TS hardcodes Sonnet here; coco-rs threads through the
+            // Memory role so the operator can swap provider+model
+            // without touching this crate.
+            model_role: Some(ModelRole::Memory),
             run_in_background: false,
             // Fork mode so the child sees the parent's message slice
             // prepended to its first turn (TS `forkContextMessages`).
@@ -406,8 +677,9 @@ impl ExtractService {
             // canUseTool gate runs at tool-runtime step 3.5,
             // composing with the `allowed_write_roots` fence above
             // (callback = inner ring; field = outer ring).
-            can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle(
+            can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle_with_telemetry(
                 self.memory_dir.clone(),
+                self.telemetry.clone(),
             )),
             require_can_use_tool: false,
             fork_label: Some(coco_types::ForkLabel::ExtractMemories),

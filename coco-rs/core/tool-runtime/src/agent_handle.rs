@@ -163,6 +163,19 @@ pub struct AgentSpawnRequest {
     /// Model override (e.g., "sonnet", "opus", "haiku").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Pin the spawn to a specific [`coco_types::ModelRole`], regardless
+    /// of what `subagent_type` would otherwise resolve to.
+    ///
+    /// Spawn-resolution precedence: `model_role > definition.model_role >
+    /// role_for_builtin(subagent_type)`. Memory forks (extract / dream /
+    /// session-memory) set this to `ModelRole::Memory` so an operator who
+    /// configured `settings.models.memory` actually steers the forks —
+    /// otherwise the `general-purpose` subagent type falls through to
+    /// `ModelRole::Subagent` and `models.memory` is decorative.
+    ///
+    /// `None` falls back to the standard precedence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_role: Option<coco_types::ModelRole>,
     /// Run in background (fire-and-forget).
     #[serde(default)]
     pub run_in_background: bool,

@@ -80,7 +80,11 @@ async fn fires_with_dream_constraints() {
     let calls = handle.calls();
     assert_eq!(calls.len(), 1);
     let constraints = calls[0].constraints.as_ref().expect("constraints");
-    assert_eq!(constraints.max_turns, Some(20));
+    // TS `autoDream.ts:230` does NOT set `maxTurns` on the fork —
+    // the consolidation agent stops naturally when it has nothing
+    // left to merge. The previous `Some(20)` cap silently truncated
+    // long consolidations; we now mirror TS by leaving the cap off.
+    assert_eq!(constraints.max_turns, None);
     assert_eq!(
         constraints.allowed_write_roots,
         vec![temp.path().to_path_buf()]

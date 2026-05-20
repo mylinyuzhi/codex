@@ -11,6 +11,9 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryConfig {
     pub directory: Option<PathBuf>,
+    /// Memory base directory override (replaces `<config_home>` in the
+    /// default per-project layout). See `coco_config::MemoryConfig`.
+    pub memory_base_override: Option<PathBuf>,
     pub skip_index: bool,
     pub kairos_mode: bool,
 
@@ -32,6 +35,11 @@ pub struct MemoryConfig {
     pub session_memory_total_tokens: i64,
 
     pub searching_past_context_enabled: bool,
+
+    /// Free-form policy text injected verbatim into the auto-memory
+    /// system-prompt block. `None` ⇒ no extra section. Source of
+    /// truth: `coco_config::MemoryConfig::extra_guidelines`.
+    pub extra_guidelines: Option<String>,
 }
 
 impl Default for MemoryConfig {
@@ -44,6 +52,7 @@ impl From<coco_config::MemoryConfig> for MemoryConfig {
     fn from(c: coco_config::MemoryConfig) -> Self {
         Self {
             directory: c.directory,
+            memory_base_override: c.memory_base_override,
             skip_index: c.skip_index,
             kairos_mode: c.kairos_mode,
             extraction_enabled: c.extraction_enabled,
@@ -60,6 +69,7 @@ impl From<coco_config::MemoryConfig> for MemoryConfig {
             session_memory_per_section_tokens: c.session_memory_per_section_tokens,
             session_memory_total_tokens: c.session_memory_total_tokens,
             searching_past_context_enabled: c.searching_past_context_enabled,
+            extra_guidelines: c.extra_guidelines,
         }
     }
 }

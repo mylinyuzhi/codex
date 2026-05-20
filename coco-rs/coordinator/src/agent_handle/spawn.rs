@@ -630,7 +630,14 @@ impl SwarmAgentHandle {
         // Spawn-time identity resolution (T3 + T7). Centralizes model +
         // role precedence in `coco_subagent`:
         //   model:  request.model > definition.model > role-resolved
-        //   role:   definition.model_role > subagent_type → role > Subagent
+        //   role:   request.model_role > definition.model_role
+        //         > subagent_type → role > Subagent
+        //
+        // Memory-crate forks (extract / dream / session-memory) set
+        // `request.model_role = Some(ModelRole::Memory)` so an operator
+        // configuring `settings.models.memory` actually steers them
+        // instead of falling through to `general-purpose →
+        // ModelRole::Subagent`.
         //
         // The definition flows through `AgentSpawnRequest.definition`,
         // populated by AgentTool from `ctx.agent_catalog`. When the catalog
@@ -642,6 +649,7 @@ impl SwarmAgentHandle {
             .map(|t| t.parse().expect("AgentTypeId::from_str is Infallible"));
         let selection = coco_subagent::resolve_subagent_selection(
             request.model.as_deref(),
+            request.model_role,
             request.definition.as_deref(),
             agent_type_id.as_ref(),
         );
@@ -717,9 +725,12 @@ impl SwarmAgentHandle {
         // `dirs::home_dir()` can return `None` on minimal containers
         // (no `$HOME`, no passwd entry). The legacy code fell back to
         // `/tmp`, which silently routed memory lookups to the wrong
-        // directory. Skip per-agent memory injection entirely instead
-        // — better an empty memory section than fabricated paths.
-        let home = dirs::home_dir();
+        // User-scope per-agent memory follows `COCO_CONFIG_HOME` (via
+        // `global_config::config_home()`), NOT the system home dir.
+        // Multi-tenant / containerised setups where `~/.coco` is
+        // unwritable still get a usable agent-memory dir. Project /
+        // Local scopes are per-repo and ignore `config_home`.
+        let config_home = coco_config::global_config::config_home();
 
         // Per-agent memory block (TS parity:
         // `tools/AgentTool/loadAgentsDir.ts:484,728` + `loadPluginAgents.ts:207`).
@@ -732,24 +743,13 @@ impl SwarmAgentHandle {
         let memory_block = match (
             inject_memory,
             request.definition.as_deref().and_then(|d| d.memory_scope),
-            home.as_deref(),
         ) {
-            (true, Some(scope), Some(home_dir)) => {
-                Some(coco_memory::agent_memory::load_agent_memory_prompt(
-                    agent_type,
-                    scope,
-                    &cwd_for_prompt,
-                    home_dir,
-                ))
-            }
-            (true, Some(_), None) => {
-                tracing::warn!(
-                    target: "coco_coordinator",
-                    agent_type,
-                    "skipping per-agent memory injection: home_dir unavailable"
-                );
-                None
-            }
+            (true, Some(scope)) => Some(coco_memory::agent_memory::load_agent_memory_prompt(
+                agent_type,
+                scope,
+                &cwd_for_prompt,
+                &config_home,
+            )),
             _ => None,
         };
 

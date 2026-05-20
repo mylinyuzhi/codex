@@ -6,8 +6,15 @@ use std::path::Path;
 const TYPES_INDIVIDUAL: &str = include_str!("text/types_individual.md");
 const TYPES_COMBINED: &str = include_str!("text/types_combined.md");
 const WHAT_NOT_TO_SAVE: &str = include_str!("text/what_not_to_save.md");
-const HOW_TO_SAVE: &str = include_str!("text/how_to_save.md");
+const HOW_TO_SAVE_TEMPLATE: &str = include_str!("text/how_to_save.md");
 const HOW_TO_SAVE_SKIP_INDEX: &str = include_str!("text/how_to_save_skipindex.md");
+
+/// Build the personal-only "How to save memories" block with the
+/// `{MAX_ENTRYPOINT_LINES}` placeholder substituted. One truth-of-record
+/// for the line cap.
+fn how_to_save() -> String {
+    HOW_TO_SAVE_TEMPLATE.replace("{MAX_ENTRYPOINT_LINES}", &MAX_ENTRYPOINT_LINES.to_string())
+}
 const WHEN_TO_ACCESS: &str = include_str!("text/when_to_access.md");
 const EXTRACT_GUIDANCE: &str = include_str!("text/extract.md");
 const DREAM_GUIDANCE: &str = include_str!("text/dream.md");
@@ -133,7 +140,7 @@ pub fn build_system_prompt_section(
     } else if combined {
         combined_how_to_save()
     } else {
-        HOW_TO_SAVE.to_string()
+        how_to_save()
     });
 
     sections.push(if combined {
@@ -284,7 +291,7 @@ pub fn build_extract_prompt(
     } else if combined {
         combined_how_to_save()
     } else {
-        HOW_TO_SAVE.to_string()
+        how_to_save()
     };
 
     let mut what_not = WHAT_NOT_TO_SAVE.to_string();

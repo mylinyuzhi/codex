@@ -195,6 +195,18 @@ impl SideQueryRequest {
         self.model_role = Some(role);
         self
     }
+
+    /// Builder: suppress the agent's standard system-prompt prefix
+    /// before `system` for this side-query. Mirrors TS
+    /// `skipSystemPromptPrefix: true` (e.g. `findRelevantMemories.ts:101`):
+    /// rankers and side-questions should not be biased by the
+    /// Claude Code preamble that describes the main agent's tools and
+    /// persona.
+    #[must_use]
+    pub fn with_skip_system_prefix(mut self, skip: bool) -> Self {
+        self.skip_system_prefix = skip;
+        self
+    }
 }
 
 impl SideQueryResponse {
