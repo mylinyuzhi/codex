@@ -408,7 +408,10 @@ impl ApiClient {
         }
 
         loop {
-            match self.do_query_with_options(call_options.clone()).await {
+            // `call_options` is borrowed across attempts — no per-attempt
+            // clone of the prompt vector. With N retries the savings are
+            // N-1 × `Vec<LlmMessage>::clone` (which can be 100s of KB).
+            match self.do_query_with_options(&call_options).await {
                 Ok(mut result) => {
                     result.retries = attempt;
                     result.total_duration_ms =
@@ -510,13 +513,20 @@ impl ApiClient {
 
     /// Execute a single query attempt via LanguageModelV4::do_generate()
     /// with pre-built options.
+    ///
+    /// `options` is borrowed across retries; per-attempt clones are
+    /// avoided. `abort_signal` is `None` for now — coco-inference doesn't
+    /// thread a cancellation token through `QueryParams` yet (TS parity
+    /// also doesn't carry one at this seam). Adding it later means
+    /// adding a `QueryParams.abort_signal: Option<CancellationToken>`
+    /// field and forwarding here.
     async fn do_query_with_options(
         &self,
-        options: LanguageModelV4CallOptions,
+        options: &LanguageModelV4CallOptions,
     ) -> Result<QueryResult, InferenceError> {
         let result = self
             .model
-            .do_generate(options)
+            .do_generate(options, None)
             .await
             .map_err(|e| self.wrap_provider_error(e))?;
 
@@ -635,7 +645,8 @@ impl ApiClient {
         debug!("api_call stream begin");
         let options = self.build_options(params);
 
-        let result = self.model.do_stream(options).await.map_err(|e| {
+        // `abort_signal: None` — see `do_query_with_options` rationale.
+        let result = self.model.do_stream(&options, None).await.map_err(|e| {
             let err = self.wrap_provider_error(e);
             warn!(error = %err, "api_call stream open failed");
             err

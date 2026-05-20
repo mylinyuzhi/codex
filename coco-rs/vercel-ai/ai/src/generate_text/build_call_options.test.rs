@@ -7,7 +7,7 @@ use vercel_ai_provider::language_model::v4::LanguageModelV4FunctionTool;
 #[test]
 fn test_build_call_options_defaults() {
     let settings = CallSettings::default();
-    let opts = build_call_options(&settings, &None, &None, &None, &None, vec![], &None);
+    let opts = build_call_options(&settings, &None, &None, &None, vec![], &None);
 
     assert!(opts.max_output_tokens.is_none());
     assert!(opts.temperature.is_none());
@@ -30,7 +30,7 @@ fn test_build_call_options_all_settings() {
         .with_seed(42)
         .with_headers(headers);
 
-    let opts = build_call_options(&settings, &None, &None, &None, &None, vec![], &None);
+    let opts = build_call_options(&settings, &None, &None, &None, vec![], &None);
 
     assert_eq!(opts.max_output_tokens, Some(1000));
     assert_eq!(opts.temperature, Some(0.7));
@@ -41,15 +41,6 @@ fn test_build_call_options_all_settings() {
     assert_eq!(opts.presence_penalty, Some(0.3));
     assert_eq!(opts.seed, Some(42));
     assert!(opts.headers.is_some());
-}
-
-#[test]
-fn test_build_call_options_with_abort_signal() {
-    let settings = CallSettings::default();
-    let signal = CancellationToken::new();
-    let opts = build_call_options(&settings, &None, &Some(signal), &None, &None, vec![], &None);
-
-    assert!(opts.abort_signal.is_some());
 }
 
 #[test]
@@ -75,15 +66,7 @@ fn test_build_call_options_merges_provider_options() {
     overrides.set("openai", override_openai);
 
     let settings = CallSettings::new().with_provider_options(base);
-    let opts = build_call_options(
-        &settings,
-        &None,
-        &None,
-        &Some(overrides),
-        &None,
-        vec![],
-        &None,
-    );
+    let opts = build_call_options(&settings, &None, &Some(overrides), &None, vec![], &None);
 
     let provider_options = opts.provider_options.expect("provider options");
     let openai = provider_options.get("openai").expect("openai options");

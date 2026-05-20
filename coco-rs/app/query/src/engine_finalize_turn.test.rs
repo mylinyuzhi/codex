@@ -83,7 +83,8 @@ impl coco_inference::LanguageModel for DummyModel {
 
     async fn do_generate(
         &self,
-        _options: coco_inference::LanguageModelCallOptions,
+        _options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
         Ok(coco_inference::LanguageModelGenerateResult {
             content: vec![coco_llm_types::AssistantContentPart::Text(
@@ -103,9 +104,10 @@ impl coco_inference::LanguageModel for DummyModel {
 
     async fn do_stream(
         &self,
-        options: coco_inference::LanguageModelCallOptions,
+        options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<coco_inference::LanguageModelStreamResult, coco_inference::AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,

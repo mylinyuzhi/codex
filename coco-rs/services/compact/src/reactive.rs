@@ -160,20 +160,22 @@ pub fn calculate_drop_target(
 /// the caller can resend the API call without going through the LLM
 /// summarizer.
 #[must_use]
-pub fn peel_head_for_ptl_retry<M: std::borrow::Borrow<Message>>(
-    messages: &[M],
+pub fn peel_head_for_ptl_retry(
+    messages: &[std::sync::Arc<Message>],
     tokens_to_free: i64,
-) -> Option<Vec<Message>> {
-    let owned: Vec<Message> = messages.iter().map(|m| m.borrow().clone()).collect();
-    let groups = crate::grouping::group_messages_by_api_round(&owned);
+) -> Option<Vec<std::sync::Arc<Message>>> {
+    // `group_messages_by_api_round` is generic over `Borrow<Message>`, so
+    // we can group the Arc-vec directly without materializing.
+    let groups = crate::grouping::group_messages_by_api_round(messages);
     if groups.len() < 2 {
         return None;
     }
     let mut acc: i64 = 0;
     let mut drop_count = 0;
     for g in &groups {
-        let group_msgs: Vec<Message> = g.iter().map(|m| (*m).clone()).collect();
-        acc += crate::tokens::estimate_tokens(&group_msgs);
+        // `estimate_tokens` is also generic — feed it the &[&Message] slice
+        // directly, no clone.
+        acc += crate::tokens::estimate_tokens(g.as_slice());
         drop_count += 1;
         if acc >= tokens_to_free {
             break;
@@ -183,12 +185,12 @@ pub fn peel_head_for_ptl_retry<M: std::borrow::Borrow<Message>>(
     if drop_count < 1 {
         return None;
     }
-    Some(
-        groups[drop_count..]
-            .iter()
-            .flat_map(|g| g.iter().map(|m| (*m).clone()))
-            .collect(),
-    )
+    // Survivors: count the messages BEFORE the drop boundary so we can
+    // index back into the Arc-vec and share each retained Arc with the
+    // caller. `groups` was derived in order, so we can recover the index
+    // by summing prefix group lengths.
+    let prefix_len: usize = groups[..drop_count].iter().map(Vec::len).sum();
+    Some(messages[prefix_len..].to_vec())
 }
 
 /// API-level micro-compaction — trim tool results from oldest messages.

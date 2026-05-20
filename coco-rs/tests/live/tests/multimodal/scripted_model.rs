@@ -109,11 +109,11 @@ impl CapturingScriptedModel {
             .clone()
     }
 
-    fn record_and_build(&self, options: LanguageModelCallOptions) -> LanguageModelGenerateResult {
+    fn record_and_build(&self, options: &LanguageModelCallOptions) -> LanguageModelGenerateResult {
         self.captured_prompts
             .lock()
             .expect("captured-prompts mutex poisoned")
-            .push(options.prompt);
+            .push(options.prompt.clone());
         self.calls.fetch_add(1, Ordering::SeqCst);
 
         let reply = self
@@ -150,14 +150,16 @@ impl LanguageModel for CapturingScriptedModel {
 
     async fn do_generate(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         Ok(self.record_and_build(options))
     }
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.record_and_build(options);
         Ok(synthetic_stream_from_content(

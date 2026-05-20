@@ -81,7 +81,8 @@ impl LanguageModel for MockModel {
     }
     async fn do_generate(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> std::result::Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         let user_text: String = options
@@ -123,12 +124,13 @@ impl LanguageModel for MockModel {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> std::result::Result<LanguageModelStreamResult, AISdkError> {
         // Compose `do_generate` output into a synthetic stream so the
         // QueryEngine streaming path (which always calls `query_stream`)
         // works against the mock.
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, abort_signal).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,

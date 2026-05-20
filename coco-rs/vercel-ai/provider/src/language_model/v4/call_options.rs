@@ -1,7 +1,6 @@
 //! Language model call options (V4).
 
 use std::collections::HashMap;
-use tokio_util::sync::CancellationToken;
 
 use super::prompt::LanguageModelV4Prompt;
 use super::tool::LanguageModelV4Tool;
@@ -161,8 +160,6 @@ pub struct LanguageModelV4CallOptions {
     pub response_format: Option<ResponseFormat>,
     /// Include raw chunks in the stream. Only applicable for streaming calls.
     pub include_raw_chunks: Option<bool>,
-    /// Abort signal for cancellation.
-    pub abort_signal: Option<CancellationToken>,
     /// Headers to include in the request.
     pub headers: Option<HashMap<String, String>>,
 }
@@ -234,12 +231,6 @@ impl LanguageModelV4CallOptions {
     /// Set whether to include raw chunks in the stream.
     pub fn with_include_raw_chunks(mut self, include_raw_chunks: bool) -> Self {
         self.include_raw_chunks = Some(include_raw_chunks);
-        self
-    }
-
-    /// Set the abort signal.
-    pub fn with_abort_signal(mut self, signal: CancellationToken) -> Self {
-        self.abort_signal = Some(signal);
         self
     }
 

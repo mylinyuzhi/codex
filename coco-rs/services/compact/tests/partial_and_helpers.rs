@@ -18,13 +18,20 @@ use std::pin::Pin;
 
 const SUMMARY: &str = "<analysis>Reviewed.</analysis><summary>Summary of recent work.</summary>";
 
+/// Test helper: wrap a borrowed `&[Message]` into the canonical
+/// `Vec<Arc<Message>>` shape that the post-refactor compact entry points
+/// accept. Caller keeps ownership of the source vec.
+fn arc_vec(msgs: &[Message]) -> Vec<std::sync::Arc<Message>> {
+    msgs.iter().cloned().map(std::sync::Arc::new).collect()
+}
+
 #[tokio::test]
 async fn partial_newest_summarizes_tail_keeps_prefix() {
     // 6 turns; pivot at index 4 → summarize messages[4..], keep messages[..4].
     let messages = conversation::simple(6);
     let (summarize, captured) = mock::mock_summarize_capturing(SUMMARY);
     let result = partial_compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         4,
         PartialCompactDirection::Newest,
         None,
@@ -79,7 +86,7 @@ async fn partial_newest_summarizes_tail_keeps_prefix() {
 async fn partial_oldest_summarizes_prefix_keeps_tail() {
     let messages = conversation::simple(6);
     let result = partial_compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         2,
         PartialCompactDirection::Oldest,
         Some("focus on tests"),
@@ -116,7 +123,7 @@ async fn partial_empty_summarize_errors() {
     let messages = conversation::simple(2);
     // Newest at end → nothing to summarize.
     let res = partial_compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         messages.len(),
         PartialCompactDirection::Newest,
         None,
@@ -132,7 +139,7 @@ async fn partial_empty_summarize_errors() {
 fn truncate_head_uses_token_gap_when_provided() {
     let messages = conversation::simple(4);
     // Provide a tiny gap → should drop just one group.
-    let truncated = truncate_head_for_ptl_retry(&messages, Some(1), 0.2)
+    let truncated = truncate_head_for_ptl_retry(&arc_vec(&messages), Some(1), 0.2)
         .expect("with multiple groups, returns a survivor list");
     assert!(
         truncated.len() < messages.len(),
@@ -162,7 +169,7 @@ fn truncate_head_strips_stale_marker_before_grouping() {
 
     // Without the strip, the function would see only the marker as group 0
     // and might fail. With the strip, it operates on the real conversation.
-    let result = truncate_head_for_ptl_retry(&messages, None, 0.5);
+    let result = truncate_head_for_ptl_retry(&arc_vec(&messages), None, 0.5);
     assert!(
         result.is_some(),
         "PTL retry should succeed when stripping stale marker"
@@ -173,13 +180,16 @@ fn truncate_head_strips_stale_marker_before_grouping() {
 fn truncate_head_returns_none_with_one_group() {
     // Single user message, no assistant ⇒ one group ⇒ nothing to drop.
     let messages = vec![msg::user("only one message")];
-    assert!(truncate_head_for_ptl_retry(&messages, None, 0.5).is_none());
+    assert!(truncate_head_for_ptl_retry(&arc_vec(&messages), None, 0.5).is_none());
 }
 
 #[test]
 fn peel_head_drops_oldest_groups() {
     // Build a multi-round conversation by alternating user/assistant.
-    let messages = conversation::simple(6);
+    let messages: Vec<std::sync::Arc<Message>> = conversation::simple(6)
+        .into_iter()
+        .map(std::sync::Arc::new)
+        .collect();
     let total_tokens = coco_compact::estimate_tokens(&messages);
     let target = total_tokens / 2;
     let peeled = peel_head_for_ptl_retry(&messages, target).expect("should peel some groups");
@@ -193,7 +203,7 @@ fn peel_head_drops_oldest_groups() {
 
 #[test]
 fn peel_head_returns_none_for_single_group() {
-    let messages = vec![msg::user("hi")];
+    let messages: Vec<std::sync::Arc<Message>> = vec![std::sync::Arc::new(msg::user("hi"))];
     assert!(peel_head_for_ptl_retry(&messages, 1).is_none());
 }
 
@@ -201,13 +211,15 @@ fn peel_head_returns_none_for_single_group() {
 fn build_post_compact_messages_has_canonical_order() {
     let mut result = mock::dummy_compact_result();
     result.summary_messages.push(msg::user("summary"));
-    result.messages_to_keep.push(msg::user("kept"));
+    result
+        .messages_to_keep
+        .push(std::sync::Arc::new(msg::user("kept")));
     result.hook_results.push(msg::user("hook"));
 
     let assembled = coco_compact::build_post_compact_messages(&result);
     assert_eq!(assembled.len(), 4); // boundary + summary + kept + hook
     matches!(
-        assembled[0],
+        &*assembled[0],
         Message::System(SystemMessage::CompactBoundary(_))
     );
 }
@@ -216,7 +228,9 @@ fn build_post_compact_messages_has_canonical_order() {
 fn build_partial_post_compact_messages_newest_keeps_prefix_before_summary() {
     let mut result = mock::dummy_compact_result();
     result.summary_messages.push(msg::user("summary"));
-    result.messages_to_keep.push(msg::user("kept prefix"));
+    result
+        .messages_to_keep
+        .push(std::sync::Arc::new(msg::user("kept prefix")));
     result.hook_results.push(msg::user("hook"));
 
     let assembled =
@@ -224,7 +238,7 @@ fn build_partial_post_compact_messages_newest_keeps_prefix_before_summary() {
 
     assert_eq!(assembled.len(), 4);
     matches!(
-        assembled[0],
+        &*assembled[0],
         Message::System(SystemMessage::CompactBoundary(_))
     );
     assert_eq!(
@@ -270,7 +284,7 @@ async fn partial_newest_ptl_retry_truncates_full_context_not_tail_only() {
     };
 
     partial_compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         8,
         PartialCompactDirection::Newest,
         None,

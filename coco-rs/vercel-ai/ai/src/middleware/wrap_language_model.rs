@@ -93,28 +93,31 @@ impl LanguageModelV4 for MiddlewareWrapper {
 
     async fn do_generate(
         &self,
-        params: LanguageModelV4CallOptions,
+        params: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
         use vercel_ai_provider::language_model_middleware::CallType;
         use vercel_ai_provider::language_model_middleware::TransformParamsOptions;
         use vercel_ai_provider::language_model_middleware::WrapGenerateOptions;
 
-        // Transform params
+        // Transform params — middleware may produce a fresh modified copy.
         let transform_options = TransformParamsOptions {
             call_type: CallType::Generate,
-            params,
+            params: params.clone(),
             model: self.inner.clone(),
         };
         let transformed_params = self.middleware.transform_params(transform_options).await?;
 
-        // Wrap generate
+        // Wrap generate. Closure receives owned params + abort, forwards
+        // `&params + abort` to the leaf provider.
         let inner = self.inner.clone();
         let wrap_options = WrapGenerateOptions {
             params: transformed_params,
+            abort_signal,
             model: inner.clone(),
-            do_generate: Box::new(move |p| {
+            do_generate: Box::new(move |p, abort| {
                 let inner = inner.clone();
-                Box::pin(async move { inner.do_generate(p).await })
+                Box::pin(async move { inner.do_generate(&p, abort).await })
             }),
         };
         self.middleware.wrap_generate(wrap_options).await
@@ -122,28 +125,30 @@ impl LanguageModelV4 for MiddlewareWrapper {
 
     async fn do_stream(
         &self,
-        params: LanguageModelV4CallOptions,
+        params: &LanguageModelV4CallOptions,
+        abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
         use vercel_ai_provider::language_model_middleware::CallType;
         use vercel_ai_provider::language_model_middleware::TransformParamsOptions;
         use vercel_ai_provider::language_model_middleware::WrapStreamOptions;
 
-        // Transform params
+        // Transform params — middleware may produce a fresh modified copy.
         let transform_options = TransformParamsOptions {
             call_type: CallType::Stream,
-            params,
+            params: params.clone(),
             model: self.inner.clone(),
         };
         let transformed_params = self.middleware.transform_params(transform_options).await?;
 
-        // Wrap stream
+        // Wrap stream. Same pattern as `do_generate`.
         let inner = self.inner.clone();
         let wrap_options = WrapStreamOptions {
             params: transformed_params,
+            abort_signal,
             model: inner.clone(),
-            do_stream: Box::new(move |p| {
+            do_stream: Box::new(move |p, abort| {
                 let inner = inner.clone();
-                Box::pin(async move { inner.do_stream(p).await })
+                Box::pin(async move { inner.do_stream(&p, abort).await })
             }),
         };
         self.middleware.wrap_stream(wrap_options).await

@@ -45,7 +45,8 @@ impl LanguageModel for TextMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         Ok(LanguageModelGenerateResult {
             content: vec![AssistantContentPart::Text(TextPart {
@@ -62,9 +63,10 @@ impl LanguageModel for TextMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -90,7 +92,8 @@ impl LanguageModel for TextThenErrorMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -113,9 +116,10 @@ impl LanguageModel for TextThenErrorMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -141,7 +145,8 @@ impl LanguageModel for ToolCallThenTextMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
 
@@ -187,9 +192,10 @@ impl LanguageModel for ToolCallThenTextMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -214,7 +220,8 @@ impl LanguageModel for ExitPlanModeThenTextMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -251,9 +258,10 @@ impl LanguageModel for ExitPlanModeThenTextMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -279,7 +287,8 @@ impl LanguageModel for MultiToolMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
 
@@ -327,9 +336,10 @@ impl LanguageModel for MultiToolMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -359,7 +369,8 @@ impl LanguageModel for OneToolThenTextMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -396,9 +407,10 @@ impl LanguageModel for OneToolThenTextMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -744,7 +756,8 @@ async fn test_tool_execution_with_real_tools() {
         }
         async fn do_generate(
             &self,
-            _options: LanguageModelCallOptions,
+            _options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelGenerateResult, AISdkError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             if call == 0 {
@@ -780,9 +793,10 @@ async fn test_tool_execution_with_real_tools() {
         }
         async fn do_stream(
             &self,
-            options: LanguageModelCallOptions,
+            options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelStreamResult, AISdkError> {
-            let result = self.do_generate(options).await?;
+            let result = self.do_generate(options, None).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
                 result.usage,
@@ -840,7 +854,8 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
         }
         async fn do_generate(
             &self,
-            _options: LanguageModelCallOptions,
+            _options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelGenerateResult, AISdkError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             if call == 0 {
@@ -876,9 +891,10 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
         }
         async fn do_stream(
             &self,
-            options: LanguageModelCallOptions,
+            options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelStreamResult, AISdkError> {
-            let result = self.do_generate(options).await?;
+            let result = self.do_generate(options, None).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
                 result.usage,
@@ -2619,7 +2635,8 @@ impl LanguageModel for AskingToolCallMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -2655,9 +2672,10 @@ impl LanguageModel for AskingToolCallMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -2903,7 +2921,8 @@ impl LanguageModel for AskingToolThenTextMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -2939,9 +2958,10 @@ impl LanguageModel for AskingToolThenTextMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,

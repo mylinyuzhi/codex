@@ -1,6 +1,7 @@
 //! Core compaction types.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -87,8 +88,8 @@ pub enum CompactSummaryKind {
 /// as a final user message or fork prompt.
 #[derive(Debug, Clone)]
 pub struct CompactSummaryAttempt {
-    pub messages: Vec<Message>,
-    pub context_messages: Vec<Message>,
+    pub messages: Vec<Arc<Message>>,
+    pub context_messages: Vec<Arc<Message>>,
     pub summary_request: String,
     pub prompt_kind: CompactSummaryKind,
     pub pre_compact_tokens: i64,
@@ -123,8 +124,14 @@ pub struct CompactResult {
     /// Post-compact attachments (file restore, plan, skills, tools, MCP).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentMessage>,
-    /// Messages preserved (not compacted).
-    pub messages_to_keep: Vec<Message>,
+    /// Messages preserved (not compacted). `Vec<Arc<Message>>` so
+    /// producers that already hold Arc-shared messages (the engine's
+    /// `Vec<Arc<Message>>` history snapshot) can Arc-clone instead of
+    /// deep-cloning when populating this field, and downstream
+    /// consumers (post-compact attachment builders, observers) can
+    /// continue Arc-sharing rather than materializing fresh
+    /// `Vec<Message>` for every read.
+    pub messages_to_keep: Vec<Arc<Message>>,
     /// Hook result messages from pre/post-compact hooks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hook_results: Vec<Message>,
@@ -302,9 +309,12 @@ impl CompactWarningState {
 /// TS: `extractDiscoveredToolNames(messages)` in `utils/toolSearch.ts`.
 /// Returned set is sorted (BTreeSet) so the boundary marker stores them
 /// deterministically — TS sorts before persisting too.
-pub fn extract_discovered_tool_names(messages: &[Message]) -> BTreeSet<String> {
+pub fn extract_discovered_tool_names<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    for msg in messages {
+    for m in messages {
+        let msg: &Message = m.borrow();
         let Message::Assistant(asst) = msg else {
             continue;
         };

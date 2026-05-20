@@ -255,7 +255,9 @@ impl QueryEngine {
         // calls `runPostCompactCleanup()` after `tryReactiveCompact`).
         // We build a synthetic CompactResult — observers in
         // `app/query/src/observers.rs` only inspect `trigger` /
-        // `is_main_agent`, not summary content, so empty fields are fine.
+        // `is_main_agent`, not summary content, so empty fields are fine —
+        // `messages_to_keep: Vec::new()` saves an N-message deep clone that
+        // would have been thrown away after the observer dispatch.
         let is_main_agent = self.config.agent_id.is_none();
         let synth = coco_compact::CompactResult {
             boundary_marker: coco_messages::create_compact_boundary_message(
@@ -265,7 +267,7 @@ impl QueryEngine {
             raw_summary: None,
             summary_messages: Vec::new(),
             attachments: Vec::new(),
-            messages_to_keep: history.as_slice().iter().map(|a| (**a).clone()).collect(),
+            messages_to_keep: Vec::new(),
             hook_results: Vec::new(),
             user_display_message: None,
             pre_compact_tokens: pre_tokens,

@@ -20,7 +20,8 @@ impl LanguageModelV4 for TestModel {
 
     async fn do_generate(
         &self,
-        _params: LanguageModelV4CallOptions,
+        _params: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
         Ok(LanguageModelV4GenerateResult::text(
             "test response",
@@ -30,7 +31,8 @@ impl LanguageModelV4 for TestModel {
 
     async fn do_stream(
         &self,
-        _params: LanguageModelV4CallOptions,
+        _params: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
         // Return an error for streaming in test
         Err(AISdkError::new("streaming not supported in test"))
@@ -141,7 +143,7 @@ async fn test_middleware_transform_params() {
     let wrapped = Arc::new(MiddlewareWrapper::new(model, middleware));
 
     let params = LanguageModelV4CallOptions::new(vec![]);
-    let result = wrapped.do_generate(params).await;
+    let result = wrapped.do_generate(&params, None).await;
 
     assert!(result.is_ok());
 }

@@ -45,9 +45,9 @@ const FILE_UNCHANGED_STUB_PREFIX: &str = "File unchanged since last read";
 ///
 /// `snapshot` is ordered by LRU recency (most recent last, from
 /// `FileReadState::snapshot_by_recency`).
-pub fn create_post_compact_file_attachments(
+pub fn create_post_compact_file_attachments<M: std::borrow::Borrow<Message>>(
     snapshot: &[(PathBuf, FileReadEntry)],
-    preserved_messages: &[Message],
+    preserved_messages: &[M],
     cwd: &Path,
     plan_file: Option<&Path>,
 ) -> Vec<AttachmentMessage> {
@@ -67,9 +67,9 @@ pub fn create_post_compact_file_attachments(
 /// list — they survive compaction even when not the most-recently-read.
 ///
 /// Self-designed augmentation; TS has no mention-aware re-injection.
-pub fn create_post_compact_file_attachments_with_priority(
+pub fn create_post_compact_file_attachments_with_priority<M: std::borrow::Borrow<Message>>(
     snapshot: &[(PathBuf, FileReadEntry)],
-    preserved_messages: &[Message],
+    preserved_messages: &[M],
     cwd: &Path,
     plan_file: Option<&Path>,
     prioritized_paths: &HashSet<PathBuf>,
@@ -146,13 +146,15 @@ pub fn create_post_compact_file_attachments_with_priority(
 /// TS: `collectReadToolFilePaths()` — scans preserved messages for assistant
 /// Read tool_use blocks whose tool results are NOT file-unchanged stubs.
 /// Files already visible in preserved messages don't need re-injection.
-fn collect_read_tool_file_paths(messages: &[Message]) -> HashSet<PathBuf> {
+fn collect_read_tool_file_paths<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+) -> HashSet<PathBuf> {
     let read_tool_name = ToolName::Read.as_str();
 
     // Pass 1: collect tool_use_ids of file-unchanged stubs.
     let stub_ids: HashSet<String> = messages
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|m| match m.borrow() {
             Message::ToolResult(tr) => {
                 if tool_result_starts_with_text(tr, FILE_UNCHANGED_STUB_PREFIX) {
                     Some(tr.tool_use_id.clone())
@@ -166,7 +168,8 @@ fn collect_read_tool_file_paths(messages: &[Message]) -> HashSet<PathBuf> {
 
     // Pass 2: collect file_path from Read tool_use blocks (excluding stubs).
     let mut paths = HashSet::new();
-    for msg in messages {
+    for m in messages {
+        let msg: &Message = m.borrow();
         let Message::Assistant(asst) = msg else {
             continue;
         };

@@ -463,7 +463,7 @@ impl QueryEngine {
             .messages_to_keep
             .iter()
             .rev()
-            .find(|m| matches!(m, coco_messages::Message::Assistant(_)))
+            .find(|m| matches!(m.as_ref(), coco_messages::Message::Assistant(_)))
             .and_then(|m| m.uuid())
             .copied();
         if let Ok(mut guard) = self.last_summarized_message_id.lock() {
@@ -557,11 +557,9 @@ impl QueryEngine {
                     fork_context_messages: Vec::new(),
                 }
             });
-            cache.fork_context_messages = attempt
-                .context_messages
-                .iter()
-                .map(|m| std::sync::Arc::new(m.clone()))
-                .collect();
+            // `CompactSummaryAttempt.context_messages` is already
+            // `Vec<Arc<Message>>` — Arc-share into the fork context.
+            cache.fork_context_messages = attempt.context_messages.clone();
 
             let mut options =
                 crate::forked_agent::ForkedAgentOptions::for_label(coco_types::ForkLabel::Compact);
@@ -759,9 +757,9 @@ impl QueryEngine {
         }
     }
 
-    async fn create_post_compact_delta_attachments(
+    async fn create_post_compact_delta_attachments<M: std::borrow::Borrow<Message>>(
         &self,
-        preserved_history: &[Message],
+        preserved_history: &[M],
     ) -> (Vec<coco_messages::AttachmentMessage>, PostCompactDeltaState) {
         let app_state_snapshot = match &self.app_state {
             Some(state) => state.read().await.clone(),
@@ -1422,8 +1420,9 @@ impl QueryEngine {
                     );
                 }
 
-                let (delta_attachments, delta_state) =
-                    self.create_post_compact_delta_attachments(&[]).await;
+                let (delta_attachments, delta_state) = self
+                    .create_post_compact_delta_attachments::<std::sync::Arc<Message>>(&[])
+                    .await;
                 result.attachments.extend(delta_attachments);
 
                 // TS-aligned order: boundary, summaryMessages, messagesToKeep,
@@ -1531,13 +1530,13 @@ struct PostCompactDeltaState {
     current_mcp_instructions: HashMap<String, String>,
 }
 
-fn preserved_contains_attachment_kind(
-    messages: &[Message],
+fn preserved_contains_attachment_kind<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
     kind: coco_types::AttachmentKind,
 ) -> bool {
     messages
         .iter()
-        .any(|message| matches!(message, Message::Attachment(att) if att.kind == kind))
+        .any(|m| matches!(m.borrow(), Message::Attachment(att) if att.kind == kind))
 }
 
 fn extract_compact_summary_from_messages(

@@ -96,7 +96,8 @@ impl LanguageModel for SteeringMock {
 
     async fn do_generate(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
         // Snapshot the prompt for the assertion phase. The guard is
@@ -167,9 +168,10 @@ impl LanguageModel for SteeringMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,

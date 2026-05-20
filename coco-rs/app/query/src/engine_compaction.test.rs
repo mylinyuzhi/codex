@@ -33,9 +33,10 @@ impl coco_inference::LanguageModel for CapturingModel {
 
     async fn do_generate(
         &self,
-        options: coco_inference::LanguageModelCallOptions,
+        options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
-        *self.options.lock().expect("model options lock poisoned") = Some(options);
+        *self.options.lock().expect("model options lock poisoned") = Some(options.clone());
         Ok(coco_inference::LanguageModelGenerateResult {
             content: vec![coco_llm_types::AssistantContentPart::Text(
                 coco_llm_types::TextPart {
@@ -54,9 +55,10 @@ impl coco_inference::LanguageModel for CapturingModel {
 
     async fn do_stream(
         &self,
-        options: coco_inference::LanguageModelCallOptions,
+        options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<coco_inference::LanguageModelStreamResult, coco_inference::AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -195,12 +197,12 @@ fn hook(event: HookEventType, command: &str) -> coco_hooks::HookDefinition {
 
 fn compact_attempt(summary_request: &str) -> coco_compact::CompactSummaryAttempt {
     coco_compact::CompactSummaryAttempt {
-        messages: vec![coco_messages::create_user_message(
+        messages: vec![std::sync::Arc::new(coco_messages::create_user_message(
             "conversation slice only",
-        )],
-        context_messages: vec![coco_messages::create_user_message(
+        ))],
+        context_messages: vec![std::sync::Arc::new(coco_messages::create_user_message(
             "conversation context for api",
-        )],
+        ))],
         summary_request: summary_request.to_string(),
         prompt_kind: coco_compact::CompactSummaryKind::Full,
         pre_compact_tokens: 42,

@@ -38,7 +38,7 @@ impl LanguageModelV4Middleware for SimulateStreamingMiddleware {
         options: WrapStreamOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
         // Pass through for now - a full implementation would convert non-streaming to streaming
-        (options.do_stream)(options.params).await
+        (options.do_stream)(options.params, options.abort_signal).await
     }
 }
 

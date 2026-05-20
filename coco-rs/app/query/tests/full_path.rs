@@ -56,7 +56,8 @@ impl LanguageModel for FullPathMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelCallOptions,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
 
@@ -130,9 +131,10 @@ impl LanguageModel for FullPathMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelCallOptions,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelStreamResult, AISdkError> {
-        let result = self.do_generate(options).await?;
+        let result = self.do_generate(options, None).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
             result.usage,
@@ -280,7 +282,8 @@ async fn test_full_path_with_bash_safety() {
         }
         async fn do_generate(
             &self,
-            options: LanguageModelCallOptions,
+            options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelGenerateResult, AISdkError> {
             // Check if we've received a tool error (permission denied)
             let has_tool_error = options.prompt.iter().any(|msg| {
@@ -326,9 +329,10 @@ async fn test_full_path_with_bash_safety() {
 
         async fn do_stream(
             &self,
-            options: LanguageModelCallOptions,
+            options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelStreamResult, AISdkError> {
-            let result = self.do_generate(options).await?;
+            let result = self.do_generate(options, None).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
                 result.usage,
@@ -436,7 +440,8 @@ async fn test_full_path_glob_and_grep() {
         }
         async fn do_generate(
             &self,
-            _options: LanguageModelCallOptions,
+            _options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelGenerateResult, AISdkError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             match call {
@@ -499,9 +504,10 @@ async fn test_full_path_glob_and_grep() {
         }
         async fn do_stream(
             &self,
-            options: LanguageModelCallOptions,
+            options: &LanguageModelCallOptions,
+            _abort_signal: Option<tokio_util::sync::CancellationToken>,
         ) -> Result<LanguageModelStreamResult, AISdkError> {
-            let result = self.do_generate(options).await?;
+            let result = self.do_generate(options, None).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
                 result.usage,

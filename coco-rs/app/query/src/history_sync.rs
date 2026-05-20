@@ -176,7 +176,7 @@ pub async fn history_clear_and_emit_session_reset(
 /// rotating the session id.
 pub async fn history_replace_and_emit(
     history: &mut MessageHistory,
-    new_messages: Vec<Message>,
+    new_messages: Vec<Arc<Message>>,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
     let (session_id, agent_id) = envelope_from(history);
@@ -184,8 +184,10 @@ pub async fn history_replace_and_emit(
     let incoming = new_messages.len();
     history.clear();
     let mut snapshot: Vec<Arc<Message>> = Vec::with_capacity(incoming);
-    for msg in new_messages {
-        snapshot.push(history.push(msg));
+    for arc in new_messages {
+        // `push_arc` stores the same Arc in history — no re-allocation,
+        // no `Message::clone`.
+        snapshot.push(history.push_arc(arc));
     }
     tracing::info!(
         target: HISTORY_SYNC_TARGET,

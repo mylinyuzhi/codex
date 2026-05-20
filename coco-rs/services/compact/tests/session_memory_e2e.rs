@@ -3,6 +3,8 @@
 //! Tests the no-LLM-call compaction path: use pre-extracted session memory
 //! as the summary, with fallback to full compaction when memory is unavailable.
 
+use std::sync::Arc;
+
 use coco_compact::compact::CompactRunOptions;
 use coco_compact::compact::compact_conversation;
 use coco_compact::session_memory::SessionMemoryCompactConfig;
@@ -13,13 +15,20 @@ use coco_test_harness::conversation;
 use coco_test_harness::messages as msg;
 use coco_types::ToolName;
 
+/// Test helper: wrap a borrowed `&[Message]` into the canonical
+/// `Vec<Arc<Message>>` shape that the post-refactor compact entry points
+/// accept. Caller keeps ownership of the source vec.
+fn arc_vec(msgs: &[Message]) -> Vec<Arc<Message>> {
+    msgs.iter().cloned().map(Arc::new).collect()
+}
+
 #[test]
 fn test_basic_flow() {
     let messages = conversation::simple(5);
     let memory = "## Decisions\n- Chose Rust over Go\n- Using tokio for async\n\n## Context\n- Building CLI tool";
     let config = SessionMemoryCompactConfig::default();
 
-    let result = compact_session_memory(&messages, memory, None, &config)
+    let result = compact_session_memory(&arc_vec(&messages), memory, None, &config)
         .expect("should not error")
         .expect("should produce a result");
 
@@ -64,14 +73,14 @@ fn test_api_invariant_preservation() {
         ..Default::default()
     };
 
-    let result = compact_session_memory(&messages, "Session context", None, &config)
+    let result = compact_session_memory(&arc_vec(&messages), "Session context", None, &config)
         .expect("should not error")
         .expect("should produce a result");
 
     // Verify no tool_result is the first kept message (would break API invariants)
     if let Some(first) = result.messages_to_keep.first() {
         assert!(
-            !matches!(first, Message::ToolResult(_)),
+            !matches!(first.as_ref(), Message::ToolResult(_)),
             "first kept message should not be a ToolResult (API invariant)"
         );
     }
@@ -83,12 +92,12 @@ fn test_empty_returns_none() {
     let config = SessionMemoryCompactConfig::default();
 
     assert!(
-        compact_session_memory(&messages, "", None, &config)
+        compact_session_memory(&arc_vec(&messages), "", None, &config)
             .unwrap()
             .is_none()
     );
     assert!(
-        compact_session_memory(&messages, "   \n  ", None, &config)
+        compact_session_memory(&arc_vec(&messages), "   \n  ", None, &config)
             .unwrap()
             .is_none()
     );
@@ -105,7 +114,7 @@ fn test_token_bounds() {
         ..Default::default()
     };
 
-    let result = compact_session_memory(&messages, "Context summary", None, &config)
+    let result = compact_session_memory(&arc_vec(&messages), "Context summary", None, &config)
         .expect("should not error")
         .expect("should produce a result");
 
@@ -135,7 +144,8 @@ async fn test_session_memory_fallback_to_full_compact() {
     let config = SessionMemoryCompactConfig::default();
 
     // Step 1: Session memory is empty → None
-    let sm_result = compact_session_memory(&messages, "", None, &config).expect("should not error");
+    let sm_result =
+        compact_session_memory(&arc_vec(&messages), "", None, &config).expect("should not error");
     assert!(sm_result.is_none(), "empty memory should return None");
 
     // Step 2: Caller falls back to full compact
@@ -145,7 +155,7 @@ async fn test_session_memory_fallback_to_full_compact() {
     };
     let summary = "<analysis>x</analysis><summary>Fallback summary</summary>";
     let result = compact_conversation(
-        &messages,
+        &arc_vec(&messages),
         &compact_run_options,
         mock::mock_summarize_ok(summary),
         None,
@@ -164,7 +174,7 @@ async fn test_session_memory_preferred_over_full() {
     let memory = "## Decisions\n- Used Rust for performance\n## Context\n- Building CLI";
     let config = SessionMemoryCompactConfig::default();
 
-    let sm_result = compact_session_memory(&messages, memory, None, &config)
+    let sm_result = compact_session_memory(&arc_vec(&messages), memory, None, &config)
         .expect("should not error")
         .expect("session memory should produce result");
 
