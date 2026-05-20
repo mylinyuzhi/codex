@@ -5,6 +5,7 @@
 pub mod agent_handle_factory;
 pub mod agent_transcript_persistence;
 pub mod at_mention_turn;
+pub mod command_queue_sink;
 pub mod disk_task_output;
 pub mod elicitation_hooks;
 pub mod file_changed_watcher;

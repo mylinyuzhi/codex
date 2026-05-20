@@ -73,7 +73,7 @@ pub(crate) struct ToolContextFactory {
     pub(crate) task_list: Option<TaskListHandleRef>,
     pub(crate) team_task_list_router: Option<TeamTaskListRouterRef>,
     pub(crate) todo_list: Option<TodoListHandleRef>,
-    pub(crate) task_handle: Option<coco_tool_runtime::TaskHandleRef>,
+    pub(crate) task_handle: Option<coco_tool_runtime::BackgroundTaskHandleRef>,
     pub(crate) permission_bridge: Option<ToolPermissionBridgeRef>,
     pub(crate) app_state: Option<Arc<RwLock<ToolAppState>>>,
     pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,

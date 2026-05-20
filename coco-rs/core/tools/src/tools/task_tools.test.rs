@@ -9,19 +9,18 @@
 
 use super::TaskCreateTool;
 use super::TaskStopTool;
-use coco_tool_runtime::BackgroundTaskInfo;
-use coco_tool_runtime::BackgroundTaskStatus;
-use coco_tool_runtime::TaskHandle;
-use coco_tool_runtime::TaskOutputDelta;
-use coco_tool_runtime::Tool;
-use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::{
+    BackgroundShellRequest, ShellTaskSpawner, TaskController, TaskOutputDelta, TaskReader,
+    TerminalSignal, Tool, ToolUseContext,
+};
+use coco_types::{TaskStateBase, TaskStatus, TaskType};
 use serde_json::json;
 use std::sync::Arc;
 
 /// Test double that tracks `kill_task` / `get_task_status` calls and
 /// returns canned results. Exercises the TS-aligned TaskStop/TaskOutput
 /// paths (which only operate on `appState.tasks`, i.e. the running-task
-/// registry — represented in coco-rs by `TaskHandle`).
+/// registry).
 #[derive(Default)]
 struct RecordingTaskHandle {
     known_ids: std::sync::Mutex<Vec<String>>,
@@ -40,18 +39,28 @@ impl RecordingTaskHandle {
     }
 }
 
-#[async_trait::async_trait]
-impl TaskHandle for RecordingTaskHandle {
-    async fn spawn_shell_task(
-        &self,
-        _request: coco_tool_runtime::BackgroundShellRequest,
-    ) -> Result<String, coco_error::BoxedError> {
-        unimplemented!("not used in these tests")
+fn canned_state(task_id: &str) -> TaskStateBase {
+    TaskStateBase {
+        id: task_id.into(),
+        task_type: TaskType::LocalBash,
+        status: TaskStatus::Running,
+        description: String::new(),
+        tool_use_id: None,
+        start_time: 0,
+        end_time: None,
+        total_paused_ms: None,
+        output_file: String::new(),
+        output_offset: 0,
+        notified: false,
     }
+}
+
+#[async_trait::async_trait]
+impl TaskReader for RecordingTaskHandle {
     async fn get_task_status(
         &self,
         task_id: &str,
-    ) -> Result<BackgroundTaskInfo, coco_error::BoxedError> {
+    ) -> Result<TaskStateBase, coco_error::BoxedError> {
         if self
             .known_ids
             .lock()
@@ -59,15 +68,7 @@ impl TaskHandle for RecordingTaskHandle {
             .iter()
             .any(|id| id == task_id)
         {
-            Ok(BackgroundTaskInfo {
-                task_id: task_id.into(),
-                status: BackgroundTaskStatus::Running,
-                summary: None,
-                output_file: None,
-                tool_use_id: None,
-                elapsed_seconds: 0.0,
-                notified: false,
-            })
+            Ok(canned_state(task_id))
         } else {
             Err(Box::new(coco_error::PlainError::new(
                 format!("unknown background task: {task_id}"),
@@ -86,6 +87,16 @@ impl TaskHandle for RecordingTaskHandle {
             is_complete: false,
         })
     }
+    async fn list_tasks(&self) -> Vec<TaskStateBase> {
+        Vec::new()
+    }
+    async fn subscribe_terminal(&self, _: &str) -> Option<TerminalSignal> {
+        None
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskController for RecordingTaskHandle {
     async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
         if self
             .known_ids
@@ -103,11 +114,15 @@ impl TaskHandle for RecordingTaskHandle {
             )))
         }
     }
-    async fn list_tasks(&self) -> Vec<BackgroundTaskInfo> {
-        Vec::new()
-    }
-    async fn poll_notifications(&self) -> Vec<BackgroundTaskInfo> {
-        Vec::new()
+}
+
+#[async_trait::async_trait]
+impl ShellTaskSpawner for RecordingTaskHandle {
+    async fn spawn_shell_task(
+        &self,
+        _request: BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError> {
+        unimplemented!("not used in these tests")
     }
 }
 

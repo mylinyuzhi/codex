@@ -59,6 +59,7 @@ pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile.workspace = true
 coco-tool-runtime = { workspace = true, features = ["testing"] }
+coco-tasks.workspace = true
 # Test-only image crate features — tests need to generate real 1x1
 # fixtures to exercise the FileRead → coco-utils-image pipeline.
 image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }

@@ -1303,7 +1303,6 @@ impl Tool for TaskOutputTool {
         if let Some(handle) = ctx.task_handle.as_ref()
             && let Ok(initial) = handle.get_task_status(&task_id).await
         {
-            use coco_tool_runtime::BackgroundTaskStatus;
             let info = if block {
                 wait_for_task_completion(handle.as_ref(), &task_id, initial, timeout_ms).await
             } else {
@@ -1314,22 +1313,16 @@ impl Tool for TaskOutputTool {
                 .await
                 .map(|d| d.content)
                 .unwrap_or_default();
-            let retrieval = match info.status {
-                BackgroundTaskStatus::Completed
-                | BackgroundTaskStatus::Failed
-                | BackgroundTaskStatus::Killed => RetrievalStatus::Success,
-                _ if block => RetrievalStatus::Timeout,
-                _ => RetrievalStatus::NotReady,
+            let retrieval = if info.status.is_terminal() {
+                RetrievalStatus::Success
+            } else if block {
+                RetrievalStatus::Timeout
+            } else {
+                RetrievalStatus::NotReady
             };
-            let status_str = format!("{:?}", info.status).to_lowercase();
+            let status_str = task_status_wire_string(info.status);
             return Ok(ToolResult {
-                data: project_output_background(
-                    &info.task_id,
-                    &status_str,
-                    output,
-                    None,
-                    retrieval,
-                ),
+                data: project_output_background(&info.id, status_str, output, None, retrieval),
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
@@ -1353,44 +1346,50 @@ impl Tool for TaskOutputTool {
     }
 }
 
+/// Wait for a background task to reach a terminal state. Event-
+/// driven via [`TaskReader::subscribe_terminal`] — the production
+/// impl returns a `watch::Receiver` that fires exactly once on the
+/// `update_status` transition into Completed/Failed/Killed.
+///
+/// Falls back to a one-shot `get_task_status` snapshot if no
+/// terminal subscription is available (test handles without watch
+/// wiring). TS parity for the blocking semantics at
+/// `TaskOutputTool.tsx:118-142` polling loop, but replaces 100 ms
+/// polling with O(1) await — Rust has primitives JS lacks, no
+/// reason to mirror its busy-wait.
 async fn wait_for_task_completion(
-    handle: &dyn coco_tool_runtime::TaskHandle,
+    handle: &dyn coco_tool_runtime::TaskReader,
     task_id: &str,
-    initial: coco_tool_runtime::BackgroundTaskInfo,
+    initial: coco_types::TaskStateBase,
     timeout_ms: u64,
-) -> coco_tool_runtime::BackgroundTaskInfo {
-    use coco_tool_runtime::BackgroundTaskStatus;
-    if matches!(
-        initial.status,
-        BackgroundTaskStatus::Completed
-            | BackgroundTaskStatus::Failed
-            | BackgroundTaskStatus::Killed
-    ) {
+) -> coco_types::TaskStateBase {
+    if initial.status.is_terminal() {
         return initial;
     }
-    let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(timeout_ms);
-    let interval = std::time::Duration::from_millis(100);
-    let mut last = initial;
-    while start.elapsed() < timeout {
-        tokio::time::sleep(interval).await;
-        match handle.get_task_status(task_id).await {
-            Ok(info) => {
-                let terminal = matches!(
-                    info.status,
-                    BackgroundTaskStatus::Completed
-                        | BackgroundTaskStatus::Failed
-                        | BackgroundTaskStatus::Killed
-                );
-                last = info;
-                if terminal {
-                    return last;
-                }
-            }
-            Err(_) => return last,
+
+    let Some(signal) = handle.subscribe_terminal(task_id).await else {
+        return initial;
+    };
+    tokio::select! {
+        _final_status = signal.await_terminal() => {
+            handle.get_task_status(task_id).await.unwrap_or(initial)
         }
+        _ = tokio::time::sleep(timeout) => initial,
     }
-    last
+}
+
+/// Wire-string projection of [`coco_types::TaskStatus`] used in the
+/// `TaskOutput` envelope's `<status>` tag. TS parity with the lowercase
+/// strings emitted at `TaskOutputTool.tsx:99-101`.
+fn task_status_wire_string(status: coco_types::TaskStatus) -> &'static str {
+    match status {
+        coco_types::TaskStatus::Pending => "pending",
+        coco_types::TaskStatus::Running => "running",
+        coco_types::TaskStatus::Completed => "completed",
+        coco_types::TaskStatus::Failed => "failed",
+        coco_types::TaskStatus::Killed => "killed",
+    }
 }
 
 // ── TodoWriteTool ─────────────────────────────────────────────────────

@@ -630,7 +630,7 @@ impl QueryEngine {
     /// side). When absent, the engine threads `None` into
     /// `ToolUseContext.task_handle`, where the task tools surface a
     /// "no task runtime configured" error.
-    pub fn with_task_handle(mut self, handle: coco_tool_runtime::TaskHandleRef) -> Self {
+    pub fn with_task_handle(mut self, handle: coco_tool_runtime::BackgroundTaskHandleRef) -> Self {
         self.task_handle = Some(handle);
         self
     }
@@ -887,7 +887,8 @@ impl QueryEngine {
 }
 
 /// Render a Rust `TaskStatus` to the TS `LocalAgentTaskState.status` string
-/// shape — `'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'cancelled'`.
+/// shape — `'pending' | 'running' | 'completed' | 'failed' | 'killed'`
+/// (TS only has 5 statuses; see `Task.ts:15-21`).
 fn task_status_to_ts_string(status: coco_types::TaskStatus) -> String {
     match status {
         coco_types::TaskStatus::Pending => "pending",
@@ -895,7 +896,6 @@ fn task_status_to_ts_string(status: coco_types::TaskStatus) -> String {
         coco_types::TaskStatus::Completed => "completed",
         coco_types::TaskStatus::Failed => "failed",
         coco_types::TaskStatus::Killed => "killed",
-        coco_types::TaskStatus::Cancelled => "cancelled",
     }
     .to_string()
 }

@@ -13,6 +13,9 @@ pub enum TaskType {
     Dream,
 }
 
+/// TS parity — five lifecycle states matching `Task.ts:15-21`. There
+/// is no `Cancelled` variant: cancel-token cascades and explicit
+/// `TaskStop` invocations both end the task in [`Self::Killed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
@@ -21,15 +24,11 @@ pub enum TaskStatus {
     Completed,
     Failed,
     Killed,
-    Cancelled,
 }
 
 impl TaskStatus {
     pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Completed | Self::Failed | Self::Killed | Self::Cancelled
-        )
+        matches!(self, Self::Completed | Self::Failed | Self::Killed)
     }
 }
 

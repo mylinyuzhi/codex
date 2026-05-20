@@ -589,9 +589,18 @@ impl Tool for BashTool {
             }
         }
 
-        // Background execution: spawn task and return immediately
+        // Background execution: spawn task and return immediately.
+        // TS parity (`BashTool.tsx:879`): `description: description ||
+        // command` — the model's input.description takes precedence,
+        // falling back to the command string when omitted.
+        let resolved_description = input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| command.to_string());
         if run_in_background {
-            return execute_background(command, timeout_ms, ctx).await;
+            return execute_background(command, &resolved_description, timeout_ms, ctx).await;
         }
 
         // Foreground execution. The sandbox state is resolved here (not
@@ -625,7 +634,8 @@ impl Tool for BashTool {
                     // killed by the watchdog, so this is a re-run — TS
                     // transfers the handle instead, but we document the
                     // divergence rather than fake it.
-                    let bg = execute_background(command, timeout_ms, ctx).await?;
+                    let bg =
+                        execute_background(command, &resolved_description, timeout_ms, ctx).await?;
                     let task_id = bg.data["task_id"].as_str().unwrap_or("").to_string();
                     return Ok(ToolResult {
                         data: serde_json::json!({
@@ -657,6 +667,7 @@ impl Tool for BashTool {
 /// Model receives `<task-notification>` XML when the task completes.
 async fn execute_background(
     command: &str,
+    description: &str,
     timeout_ms: u64,
     ctx: &ToolUseContext,
 ) -> Result<ToolResult<Value>, ToolError> {
@@ -668,13 +679,19 @@ async fn execute_background(
             source: None,
         })?;
 
-    let description = ctx.tool_use_id.as_deref().unwrap_or("bash").to_string();
+    let tool_use_id = ctx.tool_use_id.clone();
+    // TS `BashTool.tsx:910` `agentId: toolUseContext.agentId` —
+    // routes the completion notification back to the subagent that
+    // spawned the bg task so the queue filter delivers it.
+    let agent_id = ctx.agent_id.as_ref().map(ToString::to_string);
 
     let task_id = task_handle
         .spawn_shell_task(BackgroundShellRequest {
             command: command.to_string(),
             timeout_ms: Some(timeout_ms as i64),
-            description: Some(description),
+            description: description.to_string(),
+            tool_use_id,
+            agent_id,
         })
         .await
         .map_err(|e| ToolError::ExecutionFailed {

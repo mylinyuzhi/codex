@@ -153,12 +153,7 @@ impl Tool for SendMessageTool {
         if is_string_message
             && let Some(handle) = ctx.task_handle.as_ref()
             && let Ok(info) = handle.get_task_status(to).await
-            && matches!(
-                info.status,
-                coco_tool_runtime::BackgroundTaskStatus::Completed
-                    | coco_tool_runtime::BackgroundTaskStatus::Failed
-                    | coco_tool_runtime::BackgroundTaskStatus::Killed
-            )
+            && info.status.is_terminal()
         {
             // Resume needs the parent session id to find the persisted
             // transcript on disk. An empty session id makes the lookup

@@ -26,7 +26,9 @@ async fn collect_emits_snapshot_post_compact() {
 }
 
 #[tokio::test]
-async fn status_mapping_collapses_6_to_4() {
+async fn status_mapping_collapses_5_to_4() {
+    // TS has 5 statuses (Task.ts:15-21); the reminder generator
+    // ignores Pending/Running distinction (both render as Running).
     assert!(matches!(
         map_status(coco_types::TaskStatus::Completed),
         coco_system_reminder::TaskRunStatus::Completed
@@ -37,10 +39,6 @@ async fn status_mapping_collapses_6_to_4() {
     ));
     assert!(matches!(
         map_status(coco_types::TaskStatus::Killed),
-        coco_system_reminder::TaskRunStatus::Killed
-    ));
-    assert!(matches!(
-        map_status(coco_types::TaskStatus::Cancelled),
         coco_system_reminder::TaskRunStatus::Killed
     ));
     assert!(matches!(

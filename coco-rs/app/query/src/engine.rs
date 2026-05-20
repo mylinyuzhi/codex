@@ -311,7 +311,7 @@ pub struct QueryEngine {
     /// production `TaskRuntime` shared with `SwarmAgentHandle` so a
     /// bg spawn registered by the latter is addressable through the
     /// former.
-    pub(crate) task_handle: Option<coco_tool_runtime::TaskHandleRef>,
+    pub(crate) task_handle: Option<coco_tool_runtime::BackgroundTaskHandleRef>,
     /// Persistent task-list store (V2, `TaskCreate`/`TaskUpdate`/etc.).
     /// `None` resolves to `NoOpTaskListHandle` — the V2 tools then
     /// return errors on write, matching TS's "no store configured"

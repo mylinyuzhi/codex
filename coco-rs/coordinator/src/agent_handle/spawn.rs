@@ -1412,6 +1412,7 @@ impl SwarmAgentHandle {
         let dynamic_mcp_servers_for_task = self.dynamic_mcp_servers().clone();
         let worktree_manager_for_task = self.worktree_manager().cloned();
         let worktree_session_for_task = worktree_session.clone();
+        let bg_start = std::time::Instant::now();
         tokio::spawn(async move {
             // Fire SubagentStart hooks before kicking off execution and
             // prepend any returned context blocks to the prompt. TS
@@ -1504,9 +1505,13 @@ impl SwarmAgentHandle {
                     }
                 }
             }
+            // Clone the session so the borrow at notification-build
+            // time (below) still has access. `cleanup_if_unchanged`
+            // takes ownership of one copy; the original survives for
+            // the worktree info on the `<task-notification>` envelope.
             if let (Some(manager), Some(session)) = (
                 worktree_manager_for_task.as_ref(),
-                worktree_session_for_task,
+                worktree_session_for_task.clone(),
             ) {
                 let session_path = session.path.display().to_string();
                 if matches!(
@@ -1539,10 +1544,36 @@ impl SwarmAgentHandle {
             }
             if let (Some(reg), Some(tid)) = (registry_for_task, task_id_for_task) {
                 match outcome {
-                    // `None` because text deltas already streamed into the
-                    // buffer during execution — passing `response_text`
-                    // would double-append.
-                    Ok(_) => reg.mark_completed(&tid, /*response_text*/ None).await,
+                    Ok(qr) => {
+                        // TS `LocalAgentTask.tsx:249-251` — the
+                        // completion notification carries the
+                        // final assistant text, usage stats, and
+                        // worktree info so the model sees a rich
+                        // `<result>` / `<usage>` / `<worktree>`
+                        // envelope on the next turn.
+                        let duration_ms = bg_start.elapsed().as_millis() as i64;
+                        let result = last_assistant_text(&qr.messages);
+                        let usage = Some(coco_tool_runtime::AgentUsage {
+                            total_tokens: qr.input_tokens + qr.output_tokens,
+                            tool_uses: qr.tool_use_count as i32,
+                            duration_ms,
+                        });
+                        let worktree = worktree_session_for_task.as_ref().map(|s| {
+                            coco_tool_runtime::AgentWorktree {
+                                path: s.path.display().to_string(),
+                                branch: Some(s.branch.clone()),
+                            }
+                        });
+                        reg.mark_completed(
+                            &tid,
+                            coco_tool_runtime::AgentCompletionPayload {
+                                result,
+                                usage,
+                                worktree,
+                            },
+                        )
+                        .await;
+                    }
                     Err(e) => reg.mark_failed(&tid, &e.to_string()).await,
                 }
             }
@@ -1598,4 +1629,35 @@ fn count_tool_uses_in_messages(
         }
     }
     counts
+}
+
+/// Concatenate every assistant text part in the most recent
+/// assistant message. Used for the `<result>` section of the
+/// background-agent completion notification. TS:
+/// `LocalAgentTask.tsx:249` `finalMessage`. Returns `None` when the
+/// log has no assistant message or the last one is text-empty
+/// (tool-only turn).
+fn last_assistant_text(messages: &[std::sync::Arc<coco_messages::Message>]) -> Option<String> {
+    for arc in messages.iter().rev() {
+        let coco_messages::Message::Assistant(a) = arc.as_ref() else {
+            continue;
+        };
+        let coco_messages::LlmMessage::Assistant { content, .. } = &a.message else {
+            continue;
+        };
+        let mut chunks: Vec<String> = Vec::new();
+        for part in content {
+            if let coco_messages::AssistantContent::Text(t) = part
+                && !t.text.is_empty()
+            {
+                chunks.push(t.text.clone());
+            }
+        }
+        return if chunks.is_empty() {
+            None
+        } else {
+            Some(chunks.join("\n"))
+        };
+    }
+    None
 }

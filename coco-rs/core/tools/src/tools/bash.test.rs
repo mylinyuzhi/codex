@@ -219,7 +219,7 @@ async fn test_bash_timeout_error_suggests_background_when_handle_available() {
     // path fires. The no-op handle is semantically "I exist", which
     // is what the suggestion logic probes for.
     let mut ctx = ToolUseContext::test_default();
-    ctx.task_handle = Some(Arc::new(coco_tool_runtime::NoOpTaskHandle));
+    ctx.task_handle = Some(Arc::new(coco_tool_runtime::NoOpBackgroundTaskHandle));
 
     let result = BashTool
         .execute(json!({"command": "sleep 10", "timeout": 100}), &ctx)
@@ -604,49 +604,47 @@ async fn test_bash_background_without_task_handle() {
 
 #[test]
 fn test_stall_prompt_yes_no() {
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Do you want to continue? (y/n)"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "output\nmore output\nContinue? [y/n]"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Are you sure? (yes/no)"
     ));
 }
 
 #[test]
 fn test_stall_prompt_password() {
-    assert!(coco_tool_runtime::matches_interactive_prompt(
-        "Enter password:"
-    ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt("Enter password:"));
+    assert!(coco_tasks::matches_interactive_prompt(
         "[sudo] password for user:"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Enter passphrase for key:"
     ));
 }
 
 #[test]
 fn test_stall_prompt_question_pattern() {
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Do you want to proceed?"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Would you like to overwrite?"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Are you sure you want to delete?"
     ));
 }
 
 #[test]
 fn test_stall_prompt_press_key() {
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Press any key to continue"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Press Enter to continue"
     ));
 }
@@ -654,65 +652,72 @@ fn test_stall_prompt_press_key() {
 #[test]
 fn test_stall_no_false_positive_normal_output() {
     // Normal command output should NOT match
-    assert!(!coco_tool_runtime::matches_interactive_prompt(
+    assert!(!coco_tasks::matches_interactive_prompt(
         "Compiling project..."
     ));
-    assert!(!coco_tool_runtime::matches_interactive_prompt(
-        "Build succeeded"
-    ));
-    assert!(!coco_tool_runtime::matches_interactive_prompt(
+    assert!(!coco_tasks::matches_interactive_prompt("Build succeeded"));
+    assert!(!coco_tasks::matches_interactive_prompt(
         "Downloaded 42 packages"
     ));
-    assert!(!coco_tool_runtime::matches_interactive_prompt("")); // empty
+    assert!(!coco_tasks::matches_interactive_prompt("")); // empty
 }
 
 #[test]
 fn test_stall_only_checks_last_line() {
     // "password:" in earlier output should not trigger
     let tail = "checking password: ok\nall tests passed\nDone.";
-    assert!(!coco_tool_runtime::matches_interactive_prompt(tail));
+    assert!(!coco_tasks::matches_interactive_prompt(tail));
 
     // But if last line has prompt, it should match
     let tail2 = "checking things\nEnter password:";
-    assert!(coco_tool_runtime::matches_interactive_prompt(tail2));
+    assert!(coco_tasks::matches_interactive_prompt(tail2));
 }
 
 // -- Notification format tests --
+//
+// The XML builder lives in `coco_tasks::notification` and has its own
+// unit tests in that crate. These crate-local tests serve as smoke
+// checks that the integration path (BashTool spawn → TaskRuntime →
+// CommandQueueNotificationSink → render_notification) still produces
+// the TS-aligned shape.
 
 #[test]
 fn test_task_notification_format() {
-    let info = coco_tool_runtime::BackgroundTaskInfo {
+    use coco_tasks::{NotificationKind, TaskNotification, TerminalStatus, render_notification};
+    let n = TaskNotification {
         task_id: "task-1".into(),
-        status: coco_tool_runtime::BackgroundTaskStatus::Completed,
-        summary: Some("Command finished successfully".into()),
-        output_file: Some("/tmp/task-1.out".into()),
         tool_use_id: Some("tu-123".into()),
-        elapsed_seconds: 5.0,
-        notified: false,
+        agent_id: None,
+        output_file: "/tmp/task-1.out".into(),
+        description: "ls".into(),
+        kind: NotificationKind::ShellTerminal {
+            status: TerminalStatus::Completed,
+            exit_code: Some(0),
+        },
     };
-
-    let xml = coco_tool_runtime::format_task_notification(&info);
+    let xml = render_notification(&n);
     assert!(xml.contains("<task-id>task-1</task-id>"));
     assert!(xml.contains("<status>completed</status>"));
     assert!(xml.contains("<tool-use-id>tu-123</tool-use-id>"));
     assert!(xml.contains("<output-file>/tmp/task-1.out</output-file>"));
-    assert!(xml.contains("<summary>Command finished successfully</summary>"));
 }
 
 #[test]
 fn test_stall_notification_omits_status() {
-    let stall = coco_tool_runtime::StallInfo {
+    use coco_tasks::{NotificationKind, TaskNotification, render_notification};
+    let n = TaskNotification {
         task_id: "task-2".into(),
-        output_tail: "Enter password:".into(),
-        frozen_seconds: 45.0,
+        tool_use_id: None,
+        agent_id: None,
+        output_file: "/tmp/task-2.out".into(),
+        description: "sleep".into(),
+        kind: NotificationKind::Stall {
+            output_tail: "Enter password:".into(),
+        },
     };
-
-    let xml = coco_tool_runtime::format_stall_notification(&stall, Some("/tmp/task-2.out"));
-    // Stall notifications must NOT have <status> tag (TS requirement)
+    let xml = render_notification(&n);
     assert!(!xml.contains("<status>"));
     assert!(xml.contains("<task-id>task-2</task-id>"));
-    assert!(xml.contains("output frozen for 45s"));
-    // Raw output tail appears after XML
     assert!(xml.contains("Enter password:"));
 }
 

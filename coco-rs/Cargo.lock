@@ -2143,6 +2143,7 @@ dependencies = [
  "coco-shell",
  "coco-skills",
  "coco-subagent",
+ "coco-tasks",
  "coco-tool-runtime",
  "coco-types",
  "coco-utils-absolute-path",

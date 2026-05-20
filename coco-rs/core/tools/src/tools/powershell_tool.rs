@@ -355,11 +355,19 @@ async fn execute_background(
     // foreground. The task handle runs the shell for us; we just feed
     // the wrapped command string through.
     let wrapped = format!("pwsh -NoProfile -NonInteractive -Command {command:?}");
+    let description = input
+        .get("description")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| "PowerShell background task".into());
     let task_id = task_handle
         .spawn_shell_task(coco_tool_runtime::BackgroundShellRequest {
             command: wrapped,
             timeout_ms: input.get("timeout").and_then(serde_json::Value::as_i64),
-            description: Some("PowerShell background task".into()),
+            description,
+            tool_use_id: ctx.tool_use_id.clone(),
+            agent_id: ctx.agent_id.as_ref().map(ToString::to_string),
         })
         .await
         .map_err(|e| ToolError::ExecutionFailed {

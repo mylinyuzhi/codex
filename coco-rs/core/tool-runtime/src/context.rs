@@ -26,7 +26,7 @@ use crate::permission_bridge::ToolPermissionBridgeRef;
 use crate::registry::ToolRegistry;
 use crate::schedule_store::ScheduleStoreRef;
 use crate::side_query::SideQueryHandle;
-use crate::task_handle::TaskHandleRef;
+use crate::task_handle::BackgroundTaskHandleRef;
 use crate::task_list_handle::TaskListHandleRef;
 use crate::task_list_handle::TeamTaskListRouterRef;
 use crate::task_list_handle::TodoListHandleRef;
@@ -450,7 +450,7 @@ pub struct ToolUseContext {
     // ── Background Task Management ──
     /// Handle for background task operations (shell tasks, agent tasks).
     /// TS: `spawnShellTask()`, `TaskOutput`, stall watchdog.
-    pub task_handle: Option<TaskHandleRef>,
+    pub task_handle: Option<BackgroundTaskHandleRef>,
 
     // ── Persistent Task List (V2) ──
     /// Shared disk-backed plan-item store used by `TaskCreate`/`TaskGet`/

@@ -1,75 +1,76 @@
-//! Background task handle trait — abstraction for background task operations from tools.
+//! Background-task callback traits — the seam between tools and the
+//! task subsystem.
 //!
-//! TS: `utils/task/framework.ts`, `tasks/LocalShellTask/LocalShellTask.tsx`
+//! TS source: `utils/task/framework.ts`, `tasks/LocalShellTask/`,
+//! `tasks/LocalAgentTask/`, `tools/BashTool/BashTool.tsx`.
 //!
-//! Enables tools to spawn background tasks (shell commands, agents) and
-//! manage their lifecycle. Task notifications are injected as XML messages
-//! when tasks complete.
+//! ## Three narrow traits, one shared opaque type
 //!
-//! Stall detection: Implementations poll output files every 5s and trigger
-//! a notification if output hasn't changed for 45s AND the last line matches
-//! an interactive prompt pattern. Stall is a notification event, NOT a status
-//! transition — the task remains Running.
+//! The previous version of this file lumped every background-task
+//! operation onto a single `TaskHandle` trait covering spawn,
+//! status, kill, list, and poll. After splitting we have three
+//! traits with single responsibilities. The reader surface inspects
+//! ([`TaskReader`]), the controller surface kills
+//! ([`TaskController`]), the spawner surface launches shell tasks
+//! ([`ShellTaskSpawner`]).
+//!
+//! [`BackgroundTaskHandle`] is a marker super-trait so a single
+//! `Arc<dyn BackgroundTaskHandle>` can satisfy `ToolUseContext`
+//! consumers that need every surface. Production impl
+//! (`coco_cli::task_runtime::TaskRuntime`) blanket-implements it.
+//!
+//! ## Output / lifecycle / notification: where each concern lives
+//!
+//! - Status + per-task state — [`coco_types::TaskStateBase`] (the
+//!   canonical wire shape). `TaskReader` returns it directly.
+//! - On-disk output — `coco_cli::disk_task_output::DiskTaskOutput`
+//!   (per-session disk file with 5 GB cap, TS-aligned).
+//! - Notifications — [`coco_tasks::notification::NotificationSink`].
+//!   `TaskRuntime` constructs `TaskNotification` payloads at
+//!   terminal transitions and pushes through the sink; the
+//!   app-layer impl (`CommandQueueNotificationSink`) wraps the
+//!   `coco_query::CommandQueue`. Stall constants +
+//!   `matches_interactive_prompt` live in
+//!   `coco_tasks::stall` — this crate doesn't re-export them.
+//!
+//! ## What was deleted in this pass
+//!
+//! - `BackgroundTaskStatus` (4-variant projection of
+//!   `coco_types::TaskStatus`) — readers now consume
+//!   `TaskStateBase` directly. Single source of truth.
+//! - `BackgroundTaskInfo` DTO — collapsed into `TaskStateBase`.
+//! - `format_task_notification` / `format_stall_notification` —
+//!   superseded by `coco_tasks::notification::render`.
+//! - `StallInfo` / `TASK_NOTIFICATION_TAG` constant —
+//!   `coco_tasks::notification` owns the rendering surface.
+//! - `STALL_*` constants + `matches_interactive_prompt` — moved to
+//!   `coco_tasks::stall`.
+//! - `TaskHandle::poll_notifications` — push is the only path now.
+//!   Pull was vestigial (no caller in the engine).
 
 use coco_messages::Message;
-use serde::Deserialize;
-use serde::Serialize;
+use coco_types::TaskStateBase;
 use std::sync::Arc;
 
-/// Stall detection check interval.
-///
-/// TS: `STALL_CHECK_INTERVAL_MS = 5_000`
-pub const STALL_CHECK_INTERVAL_MS: u64 = 5_000;
-
-/// Stall detection threshold — output frozen for this long triggers notification.
-///
-/// TS: `STALL_THRESHOLD_MS = 45_000`
-pub const STALL_THRESHOLD_MS: u64 = 45_000;
-
-/// Number of tail bytes to read for prompt pattern detection.
-///
-/// TS: `STALL_TAIL_BYTES = 1024`
-pub const STALL_TAIL_BYTES: usize = 1024;
-
-/// Status of a background task.
-///
-/// Note: TS has no "stalled" status. Stall is a notification event,
-/// not a status transition. A stalled task remains Running until it
-/// completes, fails, or is killed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BackgroundTaskStatus {
-    Running,
-    Completed,
-    Failed,
-    Killed,
-}
-
-/// Info about a background task.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackgroundTaskInfo {
-    pub task_id: String,
-    pub status: BackgroundTaskStatus,
-    pub summary: Option<String>,
-    pub output_file: Option<String>,
-    /// Tool use ID that spawned this task (for notification targeting).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-    /// Elapsed time in seconds since task started.
-    #[serde(default)]
-    pub elapsed_seconds: f64,
-    /// Whether a notification was already sent for this task.
-    /// Prevents duplicate notifications on repeated polling.
-    #[serde(default)]
-    pub notified: bool,
-}
-
-/// Request to spawn a background shell task.
+/// Request to spawn a background shell task. Mirrors TS
+/// `LocalShellSpawnInput` (`Task.ts:59-67`) modulo the
+/// MONITOR_TOOL-specific `kind` field which is not ported yet.
 #[derive(Debug, Clone)]
 pub struct BackgroundShellRequest {
     pub command: String,
+    /// Display label the model passes via tool input. TS:
+    /// `BashTool.tsx:879` `description: description || command`.
+    pub description: String,
     pub timeout_ms: Option<i64>,
-    pub description: Option<String>,
+    /// `tool_use_id` of the Bash invocation that started this task —
+    /// threaded into the `<tool-use-id>` tag on the completion
+    /// notification. TS: `BashTool.tsx:909` `toolUseId`.
+    pub tool_use_id: Option<String>,
+    /// Agent id of the subagent that issued the spawn. Routes the
+    /// completion notification back to that agent's queue filter so
+    /// teammates only see their own bg-task completions. TS:
+    /// `BashTool.tsx:910` `agentId: toolUseContext.agentId`.
+    pub agent_id: Option<String>,
 }
 
 /// Delta output from a background task (incremental read).
@@ -80,217 +81,116 @@ pub struct TaskOutputDelta {
     pub is_complete: bool,
 }
 
-/// Stall detection result.
-///
-/// TS: stall watchdog checks if output is frozen and last line matches prompt.
-#[derive(Debug, Clone)]
-pub struct StallInfo {
-    pub task_id: String,
-    /// Tail of the output (last STALL_TAIL_BYTES bytes).
-    pub output_tail: String,
-    /// How long the output has been frozen (seconds).
-    pub frozen_seconds: f64,
-}
-
-/// XML task notification tag for injecting task results into conversation.
-pub const TASK_NOTIFICATION_TAG: &str = "task-notification";
-
-/// Format a task completion notification as XML for model consumption.
-///
-/// TS: `enqueueShellNotification()` — includes status tag for completion.
-pub fn format_task_notification(info: &BackgroundTaskInfo) -> String {
-    let status = match info.status {
-        BackgroundTaskStatus::Running => "running",
-        BackgroundTaskStatus::Completed => "completed",
-        BackgroundTaskStatus::Failed => "failed",
-        BackgroundTaskStatus::Killed => "killed",
-    };
-
-    let mut xml = format!(
-        "<{TASK_NOTIFICATION_TAG}>\n<task-id>{}</task-id>\n",
-        info.task_id
-    );
-
-    if let Some(tool_use_id) = &info.tool_use_id {
-        xml.push_str(&format!("<tool-use-id>{tool_use_id}</tool-use-id>\n"));
-    }
-    if let Some(output_file) = &info.output_file {
-        xml.push_str(&format!("<output-file>{output_file}</output-file>\n"));
-    }
-    xml.push_str(&format!("<status>{status}</status>\n"));
-    if let Some(summary) = &info.summary {
-        xml.push_str(&format!("<summary>{summary}</summary>\n"));
-    }
-
-    xml.push_str(&format!("</{TASK_NOTIFICATION_TAG}>"));
-    xml
-}
-
-/// Format a stall notification as XML for model consumption.
-///
-/// TS: Stall notifications intentionally OMIT the `<status>` tag.
-/// From TS comment: "No <status> tag — print.ts treats <status> as a terminal
-/// signal and an unknown value falls through to 'completed', falsely closing
-/// the task for SDK consumers."
-///
-/// The output_tail is included OUTSIDE the XML tags as raw text so the
-/// model can see what the command is waiting for.
-pub fn format_stall_notification(stall: &StallInfo, output_file: Option<&str>) -> String {
-    let mut xml = format!(
-        "<{TASK_NOTIFICATION_TAG}>\n<task-id>{}</task-id>\n",
-        stall.task_id
-    );
-
-    if let Some(path) = output_file {
-        xml.push_str(&format!("<output-file>{path}</output-file>\n"));
-    }
-    xml.push_str(&format!(
-        "<summary>Task appears to be waiting for input (output frozen for {:.0}s)</summary>\n",
-        stall.frozen_seconds
-    ));
-
-    xml.push_str(&format!("</{TASK_NOTIFICATION_TAG}>\n"));
-
-    // Raw output tail outside XML so model can see prompt
-    if !stall.output_tail.is_empty() {
-        xml.push_str(&stall.output_tail);
-    }
-
-    xml
-}
-
-/// Check if the last line of output tail matches an interactive prompt pattern.
-///
-/// TS: `looksLikePrompt()` — checks only the LAST line of the tail,
-/// uses regex patterns for context-aware questions.
-///
-/// Only the last line is checked to avoid false positives from prompt-like
-/// strings appearing in normal output above the current prompt.
-pub fn matches_interactive_prompt(tail: &str) -> bool {
-    // Extract the last non-empty line
-    let last_line = tail.trim_end().rsplit('\n').next().unwrap_or("").trim();
-
-    if last_line.is_empty() {
-        return false;
-    }
-
-    let lower = last_line.to_lowercase();
-
-    // Simple string patterns (exact TS patterns)
-    let string_patterns = [
-        "(y/n)",
-        "[y/n]",
-        "y/n",
-        "(yes/no)",
-        "[yes/no]",
-        "yes/no",
-        "password:",
-        "passphrase:",
-        "[sudo]",
-        "enter passphrase",
-    ];
-
-    if string_patterns.iter().any(|p| lower.contains(p)) {
-        return true;
-    }
-
-    // Directed question patterns (TS regex equivalent):
-    // /\b(?:Do you|Would you|Shall I|Are you sure|Ready to)\b.*\? *$/i
-    let question_prefixes = ["do you", "would you", "shall i", "are you sure", "ready to"];
-    if (lower.ends_with('?') || lower.ends_with("? "))
-        && question_prefixes.iter().any(|p| lower.contains(p))
-    {
-        return true;
-    }
-
-    // Action prompts ending with ?
-    // /Continue\?/i, /Overwrite\?/i, /Proceed\?/i
-    let action_prompts = ["continue?", "overwrite?", "proceed?"];
-    if action_prompts.iter().any(|p| lower.contains(p)) {
-        return true;
-    }
-
-    // Press prompts: /Press (any key|Enter)/i
-    if lower.contains("press any key") || lower.contains("press enter") {
-        return true;
-    }
-
-    false
-}
-
-/// Trait for background task operations from tools.
-///
-/// Implementations must:
-/// 1. Spawn tasks and track their state (Running/Completed/Failed/Killed)
-/// 2. Run stall detection internally:
-///    - Poll every `STALL_CHECK_INTERVAL_MS` (5s) for each running task
-///    - Track output file mtime and size
-///    - If output frozen for `STALL_THRESHOLD_MS` (45s) AND last line
-///      matches `matches_interactive_prompt()`, enqueue a stall notification
-///    - Stall detection is one-shot per frozen period: reset when output grows
-/// 3. Enqueue notifications via `poll_notifications()` — both completions and stalls
-/// 4. Persist output to disk for large outputs (max 8MB per delta read)
-/// 5. Track `notified` flag per task to prevent duplicate notifications
+/// Read-only inspection surface. Used by `TaskGet`, `TaskList`,
+/// `TaskOutput`.
 #[async_trait::async_trait]
-pub trait TaskHandle: Send + Sync {
-    /// Spawn a background shell task.
-    /// Returns the task ID immediately.
-    async fn spawn_shell_task(
-        &self,
-        request: BackgroundShellRequest,
-    ) -> Result<String, coco_error::BoxedError>;
+pub trait TaskReader: Send + Sync {
+    /// Snapshot a task's state. Returns `None` (via error) when the
+    /// id is unknown.
+    async fn get_task_status(&self, task_id: &str)
+    -> Result<TaskStateBase, coco_error::BoxedError>;
 
-    /// Get the status of a background task.
-    async fn get_task_status(
-        &self,
-        task_id: &str,
-    ) -> Result<BackgroundTaskInfo, coco_error::BoxedError>;
-
-    /// Read incremental output from a background task.
-    ///
-    /// TS: `getTaskOutputDelta(taskId, fromOffset, maxBytes)` — max 8MB per read.
+    /// Read incremental output from a task's on-disk buffer.
+    /// `from_offset` is the byte offset the caller last read; the
+    /// returned `new_offset` is `from_offset + content.len()`. TS:
+    /// `getTaskOutputDelta` (`utils/task/diskOutput.ts`).
     async fn get_task_output_delta(
         &self,
         task_id: &str,
         from_offset: i64,
     ) -> Result<TaskOutputDelta, coco_error::BoxedError>;
 
-    /// Kill a running background task.
-    async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError>;
+    /// Snapshot of every tracked task.
+    async fn list_tasks(&self) -> Vec<TaskStateBase>;
 
-    /// List all active background tasks.
-    async fn list_tasks(&self) -> Vec<BackgroundTaskInfo>;
-
-    /// Poll tasks for completion and stall events.
-    /// Returns tasks that have notifications pending (completions + stalls).
+    /// Subscribe to the task's terminal-status notification. The
+    /// receiver fires exactly once when the task transitions to a
+    /// terminal state (`Completed` / `Failed` / `Killed`). Returns
+    /// `None` when the id is unknown.
     ///
-    /// TS: `pollTasks()` — called periodically by framework.
-    /// Implementations run stall detection internally during this call.
-    async fn poll_notifications(&self) -> Vec<BackgroundTaskInfo>;
+    /// Replaces 100 ms polling in `TaskOutput` blocking reads with
+    /// event-driven wait. Backed by `tokio::sync::watch::Sender`
+    /// on the production impl — `watch` retains the last value, so
+    /// late subscribers see a task that *already* finished without
+    /// missing the signal.
+    async fn subscribe_terminal(&self, task_id: &str) -> Option<TerminalSignal>;
 }
 
-pub type TaskHandleRef = Arc<dyn TaskHandle>;
+pub type TaskReaderRef = Arc<dyn TaskReader>;
+
+/// One-shot terminal signal. The producer fires this when the task
+/// reaches a terminal state; consumers `await` it. Implemented via
+/// `tokio::sync::watch::Receiver` on the prod impl so the value is
+/// observable even when subscription happens after the task ended.
+pub struct TerminalSignal {
+    rx: tokio::sync::watch::Receiver<coco_types::TaskStatus>,
+}
+
+impl TerminalSignal {
+    pub fn new(rx: tokio::sync::watch::Receiver<coco_types::TaskStatus>) -> Self {
+        Self { rx }
+    }
+
+    /// Wait until the task is in a terminal state, returning the
+    /// final status. If the sender is dropped first, returns
+    /// whatever the last observed status was.
+    pub async fn await_terminal(mut self) -> coco_types::TaskStatus {
+        // `wait_for` returns Ok(borrow) on success. If the sender
+        // is dropped, return the current value as a best-effort
+        // (the watch retains it).
+        if let Ok(borrow) = self.rx.wait_for(|s| s.is_terminal()).await {
+            return *borrow;
+        }
+        *self.rx.borrow()
+    }
+}
+
+/// Lifecycle control surface. Used by `TaskStop`.
+#[async_trait::async_trait]
+pub trait TaskController: Send + Sync {
+    /// Kill a running task. Fires the per-task cancel token and
+    /// flips status to `Killed`. Errors when the id is unknown.
+    async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError>;
+}
+
+pub type TaskControllerRef = Arc<dyn TaskController>;
+
+/// Shell-task spawn surface. Used by `BashTool` /
+/// `PowerShellTool` background paths.
+#[async_trait::async_trait]
+pub trait ShellTaskSpawner: Send + Sync {
+    /// Spawn a background shell task. Returns the task id
+    /// immediately; the child process runs detached.
+    async fn spawn_shell_task(
+        &self,
+        request: BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError>;
+}
+
+pub type ShellTaskSpawnerRef = Arc<dyn ShellTaskSpawner>;
+
+/// Marker super-trait — `Arc<dyn BackgroundTaskHandle>` is the
+/// single value `ToolUseContext` carries. All three sub-traits are
+/// implemented by the same struct (`TaskRuntime`).
+pub trait BackgroundTaskHandle: TaskReader + TaskController + ShellTaskSpawner {}
+
+impl<T> BackgroundTaskHandle for T where T: TaskReader + TaskController + ShellTaskSpawner + ?Sized {}
+
+pub type BackgroundTaskHandleRef = Arc<dyn BackgroundTaskHandle>;
 
 /// Registration side of the background-task surface.
 ///
-/// AgentTool's background path needs to register a freshly-spawned
-/// engine task with the same store the read/control side
-/// ([`TaskHandle`]) consumes. Splitting registration out of
-/// `TaskHandle` keeps the trait shape that `coco-tools` already
-/// targets unchanged while letting `coco-coordinator` reach the
-/// registry through a narrow seam without depending on the CLI
-/// crate where the production impl lives.
+/// `AgentTool`'s background path needs to register a freshly-
+/// spawned engine task with the same store the read/control side
+/// consumes. Kept as a separate trait so `coco-coordinator` can
+/// depend on a narrow seam without dragging the entire
+/// task-spawning surface into its dep set.
 ///
 /// Production impl: `coco_cli::task_runtime::TaskRuntime`.
 #[async_trait::async_trait]
 pub trait AgentTaskRegistry: Send + Sync {
     /// Register a freshly-spawned background AgentTool task.
-    ///
-    /// Returns the `task_id` that subsequent
-    /// [`TaskHandle::get_task_status`] / `get_task_output_delta` /
-    /// `kill_task` calls accept. The implementation owns the per-
-    /// task cancellation token (handed back to the caller for
-    /// observation), output buffer, and lifecycle status.
+    /// Returns the `task_id` the read/control trait accepts.
     async fn register_agent_task(
         &self,
         description: &str,
@@ -298,43 +198,75 @@ pub trait AgentTaskRegistry: Send + Sync {
         cancel: tokio_util::sync::CancellationToken,
     ) -> String;
 
-    /// Append text to a task's output buffer.
+    /// Append text to a task's output buffer (typically a single
+    /// content chunk from the streaming engine).
     async fn append_output(&self, task_id: &str, chunk: &str);
 
-    /// Mark a task completed and stash the final response text (if
-    /// any) into the output buffer.
-    async fn mark_completed(&self, task_id: &str, response_text: Option<&str>);
+    /// Mark an agent task completed. The optional payload populates
+    /// the `<result>` / `<usage>` / `<worktree>` sections of the
+    /// `<task-notification>` envelope. TS:
+    /// `LocalAgentTask.tsx:197-262` `enqueueAgentNotification`.
+    async fn mark_completed(&self, task_id: &str, payload: AgentCompletionPayload);
 
-    /// Mark a task failed and append the error message.
+    /// Mark an agent task failed with an error message.
     async fn mark_failed(&self, task_id: &str, error: &str);
 
-    /// Snapshot a task's accumulated output buffer. Used by the
-    /// periodic AgentSummary timer to feed recent text into the
-    /// summarizer prompt. Returns the empty string for unknown
-    /// task ids.
+    /// Snapshot a task's accumulated output buffer (tail). Used by
+    /// the periodic AgentSummary timer.
     async fn read_output(&self, task_id: &str) -> String;
 
-    /// Path to the task's model-readable output file, when the
-    /// implementation exposes disk-backed task output.
+    /// Path to the task's model-readable output file.
     async fn output_file_path(&self, _task_id: &str) -> Option<std::path::PathBuf> {
         None
     }
 
-    /// Whether a task is in a terminal state. Periodic loops
-    /// observe this so they can stop cleanly without racing the
-    /// final `mark_completed` / `mark_failed` call.
+    /// Whether a task is in a terminal state.
     async fn is_terminal(&self, task_id: &str) -> bool;
 }
 
 pub type AgentTaskRegistryRef = Arc<dyn AgentTaskRegistry>;
+
+/// Optional payload threaded into the agent-task completion
+/// notification. `None` fields are omitted from the XML envelope —
+/// TS parity at `LocalAgentTask.tsx:249-251` (`resultSection`,
+/// `usageSection`, `worktreeSection` are template strings that
+/// evaluate to `''` when the corresponding data is missing).
+#[derive(Debug, Clone, Default)]
+pub struct AgentCompletionPayload {
+    /// Final response text from the subagent. TS: `finalMessage`
+    /// → `<result>...</result>`.
+    pub result: Option<String>,
+    /// Token / tool-use / duration stats. TS: `usage`
+    /// → `<usage>...</usage>`.
+    pub usage: Option<AgentUsage>,
+    /// Worktree info for `isolation: "worktree"` spawns. TS:
+    /// `worktreePath` / `worktreeBranch` → `<worktree>...</worktree>`.
+    pub worktree: Option<AgentWorktree>,
+}
+
+/// Usage block. Field shape mirrors TS `usage` argument to
+/// `enqueueAgentNotification` (`LocalAgentTask.tsx:215-219`).
+#[derive(Debug, Clone)]
+pub struct AgentUsage {
+    pub total_tokens: i64,
+    pub tool_uses: i32,
+    pub duration_ms: i64,
+}
+
+/// Worktree info for completion notifications.
+#[derive(Debug, Clone)]
+pub struct AgentWorktree {
+    pub path: String,
+    pub branch: Option<String>,
+}
 
 /// Sidecar metadata for a background AgentTool spawn. Mirrors TS
 /// `AgentMetadata` (`utils/sessionStorage.ts:264-272`). Persisted
 /// when the spawn registers; read on resume.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct AgentSpawnMetadata {
-    /// Agent type used at original spawn. Resume routes against this
-    /// when `subagent_type` is omitted.
+    /// Agent type used at original spawn. Resume routes against
+    /// this when `subagent_type` is omitted.
     pub agent_type: String,
     /// Worktree path if the spawn used `isolation: "worktree"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -348,19 +280,10 @@ pub struct AgentSpawnMetadata {
 /// `coco-coordinator` (root layer) from `coco-session` (app layer)
 /// without a layer-rule violation. Production impl lives in
 /// `app/cli` and wraps `coco_session::TranscriptStore`.
-///
-/// TS reference: split across `utils/sessionStorage.ts`'s
-/// `getAgentTranscriptPath` / `getAgentMetadataPath` /
-/// `writeAgentMetadata` / `readAgentMetadata` / `getAgentTranscript`.
 #[async_trait::async_trait]
 pub trait AgentTranscriptStore: Send + Sync {
-    /// Append `messages` to the per-agent JSONL transcript. Each
-    /// `Arc<Message>` is serialised once at this seam (the disk wire
-    /// boundary); the in-memory share survives until the JSON is
-    /// emitted. Conversation order is preserved by append order —
-    /// coco-rs doesn't need TS's parent_uuid chain because
-    /// `MessageHistory.messages` is already a Vec. Idempotent across
-    /// multiple calls.
+    /// Append `messages` to the per-agent JSONL transcript.
+    /// Idempotent across multiple calls.
     async fn append_agent_messages(
         &self,
         session_id: &str,
@@ -369,11 +292,7 @@ pub trait AgentTranscriptStore: Send + Sync {
     ) -> Result<(), coco_error::BoxedError>;
 
     /// Read every persisted message for an agent in conversation
-    /// order. Returns `Ok(None)` when no transcript exists (no prior
-    /// spawn). Deserializes from disk directly into `Arc<Message>`
-    /// so callers don't pay a Value → Message round-trip on top of
-    /// the disk read. Resume passes the result as
-    /// `AgentQueryConfig.fork_context_messages`.
+    /// order. Returns `Ok(None)` when no transcript exists.
     async fn load_agent_messages(
         &self,
         session_id: &str,
@@ -399,46 +318,50 @@ pub trait AgentTranscriptStore: Send + Sync {
 pub type AgentTranscriptStoreRef = Arc<dyn AgentTranscriptStore>;
 
 /// No-op implementation for contexts without background tasks.
-#[derive(Debug, Clone)]
-pub struct NoOpTaskHandle;
+/// Used by `ToolUseContext` in tests and headless sessions.
+#[derive(Debug, Clone, Default)]
+pub struct NoOpBackgroundTaskHandle;
 
 #[async_trait::async_trait]
-impl TaskHandle for NoOpTaskHandle {
-    async fn spawn_shell_task(
-        &self,
-        _: BackgroundShellRequest,
-    ) -> Result<String, coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "Background tasks not available in this context",
-            coco_error::StatusCode::Internal,
-        )))
-    }
-    async fn get_task_status(&self, _: &str) -> Result<BackgroundTaskInfo, coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "Background tasks not available in this context",
-            coco_error::StatusCode::Internal,
-        )))
+impl TaskReader for NoOpBackgroundTaskHandle {
+    async fn get_task_status(&self, _: &str) -> Result<TaskStateBase, coco_error::BoxedError> {
+        Err(unavail())
     }
     async fn get_task_output_delta(
         &self,
         _: &str,
         _: i64,
     ) -> Result<TaskOutputDelta, coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "Background tasks not available in this context",
-            coco_error::StatusCode::Internal,
-        )))
+        Err(unavail())
     }
+    async fn list_tasks(&self) -> Vec<TaskStateBase> {
+        vec![]
+    }
+    async fn subscribe_terminal(&self, _: &str) -> Option<TerminalSignal> {
+        None
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskController for NoOpBackgroundTaskHandle {
     async fn kill_task(&self, _: &str) -> Result<(), coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "Background tasks not available in this context",
-            coco_error::StatusCode::Internal,
-        )))
+        Err(unavail())
     }
-    async fn list_tasks(&self) -> Vec<BackgroundTaskInfo> {
-        vec![]
+}
+
+#[async_trait::async_trait]
+impl ShellTaskSpawner for NoOpBackgroundTaskHandle {
+    async fn spawn_shell_task(
+        &self,
+        _: BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError> {
+        Err(unavail())
     }
-    async fn poll_notifications(&self) -> Vec<BackgroundTaskInfo> {
-        vec![]
-    }
+}
+
+fn unavail() -> coco_error::BoxedError {
+    Box::new(coco_error::PlainError::new(
+        "Background tasks not available in this context",
+        coco_error::StatusCode::Internal,
+    ))
 }

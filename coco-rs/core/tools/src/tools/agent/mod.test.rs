@@ -732,31 +732,26 @@ async fn test_send_message_target_not_found() {
 /// Mock TaskHandle that returns a pre-canned status for any task_id.
 /// Used by the auto-resume tests to simulate a stopped bg task.
 struct StoppedTaskHandle {
-    status: coco_tool_runtime::BackgroundTaskStatus,
+    status: coco_types::TaskStatus,
 }
 
 #[async_trait::async_trait]
-impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
-    async fn spawn_shell_task(
-        &self,
-        _: coco_tool_runtime::BackgroundShellRequest,
-    ) -> Result<String, coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "not used in test",
-            coco_error::StatusCode::Internal,
-        )))
-    }
+impl coco_tool_runtime::TaskReader for StoppedTaskHandle {
     async fn get_task_status(
         &self,
         task_id: &str,
-    ) -> Result<coco_tool_runtime::BackgroundTaskInfo, coco_error::BoxedError> {
-        Ok(coco_tool_runtime::BackgroundTaskInfo {
-            task_id: task_id.into(),
+    ) -> Result<coco_types::TaskStateBase, coco_error::BoxedError> {
+        Ok(coco_types::TaskStateBase {
+            id: task_id.into(),
+            task_type: coco_types::TaskType::LocalAgent,
             status: self.status,
-            summary: None,
-            output_file: None,
+            description: String::new(),
             tool_use_id: None,
-            elapsed_seconds: 0.0,
+            start_time: 0,
+            end_time: None,
+            total_paused_ms: None,
+            output_file: String::new(),
+            output_offset: 0,
             notified: false,
         })
     }
@@ -770,14 +765,31 @@ impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
             coco_error::StatusCode::Internal,
         )))
     }
+    async fn list_tasks(&self) -> Vec<coco_types::TaskStateBase> {
+        Vec::new()
+    }
+    async fn subscribe_terminal(&self, _: &str) -> Option<coco_tool_runtime::TerminalSignal> {
+        None
+    }
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::TaskController for StoppedTaskHandle {
     async fn kill_task(&self, _: &str) -> Result<(), coco_error::BoxedError> {
         Ok(())
     }
-    async fn list_tasks(&self) -> Vec<coco_tool_runtime::BackgroundTaskInfo> {
-        Vec::new()
-    }
-    async fn poll_notifications(&self) -> Vec<coco_tool_runtime::BackgroundTaskInfo> {
-        Vec::new()
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::ShellTaskSpawner for StoppedTaskHandle {
+    async fn spawn_shell_task(
+        &self,
+        _: coco_tool_runtime::BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "not used in test",
+            coco_error::StatusCode::Internal,
+        )))
     }
 }
 
@@ -840,7 +852,7 @@ impl AgentHandle for ResumeRecordingHandle {
 
 fn ctx_with_resume_handle_and_status(
     handle: Arc<ResumeRecordingHandle>,
-    status: coco_tool_runtime::BackgroundTaskStatus,
+    status: coco_types::TaskStatus,
 ) -> ToolUseContext {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent = handle;
@@ -852,10 +864,7 @@ fn ctx_with_resume_handle_and_status(
 #[tokio::test]
 async fn test_send_message_auto_resumes_completed_task() {
     let handle = Arc::new(ResumeRecordingHandle::default());
-    let ctx = ctx_with_resume_handle_and_status(
-        handle.clone(),
-        coco_tool_runtime::BackgroundTaskStatus::Completed,
-    );
+    let ctx = ctx_with_resume_handle_and_status(handle.clone(), coco_types::TaskStatus::Completed);
     let result = SendMessageTool
         .execute(
             serde_json::json!({
@@ -885,10 +894,7 @@ async fn test_send_message_auto_resumes_completed_task() {
 #[tokio::test]
 async fn test_send_message_auto_resumes_failed_task() {
     let handle = Arc::new(ResumeRecordingHandle::default());
-    let ctx = ctx_with_resume_handle_and_status(
-        handle.clone(),
-        coco_tool_runtime::BackgroundTaskStatus::Failed,
-    );
+    let ctx = ctx_with_resume_handle_and_status(handle.clone(), coco_types::TaskStatus::Failed);
     SendMessageTool
         .execute(
             serde_json::json!({
@@ -913,7 +919,7 @@ async fn test_send_message_rejects_resume_with_empty_session_id() {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent = handle.clone();
     ctx.task_handle = Some(Arc::new(StoppedTaskHandle {
-        status: coco_tool_runtime::BackgroundTaskStatus::Completed,
+        status: coco_types::TaskStatus::Completed,
     }));
     // session_id_for_history left at None.
     let result = SendMessageTool
@@ -945,10 +951,7 @@ async fn test_send_message_does_not_resume_running_task() {
     // ResumeRecordingHandle's send_message panics if reached, so the
     // test confirms the falls-through error rather than the resume.
     let handle = Arc::new(ResumeRecordingHandle::default());
-    let ctx = ctx_with_resume_handle_and_status(
-        handle.clone(),
-        coco_tool_runtime::BackgroundTaskStatus::Running,
-    );
+    let ctx = ctx_with_resume_handle_and_status(handle.clone(), coco_types::TaskStatus::Running);
     let result = SendMessageTool
         .execute(
             serde_json::json!({

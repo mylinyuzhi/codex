@@ -2077,7 +2077,7 @@ impl SessionRuntime {
         // `SwarmAgentHandle` so AgentTool background spawns and the
         // engine's `Task*` tools see one source of truth.
         if let Some(rt) = self.task_runtime.read().await.clone() {
-            engine = engine.with_task_handle(rt as coco_tool_runtime::TaskHandleRef);
+            engine = engine.with_task_handle(rt as coco_tool_runtime::BackgroundTaskHandleRef);
         }
         if let Some(task_list) = self.task_list.read().await.clone() {
             engine = engine.with_task_list(task_list);
