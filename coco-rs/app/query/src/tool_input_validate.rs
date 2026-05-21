@@ -1,6 +1,6 @@
-//! Layer 2: tool input normalization + schema validation.
+//! schema validation: tool input normalization + schema validation.
 //!
-//! Sits between the provider-adapter-driven Layer 1 (which parses raw
+//! Sits between the provider-adapter-driven wire parsing (which parses raw
 //! `arguments` strings into [`coco_llm_types::ToolCallPart::input`]
 //! values, falling back to `{}` on parse failure) and the per-tool
 //! execution gate in [`tool_call_preparer`].
@@ -17,7 +17,7 @@
 //!   (`formatZodValidationError`).
 //!
 //! Failure paths populate
-//! [`coco_llm_types::ToolInputInvalidReason`] so Layer 3
+//! [`coco_llm_types::ToolInputInvalidReason`] so error wrap
 //! ([`tool_call_preparer::prepare_one_pending_tool_call`]) can pick
 //! the right `<tool_use_error>` wrap prefix without string-matching.
 
@@ -56,10 +56,10 @@ pub fn normalize_value_string(input: &mut Value) {
     }
 }
 
-/// Layer 2 entry point: classifies + sets `invalid` / `invalid_reason`
+/// schema validation entry point: classifies + sets `invalid` / `invalid_reason`
 /// on `tc` when the call cannot be executed as emitted.
 ///
-/// Skipped when the call is already invalid from Layer 1 — the
+/// Skipped when the call is already invalid from wire parsing — the
 /// earlier provider-side classification stands.
 pub async fn validate_tool_call(
     tc: &mut ToolCallPart,
@@ -99,7 +99,7 @@ pub async fn validate_tool_call(
                 target: "coco_query::tool_input",
                 tool = %tc.tool_name,
                 %message,
-                "tool schema failed to compile; skipping Layer-2 validation"
+                "tool schema failed to compile; skipping schema-validation validation"
             );
         }
         Err(SchemaValidationError::Rejected { .. }) => {

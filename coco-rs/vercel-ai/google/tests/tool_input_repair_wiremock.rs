@@ -3,12 +3,12 @@
 //!
 //! Like Anthropic, Gemini's wire `function_call.args` is a structured
 //! JSON `Value`, not a stringified `arguments` field. There is no
-//! Layer-1 string repair to exercise; the tests pin that:
+//! wire-parsing string repair to exercise; the tests pin that:
 //! - Object inputs round-trip verbatim
-//! - Empty / Null / odd shapes pass through unchanged (Layer 2 owns
+//! - Empty / Null / odd shapes pass through unchanged (schema validation owns
 //!   classification)
 //! - `Value::String` anomalies (extremely rare from Gemini but
-//!   theoretically possible) reach Layer 2 intact
+//!   theoretically possible) reach schema validation intact
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

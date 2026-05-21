@@ -125,14 +125,14 @@ fn display_path_translates_json_pointer() {
 // ---------------------------------------------------------------------------
 // Multi-provider, multi-tool-call integration matrix.
 //
-// Simulates the assistant turn that arrives at Layer 2: a batch of
-// `ToolCallPart`s whose `input` already came out of Layer 1
+// Simulates the assistant turn that arrives at schema validation: a batch of
+// `ToolCallPart`s whose `input` already came out of wire parsing
 // (`parse_tool_arguments_or_empty`). This is the exact shape every
 // adapter — OpenAI Chat / OpenAI Responses / OpenAI-compat /
 // Anthropic / Gemini — hands the agent loop, so the tests are
 // provider-agnostic by design. Each entry pins:
 //
-//   (provider-style malformation) → (Layer 1 outcome) → (Layer 2
+//   (provider-style malformation) → (wire parsing outcome) → (schema validation
 //   invalid_reason variant) → (formatted error message body)
 // ---------------------------------------------------------------------------
 
@@ -234,7 +234,7 @@ fn mk_tc(name: &str, input: serde_json::Value) -> ToolCallPart {
     ToolCallPart::new(format!("call_{name}"), name.to_string(), input)
 }
 
-/// Drive a raw `arguments` string through Layer 1 + Layer 2 the same
+/// Drive a raw `arguments` string through wire parsing + schema validation the same
 /// way the adapter + tool_call_preparer do, then return the resulting
 /// `ToolCallPart` so tests can assert against `invalid_reason`.
 async fn run_pipeline(
@@ -316,7 +316,7 @@ async fn matrix_anthropic_streaming_truncated_recovers_value_but_misses_field() 
 
 #[tokio::test]
 async fn matrix_pure_garbage_falls_back_to_schema_missing_fields() {
-    // Layer 1's `parse_with_repair` is intentionally aggressive —
+    // wire parsing's `parse_with_repair` is intentionally aggressive —
     // `\u{0000}!!!@@@%%%` may resolve as `Value::Null` (the leading
     // NUL byte) or `Value::Object({})`. Either way the schema
     // validator must surface a usable error pointing at the bad
@@ -329,8 +329,8 @@ async fn matrix_pure_garbage_falls_back_to_schema_missing_fields() {
         other => panic!("expected SchemaViolation, got {other:?}"),
     };
     // Accept either the "missing required" or "type mismatch"
-    // formatter line — both are valid Layer 2 outputs depending on
-    // what Layer 1 salvaged.
+    // formatter line — both are valid schema validation outputs depending on
+    // what wire parsing salvaged.
     let acceptable = message.contains("required parameter `command` is missing")
         || message.contains("expected as `object`");
     assert!(acceptable, "unexpected message: {message}");
@@ -402,8 +402,8 @@ async fn matrix_no_such_tool_short_circuits_before_schema() {
 #[tokio::test]
 async fn matrix_anthropic_value_string_nested_is_recovered_in_layer_2() {
     // Anthropic non-streaming path: the model nested stringified JSON
-    // inside what should be the input object. Layer 1 passes
-    // `Value::String` through; Layer 2's `normalize_value_string`
+    // inside what should be the input object. wire parsing passes
+    // `Value::String` through; schema validation's `normalize_value_string`
     // recovers it before schema validation.
     let tool = read_tool();
     let mut tc = mk_tc("Read", json!("{\"file_path\": \"/tmp/recovered\"}"));
@@ -415,8 +415,8 @@ async fn matrix_anthropic_value_string_nested_is_recovered_in_layer_2() {
 
 #[tokio::test]
 async fn matrix_layer_1_invalid_skips_layer_2() {
-    // If Layer 1 already set invalid (e.g., the adapter wanted to
-    // signal a truly-unrecoverable case), Layer 2 must respect that
+    // If wire parsing already set invalid (e.g., the adapter wanted to
+    // signal a truly-unrecoverable case), schema validation must respect that
     // — don't overwrite the reason with its own classification.
     let tool = read_tool();
     let mut tc = mk_tc("Read", json!({"file_path": "/tmp/x"})).with_invalid_reason(
@@ -433,7 +433,7 @@ async fn matrix_layer_1_invalid_skips_layer_2() {
             // Reason preserved unchanged.
             assert!(error.contains("line 1"));
         }
-        other => panic!("Layer 2 overwrote Layer 1's reason: {other:?}"),
+        other => panic!("schema validation overwrote wire parsing's reason: {other:?}"),
     }
 }
 

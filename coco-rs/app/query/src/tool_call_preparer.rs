@@ -130,13 +130,13 @@ pub(crate) async fn prepare_one_pending_tool_call(
     let tool_id = prepared.tool_id;
     let tool = prepared.tool;
 
-    // Layer 2 schema validation already ran inside
+    // schema validation already ran inside
     // `prepare_committed_tool_call` (tool_runner.rs:82-123) — it
     // returns `None` on `invalid=true` after emitting the synthetic
     // `<tool_use_error>...>` tool_result, so by reaching this point
     // we know the call is structurally valid. No duplicate validation
     // here; the remaining short-circuit handles the rare case where
-    // Layer 1 set `invalid=true` AFTER `prepare_committed_tool_call`
+    // wire parsing set `invalid=true` AFTER `prepare_committed_tool_call`
     // returned (cannot happen in current code paths, but keeps the
     // invariant local).
     if tc.invalid {

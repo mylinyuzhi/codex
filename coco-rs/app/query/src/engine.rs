@@ -1471,11 +1471,11 @@ impl QueryEngine {
                             // helper, falling back to `Value::Object({})`
                             // on failure. Mirrors TS Claude Code's
                             // `parsed ?? {}` in `utils/messages.ts:2694`
-                            // — let Layer 2 schema validation in
+                            // — let schema validation in
                             // `tool_call_preparer` report specific
                             // missing fields instead of a generic
                             // "JSON broken". `invalid` stays `false`
-                            // here; Layer 2 sets it on schema
+                            // here; schema validation sets it on schema
                             // violation.
                             let parsed_input =
                                 crate::tool_input_parse::parse_tool_arguments_or_empty(
@@ -2576,7 +2576,7 @@ fn assistant_content_from_snapshot(
                 }
                 // Parse with repair, falling back to `Value::Object({})`
                 // on failure. See streaming-path commentary above —
-                // Layer 2 schema validation reports specific missing
+                // schema validation reports specific missing
                 // fields rather than a generic "JSON broken", and the
                 // tool_use/tool_result pairing invariant is preserved
                 // because we never drop the call.
@@ -2591,7 +2591,7 @@ fn assistant_content_from_snapshot(
                 );
                 // Carry the wire-level `invalid` + `invalid_reason`
                 // through reconstruction. Provider adapters set these
-                // when Layer 1 detects an unrecoverable JSON parse
+                // when wire parsing detects an unrecoverable JSON parse
                 // (Anthropic streaming `content_block_stop` flush,
                 // etc.); without this carry-through the agent loop's
                 // synthetic `<tool_use_error>` wrap would fall back to

@@ -12,7 +12,7 @@ use serde::Serialize;
 ///
 /// **Coco-rs-specific extension**: `invalid` + `invalid_reason` mirror the
 /// fields on the post-stream [`crate::ToolCallPart`] so a provider adapter
-/// that detects an unrecoverable Layer-1 parse failure (e.g. Anthropic
+/// that detects an unrecoverable wire-parsing parse failure (e.g. Anthropic
 /// streaming `content_block_stop` flush) can carry the structured
 /// classification through the stream to the consumer. Without this the
 /// stream type would silently drop the reason and the agent loop would
@@ -43,7 +43,7 @@ pub struct LanguageModelV4ToolCall {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_metadata: Option<ProviderMetadata>,
     /// `true` when the provider adapter detected an unrecoverable
-    /// Layer-1 parse failure on this call. Engine consumers copy this
+    /// wire-parsing parse failure on this call. Engine consumers copy this
     /// flag onto the rebuilt [`crate::ToolCallPart`]. Default `false`
     /// plus `skip_serializing_if` keeps the wire body minimal on the
     /// happy path.

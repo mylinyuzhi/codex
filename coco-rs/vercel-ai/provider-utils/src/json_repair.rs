@@ -21,12 +21,12 @@
 //! `content_block_stop`).
 //!
 //! Adapters that fail this call fall back to `Value::Object({})` (not
-//! `invalid = true`) so the Layer-2 schema validator reports the
+//! `invalid = true`) so the schema-validation schema validator reports the
 //! missing fields specifically. Mirrors TS Claude Code's
 //! `parsed ?? {}` fallback in `utils/messages.ts:2694`.
 //!
 //! Parallel implementation: `coco-utils-json-repair` lives one layer
-//! higher (`utils/`) and is used by `app/query` for Layer-2 work; we
+//! higher (`utils/`) and is used by `app/query` for schema-validation work; we
 //! cannot share it from here because `vercel-ai-provider-utils` must
 //! stay free of `coco-*` dependencies per the workspace layering rule.
 //! Both wrappers delegate to `llm_json::repair_json` so behavioural
@@ -72,7 +72,7 @@ pub fn parse_with_repair(raw: &str) -> Result<(Value, RepairOutcome), String> {
 ///    accept it on parameterless tools.
 /// 2. **Non-empty but unrecoverable** → `Value::String(raw)`. The
 ///    model's original output survives intact for diagnostics
-///    (logs) and is visible to downstream layers — Layer 2's
+///    (logs) and is visible to downstream layers — schema validation's
 ///    schema validator surfaces `"expected object, got string"`
 ///    AND the raw bytes can be echoed back to the LLM if the agent
 ///    loop wants to reflect the malformed input verbatim.

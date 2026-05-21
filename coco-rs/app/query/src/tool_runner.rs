@@ -57,10 +57,10 @@ pub(crate) async fn prepare_committed_tool_call(
 
     let Some(tool) = tools.get(&tool_id) else {
         warn!(tool = tool_call.tool_name, "tool not found in registry");
-        // Mirror Layer 3's `<tool_use_error>No such tool available: ...>`
+        // Mirror error wrap's `<tool_use_error>No such tool available: ...>`
         // wrap so the model sees the same format whether the
         // unknown-tool branch fires here (registry miss) or in
-        // `tool_call_preparer` (Layer 2 catch for hallucinated names
+        // `tool_call_preparer` (schema validation catch for hallucinated names
         // not in the per-call tools list).
         let output = format!(
             "<tool_use_error>No such tool available: {}</tool_use_error>",
@@ -79,11 +79,11 @@ pub(crate) async fn prepare_committed_tool_call(
         return None;
     };
 
-    // Layer 1 + Layer 2 short-circuit. The provider adapter (Layer 1)
+    // wire parsing + schema validation short-circuit. The provider adapter (wire parsing)
     // may have flagged the call as `invalid` when raw `arguments`
-    // bytes were unrecoverable. Layer 2 schema validation runs only
-    // when Layer 1 left the call unflagged; otherwise we preserve
-    // Layer 1's reason. Both paths converge on the same `<tool_use_error>`
+    // bytes were unrecoverable. schema validation runs only
+    // when wire parsing left the call unflagged; otherwise we preserve
+    // wire parsing's reason. Both paths converge on the same `<tool_use_error>`
     // wrap selection so the model sees one format whether the failure
     // originated on the wire or in the schema validator.
     let mut validated = tool_call.clone();

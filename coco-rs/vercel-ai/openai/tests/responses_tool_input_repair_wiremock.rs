@@ -126,7 +126,7 @@ async fn responses_nonstream_single_quotes_repaired() {
 async fn responses_nonstream_unrecoverable_layer_1_does_not_invalidate() {
     let tc = dispatch("\u{0000}!!!@@@%%%").await;
     // Raw bytes preserved (Value::String) or salvaged (any non-empty
-    // Value) — Layer 1 never silently drops to `{}`.
+    // Value) — wire parsing never silently drops to `{}`.
     assert_ne!(tc.input, serde_json::json!({}));
     assert!(!tc.invalid);
 }

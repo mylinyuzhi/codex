@@ -41,7 +41,7 @@ reaches those entry points. Anything that lives inside
 Tool-input handling lives in three layers spread across crates,
 each owning a distinct concern:
 
-- **Layer 1 — provider adapter** (`vercel-ai-openai`,
+- **wire parsing — provider adapter** (`vercel-ai-openai`,
   `vercel-ai-openai-compatible`, `vercel-ai-anthropic`,
   `vercel-ai-google`). Calls
   `vercel_ai_provider_utils::parse_tool_arguments_or_empty` inline
@@ -53,10 +53,10 @@ each owning a distinct concern:
   **Coco-rs deviation from TS** `parsed ?? {}`
   (`utils/messages.ts:2694`): TS substitutes `{}` so the validator
   reports "missing fields" only; coco-rs keeps the raw string so
-  Layer 2 + telemetry have the full signal. Adapters never raise
-  `invalid=true` for any input; classification is Layer 2's job
+  schema validation + telemetry have the full signal. Adapters never raise
+  `invalid=true` for any input; classification is schema validation's job
   exclusively (uniform contract across providers).
-- **Layer 2 — `app/query/src/tool_input_validate.rs`**.
+- **schema validation — `app/query/src/tool_input_validate.rs`**.
   `validate_tool_call` runs `Value::String` recovery + JSON Schema
   validation via the existing
   `coco_tool_runtime::ToolSchemaValidator` (called pre-PreToolUse
@@ -64,10 +64,10 @@ each owning a distinct concern:
   `validate_effective_input_or_complete_error` at
   `tool_call_preparer.rs` keeps catching hook-rewritten input).
   Sets `ToolCallPart.invalid_reason` to the structured variant
-  (`SchemaViolation` / `NoSuchTool` / `JsonParseFailed`) so Layer 3
+  (`SchemaViolation` / `NoSuchTool` / `JsonParseFailed`) so error wrap
   picks the wrap prefix by `match`, not string compare. Mirrors TS
   `services/tools/toolExecution.ts:614-680`.
-- **Layer 3 — `app/query/src/tool_call_preparer.rs::prepare_one_pending_tool_call`**.
+- **error wrap — `app/query/src/tool_call_preparer.rs::prepare_one_pending_tool_call`**.
   `tc.invalid` → synthetic
   `tool_result(is_error: true, content: "<tool_use_error>{prefix}: ...</tool_use_error>")`
   via `complete_tool_call_with_error_mode`. The agent loop's
@@ -80,17 +80,17 @@ If you find yourself adding tool-input parsing or validation
 logic to `vercel-ai/ai/src/generate_text/`, you almost certainly
 want `app/query` instead.
 
-**Why Layer 2 lives in `app/query`, not here**: `coco-inference` is
+**Why schema validation lives in `app/query`, not here**: `coco-inference` is
 deliberately tool-agnostic — it carries no dependency on
 `coco-tool-runtime` and no awareness of the per-tool JSON Schema
 registry that drives validation. Other `ApiClient` callers
 (compaction, side-queries, auto-mode classifier, title generation,
 hook LLM) all pass `tools: None` and therefore have nothing to
-validate against. Layer 2 sits at the only path that actually
+validate against. schema validation sits at the only path that actually
 executes tools (the agent loop's `tool_call_preparer`), where the
 `ToolSchemaValidator` is already on `ToolUseContext`. The wire-level
 wiremock tests under each `vercel-ai-*/tests/*_wiremock.rs` lock the
-Layer 1 contract; the end-to-end coverage of Layer 2 lives in
+wire parsing contract; the end-to-end coverage of schema validation lives in
 `app/query/tests/tool_input_error_chain.rs` +
 `app/query/src/tool_input_validate.test.rs`.
 
@@ -98,10 +98,10 @@ Layer 1 contract; the end-to-end coverage of Layer 2 lives in
 not a correctness issue): when `parse_with_repair` fails inside the
 adapter's `content_block_stop` handler, the adapter forwards the
 raw `input_json` string verbatim. Engine reconstruction then runs
-`parse_tool_arguments_or_empty` on the same string, and Layer 2's
+`parse_tool_arguments_or_empty` on the same string, and schema validation's
 `normalize_value_string` may parse it a third time when handling
 `Value::String` inputs. Each pass is pure (no side effects), so
-this is wasted work, not wrong work. The uniform "Layer 1 never
+this is wasted work, not wrong work. The uniform "wire parsing never
 unilaterally invalidates" contract is preserved across providers
 at the cost of two extra parse attempts on the same garbage. A
 future optimization could short-circuit by emitting `Value::String`

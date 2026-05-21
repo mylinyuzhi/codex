@@ -77,11 +77,11 @@ pub struct ToolCallSegment {
     pub provider_metadata: Option<ProviderMetadata>,
     /// Coco-rs extension carried through from
     /// [`vercel_ai_provider::LanguageModelV4ToolCall.invalid`]: the
-    /// adapter detected an unrecoverable Layer-1 parse failure on
+    /// adapter detected an unrecoverable wire-parsing parse failure on
     /// the wire. Engine reconstruction copies this onto the rebuilt
     /// [`coco_llm_types::ToolCallPart`] so the agent loop can pick
     /// the right `<tool_use_error>` wrap prefix without going through
-    /// Layer 2 schema validation first.
+    /// schema validation first.
     pub invalid: bool,
     /// Structured reason accompanying [`Self::invalid`]; set by the
     /// provider adapter at the wire boundary.
@@ -366,7 +366,7 @@ impl AssistantTurnSnapshotState {
                     if tc.dynamic.is_some() {
                         seg.dynamic = tc.dynamic;
                     }
-                    // Carry Layer-1 invalid_reason from the wire
+                    // Carry wire-parsing invalid_reason from the wire
                     // close into the accumulator.
                     if tc.invalid {
                         seg.invalid = true;
@@ -840,7 +840,7 @@ pub fn synthetic_stream_from_content(
                 // can mark `is_complete=true` and downstream consumers
                 // that filter on `is_complete` see the tool call.
                 // Coco-rs extension: carry `invalid` + `invalid_reason`
-                // through the stream so adapter-detected Layer-1
+                // through the stream so adapter-detected wire-parsing
                 // failures (e.g. Anthropic streaming `content_block_stop`
                 // flush) survive engine reconstruction.
                 let mut close = LanguageModelV4ToolCall::new(call_id, tool_name, input_str);

@@ -35,7 +35,7 @@ pub(crate) struct ToolInputNormalizationContext<'a> {
 /// branch reads the target file from disk to fuzz-match `old_string`
 /// after whitespace normalization. That logic belongs in the
 /// Edit/MultiEdit tools themselves (where file I/O is already gated by
-/// permission). Adding it here would couple every Layer-1 → Layer-2
+/// permission). Adding it here would couple every wire-parsing → schema-validation
 /// hop to filesystem reads.
 pub(crate) fn normalize_observable_tool_input(
     tool_name: &str,

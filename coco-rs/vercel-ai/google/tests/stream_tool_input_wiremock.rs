@@ -8,7 +8,7 @@
 //!
 //! Adapter behaviour we pin:
 //! - Object `args` round-trips verbatim (no string parse step)
-//! - `Value::String` anomaly passes through to Layer 2 unchanged
+//! - `Value::String` anomaly passes through to schema validation unchanged
 //! - Stream `LanguageModelV4ToolCall.input` carries the JSON-
 //!   stringified form of the structured value
 

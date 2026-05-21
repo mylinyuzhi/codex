@@ -156,7 +156,7 @@ impl ReasoningPart {
 ///
 /// `input` always carries the model's best-known emission — even when the
 /// call is `invalid`. Adapters that fail JSON parsing fall back to
-/// `JSONValue::Object({})` (so Layer 2 schema validation can report
+/// `JSONValue::Object({})` (so schema validation can report
 /// specific missing fields; mirrors TS `parsed ?? {}` in
 /// `utils/messages.ts:2694`). Adapters that detect a truly unrecoverable
 /// `Value::String` payload preserve the raw bytes inside `input` so the
@@ -230,7 +230,7 @@ pub enum ToolInputInvalidReason {
     },
     /// Schema validator rejected the input. `message` carries the
     /// LLM-friendly multi-line error already formatted via
-    /// `format_schema_error` — Layer 3 wraps it verbatim inside the
+    /// `format_schema_error` — error wrap wraps it verbatim inside the
     /// `<tool_use_error>InputValidationError: …</tool_use_error>`
     /// envelope without re-formatting.
     SchemaViolation {

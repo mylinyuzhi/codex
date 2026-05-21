@@ -5,12 +5,12 @@
 //! given malformation. The test then asserts on `QueryResult.final_messages`
 //! that the synthetic `tool_result` produced by the agent loop carries
 //! the expected `<tool_use_error>` content — exercising the entire
-//! query → inference → provider → tool_call_preparer → Layer-2 →
+//! query → inference → provider → tool_call_preparer → schema-validation →
 //! tool_result chain end-to-end.
 //!
 //! Three emission shapes are covered (see `MockToolEmission`):
 //! - `Clean` — pre-parsed object (Anthropic non-streaming Value, Gemini).
-//! - `FromRawArguments` — raw string passed through Layer 1 helper
+//! - `FromRawArguments` — raw string passed through wire parsing helper
 //!   (OpenAI Chat / Responses / OpenAI-compat / Anthropic streaming).
 //! - `InvalidWithReason` — adapter detected unrecoverable parse failure
 //!   and emitted `invalid_reason` directly.
@@ -71,7 +71,7 @@ fn tool_result_bodies(result: &coco_query::QueryResult) -> Vec<String> {
 
 // ---------------------------------------------------------------------------
 // Scenario 1: OpenAI-style raw `arguments` string — trailing comma is
-// repaired in Layer 1 and the tool executes successfully.
+// repaired in wire parsing and the tool executes successfully.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -109,7 +109,7 @@ async fn full_chain_openai_trailing_comma_repaired_and_executes() {
 
 // ---------------------------------------------------------------------------
 // Scenario 2: GLM/Doubao-style raw markdown-fenced `arguments` — fence
-// is stripped in Layer 1.
+// is stripped in wire parsing.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -137,17 +137,17 @@ async fn full_chain_glm_markdown_fence_repaired() {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 3: Missing required field — Layer 1 falls back to `{}`,
-// downstream validation (Layer 2 schema validator when the tool
+// Scenario 3: Missing required field — wire parsing falls back to `{}`,
+// downstream validation (schema validation schema validator when the tool
 // declares a full JSON schema, OR `tool.validate_input` semantic
 // check for tools still on the property-only schema) produces a
 // model-readable error naming the missing field.
 //
 // `core_tools()` registers production tools (Read/Bash/…) which use
-// the property-only `input_schema()` envelope; Layer 2 vacuously
+// the property-only `input_schema()` envelope; schema validation vacuously
 // passes (no `required` constraint), so this test asserts the
 // downstream `tool.validate_input` path. Once tools migrate to full
-// `input_json_schema()` overrides, Layer 2 will surface the
+// `input_json_schema()` overrides, schema validation will surface the
 // `<tool_use_error>InputValidationError: …>` wrap instead — the
 // invariant is "model sees a useful error", not the exact wrap.
 // ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ async fn full_chain_missing_required_field_surfaces_useful_error() {
     let result = run_with_mock(model, "read missing", core_tools()).await;
     let bodies = tool_result_bodies(&result);
     let useful = bodies.iter().any(|b| {
-        // Either path (Layer 2 SchemaViolation wrap, or Tool runtime
+        // Either path (schema validation SchemaViolation wrap, or Tool runtime
         // validation message) is acceptable as long as `file_path`
         // is named.
         b.contains("file_path")
@@ -180,7 +180,7 @@ async fn full_chain_missing_required_field_surfaces_useful_error() {
 // **not preserved through `synthetic_stream_from_content`** —
 // `LanguageModelV4ToolCall` (wire type) carries only the input
 // string, by design (mirrors `@ai-sdk/provider`). Engine rebuilds
-// the `ToolCallPart` from stream events and runs Layer 1 again on
+// the `ToolCallPart` from stream events and runs wire parsing again on
 // the (string) input.
 //
 // Production: this means the **real** path for JsonParseFailed is
@@ -193,7 +193,7 @@ async fn full_chain_missing_required_field_surfaces_useful_error() {
 
 #[tokio::test]
 async fn full_chain_invalid_reason_carried_directly_via_engine() {
-    // Use `from_raw` with garbage that hits Layer 1's `{}` fallback;
+    // Use `from_raw` with garbage that hits wire parsing's `{}` fallback;
     // downstream validation picks up the missing field.
     let model = MockModelBuilder::new()
         .on_call(0, |_| {
@@ -211,7 +211,7 @@ async fn full_chain_invalid_reason_carried_directly_via_engine() {
         !bodies.is_empty(),
         "expected at least one tool_result emitted"
     );
-    // Either Layer 2 schema validation produces an InputValidationError
+    // Either schema validation produces an InputValidationError
     // wrap (when `parse_with_repair` salvages to a non-object value
     // that fails the `object` constraint) or the tool's runtime
     // `validate_input` names the missing field. Both are useful
@@ -229,7 +229,7 @@ async fn full_chain_invalid_reason_carried_directly_via_engine() {
 
 // ---------------------------------------------------------------------------
 // Scenario 5: Hallucinated tool name (provider returns a ToolCallPart
-// for a tool that isn't in the registry). Layer 2 NoSuchTool short-
+// for a tool that isn't in the registry). schema validation NoSuchTool short-
 // circuits with the dedicated wrap prefix.
 // ---------------------------------------------------------------------------
 
@@ -330,8 +330,8 @@ async fn full_chain_multi_tool_mixed_outcomes_each_independent() {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 7: Anthropic Value::String passthrough — Layer 1 hands the
-// raw `Value::String("{json}")`, Layer 2 `normalize_value_string`
+// Scenario 7: Anthropic Value::String passthrough — wire parsing hands the
+// raw `Value::String("{json}")`, schema validation `normalize_value_string`
 // recovers the inner object before schema validation. The model
 // doesn't see an error.
 // ---------------------------------------------------------------------------
@@ -361,7 +361,7 @@ async fn full_chain_anthropic_value_string_recovered_in_layer_2() {
     let bodies = tool_result_bodies(&result);
     assert!(
         !bodies[0].contains("<tool_use_error>"),
-        "Value::String should be recovered by Layer 2 normalize_value_string: {}",
+        "Value::String should be recovered by schema validation normalize_value_string: {}",
         bodies[0]
     );
     // Read tool prefixes lines with byte counters / numbers; just

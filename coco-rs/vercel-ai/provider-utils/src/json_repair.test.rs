@@ -61,7 +61,7 @@ fn truly_malformed_returns_err() {
 // Provider-shape matrix — common malformed payloads each provider family
 // emits. `parse_tool_arguments_or_empty` is what every adapter calls when
 // turning the wire `arguments`/`input_json` string into a `Value`; its
-// job is to either recover or hand Layer 2 an empty object so the schema
+// job is to either recover or hand schema validation an empty object so the schema
 // validator can name the missing fields.
 //
 // Each test simulates *one provider's typical malformation* to lock in
@@ -151,7 +151,7 @@ fn provider_matrix_anthropic_streaming_unclosed_string() {
 fn provider_matrix_array_root_falls_back_to_empty() {
     // Tool input must be an object per JSON Schema; bare arrays
     // recover as arrays, which the schema validator then rejects.
-    // The recovery itself doesn't fall back to {} — that's Layer 2's
+    // The recovery itself doesn't fall back to {} — that's schema validation's
     // concern. This test pins the contract.
     let v = parse_tool_arguments_or_empty(r#"[1, 2, 3]"#, "Tool");
     assert_eq!(v, json!([1, 2, 3]));
@@ -160,7 +160,7 @@ fn provider_matrix_array_root_falls_back_to_empty() {
 #[test]
 fn provider_matrix_pure_garbage_preserves_raw_string() {
     // When repair truly fails (e.g., bytes that can't be salvaged
-    // into JSON), we hand Layer 2 a `Value::String(raw)` so the
+    // into JSON), we hand schema validation a `Value::String(raw)` so the
     // schema validator surfaces "expected object, got string" AND
     // the raw bytes survive for downstream diagnostics.
     let raw = "\u{0000}\u{0001}}!{!!!";
@@ -184,7 +184,7 @@ fn provider_matrix_null_arguments_string_falls_back_to_empty() {
     // `arguments: "null"` is *valid* JSON but the wrong shape for a
     // tool call. `parse_with_repair` returns `Value::Null`; the
     // helper passes that through (it's not its job to coerce shape).
-    // Layer 2 schema validation flags it.
+    // schema validation flags it.
     let v = parse_tool_arguments_or_empty("null", "Tool");
     assert_eq!(v, json!(null));
 }
@@ -199,9 +199,9 @@ fn provider_matrix_number_arguments_string_passes_through() {
 fn provider_matrix_nested_stringified_json_not_unwrapped() {
     // `arguments: "\"{\\\"path\\\":\\\"/tmp\\\"}\""` produces
     // `Value::String("{\"path\":\"/tmp\"}")` — a JSON string whose
-    // inner content happens to be JSON. Layer 1 does NOT recursively
-    // parse; Layer 2's `normalize_value_string` handles that case.
-    // This test pins the Layer 1 contract.
+    // inner content happens to be JSON. wire parsing does NOT recursively
+    // parse; schema validation's `normalize_value_string` handles that case.
+    // This test pins the wire parsing contract.
     let v = parse_tool_arguments_or_empty("\"{\\\"path\\\":\\\"/tmp\\\"}\"", "Read");
     assert_eq!(v, json!("{\"path\":\"/tmp\"}"));
 }

@@ -6,7 +6,7 @@
 //! including the malformations real models occasionally emit
 //! (markdown fence, trailing comma, unrecoverable garbage). The
 //! assertions pin the resulting `ToolCallPart.input` /
-//! `ToolCallPart.invalid` so the Layer-1 contract
+//! `ToolCallPart.invalid` so the wire-parsing contract
 //! (`parse_tool_arguments_or_empty` with `{}` fallback) is locked at
 //! the wire boundary, not just at the helper.
 //!
@@ -148,14 +148,14 @@ async fn openai_chat_nonstream_markdown_fence_is_repaired() {
 #[tokio::test]
 async fn openai_chat_nonstream_unrecoverable_preserves_raw_string() {
     // Pure garbage — `parse_with_repair` returns `Err`; the adapter
-    // preserves the raw bytes as `Value::String(raw)` so Layer 2's
+    // preserves the raw bytes as `Value::String(raw)` so schema validation's
     // schema validator says "expected object, got string" AND the
     // model's original output is recoverable for diagnostics.
     //
-    // The contract we lock here: Layer 1 **does not unilaterally
+    // The contract we lock here: wire parsing **does not unilaterally
     // invalidate** — whatever `parse_with_repair` returns flows
     // through (or the raw string is preserved); classification is
-    // Layer 2's job.
+    // schema validation's job.
     let raw = "\u{0000}!!!@@@%%%";
     let tc = dispatch_with_arguments(raw).await;
     // Accept either: (a) llm_json salvaged into some Value, or
@@ -164,7 +164,7 @@ async fn openai_chat_nonstream_unrecoverable_preserves_raw_string() {
     assert_ne!(tc.input, serde_json::json!({}), "must not drop raw input");
     assert!(
         !tc.invalid,
-        "Layer 1 must not unilaterally invalidate; Layer 2 owns that decision"
+        "wire parsing must not unilaterally invalidate; schema validation owns that decision"
     );
 }
 

@@ -44,11 +44,11 @@ IDs / timing / encoding: `generate_id`, `delay`, `parse_retry_after`, `convert_b
   OpenAI output. Adapters in `vercel-ai-openai*` and
   `vercel-ai-anthropic`'s streaming `content_block_stop` branch
   call this helper inline; failure still falls back to
-  `Value::Object({})` (Layer 2 schema validation reports
+  `Value::Object({})` (schema validation reports
   specific missing fields on the next turn). See
   `services/inference/CLAUDE.md` "Call path" for the full 3-layer
   story. Parallel implementation `coco-utils-json-repair` lives one
-  layer higher (`utils/`) and is used by `app/query` for Layer-2
+  layer higher (`utils/`) and is used by `app/query` for schema-validation
   work; the duplication exists because layering forbids
   `vercel-ai-provider-utils` from depending on `coco-*` crates.
   Both wrappers delegate to `llm_json::repair_json` so drift is

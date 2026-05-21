@@ -409,7 +409,7 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
 
         // Tool calls — route raw `arguments` through `llm_json`-backed
         // repair. On parse failure, fall back to `Value::Object({})`
-        // (not `invalid = true`) so Layer 2 schema validation in
+        // (not `invalid = true`) so schema validation in
         // `app/query` reports the specific missing fields instead of
         // just "JSON broken". Mirrors TS Claude Code's `parsed ?? {}`
         // in `utils/messages.ts:2694`.

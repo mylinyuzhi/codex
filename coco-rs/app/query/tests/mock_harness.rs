@@ -56,7 +56,7 @@ use tokio_util::sync::CancellationToken;
 
 /// Mirror what `vercel_ai_provider_utils::parse_tool_arguments_or_empty`
 /// does, so tests using `MockToolEmission::FromRawArguments` reproduce
-/// the exact Layer-1 outcome that real adapters produce.
+/// the exact wire-parsing outcome that real adapters produce.
 ///
 /// Empty input → `{}` (parameterless convention); non-empty
 /// unrecoverable → `Value::String(raw)` (preserves diagnostics).
@@ -101,24 +101,24 @@ pub enum MockResponse {
     /// - [`MockToolEmission::FromRawArguments`] — raw `arguments`
     ///   string, run through `parse_tool_arguments_or_empty` the
     ///   same way OpenAI Chat / Responses / OpenAI-compat /
-    ///   Anthropic streaming do. The full Layer 1 repair behaviour
+    ///   Anthropic streaming do. The full wire parsing repair behaviour
     ///   (markdown fence stripping, trailing-comma fix, `{}`
     ///   fallback) is exercised.
     /// - [`MockToolEmission::InvalidWithReason`] — pre-set
-    ///   `invalid_reason` to drive Layer 3's wrap-prefix selection
-    ///   without going through Layer 2 (useful for adapter-side
+    ///   `invalid_reason` to drive error wrap's wrap-prefix selection
+    ///   without going through schema validation (useful for adapter-side
     ///   parse failures that bypass schema validation).
     MixedToolCalls(Vec<MockToolEmission>),
 }
 
 /// One tool emission inside a [`MockResponse::MixedToolCalls`] batch.
 pub enum MockToolEmission {
-    /// Pre-parsed input value (already through Layer 1).
+    /// Pre-parsed input value (already through wire parsing).
     Clean {
         tool_name: String,
         input: serde_json::Value,
     },
-    /// Raw `arguments` string — runs through Layer 1 helper.
+    /// Raw `arguments` string — runs through wire parsing helper.
     FromRawArguments {
         tool_name: String,
         raw_arguments: String,
@@ -178,7 +178,7 @@ impl MockToolEmission {
                 // string path. `coco-utils-json-repair` is the same
                 // `llm_json::repair_json` wrapper that
                 // `vercel-ai-provider-utils` exposes, so this mock
-                // matches the real Layer-1 outcome byte-for-byte.
+                // matches the real wire-parsing outcome byte-for-byte.
                 let input = parse_raw_arguments_like_adapter(&raw_arguments);
                 AssistantContentPart::ToolCall(ToolCallPart {
                     tool_call_id,

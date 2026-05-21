@@ -1,8 +1,8 @@
-//! Layer-1 tool-input parsing helper for the streaming / non-streaming
+//! wire-parsing tool-input parsing helper for the streaming / non-streaming
 //! engine paths.
 //!
 //! Wraps [`coco_utils_json_repair::parse_with_repair`] with the
-//! `parse_failure → Value::Object({})` fallback that Layer 2 schema
+//! `parse_failure → Value::Object({})` fallback that schema validation schema
 //! validation depends on. Mirrors TS Claude Code's `parsed ?? {}` in
 //! `utils/messages.ts:2694` — by handing the validator an empty
 //! object instead of a `Null` sentinel, the LLM receives a precise

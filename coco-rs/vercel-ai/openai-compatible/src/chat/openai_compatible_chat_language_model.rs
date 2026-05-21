@@ -301,7 +301,7 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
 
         // Tool calls — route raw arguments through `llm_json`-backed
         // repair; fall back to `Value::Object({})` on failure so
-        // Layer 2 schema validation reports missing fields.
+        // schema validation reports missing fields.
         if let Some(ref tool_calls) = choice.message.tool_calls {
             for tc in tool_calls {
                 let input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
