@@ -151,6 +151,7 @@ pub use task_handle::TaskControllerRef;
 pub use task_handle::TaskOutputDelta;
 pub use task_handle::TaskReader;
 pub use task_handle::TaskReaderRef;
+pub use task_handle::TerminalOutputs;
 pub use task_handle::TerminalSignal;
 pub use task_list_handle::InMemoryTaskListHandle;
 pub use task_list_handle::InMemoryTodoListHandle;

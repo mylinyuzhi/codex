@@ -306,9 +306,6 @@ async fn test_factory_installs_custom_agent_handle() {
         async fn get_agent_output(&self, _agent_id: &str) -> Result<String, String> {
             Err("marker".into())
         }
-        async fn background_agent(&self, _agent_id: &str) -> Result<(), String> {
-            Err("marker".into())
-        }
     }
 
     let f = ToolContextFactory {

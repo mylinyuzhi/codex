@@ -449,7 +449,8 @@ impl QueryEngine {
     /// Snapshot running async-agent tasks for post-compact attachment
     /// emission. Filters per TS `compact.ts:1577-1582`: skip the agent
     /// that owns this engine's `agent_id`, drop pending tasks (not yet
-    /// meaningful), drop terminal tasks the model already saw notified.
+    /// meaningful), drop terminal tasks the `TaskOutput` tool already
+    /// consumed (`LocalAgentExtra.retrieved`).
     pub(crate) async fn snapshot_async_agents_for_post_compact(
         &self,
     ) -> Vec<coco_compact::AsyncAgentSnapshot> {
@@ -458,31 +459,38 @@ impl QueryEngine {
         };
         let listed = tasks.list().await;
         let self_agent = self.config.agent_id.as_deref();
-        listed
-            .into_iter()
-            .filter(|t| matches!(t.task_type, coco_types::TaskType::LocalAgent))
-            .filter(|t| !matches!(t.status, coco_types::TaskStatus::Pending))
+        let mut out = Vec::with_capacity(listed.len());
+        for t in listed {
+            if !matches!(t.task_type, coco_types::TaskType::LocalAgent) {
+                continue;
+            }
+            if matches!(t.status, coco_types::TaskStatus::Pending) {
+                continue;
+            }
             // Skip the engine's own agent — it's already part of the
             // visible conversation, not a peer that the model could
             // duplicate.
-            .filter(|t| match self_agent {
-                Some(a) => t.id.as_str() != a,
-                None => true,
-            })
-            // TS additionally filters `agent.retrieved == true`. coco-rs
-            // task taxonomy doesn't carry an explicit "retrieved" bit;
-            // the closest analog is `notified` (the SDK has emitted the
-            // completion event). Using `notified` keeps duplicate-spawn
-            // protection without re-listing already-acknowledged work.
-            .filter(|t| !(t.status.is_terminal() && t.notified))
-            .map(|t| coco_compact::AsyncAgentSnapshot {
-                task_id: t.id,
+            if let Some(a) = self_agent
+                && t.id.as_str() == a
+            {
+                continue;
+            }
+            // TS `compact.ts:1578` — once the `TaskOutput` tool serves
+            // a terminal agent's output, the compact reminder stops
+            // re-announcing it. coco-rs stores this in the sparse
+            // `LocalAgentExtra` sidecar.
+            if t.status.is_terminal() && tasks.local_agent_extra(&t.id).await.retrieved {
+                continue;
+            }
+            out.push(coco_compact::AsyncAgentSnapshot {
+                task_id: t.id.clone(),
                 status: task_status_to_ts_string(t.status),
                 description: t.description,
                 delta_summary: None,
                 output_file_path: t.output_file,
-            })
-            .collect()
+            });
+        }
+        out
     }
 
     /// Stamp the most recent assistant timestamp (called from the stream

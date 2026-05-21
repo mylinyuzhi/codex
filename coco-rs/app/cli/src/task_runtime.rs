@@ -35,6 +35,7 @@ mod stall;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -44,10 +45,10 @@ use coco_tasks::{
 };
 use coco_tool_runtime::{
     AgentCompletionPayload, AgentTaskRegistry, BackgroundShellRequest, ShellTaskSpawner,
-    TaskController, TaskOutputDelta, TaskReader, TerminalSignal,
+    TaskController, TaskOutputDelta, TaskReader, TerminalOutputs, TerminalSignal,
 };
 use coco_types::{TaskStateBase, TaskStatus, TaskType};
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, trace, warn};
 
@@ -60,9 +61,33 @@ use crate::disk_task_output::{DEFAULT_MAX_READ_BYTES, DiskOutputs, DiskTaskOutpu
 /// observer) can `await` instead of polling. `watch` retains the
 /// last value, so a subscriber that arrives after the task ended
 /// still sees the terminal status.
+///
+/// `invoking_agent_id` is the routing filter on `CommandQueue` for
+/// terminal notifications — it's the agent that *called* the tool
+/// that created this task (`ctx.agent_id`), NOT a generated subagent
+/// id. Stored here (rather than re-read from `TaskManager`) because
+/// `TaskStateBase` carries `tool_use_id` but not `agent_id`. TS
+/// parity: `BashTool.tsx:910` / `AgentTool.tsx` thread
+/// `toolUseContext.agentId` through to the notification.
+///
+/// `detach` is the per-task one-shot "move to background" signal
+/// (W2). `tool.execute` in fg mode `select!`s on `.notified()`. The
+/// adjacent `detached` flag is the CAS gate that makes
+/// [`TaskRuntime::signal_detach`] idempotent — mirrors TS
+/// `backgroundAgentTask`'s `if (task.isBackgrounded) return false`
+/// (`tasks/LocalAgentTask/LocalAgentTask.tsx:620-622`).
 struct TaskEntry {
     cancel: CancellationToken,
     status_tx: watch::Sender<TaskStatus>,
+    invoking_agent_id: Option<String>,
+    detach: Arc<Notify>,
+    detached: Arc<AtomicBool>,
+    /// Set once by the shell driver in `apply_shell_terminal_state`
+    /// for `Exited` outcomes. `None` for agent tasks and shell
+    /// outcomes lacking a process exit (`Cancelled` / `SpawnFailed` /
+    /// `TimedOut`). Read by [`TaskRuntime::read_terminal_outputs`] to
+    /// compose the fg `ToolResult.data` `exitCode` field.
+    exit_code: Arc<std::sync::OnceLock<i32>>,
 }
 
 /// Production task runtime.
@@ -131,16 +156,18 @@ impl TaskRuntime {
 
     /// Register a background AgentTool spawn. Mints the id, resolves
     /// the disk path, inserts as `Running` with one lifecycle event,
-    /// and stores per-task control state (cancel token + watch).
+    /// and stores per-task control state (cancel token + watch +
+    /// invoking agent id).
     #[instrument(
         level = "info",
         skip(self, cancel),
-        fields(description = %description, tool_use_id = ?tool_use_id)
+        fields(description = %description, tool_use_id = ?tool_use_id, invoking_agent_id = ?invoking_agent_id)
     )]
     pub async fn register_agent_task(
         &self,
         description: &str,
         tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
         cancel: CancellationToken,
     ) -> String {
         let task_id = coco_types::generate_task_id(TaskType::LocalAgent);
@@ -166,18 +193,93 @@ impl TaskRuntime {
         // on demand, and `send_replace` doesn't require receivers
         // (`tokio::sync::watch::Sender::send_replace`).
         let (status_tx, _) = watch::channel(TaskStatus::Running);
-        self.entries
-            .write()
-            .await
-            .insert(task_id.clone(), TaskEntry { cancel, status_tx });
+        self.entries.write().await.insert(
+            task_id.clone(),
+            TaskEntry {
+                cancel: cancel.clone(),
+                status_tx,
+                invoking_agent_id: invoking_agent_id.map(String::from),
+                detach: Arc::new(Notify::new()),
+                detached: Arc::new(AtomicBool::new(false)),
+                exit_code: Arc::new(std::sync::OnceLock::new()),
+            },
+        );
+        // W6 (Item 3 / A4): spawn the agent stall watchdog. Fires a
+        // notification if the agent's disk output is silent for
+        // `AGENT_STALL_THRESHOLD_MS`. The bg agent driver in
+        // `coordinator::spawn_background` drains `Stream::TextDelta`
+        // into `append_output` so disk-size growth is a faithful
+        // proxy for "agent is still working". Cancel propagates from
+        // the task entry's cancel token, so terminal transitions /
+        // `kill_task` stop the watchdog cleanly.
+        tokio::spawn(stall::agent_watchdog(
+            task_id.clone(),
+            description.to_string(),
+            tool_use_id.map(String::from),
+            invoking_agent_id.map(String::from),
+            output_path.clone(),
+            dto.clone(),
+            self.notification_sink.clone(),
+            cancel,
+        ));
         info!(
             target: "coco::task_runtime",
             task_id = %task_id,
             task_type = "local_agent",
             output_file = %output_path,
-            "agent task registered (Running)"
+            "agent task registered (Running, stall watchdog spawned)"
         );
         task_id
+    }
+
+    /// W2: signal that a foreground awaiter should detach and let
+    /// the task continue in the background. Idempotent — second and
+    /// subsequent calls are no-ops (returns `false`). Mirrors TS
+    /// `backgroundAgentTask` / `shellCommand.background()`.
+    ///
+    /// Mechanics:
+    /// 1. CAS the per-task `detached: AtomicBool` to true. If already
+    ///    set, return `false` immediately.
+    /// 2. Mark `LocalAgentExtra.is_backgrounded = true` so the TUI
+    ///    panel filter can hide the task from the fg list.
+    /// 3. Call `detach.notify_one()` — wakes the fg `tool.execute`
+    ///    `select!` arm awaiting `.notified()`.
+    ///
+    /// Returns `false` (no signal fired) for unknown task ids.
+    #[instrument(level = "info", skip(self), fields(task_id = %task_id))]
+    pub async fn signal_detach(&self, task_id: &str) -> bool {
+        let snapshot = {
+            let entries = self.entries.read().await;
+            entries
+                .get(task_id)
+                .map(|e| (e.detach.clone(), e.detached.clone()))
+        };
+        let Some((detach, detached)) = snapshot else {
+            debug!(
+                target: "coco::task_runtime",
+                task_id,
+                "signal_detach: unknown task id"
+            );
+            return false;
+        };
+        // CAS gate. `swap` returns the *previous* value: if it was
+        // already true, this is a no-op (TS parity:
+        // `tasks/LocalAgentTask/LocalAgentTask.tsx:620-622`).
+        if detached.swap(true, Ordering::SeqCst) {
+            debug!(target: "coco::task_runtime", task_id, "signal_detach: already detached");
+            return false;
+        }
+        // Flip the sidecar flag. Only `LocalAgent` tasks have an
+        // entry in the sparse map; for `LocalBash`, `set_backgrounded`
+        // is a no-op on a missing entry (`LocalAgentExtra::default`).
+        self.manager.set_backgrounded(task_id, true).await;
+        detach.notify_one();
+        info!(
+            target: "coco::task_runtime",
+            task_id,
+            "signal_detach fired; fg awaiter will receive detach notification"
+        );
+        true
     }
 
     /// Append text to a task's on-disk output file. Returns
@@ -256,7 +358,8 @@ impl TaskRuntime {
     }
 
     /// Pull the description + tool_use_id + output_file from
-    /// canonical state (TaskManager) and push the agent-shaped
+    /// canonical state (TaskManager) and the routing `invoking_agent_id`
+    /// from the per-task entry; then push the agent-shaped
     /// notification.
     async fn push_agent_notification(
         &self,
@@ -268,10 +371,16 @@ impl TaskRuntime {
         let Some(state) = self.manager.get(task_id).await else {
             return;
         };
+        let invoking_agent_id = self
+            .entries
+            .read()
+            .await
+            .get(task_id)
+            .and_then(|e| e.invoking_agent_id.clone());
         let n = TaskNotification {
             task_id: state.id,
             tool_use_id: state.tool_use_id,
-            agent_id: None,
+            agent_id: invoking_agent_id,
             output_file: state.output_file,
             description: state.description,
             kind: NotificationKind::AgentTerminal {
@@ -299,9 +408,11 @@ impl AgentTaskRegistry for TaskRuntime {
         &self,
         description: &str,
         tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
         cancel: CancellationToken,
     ) -> String {
-        TaskRuntime::register_agent_task(self, description, tool_use_id, cancel).await
+        TaskRuntime::register_agent_task(self, description, tool_use_id, invoking_agent_id, cancel)
+            .await
     }
     async fn append_output(&self, task_id: &str, chunk: &str) {
         TaskRuntime::append_output(self, task_id, chunk).await
@@ -311,6 +422,63 @@ impl AgentTaskRegistry for TaskRuntime {
     }
     async fn mark_failed(&self, task_id: &str, error: &str) {
         TaskRuntime::mark_failed(self, task_id, error).await
+    }
+    async fn complete_silent(&self, task_id: &str, succeeded: bool) {
+        let status = if succeeded {
+            TaskStatus::Completed
+        } else {
+            TaskStatus::Failed
+        };
+        self.transition_terminal(task_id, status).await;
+        info!(
+            target: "coco::task_runtime",
+            task_id,
+            ?status,
+            "complete_silent: terminal transition without notification (W4 sync path)"
+        );
+    }
+
+    async fn detach_handle(&self, task_id: &str) -> Option<Arc<Notify>> {
+        // W6.2 full: same data as TaskReader's impl; expose via
+        // AgentTaskRegistry so the coordinator can race detach
+        // without holding a separate TaskReader handle.
+        TaskReader::detach_handle(self, task_id).await
+    }
+
+    async fn register_dream_task(&self, description: &str, cancel: CancellationToken) -> String {
+        // Mint a Dream-prefixed task_id so `TaskList` / TUI can
+        // identify auto-dream entries at a glance.
+        let task_id = coco_types::generate_task_id(TaskType::Dream);
+        let dto = self.disk.get_or_create(&task_id).await;
+        let output_path = dto.path().display().to_string();
+        let assigned = self
+            .manager
+            .create_running_with_id(task_id.clone(), TaskType::Dream, description, &output_path)
+            .await;
+        debug_assert_eq!(assigned, task_id);
+        let (status_tx, _) = watch::channel(TaskStatus::Running);
+        self.entries.write().await.insert(
+            task_id.clone(),
+            TaskEntry {
+                cancel,
+                status_tx,
+                // Dream is internal — no invoker agent, no detach
+                // mechanism (it's not user-cancellable mid-run via
+                // Ctrl+B; `kill_task` is the only stop path).
+                invoking_agent_id: None,
+                detach: Arc::new(Notify::new()),
+                detached: Arc::new(AtomicBool::new(false)),
+                exit_code: Arc::new(std::sync::OnceLock::new()),
+            },
+        );
+        info!(
+            target: "coco::task_runtime",
+            task_id = %task_id,
+            task_type = "dream",
+            output_file = %output_path,
+            "auto-dream task registered (Running)"
+        );
+        task_id
     }
     async fn read_output(&self, task_id: &str) -> String {
         let Some(dto) = self.disk.get(task_id).await else {
@@ -410,63 +578,95 @@ impl TaskReader for TaskRuntime {
             .get(task_id)
             .map(|e| TerminalSignal::new(e.status_tx.subscribe()))
     }
+
+    async fn detach_handle(&self, task_id: &str) -> Option<Arc<Notify>> {
+        let entries = self.entries.read().await;
+        entries.get(task_id).map(|e| e.detach.clone())
+    }
+
+    async fn read_terminal_outputs(
+        &self,
+        task_id: &str,
+    ) -> Result<TerminalOutputs, coco_error::BoxedError> {
+        let Some(state) = self.manager.get(task_id).await else {
+            return Err(boxed_msg(
+                format!("No task found with ID: {task_id}"),
+                coco_error::StatusCode::FileNotFound,
+            ));
+        };
+        let stdout = if let Some(dto) = self.disk.get(task_id).await {
+            let _ = dto.flush().await;
+            dto.read_tail(DEFAULT_MAX_READ_BYTES)
+                .await
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let interrupted = matches!(state.status, TaskStatus::Killed);
+        // W3: shell driver writes exit_code into the per-task
+        // `OnceLock` from `apply_shell_terminal_state`. Agent tasks
+        // and shell `Cancelled` / `TimedOut` / `SpawnFailed` outcomes
+        // leave it unset, yielding `None`.
+        let exit_code = self
+            .entries
+            .read()
+            .await
+            .get(task_id)
+            .and_then(|e| e.exit_code.get().copied());
+        Ok(TerminalOutputs {
+            stdout,
+            stderr: String::new(),
+            exit_code,
+            interrupted,
+        })
+    }
 }
 
 #[async_trait]
 impl TaskController for TaskRuntime {
+    /// Kill a running task by firing its cancel token. **Does not**
+    /// directly update status, broadcast on the watch, or push a
+    /// `<task-notification>` — those are the driver's job, and
+    /// doing them here would double-fire the SDK `TaskCompleted` event
+    /// and the queued notification envelope.
+    ///
+    /// - **Shell tasks**: `cancel.cancel()` propagates into the child
+    ///   process (`kill_on_drop=true`). The driver's `tokio::select!`
+    ///   on `cancel.cancelled()` returns `WaitOutcome::Cancelled`, then
+    ///   `apply_shell_terminal_state` runs the single
+    ///   `update_status(Killed)` + `sink.push(ShellTerminal{Killed})`.
+    /// - **Agent tasks**: the bg-agent closure in
+    ///   `coordinator::spawn_background` races `cancel.cancelled()`
+    ///   against `engine.execute_query`; on cancel it constructs an
+    ///   `Err("task cancelled by leader")` and routes to `mark_failed`,
+    ///   which pushes the single agent notification.
+    ///
+    /// TS parity: `LocalShellTask::killTask` (`tasks/LocalShellTask/LocalShellTask.tsx`)
+    /// also only aborts the shell — the `.result.then(...)` handler is
+    /// the single notification source.
     #[instrument(level = "info", skip(self), fields(task_id = %task_id))]
     async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
-        let entry_clone = {
+        let cancel = {
             let entries = self.entries.read().await;
-            entries
-                .get(task_id)
-                .map(|e| (e.cancel.clone(), e.status_tx.clone()))
+            entries.get(task_id).map(|e| e.cancel.clone())
         };
-        let Some((cancel, status_tx)) = entry_clone else {
+        let Some(cancel) = cancel else {
             return Err(boxed_msg(
                 format!("No running task found with ID: {task_id}"),
                 coco_error::StatusCode::FileNotFound,
             ));
         };
         cancel.cancel();
-        self.manager
-            .update_status(task_id, TaskStatus::Killed)
-            .await;
-        status_tx.send_replace(TaskStatus::Killed);
-        // Push agent-shaped notification (LocalAgent path); shell
-        // tasks reach Killed through their own driver and push from
-        // `apply_shell_terminal_state`. We don't know the type
-        // here without an extra manager read — branch on it.
-        let Some(state) = self.manager.get(task_id).await else {
-            return Ok(());
-        };
-        let n = TaskNotification {
-            task_id: state.id,
-            tool_use_id: state.tool_use_id,
-            agent_id: None,
-            output_file: state.output_file,
-            description: state.description,
-            kind: match state.task_type {
-                TaskType::LocalBash => NotificationKind::ShellTerminal {
-                    status: TerminalStatus::Killed,
-                    exit_code: None,
-                },
-                _ => NotificationKind::AgentTerminal {
-                    status: TerminalStatus::Killed,
-                    result: None,
-                    usage: None,
-                    worktree: None,
-                    error: None,
-                },
-            },
-        };
-        self.notification_sink.push(n).await;
         info!(
             target: "coco::task_runtime",
             task_id,
-            "task killed via kill_task; cancel + watch fired"
+            "kill_task fired cancel token; driver will finalize state + push notification"
         );
         Ok(())
+    }
+
+    async fn signal_detach(&self, task_id: &str) -> bool {
+        TaskRuntime::signal_detach(self, task_id).await
     }
 }
 
@@ -505,11 +705,18 @@ impl ShellTaskSpawner for TaskRuntime {
         }
         let cancel = CancellationToken::new();
         let (status_tx, _) = watch::channel(TaskStatus::Running);
+        let detach = Arc::new(Notify::new());
+        let detached = Arc::new(AtomicBool::new(false));
+        let exit_code = Arc::new(std::sync::OnceLock::new());
         self.entries.write().await.insert(
             task_id.clone(),
             TaskEntry {
                 cancel: cancel.clone(),
                 status_tx: status_tx.clone(),
+                invoking_agent_id: request.agent_id.clone(),
+                detach: detach.clone(),
+                detached: detached.clone(),
+                exit_code: exit_code.clone(),
             },
         );
         info!(
@@ -532,7 +739,11 @@ impl ShellTaskSpawner for TaskRuntime {
 
         let dto_for_driver = dto.clone();
         let cancel_for_driver = cancel.clone();
-        let stall_cancel = CancellationToken::new();
+        // W3: rename `stall_cancel` → `drain_done`. Fired by the driver
+        // tokio task after `run_shell_task` returns; stops the stall
+        // watchdog, progress timer, and auto-detach timer in one
+        // coordinated signal.
+        let drain_done = CancellationToken::new();
         tokio::spawn(stall::watchdog(
             task_id.clone(),
             request.description.clone(),
@@ -541,15 +752,60 @@ impl ShellTaskSpawner for TaskRuntime {
             output_path.clone(),
             dto.clone(),
             sink.clone(),
-            stall_cancel.clone(),
+            drain_done.clone(),
         ));
 
+        // W3: progress timer — emits `bash_progress` events through
+        // `progress_tx` every `progress_throttle_ms` while the task
+        // runs. Matches TS's `~1s` `yield { type: 'progress', ... }`
+        // cadence (`tools/BashTool/BashTool.tsx:1128-1140`). The
+        // unified fg/bg path lets fg `tool.execute` observe progress
+        // via the same `ctx.progress_tx` channel it always used.
+        if let Some(progress_tx) = request.progress_tx.clone() {
+            spawn_progress_timer(
+                task_id.clone(),
+                request.tool_use_id.clone().unwrap_or_default(),
+                request.progress_throttle_ms.max(100),
+                dto.clone(),
+                progress_tx,
+                drain_done.clone(),
+            );
+        }
+
+        // W3: auto-detach timer — fires `signal_detach(task_id)` after
+        // `auto_detach_ms` of fg execution. Mirrors TS
+        // `ASSISTANT_BLOCKING_BUDGET_MS` (15 s) auto-background. Stops
+        // when the task terminates (`drain_done` fires). Bails when
+        // the task is already terminal at fire time.
+        if let Some(ms) = request.auto_detach_ms {
+            spawn_auto_detach_timer(
+                task_id.clone(),
+                ms,
+                self.entries.clone(),
+                self.manager.clone(),
+                drain_done.clone(),
+            );
+        }
+
         let driver_status_tx = status_tx;
-        let stall_cancel_for_driver = stall_cancel;
+        let drain_done_for_driver = drain_done;
+        let exit_code_for_driver = exit_code;
+        // W6: thread sandbox state into the driver. `None` = no
+        // wrapping (current bg-default behavior). `Some` = apply
+        // `SandboxState::try_wrap_command_with_binds` before spawn.
+        let sandbox_for_driver = request.sandbox_state.clone();
+        let sandbox_bypass_for_driver = request.sandbox_bypass;
         tokio::spawn(async move {
-            let outcome =
-                run_shell_task(&command_str, timeout_ms, cancel_for_driver, dto_for_driver).await;
-            stall_cancel_for_driver.cancel();
+            let outcome = run_shell_task(
+                &command_str,
+                timeout_ms,
+                cancel_for_driver,
+                dto_for_driver,
+                sandbox_for_driver,
+                sandbox_bypass_for_driver,
+            )
+            .await;
+            drain_done_for_driver.cancel();
             apply_shell_terminal_state(
                 &manager,
                 &driver_status_tx,
@@ -559,6 +815,7 @@ impl ShellTaskSpawner for TaskRuntime {
                 driver_agent_id.as_deref(),
                 &driver_output_path,
                 sink.as_ref(),
+                &exit_code_for_driver,
                 outcome,
             )
             .await;
@@ -566,6 +823,101 @@ impl ShellTaskSpawner for TaskRuntime {
 
         Ok(task_id)
     }
+}
+
+/// W3: per-task progress emitter. Polls `dto.size()` every
+/// `throttle_ms`, builds a TS-aligned `bash_progress` payload, and
+/// sends through the caller's `ProgressSender`. Self-terminates when
+/// `drain_done` fires.
+fn spawn_progress_timer(
+    task_id: String,
+    tool_use_id: String,
+    throttle_ms: u64,
+    dto: DiskTaskOutput,
+    progress_tx: coco_tool_runtime::ProgressSender,
+    drain_done: CancellationToken,
+) {
+    tokio::spawn(async move {
+        let start = std::time::Instant::now();
+        let mut ticker = tokio::time::interval(Duration::from_millis(throttle_ms));
+        // Skip the immediate first tick — TS only emits AFTER the
+        // first throttle interval has elapsed
+        // (`runShellCommand` waits on `Promise.race([resultPromise,
+        // progressSignal])`).
+        ticker.tick().await;
+        loop {
+            tokio::select! {
+                biased;
+                () = drain_done.cancelled() => break,
+                _ = ticker.tick() => {
+                    let total_bytes = dto.size().await;
+                    let elapsed_seconds = start.elapsed().as_secs();
+                    let payload = serde_json::json!({
+                        "type": "bash_progress",
+                        "status": "running",
+                        "elapsedTimeSeconds": elapsed_seconds,
+                        "totalBytes": total_bytes,
+                        "taskId": task_id,
+                    });
+                    // Best-effort send: receiver closed = drop quietly.
+                    let _ = progress_tx.send(coco_tool_runtime::ToolProgress {
+                        tool_use_id: tool_use_id.clone(),
+                        parent_tool_use_id: None,
+                        data: payload,
+                    });
+                }
+            }
+        }
+    });
+}
+
+/// W3: per-task auto-detach timer. Fires `signal_detach`'s inline
+/// equivalent after `auto_detach_ms` of execution. Bails when the
+/// task has already terminated (`drain_done` fires first) or when
+/// the task is in a terminal state at fire time. Idempotent via the
+/// shared `detached: AtomicBool`.
+fn spawn_auto_detach_timer(
+    task_id: String,
+    auto_detach_ms: u64,
+    entries: Arc<tokio::sync::RwLock<HashMap<String, TaskEntry>>>,
+    manager: Arc<TaskManager>,
+    drain_done: CancellationToken,
+) {
+    tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            () = drain_done.cancelled() => return,
+            () = tokio::time::sleep(Duration::from_millis(auto_detach_ms)) => {}
+        }
+        // Bail if the task finished in the same tick the timer fired.
+        if manager
+            .get(&task_id)
+            .await
+            .is_none_or(|s| s.status.is_terminal())
+        {
+            return;
+        }
+        let snapshot = {
+            let guard = entries.read().await;
+            guard
+                .get(&task_id)
+                .map(|e| (e.detach.clone(), e.detached.clone()))
+        };
+        let Some((detach, detached)) = snapshot else {
+            return;
+        };
+        if detached.swap(true, Ordering::SeqCst) {
+            return; // already detached
+        }
+        manager.set_backgrounded(&task_id, true).await;
+        detach.notify_one();
+        info!(
+            target: "coco::task_runtime::shell",
+            task_id = %task_id,
+            auto_detach_ms,
+            "auto-detach timer fired; fg awaiter (if any) will receive detach"
+        );
+    });
 }
 
 /// Result of one shell-task execution. Carries enough information
@@ -591,16 +943,24 @@ struct ShellOutcome {
 /// stdout straight to disk which `ShellExecutor::execute_with_progress`
 /// doesn't expose). Streams stdout + stderr to the per-task disk file
 /// in real time so the stall watchdog observes growth.
+///
+/// W6: applies sandbox wrap (`bwrap` / Seatbelt) when `sandbox_state`
+/// is `Some` and the command isn't excluded by the sandbox settings.
+/// Mirrors `coco_shell::executor::apply_sandbox_wrap` so the
+/// TaskRuntime unified path doesn't lose the sandbox guarantee that
+/// the legacy `ShellExecutor` foreground path provided.
 #[instrument(
     level = "debug",
-    skip(cancel, dto),
-    fields(command_preview = %command_preview(command), timeout_ms)
+    skip(cancel, dto, sandbox_state),
+    fields(command_preview = %command_preview(command), timeout_ms, sandboxed = sandbox_state.is_some())
 )]
 async fn run_shell_task(
     command: &str,
     timeout_ms: i64,
     cancel: CancellationToken,
     dto: DiskTaskOutput,
+    sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
+    sandbox_bypass: coco_sandbox::SandboxBypass,
 ) -> ShellOutcome {
     use tokio::io::AsyncReadExt;
     use tokio::process::Command;
@@ -614,6 +974,19 @@ async fn run_shell_task(
     cmd.args(&args);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    // W6: sandbox wrap. `try_wrap_command_with_binds` mutates `cmd`
+    // in place to swap the program/args with the platform-specific
+    // wrapper (bwrap on Linux, Seatbelt sandbox-exec on macOS).
+    // No-op when sandbox is None / inactive / command excluded.
+    if let Some(state) = &sandbox_state
+        && let Err(e) = state.try_wrap_command_with_binds(command, sandbox_bypass, &[], &mut cmd)
+    {
+        warn!(
+            target: "coco::task_runtime::shell",
+            error = %e,
+            "sandbox wrap failed; spawning unsandboxed"
+        );
+    }
     let mut child = match cmd.kill_on_drop(true).spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -706,7 +1079,9 @@ async fn run_shell_task(
 }
 
 /// Final lifecycle update for a shell task: flip status,
-/// broadcast on the watch, and push the TS-aligned terminal
+/// broadcast on the watch, persist exit_code into the per-task
+/// `OnceLock` (W3: so `read_terminal_outputs` can return it to the
+/// fg `tool.execute` caller), and push the TS-aligned terminal
 /// notification.
 #[allow(clippy::too_many_arguments)]
 async fn apply_shell_terminal_state(
@@ -718,6 +1093,7 @@ async fn apply_shell_terminal_state(
     agent_id: Option<&str>,
     output_path: &str,
     sink: &dyn NotificationSink,
+    exit_code_slot: &Arc<std::sync::OnceLock<i32>>,
     outcome: ShellOutcome,
 ) {
     let (status, terminal, exit_code) = match outcome.wait {
@@ -744,6 +1120,11 @@ async fn apply_shell_terminal_state(
         WaitOutcome::Cancelled => (TaskStatus::Killed, TerminalStatus::Killed, None),
         WaitOutcome::SpawnFailed => (TaskStatus::Failed, TerminalStatus::Failed, None),
     };
+    // W3: persist exit_code BEFORE update_status, so any awaiter
+    // racing the terminal signal sees a consistent snapshot.
+    if let Some(code) = exit_code {
+        let _ = exit_code_slot.set(code);
+    }
     manager.update_status(task_id, status).await;
     status_tx.send_replace(status);
 

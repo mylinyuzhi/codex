@@ -888,17 +888,6 @@ impl AgentHandle for SwarmAgentHandle {
             .ok_or_else(|| format!("Agent '{agent_id}' has no output yet"))
     }
 
-    async fn background_agent(&self, agent_id: &str) -> Result<(), String> {
-        let mut agents = self.agents.write().await;
-        let agent = agents
-            .iter_mut()
-            .find(|a| a.agent_id == agent_id)
-            .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
-
-        agent.status = SubAgentStatus::Backgrounded;
-        Ok(())
-    }
-
     async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {
         self.interrupt_teammate_current_work(agent_id).await
     }

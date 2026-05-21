@@ -290,6 +290,15 @@ impl SwarmAgentHandle {
 
     /// Symmetrical cleanup: drop the per-agent hook bucket.
     /// TS parity: `clearSessionHooks(setAppState, agentId)`.
+    ///
+    /// **W6.2 full**: kept (rather than deleted as "dead code")
+    /// because the bg path's `tokio::spawn` closure uses
+    /// `registry.clear_agent_scope` directly via a cloned Arc, and
+    /// the sync path now does the same in its detached engine task.
+    /// Both bypass this `&self` wrapper. Marking `#[allow(dead_code)]`
+    /// keeps the helper available for future callers (e.g. error
+    /// paths that abandon a spawn before the engine task runs).
+    #[allow(dead_code)]
     pub(super) fn clear_frontmatter_hooks(&self, agent_id: &str) {
         if let Some(registry) = self.hook_registry() {
             registry.clear_agent_scope(agent_id);
@@ -374,6 +383,11 @@ impl SwarmAgentHandle {
     /// Tear down dynamically-added MCP servers registered for this
     /// `agent_id`. Mirror of [`Self::initialize_per_agent_mcp`]. No-op
     /// when nothing was tracked.
+    ///
+    /// **W6.2 full**: see `clear_frontmatter_hooks` — both detached
+    /// spawn paths now do this inline via cloned Arcs. Wrapper kept
+    /// for future error-path callers.
+    #[allow(dead_code)]
     pub(super) async fn cleanup_per_agent_mcp(&self, agent_id: &str) {
         let entry = self.dynamic_mcp_servers().write().await.remove(agent_id);
         let Some(names) = entry else { return };
@@ -441,6 +455,11 @@ impl SwarmAgentHandle {
     /// Fire SubagentStop hooks. Errors are logged and swallowed — a
     /// failed stop hook must not gate the spawn's response. TS parity:
     /// stop hooks run for completion / failure / cancel.
+    ///
+    /// **W6.2 full**: see `clear_frontmatter_hooks` — both detached
+    /// spawn paths now invoke `fire_subagent_stop_for_task` directly.
+    /// Wrapper kept for early-failure paths that have `&self` in scope.
+    #[allow(dead_code)]
     pub(super) async fn fire_subagent_stop_hook(
         &self,
         agent_id: &str,
@@ -1051,127 +1070,386 @@ impl SwarmAgentHandle {
             decorated_prompt
         };
 
-        // Sync path.
-        let query_result = engine.execute_query(&effective_prompt, query_config).await;
-        let duration_ms = start.elapsed().as_millis() as i64;
+        // W4 (B1 fix): register the sync agent in TaskRuntime when
+        // a registry is wired. TS parity: sync agents go through
+        // `registerAgentForeground` which populates `appState.tasks`
+        // so the UI panel + TaskList tool see them as Running.
+        // Without this, sync agents were invisible — only background
+        // agents were tracked.
+        //
+        // W6 (Dream registration): when the spawn carries the
+        // `AutoDream` fork label, register as `TaskType::Dream`
+        // instead of `LocalAgent` so the TUI panel + `TaskList` tool
+        // can differentiate auto-memory consolidation from
+        // user-spawned subagents. TS parity:
+        // `tasks/DreamTask/DreamTask.ts:72` `registerTask({type:
+        // 'dream'})`. Other framework-spawned forks (extract /
+        // session-memory / prompt-suggestion / side-question /
+        // compact / agent-summary / speculation) are
+        // service-internal and don't surface as user-visible
+        // tasks — TS doesn't register them either.
+        //
+        // The cancel token from `register_*_task` lets `kill_task`
+        // propagate into the engine via the `tokio::select!` race
+        // below — same mechanism the bg path uses.
+        let task_registry = self.task_registry().cloned();
+        let is_dream = matches!(request.fork_label, Some(coco_types::ForkLabel::AutoDream));
+        let is_skip_registration = matches!(
+            request.fork_label,
+            Some(coco_types::ForkLabel::ExtractMemories)
+                | Some(coco_types::ForkLabel::SessionMemoryAuto)
+                | Some(coco_types::ForkLabel::SessionMemoryManual)
+                | Some(coco_types::ForkLabel::PromptSuggestion)
+                | Some(coco_types::ForkLabel::SideQuestion)
+                | Some(coco_types::ForkLabel::Compact)
+                | Some(coco_types::ForkLabel::AgentSummary)
+                | Some(coco_types::ForkLabel::Speculation)
+        );
+        let sync_task = if let Some(reg) = task_registry.as_ref() {
+            if is_skip_registration {
+                None
+            } else {
+                let task_cancel = tokio_util::sync::CancellationToken::new();
+                let description = request
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| agent_type.to_string());
+                let tid = if is_dream {
+                    reg.register_dream_task(&description, task_cancel.clone())
+                        .await
+                } else {
+                    reg.register_agent_task(
+                        &description,
+                        request.tool_use_id.as_deref(),
+                        request.invoking_agent_id.as_deref(),
+                        task_cancel.clone(),
+                    )
+                    .await
+                };
+                Some((tid, task_cancel))
+            }
+        } else {
+            None
+        };
 
-        // SubagentStop fires whether the run succeeded, failed, or
-        // was cancelled — TS parity. Transcript path is `None` for
-        // sync spawns (no per-agent JSONL persistence on the sync
-        // path; bg spawns expose it via the transcript_store).
-        let _stop_result = self
-            .fire_subagent_stop_hook(&agent_id, agent_type, /*transcript*/ None)
+        // W6.2 (full): the entire sync execution path — engine call,
+        // cleanup chain, response build — now lives inside a detached
+        // `tokio::spawn` body. The inline caller races a oneshot
+        // receiver against the detach signal and external cancel:
+        //
+        // - **Oneshot delivery**: engine task finishes, sends the
+        //   built `AgentSpawnResponse`. Inline caller returns it.
+        //   `complete_silent` runs (state only, no notification —
+        //   response goes inline).
+        // - **Detach signal**: external `signal_detach(tid)` (TUI
+        //   Ctrl+B). Inline caller sets the detached flag and
+        //   returns `AsyncLaunched` immediately. Engine task keeps
+        //   running, eventually calls `mark_completed`/`mark_failed`
+        //   on its own (pushes `<task-notification>` envelope).
+        //   This is the TS-parity "detach but keep running" behavior.
+        // - **External cancel** (`kill_task(tid)`): engine task's
+        //   inner select observes the cancel and exits with an Err
+        //   QueryResult. Cleanup still runs in the engine task; the
+        //   final response is `AgentSpawnResponse::Failed`. Inline
+        //   caller receives it via oneshot.
+        //
+        // Pre-clone every Arc the engine task needs (so the closure
+        // doesn't borrow `&self`). Matches the pattern used by
+        // `spawn_background` below.
+        let hook_registry_for_engine = self.hook_registry().cloned();
+        let mcp_handle_for_engine = self.mcp_handle().cloned();
+        let dynamic_mcp_servers_for_engine = self.dynamic_mcp_servers().clone();
+        let worktree_manager_for_engine = self.worktree_manager().cloned();
+        let agents_for_engine = self.agents().clone();
+        let side_query_for_engine = self.side_query().cloned();
+        let cwd_for_engine = self.cwd.clone();
+        let task_registry_for_engine = task_registry.clone();
+        let agent_id_for_engine = agent_id.clone();
+        let agent_type_for_engine = agent_type.to_string();
+        let task_id_for_engine = sync_task.as_ref().map(|(id, _)| id.clone());
+        let task_cancel_for_engine = sync_task.as_ref().map(|(_, c)| c.clone());
+        let worktree_session_for_engine = worktree_session.clone();
+        let registered_frontmatter_hooks_for_engine = registered_frontmatter_hooks;
+
+        // Detach handle for the inline caller's race. `None` for memory
+        // forks / no registry; degrades to a 2-arm select (resp + cancel).
+        let detach_handle_for_inline: Option<std::sync::Arc<tokio::sync::Notify>> =
+            match (task_registry.as_ref(), sync_task.as_ref()) {
+                (Some(reg), Some((tid, _))) => reg.detach_handle(tid).await,
+                _ => None,
+            };
+
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel::<AgentSpawnResponse>();
+        let detached_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let detached_flag_for_engine = detached_flag.clone();
+        let sync_start = start;
+        let engine_for_task = engine.clone();
+
+        tokio::spawn(async move {
+            // ── Engine query (race against task cancel) ──────────
+            let query_result = if let Some(c) = task_cancel_for_engine.as_ref() {
+                tokio::select! {
+                    biased;
+                    () = c.cancelled() => {
+                        Err(Box::new(coco_error::PlainError::new(
+                            "task cancelled by leader",
+                            coco_error::StatusCode::Cancelled,
+                        )) as coco_error::BoxedError)
+                    }
+                    r = engine_for_task.execute_query(&effective_prompt, query_config) => r,
+                }
+            } else {
+                engine_for_task
+                    .execute_query(&effective_prompt, query_config)
+                    .await
+            };
+            let duration_ms = sync_start.elapsed().as_millis() as i64;
+
+            // ── Cleanup chain (no `&self` — uses cloned Arcs) ─────
+            fire_subagent_stop_for_task(
+                hook_registry_for_engine.clone(),
+                &cwd_for_engine,
+                &agent_id_for_engine,
+                &agent_type_for_engine,
+                /*transcript*/ None,
+            )
             .await;
 
-        // Drop per-agent frontmatter hooks now that the spawn is
-        // terminal. TS parity: `clearSessionHooks(setAppState, agentId)`
-        // in `runAgent.ts` finally block.
-        if registered_frontmatter_hooks {
-            self.clear_frontmatter_hooks(&agent_id);
-        }
+            if registered_frontmatter_hooks_for_engine
+                && let Some(reg) = hook_registry_for_engine.as_ref()
+            {
+                reg.clear_agent_scope(&agent_id_for_engine);
+            }
 
-        // Tear down dynamically-added MCP servers (no-op when none
-        // were created). TS parity: `runAgent.ts:197-210 mcpCleanup`.
-        self.cleanup_per_agent_mcp(&agent_id).await;
-
-        let (worktree_path, worktree_branch) = match (self.worktree_manager(), worktree_session) {
-            (Some(m), Some(session)) => {
-                let session_path = session.path.display().to_string();
-                match m.cleanup_if_unchanged(session) {
-                    crate::worktree::WorktreeCleanupOutcome::Removed => {
-                        // TS `executeWorktreeRemoveHook(worktreePath)`
-                        // (`worktree.ts:827`) fires only when the
-                        // worktree was actually removed. Kept paths
-                        // mean the user's work is preserved → no
-                        // remove notification.
-                        fire_worktree_remove_hook(
-                            self.hook_registry().cloned(),
-                            &self.cwd,
-                            &session_path,
-                        )
-                        .await;
-                        (None, None)
-                    }
-                    crate::worktree::WorktreeCleanupOutcome::Kept { path, branch, .. } => {
-                        (Some(path), Some(branch))
+            let dynamic_names = dynamic_mcp_servers_for_engine
+                .write()
+                .await
+                .remove(&agent_id_for_engine);
+            if let (Some(names), Some(handle)) = (dynamic_names, mcp_handle_for_engine.as_ref()) {
+                for name in names {
+                    if let Err(e) = handle.remove_dynamic_server(&name).await {
+                        tracing::debug!(
+                            error = %e,
+                            agent_id = %agent_id_for_engine,
+                            server = %name,
+                            "sync cleanup: failed to remove dynamic agent MCP server"
+                        );
                     }
                 }
             }
-            _ => (None, None),
-        };
 
-        {
-            let mut agents = self.agents().write().await;
-            if let Some(agent) = agents.iter_mut().find(|a| a.agent_id == agent_id) {
-                agent.status = match &query_result {
-                    Ok(_) => SubAgentStatus::Completed,
-                    Err(_) => SubAgentStatus::Failed,
-                };
+            let (worktree_path, worktree_branch) = match (
+                worktree_manager_for_engine.as_ref(),
+                worktree_session_for_engine,
+            ) {
+                (Some(m), Some(session)) => {
+                    let session_path = session.path.display().to_string();
+                    match m.cleanup_if_unchanged(session) {
+                        crate::worktree::WorktreeCleanupOutcome::Removed => {
+                            fire_worktree_remove_hook(
+                                hook_registry_for_engine.clone(),
+                                &cwd_for_engine,
+                                &session_path,
+                            )
+                            .await;
+                            (None, None)
+                        }
+                        crate::worktree::WorktreeCleanupOutcome::Kept { path, branch, .. } => {
+                            (Some(path), Some(branch))
+                        }
+                    }
+                }
+                _ => (None, None),
+            };
+
+            {
+                let mut agents = agents_for_engine.write().await;
+                if let Some(agent) = agents
+                    .iter_mut()
+                    .find(|a| a.agent_id == agent_id_for_engine)
+                {
+                    agent.status = match &query_result {
+                        Ok(_) => SubAgentStatus::Completed,
+                        Err(_) => SubAgentStatus::Failed,
+                    };
+                }
             }
-        }
 
-        match query_result {
-            Ok(qr) => {
-                tracing::info!(
-                    agent_id = %agent_id,
-                    agent_type = %agent_type,
-                    tool_use_count = qr.tool_use_count,
-                    tokens_in = qr.input_tokens,
-                    tokens_out = qr.output_tokens,
-                    duration_ms,
-                    "subagent spawn ok"
-                );
-                let response_text = self.classify_handoff_if_needed(agent_type, &qr).await;
-                self.summarize_handoff_if_needed(agent_type, &qr, &agent_id)
+            // ── Build AgentSpawnResponse ──────────────────────────
+            let response = match query_result {
+                Ok(qr) => {
+                    tracing::info!(
+                        agent_id = %agent_id_for_engine,
+                        agent_type = %agent_type_for_engine,
+                        tool_use_count = qr.tool_use_count,
+                        tokens_in = qr.input_tokens,
+                        tokens_out = qr.output_tokens,
+                        duration_ms,
+                        "subagent spawn ok"
+                    );
+                    let response_text = super::handoff::classify_handoff_inline(
+                        &agent_type_for_engine,
+                        &qr,
+                        side_query_for_engine.as_ref(),
+                    )
                     .await;
-                Ok(AgentSpawnResponse {
-                    status: AgentSpawnStatus::Completed,
-                    agent_id: Some(agent_id),
-                    result: response_text,
-                    error: None,
-                    total_tool_use_count: qr.tool_use_count,
-                    total_tokens: qr.input_tokens + qr.output_tokens,
-                    input_tokens: qr.input_tokens,
-                    output_tokens: qr.output_tokens,
-                    tool_use_counts: count_tool_uses_in_messages(&qr.messages),
-                    // Cache stats + per-call paths_written are
-                    // populated by the engine's QueryResult once the
-                    // wiring lands; until then default to zero/empty
-                    // so memory's hit-rate dashboards stay flat
-                    // rather than spiking on garbage.
-                    cache_read_tokens: 0,
-                    cache_creation_tokens: 0,
-                    paths_written: Vec::new(),
-                    duration_ms,
-                    worktree_path,
-                    worktree_branch,
-                    output_file: None,
-                    prompt: None,
-                })
+                    super::handoff::summarize_handoff_inline(
+                        &agent_type_for_engine,
+                        &qr,
+                        &agent_id_for_engine,
+                        side_query_for_engine.as_ref(),
+                        &agents_for_engine,
+                    )
+                    .await;
+                    AgentSpawnResponse {
+                        status: AgentSpawnStatus::Completed,
+                        agent_id: Some(agent_id_for_engine.clone()),
+                        result: response_text,
+                        error: None,
+                        total_tool_use_count: qr.tool_use_count,
+                        total_tokens: qr.input_tokens + qr.output_tokens,
+                        input_tokens: qr.input_tokens,
+                        output_tokens: qr.output_tokens,
+                        tool_use_counts: count_tool_uses_in_messages(&qr.messages),
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
+                        paths_written: Vec::new(),
+                        duration_ms,
+                        worktree_path: worktree_path.clone(),
+                        worktree_branch: worktree_branch.clone(),
+                        output_file: None,
+                        prompt: None,
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        agent_id = %agent_id_for_engine,
+                        agent_type = %agent_type_for_engine,
+                        duration_ms,
+                        error = %e,
+                        "subagent spawn failed"
+                    );
+                    AgentSpawnResponse {
+                        status: AgentSpawnStatus::Failed,
+                        agent_id: Some(agent_id_for_engine.clone()),
+                        result: None,
+                        error: Some(e.to_string()),
+                        total_tool_use_count: 0,
+                        total_tokens: 0,
+                        duration_ms,
+                        worktree_path: worktree_path.clone(),
+                        worktree_branch: worktree_branch.clone(),
+                        output_file: None,
+                        prompt: None,
+                        ..Default::default()
+                    }
+                }
+            };
+
+            // ── Route based on detached flag ─────────────────────
+            let was_detached = detached_flag_for_engine.load(std::sync::atomic::Ordering::SeqCst);
+            if was_detached {
+                // Caller already returned AsyncLaunched. Push the
+                // `<task-notification>` envelope (same path bg uses).
+                if let (Some(reg), Some(tid)) = (
+                    task_registry_for_engine.as_ref(),
+                    task_id_for_engine.as_deref(),
+                ) {
+                    match response.status {
+                        AgentSpawnStatus::Completed => {
+                            let payload = coco_tool_runtime::AgentCompletionPayload {
+                                result: response.result.clone(),
+                                usage: Some(coco_tool_runtime::AgentUsage {
+                                    total_tokens: response.total_tokens,
+                                    tool_uses: response.total_tool_use_count as i32,
+                                    duration_ms,
+                                }),
+                                worktree: response.worktree_path.clone().map(|path| {
+                                    coco_tool_runtime::AgentWorktree {
+                                        path: path.display().to_string(),
+                                        branch: response.worktree_branch.clone(),
+                                    }
+                                }),
+                            };
+                            reg.mark_completed(tid, payload).await;
+                        }
+                        AgentSpawnStatus::Failed => {
+                            reg.mark_failed(
+                                tid,
+                                response.error.as_deref().unwrap_or("agent failed"),
+                            )
+                            .await;
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                // Inline caller is still alive. Silent terminal +
+                // send response via oneshot.
+                if let (Some(reg), Some(tid)) = (
+                    task_registry_for_engine.as_ref(),
+                    task_id_for_engine.as_deref(),
+                ) {
+                    reg.complete_silent(
+                        tid,
+                        matches!(response.status, AgentSpawnStatus::Completed),
+                    )
+                    .await;
+                }
+                let _ = resp_tx.send(response);
             }
-            Err(e) => {
-                tracing::warn!(
-                    agent_id = %agent_id,
-                    agent_type = %agent_type,
-                    duration_ms,
-                    error = %e,
-                    "subagent spawn failed"
-                );
-                Ok(AgentSpawnResponse {
-                    status: AgentSpawnStatus::Failed,
-                    agent_id: Some(agent_id),
-                    result: None,
-                    error: Some(e.to_string()),
-                    total_tool_use_count: 0,
-                    total_tokens: 0,
-                    duration_ms,
-                    worktree_path,
-                    worktree_branch,
-                    output_file: None,
-                    prompt: None,
-                    ..Default::default()
-                })
+        });
+
+        // ── Inline caller: race resp_rx vs detach vs (kill_task → resp_rx) ──
+        let task_id_for_async_response = sync_task.as_ref().map(|(id, _)| id.clone());
+
+        if let Some(detach) = detach_handle_for_inline {
+            tokio::select! {
+                biased;
+                res = resp_rx => {
+                    Ok(res.unwrap_or_else(|_| AgentSpawnResponse {
+                        status: AgentSpawnStatus::Failed,
+                        agent_id: Some(agent_id.clone()),
+                        result: None,
+                        error: Some("engine task panicked".into()),
+                        duration_ms: start.elapsed().as_millis() as i64,
+                        ..Default::default()
+                    }))
+                }
+                () = detach.notified() => {
+                    detached_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    tracing::info!(
+                        target: "coco::agent_handle::sync",
+                        agent_id = %agent_id,
+                        "sync agent detached via signal_detach; engine continues in bg"
+                    );
+                    Ok(AgentSpawnResponse {
+                        status: AgentSpawnStatus::AsyncLaunched,
+                        agent_id: Some(task_id_for_async_response.unwrap_or(agent_id)),
+                        result: None,
+                        error: None,
+                        total_tool_use_count: 0,
+                        total_tokens: 0,
+                        duration_ms: start.elapsed().as_millis() as i64,
+                        worktree_path: None,
+                        worktree_branch: None,
+                        output_file: None,
+                        prompt: None,
+                        ..Default::default()
+                    })
+                }
             }
+        } else {
+            // No detach handle (memory forks / no registry). Just
+            // await the engine task's response.
+            Ok(resp_rx.await.unwrap_or_else(|_| AgentSpawnResponse {
+                status: AgentSpawnStatus::Failed,
+                agent_id: Some(agent_id.clone()),
+                result: None,
+                error: Some("engine task panicked".into()),
+                duration_ms: start.elapsed().as_millis() as i64,
+                ..Default::default()
+            }))
         }
     }
 
@@ -1205,9 +1483,20 @@ impl SwarmAgentHandle {
                 .description
                 .clone()
                 .unwrap_or_else(|| agent_type.to_string());
+            // D3 / D4 (PR-1 W1): forward both the originating
+            // `Agent(...)` tool_use_id and the *invoker* agent_id
+            // (the agent that called AgentTool, not the new
+            // subagent's id) so completion notifications route
+            // correctly. TS parity: `AgentTool.tsx` passes both into
+            // `registerAsyncAgent`.
             Some(
-                reg.register_agent_task(&description, /*tool_use_id*/ None, cancel.clone())
-                    .await,
+                reg.register_agent_task(
+                    &description,
+                    request.tool_use_id.as_deref(),
+                    request.invoking_agent_id.as_deref(),
+                    cancel.clone(),
+                )
+                .await,
             )
         } else {
             None

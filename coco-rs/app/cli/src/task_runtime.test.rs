@@ -34,7 +34,7 @@ async fn register_creates_running_task_with_tool_use_id() {
     let rt = rt();
     let cancel = CancellationToken::new();
     let task_id = rt
-        .register_agent_task("explore something", Some("toolu_01"), cancel)
+        .register_agent_task("explore something", Some("toolu_01"), None, cancel)
         .await;
 
     let state = rt.get_task_status(&task_id).await.unwrap();
@@ -48,7 +48,7 @@ async fn register_creates_running_task_with_tool_use_id() {
 async fn output_delta_returns_appended_chunks_with_offset() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new())
         .await;
 
     rt.append_output(&task_id, "first ").await;
@@ -71,7 +71,7 @@ async fn output_delta_returns_appended_chunks_with_offset() {
 async fn mark_completed_sets_terminal_status_and_appends_response() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new())
         .await;
     rt.mark_completed(
         &task_id,
@@ -94,7 +94,7 @@ async fn mark_completed_pushes_rich_agent_notification() {
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
     let task_id = rt
-        .register_agent_task("build", Some("toolu_x"), CancellationToken::new())
+        .register_agent_task("build", Some("toolu_x"), None, CancellationToken::new())
         .await;
     rt.mark_completed(
         &task_id,
@@ -136,7 +136,7 @@ async fn mark_completed_pushes_rich_agent_notification() {
 async fn mark_failed_appends_error_and_flips_status() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new())
         .await;
     rt.mark_failed(&task_id, "transport crash").await;
     let state = rt.get_task_status(&task_id).await.unwrap();
@@ -146,36 +146,77 @@ async fn mark_failed_appends_error_and_flips_status() {
     assert!(delta.is_complete);
 }
 
+/// D1 (W1): `kill_task` is single-responsibility — it ONLY fires the
+/// cancel token. State transition (`update_status(Killed)`) and the
+/// `<task-notification>` push are the driver's job. For an agent task,
+/// the bg-agent closure in `coordinator::spawn_background` observes
+/// cancel and calls `mark_failed`; for a shell task,
+/// `apply_shell_terminal_state` runs on `WaitOutcome::Cancelled`. Doing
+/// any of that here would double-fire SDK events + notifications.
+/// In this unit test no driver exists, so the task remains in Running
+/// state — that's correct behavior at this seam.
 #[tokio::test]
-async fn kill_task_cancels_token_and_marks_killed() {
+async fn kill_task_only_fires_cancel_token() {
     let rt = rt();
     let cancel = CancellationToken::new();
-    let task_id = rt.register_agent_task("work", None, cancel.clone()).await;
+    let task_id = rt
+        .register_agent_task("work", None, None, cancel.clone())
+        .await;
 
     rt.kill_task(&task_id).await.unwrap();
 
     assert!(cancel.is_cancelled(), "cancel token must fire");
+    // Status stays Running — no driver in this unit test to flip it.
     let state = rt.get_task_status(&task_id).await.unwrap();
-    assert_eq!(state.status, TaskStatus::Killed);
+    assert_eq!(
+        state.status,
+        TaskStatus::Running,
+        "kill_task must NOT update status directly; the driver does that"
+    );
 }
 
 #[tokio::test]
-async fn kill_task_pushes_killed_notification() {
+async fn kill_task_does_not_push_notification_directly() {
     let sink = CapturingSink::default();
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
     let task_id = rt
-        .register_agent_task("explore", None, CancellationToken::new())
+        .register_agent_task("explore", None, None, CancellationToken::new())
         .await;
     rt.kill_task(&task_id).await.unwrap();
     let captured = captured.lock().await;
-    assert_eq!(captured.len(), 1);
-    matches!(
-        captured[0].kind,
-        coco_tasks::NotificationKind::AgentTerminal {
-            status: coco_tasks::TerminalStatus::Killed,
-            ..
-        }
+    assert!(
+        captured.is_empty(),
+        "kill_task must not push a notification — that's the driver's job. \
+         Got {} notification(s).",
+        captured.len()
+    );
+}
+
+/// End-to-end check: the canonical kill path is cancel → driver
+/// observes cancel → driver calls `mark_failed` → ONE notification
+/// gets pushed (no race / no duplicate).
+#[tokio::test]
+async fn kill_then_mark_failed_pushes_exactly_one_notification() {
+    let sink = CapturingSink::default();
+    let captured = sink.captured.clone();
+    let rt = rt_with_sink(sink);
+    let task_id = rt
+        .register_agent_task("explore", None, None, CancellationToken::new())
+        .await;
+    rt.kill_task(&task_id).await.unwrap();
+    // Simulate what the bg-agent closure does in production after
+    // observing the cancel.
+    rt.mark_failed(&task_id, "task cancelled by leader").await;
+    let captured = captured.lock().await;
+    assert_eq!(captured.len(), 1, "exactly one notification expected");
+    assert!(
+        matches!(
+            captured[0].kind,
+            coco_tasks::NotificationKind::AgentTerminal { .. }
+        ),
+        "expected AgentTerminal, got {:?}",
+        captured[0].kind
     );
 }
 
@@ -183,7 +224,7 @@ async fn kill_task_pushes_killed_notification() {
 async fn subscribe_terminal_fires_on_mark_completed() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new())
         .await;
     let signal = rt
         .subscribe_terminal(&task_id)
@@ -206,7 +247,7 @@ async fn subscribe_terminal_fires_on_mark_completed() {
 async fn subscribe_terminal_already_terminal_returns_immediately() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new())
         .await;
     rt.mark_completed(&task_id, AgentCompletionPayload::default())
         .await;
@@ -225,10 +266,10 @@ async fn subscribe_terminal_already_terminal_returns_immediately() {
 async fn list_tasks_returns_all_registered() {
     let rt = rt();
     let _ = rt
-        .register_agent_task("a", None, CancellationToken::new())
+        .register_agent_task("a", None, None, CancellationToken::new())
         .await;
     let _ = rt
-        .register_agent_task("b", None, CancellationToken::new())
+        .register_agent_task("b", None, None, CancellationToken::new())
         .await;
     assert_eq!(rt.list_tasks().await.len(), 2);
 }
@@ -240,13 +281,114 @@ async fn unknown_task_id_errors() {
     assert!(rt.get_task_output_delta("ghost", 0).await.is_err());
     assert!(rt.kill_task("ghost").await.is_err());
     assert!(rt.subscribe_terminal("ghost").await.is_none());
+    assert!(
+        coco_tool_runtime::TaskReader::detach_handle(&*rt, "ghost")
+            .await
+            .is_none()
+    );
+    assert!(!rt.signal_detach("ghost").await);
+    assert!(rt.read_terminal_outputs("ghost").await.is_err());
+}
+
+// ── W2: detach signal contract tests ────────────────────────────────
+
+/// First `signal_detach` returns true (and notifies); subsequent calls
+/// return false (CAS-guarded). Mirrors TS `backgroundAgentTask`'s
+/// `if (task.isBackgrounded) return false`.
+#[tokio::test]
+async fn signal_detach_is_idempotent() {
+    let rt = rt();
+    let task_id = rt
+        .register_agent_task("work", None, None, CancellationToken::new())
+        .await;
+    assert!(rt.signal_detach(&task_id).await, "first signal must fire");
+    assert!(
+        !rt.signal_detach(&task_id).await,
+        "second signal must be no-op"
+    );
+    assert!(
+        !rt.signal_detach(&task_id).await,
+        "third signal must be no-op"
+    );
+}
+
+/// `signal_detach` wakes an awaiter on the per-task `Notify`. Mirrors
+/// the TS `Promise.race([nextMessage, backgroundSignal])` arm:
+/// resolving the signal wakes the awaiter exactly once.
+#[tokio::test]
+async fn signal_detach_wakes_notify_awaiter() {
+    let rt = rt();
+    let task_id = rt
+        .register_agent_task("work", None, None, CancellationToken::new())
+        .await;
+    let notify = coco_tool_runtime::TaskReader::detach_handle(&*rt, &task_id)
+        .await
+        .expect("entry must exist");
+    // Race: signal first, then assert the awaiter wakes within 1s.
+    let rt2 = rt.clone();
+    let id2 = task_id.clone();
+    let _handle = tokio::spawn(async move {
+        // Small delay so the awaiter is parked first.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        rt2.signal_detach(&id2).await;
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), notify.notified())
+        .await
+        .expect("awaiter must wake within 1s");
+}
+
+/// `signal_detach` flips `LocalAgentExtra.is_backgrounded` for
+/// `LocalAgent` tasks so the TUI panel filter can hide detached
+/// tasks. Verifies the side-effect via TaskManager's sidecar accessor.
+#[tokio::test]
+async fn signal_detach_flips_is_backgrounded_for_local_agent() {
+    let rt = rt();
+    let task_id = rt
+        .register_agent_task("work", None, None, CancellationToken::new())
+        .await;
+    let extras_before = rt.manager().local_agent_extra(&task_id).await;
+    assert!(!extras_before.is_backgrounded);
+    rt.signal_detach(&task_id).await;
+    let extras_after = rt.manager().local_agent_extra(&task_id).await;
+    assert!(
+        extras_after.is_backgrounded,
+        "is_backgrounded must flip to true after signal_detach"
+    );
+}
+
+/// `read_terminal_outputs` returns the on-disk content as `stdout`
+/// (stdout+stderr merged in coco-rs file mode). `interrupted` is true
+/// only when the task ended in `Killed`.
+#[tokio::test]
+async fn read_terminal_outputs_returns_disk_content() {
+    let rt = rt();
+    let task_id = rt
+        .register_agent_task("work", None, None, CancellationToken::new())
+        .await;
+    rt.append_output(&task_id, "line1\n").await;
+    rt.append_output(&task_id, "line2\n").await;
+    rt.mark_completed(&task_id, AgentCompletionPayload::default())
+        .await;
+    let outputs = rt
+        .read_terminal_outputs(&task_id)
+        .await
+        .expect("must succeed");
+    assert!(outputs.stdout.contains("line1"));
+    assert!(outputs.stdout.contains("line2"));
+    assert!(outputs.stderr.is_empty(), "merged into stdout in fg path");
+    assert!(
+        !outputs.interrupted,
+        "Completed (not Killed) → interrupted=false"
+    );
 }
 
 #[tokio::test]
 async fn mark_completed_cancels_per_task_token() {
     let rt = rt();
     let cancel = CancellationToken::new();
-    let task_id = rt.register_agent_task("work", None, cancel.clone()).await;
+    let task_id = rt
+        .register_agent_task("work", None, None, cancel.clone())
+        .await;
     assert!(!cancel.is_cancelled());
     rt.mark_completed(&task_id, AgentCompletionPayload::default())
         .await;
@@ -257,7 +399,9 @@ async fn mark_completed_cancels_per_task_token() {
 async fn mark_failed_cancels_per_task_token() {
     let rt = rt();
     let cancel = CancellationToken::new();
-    let task_id = rt.register_agent_task("work", None, cancel.clone()).await;
+    let task_id = rt
+        .register_agent_task("work", None, None, cancel.clone())
+        .await;
     rt.mark_failed(&task_id, "boom").await;
     assert!(cancel.is_cancelled());
 }
@@ -273,6 +417,11 @@ async fn shell_spawn_runs_command_and_marks_completed() {
             description: "echo test".into(),
             tool_use_id: Some("toolu_sh1".into()),
             agent_id: None,
+            progress_tx: None,
+            progress_throttle_ms: 1000,
+            auto_detach_ms: None,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
         .await
         .expect("shell spawn should succeed");
@@ -305,6 +454,11 @@ async fn shell_spawn_propagates_nonzero_exit_as_failed() {
             description: "fail".into(),
             tool_use_id: None,
             agent_id: None,
+            progress_tx: None,
+            progress_throttle_ms: 1000,
+            auto_detach_ms: None,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
         .await
         .unwrap();
@@ -337,6 +491,11 @@ async fn shell_spawn_threads_tool_use_id_and_agent_id_into_notification() {
             description: "noop".into(),
             tool_use_id: Some("toolu_bash99".into()),
             agent_id: Some("agent-3".into()),
+            progress_tx: None,
+            progress_throttle_ms: 1000,
+            auto_detach_ms: None,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
         .await
         .unwrap();
@@ -368,17 +527,251 @@ async fn shell_spawn_threads_tool_use_id_and_agent_id_into_notification() {
 async fn no_sink_means_no_panic_on_terminal() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("explore", None, CancellationToken::new())
+        .register_agent_task("explore", None, None, CancellationToken::new())
         .await;
     rt.mark_completed(&task_id, AgentCompletionPayload::default())
         .await;
+}
+
+// ── W6: Dream task registration ─────────────────────────────────────
+
+/// W6: `register_dream_task` creates a task with `TaskType::Dream`
+/// so the TUI panel + `TaskList` tool can differentiate auto-memory
+/// consolidation from user-spawned subagents. TS parity:
+/// `tasks/DreamTask/DreamTask.ts:72`.
+#[tokio::test]
+async fn register_dream_task_creates_dream_typed_task() {
+    let rt = rt();
+    let task_id = rt
+        .register_dream_task("auto-dream consolidation", CancellationToken::new())
+        .await;
+    let state = rt.get_task_status(&task_id).await.unwrap();
+    assert_eq!(state.task_type, coco_types::TaskType::Dream);
+    assert_eq!(state.status, TaskStatus::Running);
+    assert_eq!(state.description, "auto-dream consolidation");
+    assert!(
+        task_id.starts_with("td"),
+        "dream task ID must use the 'td' prefix per generate_task_id, got: {task_id}"
+    );
+}
+
+#[tokio::test]
+async fn register_dream_task_supports_kill_via_cancel_token() {
+    let rt = rt();
+    let cancel = CancellationToken::new();
+    let task_id = rt.register_dream_task("auto-dream", cancel.clone()).await;
+    assert!(!cancel.is_cancelled());
+    rt.kill_task(&task_id).await.unwrap();
+    assert!(cancel.is_cancelled());
+}
+
+// ── W4: complete_silent contract (sync agent path) ──────────────────
+
+/// W4: `complete_silent` transitions to a terminal status but does
+/// NOT push a `<task-notification>` envelope. Used by the sync
+/// AgentTool path where the result returns to the parent tool call
+/// directly — pushing a queued notification would double-inform the
+/// model. Mirrors TS sync-path behavior (no `enqueueAgentNotification`).
+#[tokio::test]
+async fn complete_silent_transitions_status_without_notification() {
+    let sink = CapturingSink::default();
+    let captured = sink.captured.clone();
+    let rt = rt_with_sink(sink);
+    let task_id = rt
+        .register_agent_task("sync-work", None, None, CancellationToken::new())
+        .await;
+
+    rt.complete_silent(&task_id, true).await;
+
+    let state = rt.get_task_status(&task_id).await.unwrap();
+    assert_eq!(
+        state.status,
+        TaskStatus::Completed,
+        "complete_silent(true) → Completed"
+    );
+    let captured = captured.lock().await;
+    assert!(
+        captured.is_empty(),
+        "complete_silent must NOT push a notification. Got {} notification(s).",
+        captured.len()
+    );
+}
+
+#[tokio::test]
+async fn complete_silent_failed_path() {
+    let sink = CapturingSink::default();
+    let captured = sink.captured.clone();
+    let rt = rt_with_sink(sink);
+    let task_id = rt
+        .register_agent_task("sync-work", None, None, CancellationToken::new())
+        .await;
+
+    rt.complete_silent(&task_id, false).await;
+
+    let state = rt.get_task_status(&task_id).await.unwrap();
+    assert_eq!(state.status, TaskStatus::Failed);
+    assert!(captured.lock().await.is_empty());
+}
+
+/// W4: `complete_silent` fires the per-task cancel token (so any
+/// downstream timer / watcher exits) and broadcasts the terminal
+/// status via the watch channel (so `TaskOutput(block=true)` waiters
+/// resolve).
+#[tokio::test]
+async fn complete_silent_fires_cancel_and_broadcasts_terminal() {
+    let rt = rt();
+    let cancel = CancellationToken::new();
+    let task_id = rt
+        .register_agent_task("sync-work", None, None, cancel.clone())
+        .await;
+    let signal = rt
+        .subscribe_terminal(&task_id)
+        .await
+        .expect("entry must exist");
+
+    assert!(!cancel.is_cancelled());
+
+    rt.complete_silent(&task_id, true).await;
+
+    assert!(cancel.is_cancelled(), "cancel token must fire");
+    let final_status =
+        tokio::time::timeout(std::time::Duration::from_secs(1), signal.await_terminal())
+            .await
+            .expect("terminal signal must fire within 1s");
+    assert_eq!(final_status, TaskStatus::Completed);
+}
+
+// ── W3: progress timer + auto-detach + exit_code tests ──────────────
+
+/// W3: `read_terminal_outputs` returns the actual `exit_code` for a
+/// completed shell task. Validates that the shell driver persists
+/// the code into the `OnceLock` slot via `apply_shell_terminal_state`.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shell_spawn_persists_exit_code_for_terminal_outputs() {
+    let rt = rt();
+    let task_id = rt
+        .spawn_shell_task(BackgroundShellRequest {
+            command: "exit 42".into(),
+            timeout_ms: Some(5_000),
+            description: "exit-42".into(),
+            tool_use_id: None,
+            agent_id: None,
+            progress_tx: None,
+            progress_throttle_ms: 1000,
+            auto_detach_ms: None,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .unwrap();
+
+    // Wait for terminal.
+    let signal = rt
+        .subscribe_terminal(&task_id)
+        .await
+        .expect("entry must exist");
+    tokio::time::timeout(std::time::Duration::from_secs(5), signal.await_terminal())
+        .await
+        .expect("task must terminate within 5s");
+
+    let outputs = rt
+        .read_terminal_outputs(&task_id)
+        .await
+        .expect("terminal outputs must read");
+    assert_eq!(outputs.exit_code, Some(42));
+    assert!(!outputs.interrupted, "natural exit is not 'interrupted'");
+}
+
+/// W3: progress timer emits `bash_progress` events through the
+/// `ProgressSender` while the task runs. The test uses a short
+/// `progress_throttle_ms` and a sleeping command to observe at least
+/// one tick.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shell_spawn_emits_progress_events_through_progress_tx() {
+    use coco_tool_runtime::ToolProgress;
+    use tokio::sync::mpsc;
+
+    let rt = rt();
+    let (tx, mut rx) = mpsc::unbounded_channel::<ToolProgress>();
+    let _task_id = rt
+        .spawn_shell_task(BackgroundShellRequest {
+            // Sleep long enough to ensure at least one progress tick
+            // at 100 ms throttle, then exit.
+            command: "sleep 0.3 && echo done".into(),
+            timeout_ms: Some(5_000),
+            description: "progress-test".into(),
+            tool_use_id: Some("toolu_progress".into()),
+            agent_id: None,
+            progress_tx: Some(tx),
+            progress_throttle_ms: 100,
+            auto_detach_ms: None,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .unwrap();
+
+    let progress = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+        .await
+        .expect("progress event must arrive within 3s")
+        .expect("channel must yield at least one progress event");
+    assert_eq!(progress.tool_use_id, "toolu_progress");
+    assert_eq!(
+        progress.data["type"].as_str(),
+        Some("bash_progress"),
+        "payload must carry TS-aligned `type` field"
+    );
+    assert_eq!(progress.data["status"].as_str(), Some("running"));
+}
+
+/// W3: auto-detach timer fires `signal_detach` after `auto_detach_ms`.
+/// Validates idempotency-via-fight: signal_detach is fired by both the
+/// timer and the test, and the second call returns `false`.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shell_spawn_auto_detach_timer_fires() {
+    let rt = rt();
+    let task_id = rt
+        .spawn_shell_task(BackgroundShellRequest {
+            // Long-running command so auto-detach beats natural exit.
+            command: "sleep 5".into(),
+            timeout_ms: Some(10_000),
+            description: "auto-detach".into(),
+            tool_use_id: None,
+            agent_id: None,
+            progress_tx: None,
+            progress_throttle_ms: 1000,
+            auto_detach_ms: Some(200),
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .unwrap();
+
+    let notify = coco_tool_runtime::TaskReader::detach_handle(&*rt, &task_id)
+        .await
+        .expect("entry must exist");
+    tokio::time::timeout(std::time::Duration::from_secs(2), notify.notified())
+        .await
+        .expect("auto-detach must fire within 2s");
+
+    // Subsequent explicit signal_detach is a no-op (already detached
+    // by the timer).
+    assert!(
+        !rt.signal_detach(&task_id).await,
+        "second signal must be CAS no-op"
+    );
+    // Cleanup so the test doesn't leak a sleeping subprocess.
+    rt.kill_task(&task_id).await.unwrap();
 }
 
 #[tokio::test]
 async fn read_output_returns_full_buffer_after_completion() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new())
         .await;
     rt.append_output(&task_id, "alpha").await;
     rt.mark_completed(

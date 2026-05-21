@@ -55,7 +55,7 @@ use std::sync::Arc;
 /// Request to spawn a background shell task. Mirrors TS
 /// `LocalShellSpawnInput` (`Task.ts:59-67`) modulo the
 /// MONITOR_TOOL-specific `kind` field which is not ported yet.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BackgroundShellRequest {
     pub command: String,
     /// Display label the model passes via tool input. TS:
@@ -71,6 +71,52 @@ pub struct BackgroundShellRequest {
     /// teammates only see their own bg-task completions. TS:
     /// `BashTool.tsx:910` `agentId: toolUseContext.agentId`.
     pub agent_id: Option<String>,
+    /// W3: when set, the TaskRuntime stdout-drain coroutine emits
+    /// `bash_progress` events through this channel every
+    /// [`Self::progress_throttle_ms`]. Mirrors TS `runShellCommand`'s
+    /// `~1s` `yield { type: 'progress', ... }` cadence
+    /// (`tools/BashTool/BashTool.tsx:1128-1140`). `None` = no
+    /// progress emission (background-only spawns; bg drains to disk
+    /// but doesn't need a live channel).
+    pub progress_tx: Option<crate::traits::ProgressSender>,
+    /// Throttle interval for `progress_tx` emission. Ignored when
+    /// `progress_tx` is `None`. Default 1000 ms (matches TS's
+    /// `POLL_INTERVAL_MS`).
+    pub progress_throttle_ms: u64,
+    /// W3: when set, the TaskRuntime fires `signal_detach(task_id)`
+    /// internally after this many ms of foreground execution. Mirrors
+    /// TS `ASSISTANT_BLOCKING_BUDGET_MS` (15 s) — used by `BashTool`
+    /// in assistant mode to auto-detach long-running fg commands.
+    /// `None` = never auto-detach (the caller's `tool.execute`
+    /// `select!` arm is the only path that observes detach).
+    pub auto_detach_ms: Option<u64>,
+    /// W6: optional sandbox runtime state. When `Some` and the
+    /// command isn't excluded by sandbox settings, the TaskRuntime
+    /// driver wraps the child process via
+    /// `SandboxState::try_wrap_command_with_binds` (bwrap / Seatbelt)
+    /// before spawn. Mirrors `coco_shell::ExecOptions.sandbox`. `None`
+    /// runs unsandboxed — backwards-compatible with sessions that
+    /// don't wire sandbox state.
+    pub sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
+    /// W6: sandbox bypass requested via `dangerouslyDisableSandbox`
+    /// tool input. Honored only when `sandbox_state.is_some()` and
+    /// the session allows unsandboxed commands.
+    pub sandbox_bypass: coco_sandbox::SandboxBypass,
+}
+
+impl std::fmt::Debug for BackgroundShellRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackgroundShellRequest")
+            .field("command", &self.command)
+            .field("description", &self.description)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("tool_use_id", &self.tool_use_id)
+            .field("agent_id", &self.agent_id)
+            .field("progress_tx", &self.progress_tx.is_some())
+            .field("progress_throttle_ms", &self.progress_throttle_ms)
+            .field("auto_detach_ms", &self.auto_detach_ms)
+            .finish()
+    }
 }
 
 /// Delta output from a background task (incremental read).
@@ -79,6 +125,35 @@ pub struct TaskOutputDelta {
     pub content: String,
     pub new_offset: i64,
     pub is_complete: bool,
+}
+
+/// Terminal-state outputs for foreground `tool.execute` callers that
+/// raced the task's terminal signal. Used by the unified fg/bg
+/// execution path (W3): when `tool.execute`'s `select!` arm catches
+/// the terminal signal, it calls
+/// [`TaskReader::read_terminal_outputs`] to assemble a fg-shape
+/// `ToolResult.data` (`{stdout, stderr, exitCode, interrupted}`).
+///
+/// TS parity: matches the shape of `runShellCommand`'s `ExecResult`
+/// (`tools/BashTool/BashTool.tsx` returns `{stdout, stderr, code,
+/// interrupted}` on completion). In coco-rs, stdout and stderr are
+/// merged on disk (single fd, atomic appends — matching TS file
+/// mode), so the impl returns the combined text on `stdout` and
+/// leaves `stderr` empty. Callers should not branch on `stderr.is_empty()`
+/// to detect success; use `exit_code` instead.
+#[derive(Debug, Clone)]
+pub struct TerminalOutputs {
+    /// Combined stdout + stderr from the on-disk task file, truncated
+    /// to `DEFAULT_MAX_READ_BYTES` (~64 KB).
+    pub stdout: String,
+    /// Empty in the unified path (stdout+stderr merged on disk). Kept
+    /// in the type for future implementations that split streams.
+    pub stderr: String,
+    /// Exit code from the child process. `None` for non-process
+    /// terminations (`Cancelled`, `SpawnFailed`, agent tasks).
+    pub exit_code: Option<i32>,
+    /// True iff the task ended via `kill_task` / cancel-token cascade.
+    pub interrupted: bool,
 }
 
 /// Read-only inspection surface. Used by `TaskGet`, `TaskList`,
@@ -114,6 +189,39 @@ pub trait TaskReader: Send + Sync {
     /// late subscribers see a task that *already* finished without
     /// missing the signal.
     async fn subscribe_terminal(&self, task_id: &str) -> Option<TerminalSignal>;
+
+    /// Subscribe to the per-task "detach" signal — used by the
+    /// unified fg/bg execution path (W3) to race a terminal arm
+    /// against a "move to background" arm in `tool.execute`. Returns
+    /// `None` when the id is unknown.
+    ///
+    /// `Arc<Notify>` semantics: a single shared notification slot.
+    /// Multiple awaiters of `.notified()` all wake on
+    /// [`TaskController::signal_detach`]. Idempotency is enforced at
+    /// the signal site via an internal `AtomicBool` — calling
+    /// `signal_detach` twice on the same task is a no-op the second
+    /// time, matching TS `backgroundAgentTask` (`tasks/LocalAgentTask/LocalAgentTask.tsx:617-650`)
+    /// `if (task.isBackgrounded) return false`.
+    ///
+    /// TS analog: the per-agent `backgroundSignal` Promise stored in
+    /// `backgroundSignalResolvers: Map<agentId, () => void>`
+    /// (`tasks/LocalAgentTask/LocalAgentTask.tsx:526-614`); shell
+    /// path: `shellCommand.background(taskId)` flag flip
+    /// (`utils/ShellCommand.ts:349-366`).
+    async fn detach_handle(&self, task_id: &str) -> Option<Arc<tokio::sync::Notify>>;
+
+    /// Compose the terminal-state output frame for `tool.execute`
+    /// callers that raced the terminal signal in fg mode. Reads up to
+    /// `DEFAULT_MAX_READ_BYTES` of the merged stdout+stderr disk file,
+    /// stamps exit code (when known) and `interrupted` flag.
+    ///
+    /// Errors when the task id is unknown. Returns content even when
+    /// the task is still running (caller pre-condition: only call
+    /// after `subscribe_terminal().await_terminal()` resolves).
+    async fn read_terminal_outputs(
+        &self,
+        task_id: &str,
+    ) -> Result<TerminalOutputs, coco_error::BoxedError>;
 }
 
 pub type TaskReaderRef = Arc<dyn TaskReader>;
@@ -148,9 +256,35 @@ impl TerminalSignal {
 /// Lifecycle control surface. Used by `TaskStop`.
 #[async_trait::async_trait]
 pub trait TaskController: Send + Sync {
-    /// Kill a running task. Fires the per-task cancel token and
-    /// flips status to `Killed`. Errors when the id is unknown.
+    /// Kill a running task by firing its cancel token. Errors when
+    /// the id is unknown. **Does not** update status or push a
+    /// notification directly — the driver does that. See
+    /// `app/cli/src/task_runtime.rs::kill_task` for the contract.
     async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError>;
+
+    /// Signal that a task should detach from its foreground awaiter
+    /// and continue running in the background. Returns `true` on the
+    /// first call (CAS-guarded); `false` on subsequent calls (already
+    /// detached) and when the id is unknown.
+    ///
+    /// Mechanics:
+    /// 1. Atomically flip the per-task "detached" flag. If already
+    ///    detached, return `false`.
+    /// 2. Update `LocalAgentExtra.is_backgrounded` (for the TUI panel
+    ///    filter to differentiate fg vs detached tasks).
+    /// 3. Notify the per-task [`tokio::sync::Notify`] returned by
+    ///    [`TaskReader::detach_handle`]. The fg-mode `tool.execute`
+    ///    `select!` arm awaiting `.notified()` wakes and returns a
+    ///    `{task_id, status: "background"}` shape — the underlying
+    ///    process / engine keeps running and will fire its own
+    ///    terminal notification later.
+    ///
+    /// TS parity:
+    /// - Shell: `backgroundExistingForegroundTask` (`tasks/LocalShellTask/LocalShellTask.tsx:420-470`)
+    ///   → `shellCommand.background(taskId)` (`utils/ShellCommand.ts:349-366`).
+    /// - Agent: `backgroundAgentTask` (`tasks/LocalAgentTask/LocalAgentTask.tsx:617-650`)
+    ///   → resolves the per-agent `backgroundSignal` resolver.
+    async fn signal_detach(&self, task_id: &str) -> bool;
 }
 
 pub type TaskControllerRef = Arc<dyn TaskController>;
@@ -191,10 +325,24 @@ pub type BackgroundTaskHandleRef = Arc<dyn BackgroundTaskHandle>;
 pub trait AgentTaskRegistry: Send + Sync {
     /// Register a freshly-spawned background AgentTool task.
     /// Returns the `task_id` the read/control trait accepts.
+    ///
+    /// - `tool_use_id`: the `Agent(...)` invocation's tool_use id from
+    ///   the parent's `ToolUseContext.tool_use_id`. Threaded into the
+    ///   `<tool-use-id>` tag on completion notifications so the model
+    ///   can correlate the queued envelope with the original tool call.
+    ///   TS parity: `AgentTool.tsx` passes `toolUseContext.toolUseId`
+    ///   into `registerAgentForeground` / `registerAsyncAgent`.
+    /// - `invoking_agent_id`: the agent that *called* AgentTool
+    ///   (`ctx.agent_id`), NOT the newly-spawned subagent's id. Used
+    ///   as the routing filter on `CommandQueue` so a teammate only
+    ///   sees completion notifications for tasks IT spawned. TS
+    ///   parity: `BashTool.tsx:910` passes `agentId: toolUseContext.agentId`
+    ///   into the queued notification; agent path mirrors.
     async fn register_agent_task(
         &self,
         description: &str,
         tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
         cancel: tokio_util::sync::CancellationToken,
     ) -> String;
 
@@ -210,6 +358,47 @@ pub trait AgentTaskRegistry: Send + Sync {
 
     /// Mark an agent task failed with an error message.
     async fn mark_failed(&self, task_id: &str, error: &str);
+
+    /// W4: transition an agent task to a terminal state WITHOUT
+    /// pushing a `<task-notification>` envelope. Used by the sync
+    /// AgentTool path where the result is returned to the parent
+    /// tool call directly — pushing a notification would cause the
+    /// model to see the same outcome twice (once via tool result,
+    /// once via queued envelope). TS parity: sync agent path
+    /// (`AgentTool.tsx:1054`) does **not** call
+    /// `enqueueAgentNotification`; only the backgrounded path
+    /// (`enqueueAgentNotification` in `tasks/LocalAgentTask/LocalAgentTask.tsx:197-262`)
+    /// emits the envelope.
+    ///
+    /// `succeeded` selects between `TaskStatus::Completed` (true) and
+    /// `TaskStatus::Failed` (false). Internally fires the per-task
+    /// cancel token and broadcasts the terminal status on the watch
+    /// channel — same as `mark_completed`/`mark_failed` would — but
+    /// skips the sink push.
+    async fn complete_silent(&self, task_id: &str, succeeded: bool);
+
+    /// Register a memory-consolidation (auto-dream) task. Same
+    /// lifecycle as agent tasks but with `TaskType::Dream` so the
+    /// TUI panel + `TaskList` tool can differentiate background
+    /// memory work from user-spawned subagents. No `tool_use_id` /
+    /// `invoking_agent_id` because dream is a runtime-internal
+    /// service that doesn't surface back to the model via a tool
+    /// result. TS parity: `tasks/DreamTask/DreamTask.ts:72`
+    /// `registerTask({type: 'dream', ...})`.
+    async fn register_dream_task(
+        &self,
+        description: &str,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> String;
+
+    /// W6.2 (full): expose the per-task detach `Notify` so the
+    /// coordinator's sync-path engine driver can race `engine.execute_query`
+    /// against an external `signal_detach`. Mirrors
+    /// [`TaskReader::detach_handle`] but reachable through the
+    /// registration-side `AgentTaskRegistry` trait so the
+    /// coordinator doesn't need a separate `TaskReader` handle.
+    /// Returns `None` when the id is unknown.
+    async fn detach_handle(&self, task_id: &str) -> Option<std::sync::Arc<tokio::sync::Notify>>;
 
     /// Snapshot a task's accumulated output buffer (tail). Used by
     /// the periodic AgentSummary timer.
@@ -340,12 +529,24 @@ impl TaskReader for NoOpBackgroundTaskHandle {
     async fn subscribe_terminal(&self, _: &str) -> Option<TerminalSignal> {
         None
     }
+    async fn detach_handle(&self, _: &str) -> Option<Arc<tokio::sync::Notify>> {
+        None
+    }
+    async fn read_terminal_outputs(
+        &self,
+        _: &str,
+    ) -> Result<TerminalOutputs, coco_error::BoxedError> {
+        Err(unavail())
+    }
 }
 
 #[async_trait::async_trait]
 impl TaskController for NoOpBackgroundTaskHandle {
     async fn kill_task(&self, _: &str) -> Result<(), coco_error::BoxedError> {
         Err(unavail())
+    }
+    async fn signal_detach(&self, _: &str) -> bool {
+        false
     }
 }
 

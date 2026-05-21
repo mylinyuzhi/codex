@@ -368,6 +368,18 @@ async fn execute_background(
             description,
             tool_use_id: ctx.tool_use_id.clone(),
             agent_id: ctx.agent_id.as_ref().map(ToString::to_string),
+            // W3: bg-only spawn — no progress emission, no auto-detach.
+            // The fg PowerShell path still goes through ShellExecutor;
+            // unifying it would mirror the BashTool W3 refactor and is
+            // a follow-up.
+            progress_tx: None,
+            progress_throttle_ms: 1000,
+            auto_detach_ms: None,
+            // W6: PowerShell bg path currently doesn't thread sandbox
+            // state — `pwsh` runs on macOS/Linux too but the sandbox
+            // wrap targets bash. Skip for now; this is a follow-up.
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
         .await
         .map_err(|e| ToolError::ExecutionFailed {

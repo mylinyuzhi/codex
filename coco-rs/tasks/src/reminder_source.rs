@@ -3,32 +3,41 @@
 //! TS `getUnifiedTaskAttachments(ctx)` fires post-compaction to warn
 //! the agent against duplicate background-task spawns. coco-rs
 //! mirrors that semantics: when `just_compacted` is true, this impl
-//! snapshots every currently-tracked LocalAgent running task and
+//! snapshots every currently-tracked LocalAgent **running** task and
 //! maps its status into a `TaskStatusSnapshot` so the reminder
-//! generator can render the per-task warning text verbatim with TS.
+//! generator can render the "still running, don't spawn a duplicate"
+//! warning text verbatim with TS.
 //!
 //! ## TS-aligned filter (mirrors `compact.ts:1572-1598`)
 //!
-//! Three skip conditions, applied in order:
+//! Skip conditions, applied in order:
 //!
 //! 1. **Not a LocalAgent** — TS only generates `task_status`
 //!    reminders for `local_agent` tasks. Shell / dream / teammate
 //!    tasks don't carry the "don't spawn a duplicate" affordance.
-//! 2. **`retrieved`** — `TaskOutputTool` already served this task's
-//!    terminal output; the model knows what happened, no need to
-//!    re-announce. Source: TS `compact.ts:1578` `agent.retrieved`.
-//! 3. **Same `agent_id` as the caller** — fork mode + nested
-//!    spawns. The agent doesn't warn itself about itself. Source:
-//!    TS `compact.ts:1580` `agent.agentId === context.agentId`.
-//!    coco-rs threads `agent_id` through the `collect` parameter;
-//!    `None` means the main thread.
+//! 2. **Terminal status** (W6 / A2 fix) — Completed / Failed /
+//!    Killed tasks have already delivered their result through the
+//!    `<task-notification>` envelope via `CommandQueue`
+//!    (`QueuedCommandGenerator`). Re-emitting them post-compact
+//!    would double-inform the model. The post-compact reminder is
+//!    explicitly the "still running, don't spawn a duplicate" hint;
+//!    that's only meaningful for in-flight tasks.
+//! 3. **`retrieved`** — `TaskOutputTool` already served this task's
+//!    output (terminal or partial); model knows what happened. TS:
+//!    `compact.ts:1578` `agent.retrieved`.
+//! 4. **Same `agent_id` as the caller** — fork mode + nested
+//!    spawns. The agent doesn't warn itself about itself. TS:
+//!    `compact.ts:1580` `agent.agentId === context.agentId`.
+//!    coco-rs threads `agent_id` through `collect`; `None` means
+//!    the main thread.
 //!
 //! TS parity notes:
-//! - Only `Running` tasks need the anti-duplicate warning; coco-rs
-//!   surfaces `Completed` / `Failed` / `Killed` too so the post-compact
-//!   reminder text matches TS branching (`messages.ts:3954-3988`).
 //! - When `just_compacted` is false we return empty — TS only emits
 //!   this reminder right after the compaction boundary.
+//! - Terminal-task reporting flows through the `QueuedCommand`
+//!   reminder (the `<task-notification>` XML envelope wrapped in
+//!   `<system-reminder>`), which is the single source of truth for
+//!   "task X terminated with result Y".
 
 use async_trait::async_trait;
 use coco_system_reminder::TaskRunStatus;
@@ -59,6 +68,7 @@ impl TaskStatusSource for TaskManager {
         let total = states.len();
         let mut kept = 0usize;
         let mut skipped_type = 0usize;
+        let mut skipped_terminal = 0usize;
         let mut skipped_retrieved = 0usize;
         let mut skipped_self = 0usize;
         let mut snapshots = Vec::with_capacity(states.len());
@@ -68,13 +78,24 @@ impl TaskStatusSource for TaskManager {
                 skipped_type += 1;
                 continue;
             }
+            // Rule 2 (W6 / A2): terminal tasks already delivered via
+            // the `QueuedCommandGenerator` (`<task-notification>` XML
+            // wrapped in `<system-reminder>`). The post-compact
+            // reminder is the "still running, don't spawn a
+            // duplicate" hint — it has no purpose for terminal
+            // tasks.
+            if t.status.is_terminal() {
+                skipped_terminal += 1;
+                continue;
+            }
             let extra = self.local_agent_extra(&t.id).await;
-            // Rule 2: skip if `TaskOutputTool` already retrieved.
+            // Rule 3: skip if `TaskOutputTool` already retrieved
+            // partial output and the model has shown awareness.
             if extra.retrieved {
                 skipped_retrieved += 1;
                 continue;
             }
-            // Rule 3: skip when the caller is the task itself
+            // Rule 4: skip when the caller is the task itself
             // (fork-mode recursion). `tool_use_id` is the closest
             // proxy we have for "agent that produced this task" on
             // the caller side; matches TS `agent.agentId ===
@@ -86,18 +107,16 @@ impl TaskStatusSource for TaskManager {
                 continue;
             }
             kept += 1;
+            // After Rule 2, every snapshot here is in `Running` state
+            // (Pending/Running both map to TaskRunStatus::Running).
+            // `delta_summary` mirrors TS `agent.progress?.summary`
+            // (`compact.ts:1591-1594`).
             snapshots.push(TaskStatusSnapshot {
                 task_id: t.id,
                 description: t.description,
-                status: map_status(t.status),
+                status: TaskRunStatus::Running,
                 task_type: task_type_wire_name(t.task_type).to_string(),
-                // `delta_summary` mirrors TS `agent.progress?.summary`
-                // for running tasks and `agent.error` for failed.
-                // `compact.ts:1591-1594`.
-                delta_summary: match map_status(t.status) {
-                    TaskRunStatus::Running => extra.progress_summary,
-                    _ => None,
-                },
+                delta_summary: extra.progress_summary,
                 output_file_path: Some(t.output_file).filter(|s| !s.is_empty()),
             });
         }
@@ -106,15 +125,22 @@ impl TaskStatusSource for TaskManager {
             total,
             kept,
             skipped_type,
+            skipped_terminal,
             skipped_retrieved,
             skipped_self,
             caller_agent_id = ?agent_id,
-            "task_status reminder snapshot built (post-compact)"
+            "task_status reminder snapshot built (post-compact, running-only)"
         );
         snapshots
     }
 }
 
+// W6 / A2: terminal tasks are now filtered out (Rule 2 above), so
+// the status mapping is trivially `Running` for everything that
+// survives the filter. Kept as a no-op helper for now in case future
+// reminders re-introduce terminal-task variants; remove if it remains
+// unused after the W6 settle.
+#[allow(dead_code)]
 fn map_status(s: TaskStatus) -> TaskRunStatus {
     match s {
         TaskStatus::Completed => TaskRunStatus::Completed,

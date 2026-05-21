@@ -51,7 +51,11 @@ fn canned_state(task_id: &str) -> TaskStateBase {
         total_paused_ms: None,
         output_file: String::new(),
         output_offset: 0,
-        notified: false,
+        progress_summary: None,
+        retrieved: false,
+        retain: false,
+        evict_after: None,
+        is_backgrounded: false,
     }
 }
 
@@ -93,6 +97,18 @@ impl TaskReader for RecordingTaskHandle {
     async fn subscribe_terminal(&self, _: &str) -> Option<TerminalSignal> {
         None
     }
+    async fn detach_handle(&self, _: &str) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        None
+    }
+    async fn read_terminal_outputs(
+        &self,
+        _: &str,
+    ) -> Result<coco_tool_runtime::TerminalOutputs, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "read_terminal_outputs not used in these tests",
+            coco_error::StatusCode::Internal,
+        )))
+    }
 }
 
 #[async_trait::async_trait]
@@ -113,6 +129,9 @@ impl TaskController for RecordingTaskHandle {
                 coco_error::StatusCode::Internal,
             )))
         }
+    }
+    async fn signal_detach(&self, _: &str) -> bool {
+        false
     }
 }
 

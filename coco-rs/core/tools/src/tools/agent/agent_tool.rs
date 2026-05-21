@@ -711,6 +711,17 @@ impl Tool for AgentTool {
             require_can_use_tool: false,
             fork_label: None,
             is_non_interactive: ctx.is_non_interactive,
+            // D3 / D4 (PR-1 W1): thread the parent's tool_use_id and
+            // invoker agent_id through to the background task
+            // registration so the `<task-notification>` envelope
+            // carries the right routing tags. Without these, completion
+            // notifications were routed to the main thread regardless
+            // of which agent spawned them, and the `<tool-use-id>` tag
+            // was missing. TS parity: `AgentTool.tsx` passes both
+            // `toolUseContext.toolUseId` and `toolUseContext.agentId`
+            // into `registerAgentForeground` / `registerAsyncAgent`.
+            tool_use_id: ctx.tool_use_id.clone(),
+            invoking_agent_id: ctx.agent_id.as_ref().map(|a| a.as_str().to_string()),
         };
 
         let request_description = request.description.clone();

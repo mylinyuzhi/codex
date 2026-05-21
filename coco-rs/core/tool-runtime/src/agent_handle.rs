@@ -332,6 +332,24 @@ pub struct AgentSpawnRequest {
     /// backend selection uses this to force in-process teammates.
     #[serde(default)]
     pub is_non_interactive: bool,
+    /// `tool_use_id` of the `Agent(...)` invocation that produced this
+    /// spawn. Threaded into the background task's `<tool-use-id>` tag
+    /// so the model correlates completion notifications back to the
+    /// original AgentTool call. TS parity: `AgentTool.tsx` passes
+    /// `toolUseContext.toolUseId` into `registerAgentForeground` /
+    /// `registerAsyncAgent`. Filled at the `AgentTool::execute`
+    /// boundary from `ctx.tool_use_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    /// Agent id of the *invoker* — the agent that called `AgentTool`,
+    /// **not** the newly-spawned subagent. Used as the `agent_id`
+    /// filter on the `CommandQueue` so a teammate only receives
+    /// completion notifications for tasks it itself spawned. `None`
+    /// for main-thread spawns. TS parity: `AgentTool.tsx` /
+    /// `BashTool.tsx:910` pass `toolUseContext.agentId`. Filled at the
+    /// `AgentTool::execute` boundary from `ctx.agent_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invoking_agent_id: Option<String>,
 }
 
 /// Response from spawning a subagent.
@@ -540,12 +558,6 @@ pub trait AgentHandle: Send + Sync {
     /// TS: getAgentOutput() — reads the output file from a completed agent.
     async fn get_agent_output(&self, agent_id: &str) -> Result<String, String>;
 
-    /// Signal that a foreground agent should move to background execution.
-    ///
-    /// The agent continues running but unblocks the parent turn.
-    /// TS: backgroundSignal + wasBackgrounded logic in AgentTool.tsx
-    async fn background_agent(&self, agent_id: &str) -> Result<(), String>;
-
     /// Interrupt an in-process teammate's current turn without stopping
     /// the teammate lifecycle.
     ///
@@ -596,9 +608,5 @@ impl AgentHandle for NoOpAgentHandle {
 
     async fn get_agent_output(&self, _agent_id: &str) -> Result<String, String> {
         Err("Agent output not available in this context".into())
-    }
-
-    async fn background_agent(&self, _agent_id: &str) -> Result<(), String> {
-        Err("Agent backgrounding not available in this context".into())
     }
 }

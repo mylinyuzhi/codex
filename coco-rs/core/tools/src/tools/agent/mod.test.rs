@@ -166,10 +166,6 @@ impl AgentHandle for MockAgentHandle {
     async fn get_agent_output(&self, _agent_id: &str) -> Result<String, String> {
         Err("not implemented in mock".into())
     }
-
-    async fn background_agent(&self, _agent_id: &str) -> Result<(), String> {
-        Err("not implemented in mock".into())
-    }
 }
 
 fn ctx_with_agent(handle: impl AgentHandle + 'static) -> ToolUseContext {
@@ -224,9 +220,6 @@ impl AgentHandle for CapturingAgentHandle {
         Err("unused".into())
     }
     async fn get_agent_output(&self, _: &str) -> Result<String, String> {
-        Err("unused".into())
-    }
-    async fn background_agent(&self, _: &str) -> Result<(), String> {
         Err("unused".into())
     }
 }
@@ -752,7 +745,11 @@ impl coco_tool_runtime::TaskReader for StoppedTaskHandle {
             total_paused_ms: None,
             output_file: String::new(),
             output_offset: 0,
-            notified: false,
+            progress_summary: None,
+            retrieved: false,
+            retain: false,
+            evict_after: None,
+            is_backgrounded: false,
         })
     }
     async fn get_task_output_delta(
@@ -771,12 +768,27 @@ impl coco_tool_runtime::TaskReader for StoppedTaskHandle {
     async fn subscribe_terminal(&self, _: &str) -> Option<coco_tool_runtime::TerminalSignal> {
         None
     }
+    async fn detach_handle(&self, _: &str) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        None
+    }
+    async fn read_terminal_outputs(
+        &self,
+        _: &str,
+    ) -> Result<coco_tool_runtime::TerminalOutputs, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "not used in test",
+            coco_error::StatusCode::Internal,
+        )))
+    }
 }
 
 #[async_trait::async_trait]
 impl coco_tool_runtime::TaskController for StoppedTaskHandle {
     async fn kill_task(&self, _: &str) -> Result<(), coco_error::BoxedError> {
         Ok(())
+    }
+    async fn signal_detach(&self, _: &str) -> bool {
+        false
     }
 }
 
@@ -821,9 +833,6 @@ impl AgentHandle for ResumeRecordingHandle {
         Err("not expected".into())
     }
     async fn get_agent_output(&self, _: &str) -> Result<String, String> {
-        Err("not expected".into())
-    }
-    async fn background_agent(&self, _: &str) -> Result<(), String> {
         Err("not expected".into())
     }
     async fn resume_agent(

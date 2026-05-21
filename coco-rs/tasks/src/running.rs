@@ -35,61 +35,53 @@ use tokio::sync::mpsc;
 /// task. TS: `utils/task/framework.ts:28` `PANEL_GRACE_MS = 30_000`.
 pub const PANEL_GRACE_MS: i64 = 30_000;
 
-/// Sidecar state for `TaskType::LocalAgent` tasks. Mirrors fields
-/// TS keeps on `LocalAgentTaskState` directly but coco-rs holds in
-/// a sparse map (only populated when needed) to avoid bloating
-/// every `TaskStateBase`.
+/// Backward-compat view of the (now-merged) per-task agent-sidecar
+/// fields. After W6 / A5 these live directly on `TaskStateBase`;
+/// `LocalAgentExtra` is kept as a read-only projection so existing
+/// callers (`MemoryRuntime`, tests) can keep their snapshot-and-read
+/// pattern without rewriting every call site.
 ///
 /// TS source: `tasks/LocalAgentTask/LocalAgentTask.tsx:128-148`.
-///
-/// | Field | TS line | Purpose |
-/// |-------|---------|---------|
-/// | `progress_summary` | `LocalAgentTask.tsx:142` `progress.summary` | Last summarizer output, surfaced in compact reminders. |
-/// | `retrieved` | `compact.ts:1578` filter | True after `TaskOutput` successfully read the terminal output; suppresses compact reminder. |
-/// | `retain` | `LocalAgentTask.tsx:140` | UI grace-period flag — when true, no `evictAfter` deadline. |
-/// | `evict_after` | `LocalAgentTask.tsx:147` | Unix-ms at which the panel may evict the task; `None` = no deadline. |
-/// | `is_backgrounded` | `LocalAgentTask.tsx:134` | Ctrl+B session-backgrounded indicator. |
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LocalAgentExtra {
-    /// Most recent agent-summary text. `None` until the first
-    /// periodic summary fires. Surfaced in the compact reminder so
-    /// the model sees "Progress: ..." text. TS:
-    /// `LocalAgentTask.tsx:240-241` `progress.summary`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_summary: Option<String>,
-    /// True once `TaskOutputTool` reads the terminal output. Stops
-    /// the compact reminder from announcing the same agent
-    /// repeatedly. TS: `compact.ts:1578` `agent.retrieved`.
     #[serde(default)]
     pub retrieved: bool,
-    /// When set by the TUI panel viewer, blocks eviction. TS:
-    /// `LocalAgentTask.tsx:140`.
     #[serde(default)]
     pub retain: bool,
-    /// Unix-ms deadline after which the panel may evict the task.
-    /// Set to `start_time + PANEL_GRACE_MS` (30 s) at terminal
-    /// transition; `None` when `retain` is true. TS:
-    /// `LocalAgentTask.tsx:294, 424, 448`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evict_after: Option<i64>,
-    /// Session-backgrounded flag for Ctrl+B fg/bg switching. Used
-    /// by the TUI panel filter. TS: `LocalAgentTask.tsx:134`.
     #[serde(default)]
     pub is_backgrounded: bool,
+}
+
+impl From<&TaskStateBase> for LocalAgentExtra {
+    fn from(t: &TaskStateBase) -> Self {
+        Self {
+            progress_summary: t.progress_summary.clone(),
+            retrieved: t.retrieved,
+            retain: t.retain,
+            evict_after: t.evict_after,
+            is_backgrounded: t.is_backgrounded,
+        }
+    }
 }
 
 /// Running task manager — tracks background-task lifecycle state.
 ///
 /// Output buffers do **not** live here; the per-task disk file owned
 /// by [`coco_cli::disk_task_output::DiskOutputs`] is the system of
-/// record for captured stdout/stderr/result text. The manager only
-/// holds the typed status, timestamps, and the LocalAgent sidecar.
+/// record for captured stdout/stderr/result text. The manager holds
+/// only the typed status, timestamps, and the (W6-merged) LocalAgent
+/// sidecar fields on the same `TaskStateBase`.
+///
+/// **W6 (A5)**: single `tasks` RwLock instead of two locks
+/// (`tasks` + `local_agent_extras`). Eliminates the race where a UI
+/// `set_retain(true)` and the `update_status(terminal)` evict-after
+/// stamp could interleave, silently evicting a panel-pinned task.
 pub struct TaskManager {
     tasks: Arc<RwLock<HashMap<String, TaskStateBase>>>,
-    /// Sparse sidecar for [`TaskType::LocalAgent`] entries — TS
-    /// parity for the 5 fields TS keeps on `LocalAgentTaskState`.
-    /// Other task types don't get an entry here.
-    local_agent_extras: Arc<RwLock<HashMap<String, LocalAgentExtra>>>,
     /// Optional sink for lifecycle events. When set, `create` and
     /// `update_status` emit `CoreEvent::Protocol(Task*)` notifications
     /// so SDK consumers see background task activity.
@@ -108,68 +100,59 @@ impl TaskManager {
     pub fn new() -> Self {
         Self {
             tasks: Arc::new(RwLock::new(HashMap::new())),
-            local_agent_extras: Arc::new(RwLock::new(HashMap::new())),
             event_tx: None,
         }
     }
 
-    // ── LocalAgent sidecar accessors ──────────────────────────────
+    // ── LocalAgent sidecar accessors (W6 / A5 merged) ────────────
     //
-    // Sparse map: an entry exists only when at least one extra
-    // field has been set. Readers default to `LocalAgentExtra::default()`
-    // when no entry exists, which matches TS where these fields are
-    // optional on the state.
+    // Fields live on `TaskStateBase`. Setters take the single `tasks`
+    // RwLock once. Reads can take a shared lock.
 
     /// Snapshot the extras for a LocalAgent task; returns default
-    /// when the task either doesn't exist or hasn't had any extras
-    /// recorded.
+    /// when the task doesn't exist.
     pub async fn local_agent_extra(&self, id: &str) -> LocalAgentExtra {
-        self.local_agent_extras
+        self.tasks
             .read()
             .await
             .get(id)
-            .cloned()
+            .map(LocalAgentExtra::from)
             .unwrap_or_default()
     }
 
-    /// Update a LocalAgent task's progress summary. Called by the
-    /// periodic AgentSummary timer. Idempotent — overwrites the
-    /// previous summary so the compact reminder always shows the
-    /// most recent line.
+    /// Update a LocalAgent task's progress summary. Idempotent.
     pub async fn set_progress_summary(&self, id: &str, summary: String) {
-        let mut map = self.local_agent_extras.write().await;
-        map.entry(id.to_string()).or_default().progress_summary = Some(summary);
+        if let Some(t) = self.tasks.write().await.get_mut(id) {
+            t.progress_summary = Some(summary);
+        }
     }
 
-    /// Flip the `retrieved` flag — called by `TaskOutputTool` once
-    /// it successfully serves the terminal output. Suppresses the
-    /// post-compact "is still running"/"completed" reminder for
-    /// already-consumed agents. TS: `compact.ts:1578`.
+    /// Flip the `retrieved` flag — TS: `compact.ts:1578`.
     pub async fn mark_retrieved(&self, id: &str) {
-        let mut map = self.local_agent_extras.write().await;
-        map.entry(id.to_string()).or_default().retrieved = true;
+        if let Some(t) = self.tasks.write().await.get_mut(id) {
+            t.retrieved = true;
+        }
     }
 
-    /// UI flips this when the user pins a task panel open. Blocks
-    /// eviction until cleared. TS: `LocalAgentTask.tsx:140`.
+    /// UI flips this when the user pins a task panel open.
     pub async fn set_retain(&self, id: &str, retain: bool) {
-        let mut map = self.local_agent_extras.write().await;
-        map.entry(id.to_string()).or_default().retain = retain;
+        if let Some(t) = self.tasks.write().await.get_mut(id) {
+            t.retain = retain;
+        }
     }
 
-    /// Stamp the panel grace-period deadline. Called on terminal
-    /// transition. TS: `LocalAgentTask.tsx:294, 424, 448` —
-    /// `evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS`.
+    /// Stamp the panel grace-period deadline.
     pub async fn set_evict_after(&self, id: &str, evict_after_ms: Option<i64>) {
-        let mut map = self.local_agent_extras.write().await;
-        map.entry(id.to_string()).or_default().evict_after = evict_after_ms;
+        if let Some(t) = self.tasks.write().await.get_mut(id) {
+            t.evict_after = evict_after_ms;
+        }
     }
 
-    /// Toggle the Ctrl+B session-backgrounded flag. TS:
-    /// `LocalAgentTask.tsx:134` + `useSessionBackgrounding.ts:56`.
+    /// Toggle the Ctrl+B session-backgrounded flag.
     pub async fn set_backgrounded(&self, id: &str, backgrounded: bool) {
-        let mut map = self.local_agent_extras.write().await;
-        map.entry(id.to_string()).or_default().is_backgrounded = backgrounded;
+        if let Some(t) = self.tasks.write().await.get_mut(id) {
+            t.is_backgrounded = backgrounded;
+        }
     }
 
     /// Attach an event sink so every task lifecycle transition flows
@@ -247,7 +230,12 @@ impl TaskManager {
             total_paused_ms: None,
             output_file: output_file.to_string(),
             output_offset: 0,
-            notified: false,
+            // W6 (A5): merged sidecar fields default to "not set".
+            progress_summary: None,
+            retrieved: false,
+            retain: false,
+            evict_after: None,
+            is_backgrounded: false,
         };
         self.tasks.write().await.insert(id.clone(), state);
         self.emit_task_started(&id, task_type, description, output_file)
@@ -260,33 +248,34 @@ impl TaskManager {
     }
 
     pub async fn update_status(&self, id: &str, status: TaskStatus) {
-        // Capture the snapshot we need for emission inside the write lock,
-        // then drop the lock before `.await`-ing the channel send so we
-        // don't hold the RwLock across an await point.
+        // W6 (A5): status flip + evict_after stamp now happen under
+        // a single write lock. Previously the evict_after stamp went
+        // through `set_evict_after` (the sidecar map's separate
+        // lock), creating a window where a UI `set_retain(true)`
+        // could land between us reading `retain=false` and writing
+        // `evict_after`, silently evicting the just-pinned task.
         let snapshot = {
             let mut tasks = self.tasks.write().await;
             if let Some(task) = tasks.get_mut(id) {
                 task.status = status;
                 if status.is_terminal() {
                     task.end_time = Some(current_time_ms());
+                    // Stamp `evict_after` atomically with the status
+                    // flip. TS parity:
+                    // `LocalAgentTask.tsx:294, 424, 448` —
+                    // `evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS`.
+                    if task.task_type == TaskType::LocalAgent && !task.retain {
+                        task.evict_after = Some(current_time_ms() + PANEL_GRACE_MS);
+                    }
                 }
                 Some((task.clone(), task.output_file.clone()))
             } else {
                 None
             }
         };
+        // Drop the write lock before `.await`-ing the channel send so
+        // we don't hold the RwLock across an await point.
         if let Some((task, output_file)) = snapshot {
-            // TS parity: stamp `evictAfter = now + PANEL_GRACE_MS`
-            // for terminal LocalAgent tasks unless the UI pinned
-            // `retain`. `LocalAgentTask.tsx:294, 424, 448`. Other
-            // task types don't carry this field; skip.
-            if status.is_terminal() && task.task_type == TaskType::LocalAgent {
-                let retain = self.local_agent_extra(id).await.retain;
-                if !retain {
-                    let evict_after = current_time_ms() + PANEL_GRACE_MS;
-                    self.set_evict_after(id, Some(evict_after)).await;
-                }
-            }
             if status.is_terminal() {
                 self.emit_task_completed(id, &task, &output_file).await;
             } else {
@@ -305,14 +294,6 @@ impl TaskManager {
         }
     }
 
-    /// Flip the `notified` flag so subsequent `poll_notifications`
-    /// calls don't re-emit a completed task.
-    pub async fn mark_notified(&self, id: &str) {
-        if let Some(task) = self.tasks.write().await.get_mut(id) {
-            task.notified = true;
-        }
-    }
-
     pub async fn list(&self) -> Vec<TaskStateBase> {
         self.tasks.read().await.values().cloned().collect()
     }
@@ -326,24 +307,24 @@ impl TaskManager {
     /// parity: `framework.ts:138, 241` — `if ('retain' in task &&
     /// (task.evictAfter ?? Infinity) > Date.now()) return prev`.
     pub async fn remove_completed(&self) -> usize {
+        // W6 (A5): single-lock eviction — `retain` / `evict_after`
+        // live on the same task entry. No risk of a UI flip racing
+        // the eviction decision.
         let mut tasks = self.tasks.write().await;
-        let extras_guard = self.local_agent_extras.read().await;
         let now = current_time_ms();
 
         let terminal_ids: Vec<String> = tasks
             .iter()
-            .filter(|(id, t)| {
+            .filter(|(_id, t)| {
                 if !t.status.is_terminal() {
                     return false;
                 }
                 // Panel-grace gate for LocalAgent tasks (TS parity).
-                if t.task_type == TaskType::LocalAgent
-                    && let Some(extra) = extras_guard.get(*id)
-                {
-                    if extra.retain {
+                if t.task_type == TaskType::LocalAgent {
+                    if t.retain {
                         return false;
                     }
-                    if let Some(deadline) = extra.evict_after
+                    if let Some(deadline) = t.evict_after
                         && deadline > now
                     {
                         return false;
@@ -353,15 +334,10 @@ impl TaskManager {
             })
             .map(|(id, _)| id.clone())
             .collect();
-        drop(extras_guard);
 
         let count = terminal_ids.len();
-        if count > 0 {
-            let mut extras = self.local_agent_extras.write().await;
-            for id in &terminal_ids {
-                tasks.remove(id);
-                extras.remove(id);
-            }
+        for id in &terminal_ids {
+            tasks.remove(id);
         }
         count
     }

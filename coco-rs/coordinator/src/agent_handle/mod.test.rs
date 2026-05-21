@@ -390,6 +390,172 @@ async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
     );
 }
 
+/// W6.2 full: when `signal_detach` fires while a sync agent's
+/// engine is still running, the spawn caller must return
+/// `AsyncLaunched` immediately while the engine task keeps running
+/// in the background and eventually pushes a `<task-notification>`
+/// envelope via `mark_completed`. This is the TS-parity "detach but
+/// keep running" behavior — superior to the W6.2-half behavior
+/// (which used to terminate the engine on detach).
+///
+/// Uses an inline mock `AgentTaskRegistry` instead of the real
+/// `coco_cli::TaskRuntime` because coordinator can't depend on
+/// `coco-cli` (one-way layer rule).
+#[cfg(not(windows))]
+#[tokio::test]
+async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentCompletionPayload;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+    use coco_tool_runtime::AgentTaskRegistry;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    /// Minimal in-memory mock of `AgentTaskRegistry` for this test.
+    /// Tracks `mark_completed` invocations so the test can verify the
+    /// engine task actually finalized after detach.
+    struct MockRegistry {
+        detach: Arc<tokio::sync::Notify>,
+        completed: Arc<tokio::sync::Notify>,
+        mark_completed_called: Arc<AtomicBool>,
+        task_id: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl AgentTaskRegistry for MockRegistry {
+        async fn register_agent_task(
+            &self,
+            _description: &str,
+            _tool_use_id: Option<&str>,
+            _invoking_agent_id: Option<&str>,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> String {
+            let id = "ta_test_dt".to_string();
+            *self.task_id.lock().unwrap() = Some(id.clone());
+            id
+        }
+        async fn append_output(&self, _: &str, _: &str) {}
+        async fn mark_completed(&self, _: &str, _: AgentCompletionPayload) {
+            self.mark_completed_called.store(true, Ordering::SeqCst);
+            self.completed.notify_one();
+        }
+        async fn mark_failed(&self, _: &str, _: &str) {
+            self.completed.notify_one();
+        }
+        async fn complete_silent(&self, _: &str, _: bool) {}
+        async fn read_output(&self, _: &str) -> String {
+            String::new()
+        }
+        async fn is_terminal(&self, _: &str) -> bool {
+            false
+        }
+        async fn register_dream_task(
+            &self,
+            _description: &str,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> String {
+            "td_unused".into()
+        }
+        async fn detach_handle(&self, _: &str) -> Option<Arc<tokio::sync::Notify>> {
+            Some(self.detach.clone())
+        }
+    }
+
+    // Engine that blocks until the test releases it.
+    struct GatedEngine {
+        release: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait]
+    impl AgentQueryEngine for GatedEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            _config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            self.release.notified().await;
+            Ok(AgentQueryResult {
+                response_text: Some("detached result".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 7,
+                output_tokens: 11,
+                tool_use_count: 0,
+                cancelled: false,
+            })
+        }
+    }
+
+    let release = Arc::new(tokio::sync::Notify::new());
+    let detach = Arc::new(tokio::sync::Notify::new());
+    let completed = Arc::new(tokio::sync::Notify::new());
+    let mark_completed_called = Arc::new(AtomicBool::new(false));
+    let registry = Arc::new(MockRegistry {
+        detach: detach.clone(),
+        completed: completed.clone(),
+        mark_completed_called: mark_completed_called.clone(),
+        task_id: std::sync::Mutex::new(None),
+    });
+
+    let mut handle = create_test_handle();
+    handle.set_execution_engine(Arc::new(GatedEngine {
+        release: release.clone(),
+    }));
+    handle.set_task_registry(registry.clone() as coco_tool_runtime::AgentTaskRegistryRef);
+
+    let request = AgentSpawnRequest {
+        prompt: "long work".into(),
+        subagent_type: Some("general-purpose".into()),
+        ..Default::default()
+    };
+
+    // Spawn agent in another task so we can fire detach while it's
+    // waiting for the engine to complete.
+    let handle_arc = Arc::new(handle);
+    let handle_clone = handle_arc.clone();
+    let spawn_handle = tokio::spawn(async move { handle_clone.spawn_agent(request).await });
+
+    // Give the spawn time to reach the detach-race select! arm.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Fire detach via the same Notify the engine task subscribed to.
+    detach.notify_one();
+
+    // Spawn caller returns AsyncLaunched (engine still running).
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), spawn_handle)
+        .await
+        .expect("spawn must return within 2s")
+        .expect("join")
+        .expect("spawn must succeed");
+    assert_eq!(
+        response.status,
+        AgentSpawnStatus::AsyncLaunched,
+        "detach must return AsyncLaunched, not Completed; got {:?}",
+        response.status
+    );
+
+    // Verify engine is still running by checking mark_completed hasn't fired.
+    assert!(
+        !mark_completed_called.load(Ordering::SeqCst),
+        "mark_completed must NOT have fired before engine completes"
+    );
+
+    // Now release the engine.
+    release.notify_one();
+
+    // Engine task should call mark_completed (since it was detached).
+    tokio::time::timeout(std::time::Duration::from_secs(2), completed.notified())
+        .await
+        .expect("engine task must call mark_completed after release");
+
+    assert!(
+        mark_completed_called.load(Ordering::SeqCst),
+        "detached path must route through mark_completed (push notification), \
+         not complete_silent"
+    );
+}
+
 #[tokio::test]
 async fn test_spawn_subagent_async() {
     // P2': background spawns now actually drive the engine in a
