@@ -334,6 +334,52 @@ impl<T> BackgroundTaskHandle for T where T: TaskReader + TaskController + ShellT
 
 pub type BackgroundTaskHandleRef = Arc<dyn BackgroundTaskHandle>;
 
+/// Registration mode for an AgentTool spawn. Encodes the two
+/// orthogonal axes (`initial_state`, `auto_detach`) as a single
+/// discriminated enum so callsites self-document rather than passing
+/// two booleans / Options. Per project style (`CLAUDE.md` "Parameter
+/// Design"): avoid bool/ambiguous Option parameters; prefer enums.
+///
+/// TS parity:
+/// - [`Self::Foreground`] = `registerAgentForeground` without
+///   `autoBackgroundMs` (`LocalAgentTask.tsx:526-614`, no timer).
+/// - [`Self::ForegroundWithAutoDetach`] = `registerAgentForeground`
+///   with `autoBackgroundMs: Some(ms)`.
+/// - [`Self::Background`] = `registerAsyncAgent`
+///   (`LocalAgentTask.tsx:466-515`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRegistration {
+    /// Sync spawn, no auto-detach timer. The task entry starts with
+    /// `is_backgrounded = false` and stays foreground until the
+    /// engine completes or an external `signal_detach` fires.
+    Foreground,
+    /// Sync spawn with an armed auto-detach timer. After `ms` of
+    /// execution the runtime fires `signal_detach(task_id)` so the
+    /// fg awaiter unblocks with `AsyncLaunched`. TS parity:
+    /// `LocalAgentTask.tsx:582-608` `setTimeout(autoBackgroundMs)`.
+    ForegroundWithAutoDetach { ms: u64 },
+    /// Fire-and-forget bg spawn. The task entry is created with
+    /// `is_backgrounded = true` so the TUI panel filter and the
+    /// post-compact reminder source treat it as already-backgrounded
+    /// from creation. TS parity: `registerAsyncAgent` sets
+    /// `isBackgrounded: true` at line 499.
+    Background,
+}
+
+impl AgentRegistration {
+    /// Returns the `(is_backgrounded, auto_detach_ms)` pair the
+    /// production impl threads through to `TaskRuntime`. Provides a
+    /// single decomposition site so the underlying impl stays
+    /// declarative.
+    pub fn decompose(self) -> (bool, Option<u64>) {
+        match self {
+            Self::Foreground => (false, None),
+            Self::ForegroundWithAutoDetach { ms } => (false, Some(ms)),
+            Self::Background => (true, None),
+        }
+    }
+}
+
 /// Registration side of the background-task surface.
 ///
 /// `AgentTool`'s background path needs to register a freshly-
@@ -345,11 +391,10 @@ pub type BackgroundTaskHandleRef = Arc<dyn BackgroundTaskHandle>;
 /// Production impl: `coco_cli::task_runtime::TaskRuntime`.
 #[async_trait::async_trait]
 pub trait AgentTaskRegistry: Send + Sync {
-    /// Register a freshly-spawned AgentTool task that the parent will
-    /// **synchronously await** (foreground). The task entry starts with
-    /// `is_backgrounded = false`; an optional auto-detach timer can flip
-    /// it to `true` later. TS parity: `registerAgentForeground`
-    /// (`LocalAgentTask.tsx:526-614`).
+    /// Register a freshly-spawned AgentTool task. The `registration`
+    /// parameter selects the initial fg/bg state and the optional
+    /// auto-detach timer — see [`AgentRegistration`] for the
+    /// taxonomy and TS-parity mapping.
     ///
     /// Returns the `task_id` the read/control trait accepts.
     ///
@@ -357,70 +402,50 @@ pub trait AgentTaskRegistry: Send + Sync {
     ///   the parent's `ToolUseContext.tool_use_id`. Threaded into the
     ///   `<tool-use-id>` tag on completion notifications so the model
     ///   can correlate the queued envelope with the original tool call.
-    ///   TS parity: `AgentTool.tsx` passes `toolUseContext.toolUseId`
-    ///   into `registerAgentForeground` / `registerAsyncAgent`.
     /// - `invoking_agent_id`: the agent that *called* AgentTool
     ///   (`ctx.agent_id`), NOT the newly-spawned subagent's id. Used
     ///   as the routing filter on `CommandQueue` so a teammate only
-    ///   sees completion notifications for tasks IT spawned. TS
-    ///   parity: `BashTool.tsx:910` passes `agentId: toolUseContext.agentId`
-    ///   into the queued notification; agent path mirrors.
+    ///   sees completion notifications for tasks IT spawned.
     async fn register_agent_task(
         &self,
         description: &str,
         tool_use_id: Option<&str>,
         invoking_agent_id: Option<&str>,
         cancel: tokio_util::sync::CancellationToken,
+        registration: AgentRegistration,
     ) -> String;
-
-    /// Register a fire-and-forget background AgentTool task. The task
-    /// entry starts with `is_backgrounded = true` — the UI panel
-    /// fg/bg filter and any post-compact reminder source see it as
-    /// already-backgrounded. TS parity: `registerAsyncAgent`
-    /// (`LocalAgentTask.tsx:466-515`) sets `isBackgrounded: true` at
-    /// task creation.
-    ///
-    /// Default impl delegates to [`Self::register_agent_task`] so
-    /// existing in-memory test implementations stay compatible (they
-    /// don't differentiate fg/bg state); the production
-    /// `coco_cli::task_runtime::TaskRuntime` overrides this to set
-    /// `is_backgrounded: true` on the underlying `TaskStateBase`.
-    async fn register_background_agent_task(
-        &self,
-        description: &str,
-        tool_use_id: Option<&str>,
-        invoking_agent_id: Option<&str>,
-        cancel: tokio_util::sync::CancellationToken,
-    ) -> String {
-        self.register_agent_task(description, tool_use_id, invoking_agent_id, cancel)
-            .await
-    }
-
-    /// TS-parity variant that arms an auto-background timer for a
-    /// foreground spawn. When `auto_background_ms = Some(ms)`, the
-    /// runtime fires `signal_detach(tid)` after `ms` of execution if
-    /// the task is still running. Default impl delegates to
-    /// [`Self::register_agent_task`] (ignoring the timer) so existing
-    /// implementations stay compatible.
-    ///
-    /// TS source: `LocalAgentTask.tsx:582-608 registerAgentForeground`
-    /// `setTimeout(... autoBackgroundMs)`. Always foreground init
-    /// (`is_backgrounded = false`); the timer flips it later.
-    async fn register_agent_task_with_auto_background(
-        &self,
-        description: &str,
-        tool_use_id: Option<&str>,
-        invoking_agent_id: Option<&str>,
-        cancel: tokio_util::sync::CancellationToken,
-        _auto_background_ms: Option<u64>,
-    ) -> String {
-        self.register_agent_task(description, tool_use_id, invoking_agent_id, cancel)
-            .await
-    }
 
     /// Append text to a task's output buffer (typically a single
     /// content chunk from the streaming engine).
     async fn append_output(&self, task_id: &str, chunk: &str);
+
+    /// Update the periodic-AgentSummary text on the task's progress
+    /// snapshot. Preserves the existing token / tool counters; only
+    /// the `summary` field is replaced. The production impl emits a
+    /// `TaskProgress` SDK event when the value actually changes (so
+    /// idempotent writes don't churn the wire).
+    ///
+    /// TS parity: `LocalAgentTask.tsx:387-406 updateAgentSummary` —
+    /// writes to `AppState.tasks[id].progress.summary` AND calls
+    /// `emitTaskProgress` when `getSdkAgentProgressSummariesEnabled()`.
+    ///
+    /// No-op when the task id is unknown or isn't a LocalAgent.
+    async fn set_progress_summary(&self, task_id: &str, summary: String);
+
+    /// Replace the task's full progress snapshot (tool count, token
+    /// counts, last tool name, recent activities). Preserves the
+    /// existing `summary` field across writes. Called by the engine
+    /// stream-drain loop on every `ToolUseStarted` event so the
+    /// per-tool TaskProgress wire event reaches SDK consumers.
+    ///
+    /// TS parity: `AgentTool.tsx:947-948` calls
+    /// `updateAsyncAgentProgress(taskId, getProgressUpdate(tracker), …)`
+    /// then `emitTaskProgress(tracker, …, lastToolName)`. The Rust
+    /// production impl folds both calls into one — the registry impl
+    /// writes the snapshot AND emits the SDK event in a single seam.
+    ///
+    /// No-op when the task id is unknown or isn't a LocalAgent.
+    async fn set_progress(&self, task_id: &str, progress: coco_types::TaskProgress);
 
     /// Mark an agent task completed. The optional payload populates
     /// the `<result>` / `<usage>` / `<worktree>` sections of the

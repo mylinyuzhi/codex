@@ -160,7 +160,26 @@ pub struct SwarmAgentHandle {
     /// (string-ref entries point at parent-shared connections that
     /// must NOT be torn down — TS `newlyCreatedClients` guard).
     dynamic_mcp_servers: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Vec<String>>>>,
+    /// Builder closure invoked at spawn time when the target subagent
+    /// is `coco-guide` to populate the dynamic context block (custom
+    /// skills / agents / MCP servers / plugin commands / settings.json).
+    /// Mirrors TS `claudeCodeGuideAgent.ts:121-200`'s `getSystemPrompt`
+    /// callback which reads runtime context off `toolUseContext.options`.
+    ///
+    /// `None` ⇒ no dynamic block is appended (static base prompt only).
+    /// The CLI bootstrap wires this from `CommandRegistry` +
+    /// `AgentCatalogSnapshot` + `McpHandle::connected_servers` +
+    /// settings.json. Kept as a builder closure rather than 4
+    /// separate Arc fields so future additions to the block don't
+    /// proliferate SwarmAgentHandle fields.
+    coco_guide_context_builder: Option<CocoGuideContextBuilder>,
 }
+
+/// Closure type for [`SwarmAgentHandle::coco_guide_context_builder`].
+/// Returns an owned snapshot — callers can read short-lived registry
+/// state inside without lifetime entanglement at the use site.
+pub type CocoGuideContextBuilder =
+    Arc<dyn Fn() -> coco_subagent::CocoGuideDynamicContext + Send + Sync>;
 
 impl SwarmAgentHandle {
     pub fn new(
@@ -197,7 +216,24 @@ impl SwarmAgentHandle {
             dynamic_mcp_servers: Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            coco_guide_context_builder: None,
         }
+    }
+
+    /// Install the coco-guide dynamic context builder. TS source:
+    /// `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`.
+    /// Without this hook, spawned `coco-guide` agents see only the
+    /// static base prompt — losing visibility into the user's custom
+    /// skills / agents / MCP servers / settings, matching the
+    /// pre-Phase-1 coco-rs behavior. CLI bootstrap typically wires
+    /// this from the CommandRegistry + active AgentCatalogSnapshot +
+    /// the McpHandle's connected-servers list + settings.json.
+    pub fn set_coco_guide_context_builder(&mut self, builder: CocoGuideContextBuilder) {
+        self.coco_guide_context_builder = Some(builder);
+    }
+
+    pub(crate) fn coco_guide_context_builder(&self) -> Option<&CocoGuideContextBuilder> {
+        self.coco_guide_context_builder.as_ref()
     }
 
     pub fn set_backend_registry(&mut self, registry: Arc<crate::pane::BackendRegistry>) {

@@ -125,6 +125,17 @@ pub struct LocalAgentExtras {
     /// `:499` (async init = true) / `:564` (fg init = false).
     #[serde(default)]
     pub is_backgrounded: bool,
+    /// Error text from a `Failed` terminal transition, surfaced by the
+    /// post-compact `task_status` reminder so the model rediscovers
+    /// failure context after compaction wiped the original
+    /// `<task-notification>` envelope. `None` for non-Failed terminals
+    /// and pre-terminal states.
+    ///
+    /// TS parity: `compact.ts:1591-1594` reads `agent.error` as
+    /// `deltaSummary` for terminal tasks; renderer at
+    /// `messages.ts:4005-4006` outputs `"Delta: <error>"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Per-`TaskType` sidecar extras. The Rust analog of TS's union

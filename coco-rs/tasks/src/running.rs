@@ -29,6 +29,7 @@ use coco_types::TaskUsage;
 use coco_types::generate_task_id;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 
@@ -61,6 +62,14 @@ pub struct TaskManager {
     /// `update_status` emit `CoreEvent::Protocol(Task*)` notifications
     /// so SDK consumers see background task activity.
     event_tx: Option<mpsc::Sender<CoreEvent>>,
+    /// Per-emit gate for `TaskProgress` summary events. TS parity:
+    /// `getSdkAgentProgressSummariesEnabled()` at `LocalAgentTask.tsx:390`
+    /// — TS checks this BOTH at summary-timer-start AND at every
+    /// emit, so toggling the flag mid-session immediately stops new
+    /// progress events. CLI bootstrap wires this from
+    /// `app_state.agent_progress_summaries_enabled`. `None` ⇒ emission
+    /// follows the upstream timer gate only (no per-emit check).
+    sdk_summaries_enabled: Option<Arc<AtomicBool>>,
 }
 
 impl std::fmt::Debug for TaskManager {
@@ -76,15 +85,69 @@ impl TaskManager {
         Self {
             tasks: Arc::new(RwLock::new(HashMap::new())),
             event_tx: None,
+            sdk_summaries_enabled: None,
         }
+    }
+
+    /// Attach an SDK-summary gate. After this call, `TaskProgress`
+    /// summary emissions are gated on `flag.load(Relaxed)` at every
+    /// emit, in addition to the upstream timer gate. Matches TS
+    /// double-gating at `LocalAgentTask.tsx:390 getSdkAgentProgressSummariesEnabled()`.
+    pub fn with_summary_emission_gate(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.sdk_summaries_enabled = Some(flag);
+        self
     }
 
     // ── LocalAgent sidecar accessors ─────────────────────────────
     //
     // Fields live inside `TaskStateBase.extras::LocalAgent(...)`.
-    // Setters take the single `tasks` RwLock once and write through
-    // the enum variant (initializing it on first write for tasks
-    // whose initial `task_type` was `LocalAgent`).
+    // All setters route through [`Self::update_local_agent_extras`]
+    // so there's exactly one lock-acquire + variant-match site —
+    // mirrors TS `utils/task/framework.ts:48-72 updateTaskState<T>`,
+    // the single higher-order helper every TS setter delegates to.
+
+    /// Higher-order helper: run `f` against the task's LocalAgent
+    /// extras under the write lock and return its output. Returns
+    /// `None` when the task doesn't exist OR isn't a LocalAgent task.
+    ///
+    /// TS parity: `updateTaskState<T extends TaskState>` at
+    /// `utils/task/framework.ts:48-72` — the single update primitive
+    /// every per-field TS setter delegates to.
+    async fn update_local_agent_extras<F, R>(&self, id: &str, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut LocalAgentExtras) -> R,
+    {
+        self.tasks
+            .write()
+            .await
+            .get_mut(id)
+            .and_then(|t| t.local_agent_extras_mut())
+            .map(f)
+    }
+
+    /// Change-detecting variant of [`Self::update_local_agent_extras`].
+    /// The closure returns `true` when it observed a real mutation,
+    /// `false` for no-op writes. Used by emit-on-change setters so
+    /// idempotent writes don't fire SDK events.
+    ///
+    /// TS parity: `framework.ts:59-62` — `if (updated === task) return prev`
+    /// ref-equality short-circuit. Rust mutates in place so there's
+    /// no reference identity to test; the closure declares change
+    /// explicitly.
+    ///
+    /// Returns `Some(true)` on real change, `Some(false)` on no-op,
+    /// `None` when the task doesn't exist OR isn't a LocalAgent task.
+    async fn update_local_agent_extras_if_changed<F>(&self, id: &str, f: F) -> Option<bool>
+    where
+        F: FnOnce(&mut LocalAgentExtras) -> bool,
+    {
+        self.tasks
+            .write()
+            .await
+            .get_mut(id)
+            .and_then(|t| t.local_agent_extras_mut())
+            .map(f)
+    }
 
     /// Snapshot the extras for a LocalAgent task; returns default
     /// when the task doesn't exist OR isn't a LocalAgent task.
@@ -99,98 +162,156 @@ impl TaskManager {
     }
 
     /// Update a LocalAgent task's progress summary text. Preserves
-    /// existing token / activity counters — TS parity with
-    /// `updateAgentSummary` (`LocalAgentTask.tsx:359-407`) which writes
-    /// only the `summary` field on the AgentProgress struct.
+    /// existing token / activity counters and emits a `TaskProgress`
+    /// SDK event so subscribed consumers (VS Code subagent panel,
+    /// JSONL transcript) see the summary as it arrives.
+    ///
+    /// TS parity: `updateAgentSummary` (`LocalAgentTask.tsx:387-406`):
+    /// writes the summary field AND calls `emitTaskProgress` when
+    /// `getSdkAgentProgressSummariesEnabled()`. The upstream gate
+    /// lives at `agent_tool.rs:480` (where the summary timer is
+    /// only spawned when the flag is on), so reaching this method in
+    /// production already implies the SDK consumer opted in;
+    /// emission is unconditional here when an `event_tx` is wired.
     pub async fn set_progress_summary(&self, id: &str, summary: String) {
-        if let Some(extras) = self
-            .tasks
-            .write()
-            .await
-            .get_mut(id)
-            .and_then(|t| t.local_agent_extras_mut())
+        // Capture-or-skip: write only when the incoming summary differs
+        // from what's already stored. On a real change, we also pull
+        // the counter snapshot needed for the SDK emission so the
+        // post-write read doesn't have to reacquire the lock.
+        //
+        // `RefCell`-style interior mutability is overkill here; an
+        // `Option<ProgressEmitSnapshot>` placed in an outer scope via
+        // a fresh binding gets the closure's captured-by-mut effect.
+        let mut captured: Option<ProgressEmitSnapshot> = None;
+        let changed = self
+            .update_local_agent_extras_if_changed(id, |e| {
+                let mut p = e.progress.clone().unwrap_or_default();
+                if p.summary.as_deref() == Some(summary.as_str()) {
+                    // No-op write: don't perturb the cache or emit.
+                    return false;
+                }
+                p.summary = Some(summary.clone());
+                captured = Some(ProgressEmitSnapshot {
+                    total_tokens: p.total_tokens,
+                    tool_use_count: p.tool_use_count,
+                    last_tool_name: p.last_tool_name.clone(),
+                });
+                e.progress = Some(p);
+                true
+            })
+            .await;
+        if matches!(changed, Some(true))
+            && let Some(snap) = captured
         {
-            let mut progress = extras.progress.clone().unwrap_or_default();
-            progress.summary = Some(summary);
-            extras.progress = Some(progress);
+            self.emit_progress_summary(id, summary, snap).await;
         }
     }
 
     /// Replace a LocalAgent task's full progress snapshot. Used by the
-    /// engine's per-message updater to refresh token counts +
-    /// `recent_activities`. TS: `updateAgentProgress`
-    /// (`LocalAgentTask.tsx:339-353`) — preserves an existing `summary`
-    /// across overlapping writes.
+    /// engine's stream-drain loop on every `ToolUseStarted` event to
+    /// refresh tool count + `last_tool_name` (D2). Preserves any
+    /// existing `summary` (the periodic AgentSummary timer is the only
+    /// writer of that field) across overlapping writes.
+    ///
+    /// Emits a `TaskProgress` SDK event so consumers (VS Code subagent
+    /// panel, JSONL transcript) observe per-tool progress in real time.
+    /// TS parity: `AgentTool.tsx:947-948` calls
+    /// `updateAsyncAgentProgress` then `emitTaskProgress` separately —
+    /// Rust folds both into one seam (`set_progress`).
     pub async fn set_progress(&self, id: &str, mut progress: TaskProgress) {
-        if let Some(extras) = self
-            .tasks
-            .write()
-            .await
-            .get_mut(id)
-            .and_then(|t| t.local_agent_extras_mut())
-        {
+        // Capture-or-skip: write + emit only when the incoming snapshot
+        // differs from what's stored. Avoids fanning out SDK events
+        // for no-op writes (e.g. unchanged tool count).
+        let mut emit_payload: Option<TaskProgress> = None;
+        self.update_local_agent_extras_if_changed(id, |e| {
             // Preserve any existing summary; otherwise an interleaved
-            // `updateAgentProgress` from the stream would clobber the
-            // periodic AgentSummary text.
+            // write from the stream would clobber the periodic
+            // AgentSummary text.
             if progress.summary.is_none()
-                && let Some(existing) = extras.progress.as_ref().and_then(|p| p.summary.clone())
+                && let Some(existing) = e.progress.as_ref().and_then(|p| p.summary.clone())
             {
                 progress.summary = Some(existing);
             }
-            extras.progress = Some(progress);
+            if e.progress.as_ref() == Some(&progress) {
+                return false;
+            }
+            emit_payload = Some(progress.clone());
+            e.progress = Some(progress);
+            true
+        })
+        .await;
+        if let Some(payload) = emit_payload {
+            self.emit_progress(id, payload).await;
         }
+    }
+
+    /// Emit a `TaskProgress` SDK event with the full progress snapshot.
+    /// Per-emit gate (D14) applies — when the SDK summary flag is off,
+    /// drop without emitting. Per-tool progress events ride the same
+    /// gate as periodic summaries; TS uses one flag for both
+    /// (`getSdkAgentProgressSummariesEnabled`).
+    async fn emit_progress(&self, task_id: &str, progress: TaskProgress) {
+        let Some(tx) = &self.event_tx else { return };
+        if let Some(gate) = &self.sdk_summaries_enabled
+            && !gate.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        let Some(state) = self.tasks.read().await.get(task_id).cloned() else {
+            return;
+        };
+        let duration_ms = current_time_ms().saturating_sub(state.start_time);
+        let params = TaskProgressParams {
+            task_id: task_id.to_string(),
+            tool_use_id: state.tool_use_id,
+            description: state.description,
+            usage: TaskUsage {
+                total_tokens: progress.total_tokens,
+                tool_uses: progress.tool_use_count,
+                duration_ms,
+            },
+            last_tool_name: progress.last_tool_name,
+            summary: progress.summary,
+            workflow_progress: Vec::new(),
+        };
+        let _ = tx
+            .send(CoreEvent::Protocol(ServerNotification::TaskProgress(
+                params,
+            )))
+            .await;
     }
 
     /// Flip the `retrieved` flag — TS: `compact.ts:1578`.
     pub async fn mark_retrieved(&self, id: &str) {
-        if let Some(extras) = self
-            .tasks
-            .write()
-            .await
-            .get_mut(id)
-            .and_then(|t| t.local_agent_extras_mut())
-        {
-            extras.retrieved = true;
-        }
+        self.update_local_agent_extras(id, |e| e.retrieved = true)
+            .await;
     }
 
     /// UI flips this when the user pins a task panel open.
     pub async fn set_retain(&self, id: &str, retain: bool) {
-        if let Some(extras) = self
-            .tasks
-            .write()
-            .await
-            .get_mut(id)
-            .and_then(|t| t.local_agent_extras_mut())
-        {
-            extras.retain = retain;
-        }
+        self.update_local_agent_extras(id, |e| e.retain = retain)
+            .await;
     }
 
     /// Stamp the panel grace-period deadline.
     pub async fn set_evict_after(&self, id: &str, evict_after_ms: Option<i64>) {
-        if let Some(extras) = self
-            .tasks
-            .write()
-            .await
-            .get_mut(id)
-            .and_then(|t| t.local_agent_extras_mut())
-        {
-            extras.evict_after = evict_after_ms;
-        }
+        self.update_local_agent_extras(id, |e| e.evict_after = evict_after_ms)
+            .await;
     }
 
     /// Toggle the Ctrl+B session-backgrounded flag.
     pub async fn set_backgrounded(&self, id: &str, backgrounded: bool) {
-        if let Some(extras) = self
-            .tasks
-            .write()
-            .await
-            .get_mut(id)
-            .and_then(|t| t.local_agent_extras_mut())
-        {
-            extras.is_backgrounded = backgrounded;
-        }
+        self.update_local_agent_extras(id, |e| e.is_backgrounded = backgrounded)
+            .await;
+    }
+
+    /// Record the error text from a `Failed` terminal transition.
+    /// Picked up by `coco_tasks::reminder_source::collect` to populate
+    /// the `delta_summary` field of the post-compact `task_status`
+    /// reminder. TS parity: `compact.ts:1591-1594` `agent.error`.
+    pub async fn set_error(&self, id: &str, error: String) {
+        self.update_local_agent_extras(id, |e| e.error = Some(error))
+            .await;
     }
 
     /// Attach an event sink so every task lifecycle transition flows
@@ -465,6 +586,52 @@ impl TaskManager {
             .await;
     }
 
+    /// Emit a `TaskProgress` SDK event with a summary update.
+    /// Mirrors TS `emitTaskProgress` (`utils/task/sdkProgress.ts:10-36`)
+    /// called from `updateAgentSummary` at `LocalAgentTask.tsx:397-405`.
+    async fn emit_progress_summary(
+        &self,
+        task_id: &str,
+        summary: String,
+        snap: ProgressEmitSnapshot,
+    ) {
+        let Some(tx) = &self.event_tx else { return };
+        // D14: per-emit gate. When the SDK consumer toggles
+        // `agent_progress_summaries_enabled` off mid-session, stop
+        // emitting immediately — don't rely solely on the upstream
+        // timer-start gate, which checks once and never re-reads.
+        if let Some(gate) = &self.sdk_summaries_enabled
+            && !gate.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        // Pull description + tool_use_id + start_time from canonical
+        // state without holding any extras lock — the snapshot above
+        // already captured the counter fields atomically.
+        let Some(state) = self.tasks.read().await.get(task_id).cloned() else {
+            return;
+        };
+        let duration_ms = current_time_ms().saturating_sub(state.start_time);
+        let params = TaskProgressParams {
+            task_id: task_id.to_string(),
+            tool_use_id: state.tool_use_id,
+            description: state.description,
+            usage: TaskUsage {
+                total_tokens: snap.total_tokens,
+                tool_uses: snap.tool_use_count,
+                duration_ms,
+            },
+            last_tool_name: snap.last_tool_name,
+            summary: Some(summary),
+            workflow_progress: Vec::new(),
+        };
+        let _ = tx
+            .send(CoreEvent::Protocol(ServerNotification::TaskProgress(
+                params,
+            )))
+            .await;
+    }
+
     async fn emit_task_completed(&self, task_id: &str, state: &TaskStateBase, output_file: &str) {
         let Some(tx) = &self.event_tx else { return };
         let status = task_status_to_completion(state.status);
@@ -496,6 +663,17 @@ impl Default for TaskManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Counter fields captured under the `update_local_agent_extras`
+/// write lock so the post-write `TaskProgress` emission doesn't have
+/// to re-acquire the lock to read them. The progress event uses
+/// these alongside `summary`, `task_id`, and `description`.
+#[derive(Debug, Clone)]
+struct ProgressEmitSnapshot {
+    total_tokens: i64,
+    tool_use_count: i32,
+    last_tool_name: Option<String>,
 }
 
 fn current_time_ms() -> i64 {

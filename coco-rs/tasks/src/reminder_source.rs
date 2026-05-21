@@ -1,27 +1,22 @@
 //! `TaskStatusSource` impl on [`crate::running::TaskManager`].
 //!
-//! TS `getUnifiedTaskAttachments(ctx)` fires post-compaction to warn
-//! the agent against duplicate background-task spawns. coco-rs
-//! mirrors that semantics: when `just_compacted` is true, this impl
-//! snapshots every currently-tracked LocalAgent **running** task and
-//! maps its status into a `TaskStatusSnapshot` so the reminder
-//! generator can render the "still running, don't spawn a duplicate"
-//! warning text verbatim with TS.
+//! TS `createAsyncAgentAttachmentsIfNeeded` (`services/compact/compact.ts:1568-1598`)
+//! fires post-compaction so the model rediscovers background agents
+//! whose `<task-notification>` envelope was wiped from the
+//! `CommandQueue` by compaction. Both **still-running** agents (so the
+//! model doesn't spawn a duplicate) AND **terminal** agents whose
+//! results haven't been retrieved must be re-injected — compaction
+//! cleared the queue that delivered them inline.
 //!
-//! ## TS-aligned filter (mirrors `compact.ts:1572-1598`)
+//! ## TS-aligned filter (mirrors `compact.ts:1576-1583`)
 //!
 //! Skip conditions, applied in order:
 //!
 //! 1. **Not a LocalAgent** — TS only generates `task_status`
 //!    reminders for `local_agent` tasks. Shell / dream / teammate
 //!    tasks don't carry the "don't spawn a duplicate" affordance.
-//! 2. **Terminal status** (W6 / A2 fix) — Completed / Failed /
-//!    Killed tasks have already delivered their result through the
-//!    `<task-notification>` envelope via `CommandQueue`
-//!    (`QueuedCommandGenerator`). Re-emitting them post-compact
-//!    would double-inform the model. The post-compact reminder is
-//!    explicitly the "still running, don't spawn a duplicate" hint;
-//!    that's only meaningful for in-flight tasks.
+//! 2. **`status == Pending`** — never started; nothing to report.
+//!    TS: `compact.ts:1579` `agent.status === 'pending'`.
 //! 3. **`retrieved`** — `TaskOutputTool` already served this task's
 //!    output (terminal or partial); model knows what happened. TS:
 //!    `compact.ts:1578` `agent.retrieved`.
@@ -31,13 +26,10 @@
 //!    coco-rs threads `agent_id` through `collect`; `None` means
 //!    the main thread.
 //!
-//! TS parity notes:
-//! - When `just_compacted` is false we return empty — TS only emits
-//!   this reminder right after the compaction boundary.
-//! - Terminal-task reporting flows through the `QueuedCommand`
-//!   reminder (the `<task-notification>` XML envelope wrapped in
-//!   `<system-reminder>`), which is the single source of truth for
-//!   "task X terminated with result Y".
+//! Terminal tasks (Completed / Failed / Killed) flow through the
+//! generator's status-dispatched render at
+//! `coco_system_reminder::generators::task_status::render_one` —
+//! TS counterpart `messages.ts:3954-4024`.
 
 use async_trait::async_trait;
 use coco_system_reminder::TaskRunStatus;
@@ -68,7 +60,7 @@ impl TaskStatusSource for TaskManager {
         let total = states.len();
         let mut kept = 0usize;
         let mut skipped_type = 0usize;
-        let mut skipped_terminal = 0usize;
+        let mut skipped_pending = 0usize;
         let mut skipped_retrieved = 0usize;
         let mut skipped_self = 0usize;
         let mut snapshots = Vec::with_capacity(states.len());
@@ -78,14 +70,10 @@ impl TaskStatusSource for TaskManager {
                 skipped_type += 1;
                 continue;
             }
-            // Rule 2 (W6 / A2): terminal tasks already delivered via
-            // the `QueuedCommandGenerator` (`<task-notification>` XML
-            // wrapped in `<system-reminder>`). The post-compact
-            // reminder is the "still running, don't spawn a
-            // duplicate" hint — it has no purpose for terminal
-            // tasks.
-            if t.status.is_terminal() {
-                skipped_terminal += 1;
+            // Rule 2: skip Pending — never started, nothing to report.
+            // TS: `compact.ts:1579` `agent.status === 'pending'`.
+            if t.status == TaskStatus::Pending {
+                skipped_pending += 1;
                 continue;
             }
             let extra = self.local_agent_extra(&t.id).await;
@@ -95,47 +83,63 @@ impl TaskStatusSource for TaskManager {
                 skipped_retrieved += 1;
                 continue;
             }
-            // Rule 4: skip when the caller is the task itself
-            // (fork-mode recursion). `tool_use_id` is the closest
-            // proxy we have for "agent that produced this task" on
-            // the caller side; matches TS `agent.agentId ===
-            // context.agentId`.
+            // Rule 4: skip when the caller IS the task (fork-mode
+            // recursion guard — an agent shouldn't be reminded about
+            // its own running state). For LocalAgent tasks the
+            // `task_id` IS the agent's identifier: `register_agent_task_inner`
+            // mints both from `coco_types::generate_task_id(LocalAgent)`
+            // and threads the same id everywhere downstream.
+            //
+            // TS parity: `compact.ts:1580` `agent.agentId === context.agentId`.
+            //
+            // (The previous comparison used `tool_use_id` as a "proxy" —
+            // it isn't one. `tool_use_id` is the Anthropic-style
+            // `toolu_...` ID of the spawning tool call, in a different
+            // namespace from agent_id; the proxy never matched and the
+            // self-filter never fired.)
             if let Some(caller_id) = agent_id
-                && t.tool_use_id.as_deref() == Some(caller_id)
+                && t.id == caller_id
             {
                 skipped_self += 1;
                 continue;
             }
             kept += 1;
-            // After Rule 2, every snapshot here is in `Running` state
-            // (Pending/Running both map to TaskRunStatus::Running).
-            // `delta_summary` mirrors TS `agent.progress?.summary`
-            // (`compact.ts:1591-1594`).
-            // Build the `delta_summary` from the richer `TaskProgress`
-            // struct. TS source: `compact.ts:1591-1594` reads
-            // `agent.progress?.summary`. coco-rs falls back to a
-            // "$tool_use_count tool uses, $token_count tokens" sentence
-            // when the periodic summary text hasn't fired yet so the
-            // model gets *some* delta signal instead of nothing.
-            let delta_summary = extra.progress.as_ref().map(|p| {
-                p.summary.clone().unwrap_or_else(|| {
-                    let mut parts = Vec::new();
-                    if let Some(last) = p.last_tool_name.as_deref() {
-                        parts.push(format!("last action: {last}"));
-                    }
-                    if p.tool_use_count > 0 {
-                        parts.push(format!("tool uses: {}", p.tool_use_count));
-                    }
-                    if p.total_tokens > 0 {
-                        parts.push(format!("tokens: {}", p.total_tokens));
-                    }
-                    parts.join(", ")
+            // Build the `delta_summary`. TS source:
+            // `compact.ts:1591-1594` reads `agent.progress?.summary`
+            // for running tasks and `agent.error` for terminal tasks.
+            //
+            // For terminal-error tasks, prefer the recorded `error`
+            // text (set by `mark_failed` on the failure path) so the
+            // model sees `"Delta: <error>"` in the post-compact
+            // reminder — TS-parity. Fall through to the progress
+            // summary / synthetic counter sentence when no error is
+            // recorded (Completed / Killed without recorded error).
+            let delta_summary = if t.status.is_terminal()
+                && let Some(err) = extra.error.as_deref()
+                && !err.is_empty()
+            {
+                Some(err.to_string())
+            } else {
+                extra.progress.as_ref().map(|p| {
+                    p.summary.clone().unwrap_or_else(|| {
+                        let mut parts = Vec::new();
+                        if let Some(last) = p.last_tool_name.as_deref() {
+                            parts.push(format!("last action: {last}"));
+                        }
+                        if p.tool_use_count > 0 {
+                            parts.push(format!("tool uses: {}", p.tool_use_count));
+                        }
+                        if p.total_tokens > 0 {
+                            parts.push(format!("tokens: {}", p.total_tokens));
+                        }
+                        parts.join(", ")
+                    })
                 })
-            });
+            };
             snapshots.push(TaskStatusSnapshot {
                 task_id: t.id,
                 description: t.description,
-                status: TaskRunStatus::Running,
+                status: map_status(t.status),
                 task_type: task_type_wire_name(t.task_type).to_string(),
                 delta_summary,
                 output_file_path: Some(t.output_file).filter(|s| !s.is_empty()),
@@ -146,22 +150,19 @@ impl TaskStatusSource for TaskManager {
             total,
             kept,
             skipped_type,
-            skipped_terminal,
+            skipped_pending,
             skipped_retrieved,
             skipped_self,
             caller_agent_id = ?agent_id,
-            "task_status reminder snapshot built (post-compact, running-only)"
+            "task_status reminder snapshot built (post-compact, TS-aligned filter)"
         );
         snapshots
     }
 }
 
-// W6 / A2: terminal tasks are now filtered out (Rule 2 above), so
-// the status mapping is trivially `Running` for everything that
-// survives the filter. Kept as a no-op helper for now in case future
-// reminders re-introduce terminal-task variants; remove if it remains
-// unused after the W6 settle.
-#[allow(dead_code)]
+/// Map the 5-variant `TaskStatus` to the 4-variant `TaskRunStatus`
+/// the reminder generator dispatches on (`Pending` collapses into
+/// `Running` because the filter above already rejects `Pending`).
 fn map_status(s: TaskStatus) -> TaskRunStatus {
     match s {
         TaskStatus::Completed => TaskRunStatus::Completed,

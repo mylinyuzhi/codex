@@ -493,6 +493,87 @@ impl SwarmAgentHandle {
     }
 }
 
+/// Typed outcome carried on the engine-driver → inline-caller oneshot.
+///
+/// Replaces the previous "drop the channel when handing off to the bg
+/// path" mechanism — that approach made `Err(RecvError)` ambiguous
+/// (true panic vs orderly bg-handoff). With a typed sum the channel
+/// is always sent on; `Err(RecvError)` is now exclusively a panic
+/// signal.
+///
+/// TS source-of-truth: `tools/AgentTool/AgentTool.tsx:886-892` uses
+/// `Promise.race([iterator.next(), backgroundSignal])` where both
+/// Promises remain observable after the race. The tagged enum is the
+/// Rust equivalent — Tokio's oneshot semantics force us to model the
+/// "engine completed but caller already moved on" case explicitly
+/// rather than relying on Promise object lifetime.
+#[derive(Debug)]
+enum EngineOutcome {
+    /// Engine ran inline; the awaiter wins the race and returns this
+    /// response directly. `complete_silent` has already transitioned
+    /// the task to its terminal state without pushing a notification
+    /// envelope (the model gets the result via the tool result).
+    ///
+    /// `AgentSpawnResponse` is ~300 bytes (`Vec<PathBuf>`,
+    /// `HashMap<ToolName, i32>`, multiple `Option<String>`); boxing
+    /// keeps both variants the same shallow size so the small
+    /// `CompletedAfterDetach` arm doesn't pay the worst-case stack
+    /// cost. Per `clippy::large_enum_variant`.
+    CompletedSync(Box<AgentSpawnResponse>),
+    /// External `signal_detach` fired before the engine finished.
+    /// The engine continued to completion in the bg, and the
+    /// `<task-notification>` envelope has been pushed via
+    /// `mark_completed`/`mark_failed`. The awaiter returns
+    /// `AsyncLaunched` — the model already received the bg-shaped
+    /// reply via the notification envelope.
+    CompletedAfterDetach {
+        agent_id: String,
+        task_id: Option<String>,
+        duration_ms: i64,
+    },
+}
+
+/// Translate the engine-driver oneshot outcome into the awaiter's
+/// `AgentSpawnResponse`. Recv-error (the truly degenerate path) maps
+/// to a `Failed` response with the panic marker so the model isn't
+/// left hanging if the engine task aborts mid-run.
+fn resolve_engine_outcome(
+    res: Result<EngineOutcome, tokio::sync::oneshot::error::RecvError>,
+    agent_id: &str,
+    task_id_for_async_response: Option<String>,
+    start: Instant,
+) -> AgentSpawnResponse {
+    match res {
+        Ok(EngineOutcome::CompletedSync(response)) => *response,
+        Ok(EngineOutcome::CompletedAfterDetach {
+            agent_id: detached_agent_id,
+            task_id,
+            duration_ms,
+        }) => AgentSpawnResponse {
+            status: AgentSpawnStatus::AsyncLaunched,
+            agent_id: Some(task_id.unwrap_or(detached_agent_id)),
+            result: None,
+            error: None,
+            total_tool_use_count: 0,
+            total_tokens: 0,
+            duration_ms,
+            worktree_path: None,
+            worktree_branch: None,
+            output_file: None,
+            prompt: None,
+            ..Default::default()
+        },
+        Err(_) => AgentSpawnResponse {
+            status: AgentSpawnStatus::Failed,
+            agent_id: Some(task_id_for_async_response.unwrap_or_else(|| agent_id.to_string())),
+            result: None,
+            error: Some("engine task panicked".into()),
+            duration_ms: start.elapsed().as_millis() as i64,
+            ..Default::default()
+        },
+    }
+}
+
 /// Sync-path early-failure response. Worktree cleanup is the caller's
 /// responsibility — this helper only builds the `AgentSpawnResponse`
 /// shell.
@@ -799,12 +880,40 @@ impl SwarmAgentHandle {
         //     position)
         // TS parity: `AgentTool.tsx:534`
         // `enhanceSystemPromptWithEnvDetails([agentPrompt], model, …)`.
+        //
+        // For `coco-guide` specifically: the agent's static identity is
+        // augmented with a per-spawn dynamic context block listing the
+        // user's custom skills / agents / MCP servers / plugin commands /
+        // settings.json snapshot. TS source:
+        // `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`'s
+        // `getSystemPrompt({toolUseContext})` callback. The builder
+        // closure is installed by the CLI bootstrap; absent installation
+        // the spawn falls back to the static base only.
+        let coco_guide_context_builder = self.coco_guide_context_builder().cloned();
         let build_fresh_prompt = || -> String {
             let def = request.definition.as_deref();
-            let identity = def
+            let static_identity = def
                 .and_then(|d| d.system_prompt.as_deref())
                 .filter(|s| !s.is_empty())
                 .unwrap_or(coco_context::prompt::DEFAULT_AGENT_IDENTITY);
+            // Append the coco-guide dynamic block when this spawn is
+            // for the `coco-guide` agent AND a context builder is
+            // installed. Owned `String` so the assembler below can
+            // borrow with `&str` like the static path. Empty result
+            // (every section omitted) is treated identically to
+            // "no builder installed" — TS parity for the
+            // `if (contextSections.length > 0)` gate.
+            let identity_owned: Option<String> =
+                if agent_type == coco_types::SubagentType::CocoGuide.as_str() {
+                    coco_guide_context_builder.as_ref().and_then(|build| {
+                        let ctx = build();
+                        coco_subagent::coco_guide_dynamic_block(&ctx)
+                            .map(|block| format!("{static_identity}{block}"))
+                    })
+                } else {
+                    None
+                };
+            let identity: &str = identity_owned.as_deref().unwrap_or(static_identity);
             let claude_md_files: Vec<coco_context::MemoryFile> =
                 if def.map(|d| d.omit_claude_md).unwrap_or(false) {
                     Vec::new()
@@ -1173,14 +1282,21 @@ impl SwarmAgentHandle {
                     // (run_in_background=false) optionally arm the
                     // auto-detach timer. Background spawns ignore the
                     // field — they detach immediately by definition.
-                    reg.register_agent_task_with_auto_background(
+                    let registration = match request
+                        .auto_background_ms
+                        .filter(|_| !request.run_in_background)
+                    {
+                        Some(ms) => {
+                            coco_tool_runtime::AgentRegistration::ForegroundWithAutoDetach { ms }
+                        }
+                        None => coco_tool_runtime::AgentRegistration::Foreground,
+                    };
+                    reg.register_agent_task(
                         &description,
                         request.tool_use_id.as_deref(),
                         request.invoking_agent_id.as_deref(),
                         task_cancel.clone(),
-                        request
-                            .auto_background_ms
-                            .filter(|_| !request.run_in_background),
+                        registration,
                     )
                     .await
                 };
@@ -1237,7 +1353,7 @@ impl SwarmAgentHandle {
                 _ => None,
             };
 
-        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel::<AgentSpawnResponse>();
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel::<EngineOutcome>();
         let detached_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let detached_flag_for_engine = detached_flag.clone();
         let sync_start = start;
@@ -1405,10 +1521,24 @@ impl SwarmAgentHandle {
             };
 
             // ── Route based on detached flag ─────────────────────
+            //
+            // Two paths, always typed: build an `EngineOutcome` and
+            // send via the oneshot. The channel is **never dropped
+            // without sending**, so the inline awaiter's `Err(RecvError)`
+            // path now only fires on a true panic — not on a
+            // bg-handoff-after-engine-completion race. TS parity:
+            // `Promise.race([engine.next(), backgroundSignal])` keeps
+            // both Promises observable; we model that with a typed
+            // outcome on a single channel.
             let was_detached = detached_flag_for_engine.load(std::sync::atomic::Ordering::SeqCst);
-            if was_detached {
-                // Caller already returned AsyncLaunched. Push the
-                // `<task-notification>` envelope (same path bg uses).
+            let outcome = if was_detached {
+                // Inline awaiter has likely already returned AsyncLaunched
+                // via `detach.notified()`. Push the `<task-notification>`
+                // envelope so the model rediscovers the result through the
+                // bg path (same envelope `register_background_agent_task`
+                // spawns produce). TS parity: `AgentTool.tsx:978-1029` —
+                // when `wasBackgrounded` is true, the iterator continuation
+                // calls `enqueueAgentNotification`.
                 if let (Some(reg), Some(tid)) = (
                     task_registry_for_engine.as_ref(),
                     task_id_for_engine.as_deref(),
@@ -1441,9 +1571,21 @@ impl SwarmAgentHandle {
                         _ => {}
                     }
                 }
+                EngineOutcome::CompletedAfterDetach {
+                    agent_id: response
+                        .agent_id
+                        .clone()
+                        .unwrap_or(agent_id_for_engine.clone()),
+                    task_id: task_id_for_engine.clone(),
+                    duration_ms,
+                }
             } else {
-                // Inline caller is still alive. Silent terminal +
-                // send response via oneshot.
+                // Inline caller is still alive. Silent terminal — the
+                // response carries the outcome inline; no notification
+                // envelope (would be redundant with the tool result the
+                // model sees). TS parity: `AgentTool.tsx:957
+                // completeAgentTask` writes state but doesn't call
+                // `enqueueAgentNotification` for the sync return path.
                 if let (Some(reg), Some(tid)) = (
                     task_registry_for_engine.as_ref(),
                     task_id_for_engine.as_deref(),
@@ -1454,26 +1596,33 @@ impl SwarmAgentHandle {
                     )
                     .await;
                 }
-                let _ = resp_tx.send(response);
-            }
+                EngineOutcome::CompletedSync(Box::new(response))
+            };
+            let _ = resp_tx.send(outcome);
         });
 
-        // ── Inline caller: race resp_rx vs detach vs (kill_task → resp_rx) ──
+        // ── Inline caller: race resp_rx vs detach ────────────────
+        //
+        // Three observable inputs map to three branches:
+        //
+        // | Wire                                | Path                                    |
+        // |-------------------------------------|-----------------------------------------|
+        // | `Ok(EngineOutcome::CompletedSync)`  | engine ran inline → return its response |
+        // | `Ok(EngineOutcome::CompletedAfterDetach)` | engine raced detach → AsyncLaunched (bg path pushed notification) |
+        // | `Err(RecvError)`                    | true panic in engine task               |
+        // | `detach.notified()` wins            | external Ctrl+B → AsyncLaunched         |
+        //
+        // The `Err` arm now only fires on a real panic — TS-parity with
+        // `Promise.race` where neither Promise is "dropped"; both stay
+        // observable.
         let task_id_for_async_response = sync_task.as_ref().map(|(id, _)| id.clone());
 
         if let Some(detach) = detach_handle_for_inline {
             tokio::select! {
                 biased;
-                res = resp_rx => {
-                    Ok(res.unwrap_or_else(|_| AgentSpawnResponse {
-                        status: AgentSpawnStatus::Failed,
-                        agent_id: Some(agent_id.clone()),
-                        result: None,
-                        error: Some("engine task panicked".into()),
-                        duration_ms: start.elapsed().as_millis() as i64,
-                        ..Default::default()
-                    }))
-                }
+                res = resp_rx => Ok(resolve_engine_outcome(
+                    res, &agent_id, task_id_for_async_response, start,
+                )),
                 () = detach.notified() => {
                     detached_flag.store(true, std::sync::atomic::Ordering::SeqCst);
                     tracing::info!(
@@ -1500,14 +1649,12 @@ impl SwarmAgentHandle {
         } else {
             // No detach handle (memory forks / no registry). Just
             // await the engine task's response.
-            Ok(resp_rx.await.unwrap_or_else(|_| AgentSpawnResponse {
-                status: AgentSpawnStatus::Failed,
-                agent_id: Some(agent_id.clone()),
-                result: None,
-                error: Some("engine task panicked".into()),
-                duration_ms: start.elapsed().as_millis() as i64,
-                ..Default::default()
-            }))
+            Ok(resolve_engine_outcome(
+                resp_rx.await,
+                &agent_id,
+                task_id_for_async_response,
+                start,
+            ))
         }
     }
 
@@ -1548,17 +1695,17 @@ impl SwarmAgentHandle {
             // correctly. TS parity: `AgentTool.tsx` passes both into
             // `registerAsyncAgent`.
             //
-            // PR 1 / W1: bg path uses the dedicated
-            // `register_background_agent_task` so the task entry's
-            // `is_backgrounded` flag initializes to `true` from
-            // creation — matches TS `registerAsyncAgent`'s
+            // PR 1 / W1: bg path uses `AgentRegistration::Background` so
+            // the task entry's `is_backgrounded` flag initializes to
+            // `true` from creation — matches TS `registerAsyncAgent`'s
             // `isBackgrounded: true` literal (`LocalAgentTask.tsx:499`).
             Some(
-                reg.register_background_agent_task(
+                reg.register_agent_task(
                     &description,
                     request.tool_use_id.as_deref(),
                     request.invoking_agent_id.as_deref(),
                     cancel.clone(),
+                    coco_tool_runtime::AgentRegistration::Background,
                 )
                 .await,
             )
@@ -1607,12 +1754,34 @@ impl SwarmAgentHandle {
             (task_registry.clone(), task_id.clone(), event_rx)
         {
             tokio::spawn(async move {
+                // D2: per-tool ProgressTracker. TS parity:
+                // `tools/AgentTool/agentToolUtils.ts:createProgressTracker`
+                // + `tools/AgentTool/AgentTool.tsx:947-948` —
+                // increments on every ToolUseStarted and emits the
+                // tracker snapshot through `emitTaskProgress` so SDK
+                // consumers (VS Code subagent panel, JSONL transcript)
+                // observe per-tool progress.
+                //
+                // Token counts are NOT updated here — they come from
+                // the engine's final usage report after the stream
+                // finishes. The tracker carries `tool_use_count` +
+                // `last_tool_name` (matching TS's `lastToolName`).
+                let mut tracker = coco_types::TaskProgress::default();
                 while let Some(event) = rx.recv().await {
-                    if let coco_types::CoreEvent::Stream(
-                        coco_types::AgentStreamEvent::TextDelta { delta, .. },
-                    ) = event
-                    {
-                        reg.append_output(&tid, &delta).await;
+                    match event {
+                        coco_types::CoreEvent::Stream(
+                            coco_types::AgentStreamEvent::TextDelta { delta, .. },
+                        ) => {
+                            reg.append_output(&tid, &delta).await;
+                        }
+                        coco_types::CoreEvent::Stream(
+                            coco_types::AgentStreamEvent::ToolUseStarted { name, .. },
+                        ) => {
+                            tracker.tool_use_count = tracker.tool_use_count.saturating_add(1);
+                            tracker.last_tool_name = Some(name);
+                            reg.set_progress(&tid, tracker.clone()).await;
+                        }
+                        _ => {}
                     }
                 }
             });
@@ -1722,6 +1891,15 @@ impl SwarmAgentHandle {
                     };
                     if let Some(clean) = coco_subagent::sanitize_summary(&summary_text) {
                         previous = Some(clean.clone());
+                        // Write the summary to the canonical task state.
+                        // The registry impl emits a `TaskProgress` SDK
+                        // event when the value actually changes (D1 +
+                        // D7 + D14 stack). TS parity:
+                        // `LocalAgentTask.tsx:387-406 updateAgentSummary`.
+                        reg.set_progress_summary(&tid, clean.clone()).await;
+                        // Keep the swarm-side mirror for the TUI panel
+                        // during the dual-store migration window —
+                        // remove once the TUI reads via TaskManager.
                         let mut agents = agents_for_summary.write().await;
                         if let Some(state) = agents
                             .iter_mut()

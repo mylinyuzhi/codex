@@ -1,7 +1,7 @@
 use super::*;
 use coco_tool_runtime::{
-    AgentCompletionPayload, AgentTaskRegistry, AgentUsage, AgentWorktree, BackgroundShellRequest,
-    ShellTaskSpawner, TaskController, TaskReader,
+    AgentCompletionPayload, AgentRegistration as AR, AgentTaskRegistry, AgentUsage, AgentWorktree,
+    BackgroundShellRequest, ShellTaskSpawner, TaskController, TaskReader,
 };
 use std::sync::Arc;
 
@@ -34,7 +34,13 @@ async fn register_creates_running_task_with_tool_use_id() {
     let rt = rt();
     let cancel = CancellationToken::new();
     let task_id = rt
-        .register_agent_task("explore something", Some("toolu_01"), None, cancel)
+        .register_agent_task(
+            "explore something",
+            Some("toolu_01"),
+            None,
+            cancel,
+            AR::Foreground,
+        )
         .await;
 
     let state = rt.get_task_status(&task_id).await.unwrap();
@@ -48,7 +54,7 @@ async fn register_creates_running_task_with_tool_use_id() {
 async fn output_delta_returns_appended_chunks_with_offset() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
 
     rt.append_output(&task_id, "first ").await;
@@ -71,7 +77,7 @@ async fn output_delta_returns_appended_chunks_with_offset() {
 async fn mark_completed_sets_terminal_status_and_appends_response() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     rt.mark_completed(
         &task_id,
@@ -94,7 +100,13 @@ async fn mark_completed_pushes_rich_agent_notification() {
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
     let task_id = rt
-        .register_agent_task("build", Some("toolu_x"), None, CancellationToken::new())
+        .register_agent_task(
+            "build",
+            Some("toolu_x"),
+            None,
+            CancellationToken::new(),
+            AR::Foreground,
+        )
         .await;
     rt.mark_completed(
         &task_id,
@@ -136,7 +148,7 @@ async fn mark_completed_pushes_rich_agent_notification() {
 async fn mark_failed_appends_error_and_flips_status() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     rt.mark_failed(&task_id, "transport crash").await;
     let state = rt.get_task_status(&task_id).await.unwrap();
@@ -160,7 +172,7 @@ async fn kill_task_only_fires_cancel_token() {
     let rt = rt();
     let cancel = CancellationToken::new();
     let task_id = rt
-        .register_agent_task("work", None, None, cancel.clone())
+        .register_agent_task("work", None, None, cancel.clone(), AR::Foreground)
         .await;
 
     rt.kill_task(&task_id).await.unwrap();
@@ -181,7 +193,13 @@ async fn kill_task_does_not_push_notification_directly() {
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
     let task_id = rt
-        .register_agent_task("explore", None, None, CancellationToken::new())
+        .register_agent_task(
+            "explore",
+            None,
+            None,
+            CancellationToken::new(),
+            AR::Foreground,
+        )
         .await;
     rt.kill_task(&task_id).await.unwrap();
     let captured = captured.lock().await;
@@ -202,7 +220,13 @@ async fn kill_then_mark_failed_pushes_exactly_one_notification() {
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
     let task_id = rt
-        .register_agent_task("explore", None, None, CancellationToken::new())
+        .register_agent_task(
+            "explore",
+            None,
+            None,
+            CancellationToken::new(),
+            AR::Foreground,
+        )
         .await;
     rt.kill_task(&task_id).await.unwrap();
     // Simulate what the bg-agent closure does in production after
@@ -224,7 +248,7 @@ async fn kill_then_mark_failed_pushes_exactly_one_notification() {
 async fn subscribe_terminal_fires_on_mark_completed() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     let signal = rt
         .subscribe_terminal(&task_id)
@@ -247,7 +271,7 @@ async fn subscribe_terminal_fires_on_mark_completed() {
 async fn subscribe_terminal_already_terminal_returns_immediately() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     rt.mark_completed(&task_id, AgentCompletionPayload::default())
         .await;
@@ -266,10 +290,10 @@ async fn subscribe_terminal_already_terminal_returns_immediately() {
 async fn list_tasks_returns_all_registered() {
     let rt = rt();
     let _ = rt
-        .register_agent_task("a", None, None, CancellationToken::new())
+        .register_agent_task("a", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     let _ = rt
-        .register_agent_task("b", None, None, CancellationToken::new())
+        .register_agent_task("b", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     assert_eq!(rt.list_tasks().await.len(), 2);
 }
@@ -302,7 +326,7 @@ async fn unknown_task_id_errors() {
 async fn signal_detach_is_idempotent() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     assert_eq!(
         rt.signal_detach(&task_id).await,
@@ -328,7 +352,7 @@ async fn signal_detach_is_idempotent() {
 async fn signal_detach_wakes_notify_awaiter() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     let notify = coco_tool_runtime::TaskReader::detach_handle(&*rt, &task_id)
         .await
@@ -353,7 +377,7 @@ async fn signal_detach_wakes_notify_awaiter() {
 async fn signal_detach_flips_is_backgrounded_for_local_agent() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     let extras_before = rt.manager().local_agent_extra(&task_id).await;
     assert!(!extras_before.is_backgrounded);
@@ -372,7 +396,7 @@ async fn signal_detach_flips_is_backgrounded_for_local_agent() {
 async fn read_terminal_outputs_returns_disk_content() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     rt.append_output(&task_id, "line1\n").await;
     rt.append_output(&task_id, "line2\n").await;
@@ -396,7 +420,7 @@ async fn mark_completed_cancels_per_task_token() {
     let rt = rt();
     let cancel = CancellationToken::new();
     let task_id = rt
-        .register_agent_task("work", None, None, cancel.clone())
+        .register_agent_task("work", None, None, cancel.clone(), AR::Foreground)
         .await;
     assert!(!cancel.is_cancelled());
     rt.mark_completed(&task_id, AgentCompletionPayload::default())
@@ -409,7 +433,7 @@ async fn mark_failed_cancels_per_task_token() {
     let rt = rt();
     let cancel = CancellationToken::new();
     let task_id = rt
-        .register_agent_task("work", None, None, cancel.clone())
+        .register_agent_task("work", None, None, cancel.clone(), AR::Foreground)
         .await;
     rt.mark_failed(&task_id, "boom").await;
     assert!(cancel.is_cancelled());
@@ -536,7 +560,13 @@ async fn shell_spawn_threads_tool_use_id_and_agent_id_into_notification() {
 async fn no_sink_means_no_panic_on_terminal() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("explore", None, None, CancellationToken::new())
+        .register_agent_task(
+            "explore",
+            None,
+            None,
+            CancellationToken::new(),
+            AR::Foreground,
+        )
         .await;
     rt.mark_completed(&task_id, AgentCompletionPayload::default())
         .await;
@@ -587,7 +617,13 @@ async fn complete_silent_transitions_status_without_notification() {
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
     let task_id = rt
-        .register_agent_task("sync-work", None, None, CancellationToken::new())
+        .register_agent_task(
+            "sync-work",
+            None,
+            None,
+            CancellationToken::new(),
+            AR::Foreground,
+        )
         .await;
 
     rt.complete_silent(&task_id, true).await;
@@ -612,7 +648,13 @@ async fn complete_silent_failed_path() {
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
     let task_id = rt
-        .register_agent_task("sync-work", None, None, CancellationToken::new())
+        .register_agent_task(
+            "sync-work",
+            None,
+            None,
+            CancellationToken::new(),
+            AR::Foreground,
+        )
         .await;
 
     rt.complete_silent(&task_id, false).await;
@@ -631,7 +673,7 @@ async fn complete_silent_fires_cancel_and_broadcasts_terminal() {
     let rt = rt();
     let cancel = CancellationToken::new();
     let task_id = rt
-        .register_agent_task("sync-work", None, None, cancel.clone())
+        .register_agent_task("sync-work", None, None, cancel.clone(), AR::Foreground)
         .await;
     let signal = rt
         .subscribe_terminal(&task_id)
@@ -781,7 +823,7 @@ async fn shell_spawn_auto_detach_timer_fires() {
 async fn read_output_returns_full_buffer_after_completion() {
     let rt = rt();
     let task_id = rt
-        .register_agent_task("work", None, None, CancellationToken::new())
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
         .await;
     rt.append_output(&task_id, "alpha").await;
     rt.mark_completed(

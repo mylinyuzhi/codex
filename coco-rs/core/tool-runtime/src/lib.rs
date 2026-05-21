@@ -143,6 +143,7 @@ pub use skill_handle::SkillInvocationError;
 pub use skill_handle::SkillInvocationResult;
 pub use skill_handle::SubagentInheritance;
 pub use task_handle::AgentCompletionPayload;
+pub use task_handle::AgentRegistration;
 pub use task_handle::AgentSpawnMetadata;
 pub use task_handle::AgentTaskRegistry;
 pub use task_handle::AgentTaskRegistryRef;

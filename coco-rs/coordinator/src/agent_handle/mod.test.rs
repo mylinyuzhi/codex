@@ -431,12 +431,15 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
             _tool_use_id: Option<&str>,
             _invoking_agent_id: Option<&str>,
             _cancel: tokio_util::sync::CancellationToken,
+            _registration: coco_tool_runtime::AgentRegistration,
         ) -> String {
             let id = "ta_test_dt".to_string();
             *self.task_id.lock().unwrap() = Some(id.clone());
             id
         }
         async fn append_output(&self, _: &str, _: &str) {}
+        async fn set_progress_summary(&self, _: &str, _: String) {}
+        async fn set_progress(&self, _: &str, _: coco_types::TaskProgress) {}
         async fn mark_completed(&self, _: &str, _: AgentCompletionPayload) {
             self.mark_completed_called.store(true, Ordering::SeqCst);
             self.completed.notify_one();
