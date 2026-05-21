@@ -26,6 +26,7 @@ members = [
     "utils/frontmatter",
     "utils/git",
     "utils/image",
+    "utils/json-repair",
     "utils/json-to-toml",
     "utils/keyring-store",
     "utils/pty",
@@ -139,6 +140,7 @@ coco-utils-cache = { path = "utils/cache" }
 coco-utils-cargo-bin = { path = "utils/cargo-bin" }
 coco-utils-common = { path = "utils/common" }
 coco-utils-image = { path = "utils/image" }
+coco-utils-json-repair = { path = "utils/json-repair" }
 coco-utils-json-to-toml = { path = "utils/json-to-toml" }
 coco-utils-pty = { path = "utils/pty" }
 coco-utils-readiness = { path = "utils/readiness" }
@@ -241,6 +243,7 @@ ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
 mime_guess = "2.0.5"
 jsonc-parser = { version = "0.24", features = ["serde", "cst"] }
+llm_json = "1.0.3"
 keyring = "3"
 lazy_static = "1"
 libc = "0.2"

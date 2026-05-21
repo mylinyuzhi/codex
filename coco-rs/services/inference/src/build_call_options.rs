@@ -1,4 +1,4 @@
-//! `build_call_options` — Layer 2 entry that constructs a fresh
+//! `build_call_options` — schema validation entry that constructs a fresh
 //! `LanguageModelV4CallOptions` per turn.
 //!
 //! This is the **single ProviderOptions write site** in the entire
@@ -120,6 +120,12 @@ pub fn build_call_options_with_extra(
         ..Default::default()
     };
     call.tools = tools;
+    // Tool-call argument parsing lives in the provider adapter now.
+    // Each adapter calls `vercel_ai_provider_utils::parse_tool_arguments_or_empty`
+    // (which wraps `llm_json::repair_json`) directly when constructing
+    // `ToolCallPart`. The previous workspace-level `tool_input_parse_fn`
+    // injection has been removed — there is no longer a per-call
+    // pluggable parser hook.
 
     // Lane A: typed sampling. `None` semantically means "let provider
     // default" — every typed body builder writes the field only on
@@ -198,7 +204,7 @@ pub fn build_call_options_with_extra(
     // providers don't, so we skip the key entirely.
     //
     // Precedence: when the user has pre-stuffed `contextManagement`
-    // into `extra_body` (Layer 1 escape hatch), don't overwrite — log
+    // into `extra_body` (wire parsing escape hatch), don't overwrite — log
     // and keep the user's value. This makes the manual override stable
     // even after we begin computing strategies upstream.
     if api == ProviderApi::Anthropic

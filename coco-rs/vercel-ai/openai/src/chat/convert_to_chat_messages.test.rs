@@ -82,6 +82,8 @@ fn converts_assistant_tool_call() {
             input: serde_json::json!({"city": "SF"}),
             provider_executed: None,
             provider_metadata: None,
+            invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];

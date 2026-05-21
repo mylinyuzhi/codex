@@ -29,3 +29,27 @@ IDs / timing / encoding: `generate_id`, `delay`, `parse_retry_after`, `convert_b
 - Async-first: all I/O supports `CancellationToken`.
 - Errors propagate as `AISdkError` from provider crate.
 - Header handling canonicalizes keys via `normalize_headers` before combining.
+
+## Coco-rs-specific deviations from `@ai-sdk/provider-utils` TS spec
+
+- **`json_repair` module** — `parse_with_repair` /
+  `parse_tool_arguments_or_empty` wrapping the third-party `llm_json`
+  crate (markdown fence stripping, single-quote → double-quote,
+  trailing-comma fix, Python-literal mapping, truncation completion).
+  Not in the TS spec — TS Claude Code uses bare `JSON.parse` and
+  silently falls back to `{}` on failure. coco-rs adds aggressive
+  repair because it targets diverse OpenAI-compatible endpoints
+  (GLM, Doubao, DeepSeek, Groq, xAI, Ollama) whose tool-call
+  `arguments` strings are messier than first-party Anthropic /
+  OpenAI output. Adapters in `vercel-ai-openai*` and
+  `vercel-ai-anthropic`'s streaming `content_block_stop` branch
+  call this helper inline; failure still falls back to
+  `Value::Object({})` (schema validation reports
+  specific missing fields on the next turn). See
+  `services/inference/CLAUDE.md` "Call path" for the full 3-layer
+  story. Parallel implementation `coco-utils-json-repair` lives one
+  layer higher (`utils/`) and is used by `app/query` for schema-validation
+  work; the duplication exists because layering forbids
+  `vercel-ai-provider-utils` from depending on `coco-*` crates.
+  Both wrappers delegate to `llm_json::repair_json` so drift is
+  bounded.

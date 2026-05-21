@@ -309,6 +309,8 @@ impl StreamingToolCallTracker {
                 provider_executed: None,
                 dynamic: None,
                 provider_metadata,
+                invalid: false,
+                invalid_reason: None,
             },
         ));
 

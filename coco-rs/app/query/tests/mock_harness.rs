@@ -54,6 +54,24 @@ use coco_types::ToolAppState;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
+/// Mirror what `vercel_ai_provider_utils::parse_tool_arguments_or_empty`
+/// does, so tests using `MockToolEmission::FromRawArguments` reproduce
+/// the exact wire-parsing outcome that real adapters produce.
+///
+/// Empty input → `{}` (parameterless convention); non-empty
+/// unrecoverable → `Value::String(raw)` (preserves diagnostics).
+fn parse_raw_arguments_like_adapter(raw: &str) -> serde_json::Value {
+    use coco_utils_json_repair::RepairOutcome;
+    use coco_utils_json_repair::parse_with_repair;
+    if raw.trim().is_empty() {
+        return serde_json::Value::Object(serde_json::Map::new());
+    }
+    match parse_with_repair(raw) {
+        Ok((v, RepairOutcome::Clean | RepairOutcome::Repaired)) => v,
+        Err(_) => serde_json::Value::String(raw.to_string()),
+    }
+}
+
 // ─── MockResponse: declarative response builder ───
 
 /// A declarative mock response.
@@ -72,6 +90,121 @@ pub enum MockResponse {
     },
     /// Return multiple tool calls (parallel execution).
     MultiToolCall(Vec<(String, serde_json::Value)>),
+    /// Mixed batch with full control over each tool call's shape.
+    ///
+    /// Use this to simulate the **provider adapter output** exactly:
+    /// each entry can be one of three shapes:
+    ///
+    /// - [`MockToolEmission::Clean`] — pre-parsed `Value`, e.g.
+    ///   what comes out of Anthropic non-streaming when wire input is
+    ///   already an object.
+    /// - [`MockToolEmission::FromRawArguments`] — raw `arguments`
+    ///   string, run through `parse_tool_arguments_or_empty` the
+    ///   same way OpenAI Chat / Responses / OpenAI-compat /
+    ///   Anthropic streaming do. The full wire parsing repair behaviour
+    ///   (markdown fence stripping, trailing-comma fix, `{}`
+    ///   fallback) is exercised.
+    /// - [`MockToolEmission::InvalidWithReason`] — pre-set
+    ///   `invalid_reason` to drive error wrap's wrap-prefix selection
+    ///   without going through schema validation (useful for adapter-side
+    ///   parse failures that bypass schema validation).
+    MixedToolCalls(Vec<MockToolEmission>),
+}
+
+/// One tool emission inside a [`MockResponse::MixedToolCalls`] batch.
+pub enum MockToolEmission {
+    /// Pre-parsed input value (already through wire parsing).
+    Clean {
+        tool_name: String,
+        input: serde_json::Value,
+    },
+    /// Raw `arguments` string — runs through wire parsing helper.
+    FromRawArguments {
+        tool_name: String,
+        raw_arguments: String,
+    },
+    /// Pre-set `invalid_reason` (simulates adapter-side parse fail).
+    InvalidWithReason {
+        tool_name: String,
+        input: serde_json::Value,
+        reason: coco_llm_types::ToolInputInvalidReason,
+    },
+}
+
+impl MockToolEmission {
+    pub fn clean(tool_name: &str, input: serde_json::Value) -> Self {
+        Self::Clean {
+            tool_name: tool_name.to_string(),
+            input,
+        }
+    }
+
+    pub fn from_raw(tool_name: &str, raw_arguments: &str) -> Self {
+        Self::FromRawArguments {
+            tool_name: tool_name.to_string(),
+            raw_arguments: raw_arguments.to_string(),
+        }
+    }
+
+    pub fn invalid(
+        tool_name: &str,
+        input: serde_json::Value,
+        reason: coco_llm_types::ToolInputInvalidReason,
+    ) -> Self {
+        Self::InvalidWithReason {
+            tool_name: tool_name.to_string(),
+            input,
+            reason,
+        }
+    }
+
+    fn into_part(self, idx: usize, call_idx: i32) -> AssistantContentPart {
+        let tool_call_id = format!("call_{call_idx}_{idx}");
+        match self {
+            Self::Clean { tool_name, input } => AssistantContentPart::ToolCall(ToolCallPart {
+                tool_call_id,
+                tool_name,
+                input,
+                provider_executed: None,
+                provider_metadata: None,
+                invalid: false,
+                invalid_reason: None,
+            }),
+            Self::FromRawArguments {
+                tool_name,
+                raw_arguments,
+            } => {
+                // Mirror what every provider adapter does on the wire
+                // string path. `coco-utils-json-repair` is the same
+                // `llm_json::repair_json` wrapper that
+                // `vercel-ai-provider-utils` exposes, so this mock
+                // matches the real wire-parsing outcome byte-for-byte.
+                let input = parse_raw_arguments_like_adapter(&raw_arguments);
+                AssistantContentPart::ToolCall(ToolCallPart {
+                    tool_call_id,
+                    tool_name,
+                    input,
+                    provider_executed: None,
+                    provider_metadata: None,
+                    invalid: false,
+                    invalid_reason: None,
+                })
+            }
+            Self::InvalidWithReason {
+                tool_name,
+                input,
+                reason,
+            } => AssistantContentPart::ToolCall(ToolCallPart {
+                tool_call_id,
+                tool_name,
+                input,
+                provider_executed: None,
+                provider_metadata: None,
+                invalid: true,
+                invalid_reason: Some(reason),
+            }),
+        }
+    }
 }
 
 impl MockResponse {
@@ -106,6 +239,8 @@ impl MockResponse {
                     input,
                     provider_executed: None,
                     provider_metadata: None,
+                    invalid: false,
+                    invalid_reason: None,
                 })],
                 StopReason::ToolUse,
             ),
@@ -121,6 +256,8 @@ impl MockResponse {
                         input,
                         provider_executed: None,
                         provider_metadata: None,
+                        invalid: false,
+                        invalid_reason: None,
                     }));
                 }
                 (parts, StopReason::ToolUse)
@@ -136,8 +273,18 @@ impl MockResponse {
                             input,
                             provider_executed: None,
                             provider_metadata: None,
+                            invalid: false,
+                            invalid_reason: None,
                         })
                     })
+                    .collect();
+                (parts, StopReason::ToolUse)
+            }
+            Self::MixedToolCalls(emissions) => {
+                let parts: Vec<_> = emissions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, e)| e.into_part(i, call_idx))
                     .collect();
                 (parts, StopReason::ToolUse)
             }

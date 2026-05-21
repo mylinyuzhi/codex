@@ -23,6 +23,9 @@ use std::sync::Arc;
 
 // Re-export data types for convenience — callers can import from coco_tool_runtime
 // without adding coco-types as a direct dependency.
+pub use coco_types::Capability;
+pub use coco_types::ModelRole;
+pub use coco_types::SideQueryOutputFormat;
 pub use coco_types::SideQueryRequest;
 pub use coco_types::SideQueryResponse;
 pub use coco_types::SideQueryStopReason;
@@ -50,6 +53,24 @@ pub trait SideQuery: Send + Sync {
 
     /// Get the default model ID for side queries.
     fn model_id(&self) -> &str;
+
+    /// Whether the resolved model for `role` (or the default model
+    /// when `role` is `None`) declares the given [`Capability`].
+    ///
+    /// Used by callers that need to pick between provider-supported
+    /// paths and the multi-LLM fallback at request build time — most
+    /// notably the memory recall ranker choosing between native
+    /// `output_format` (when [`Capability::StructuredOutput`] is set)
+    /// and `with_forced_tool` (universally supported).
+    ///
+    /// Default impl returns `false` so test doubles
+    /// ([`NoOpSideQuery`], unit-test stubs) keep compiling without
+    /// caring about capability semantics. Real implementations
+    /// override against the live model registry.
+    fn supports_capability(&self, role: Option<ModelRole>, capability: Capability) -> bool {
+        let _ = (role, capability);
+        false
+    }
 }
 
 /// Shared handle type for `ToolUseContext`.

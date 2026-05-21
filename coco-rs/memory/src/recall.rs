@@ -10,6 +10,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
+use coco_types::SideQueryResponse;
+
 use crate::scan::ScannedMemory;
 use crate::scan::file_mtime_ms;
 use crate::scan::format_memory_manifest;
@@ -161,27 +163,164 @@ pub fn build_selection_prompt(
     out
 }
 
-/// Parse the selection response — a JSON object with a
-/// `selected_memories` array, with permissive fallback to a bare array.
-pub fn parse_selection_response(response: &str) -> Vec<String> {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(response)
-        && let Some(arr) = v.get("selected_memories").and_then(|x| x.as_array())
-    {
-        return arr
-            .iter()
-            .filter_map(|s| s.as_str().map(str::to_string))
-            .collect();
+/// Outcome of decoding a ranker response into a memory selection.
+///
+/// The caller in [`crate::MemoryRuntime::recall`] uses this to decide
+/// whether the response is **trustworthy** (legal JSON shape — even an
+/// empty `selected_memories` array counts) versus **malformed**
+/// (truncated, non-JSON, or no extractable selection container).
+/// Trustworthy responses are taken at face value — an empty selection
+/// is a legitimate "no matches" verdict. Malformed responses trigger
+/// the forced-tool fallback so a transient provider format hiccup
+/// (broken JSON from the structured-output API, markdown wrapper that
+/// doesn't carry an embeddable array) doesn't suppress recall.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecallSelection {
+    /// Response was syntactically well-formed and matched our expected
+    /// recall schema. The list may legitimately be empty when the
+    /// model decided no memories were relevant.
+    Parsed(Vec<String>),
+    /// Response could not be decoded against the recall schema —
+    /// truncated JSON, illegal characters, or neither a
+    /// `selected_memories` object nor an extractable bare array.
+    /// Caller should fall back to the multi-LLM forced-tool path.
+    Malformed,
+}
+
+/// Parse a textual ranker response into a [`RecallSelection`].
+///
+/// Accepts:
+/// 1. `{"selected_memories": [...]}` — the canonical structured-output
+///    shape. An empty array is `Parsed(vec![])`, NOT `Malformed`.
+/// 2. JSON object missing the `selected_memories` field but otherwise
+///    parseable (e.g. `{"reason": "no matches"}`) — treated as
+///    `Parsed(vec![])` so a model that legitimately answered "nothing
+///    relevant" in free-form JSON does not trigger a fallback retry.
+/// 3. Bare `[...]` array somewhere in the response — TS legacy
+///    fallback for markdown-wrapped responses (`\`\`\`json\n[...]\n\`\`\``).
+///
+/// Anything else — truncated, non-JSON, or no recognisable container —
+/// returns [`RecallSelection::Malformed`].
+pub fn parse_selection_response(response: &str) -> RecallSelection {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return RecallSelection::Malformed;
     }
-    // Fallback: a bare array embedded somewhere in the response.
-    if let (Some(start), Some(end)) = (response.find('['), response.rfind(']'))
-        && start < end
-    {
-        let slice = &response[start..=end];
-        if let Ok(v) = serde_json::from_str::<Vec<String>>(slice) {
-            return v;
+    // Two-stage parse, both routed through the workspace's single
+    // JSON-repair source of truth (`coco_utils_json_repair`):
+    //
+    //   1. Strict `serde_json` first (no repair fired); accepts any
+    //      legal JSON shape — `{selected_memories: [...]}`, bare
+    //      `[...]`, or other valid JSON — and extracts what we can,
+    //      including legitimate empty `[]`.
+    //   2. On strict-parse failure, hand the trimmed input to
+    //      `parse_with_repair`. This recovers from common LLM tics:
+    //      markdown code fences, trailing commas, single quotes,
+    //      missing brackets, truncated structured-output responses.
+    //
+    // An empty `selected_memories: []` (or any legal JSON without our
+    // schema) returns `Parsed(vec![])` — the runtime treats this as a
+    // legitimate "no matches" verdict and does NOT trigger the
+    // forced-tool fallback. Only genuinely malformed input
+    // (un-parseable even after repair) falls through to `Malformed`.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return extract_from_json_value(v);
+    }
+    if let Ok((v, outcome)) = coco_utils_json_repair::parse_with_repair(trimmed) {
+        if matches!(outcome, coco_utils_json_repair::RepairOutcome::Repaired) {
+            // Repair fires when strict JSON parse failed but
+            // `llm_json` recovered a parseable value (markdown
+            // fence stripped, trailing comma dropped, truncation
+            // closed, etc). Log at debug level so dashboards can
+            // monitor real-world hit rate without burying happy-
+            // path logs; bump to warn if a specific model regresses
+            // consistently.
+            tracing::debug!(
+                target: "coco_memory::recall",
+                response_bytes = trimmed.len(),
+                "recall ranker response required JSON repair before extraction"
+            );
         }
+        return extract_from_json_value(v);
     }
-    Vec::new()
+    RecallSelection::Malformed
+}
+
+/// Pull `selected_memories` from a parsed JSON value, accepting the
+/// three legitimate shapes the recall ranker may emit. Any other
+/// legal JSON shape yields `Parsed(vec![])` — a parseable response
+/// that just doesn't carry recall content is not a wire-format bug.
+fn extract_from_json_value(v: serde_json::Value) -> RecallSelection {
+    if let Some(arr) = v.get("selected_memories").and_then(|x| x.as_array()) {
+        return RecallSelection::Parsed(
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect(),
+        );
+    }
+    if let Some(arr) = v.as_array() {
+        return RecallSelection::Parsed(
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect(),
+        );
+    }
+    RecallSelection::Parsed(Vec::new())
+}
+
+/// Decode a [`SideQueryResponse`] into a [`RecallSelection`].
+///
+/// Honors both wire shapes the ranker can emit:
+///
+/// 1. **`tool_uses[0].input`** — populated by the forced-tool path
+///    (TS parity) and by the Anthropic adapter's synthetic-json-tool
+///    fallback when its per-model capability table doesn't know about
+///    a newer Claude. Tool inputs are already typed JSON, so the only
+///    way to "fail" here is for the provider to return tool_uses
+///    without a usable `selected_memories` field — which we treat as
+///    a legitimate empty verdict (`Parsed(vec![])`).
+/// 2. **`text`** — populated by the native structured-output path
+///    (OpenAI `response_format.json_schema`, Gemini `responseSchema`,
+///    Anthropic `output_format` with the structured-outputs beta).
+///    Routed through [`parse_selection_response`] for the
+///    parseability gate.
+///
+/// A response with neither text nor tool_uses is [`RecallSelection::Malformed`].
+pub fn extract_recall_selection(resp: &SideQueryResponse) -> RecallSelection {
+    if let Some(tu) = resp.tool_uses.first() {
+        // Adapter signalled it could not parse the raw `arguments`
+        // JSON (strict + repair both failed). Treat as wire-malformed
+        // so the runtime's two-attempt strategy triggers the
+        // forced-tool fallback (when this came from the structured-
+        // output path) or surfaces empty (when this is itself the
+        // forced-tool path's response). Without this check we'd
+        // silently return `Parsed(vec![])` on a Value::Null tool
+        // input and recall would mysteriously stay empty.
+        if tu.invalid {
+            tracing::debug!(
+                target: "coco_memory::recall",
+                tool_name = %tu.name,
+                "recall side-query tool_use marked invalid by adapter; \
+                 treating as malformed for fallback"
+            );
+            return RecallSelection::Malformed;
+        }
+        let names = tu
+            .input
+            .get("selected_memories")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        return RecallSelection::Parsed(names);
+    }
+    match resp.text.as_deref() {
+        Some(text) => parse_selection_response(text),
+        None => RecallSelection::Malformed,
+    }
 }
 
 /// Load selected memories from disk, applying truncation, freshness

@@ -351,6 +351,8 @@ fn extract_discovered_tool_names_picks_up_toolsearch_input() {
                 input: json!({"tools": ["Bash", "Edit"]}),
                 provider_executed: None,
                 provider_metadata: None,
+                invalid: false,
+                invalid_reason: None,
             })],
             provider_options: None,
         },

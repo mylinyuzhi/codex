@@ -99,6 +99,8 @@ fn assistant_tool_call_is_error() {
             input: serde_json::json!({}),
             provider_executed: None,
             provider_metadata: None,
+            invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];

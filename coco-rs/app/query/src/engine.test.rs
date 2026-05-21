@@ -164,6 +164,8 @@ impl LanguageModel for ToolCallThenTextMock {
                         input: serde_json::json!({"file_path": "/tmp/nonexistent.txt"}),
                         provider_executed: None,
                         provider_metadata: None,
+                        invalid: false,
+                        invalid_reason: None,
                     }),
                 ],
                 usage: Usage::new(20, 15),
@@ -232,6 +234,8 @@ impl LanguageModel for ExitPlanModeThenTextMock {
                     input: serde_json::json!({}),
                     provider_executed: None,
                     provider_metadata: None,
+                    invalid: false,
+                    invalid_reason: None,
                 })],
                 usage: Usage::new(20, 15),
                 finish_reason: FinishReason::new(StopReason::ToolUse),
@@ -302,6 +306,8 @@ impl LanguageModel for MultiToolMock {
                         input: serde_json::json!({"file_path": "/tmp/file_a.txt"}),
                         provider_executed: None,
                         provider_metadata: None,
+                        invalid: false,
+                        invalid_reason: None,
                     }),
                     AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: "call_b".into(),
@@ -309,6 +315,8 @@ impl LanguageModel for MultiToolMock {
                         input: serde_json::json!({"file_path": "/tmp/file_b.txt"}),
                         provider_executed: None,
                         provider_metadata: None,
+                        invalid: false,
+                        invalid_reason: None,
                     }),
                 ],
                 usage: Usage::new(15, 10),
@@ -380,6 +388,8 @@ impl LanguageModel for OneToolThenTextMock {
                     tool_name: self.tool_name.clone(),
                     input: self.input.clone(),
                     provider_executed: None,
+                    invalid: false,
+                    invalid_reason: None,
                     provider_metadata: None,
                 })],
                 usage: Usage::new(5, 5),
@@ -768,6 +778,8 @@ async fn test_tool_execution_with_real_tools() {
                         input: serde_json::json!({"file_path": self.file_path}),
                         provider_executed: None,
                         provider_metadata: None,
+                        invalid: false,
+                        invalid_reason: None,
                     })],
                     usage: Usage::new(10, 5),
                     finish_reason: FinishReason::new(StopReason::ToolUse),
@@ -866,6 +878,8 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
                         input: serde_json::json!({"file_path": self.file_path}),
                         provider_executed: None,
                         provider_metadata: None,
+                        invalid: false,
+                        invalid_reason: None,
                     })],
                     usage: Usage::new(8, 4),
                     finish_reason: FinishReason::new(StopReason::ToolUse),
@@ -1324,7 +1338,12 @@ async fn unknown_tool_call_gets_error_result_and_completed_event() {
     assert_eq!(result.turns, 2);
     let output = tool_result_error_text(&result.final_messages, "unknown_1")
         .expect("unknown tool should produce an error tool result");
-    assert!(output.contains("Unknown tool: MissingTool"));
+    // Updated to mirror the unified `<tool_use_error>No such tool
+    // available: ...>` wrap that `tool_runner` now emits.
+    assert!(
+        output.contains("No such tool available: MissingTool"),
+        "got: {output}"
+    );
 
     let (queued, started, completed, completed_is_error) =
         tool_lifecycle_counts(&events, "unknown_1");
@@ -2678,6 +2697,8 @@ impl LanguageModel for AskingToolCallMock {
                     input: serde_json::json!({}),
                     provider_executed: None,
                     provider_metadata: None,
+                    invalid: false,
+                    invalid_reason: None,
                 })],
                 usage: Usage::new(10, 5),
                 finish_reason: FinishReason::new(StopReason::ToolUse),
@@ -2968,6 +2989,8 @@ impl LanguageModel for AskingToolThenTextMock {
                     input: serde_json::json!({}),
                     provider_executed: None,
                     provider_metadata: None,
+                    invalid: false,
+                    invalid_reason: None,
                 })],
                 usage: Usage::new(5, 5),
                 finish_reason: FinishReason::new(StopReason::ToolUse),

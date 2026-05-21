@@ -11,17 +11,19 @@ use coco_paths::ProjectPaths;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::SideQueryHandle;
 use coco_tool_runtime::SideQueryRequest;
+use coco_types::Capability;
 use coco_types::ModelRole;
 use coco_types::SideQueryToolDef;
 
 use crate::config::MemoryConfig;
 use crate::path::MemoryDir;
 use crate::recall::PrefetchState;
+use crate::recall::RecallSelection;
 use crate::recall::RelevantMemory;
 use crate::recall::SELECT_MEMORIES_SYSTEM_PROMPT;
 use crate::recall::build_selection_prompt;
+use crate::recall::extract_recall_selection;
 use crate::recall::load_relevant_memories;
-use crate::recall::parse_selection_response;
 use crate::scan::scan_memory_files;
 use crate::service::DreamService;
 use crate::service::ExtractService;
@@ -710,85 +712,148 @@ impl MemoryRuntime {
         };
 
         let user_prompt = build_selection_prompt(query, &scanned, &self.recall_state, recent_tools);
-        // Force structured output via a synthetic
-        // `select_memories` tool — TS parity with
-        // `selectRelevantMemories.ts`'s `tool_choice: { type:
-        // "tool", name: "select_memories" }`. Strict JSON
-        // shape is more reliable than a permissive
-        // `parse_selection_response` regex over free text.
-        let tool = SideQueryToolDef {
-            name: RECALL_TOOL_NAME.into(),
-            description: "Return up to 5 memory filenames most relevant to the user's query."
-                .into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "selected_memories": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "maxItems": 5,
+        // Schema describing the recall response shape. Shared
+        // between the native structured-output path and the
+        // forced-tool fallback: same JSON contract, different
+        // wire format depending on whether the resolved Memory
+        // model declares `Capability::StructuredOutput`.
+        let recall_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "selected_memories": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": 5,
+                }
+            },
+            "required": ["selected_memories"],
+            "additionalProperties": false,
+        });
+
+        // Two-attempt strategy:
+        //
+        // 1. **Native structured output** — fires when the resolved
+        //    Memory model declares `Capability::StructuredOutput`. The
+        //    request rides on each provider's structured-output API
+        //    (OpenAI `response_format.json_schema`, Gemini
+        //    `responseSchema`, Anthropic `output_format` +
+        //    `structured-outputs-2025-11-13` beta — or the Anthropic
+        //    adapter's synthetic-tool fallback for unknown Claude
+        //    variants). Skipped entirely on unvetted models — those
+        //    go straight to attempt 2.
+        //
+        // 2. **Forced-tool fallback** — multi-LLM-safe path that
+        //    every provider supports (tool_choice = the named tool).
+        //    Fires when attempt 1 is skipped, when the side-query
+        //    handle hard-fails (transport / HTTP), or when the
+        //    response decodes as `RecallSelection::Malformed`
+        //    (truncated JSON, non-parseable text). An empty
+        //    `selected_memories: []` is **not** malformed —
+        //    [`extract_recall_selection`] treats it as a legitimate
+        //    "no matches" verdict, sparing a wasted 2nd LLM call on
+        //    every no-recall turn.
+        let supports_structured =
+            handle.supports_capability(Some(ModelRole::Memory), Capability::StructuredOutput);
+        let mut attempt_names: Option<Vec<String>> = None;
+        if supports_structured {
+            let request = SideQueryRequest::with_json_schema(
+                SELECT_MEMORIES_SYSTEM_PROMPT,
+                &user_prompt,
+                recall_schema.clone(),
+                RECALL_QUERY_SOURCE,
+            )
+            .with_schema_name(RECALL_TOOL_NAME)
+            .with_schema_description("Up to 5 memory filenames most relevant to the user's query.")
+            .with_model_role(ModelRole::Memory)
+            // TS `findRelevantMemories.ts:101`
+            // `skipSystemPromptPrefix: true` — ranker must not see
+            // the main agent's preamble.
+            .with_skip_system_prefix(true);
+            match handle.query(request).await {
+                Ok(resp) => match extract_recall_selection(&resp) {
+                    RecallSelection::Parsed(v) => {
+                        attempt_names = Some(v);
+                    }
+                    RecallSelection::Malformed => {
+                        tracing::debug!(
+                            target: "coco_memory::recall",
+                            "structured-output ranker returned malformed response; \
+                             falling back to forced-tool path"
+                        );
                     }
                 },
-                "required": ["selected_memories"],
-                "additionalProperties": false,
-            }),
-        };
-        let request = SideQueryRequest::with_forced_tool(
-            SELECT_MEMORIES_SYSTEM_PROMPT,
-            &user_prompt,
-            tool,
-            RECALL_QUERY_SOURCE,
-        )
-        .with_model_role(ModelRole::Memory)
-        // TS `findRelevantMemories.ts:101`
-        // `skipSystemPromptPrefix: true` — ranker must not
-        // see the main agent's Claude Code preamble. The
-        // preamble describes tools/persona unrelated to
-        // memory selection and biases the ranker.
-        .with_skip_system_prefix(true);
-        let selected: Vec<String> = match handle.query(request).await {
-            Ok(resp) => {
-                // Prefer the structured tool input; fall back
-                // to text-mode parsing for providers that
-                // don't honor `tool_choice` (TS legacy path).
-                let names = resp
-                    .tool_uses
-                    .first()
-                    .and_then(|tu| tu.input.get("selected_memories"))
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|s| s.as_str().map(str::to_string))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_else(|| {
-                        let text = resp.text.clone().unwrap_or_default();
-                        parse_selection_response(&text)
-                    });
-                // Ranker returns filenames; resolve to absolute paths
-                // by matching against the scanned manifest via a
-                // hash index — O(k) instead of O(n·k).
-                let by_name: std::collections::HashMap<&str, &str> = scanned
-                    .iter()
-                    .map(|m| (m.filename.as_str(), m.path.to_str().unwrap_or("")))
-                    .collect();
-                names
-                    .into_iter()
-                    .filter_map(|name| {
-                        by_name
-                            .get(name.as_str())
-                            .filter(|p| !p.is_empty())
-                            .map(|p| (*p).to_string())
-                    })
-                    .collect()
+                Err(err) => {
+                    tracing::debug!(
+                        target: "coco_memory::recall",
+                        error = %err,
+                        "structured-output ranker hard-failed; falling back to forced-tool path"
+                    );
+                }
             }
-            Err(err) => {
-                // TS parity: stay silent on ranker failure rather than
-                // surfacing arbitrary newest-first content.
-                tracing::debug!("memory recall ranker failed, suppressing: {err}");
-                return Vec::new();
+        }
+        let names: Vec<String> = match attempt_names {
+            Some(v) => v,
+            None => {
+                // Forced-tool fallback: synthetic `select_memories`
+                // tool with the recall schema as `input_schema` —
+                // every provider supports `tool_choice = { type:
+                // "tool", name: "select_memories" }`.
+                let tool = SideQueryToolDef {
+                    name: RECALL_TOOL_NAME.into(),
+                    description:
+                        "Return up to 5 memory filenames most relevant to the user's query.".into(),
+                    input_schema: recall_schema,
+                };
+                let request = SideQueryRequest::with_forced_tool(
+                    SELECT_MEMORIES_SYSTEM_PROMPT,
+                    &user_prompt,
+                    tool,
+                    RECALL_QUERY_SOURCE,
+                )
+                .with_model_role(ModelRole::Memory)
+                .with_skip_system_prefix(true);
+                match handle.query(request).await {
+                    Ok(resp) => match extract_recall_selection(&resp) {
+                        RecallSelection::Parsed(v) => v,
+                        RecallSelection::Malformed => {
+                            tracing::debug!(
+                                target: "coco_memory::recall",
+                                "forced-tool ranker also returned malformed response; \
+                                 surfacing empty recall"
+                            );
+                            return Vec::new();
+                        }
+                    },
+                    Err(err) => {
+                        // TS parity: stay silent on ranker failure rather than
+                        // surfacing arbitrary newest-first content.
+                        tracing::debug!(
+                            target: "coco_memory::recall",
+                            error = %err,
+                            "memory recall ranker (forced-tool fallback) failed"
+                        );
+                        return Vec::new();
+                    }
+                }
             }
         };
+
+        // Ranker returns filenames; resolve to absolute paths by
+        // matching against the scanned manifest via a hash index —
+        // O(k) instead of O(n·k).
+        let by_name: std::collections::HashMap<&str, &str> = scanned
+            .iter()
+            .map(|m| (m.filename.as_str(), m.path.to_str().unwrap_or("")))
+            .collect();
+        let selected: Vec<String> = names
+            .into_iter()
+            .filter_map(|name| {
+                by_name
+                    .get(name.as_str())
+                    .filter(|p| !p.is_empty())
+                    .map(|p| (*p).to_string())
+            })
+            .collect();
 
         load_relevant_memories(&selected, &self.recall_state)
     }

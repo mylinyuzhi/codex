@@ -506,6 +506,9 @@ SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "Sy
 # Tool message content parts.
 ToolContentPart = Union["ToolResultPart", "ToolApprovalResponsePart"]
 
+# Structured cause for an invalid tool call. Drives the wrap prefix
+ToolInputInvalidReason = dict[str, Any]
+
 # Content of a tool result.
 ToolResultContent = dict[str, Any]
 
@@ -2349,6 +2352,8 @@ class ToolCallPart(BaseModel):
     input: Any
     toolCallId: str
     toolName: str
+    invalid: bool = False
+    invalidReason: ToolInputInvalidReason | None = None
     providerExecuted: bool | None = None
     providerMetadata: ProviderMetadata | None = None
 

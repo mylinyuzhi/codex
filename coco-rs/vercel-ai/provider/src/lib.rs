@@ -112,6 +112,7 @@ pub use content::SharedV4ProviderReference;
 pub use content::TextPart;
 pub use content::ToolCallPart;
 pub use content::ToolContentPart;
+pub use content::ToolInputInvalidReason;
 pub use content::ToolResultContent;
 pub use content::ToolResultContentPart;
 pub use content::ToolResultPart;

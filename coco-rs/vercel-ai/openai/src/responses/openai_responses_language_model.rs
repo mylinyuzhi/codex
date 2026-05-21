@@ -552,10 +552,11 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     namespace,
                 } => {
                     has_function_call = true;
-                    let input: Value = arguments
-                        .as_deref()
-                        .and_then(|a| serde_json::from_str(a).ok())
-                        .unwrap_or(Value::Null);
+                    let tool_name = name.clone().unwrap_or_default();
+                    let parsed_input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
+                        arguments.as_deref().unwrap_or(""),
+                        &tool_name,
+                    );
                     // TS upstream #14789: surface the function_call's
                     // `namespace` (set when a server-executed
                     // tool_search dispatched to a deferred tool) under
@@ -577,25 +578,30 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     };
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: call_id.clone().unwrap_or_default(),
-                        tool_name: name.clone().unwrap_or_default(),
-                        input,
+                        tool_name,
+                        input: parsed_input,
                         provider_executed: None,
                         provider_metadata,
+                        invalid: false,
+                        invalid_reason: None,
                     }));
                 }
                 ResponseOutputItem::CustomToolCall {
                     id, name, input, ..
                 } => {
                     has_function_call = true;
-                    let parsed_input: Value = input
-                        .as_deref()
-                        .and_then(|a| serde_json::from_str(a).ok())
-                        .unwrap_or(Value::Null);
+                    let tool_name = name.clone().unwrap_or_default();
+                    let parsed_input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
+                        input.as_deref().unwrap_or(""),
+                        &tool_name,
+                    );
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: id.clone().unwrap_or_default(),
-                        tool_name: name.clone().unwrap_or_default(),
+                        tool_name,
                         input: parsed_input,
                         provider_executed: Some(true),
+                        invalid: false,
+                        invalid_reason: None,
                         provider_metadata: None,
                     }));
                 }
@@ -638,6 +644,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input: json!({ "type": "web_search" }),
                         provider_executed: Some(true),
                         provider_metadata: None,
+                        invalid: false,
+                        invalid_reason: None,
                     }));
                 }
                 ResponseOutputItem::FileSearchCall { id, results, .. } => {
@@ -653,6 +661,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input: json!({ "type": "file_search" }),
                         provider_executed: Some(true),
                         provider_metadata: meta,
+                        invalid: false,
+                        invalid_reason: None,
                     }));
                 }
                 ResponseOutputItem::CodeInterpreterCall {
@@ -665,6 +675,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input: json!({ "type": "code_interpreter", "code": code }),
                         provider_executed: Some(true),
                         provider_metadata: None,
+                        invalid: false,
+                        invalid_reason: None,
                     }));
                     // Emit tool result if outputs are present
                     if let Some(outs) = outputs {
@@ -685,6 +697,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input: json!({ "type": "image_generation" }),
                         provider_executed: Some(true),
                         provider_metadata: None,
+                        invalid: false,
+                        invalid_reason: None,
                     }));
                     if let Some(res) = result {
                         content.push(AssistantContentPart::ToolResult(
@@ -723,6 +737,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         tool_name: name.clone().unwrap_or_default(),
                         input: parsed_args,
                         provider_executed: Some(true),
+                        invalid: false,
+                        invalid_reason: None,
                         provider_metadata: meta,
                     }));
                     // Emit result or error
@@ -768,6 +784,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         tool_name: "local_shell".into(),
                         input: action.clone().unwrap_or(Value::Null),
                         provider_executed: Some(true),
+                        invalid: false,
+                        invalid_reason: None,
                         provider_metadata: None,
                     }));
                 }
@@ -784,6 +802,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         tool_name: "shell".into(),
                         input: action.clone().unwrap_or(Value::Null),
                         provider_executed: Some(true),
+                        invalid: false,
+                        invalid_reason: None,
                         provider_metadata: None,
                     }));
                     if let Some(outs) = output {
@@ -807,6 +827,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         tool_name: "apply_patch".into(),
                         input: operation.clone().unwrap_or(Value::Null),
                         provider_executed: Some(true),
+                        invalid: false,
+                        invalid_reason: None,
                         provider_metadata: None,
                     }));
                 }
@@ -844,6 +866,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input,
                         provider_executed: if is_hosted { Some(true) } else { None },
                         provider_metadata: pm,
+                        invalid: false,
+                        invalid_reason: None,
                     }));
                 }
                 ResponseOutputItem::ToolSearchOutput {

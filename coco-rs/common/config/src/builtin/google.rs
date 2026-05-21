@@ -39,6 +39,11 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                 Capability::Streaming,
                 Capability::ToolCalling,
                 Capability::Vision,
+                // Gemini natively supports `responseMimeType:
+                // "application/json"` + `responseSchema`. The
+                // `vercel-ai-google` adapter emits both when
+                // `response_format: ResponseFormat::Json` is set.
+                Capability::StructuredOutput,
                 Capability::ExtendedThinking,
                 Capability::AdaptiveThinking,
                 Capability::ParallelToolCalls,

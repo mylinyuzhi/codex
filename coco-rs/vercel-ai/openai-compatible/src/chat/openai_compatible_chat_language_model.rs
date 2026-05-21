@@ -299,11 +299,15 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
             )));
         }
 
-        // Tool calls
+        // Tool calls — route raw arguments through `llm_json`-backed
+        // repair; fall back to `Value::Object({})` on failure so
+        // schema validation reports missing fields.
         if let Some(ref tool_calls) = choice.message.tool_calls {
             for tc in tool_calls {
-                let input: serde_json::Value =
-                    serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                let input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
+                    &tc.function.arguments,
+                    &tc.function.name,
+                );
 
                 // Extract thought_signature from extra_content.google.thought_signature
                 let tc_provider_metadata = tc
@@ -334,6 +338,8 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
                     tool_name: tc.function.name.clone(),
                     input,
                     provider_executed: None,
+                    invalid: false,
+                    invalid_reason: None,
                     provider_metadata: tc_provider_metadata,
                 }));
             }

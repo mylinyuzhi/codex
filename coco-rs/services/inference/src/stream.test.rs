@@ -57,6 +57,8 @@ async fn synthetic_stream_emits_events_in_content_order() {
             input: serde_json::json!({"command": "echo hi"}),
             provider_executed: None,
             provider_metadata: None,
+            invalid: false,
+            invalid_reason: None,
         }),
     ];
 
@@ -285,6 +287,8 @@ async fn snapshot_preserves_provider_metadata_on_every_variant() {
             input: serde_json::json!({"command": "ls"}),
             provider_executed: None,
             provider_metadata: Some(tool_meta.clone()),
+            invalid: false,
+            invalid_reason: None,
         }),
     ];
 
@@ -559,6 +563,8 @@ async fn snapshot_none_close_does_not_overwrite_some_start() {
                 provider_executed: None,
                 dynamic: None,
                 provider_metadata: None, // ← critical: None close
+                invalid: false,
+                invalid_reason: None,
             },
         )),
         Ok(LanguageModelV4StreamPart::Finish {
@@ -654,6 +660,8 @@ async fn tool_input_round_trips_through_synthetic_stream() {
         tool_name: "Bash".into(),
         input: original_input.clone(),
         provider_executed: None,
+        invalid: false,
+        invalid_reason: None,
         provider_metadata: None,
     })];
 

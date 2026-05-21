@@ -974,6 +974,10 @@ impl QueryEngine {
                 // (e.g. the auto-mode classifier's stage-1 `</block>`
                 // terminator).
                 stop_sequences: None,
+                // Native structured-output is a side-query / helper
+                // concept; the main agent loop never asks the model
+                // to emit a single JSON object.
+                response_format: None,
             };
 
             // ── Phase 9: Streaming tool scheduling ──
@@ -1462,42 +1466,26 @@ impl QueryEngine {
                             && let Some(buf) = tool_buffers.get(&id)
                             && buf.complete
                         {
-                            // Strict parse → repair fallback (trailing
-                            // commas, unquoted keys, unclosed strings /
-                            // brackets). Models occasionally emit these;
-                            // the repair pass turns "drop the call" into
-                            // "run with the obvious intent".
-                            let input: serde_json::Value = match coco_tool_runtime::parse_tool_input(
-                                &buf.input_json,
-                            ) {
-                                Ok((v, outcome)) => {
-                                    if let coco_tool_runtime::ParseOutcome::Repaired {
-                                        repaired_with,
-                                    } = outcome
-                                    {
-                                        tracing::info!(
-                                            tool_call_id = %id,
-                                            tool_name = %buf.tool_name,
-                                            repaired_with = ?repaired_with,
-                                            "streaming tool input JSON repaired before execution",
-                                        );
-                                    }
-                                    v
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        tool_call_id = %id,
-                                        tool_name = %buf.tool_name,
-                                        error = %e,
-                                        "streaming tool input JSON parse failed; dropping call"
-                                    );
-                                    continue;
-                                }
-                            };
+                            // Parse the accumulated `input_json` buffer
+                            // through the shared `llm_json` repair
+                            // helper, falling back to `Value::Object({})`
+                            // on failure. Mirrors TS Claude Code's
+                            // `parsed ?? {}` in `utils/messages.ts:2694`
+                            // — let schema validation in
+                            // `tool_call_preparer` report specific
+                            // missing fields instead of a generic
+                            // "JSON broken". `invalid` stays `false`
+                            // here; schema validation sets it on schema
+                            // violation.
+                            let parsed_input =
+                                crate::tool_input_parse::parse_tool_arguments_or_empty(
+                                    &buf.input_json,
+                                    &buf.tool_name,
+                                );
                             let input =
                                 crate::tool_input_normalizer::normalize_observable_tool_input(
                                     &buf.tool_name,
-                                    input,
+                                    parsed_input,
                                     crate::tool_input_normalizer::ToolInputNormalizationContext {
                                         session_id: Some(&self.config.session_id),
                                         plans_dir: plans_dir.as_deref(),
@@ -1505,6 +1493,7 @@ impl QueryEngine {
                                             .agent_id
                                             .as_ref()
                                             .map(coco_types::AgentId::as_str),
+                                        cwd: None,
                                     },
                                 );
                             let tcp = ToolCallPart {
@@ -1512,6 +1501,8 @@ impl QueryEngine {
                                 tool_name: buf.tool_name.clone(),
                                 input,
                                 provider_executed: None,
+                                invalid: false,
+                                invalid_reason: None,
                                 provider_metadata: None,
                             };
                             let slice = std::slice::from_ref(&tcp);
@@ -1771,6 +1762,8 @@ impl QueryEngine {
                                         is_input_complete: buf.complete,
                                         is_complete: false,
                                         provider_metadata: None,
+                                        invalid: false,
+                                        invalid_reason: None,
                                     },
                                 )
                             })
@@ -1783,6 +1776,7 @@ impl QueryEngine {
                                 session_id: Some(&self.config.session_id),
                                 plans_dir: plans_dir.as_deref(),
                                 agent_id: self.config.agent_id.as_deref(),
+                                cwd: None,
                             },
                         );
                         if !content_parts.is_empty() {
@@ -1988,6 +1982,7 @@ impl QueryEngine {
                     session_id: Some(&self.config.session_id),
                     plans_dir: plans_dir.as_deref(),
                     agent_id: self.config.agent_id.as_deref(),
+                    cwd: None,
                 },
             );
 
@@ -2579,42 +2574,35 @@ fn assistant_content_from_snapshot(
                     warn!(tool_call_id = %tc.id, "tool call did not complete");
                     continue;
                 }
-                let input: serde_json::Value =
-                    match coco_tool_runtime::parse_tool_input(&tc.input_json) {
-                        Ok((v, outcome)) => {
-                            if let coco_tool_runtime::ParseOutcome::Repaired { repaired_with } =
-                                outcome
-                            {
-                                tracing::info!(
-                                    tool_call_id = %tc.id,
-                                    tool_name = %tc.tool_name,
-                                    repaired_with = ?repaired_with,
-                                    "tool input JSON repaired before execution",
-                                );
-                            }
-                            v
-                        }
-                        Err(e) => {
-                            warn!(
-                                tool_call_id = %tc.id,
-                                tool_name = %tc.tool_name,
-                                error = %e,
-                                raw_input = %tc.input_json,
-                                "tool input JSON parse failed"
-                            );
-                            continue;
-                        }
-                    };
+                // Parse with repair, falling back to `Value::Object({})`
+                // on failure. See streaming-path commentary above —
+                // schema validation reports specific missing
+                // fields rather than a generic "JSON broken", and the
+                // tool_use/tool_result pairing invariant is preserved
+                // because we never drop the call.
+                let parsed_input = crate::tool_input_parse::parse_tool_arguments_or_empty(
+                    &tc.input_json,
+                    &tc.tool_name,
+                );
                 let input = crate::tool_input_normalizer::normalize_observable_tool_input(
                     &tc.tool_name,
-                    input,
+                    parsed_input,
                     normalizer_ctx,
                 );
+                // Carry the wire-level `invalid` + `invalid_reason`
+                // through reconstruction. Provider adapters set these
+                // when wire parsing detects an unrecoverable JSON parse
+                // (Anthropic streaming `content_block_stop` flush,
+                // etc.); without this carry-through the agent loop's
+                // synthetic `<tool_use_error>` wrap would fall back to
+                // a generic message.
                 let tcp = ToolCallPart {
                     tool_call_id: tc.id.clone(),
                     tool_name: tc.tool_name.clone(),
                     input,
                     provider_executed: tc.provider_executed,
+                    invalid: tc.invalid,
+                    invalid_reason: tc.invalid_reason.clone(),
                     provider_metadata: tc.provider_metadata.clone(),
                 };
                 content_parts.push(AssistantContentPart::ToolCall(tcp.clone()));

@@ -110,6 +110,7 @@ pub use vercel_ai_provider::LanguageModelV4GenerateResult as LanguageModelGenera
 pub use vercel_ai_provider::LanguageModelV4StreamResult as LanguageModelStreamResult;
 pub use vercel_ai_provider::LanguageModelV4Tool as LanguageModelTool;
 pub use vercel_ai_provider::ProviderV4 as Provider;
+pub use vercel_ai_provider::ResponseFormat;
 pub use vercel_ai_provider::language_model::v4::LanguageModelV4FunctionTool as LanguageModelFunctionTool;
 
 // Provider-internal content variants not part of the DTO seam (used by

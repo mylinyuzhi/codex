@@ -64,6 +64,8 @@ fn converts_assistant_tool_call() {
             input: serde_json::json!({"city": "SF"}),
             provider_executed: None,
             provider_metadata: None,
+            invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];
@@ -287,6 +289,8 @@ fn tool_call_includes_thought_signature() {
             input: serde_json::json!({"query": "test"}),
             provider_executed: None,
             provider_metadata: Some(ProviderMetadata(meta)),
+            invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];
@@ -428,6 +432,8 @@ fn tool_call_spreads_part_metadata() {
             input: serde_json::json!({}),
             provider_executed: None,
             provider_metadata: Some(pm),
+            invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];

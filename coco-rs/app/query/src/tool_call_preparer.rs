@@ -7,6 +7,7 @@ use coco_hooks::orchestration::OrchestrationContext;
 use coco_inference::ApiClient;
 use coco_inference::QueryParams;
 use coco_llm_types::ToolCallPart;
+use coco_llm_types::ToolInputInvalidReason;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
@@ -128,6 +129,49 @@ pub(crate) async fn prepare_one_pending_tool_call(
 
     let tool_id = prepared.tool_id;
     let tool = prepared.tool;
+
+    // schema validation already ran inside
+    // `prepare_committed_tool_call` (tool_runner.rs:82-123) — it
+    // returns `None` on `invalid=true` after emitting the synthetic
+    // `<tool_use_error>...>` tool_result, so by reaching this point
+    // we know the call is structurally valid. No duplicate validation
+    // here; the remaining short-circuit handles the rare case where
+    // wire parsing set `invalid=true` AFTER `prepare_committed_tool_call`
+    // returned (cannot happen in current code paths, but keeps the
+    // invariant local).
+    if tc.invalid {
+        let message = match &tc.invalid_reason {
+            Some(ToolInputInvalidReason::SchemaViolation { message }) => {
+                format!("<tool_use_error>InputValidationError: {message}</tool_use_error>")
+            }
+            Some(ToolInputInvalidReason::NoSuchTool { tool_name }) => {
+                format!("<tool_use_error>No such tool available: {tool_name}</tool_use_error>")
+            }
+            Some(ToolInputInvalidReason::JsonParseFailed { error, .. }) => {
+                format!(
+                    "<tool_use_error>The tool call arguments could not be parsed as JSON: {error}. \
+                     Please retry with valid JSON.</tool_use_error>"
+                )
+            }
+            None => {
+                // Legacy path: invalid=true with no structured reason.
+                "<tool_use_error>The tool call arguments could not be parsed as JSON, \
+                 even after repair. Please retry with valid JSON arguments.</tool_use_error>"
+                    .to_string()
+            }
+        };
+        crate::helpers::complete_tool_call_with_error_mode(
+            args.event_tx,
+            args.history,
+            &tc.tool_call_id,
+            &tc.tool_name,
+            &tool_id,
+            &message,
+            args.completion_event_mode,
+        )
+        .await;
+        return None;
+    }
     // `tc.input` is already the observable input — both engine paths run
     // `normalize_observable_tool_input` when building this `ToolCallPart`.
 
@@ -536,6 +580,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                 // emit `<thinking>` and `<reason>` freely. TS parity:
                 // `yoloClassifier.ts:792`.
                 stop_sequences: req.stop_sequences,
+                response_format: None,
             };
             match client.query(&params).await {
                 Ok(result) => {

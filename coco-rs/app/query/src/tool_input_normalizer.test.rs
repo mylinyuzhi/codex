@@ -29,6 +29,7 @@ fn test_normalize_observable_tool_input_exit_injects_plan_and_path() {
             session_id: Some(session_id),
             plans_dir: Some(&plans_dir),
             agent_id: None,
+            cwd: None,
         },
     );
 
@@ -55,6 +56,7 @@ fn test_normalize_observable_tool_input_exit_overrides_stale_plan() {
             session_id: Some(session_id),
             plans_dir: Some(&plans_dir),
             agent_id: Some("agent-1"),
+            cwd: None,
         },
     );
 
@@ -79,8 +81,102 @@ fn test_normalize_observable_tool_input_exit_without_plan_unchanged() {
             session_id: Some("missing-plan"),
             plans_dir: Some(&plans_dir),
             agent_id: None,
+            cwd: None,
         },
     );
 
     assert_eq!(normalized, input);
+}
+
+#[test]
+fn test_bash_strips_cd_cwd_prefix() {
+    let normalized = normalize_observable_tool_input(
+        coco_types::ToolName::Bash.as_str(),
+        json!({"command": "cd /repo && ls -la"}),
+        ToolInputNormalizationContext {
+            cwd: Some("/repo"),
+            ..ToolInputNormalizationContext::default()
+        },
+    );
+    assert_eq!(normalized, json!({"command": "ls -la"}));
+}
+
+#[test]
+fn test_bash_skips_strip_when_cwd_unset() {
+    let input = json!({"command": "cd /repo && ls -la"});
+    let normalized = normalize_observable_tool_input(
+        coco_types::ToolName::Bash.as_str(),
+        input.clone(),
+        ToolInputNormalizationContext::default(),
+    );
+    assert_eq!(normalized, input);
+}
+
+#[test]
+fn test_bash_skips_strip_when_prefix_does_not_match() {
+    let normalized = normalize_observable_tool_input(
+        coco_types::ToolName::Bash.as_str(),
+        json!({"command": "cd /other && ls"}),
+        ToolInputNormalizationContext {
+            cwd: Some("/repo"),
+            ..ToolInputNormalizationContext::default()
+        },
+    );
+    assert_eq!(normalized, json!({"command": "cd /other && ls"}));
+}
+
+#[test]
+fn test_bash_rewrites_double_backslash_semicolon() {
+    let normalized = normalize_observable_tool_input(
+        coco_types::ToolName::Bash.as_str(),
+        json!({"command": r"find . -name '*.tmp' -exec rm {} \\;"}),
+        ToolInputNormalizationContext::default(),
+    );
+    assert_eq!(
+        normalized,
+        json!({"command": r"find . -name '*.tmp' -exec rm {} \;"})
+    );
+}
+
+#[test]
+fn test_task_output_maps_legacy_agent_id() {
+    let normalized = normalize_observable_tool_input(
+        coco_types::ToolName::TaskOutput.as_str(),
+        json!({"agentId": "agent-42", "block": false}),
+        ToolInputNormalizationContext::default(),
+    );
+    assert_eq!(normalized, json!({"task_id": "agent-42", "block": false}));
+}
+
+#[test]
+fn test_task_output_maps_legacy_bash_id() {
+    let normalized = normalize_observable_tool_input(
+        coco_types::ToolName::TaskOutput.as_str(),
+        json!({"bash_id": "bash-7"}),
+        ToolInputNormalizationContext::default(),
+    );
+    assert_eq!(normalized, json!({"task_id": "bash-7"}));
+}
+
+#[test]
+fn test_task_output_existing_task_id_wins() {
+    let normalized = normalize_observable_tool_input(
+        coco_types::ToolName::TaskOutput.as_str(),
+        json!({"task_id": "modern", "agentId": "ignored"}),
+        ToolInputNormalizationContext::default(),
+    );
+    assert_eq!(
+        normalized,
+        json!({"task_id": "modern", "agentId": "ignored"})
+    );
+}
+
+#[test]
+fn test_task_output_wait_up_to_to_timeout_ms() {
+    let normalized = normalize_observable_tool_input(
+        coco_types::ToolName::TaskOutput.as_str(),
+        json!({"task_id": "t", "wait_up_to": 15}),
+        ToolInputNormalizationContext::default(),
+    );
+    assert_eq!(normalized, json!({"task_id": "t", "timeout": 15_000}));
 }

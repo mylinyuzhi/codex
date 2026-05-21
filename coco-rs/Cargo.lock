@@ -255,6 +255,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "assert-json-diff"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47e4f2b81832e72834d7518d8487a0396a28cc408186a2e8854c0f98011faf12"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "assert_cmd"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1356,6 +1366,7 @@ dependencies = [
  "coco-llm-types",
  "coco-otel",
  "coco-types",
+ "coco-utils-json-repair",
  "futures",
  "pretty_assertions",
  "reqwest",
@@ -1501,6 +1512,7 @@ dependencies = [
  "coco-shell-parser",
  "coco-tool-runtime",
  "coco-types",
+ "coco-utils-json-repair",
  "filetime",
  "libc",
  "notify 8.2.0",
@@ -1678,6 +1690,7 @@ dependencies = [
  "coco-tool-runtime",
  "coco-tools",
  "coco-types",
+ "coco-utils-json-repair",
  "lru 0.16.4",
  "once_cell",
  "pretty_assertions",
@@ -2108,6 +2121,7 @@ dependencies = [
  "coco-subagent",
  "coco-system-reminder",
  "coco-types",
+ "coco-utils-json-repair",
  "futures",
  "jsonschema",
  "pretty_assertions",
@@ -2278,6 +2292,16 @@ dependencies = [
  "mime_guess",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "coco-utils-json-repair"
+version = "0.0.0"
+dependencies = [
+ "llm_json",
+ "pretty_assertions",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2687,6 +2711,24 @@ dependencies = [
  "sha2",
  "zeroize",
 ]
+
+[[package]]
+name = "deadpool"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0be2b1d1d6ec8d846f05e137292d0b89133caf95ef33695424c09568bdd39b1b"
+dependencies = [
+ "deadpool-runtime",
+ "lazy_static",
+ "num_cpus",
+ "tokio",
+]
+
+[[package]]
+name = "deadpool-runtime"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
 name = "deltae"
@@ -4554,6 +4596,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
+name = "llm_json"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e3a81b4dfc9cbadf5adde6e601f1b8ec0806d2b41da589e40cdc082e8e223b2"
+dependencies = [
+ "clap",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5169,6 +5222,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "num_cpus"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
+dependencies = [
+ "hermit-abi",
+ "libc",
 ]
 
 [[package]]
@@ -8596,6 +8659,7 @@ dependencies = [
  "tracing",
  "vercel-ai-provider",
  "vercel-ai-provider-utils",
+ "wiremock",
 ]
 
 [[package]]
@@ -8632,6 +8696,7 @@ dependencies = [
  "tracing",
  "vercel-ai-provider",
  "vercel-ai-provider-utils",
+ "wiremock",
 ]
 
 [[package]]
@@ -8655,6 +8720,7 @@ dependencies = [
  "tracing",
  "vercel-ai-provider",
  "vercel-ai-provider-utils",
+ "wiremock",
 ]
 
 [[package]]
@@ -8679,6 +8745,7 @@ dependencies = [
  "tracing",
  "vercel-ai-provider",
  "vercel-ai-provider-utils",
+ "wiremock",
 ]
 
 [[package]]
@@ -8708,8 +8775,10 @@ dependencies = [
  "bytes",
  "futures",
  "jsonschema",
+ "llm_json",
  "mime",
  "once_cell",
+ "pretty_assertions",
  "rand 0.9.4",
  "regex",
  "reqwest",
@@ -9501,6 +9570,29 @@ name = "winsafe"
 version = "0.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
+
+[[package]]
+name = "wiremock"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08db1edfb05d9b3c1542e521aea074442088292f00b5f28e435c714a98f85031"
+dependencies = [
+ "assert-json-diff",
+ "base64 0.22.1",
+ "deadpool",
+ "futures",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "log",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "wit-bindgen"

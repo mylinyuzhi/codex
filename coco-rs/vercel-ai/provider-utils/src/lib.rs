@@ -50,6 +50,7 @@ pub mod generate_id;
 pub mod headers;
 pub mod inject_json_instruction;
 pub mod json;
+pub mod json_repair;
 pub mod json_schema_derive;
 pub mod load_api_key;
 pub mod load_setting;
@@ -169,6 +170,9 @@ pub use inject_json_instruction::inject_json_array_instruction;
 pub use inject_json_instruction::inject_json_instruction;
 pub use inject_json_instruction::inject_json_instruction_with_description;
 
+pub use json_repair::RepairOutcome;
+pub use json_repair::parse_tool_arguments_or_empty;
+pub use json_repair::parse_with_repair;
 pub use json_schema_derive::GeneratedSchema;
 pub use json_schema_derive::add_required_fields;
 pub use json_schema_derive::json_schema_from_type;

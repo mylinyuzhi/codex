@@ -166,6 +166,141 @@ impl ToolSchemaValidator {
             }
         }
     }
+
+    /// Validate and return **structured** issues so callers can format
+    /// them TS-parity (e.g. `formatZodValidationError`-style output).
+    ///
+    /// Same cache as [`Self::validate`]. Returns `Ok(())` when the
+    /// input matches, `Err(Vec<SchemaIssue>)` carrying classified
+    /// issues otherwise. Schema-compile failures still raise
+    /// [`SchemaValidationError::SchemaCompileFailed`] via the inner
+    /// `Result`'s `Err` variant.
+    pub async fn validate_collect(
+        &self,
+        tool: &dyn DynTool,
+        input: &Value,
+    ) -> Result<Result<(), Vec<SchemaIssue>>, SchemaValidationError> {
+        let tool_id = tool.id();
+        // Fast path
+        let validator = {
+            let cache = self.cache.read().await;
+            cache.get(&tool_id).cloned()
+        };
+        let validator = if let Some(v) = validator {
+            v
+        } else {
+            // Slow path: compile + insert
+            let schema = effective_tool_schema(tool);
+            let compiled = jsonschema::JSONSchema::compile(&schema).map_err(|e| {
+                SchemaValidationError::SchemaCompileFailed {
+                    message: e.to_string(),
+                }
+            })?;
+            let compiled = Arc::new(compiled);
+            let mut cache = self.cache.write().await;
+            cache.entry(tool_id).or_insert(compiled).clone()
+        };
+
+        match validator.validate(input) {
+            Ok(()) => Ok(Ok(())),
+            Err(errors) => {
+                let issues = errors.map(SchemaIssue::from_jsonschema).collect::<Vec<_>>();
+                Ok(Err(issues))
+            }
+        }
+    }
+}
+
+/// Structured form of a JSON Schema validation issue, captured at the
+/// `core/tool-runtime` boundary so higher layers
+/// (`app/query::tool_input_validate::format_schema_error`) can produce
+/// TS-parity error text without depending on `jsonschema` directly.
+///
+/// Each variant maps onto a `formatZodValidationError`
+/// (`utils/toolErrors.ts:66-130`) output line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaIssue {
+    /// Required field is missing from the input. `path` is the
+    /// JSON Pointer of the parent object; `field` is the missing key.
+    MissingRequired { path: String, field: String },
+    /// Input contains a field not in the schema.
+    UnexpectedField { path: String, field: String },
+    /// Field type does not match the schema.
+    TypeMismatch {
+        path: String,
+        expected: String,
+        received: String,
+    },
+    /// Catch-all for other validation failures (enum, pattern,
+    /// min/max length, etc). `message` is the raw `jsonschema`
+    /// rendering.
+    Other { path: String, message: String },
+}
+
+impl SchemaIssue {
+    /// Classify a `jsonschema::ValidationError` into a `SchemaIssue`.
+    fn from_jsonschema(err: jsonschema::ValidationError<'_>) -> Self {
+        use jsonschema::error::ValidationErrorKind;
+
+        let path = err.instance_path.to_string();
+        match &err.kind {
+            ValidationErrorKind::Required { property } => SchemaIssue::MissingRequired {
+                path,
+                field: property
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| property.to_string()),
+            },
+            ValidationErrorKind::AdditionalProperties { unexpected } => {
+                // jsonschema lumps unexpected keys into one error;
+                // split into one issue per key so the formatter can
+                // render them line-by-line.
+                if let Some(first) = unexpected.first() {
+                    SchemaIssue::UnexpectedField {
+                        path,
+                        field: first.clone(),
+                    }
+                } else {
+                    SchemaIssue::Other {
+                        path,
+                        message: err.to_string(),
+                    }
+                }
+            }
+            ValidationErrorKind::Type { kind } => {
+                let expected = format_type_kind(kind);
+                let received = json_type_name(err.instance.as_ref());
+                SchemaIssue::TypeMismatch {
+                    path,
+                    expected,
+                    received: received.into(),
+                }
+            }
+            _ => SchemaIssue::Other {
+                path,
+                message: err.to_string(),
+            },
+        }
+    }
+}
+
+fn format_type_kind(kind: &jsonschema::error::TypeKind) -> String {
+    use jsonschema::error::TypeKind;
+    match kind {
+        TypeKind::Single(t) => format!("{t:?}").to_lowercase(),
+        TypeKind::Multiple(_) => "multiple".to_string(),
+    }
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 #[cfg(test)]

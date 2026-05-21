@@ -407,11 +407,18 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
             }));
         }
 
-        // Tool calls
+        // Tool calls — route raw `arguments` through `llm_json`-backed
+        // repair. On parse failure, fall back to `Value::Object({})`
+        // (not `invalid = true`) so schema validation in
+        // `app/query` reports the specific missing fields instead of
+        // just "JSON broken". Mirrors TS Claude Code's `parsed ?? {}`
+        // in `utils/messages.ts:2694`.
         if let Some(ref tool_calls) = choice.message.tool_calls {
             for tc in tool_calls {
-                let input: serde_json::Value =
-                    serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                let input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
+                    &tc.function.arguments,
+                    &tc.function.name,
+                );
                 let tool_call_id = tc
                     .id
                     .clone()
@@ -421,6 +428,8 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
                     tool_name: tc.function.name.clone(),
                     input,
                     provider_executed: None,
+                    invalid: false,
+                    invalid_reason: None,
                     provider_metadata: None,
                 }));
             }

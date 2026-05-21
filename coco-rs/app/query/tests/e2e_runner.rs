@@ -246,6 +246,8 @@ fn make_tool_result(tool_calls: &[ResolvedToolCall], call_idx: i32) -> LanguageM
                 input: tc.input.clone(),
                 provider_executed: None,
                 provider_metadata: None,
+                invalid: false,
+                invalid_reason: None,
             })
         })
         .collect();
@@ -277,6 +279,8 @@ fn make_text_and_tool_result(
             input: tc.input.clone(),
             provider_executed: None,
             provider_metadata: None,
+            invalid: false,
+            invalid_reason: None,
         }));
     }
 

@@ -540,7 +540,7 @@ pub trait Tool: Send + Sync + 'static {
     }
 
     /// Whether this tool is **statically** read-only — known to be safe
-    /// without inspecting input. Used by Layer 3 (`PermissionMode::Plan`)
+    /// without inspecting input. Used by error wrap (`PermissionMode::Plan`)
     /// to filter the schema at definitions-time, before any input exists.
     /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` §7.
     ///

@@ -212,6 +212,7 @@ impl HookLlmHandle for QueryHookLlm {
             cache: None,
             agentic: false,
             stop_sequences: None,
+            response_format: None,
         };
 
         let result = tokio::time::timeout(timeout, client.query(&params)).await;

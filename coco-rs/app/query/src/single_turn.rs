@@ -50,6 +50,7 @@ pub async fn single_turn_query(
         agentic: false,
         cache: None,
         stop_sequences: None,
+        response_format: None,
     };
 
     let result = client.query(&params).await.map_err(|e| {

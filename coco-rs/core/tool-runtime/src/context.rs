@@ -122,7 +122,7 @@ pub struct ToolUseContext {
     /// Centralized feature gates. See
     /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub features: Arc<Features>,
-    /// Layer 2 of the tool-filter pipeline — extra tools the active
+    /// schema validation of the tool-filter pipeline — extra tools the active
     /// model adds beyond the baseline + baseline tools it excludes.
     /// Resolved once at session start (or on `/model` switch).
     pub tool_overrides: Arc<ToolOverrides>,

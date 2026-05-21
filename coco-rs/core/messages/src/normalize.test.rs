@@ -1069,6 +1069,8 @@ mod pipeline_invariants {
             tool_name: coco_types::ToolName::ExitPlanMode.as_str().to_string(),
             input,
             provider_executed: None,
+            invalid: false,
+            invalid_reason: None,
             provider_metadata: None,
         })
     }

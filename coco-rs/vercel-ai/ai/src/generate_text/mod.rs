@@ -15,7 +15,6 @@ mod generate;
 mod generate_text_result;
 mod generated_file;
 mod output;
-mod parse_tool_call;
 mod prune_messages;
 mod reasoning_output;
 mod response_message;
@@ -24,7 +23,6 @@ mod step_result;
 mod stop_condition;
 mod stream_text;
 mod to_response_messages;
-mod tool_call_repair;
 mod tool_error;
 mod tool_output;
 
@@ -141,10 +139,6 @@ pub use output::json_output_with;
 pub use output::object_output;
 pub use output::text_output;
 
-// parse_tool_call
-pub use parse_tool_call::ParsedToolCall;
-pub use parse_tool_call::parse_tool_call_input;
-
 // prune_messages
 pub use prune_messages::PruneMessagesOptions;
 pub use prune_messages::ReasoningPruneMode;
@@ -199,15 +193,6 @@ pub use to_response_messages::build_tool_result_message as build_tool_msg;
 pub use to_response_messages::to_response_messages;
 pub use to_response_messages::to_response_messages_from_tool_calls;
 pub use to_response_messages::to_response_messages_with_text;
-
-// tool_call_repair
-pub use tool_call_repair::CustomRepairFunction;
-pub use tool_call_repair::JsonRepairFunction;
-pub use tool_call_repair::RepairResult;
-pub use tool_call_repair::ToolCallRepairFunction;
-pub use tool_call_repair::repair_tool_call;
-pub use tool_call_repair::repair_tool_calls;
-pub use tool_call_repair::validate_tool_call_for_repair;
 
 // tool_error
 pub use tool_error::ToolError;

@@ -69,6 +69,8 @@ fn test_extract_text_content_with_metadata() {
             input: json!({}),
             provider_executed: None,
             provider_metadata: None,
+            invalid: false,
+            invalid_reason: None,
         }),
     ];
 

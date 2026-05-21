@@ -28,6 +28,7 @@ fn params_for(prompt: Vec<LlmMessage>, source: &str) -> QueryParams {
         agentic: false,
         cache: None,
         stop_sequences: None,
+        response_format: None,
     }
 }
 

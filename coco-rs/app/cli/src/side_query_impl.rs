@@ -21,9 +21,12 @@ use coco_inference::ApiClient;
 use coco_inference::LanguageModelFunctionTool;
 use coco_inference::LanguageModelTool;
 use coco_inference::QueryParams;
+use coco_inference::ResponseFormat;
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
 use coco_tool_runtime::SideQuery;
+use coco_types::Capability;
+use coco_types::ModelRole;
 use coco_types::SideQueryRequest;
 use coco_types::SideQueryResponse;
 use coco_types::SideQueryRole;
@@ -143,6 +146,22 @@ impl SideQuery for SideQueryAdapter {
             )
         };
 
+        // Native structured-output spec. Translated into
+        // `vercel_ai_provider::ResponseFormat::Json`; the inference
+        // layer drops it when the resolved model lacks
+        // [`Capability::StructuredOutput`] (see
+        // `coco_inference::client::build_options_with_extra`), so the
+        // caller's `forced_tool` / `tools` path acts as the multi-LLM
+        // fallback.
+        let response_format = request
+            .output_format
+            .as_ref()
+            .map(|fmt| ResponseFormat::Json {
+                schema: Some(fmt.schema.clone()),
+                name: fmt.name.clone(),
+                description: fmt.description.clone(),
+            });
+
         let params = QueryParams {
             prompt,
             max_tokens: request.max_tokens.map(i64::from),
@@ -159,6 +178,7 @@ impl SideQuery for SideQueryAdapter {
             agentic: false,
             cache: None,
             stop_sequences: None,
+            response_format,
         };
 
         let result = client.query(&params).await.map_err(|e| {
@@ -182,6 +202,11 @@ impl SideQuery for SideQueryAdapter {
                     tool_uses.push(SideQueryToolUse {
                         name: tc.tool_name.clone(),
                         input: tc.input.clone(),
+                        // Propagate the adapter's parse-failure flag.
+                        // Recall (and any future caller) treats
+                        // `invalid: true` as a wire-malformed
+                        // response and falls back accordingly.
+                        invalid: tc.invalid,
                     });
                 }
                 _ => {}
@@ -227,5 +252,36 @@ impl SideQuery for SideQueryAdapter {
 
     fn model_id(&self) -> &str {
         self.default_client.model_id()
+    }
+
+    /// Resolve the model for `role` (or the Main role when `role` is
+    /// `None`) through the live registry and check its declared
+    /// capabilities. Returns `false` on any resolution failure so
+    /// callers degrade to the multi-LLM-safe path.
+    ///
+    /// Read-only `RwLock` access via `try_read` — the role-client
+    /// cache is only mutated by `resolve_client` during a hot-path
+    /// build, and that write is fast enough that contention here
+    /// would surface as a behavioral bug rather than a hot-loop;
+    /// blocking with `read()` is fine here because this method is
+    /// only called from preparation paths, not the streaming loop.
+    fn supports_capability(&self, role: Option<ModelRole>, capability: Capability) -> bool {
+        let resolved_role = role.unwrap_or(ModelRole::Main);
+        let Some(spec) = self.runtime_config.model_roles.get(resolved_role) else {
+            return false;
+        };
+        let Some(model) = self
+            .runtime_config
+            .model_registry
+            .resolve(&spec.provider, &spec.model_id)
+        else {
+            return false;
+        };
+        model
+            .info
+            .capabilities
+            .as_deref()
+            .unwrap_or(&[])
+            .contains(&capability)
     }
 }
