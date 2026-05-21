@@ -121,3 +121,442 @@ fn display_path_translates_json_pointer() {
     assert_eq!(display_path("/foo/bar"), "foo.bar");
     assert_eq!(display_path("/edits/0/old_string"), "edits[0].old_string");
 }
+
+// ---------------------------------------------------------------------------
+// Multi-provider, multi-tool-call integration matrix.
+//
+// Simulates the assistant turn that arrives at Layer 2: a batch of
+// `ToolCallPart`s whose `input` already came out of Layer 1
+// (`parse_tool_arguments_or_empty`). This is the exact shape every
+// adapter — OpenAI Chat / OpenAI Responses / OpenAI-compat /
+// Anthropic / Gemini — hands the agent loop, so the tests are
+// provider-agnostic by design. Each entry pins:
+//
+//   (provider-style malformation) → (Layer 1 outcome) → (Layer 2
+//   invalid_reason variant) → (formatted error message body)
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+use std::sync::Arc as StdArc;
+
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::traits::Tool;
+use coco_types::ToolId;
+use coco_types::ToolInputSchema;
+use coco_types::ToolName;
+
+use crate::tool_input_parse::parse_tool_arguments_or_empty;
+
+/// Minimal Tool mock that lets each test pin its own input schema.
+struct MockTool {
+    id: ToolId,
+    name: String,
+    schema: serde_json::Value,
+}
+
+impl MockTool {
+    fn new(name: ToolName, schema: serde_json::Value) -> Self {
+        Self {
+            id: ToolId::Builtin(name),
+            name: name.as_str().to_string(),
+            schema,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for MockTool {
+    fn id(&self) -> ToolId {
+        self.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self, _input: &serde_json::Value, _options: &DescriptionOptions) -> String {
+        String::new()
+    }
+    fn input_schema(&self) -> ToolInputSchema {
+        ToolInputSchema {
+            properties: HashMap::new(),
+        }
+    }
+    fn input_json_schema(&self) -> Option<serde_json::Value> {
+        Some(self.schema.clone())
+    }
+    fn is_read_only(&self, _input: &serde_json::Value) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &serde_json::Value) -> bool {
+        true
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &ToolUseContext,
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, ToolError> {
+        unreachable!("MockTool::execute should not run in validate tests")
+    }
+}
+
+fn bash_tool() -> StdArc<dyn Tool> {
+    StdArc::new(MockTool::new(
+        ToolName::Bash,
+        json!({
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+                "timeout": {"type": "number"},
+            },
+            "required": ["command"],
+            "additionalProperties": false,
+        }),
+    ))
+}
+
+fn read_tool() -> StdArc<dyn Tool> {
+    StdArc::new(MockTool::new(
+        ToolName::Read,
+        json!({
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["file_path"],
+            "additionalProperties": false,
+        }),
+    ))
+}
+
+fn mk_tc(name: &str, input: serde_json::Value) -> ToolCallPart {
+    ToolCallPart::new(format!("call_{name}"), name.to_string(), input)
+}
+
+/// Drive a raw `arguments` string through Layer 1 + Layer 2 the same
+/// way the adapter + tool_call_preparer do, then return the resulting
+/// `ToolCallPart` so tests can assert against `invalid_reason`.
+async fn run_pipeline(
+    raw_arguments: &str,
+    tool_name: &str,
+    tool: Option<&StdArc<dyn Tool>>,
+) -> ToolCallPart {
+    let input = parse_tool_arguments_or_empty(raw_arguments, tool_name);
+    let mut tc = mk_tc(tool_name, input);
+    let validator = coco_tool_runtime::ToolSchemaValidator::new();
+    validate_tool_call(&mut tc, tool, &validator).await;
+    tc
+}
+
+#[tokio::test]
+async fn matrix_openai_clean_arguments_pass_validation() {
+    let tool = read_tool();
+    let tc = run_pipeline(r#"{"file_path": "/tmp/x"}"#, "Read", Some(&tool)).await;
+    assert!(!tc.invalid);
+    assert!(tc.invalid_reason.is_none());
+    assert_eq!(tc.input, json!({"file_path": "/tmp/x"}));
+}
+
+#[tokio::test]
+async fn matrix_openai_trailing_comma_is_repaired() {
+    let tool = read_tool();
+    let tc = run_pipeline(
+        r#"{"file_path": "/tmp/x", "limit": 100,}"#,
+        "Read",
+        Some(&tool),
+    )
+    .await;
+    assert!(
+        !tc.invalid,
+        "expected repair to succeed: {:?}",
+        tc.invalid_reason
+    );
+    assert_eq!(tc.input, json!({"file_path": "/tmp/x", "limit": 100}));
+}
+
+#[tokio::test]
+async fn matrix_glm_markdown_fence_is_repaired() {
+    let tool = read_tool();
+    let tc = run_pipeline(
+        "```json\n{\"file_path\": \"/repo/main.rs\"}\n```",
+        "Read",
+        Some(&tool),
+    )
+    .await;
+    assert!(!tc.invalid);
+    assert_eq!(tc.input, json!({"file_path": "/repo/main.rs"}));
+}
+
+#[tokio::test]
+async fn matrix_deepseek_single_quotes_is_repaired() {
+    let tool = read_tool();
+    let tc = run_pipeline(r#"{'file_path': '/tmp/foo'}"#, "Read", Some(&tool)).await;
+    assert!(!tc.invalid);
+    assert_eq!(tc.input, json!({"file_path": "/tmp/foo"}));
+}
+
+#[tokio::test]
+async fn matrix_anthropic_streaming_truncated_recovers_value_but_misses_field() {
+    // Recovered Value loses the required field — schema validation
+    // surfaces the missing field rather than "JSON broken".
+    let tool = bash_tool();
+    let tc = run_pipeline(r#"{"unused_key": "/tmp"#, "Bash", Some(&tool)).await;
+    assert!(tc.invalid);
+    let reason = tc.invalid_reason.expect("invalid_reason set");
+    let message = match reason {
+        ToolInputInvalidReason::SchemaViolation { message } => message,
+        other => panic!("expected SchemaViolation, got {other:?}"),
+    };
+    assert!(
+        message.contains("required parameter `command` is missing"),
+        "got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn matrix_pure_garbage_falls_back_to_schema_missing_fields() {
+    // Layer 1's `parse_with_repair` is intentionally aggressive —
+    // `\u{0000}!!!@@@%%%` may resolve as `Value::Null` (the leading
+    // NUL byte) or `Value::Object({})`. Either way the schema
+    // validator must surface a usable error pointing at the bad
+    // shape; the contract is "structured error, not opaque".
+    let tool = bash_tool();
+    let tc = run_pipeline("\u{0000}!!!@@@%%%", "Bash", Some(&tool)).await;
+    assert!(tc.invalid);
+    let message = match tc.invalid_reason.unwrap() {
+        ToolInputInvalidReason::SchemaViolation { message } => message,
+        other => panic!("expected SchemaViolation, got {other:?}"),
+    };
+    // Accept either the "missing required" or "type mismatch"
+    // formatter line — both are valid Layer 2 outputs depending on
+    // what Layer 1 salvaged.
+    let acceptable = message.contains("required parameter `command` is missing")
+        || message.contains("expected as `object`");
+    assert!(acceptable, "unexpected message: {message}");
+}
+
+#[tokio::test]
+async fn matrix_empty_arguments_string_falls_back_to_schema_check() {
+    let tool = bash_tool();
+    let tc = run_pipeline("", "Bash", Some(&tool)).await;
+    assert!(tc.invalid);
+    let message = match tc.invalid_reason.unwrap() {
+        ToolInputInvalidReason::SchemaViolation { message } => message,
+        other => panic!("expected SchemaViolation, got {other:?}"),
+    };
+    assert!(message.contains("required parameter `command` is missing"));
+}
+
+#[tokio::test]
+async fn matrix_type_mismatch_reports_expected_and_received() {
+    let tool = bash_tool();
+    let tc = run_pipeline(
+        r#"{"command": "ls", "timeout": "not-a-number"}"#,
+        "Bash",
+        Some(&tool),
+    )
+    .await;
+    assert!(tc.invalid);
+    let message = match tc.invalid_reason.unwrap() {
+        ToolInputInvalidReason::SchemaViolation { message } => message,
+        other => panic!("expected SchemaViolation, got {other:?}"),
+    };
+    assert!(message.contains("`timeout`"), "got: {message}");
+    assert!(message.contains("expected as `number`"), "got: {message}");
+    assert!(message.contains("provided as `string`"), "got: {message}");
+}
+
+#[tokio::test]
+async fn matrix_unexpected_field_is_reported() {
+    let tool = bash_tool();
+    let tc = run_pipeline(
+        r#"{"command": "ls", "extra_field": "ignored"}"#,
+        "Bash",
+        Some(&tool),
+    )
+    .await;
+    assert!(tc.invalid);
+    let message = match tc.invalid_reason.unwrap() {
+        ToolInputInvalidReason::SchemaViolation { message } => message,
+        other => panic!("expected SchemaViolation, got {other:?}"),
+    };
+    assert!(
+        message.contains("unexpected parameter `extra_field` was provided"),
+        "got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn matrix_no_such_tool_short_circuits_before_schema() {
+    let tc = run_pipeline(r#"{"command": "ls"}"#, "NonexistentTool", None).await;
+    assert!(tc.invalid);
+    match tc.invalid_reason.unwrap() {
+        ToolInputInvalidReason::NoSuchTool { tool_name } => {
+            assert_eq!(tool_name, "NonexistentTool");
+        }
+        other => panic!("expected NoSuchTool, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn matrix_anthropic_value_string_nested_is_recovered_in_layer_2() {
+    // Anthropic non-streaming path: the model nested stringified JSON
+    // inside what should be the input object. Layer 1 passes
+    // `Value::String` through; Layer 2's `normalize_value_string`
+    // recovers it before schema validation.
+    let tool = read_tool();
+    let mut tc = mk_tc("Read", json!("{\"file_path\": \"/tmp/recovered\"}"));
+    let validator = coco_tool_runtime::ToolSchemaValidator::new();
+    validate_tool_call(&mut tc, Some(&tool), &validator).await;
+    assert!(!tc.invalid);
+    assert_eq!(tc.input, json!({"file_path": "/tmp/recovered"}));
+}
+
+#[tokio::test]
+async fn matrix_layer_1_invalid_skips_layer_2() {
+    // If Layer 1 already set invalid (e.g., the adapter wanted to
+    // signal a truly-unrecoverable case), Layer 2 must respect that
+    // — don't overwrite the reason with its own classification.
+    let tool = read_tool();
+    let mut tc = mk_tc("Read", json!({"file_path": "/tmp/x"})).with_invalid_reason(
+        ToolInputInvalidReason::JsonParseFailed {
+            raw: "{garbage".to_string(),
+            error: "expected `:` at line 1 column 2".to_string(),
+        },
+    );
+    let validator = coco_tool_runtime::ToolSchemaValidator::new();
+    validate_tool_call(&mut tc, Some(&tool), &validator).await;
+    assert!(tc.invalid);
+    match tc.invalid_reason.unwrap() {
+        ToolInputInvalidReason::JsonParseFailed { error, .. } => {
+            // Reason preserved unchanged.
+            assert!(error.contains("line 1"));
+        }
+        other => panic!("Layer 2 overwrote Layer 1's reason: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn matrix_multi_tool_call_mixed_outcomes() {
+    // Simulate a single assistant turn that emitted N tool calls
+    // across providers — some clean, some malformed in different
+    // ways. Each one should classify independently.
+    let bash = bash_tool();
+    let read = read_tool();
+    let validator = coco_tool_runtime::ToolSchemaValidator::new();
+
+    struct Case {
+        provider_hint: &'static str,
+        tool_name: &'static str,
+        raw_arguments: &'static str,
+        tool: Option<StdArc<dyn Tool>>,
+        expected_valid: bool,
+        expected_message_contains: Option<&'static str>,
+    }
+
+    let cases = vec![
+        Case {
+            provider_hint: "openai-chat clean",
+            tool_name: "Read",
+            raw_arguments: r#"{"file_path": "/tmp/a"}"#,
+            tool: Some(read.clone()),
+            expected_valid: true,
+            expected_message_contains: None,
+        },
+        Case {
+            provider_hint: "glm markdown fence",
+            tool_name: "Read",
+            raw_arguments: "```json\n{\"file_path\": \"/tmp/b\"}\n```",
+            tool: Some(read.clone()),
+            expected_valid: true,
+            expected_message_contains: None,
+        },
+        Case {
+            provider_hint: "deepseek single quotes",
+            tool_name: "Bash",
+            raw_arguments: r#"{'command': 'ls -la'}"#,
+            tool: Some(bash.clone()),
+            expected_valid: true,
+            expected_message_contains: None,
+        },
+        Case {
+            provider_hint: "openai trailing comma",
+            tool_name: "Bash",
+            raw_arguments: r#"{"command": "echo", "timeout": 5000,}"#,
+            tool: Some(bash.clone()),
+            expected_valid: true,
+            expected_message_contains: None,
+        },
+        Case {
+            provider_hint: "anthropic streaming truncated",
+            tool_name: "Bash",
+            raw_arguments: r#"{"command": "find ."#,
+            tool: Some(bash.clone()),
+            expected_valid: true,
+            expected_message_contains: None,
+        },
+        Case {
+            provider_hint: "missing required field",
+            tool_name: "Bash",
+            raw_arguments: r#"{"timeout": 1000}"#,
+            tool: Some(bash.clone()),
+            expected_valid: false,
+            expected_message_contains: Some("required parameter `command` is missing"),
+        },
+        Case {
+            provider_hint: "type mismatch",
+            tool_name: "Read",
+            raw_arguments: r#"{"file_path": "/tmp/x", "limit": "many"}"#,
+            tool: Some(read.clone()),
+            expected_valid: false,
+            expected_message_contains: Some("expected as `integer`"),
+        },
+        Case {
+            provider_hint: "hallucinated tool name",
+            tool_name: "DoTheThing",
+            raw_arguments: r#"{"x": 1}"#,
+            tool: None,
+            expected_valid: false,
+            expected_message_contains: None,
+        },
+        Case {
+            provider_hint: "empty arguments",
+            tool_name: "Bash",
+            raw_arguments: "",
+            tool: Some(bash.clone()),
+            expected_valid: false,
+            expected_message_contains: Some("required parameter `command` is missing"),
+        },
+    ];
+
+    for case in cases {
+        let input = parse_tool_arguments_or_empty(case.raw_arguments, case.tool_name);
+        let mut tc = mk_tc(case.tool_name, input);
+        validate_tool_call(&mut tc, case.tool.as_ref(), &validator).await;
+
+        assert_eq!(
+            !tc.invalid, case.expected_valid,
+            "[{}] expected valid={}, got invalid_reason={:?}",
+            case.provider_hint, case.expected_valid, tc.invalid_reason,
+        );
+
+        if let Some(needle) = case.expected_message_contains {
+            let message = match tc.invalid_reason.as_ref() {
+                Some(ToolInputInvalidReason::SchemaViolation { message }) => message.clone(),
+                Some(ToolInputInvalidReason::NoSuchTool { tool_name }) => {
+                    format!("NoSuchTool: {tool_name}")
+                }
+                Some(ToolInputInvalidReason::JsonParseFailed { error, .. }) => error.clone(),
+                None => String::new(),
+            };
+            assert!(
+                message.contains(needle),
+                "[{}] expected message to contain `{}`, got: {}",
+                case.provider_hint,
+                needle,
+                message
+            );
+        }
+    }
+}

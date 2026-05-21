@@ -563,6 +563,8 @@ async fn snapshot_none_close_does_not_overwrite_some_start() {
                 provider_executed: None,
                 dynamic: None,
                 provider_metadata: None, // ← critical: None close
+                invalid: false,
+                invalid_reason: None,
             },
         )),
         Ok(LanguageModelV4StreamPart::Finish {

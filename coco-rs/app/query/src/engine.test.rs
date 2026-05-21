@@ -1338,7 +1338,12 @@ async fn unknown_tool_call_gets_error_result_and_completed_event() {
     assert_eq!(result.turns, 2);
     let output = tool_result_error_text(&result.final_messages, "unknown_1")
         .expect("unknown tool should produce an error tool result");
-    assert!(output.contains("Unknown tool: MissingTool"));
+    // Updated to mirror the unified `<tool_use_error>No such tool
+    // available: ...>` wrap that `tool_runner` now emits.
+    assert!(
+        output.contains("No such tool available: MissingTool"),
+        "got: {output}"
+    );
 
     let (queued, started, completed, completed_is_error) =
         tool_lifecycle_counts(&events, "unknown_1");

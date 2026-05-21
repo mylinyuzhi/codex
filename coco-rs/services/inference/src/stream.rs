@@ -75,6 +75,17 @@ pub struct ToolCallSegment {
     /// filters on `is_input_complete || is_complete`.
     pub is_complete: bool,
     pub provider_metadata: Option<ProviderMetadata>,
+    /// Coco-rs extension carried through from
+    /// [`vercel_ai_provider::LanguageModelV4ToolCall.invalid`]: the
+    /// adapter detected an unrecoverable Layer-1 parse failure on
+    /// the wire. Engine reconstruction copies this onto the rebuilt
+    /// [`coco_llm_types::ToolCallPart`] so the agent loop can pick
+    /// the right `<tool_use_error>` wrap prefix without going through
+    /// Layer 2 schema validation first.
+    pub invalid: bool,
+    /// Structured reason accompanying [`Self::invalid`]; set by the
+    /// provider adapter at the wire boundary.
+    pub invalid_reason: Option<vercel_ai_provider::ToolInputInvalidReason>,
 }
 
 #[derive(Debug, Clone)]
@@ -295,6 +306,8 @@ impl AssistantTurnSnapshotState {
                         is_input_complete: false,
                         is_complete: false,
                         provider_metadata: provider_metadata.clone(),
+                        invalid: false,
+                        invalid_reason: None,
                     }));
                 self.active_tool.insert(id.clone(), idx);
             }
@@ -353,6 +366,12 @@ impl AssistantTurnSnapshotState {
                     if tc.dynamic.is_some() {
                         seg.dynamic = tc.dynamic;
                     }
+                    // Carry Layer-1 invalid_reason from the wire
+                    // close into the accumulator.
+                    if tc.invalid {
+                        seg.invalid = true;
+                        seg.invalid_reason = tc.invalid_reason.clone();
+                    }
                     self.active_tool.remove(&tc.tool_call_id);
                 } else {
                     // ToolCall arrived without prior ToolInputStart —
@@ -369,6 +388,8 @@ impl AssistantTurnSnapshotState {
                             is_input_complete: true,
                             is_complete: true,
                             provider_metadata: tc.provider_metadata.clone(),
+                            invalid: tc.invalid,
+                            invalid_reason: tc.invalid_reason.clone(),
                         }));
                 }
             }
@@ -790,6 +811,8 @@ pub fn synthetic_stream_from_content(
                 let tool_name = tc.tool_name.clone();
                 let provider_executed = tc.provider_executed;
                 let provider_metadata = tc.provider_metadata.clone();
+                let invalid = tc.invalid;
+                let invalid_reason = tc.invalid_reason.clone();
                 // `ToolCallPart.input` is `JSONValue`; the wire shape
                 // expects stringified JSON, mirroring the canonical
                 // `LanguageModelV4ToolCall.input: String` field.
@@ -816,7 +839,13 @@ pub fn synthetic_stream_from_content(
                 // after `ToolInputEnd`. Required so the accumulator
                 // can mark `is_complete=true` and downstream consumers
                 // that filter on `is_complete` see the tool call.
+                // Coco-rs extension: carry `invalid` + `invalid_reason`
+                // through the stream so adapter-detected Layer-1
+                // failures (e.g. Anthropic streaming `content_block_stop`
+                // flush) survive engine reconstruction.
                 let mut close = LanguageModelV4ToolCall::new(call_id, tool_name, input_str);
+                close.invalid = invalid;
+                close.invalid_reason = invalid_reason;
                 close.provider_executed = provider_executed;
                 close.provider_metadata = provider_metadata;
                 parts.push(Ok(Part::ToolCall(close)));

@@ -28,6 +28,51 @@ Thin multi-provider LLM client wrapper over `vercel-ai`. Generic retry, usage ag
 - `build_call_options_with_extra` — returns `(LanguageModelV4CallOptions, BTreeMap<String, Value>)` so the cache-break detector hashes the merged map directly (Finding 5)
 - `ProviderClientFingerprint` — extended with `runtime_state_digest` over `account` + `prompt_cache` + per-provider `provider_options` map; settings-reload that flips any of these triggers a turn-boundary client rebuild (design §19.3 attack γ). Per-provider scoping means a knob flip on one Anthropic instance doesn't churn an unrelated instance's client.
 
+## Call path — bypasses `vercel-ai/ai` SDK layer
+
+[`ApiClient::query`] / [`ApiClient::query_stream`] call
+`self.model.do_generate` / `do_stream` **directly** on the
+`Arc<dyn LanguageModelV4>` (provider adapter). coco-rs does NOT
+route through `vercel_ai::generate_text` / `stream_text` in
+production paths — `grep` confirms only `vercel-ai/ai/tests/live/`
+reaches those entry points. Anything that lives inside
+`vercel-ai/ai/src/generate_text/` is **dead for coco-rs**.
+
+Tool-input handling lives in three layers spread across crates,
+each owning a distinct concern:
+
+- **Layer 1 — provider adapter** (`vercel-ai-openai`,
+  `vercel-ai-openai-compatible`, `vercel-ai-anthropic`,
+  `vercel-ai-google`). Calls
+  `vercel_ai_provider_utils::parse_tool_arguments_or_empty` inline
+  while building each `ToolCallPart`. Parse failure → `Value::Object({})`
+  passthrough (mirrors TS `parsed ?? {}` in
+  `utils/messages.ts:2694`). Adapters never raise `invalid=true`
+  for repairable input; that decision belongs to Layer 2.
+- **Layer 2 — `app/query/src/tool_input_validate.rs`**.
+  `validate_tool_call` runs `Value::String` recovery + JSON Schema
+  validation via the existing
+  `coco_tool_runtime::ToolSchemaValidator` (called pre-PreToolUse
+  hook for raw input; the existing post-hook
+  `validate_effective_input_or_complete_error` at
+  `tool_call_preparer.rs` keeps catching hook-rewritten input).
+  Sets `ToolCallPart.invalid_reason` to the structured variant
+  (`SchemaViolation` / `NoSuchTool` / `JsonParseFailed`) so Layer 3
+  picks the wrap prefix by `match`, not string compare. Mirrors TS
+  `services/tools/toolExecution.ts:614-680`.
+- **Layer 3 — `app/query/src/tool_call_preparer.rs::prepare_one_pending_tool_call`**.
+  `tc.invalid` → synthetic
+  `tool_result(is_error: true, content: "<tool_use_error>{prefix}: ...</tool_use_error>")`
+  via `complete_tool_call_with_error_mode`. The agent loop's
+  next turn carries the structured error back to the main LLM and
+  the model self-corrects — there is no LLM repair callback, and
+  there is no static repair retry; recovery is the agent loop
+  itself. Mirrors TS Claude Code.
+
+If you find yourself adding tool-input parsing or validation
+logic to `vercel-ai/ai/src/generate_text/`, you almost certainly
+want `app/query` instead.
+
 ## Design Notes
 
 - Thinking-level conversion (`thinking_convert`): `ThinkingLevel` → per-provider `ProviderOptions`. Signature is `to_extra_body(level, api, capabilities: &[Capability])` — `build_call_options` threads `info.capabilities.as_deref().unwrap_or(&[])` through. The `ProviderApi::Anthropic` arm has full coverage of `ReasoningEffort` via an exhaustive inner match: `Disable` → `thinking: {type: disabled}`; `Auto` → `thinking: {type: adaptive}` **only when `capabilities` contains `Capability::AdaptiveThinking`**, otherwise omitted (server default applies); `Minimal` → mapped to `Low`; `Low/Medium/High/XHigh` → emit BOTH `thinking: {type: enabled, budgetTokens?}` (legacy API, with budget when ModelInfo declares one) AND `output_config.effort` (new API, mapped via Anthropic's `Effort` enum: `Low/Medium/High` literal, `XHigh` → `"max"`). Other arms (Openai/Gemini/OpenaiCompat) keep the `is_explicit_level()` gate — `Disable`/`Auto` emit nothing for them, and the capability slice is unused. The `output_config` write goes through raw shallow-merge — the convert layer never sets `AnthropicProviderOptions.effort`, so the Anthropic-specific `effort-2025-11-24` beta header is not added. Callers wanting that beta opt in by setting `provider_options["anthropic"]["effort"]` directly. **Adaptive thinking is gated by `Capability::AdaptiveThinking`** — declared in the registry for Claude Sonnet 4.6, Claude Opus 4.7, and DeepSeek V4 (anthropic-compat). Non-adaptive Claude models (Sonnet 4.5, Opus 4.5, Haiku 4.5) gracefully degrade to server-default when the user passes `--thinking auto`, preventing 400 errors. `level.options` is passed through unconditionally (including for `Disable`/`Auto`). **`budget_tokens` is faithfully forwarded — when `level.budget_tokens` is `None`, the typed Anthropic arm omits the `budgetTokens` key, and `vercel-ai-anthropic` likewise emits `{"type":"enabled"}` with no budget on the wire (no synthesized default, no `max_tokens` bump). Endpoints that require it must declare a budget at the `ModelInfo` layer.**

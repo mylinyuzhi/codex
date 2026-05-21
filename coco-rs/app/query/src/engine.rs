@@ -1762,6 +1762,8 @@ impl QueryEngine {
                                         is_input_complete: buf.complete,
                                         is_complete: false,
                                         provider_metadata: None,
+                                        invalid: false,
+                                        invalid_reason: None,
                                     },
                                 )
                             })
@@ -2587,13 +2589,20 @@ fn assistant_content_from_snapshot(
                     parsed_input,
                     normalizer_ctx,
                 );
+                // Carry the wire-level `invalid` + `invalid_reason`
+                // through reconstruction. Provider adapters set these
+                // when Layer 1 detects an unrecoverable JSON parse
+                // (Anthropic streaming `content_block_stop` flush,
+                // etc.); without this carry-through the agent loop's
+                // synthetic `<tool_use_error>` wrap would fall back to
+                // a generic message.
                 let tcp = ToolCallPart {
                     tool_call_id: tc.id.clone(),
                     tool_name: tc.tool_name.clone(),
                     input,
                     provider_executed: tc.provider_executed,
-                    invalid: false,
-                    invalid_reason: None,
+                    invalid: tc.invalid,
+                    invalid_reason: tc.invalid_reason.clone(),
                     provider_metadata: tc.provider_metadata.clone(),
                 };
                 content_parts.push(AssistantContentPart::ToolCall(tcp.clone()));

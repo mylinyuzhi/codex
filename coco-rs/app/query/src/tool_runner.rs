@@ -57,7 +57,15 @@ pub(crate) async fn prepare_committed_tool_call(
 
     let Some(tool) = tools.get(&tool_id) else {
         warn!(tool = tool_call.tool_name, "tool not found in registry");
-        let output = format!("Unknown tool: {}", tool_call.tool_name);
+        // Mirror Layer 3's `<tool_use_error>No such tool available: ...>`
+        // wrap so the model sees the same format whether the
+        // unknown-tool branch fires here (registry miss) or in
+        // `tool_call_preparer` (Layer 2 catch for hallucinated names
+        // not in the per-call tools list).
+        let output = format!(
+            "<tool_use_error>No such tool available: {}</tool_use_error>",
+            tool_call.tool_name
+        );
         complete_tool_call_with_error_mode(
             event_tx,
             history,
@@ -70,6 +78,49 @@ pub(crate) async fn prepare_committed_tool_call(
         .await;
         return None;
     };
+
+    // Layer 1 + Layer 2 short-circuit. The provider adapter (Layer 1)
+    // may have flagged the call as `invalid` when raw `arguments`
+    // bytes were unrecoverable. Layer 2 schema validation runs only
+    // when Layer 1 left the call unflagged; otherwise we preserve
+    // Layer 1's reason. Both paths converge on the same `<tool_use_error>`
+    // wrap selection so the model sees one format whether the failure
+    // originated on the wire or in the schema validator.
+    let mut validated = tool_call.clone();
+    if !validated.invalid
+        && let Some(validator) = ctx.tool_schema_validator.as_ref()
+    {
+        crate::tool_input_validate::validate_tool_call(&mut validated, Some(&tool), validator)
+            .await;
+    }
+    if validated.invalid {
+        let message = match validated.invalid_reason {
+            Some(coco_llm_types::ToolInputInvalidReason::SchemaViolation { message }) => {
+                format!("<tool_use_error>InputValidationError: {message}</tool_use_error>")
+            }
+            Some(coco_llm_types::ToolInputInvalidReason::NoSuchTool { tool_name }) => {
+                format!("<tool_use_error>No such tool available: {tool_name}</tool_use_error>")
+            }
+            Some(coco_llm_types::ToolInputInvalidReason::JsonParseFailed { error, .. }) => {
+                format!(
+                    "<tool_use_error>The tool call arguments could not be parsed as JSON: {error}. \
+                     Please retry with valid JSON.</tool_use_error>"
+                )
+            }
+            None => "<tool_use_error>Invalid tool call</tool_use_error>".to_string(),
+        };
+        complete_tool_call_with_error_mode(
+            event_tx,
+            history,
+            &tool_call.tool_call_id,
+            &tool_call.tool_name,
+            &tool_id,
+            &message,
+            completion_event_mode,
+        )
+        .await;
+        return None;
+    }
 
     let validation = tool.validate_input(&tool_call.input, ctx);
     if !validation.is_valid() {
