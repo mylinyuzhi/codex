@@ -1532,6 +1532,7 @@ impl QueryEngine {
                                 input,
                                 provider_executed: None,
                                 invalid: input_invalid,
+                                invalid_reason: None,
                                 provider_metadata: None,
                             };
                             let slice = std::slice::from_ref(&tcp);
@@ -2639,6 +2640,7 @@ fn assistant_content_from_snapshot(
                     input,
                     provider_executed: tc.provider_executed,
                     invalid: input_invalid,
+                    invalid_reason: None,
                     provider_metadata: tc.provider_metadata.clone(),
                 };
                 content_parts.push(AssistantContentPart::ToolCall(tcp.clone()));

@@ -60,6 +60,7 @@ fn tool_call() -> ToolCallPart {
         input: json!({"file_path": "/main/foo.txt"}),
         provider_executed: None,
         invalid: false,
+        invalid_reason: None,
         provider_metadata: None,
     }
 }

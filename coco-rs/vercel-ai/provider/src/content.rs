@@ -153,6 +153,14 @@ impl ReasoningPart {
 }
 
 /// A tool call content part.
+///
+/// `input` always carries the model's best-known emission — even when the
+/// call is `invalid`. Adapters that fail JSON parsing fall back to
+/// `JSONValue::Object({})` (so Layer 2 schema validation can report
+/// specific missing fields; mirrors TS `parsed ?? {}` in
+/// `utils/messages.ts:2694`). Adapters that detect a truly unrecoverable
+/// `Value::String` payload preserve the raw bytes inside `input` so the
+/// agent loop can surface the original emission in diagnostics.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,36 +169,85 @@ pub struct ToolCallPart {
     pub tool_call_id: String,
     /// The tool name.
     pub tool_name: String,
-    /// The tool arguments as JSON.
+    /// The tool arguments as JSON. **Always populated** — see struct doc.
     pub input: JSONValue,
     /// Whether the tool call will be executed by the provider.
     /// If this flag is not set or is false, the tool call will be executed by the client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_executed: Option<bool>,
-    /// `true` when the adapter could not parse the raw `arguments`
-    /// string against strict JSON (or repair via
-    /// [`crate::ToolInputParseFunction`] also failed). The `input`
-    /// field is [`JSONValue::Null`] in this case. Caller layers
-    /// (agent loop, side queries) read this flag and emit a
-    /// synthetic tool_result back to the LLM so the model can
-    /// self-correct on the next turn.
+    /// `true` when the tool call cannot be executed as emitted: the
+    /// raw `arguments` could not be recovered into a parseable shape,
+    /// the schema validator rejected the input, or the model named a
+    /// tool that does not exist. Pair with [`Self::invalid_reason`]
+    /// for the precise cause.
+    ///
+    /// Caller layers (`app/query` preparer, side queries) read this
+    /// flag and emit a synthetic `tool_result(is_error: true)` so the
+    /// agent loop's next turn carries a structured error back to the
+    /// main LLM for self-correction.
     ///
     /// **TS parity**: mirrors `invalid: boolean` on the SDK-level
     /// `TypedToolCall` in `@ai-sdk/ai`
     /// (`packages/ai/src/generate-text/parse-tool-call.ts`).
-    ///
-    /// **Backward compatible**: `#[serde(default)]` so legacy
-    /// transcripts that pre-date the field deserialise as
-    /// `invalid: false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub invalid: bool,
+    /// Structured reason accompanying [`Self::invalid`]. Set by
+    /// whichever layer first detected the failure (provider adapter
+    /// for unrecoverable JSON parse, `app/query::tool_input_validate`
+    /// for schema or NoSuchTool failures). `None` when `invalid` is
+    /// `false`; required to be `Some(_)` when `invalid` is `true`
+    /// (invariant maintained by the constructors below).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invalid_reason: Option<ToolInputInvalidReason>,
     /// Provider-specific metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_metadata: Option<ProviderMetadata>,
 }
 
+/// Structured cause for an invalid tool call. Drives the wrap prefix
+/// chosen by `app/query`'s tool result synthesizer:
+/// - [`Self::JsonParseFailed`] → `<tool_use_error>JSON parse failed: …</tool_use_error>`
+/// - [`Self::SchemaViolation`] → `<tool_use_error>InputValidationError: …</tool_use_error>`
+/// - [`Self::NoSuchTool`] → `<tool_use_error>No such tool available: …</tool_use_error>`
+///
+/// Mirrors the three failure modes that TS Claude Code distinguishes
+/// in `services/tools/toolExecution.ts:337-411,614-680`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolInputInvalidReason {
+    /// Raw `arguments` bytes could not be parsed into JSON, even after
+    /// repair. Reserved for the unrecoverable case (e.g. a streaming
+    /// buffer that finished with truly malformed content). The common
+    /// recoverable failure mode lands in [`Self::SchemaViolation`]
+    /// instead because adapters fall back to `{}` on parse failure
+    /// and let the schema validator report specific missing fields.
+    JsonParseFailed {
+        /// Original raw string preserved for diagnostics.
+        raw: String,
+        /// Parser error string (already redacted to a single line).
+        error: String,
+    },
+    /// Schema validator rejected the input. `message` carries the
+    /// LLM-friendly multi-line error already formatted via
+    /// `format_schema_error` — Layer 3 wraps it verbatim inside the
+    /// `<tool_use_error>InputValidationError: …</tool_use_error>`
+    /// envelope without re-formatting.
+    SchemaViolation {
+        /// Pre-formatted, LLM-readable error body.
+        message: String,
+    },
+    /// Model emitted a tool name not present in the request's tools
+    /// list. Recovery is the agent loop: the next turn's prompt
+    /// reminds the model which tools are available.
+    NoSuchTool {
+        /// The unknown name the model emitted.
+        tool_name: String,
+    },
+}
+
 impl ToolCallPart {
-    /// Create a new tool call part.
+    /// Create a new tool call part. Defaults to `invalid = false`.
     pub fn new(
         tool_call_id: impl Into<String>,
         tool_name: impl Into<String>,
@@ -202,20 +259,7 @@ impl ToolCallPart {
             input,
             provider_executed: None,
             invalid: false,
-            provider_metadata: None,
-        }
-    }
-
-    /// Construct an invalid tool call — used by adapters when the
-    /// raw `arguments` string failed to parse and no repair callback
-    /// recovered. Sets `input = JSONValue::Null, invalid = true`.
-    pub fn invalid(tool_call_id: impl Into<String>, tool_name: impl Into<String>) -> Self {
-        Self {
-            tool_call_id: tool_call_id.into(),
-            tool_name: tool_name.into(),
-            input: JSONValue::Null,
-            provider_executed: None,
-            invalid: true,
+            invalid_reason: None,
             provider_metadata: None,
         }
     }
@@ -226,9 +270,13 @@ impl ToolCallPart {
         self
     }
 
-    /// Mark the tool call as failed-to-parse.
-    pub fn with_invalid(mut self, invalid: bool) -> Self {
-        self.invalid = invalid;
+    /// Mark the tool call as invalid with a structured reason. Sets
+    /// `invalid = true` and `invalid_reason = Some(reason)` atomically
+    /// so the invariant "invalid ↔ invalid_reason.is_some()" cannot be
+    /// broken from a single call site.
+    pub fn with_invalid_reason(mut self, reason: ToolInputInvalidReason) -> Self {
+        self.invalid = true;
+        self.invalid_reason = Some(reason);
         self
     }
 

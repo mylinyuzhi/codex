@@ -340,6 +340,7 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
                     input: parsed.value,
                     provider_executed: None,
                     invalid: parsed.invalid,
+                    invalid_reason: None,
                     provider_metadata: tc_provider_metadata,
                 }));
             }

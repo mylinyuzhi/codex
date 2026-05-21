@@ -183,6 +183,7 @@ async fn metadata_survives_reasoning_and_tool_call() {
             provider_executed: None,
             provider_metadata: Some(tool_meta.clone()),
             invalid: false,
+            invalid_reason: None,
         }),
     ];
 
@@ -259,6 +260,7 @@ async fn order_is_preserved_for_text_tool_text_interleaving() {
             provider_executed: None,
             provider_metadata: Some(meta("google", "thoughtSignature", "MT")),
             invalid: false,
+            invalid_reason: None,
         }),
         AssistantContentPart::Text(TextPart {
             text: "after".into(),

@@ -82,6 +82,7 @@ fn converts_assistant_tool_call() {
             provider_executed: None,
             provider_metadata: None,
             invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];
@@ -272,6 +273,7 @@ fn converts_provider_executed_server_tool_use() {
             provider_executed: Some(true),
             provider_metadata: None,
             invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];
@@ -307,6 +309,7 @@ fn converts_mcp_tool_use_round_trip() {
                 provider_executed: Some(true),
                 provider_metadata: Some(ProviderMetadata(mcp_meta)),
                 invalid: false,
+                invalid_reason: None,
             }),
             AssistantContentPart::ToolResult(vercel_ai_provider::content::ToolResultPart {
                 tool_call_id: "mcp_1".into(),
@@ -352,6 +355,7 @@ fn converts_code_execution_sub_tool() {
             provider_executed: Some(true),
             provider_metadata: None,
             invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];
@@ -384,6 +388,7 @@ fn strips_programmatic_tool_call_type() {
             provider_executed: Some(true),
             provider_metadata: None,
             invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];
@@ -525,6 +530,7 @@ fn forwards_caller_info_in_regular_tool_call() {
             provider_executed: None,
             provider_metadata: Some(ProviderMetadata(meta)),
             invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];

@@ -83,6 +83,7 @@ fn converts_assistant_tool_call() {
             provider_executed: None,
             provider_metadata: None,
             invalid: false,
+            invalid_reason: None,
         })],
         provider_options: None,
     }];

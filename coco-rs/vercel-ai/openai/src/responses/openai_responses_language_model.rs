@@ -584,6 +584,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_executed: None,
                         provider_metadata,
                         invalid: parsed.invalid,
+                        invalid_reason: None,
                     }));
                 }
                 ResponseOutputItem::CustomToolCall {
@@ -602,6 +603,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input: parsed.value,
                         provider_executed: Some(true),
                         invalid: parsed.invalid,
+                        invalid_reason: None,
                         provider_metadata: None,
                     }));
                 }
@@ -645,6 +647,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_executed: Some(true),
                         provider_metadata: None,
                         invalid: false,
+                        invalid_reason: None,
                     }));
                 }
                 ResponseOutputItem::FileSearchCall { id, results, .. } => {
@@ -661,6 +664,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_executed: Some(true),
                         provider_metadata: meta,
                         invalid: false,
+                        invalid_reason: None,
                     }));
                 }
                 ResponseOutputItem::CodeInterpreterCall {
@@ -674,6 +678,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_executed: Some(true),
                         provider_metadata: None,
                         invalid: false,
+                        invalid_reason: None,
                     }));
                     // Emit tool result if outputs are present
                     if let Some(outs) = outputs {
@@ -695,6 +700,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_executed: Some(true),
                         provider_metadata: None,
                         invalid: false,
+                        invalid_reason: None,
                     }));
                     if let Some(res) = result {
                         content.push(AssistantContentPart::ToolResult(
@@ -734,6 +740,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input: parsed_args,
                         provider_executed: Some(true),
                         invalid: false,
+                        invalid_reason: None,
                         provider_metadata: meta,
                     }));
                     // Emit result or error
@@ -780,6 +787,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input: action.clone().unwrap_or(Value::Null),
                         provider_executed: Some(true),
                         invalid: false,
+                        invalid_reason: None,
                         provider_metadata: None,
                     }));
                 }
@@ -797,6 +805,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input: action.clone().unwrap_or(Value::Null),
                         provider_executed: Some(true),
                         invalid: false,
+                        invalid_reason: None,
                         provider_metadata: None,
                     }));
                     if let Some(outs) = output {
@@ -821,6 +830,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         input: operation.clone().unwrap_or(Value::Null),
                         provider_executed: Some(true),
                         invalid: false,
+                        invalid_reason: None,
                         provider_metadata: None,
                     }));
                 }
@@ -859,6 +869,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_executed: if is_hosted { Some(true) } else { None },
                         provider_metadata: pm,
                         invalid: false,
+                        invalid_reason: None,
                     }));
                 }
                 ResponseOutputItem::ToolSearchOutput {

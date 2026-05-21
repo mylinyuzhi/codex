@@ -1070,6 +1070,7 @@ mod pipeline_invariants {
             input,
             provider_executed: None,
             invalid: false,
+            invalid_reason: None,
             provider_metadata: None,
         })
     }

@@ -43,6 +43,7 @@ fn assistant_tool_call(name: &str) -> Message {
                 provider_executed: None,
                 provider_metadata: None,
                 invalid: false,
+                invalid_reason: None,
             })],
             provider_options: None,
         },

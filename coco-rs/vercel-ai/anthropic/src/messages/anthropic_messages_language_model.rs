@@ -1118,6 +1118,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                             provider_executed: None,
                             provider_metadata,
                             invalid: false,
+                            invalid_reason: None,
                         }));
                     }
                 }
@@ -1171,6 +1172,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                         input: mapped_input,
                         provider_executed: Some(true),
                         invalid: false,
+                        invalid_reason: None,
                         provider_metadata: if meta.is_empty() {
                             None
                         } else {
@@ -1197,6 +1199,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                         input: input.clone(),
                         provider_executed: Some(true),
                         invalid: false,
+                        invalid_reason: None,
                         provider_metadata: Some(pm),
                     }));
                 }

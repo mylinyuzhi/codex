@@ -68,6 +68,7 @@ fn test_extract_tool_calls() {
             provider_executed: None,
             provider_metadata: None,
             invalid: false,
+            invalid_reason: None,
         }),
     ];
     let calls = extract_tool_calls(&content);

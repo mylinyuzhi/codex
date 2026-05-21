@@ -58,6 +58,7 @@ async fn synthetic_stream_emits_events_in_content_order() {
             provider_executed: None,
             provider_metadata: None,
             invalid: false,
+            invalid_reason: None,
         }),
     ];
 
@@ -287,6 +288,7 @@ async fn snapshot_preserves_provider_metadata_on_every_variant() {
             provider_executed: None,
             provider_metadata: Some(tool_meta.clone()),
             invalid: false,
+            invalid_reason: None,
         }),
     ];
 
@@ -657,6 +659,7 @@ async fn tool_input_round_trips_through_synthetic_stream() {
         input: original_input.clone(),
         provider_executed: None,
         invalid: false,
+        invalid_reason: None,
         provider_metadata: None,
     })];
 

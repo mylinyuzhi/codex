@@ -377,6 +377,7 @@ fn assistant_llm_from_blocks(blocks: Vec<InjectedBlock>) -> LlmMessage {
                     input,
                     provider_executed: None,
                     invalid: false,
+                    invalid_reason: None,
                     provider_metadata: None,
                 }));
             }

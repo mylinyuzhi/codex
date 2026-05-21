@@ -70,6 +70,7 @@ fn test_extract_text_content_with_metadata() {
             provider_executed: None,
             provider_metadata: None,
             invalid: false,
+            invalid_reason: None,
         }),
     ];
 
