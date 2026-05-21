@@ -4,7 +4,7 @@
 //! helpers from `powershell.rs` — previously they were dead code.
 
 use super::PowerShellTool;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
@@ -13,12 +13,12 @@ use serde_json::json;
 #[tokio::test]
 async fn test_powershell_rejects_unsafe_clm_type() {
     let ctx = ToolUseContext::test_default();
-    let result = PowerShellTool
-        .execute(
-            json!({"command": "[System.Reflection.Assembly]::LoadFrom('x.dll')"}),
-            &ctx,
-        )
-        .await;
+    let result = <PowerShellTool as DynTool>::execute(
+        &PowerShellTool,
+        json!({"command": "[System.Reflection.Assembly]::LoadFrom('x.dll')"}),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err(), "unsafe .NET type must be rejected");
     let err = result.unwrap_err().to_string();
     assert!(
@@ -32,12 +32,12 @@ async fn test_powershell_rejects_unsafe_clm_type() {
 #[tokio::test]
 async fn test_powershell_rejects_git_internal_write() {
     let ctx = ToolUseContext::test_default();
-    let result = PowerShellTool
-        .execute(
-            json!({"command": "Set-Content .git/hooks/pre-commit 'evil'"}),
-            &ctx,
-        )
-        .await;
+    let result = <PowerShellTool as DynTool>::execute(
+        &PowerShellTool,
+        json!({"command": "Set-Content .git/hooks/pre-commit 'evil'"}),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err(), "git-internal write must be rejected");
 }
 
@@ -45,12 +45,12 @@ async fn test_powershell_rejects_git_internal_write() {
 #[tokio::test]
 async fn test_powershell_rejects_unc_path() {
     let ctx = ToolUseContext::test_default();
-    let result = PowerShellTool
-        .execute(
-            json!({"command": "Get-ChildItem \\\\evil.com\\share"}),
-            &ctx,
-        )
-        .await;
+    let result = <PowerShellTool as DynTool>::execute(
+        &PowerShellTool,
+        json!({"command": "Get-ChildItem \\\\evil.com\\share"}),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err(), "UNC path must be rejected");
     let err = result.unwrap_err().to_string();
     assert!(
@@ -73,15 +73,15 @@ fn test_powershell_read_only_fast_path() {
     for cmd in cases {
         let input = json!({"command": cmd});
         assert!(
-            PowerShellTool.is_read_only(&input),
+            <PowerShellTool as DynTool>::is_read_only(&PowerShellTool, &input),
             "`{cmd}` should be read-only"
         );
         assert!(
-            PowerShellTool.is_concurrency_safe(&input),
+            <PowerShellTool as DynTool>::is_concurrency_safe(&PowerShellTool, &input),
             "`{cmd}` should be concurrency-safe"
         );
         assert!(
-            !PowerShellTool.is_destructive(&input),
+            !<PowerShellTool as DynTool>::is_destructive(&PowerShellTool, &input),
             "`{cmd}` should not be destructive"
         );
     }
@@ -100,11 +100,11 @@ fn test_powershell_destructive_classification() {
     for cmd in cases {
         let input = json!({"command": cmd});
         assert!(
-            !PowerShellTool.is_read_only(&input),
+            !<PowerShellTool as DynTool>::is_read_only(&PowerShellTool, &input),
             "`{cmd}` should not be read-only"
         );
         assert!(
-            PowerShellTool.is_destructive(&input),
+            <PowerShellTool as DynTool>::is_destructive(&PowerShellTool, &input),
             "`{cmd}` should be destructive"
         );
     }
@@ -114,7 +114,7 @@ fn test_powershell_destructive_classification() {
 #[test]
 fn test_powershell_max_result_size_matches_ts() {
     assert_eq!(
-        PowerShellTool.max_result_size_bound(),
+        <PowerShellTool as DynTool>::max_result_size_bound(&PowerShellTool,),
         coco_tool_runtime::ResultSizeBound::Chars(30_000),
     );
 }
@@ -123,7 +123,7 @@ fn test_powershell_max_result_size_matches_ts() {
 #[test]
 fn test_powershell_missing_command_fails_validation() {
     let ctx = ToolUseContext::test_default();
-    let result = PowerShellTool.validate_input(&json!({}), &ctx);
+    let result = <PowerShellTool as DynTool>::validate_input(&PowerShellTool, &json!({}), &ctx);
     assert!(matches!(
         result,
         coco_tool_runtime::ValidationResult::Invalid { .. }
@@ -134,8 +134,11 @@ fn test_powershell_missing_command_fails_validation() {
 #[test]
 fn test_powershell_timeout_max_enforced() {
     let ctx = ToolUseContext::test_default();
-    let result =
-        PowerShellTool.validate_input(&json!({"command": "Get-Process", "timeout": 700_000}), &ctx);
+    let result = <PowerShellTool as DynTool>::validate_input(
+        &PowerShellTool,
+        &json!({"command": "Get-Process", "timeout": 700_000}),
+        &ctx,
+    );
     assert!(matches!(
         result,
         coco_tool_runtime::ValidationResult::Invalid { .. }
@@ -151,12 +154,12 @@ async fn test_powershell_readonly_bypasses_clm_gate() {
     // should skip the gate. We choose `[System.Whatever]` (not allowed)
     // inside a Get- command to prove the gate is bypassed.
     let ctx = ToolUseContext::test_default();
-    let result = PowerShellTool
-        .execute(
-            json!({"command": "Get-Content 'file.txt' # [System.Reflection.Assembly]"}),
-            &ctx,
-        )
-        .await;
+    let result = <PowerShellTool as DynTool>::execute(
+        &PowerShellTool,
+        json!({"command": "Get-Content 'file.txt' # [System.Reflection.Assembly]"}),
+        &ctx,
+    )
+    .await;
     // We expect this to either succeed (if pwsh is installed) or fail
     // with a pwsh-spawn error — NOT with a security-gate error.
     if let Err(e) = result {
@@ -172,7 +175,8 @@ async fn test_powershell_readonly_bypasses_clm_gate() {
 
 mod render_tests {
     use super::PowerShellTool;
-    use coco_tool_runtime::Tool;
+    use coco_tool_runtime::DynTool;
+
     use coco_tool_runtime::ToolResultContentPart;
     use serde_json::json;
 
@@ -190,7 +194,7 @@ mod render_tests {
             "status": "background",
             "message": "PowerShell command running in background. Task ID: ps-1.",
         });
-        let parts = PowerShellTool.render_for_model(&data);
+        let parts = <PowerShellTool as DynTool>::render_for_model(&PowerShellTool, &data);
         assert_eq!(
             text_of(&parts),
             "PowerShell command running in background. Task ID: ps-1."
@@ -205,7 +209,7 @@ mod render_tests {
             "exitCode": 0,
             "interrupted": false,
         });
-        let parts = PowerShellTool.render_for_model(&data);
+        let parts = <PowerShellTool as DynTool>::render_for_model(&PowerShellTool, &data);
         let text = text_of(&parts);
         assert!(text.contains("hello\nworld"), "got: {text}");
         assert!(text.contains("warn: x"), "got: {text}");
@@ -221,7 +225,7 @@ mod render_tests {
             "stderr": "",
             "interrupted": true,
         });
-        let parts = PowerShellTool.render_for_model(&data);
+        let parts = <PowerShellTool as DynTool>::render_for_model(&PowerShellTool, &data);
         let text = text_of(&parts);
         assert!(text.contains("partial"), "got: {text}");
         assert!(
@@ -242,7 +246,7 @@ mod render_tests {
             "persistedOutputPath": "/tmp/coco-ps-1.txt",
             "persistedOutputSize": 1_500_000,
         });
-        let parts = PowerShellTool.render_for_model(&data);
+        let parts = <PowerShellTool as DynTool>::render_for_model(&PowerShellTool, &data);
         let text = text_of(&parts);
         assert!(text.contains("first line\nsecond line"), "got: {text}");
         assert!(!text.contains("<persisted-output>"), "got: {text}");
@@ -260,7 +264,7 @@ mod render_tests {
             "backgroundTaskId": "ps-99",
             "assistantAutoBackgrounded": true,
         });
-        let parts = PowerShellTool.render_for_model(&data);
+        let parts = <PowerShellTool as DynTool>::render_for_model(&PowerShellTool, &data);
         let text = text_of(&parts);
         assert!(
             text.contains("Command exceeded the assistant-mode blocking budget"),
@@ -279,7 +283,7 @@ mod render_tests {
             "backgroundTaskId": "ps-7",
             "backgroundedByUser": true,
         });
-        let parts = PowerShellTool.render_for_model(&data);
+        let parts = <PowerShellTool as DynTool>::render_for_model(&PowerShellTool, &data);
         let text = text_of(&parts);
         assert!(
             text.contains("Command was manually backgrounded by user"),
@@ -298,7 +302,7 @@ mod render_tests {
             "interrupted": false,
             "backgroundTaskId": "ps-3",
         });
-        let parts = PowerShellTool.render_for_model(&data);
+        let parts = <PowerShellTool as DynTool>::render_for_model(&PowerShellTool, &data);
         let text = text_of(&parts);
         assert!(
             text.contains("Command running in background with ID: ps-3"),

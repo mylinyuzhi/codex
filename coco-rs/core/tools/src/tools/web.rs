@@ -8,8 +8,41 @@ use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// Typed input for [`WebFetchTool`]. Manual `input_schema()` is the
+/// model-facing source of truth — this struct is the boundary
+/// deserialiser.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct WebFetchInput {
+    /// The URL to fetch content from
+    #[serde(default)]
+    pub url: String,
+    /// The prompt to run on the fetched content
+    #[serde(default)]
+    pub prompt: String,
+}
+
+/// Typed input for [`WebSearchTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct WebSearchInput {
+    /// The search query
+    #[serde(default)]
+    pub query: String,
+    /// Maximum number of results to return. Clamped to
+    /// `[1, SEARCH_MAX_RESULTS_CEILING]`.
+    #[serde(default)]
+    pub max_results: Option<i64>,
+    /// Only include results from these domains (client-side filter).
+    #[serde(default)]
+    pub allowed_domains: Option<Vec<String>>,
+    /// Never include results from these domains (client-side filter).
+    #[serde(default)]
+    pub blocked_domains: Option<Vec<String>>,
+}
 
 // Max-fetch-length (100K chars), fetch timeout (60s), and user-agent
 // now live on `coco_config::WebFetchConfig` — consumed from
@@ -533,6 +566,12 @@ pub struct WebFetchTool;
 
 #[async_trait::async_trait]
 impl Tool for WebFetchTool {
+    type Input = WebFetchInput;
+    /// Multi-shape output (cached/fresh extraction, cross-origin
+    /// redirect envelope, raw markdown fallback) — keep `Value` as the
+    /// escape hatch (see `BashTool` for the same rationale).
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::WebFetch)
     }
@@ -542,7 +581,7 @@ impl Tool for WebFetchTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::WebFetch)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &WebFetchInput, _options: &DescriptionOptions) -> String {
         // R7-T25: byte-aligned port of TS `WebFetchTool/prompt.ts:3-21`
         // `DESCRIPTION`. Includes the MCP-preference hint, the
         // 15-minute cache note, and the cross-origin redirect handling
@@ -584,10 +623,10 @@ Usage notes:
             required: Vec::new(),
         }
     }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &WebFetchInput) -> bool {
         true
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &WebFetchInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -597,8 +636,11 @@ Usage notes:
         Some("fetch a URL and summarize the page contents")
     }
 
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let url = input.get("url").and_then(|v| v.as_str())?;
+    fn get_activity_description(&self, input: &WebFetchInput) -> Option<String> {
+        if input.url.is_empty() {
+            return None;
+        }
+        let url = input.url.as_str();
         let truncated: String = url.chars().take(47).collect();
         let display = if truncated.len() < url.len() {
             format!("Fetching {truncated}...")
@@ -633,14 +675,10 @@ Usage notes:
 
     async fn execute(
         &self,
-        input: Value,
+        input: WebFetchInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let url = input
-            .get("url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+        let url = input.url.trim();
 
         if url.is_empty() {
             return Err(ToolError::InvalidInput {
@@ -672,11 +710,7 @@ Usage notes:
             });
         }
 
-        let prompt = input
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+        let prompt = input.prompt.trim();
 
         if prompt.is_empty() {
             return Err(ToolError::InvalidInput {
@@ -1091,7 +1125,6 @@ pub(super) fn resolve_redirect_url(base: &str, location: &str) -> String {
 // `[PARSE_ERROR]`) let the model react appropriately — e.g. retrying with a
 // different query after a parse error vs. backing off on rate limits.
 
-use serde::Deserialize;
 use serde::Serialize;
 use std::sync::LazyLock;
 use std::sync::Mutex;
@@ -1289,6 +1322,12 @@ pub struct WebSearchTool;
 
 #[async_trait::async_trait]
 impl Tool for WebSearchTool {
+    type Input = WebSearchInput;
+    /// Wire shape carries both prebuilt `formatted` markdown and a
+    /// downstream-consumer `results` array; staying on `Value` keeps
+    /// the consumer flexibility without forcing a typed result envelope.
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::WebSearch)
     }
@@ -1298,7 +1337,7 @@ impl Tool for WebSearchTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::WebSearch)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &WebSearchInput, _options: &DescriptionOptions) -> String {
         // R7-T25: byte-aligned port of TS `WebSearchTool/prompt.ts:5-33`
         // `getWebSearchPrompt()`. The CRITICAL REQUIREMENT block is
         // mandatory — TS marks it as "MUST follow" and the model is
@@ -1384,10 +1423,10 @@ IMPORTANT - Use the correct year in search queries:
             required: Vec::new(),
         }
     }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &WebSearchInput) -> bool {
         true
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &WebSearchInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -1399,11 +1438,10 @@ IMPORTANT - Use the correct year in search queries:
 
     fn validate_input(
         &self,
-        input: &Value,
+        input: &WebSearchInput,
         _ctx: &ToolUseContext,
     ) -> coco_tool_runtime::ValidationResult {
-        let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
-        if query.trim().len() < SEARCH_MIN_QUERY_LEN {
+        if input.query.trim().len() < SEARCH_MIN_QUERY_LEN {
             return coco_tool_runtime::ValidationResult::invalid(
                 "query must be at least 2 characters long",
             );
@@ -1413,13 +1451,13 @@ IMPORTANT - Use the correct year in search queries:
         // lists, which wins? We reject at validation time to force a clear
         // policy. Cocode-rs enforces the same rule.
         let has_allowed = input
-            .get("allowed_domains")
-            .and_then(|v| v.as_array())
+            .allowed_domains
+            .as_ref()
             .map(|a| !a.is_empty())
             .unwrap_or(false);
         let has_blocked = input
-            .get("blocked_domains")
-            .and_then(|v| v.as_array())
+            .blocked_domains
+            .as_ref()
             .map(|a| !a.is_empty())
             .unwrap_or(false);
         if has_allowed && has_blocked {
@@ -1430,9 +1468,11 @@ IMPORTANT - Use the correct year in search queries:
         coco_tool_runtime::ValidationResult::Valid
     }
 
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let query = input.get("query").and_then(|v| v.as_str())?;
-        Some(format!("Searching for \"{query}\""))
+    fn get_activity_description(&self, input: &WebSearchInput) -> Option<String> {
+        if input.query.is_empty() {
+            return None;
+        }
+        Some(format!("Searching for \"{}\"", input.query))
     }
 
     /// Render the prebuilt `formatted` field — the structured `results`
@@ -1452,15 +1492,10 @@ IMPORTANT - Use the correct year in search queries:
 
     async fn execute(
         &self,
-        input: Value,
+        input: WebSearchInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let query = input
-            .get("query")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let query = input.query.trim().to_string();
 
         if query.is_empty() {
             return Err(ToolError::InvalidInput {
@@ -1470,24 +1505,14 @@ IMPORTANT - Use the correct year in search queries:
         }
 
         let allowed: Vec<String> = input
-            .get("allowed_domains")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(str::to_lowercase)
-                    .collect()
-            })
+            .allowed_domains
+            .as_ref()
+            .map(|a| a.iter().map(|s| s.to_lowercase()).collect())
             .unwrap_or_default();
         let blocked: Vec<String> = input
-            .get("blocked_domains")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(str::to_lowercase)
-                    .collect()
-            })
+            .blocked_domains
+            .as_ref()
+            .map(|a| a.iter().map(|s| s.to_lowercase()).collect())
             .unwrap_or_default();
 
         // max_results precedence: input override > config default.
@@ -1495,8 +1520,7 @@ IMPORTANT - Use the correct year in search queries:
         // settings file or a hostile input can't force us to fetch
         // thousands of pages.
         let max_results = input
-            .get("max_results")
-            .and_then(serde_json::Value::as_i64)
+            .max_results
             .map(|n| n as usize)
             .unwrap_or_else(|| ctx.web_search_config.max_results.max(1) as usize)
             .clamp(1, SEARCH_MAX_RESULTS_CEILING);

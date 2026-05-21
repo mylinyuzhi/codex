@@ -33,6 +33,13 @@ serde_json.workspace = true
 async-trait.workspace = true
 futures = { workspace = true, features = ["alloc"] }
 jsonschema = "0.18"
+# Used by `derive` module to produce `ToolInputSchema` from
+# `#[derive(JsonSchema)]` input/output structs — one artifact per tool
+# is the source of truth for both schema and typed parsing.
+# TS parity: `z.infer<Input>` derives the type FROM the zod schema; the
+# Rust mirror is `T: JsonSchema` → schema, with `T: Deserialize` doing
+# the typed parse.
+schemars.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-util = { workspace = true }

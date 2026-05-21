@@ -51,7 +51,7 @@ use coco_types::ToolId;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::traits::Tool;
+use crate::traits::DynTool;
 
 /// Build the full JSON Schema document the model saw for a tool.
 ///
@@ -62,7 +62,7 @@ use crate::traits::Tool;
 /// TS parity: mirrors `toolUseContext.options.tools[name]` — both
 /// validator input and model-visible schema come from the same
 /// function so drift is impossible.
-pub fn effective_tool_schema(tool: &dyn Tool) -> Value {
+pub fn effective_tool_schema(tool: &dyn DynTool) -> Value {
     if let Some(json) = tool.input_json_schema() {
         return json;
     }
@@ -123,7 +123,7 @@ impl ToolSchemaValidator {
     /// `tool.id()`. Subsequent calls hit the cache.
     pub async fn validate(
         &self,
-        tool: &dyn Tool,
+        tool: &dyn DynTool,
         input: &Value,
     ) -> Result<(), SchemaValidationError> {
         let tool_id = tool.id();

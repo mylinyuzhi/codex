@@ -54,15 +54,18 @@
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use regex::Regex;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -199,7 +202,7 @@ struct ScoredTool {
 /// Score a deferred tool against pre-tokenized search terms. Returns
 /// the raw score; the caller filters out `score <= 0` and sorts.
 fn score_tool(
-    tool: &dyn Tool,
+    tool: &dyn DynTool,
     parsed: &ParsedToolName,
     desc_lower: &str,
     hint_lower: &str,
@@ -249,8 +252,8 @@ fn score_tool(
 /// Run the keyword path over the deferred-tool list. Mirrors TS
 /// `searchToolsWithKeywords` (`ToolSearchTool.ts:186-302`).
 fn search_with_keywords(
-    deferred: &[Arc<dyn Tool>],
-    all: &[Arc<dyn Tool>],
+    deferred: &[Arc<dyn DynTool>],
+    all: &[Arc<dyn DynTool>],
     desc_opts: &DescriptionOptions,
     query: &str,
     max_results: usize,
@@ -324,7 +327,7 @@ fn search_with_keywords(
     // Precompute description + hint for each deferred tool so the
     // pre-filter and the scoring pass don't both call `description`.
     struct ToolWithText {
-        tool: Arc<dyn Tool>,
+        tool: Arc<dyn DynTool>,
         parsed: ParsedToolName,
         desc_lower: String,
         hint_lower: String,
@@ -415,10 +418,49 @@ fn build_discovery_patch(matches: &[String]) -> Option<coco_types::AppStatePatch
     }))
 }
 
+/// Typed input for [`ToolSearchTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct ToolSearchInput {
+    /// Query to find deferred tools. Use "select:<tool_name>" for
+    /// direct selection, or keywords to search.
+    #[serde(default)]
+    pub query: String,
+    /// Maximum number of results to return (default: 5)
+    #[serde(default)]
+    pub max_results: Option<i64>,
+}
+
+/// Typed output for [`ToolSearchTool`]. Same wire fields as the
+/// pre-typed `build_envelope` produced.
+///
+/// All fields default so transcript replay / partial fixtures
+/// round-trip via the `DynTool` blanket.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ToolSearchOutput {
+    #[serde(default)]
+    pub matches: Vec<String>,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub total_deferred_tools: i64,
+    /// Set when the current model supports Anthropic's server-side
+    /// `tool_reference` expansion — `render_for_model` then emits
+    /// `tool_reference` content blocks instead of a text list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_as_tool_reference: Option<bool>,
+    /// Empty-result retry hint — only set when no matches AND at
+    /// least one MCP server is still mid-handshake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_mcp_servers: Option<Vec<String>>,
+}
+
 pub struct ToolSearchTool;
 
 #[async_trait::async_trait]
 impl Tool for ToolSearchTool {
+    type Input = ToolSearchInput;
+    type Output = ToolSearchOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::ToolSearch)
     }
@@ -439,44 +481,26 @@ impl Tool for ToolSearchTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.tool_search_active()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &ToolSearchInput, _options: &DescriptionOptions) -> String {
         format!("{PROMPT_HEAD}{PROMPT_LOCATION_HINT}{PROMPT_TAIL}")
     }
     async fn prompt(&self, _options: &PromptOptions) -> String {
         format!("{PROMPT_HEAD}{PROMPT_LOCATION_HINT}{PROMPT_TAIL}")
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "query".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Query to find deferred tools. Use \"select:<tool_name>\" for direct selection, or keywords to search."
-            }),
-        );
-        p.insert(
-            "max_results".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Maximum number of results to return (default: 5)"
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
-    }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &ToolSearchInput) -> bool {
         true
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &ToolSearchInput) -> bool {
         true
     }
 
     /// Render the search envelope into content parts the model sees.
     ///
     /// **Two emission shapes**, selected by the `render_as_tool_reference`
-    /// flag the executor sets in `data`:
+    /// flag the executor sets in `out`:
     ///
     /// 1. **`tool_reference` blocks** (Anthropic, capable models) —
     ///    one `Custom` part per match carrying
@@ -500,40 +524,33 @@ impl Tool for ToolSearchTool {
     /// matches TS byte-for-byte: `No matching deferred tools found` +
     /// the pending-MCP-server suffix when servers are still
     /// mid-handshake.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let matches: Vec<&str> = data
-            .get("matches")
-            .and_then(Value::as_array)
-            .map(|arr| arr.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        let use_tool_reference = data
-            .get("render_as_tool_reference")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+    fn render_for_model(&self, out: &ToolSearchOutput) -> Vec<ToolResultContentPart> {
+        let use_tool_reference = out.render_as_tool_reference.unwrap_or(false);
 
-        if !matches.is_empty() && use_tool_reference {
-            return matches
-                .into_iter()
-                .map(coco_tool_runtime::tool_reference_content_part)
+        if !out.matches.is_empty() && use_tool_reference {
+            return out
+                .matches
+                .iter()
+                .map(|m| coco_tool_runtime::tool_reference_content_part(m.as_str()))
                 .collect();
         }
 
-        let text = if matches.is_empty() {
-            let mut out = "No matching deferred tools found".to_string();
-            if let Some(pending) = data.get("pending_mcp_servers").and_then(Value::as_array) {
-                let names: Vec<&str> = pending.iter().filter_map(Value::as_str).collect();
+        let text = if out.matches.is_empty() {
+            let mut text = "No matching deferred tools found".to_string();
+            if let Some(pending) = out.pending_mcp_servers.as_ref() {
+                let names: Vec<&str> = pending.iter().map(String::as_str).collect();
                 if !names.is_empty() {
                     use std::fmt::Write;
                     let _ = write!(
-                        out,
+                        text,
                         ". Some MCP servers are still connecting: {}. Their tools will become available shortly — try searching again.",
                         names.join(", ")
                     );
                 }
             }
-            out
+            text
         } else {
-            format!("Matched tools:\n{}", matches.join("\n"))
+            format!("Matched tools:\n{}", out.matches.join("\n"))
         };
         vec![ToolResultContentPart::Text {
             text,
@@ -543,15 +560,10 @@ impl Tool for ToolSearchTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: ToolSearchInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let raw_query = input
-            .get("query")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
+    ) -> Result<ToolResult<ToolSearchOutput>, ToolError> {
+        let raw_query = input.query.trim().to_string();
 
         if raw_query.is_empty() {
             return Err(ToolError::InvalidInput {
@@ -561,8 +573,7 @@ impl Tool for ToolSearchTool {
         }
 
         let max_results = input
-            .get("max_results")
-            .and_then(serde_json::Value::as_i64)
+            .max_results
             .filter(|n| *n > 0)
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_MAX_RESULTS);
@@ -571,7 +582,7 @@ impl Tool for ToolSearchTool {
         // see a consistent state. `ctx.tools.all()` clones Arc handles
         // — cheap.
         let all_tools = ctx.tools.all();
-        let deferred: Vec<Arc<dyn Tool>> = all_tools
+        let deferred: Vec<Arc<dyn DynTool>> = all_tools
             .iter()
             .filter(|t| {
                 // A tool is in the searchable "deferred" pool when it
@@ -700,25 +711,28 @@ async fn build_envelope(
     total_deferred_tools: i64,
     use_tool_reference: bool,
     mcp: &coco_tool_runtime::McpHandleRef,
-) -> Value {
-    let mut envelope = serde_json::json!({
-        "matches": matches,
-        "query": raw_query,
-        "total_deferred_tools": total_deferred_tools,
-    });
-    if use_tool_reference {
-        envelope["render_as_tool_reference"] = serde_json::Value::Bool(true);
-    }
+) -> ToolSearchOutput {
     // Empty-result retry hint: only attach when there's genuine MCP-
     // server churn so the model gets actionable info, not noise. TS
     // parity: `ToolSearchTool.ts:422-433`.
-    if matches.is_empty() {
+    let pending_mcp_servers = if matches.is_empty() {
         let pending = mcp.pending_server_names().await;
-        if !pending.is_empty() {
-            envelope["pending_mcp_servers"] = serde_json::json!(pending);
+        if pending.is_empty() {
+            None
+        } else {
+            Some(pending)
         }
+    } else {
+        None
+    };
+
+    ToolSearchOutput {
+        matches: matches.to_vec(),
+        query: raw_query.to_string(),
+        total_deferred_tools,
+        render_as_tool_reference: use_tool_reference.then_some(true),
+        pending_mcp_servers,
     }
-    envelope
 }
 
 #[cfg(test)]

@@ -547,7 +547,7 @@ pub fn get_command_type_for_logging(command: &str) -> &'static str {
 
 /// Extract description from the tool input, falling back to command truncation.
 ///
-/// TS: BashTool.description() + getToolUseSummary() + getActivityDescription()
+/// TS: <BashTool as DynTool>::description(&BashTool, ) + getToolUseSummary() + getActivityDescription()
 pub fn extract_description(command: &str, description: Option<&str>) -> String {
     if let Some(desc) = description
         && !desc.is_empty()

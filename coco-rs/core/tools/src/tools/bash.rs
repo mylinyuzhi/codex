@@ -17,8 +17,56 @@ use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// Typed input for [`BashTool`].
+///
+/// The model-facing schema is built by the manual [`BashTool::input_schema`]
+/// override — TS-mirror with the four user-visible fields and intentionally
+/// omitting `_simulatedSedEdit` (internal; populated by the
+/// `SedEditPermissionRequest` TUI dialog).
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct BashInput {
+    /// The shell command to execute. Required by validation, but
+    /// `#[serde(default)]` lets us emit a clean "missing command" error
+    /// at the boundary instead of an opaque Serde failure.
+    #[serde(default)]
+    pub command: String,
+    /// Optional timeout (ms). Clamped to `ToolConfig::bash.max_timeout_ms`.
+    #[serde(default)]
+    pub timeout: Option<u64>,
+    /// Short description of what the command does. Falls back to the
+    /// command string when omitted (TS `BashTool.tsx:879`).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Run in the background. Returns a `task_id` immediately and emits
+    /// a `<task-notification>` on completion.
+    #[serde(default)]
+    pub run_in_background: bool,
+    /// Bypass sandbox wrapping for this command. Requires the killswitch
+    /// to be unlocked; falls open at the sandbox layer otherwise.
+    #[serde(default, rename = "dangerouslyDisableSandbox")]
+    pub dangerously_disable_sandbox: bool,
+    /// (Internal) Previewed sed-edit payload from the
+    /// `SedEditPermissionRequest` TUI dialog. NOT exposed in
+    /// `input_schema()` — the model can't synthesise this; it's only
+    /// populated by upstream rewrite when the user converts a
+    /// `sed -i ...` command into an Edit-style write.
+    #[serde(default, rename = "_simulatedSedEdit")]
+    pub simulated_sed_edit: Option<SimulatedSedEdit>,
+}
+
+/// Internal sed-edit payload — see [`BashInput::simulated_sed_edit`].
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SimulatedSedEdit {
+    #[serde(rename = "filePath")]
+    pub file_path: String,
+    #[serde(rename = "newContent")]
+    pub new_content: String,
+}
 
 fn default_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
     config.bash.default_timeout_ms.max(1) as u64
@@ -191,6 +239,13 @@ pub struct BashTool;
 
 #[async_trait::async_trait]
 impl Tool for BashTool {
+    type Input = BashInput;
+    /// Multiple wire shapes (fg text, fg image with `structuredContent`,
+    /// bg `{task_id, status}`) make a typed Output more friction than
+    /// it's worth — keep `Value` as the deliberate escape hatch (same
+    /// pattern as `ReadTool` / `PowerShellTool`).
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Bash)
     }
@@ -199,7 +254,7 @@ impl Tool for BashTool {
         ToolName::Bash.as_str()
     }
 
-    fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &BashInput, _options: &DescriptionOptions) -> String {
         BASH_TOOL_DESCRIPTION.into()
     }
 
@@ -254,24 +309,22 @@ impl Tool for BashTool {
     ///
     /// Delegates to `coco_shell::read_only::is_read_only_command` which wraps the
     /// 40+ safe-command allowlist + conditional safety rules for git/sed/find/rg/etc.
-    fn is_read_only(&self, input: &Value) -> bool {
-        input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .map(is_read_only_command)
-            .unwrap_or(false)
+    fn is_read_only(&self, input: &BashInput) -> bool {
+        !input.command.is_empty() && is_read_only_command(&input.command)
     }
 
     /// Concurrency-safe iff read-only. TS `isConcurrencySafe` is driven by the
     /// same allowlist — read-only commands have no shared mutable state with
     /// sibling tools, so the executor can batch them with Read/Grep/Glob.
-    fn is_concurrency_safe(&self, input: &Value) -> bool {
-        self.is_read_only(input)
+    fn is_concurrency_safe(&self, input: &BashInput) -> bool {
+        Tool::is_read_only(self, input)
     }
 
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let command = input.get("command").and_then(|v| v.as_str())?;
-        // Truncate long commands for display (char-safe)
+    fn get_activity_description(&self, input: &BashInput) -> Option<String> {
+        if input.command.is_empty() {
+            return None;
+        }
+        let command = input.command.as_str();
         let truncated: String = command.chars().take(57).collect();
         let display = if truncated.len() < command.len() {
             format!("Running {truncated}...")
@@ -286,8 +339,8 @@ impl Tool for BashTool {
     /// `true` forced approval for every `ls`/`cat`/`git log`, which was a major UX
     /// regression vs. TS. Matches TS multi-stage pipeline where the read-only fast
     /// path (`bashPermissions.ts:1663+`) auto-allows before reaching the Ask phase.
-    fn is_destructive(&self, input: &Value) -> bool {
-        !self.is_read_only(input)
+    fn is_destructive(&self, input: &BashInput) -> bool {
+        !Tool::is_read_only(self, input)
     }
 
     /// Tool-result persistence threshold. TS: `BashTool.tsx:424`
@@ -445,12 +498,12 @@ impl Tool for BashTool {
         }]
     }
 
-    fn validate_input(&self, input: &Value, ctx: &ToolUseContext) -> ValidationResult {
-        if input.get("command").and_then(|v| v.as_str()).is_none() {
+    fn validate_input(&self, input: &BashInput, ctx: &ToolUseContext) -> ValidationResult {
+        if input.command.is_empty() {
             return ValidationResult::invalid("missing required field: command");
         }
         let max_timeout_ms = max_timeout_ms(&ctx.tool_config);
-        if let Some(timeout) = input.get("timeout").and_then(serde_json::Value::as_u64)
+        if let Some(timeout) = input.timeout
             && timeout > max_timeout_ms
         {
             return ValidationResult::invalid(format!(
@@ -462,7 +515,7 @@ impl Tool for BashTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: BashInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         // ── R7-T11: _simulatedSedEdit short-circuit ──
@@ -484,33 +537,29 @@ impl Tool for BashTool {
         // `services/tools/toolExecution.ts:756-770`). We emit a debug
         // log when the field is present so anomalous traffic is visible
         // even if the executor strip is missing.
-        if let Some(sed_input) = input.get("_simulatedSedEdit") {
+        if let Some(sed_input) = input.simulated_sed_edit.as_ref() {
             tracing::debug!(
                 "BashTool received _simulatedSedEdit input — applying as Edit-style write"
             );
             return apply_sed_edit(sed_input, ctx).await;
         }
 
-        let command = input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidInput {
+        if input.command.is_empty() {
+            return Err(ToolError::InvalidInput {
                 message: "missing command".into(),
                 error_code: None,
-            })?;
+            });
+        }
+        let command = input.command.as_str();
 
         let default_timeout_ms = default_timeout_ms(&ctx.tool_config);
         let max_timeout_ms = max_timeout_ms(&ctx.tool_config);
         let timeout_ms = input
-            .get("timeout")
-            .and_then(serde_json::Value::as_u64)
+            .timeout
             .unwrap_or(default_timeout_ms)
             .min(max_timeout_ms);
 
-        let run_in_background = input
-            .get("run_in_background")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+        let run_in_background = input.run_in_background;
 
         // R6-T18: sandbox decision. Matches TS `shouldUseSandbox(input)`
         // at `shouldUseSandbox.ts:130-153`:
@@ -524,12 +573,7 @@ impl Tool for BashTool {
         // (feature gate + bootstrap supplied the state) and forwards the
         // bypass flag.
         let sandbox_state = active_sandbox_state(ctx);
-        let sandbox_bypass = SandboxBypass::from_flag(
-            input
-                .get("dangerouslyDisableSandbox")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
-        );
+        let sandbox_bypass = SandboxBypass::from_flag(input.dangerously_disable_sandbox);
         if let Some(state) = &sandbox_state {
             let snapshot = state.command_snapshot(command, sandbox_bypass);
             if snapshot.should_wrap {
@@ -596,8 +640,8 @@ impl Tool for BashTool {
         // command` — the model's input.description takes precedence,
         // falling back to the command string when omitted.
         let resolved_description = input
-            .get("description")
-            .and_then(|v| v.as_str())
+            .description
+            .as_deref()
             .filter(|s| !s.is_empty())
             .map(String::from)
             .unwrap_or_else(|| command.to_string());
@@ -1198,23 +1242,11 @@ fn build_image_block(bytes: &[u8]) -> Value {
 /// `newContent` fields. Missing/wrong-type fields surface as
 /// `InvalidInput` errors.
 async fn apply_sed_edit(
-    sed_input: &Value,
+    sed_input: &SimulatedSedEdit,
     ctx: &ToolUseContext,
 ) -> Result<ToolResult<Value>, ToolError> {
-    let file_path = sed_input
-        .get("filePath")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidInput {
-            message: "_simulatedSedEdit.filePath is required".into(),
-            error_code: None,
-        })?;
-    let new_content = sed_input
-        .get("newContent")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidInput {
-            message: "_simulatedSedEdit.newContent is required".into(),
-            error_code: None,
-        })?;
+    let file_path = sed_input.file_path.as_str();
+    let new_content = sed_input.new_content.as_str();
 
     let path = std::path::Path::new(file_path);
 

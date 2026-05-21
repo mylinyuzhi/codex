@@ -1,5 +1,5 @@
 use crate::tools::write::WriteTool;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::PermissionBehavior;
 use coco_types::PermissionMode;
@@ -13,7 +13,12 @@ use serde_json::json;
 #[test]
 fn test_write_description_includes_read_before_write_warning() {
     use coco_tool_runtime::DescriptionOptions;
-    let desc = WriteTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
+    // Description is input-independent, but the blanket DynTool path
+    // needs a valid Input fixture to deserialize before calling the
+    // typed Tool::description.
+    let fixture = json!({"file_path": "/tmp/x", "content": ""});
+    let desc =
+        <WriteTool as DynTool>::description(&WriteTool, &fixture, &DescriptionOptions::default());
     assert!(
         desc.contains("MUST use the `Read` tool first"),
         "Write description should warn about read-before-write requirement, got:\n{desc}"
@@ -36,12 +41,12 @@ async fn test_write_check_permissions_accept_edits_allows_cwd_path() {
     ctx.cwd_override = Some(dir.path().to_path_buf());
     ctx.permission_context.mode = PermissionMode::AcceptEdits;
 
-    let result = WriteTool
-        .check_permissions(
-            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::check_permissions(
+        &WriteTool,
+        &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+        &ctx,
+    )
+    .await;
 
     assert!(matches!(result, ToolCheckResult::Allow { .. }));
 }
@@ -56,12 +61,12 @@ async fn test_write_check_permissions_accept_edits_asks_outside_cwd() {
     ctx.permission_context.mode = PermissionMode::Default;
     ctx.permission_context.mode = PermissionMode::AcceptEdits;
 
-    let result = WriteTool
-        .check_permissions(
-            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::check_permissions(
+        &WriteTool,
+        &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+        &ctx,
+    )
+    .await;
 
     assert!(matches!(result, ToolCheckResult::Ask { .. }), "{result:?}");
 }
@@ -75,12 +80,12 @@ async fn test_write_check_permissions_default_ask_includes_write_suggestions() {
     ctx.cwd_override = Some(cwd.path().to_path_buf());
     ctx.permission_context.mode = PermissionMode::Default;
 
-    let result = WriteTool
-        .check_permissions(
-            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::check_permissions(
+        &WriteTool,
+        &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+        &ctx,
+    )
+    .await;
 
     let ToolCheckResult::Ask { suggestions, .. } = result else {
         panic!("expected ask");
@@ -123,12 +128,12 @@ async fn test_write_check_permissions_honors_tool_wide_allow_rule() {
         }],
     );
 
-    let result = WriteTool
-        .check_permissions(
-            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::check_permissions(
+        &WriteTool,
+        &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+        &ctx,
+    )
+    .await;
 
     assert!(matches!(result, ToolCheckResult::Allow { .. }));
 }
@@ -153,12 +158,12 @@ async fn test_write_check_permissions_ignores_path_scoped_write_rule() {
         }],
     );
 
-    let result = WriteTool
-        .check_permissions(
-            &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::check_permissions(
+        &WriteTool,
+        &json!({"file_path": file.to_str().unwrap(), "content": "hello"}),
+        &ctx,
+    )
+    .await;
 
     assert!(matches!(result, ToolCheckResult::Ask { .. }), "{result:?}");
 }
@@ -169,13 +174,13 @@ async fn test_write_new_file() {
     let file = dir.path().join("new.txt");
 
     let ctx = ToolUseContext::test_default();
-    let result = WriteTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "content": "hello\nworld\n"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "hello\nworld\n"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // TS shape: `{type: "create", filePath: ...}`. render_for_model
     // builds the human message from these fields.
@@ -191,13 +196,13 @@ async fn test_write_overwrite_existing() {
     std::fs::write(&file, "old content").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = WriteTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "content": "new content"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "new content"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["type"], "update");
     assert_eq!(result.data["filePath"], file.to_str().unwrap());
@@ -208,7 +213,7 @@ async fn test_write_overwrite_existing() {
 async fn test_write_render_for_model_create_branch() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!({"type": "create", "filePath": "/abs/new.txt"});
-    let parts = WriteTool.render_for_model(&data);
+    let parts = <WriteTool as DynTool>::render_for_model(&WriteTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -220,7 +225,7 @@ async fn test_write_render_for_model_create_branch() {
 async fn test_write_render_for_model_update_branch() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!({"type": "update", "filePath": "/abs/existing.txt"});
-    let parts = WriteTool.render_for_model(&data);
+    let parts = <WriteTool as DynTool>::render_for_model(&WriteTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -237,12 +242,12 @@ async fn test_write_creates_parent_dirs() {
     let file = dir.path().join("a").join("b").join("c.txt");
 
     let ctx = ToolUseContext::test_default();
-    let result = WriteTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "content": "deep"}),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "deep"}),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_ok());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "deep");
@@ -251,9 +256,9 @@ async fn test_write_creates_parent_dirs() {
 #[tokio::test]
 async fn test_write_missing_content() {
     let ctx = ToolUseContext::test_default();
-    let result = WriteTool
-        .execute(json!({"file_path": "/tmp/test.txt"}), &ctx)
-        .await;
+    let result =
+        <WriteTool as DynTool>::execute(&WriteTool, json!({"file_path": "/tmp/test.txt"}), &ctx)
+            .await;
 
     assert!(result.is_err());
 }
@@ -279,13 +284,13 @@ async fn test_write_preserves_utf16le_encoding() {
     std::fs::write(&file, &seed).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    WriteTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "content": "new"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "new"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let bytes = std::fs::read(&file).unwrap();
     // The file should still be UTF-16LE encoded. First two bytes are BOM.
@@ -324,12 +329,12 @@ async fn test_write_rejects_overwrite_without_read() {
     std::fs::write(&file, "original").unwrap();
 
     let ctx = ctx_with_file_state();
-    let result = WriteTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "content": "replaced"}),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "replaced"}),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err(), "should reject unseen-file overwrite");
     let err = result.unwrap_err().to_string();
@@ -348,13 +353,13 @@ async fn test_write_new_file_bypasses_read_check() {
     let file = dir.path().join("brand_new.txt");
 
     let ctx = ctx_with_file_state();
-    let result = WriteTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "content": "fresh"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "fresh"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["type"], "create");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "fresh");
@@ -384,12 +389,12 @@ async fn test_write_allows_overwrite_after_read() {
         );
     }
 
-    let result = WriteTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "content": "second version"}),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "second version"}),
+        &ctx,
+    )
+    .await;
     assert!(
         result.is_ok(),
         "prior read should allow overwrite: {result:?}"
@@ -424,12 +429,12 @@ async fn test_write_detects_content_drift() {
         );
     }
 
-    let result = WriteTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "content": "new content"}),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "new content"}),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err(), "content drift should be detected");
     let err = result.unwrap_err().to_string();
     assert!(
@@ -445,13 +450,13 @@ async fn test_write_new_file_is_utf8() {
     let file = dir.path().join("fresh.txt");
 
     let ctx = ToolUseContext::test_default();
-    WriteTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "content": "plain ascii"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "plain ascii"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let bytes = std::fs::read(&file).unwrap();
     assert_eq!(bytes, b"plain ascii");
@@ -476,17 +481,17 @@ async fn test_write_rejects_secret_in_team_memory_path() {
     let file = team_dir.join("personal.md");
 
     let ctx = ToolUseContext::test_default();
-    let result = WriteTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                // A bearer token-shaped secret triggers the redaction
-                // detector, which causes the guard to reject the write.
-                "content": "API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\nplain text\n"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            // A bearer token-shaped secret triggers the redaction
+            // detector, which causes the guard to reject the write.
+            "content": "API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\nplain text\n"
+        }),
+        &ctx,
+    )
+    .await;
 
     let err = result.unwrap_err();
     let msg = err.to_string();
@@ -507,15 +512,15 @@ async fn test_write_allows_secret_outside_team_memory_path() {
     let file = dir.path().join("notes.md");
 
     let ctx = ToolUseContext::test_default();
-    let result = WriteTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "content": "API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\n"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "content": "API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\n"
+        }),
+        &ctx,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -532,16 +537,16 @@ async fn test_write_allows_clean_content_in_team_memory_path() {
     let file = team_dir.join("safe.md");
 
     let ctx = ToolUseContext::test_default();
-    let result = WriteTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                // No secrets — guard permits the write.
-                "content": "Just plain documentation text without any keys."
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            // No secrets — guard permits the write.
+            "content": "Just plain documentation text without any keys."
+        }),
+        &ctx,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -563,15 +568,15 @@ async fn test_write_secret_guard_respects_custom_memory_dir_config() {
 
     let mut ctx = ToolUseContext::test_default();
     ctx.memory_config.directory = Some(custom_memory_dir);
-    let result = WriteTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "content": "API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\n"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "content": "API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\n"
+        }),
+        &ctx,
+    )
+    .await;
 
     let err = result.unwrap_err();
     assert!(

@@ -970,16 +970,19 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
 #[tokio::test]
 async fn test_bash_destructive_command_blocked() {
     // Test that the Bash tool blocks destructive commands
-    use coco_tool_runtime::Tool;
+
     use coco_tools::BashTool;
 
     let tool = BashTool;
     let ctx = coco_tool_runtime::ToolUseContext::test_default();
 
     // "rm -rf /" should be blocked by destructive warning check
-    let result = tool
-        .execute(serde_json::json!({"command": "rm -rf /"}), &ctx)
-        .await;
+    let result = <BashTool as coco_tool_runtime::DynTool>::execute(
+        &tool,
+        serde_json::json!({"command": "rm -rf /"}),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -988,19 +991,18 @@ async fn test_bash_destructive_command_blocked() {
 
 #[tokio::test]
 async fn test_bash_safe_command_executes() {
-    use coco_tool_runtime::Tool;
     use coco_tools::BashTool;
 
     let tool = BashTool;
     let ctx = coco_tool_runtime::ToolUseContext::test_default();
 
-    let result = tool
-        .execute(
-            serde_json::json!({"command": "echo integration_test_ok"}),
-            &ctx,
-        )
-        .await
-        .expect("echo should work");
+    let result = <BashTool as coco_tool_runtime::DynTool>::execute(
+        &tool,
+        serde_json::json!({"command": "echo integration_test_ok"}),
+        &ctx,
+    )
+    .await
+    .expect("echo should work");
 
     // Bash output is the TS-shaped object envelope:
     // `{ stdout, stderr, exitCode, interrupted, ... }` — pull stdout
@@ -1434,6 +1436,10 @@ struct PermissionRewriteTool;
 
 #[async_trait::async_trait]
 impl coco_tool_runtime::Tool for PermissionRewriteTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("permission_rewrite".into())
     }
@@ -1478,6 +1484,10 @@ struct HookEchoTool;
 
 #[async_trait::async_trait]
 impl coco_tool_runtime::Tool for HookEchoTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("hook_echo".into())
     }
@@ -1511,6 +1521,10 @@ struct HookMcpTool;
 
 #[async_trait::async_trait]
 impl coco_tool_runtime::Tool for HookMcpTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Mcp {
             server: "test-server".into(),
@@ -1558,6 +1572,10 @@ struct HookOrderingTool;
 
 #[async_trait::async_trait]
 impl coco_tool_runtime::Tool for HookOrderingTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("hook_ordering".into())
     }
@@ -1596,6 +1614,10 @@ struct HookOrderingMcpTool;
 
 #[async_trait::async_trait]
 impl coco_tool_runtime::Tool for HookOrderingMcpTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Mcp {
             server: "test-server".into(),
@@ -1646,6 +1668,10 @@ struct HookFailTool;
 
 #[async_trait::async_trait]
 impl coco_tool_runtime::Tool for HookFailTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("hook_fail".into())
     }
@@ -2577,6 +2603,10 @@ struct AskingTool;
 
 #[async_trait::async_trait]
 impl coco_tool_runtime::Tool for AskingTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("AskingTool".into())
     }
@@ -2837,6 +2867,10 @@ struct AskingMockTool;
 
 #[async_trait::async_trait]
 impl Tool for AskingMockTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom("asking_mock".into())
     }

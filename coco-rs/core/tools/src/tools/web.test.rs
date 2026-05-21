@@ -7,7 +7,7 @@ use super::extract_host;
 use super::parse_duckduckgo_html;
 use super::percent_decode;
 use super::strip_html_tags;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
@@ -212,18 +212,25 @@ fn test_parse_ddg_html_multiple_results() {
 
 #[test]
 fn test_websearch_is_read_only() {
-    assert!(WebSearchTool.is_read_only(&serde_json::Value::Null));
+    assert!(<WebSearchTool as DynTool>::is_read_only(
+        &WebSearchTool,
+        &json!({"query": "x"})
+    ));
 }
 
 #[test]
 fn test_websearch_is_concurrency_safe() {
-    assert!(WebSearchTool.is_concurrency_safe(&serde_json::Value::Null));
+    assert!(<WebSearchTool as DynTool>::is_concurrency_safe(
+        &WebSearchTool,
+        &json!({"query": "x"})
+    ));
 }
 
 #[tokio::test]
 async fn test_websearch_rejects_short_query() {
     let ctx = ToolUseContext::test_default();
-    let vr = WebSearchTool.validate_input(&json!({"query": "a"}), &ctx);
+    let vr =
+        <WebSearchTool as DynTool>::validate_input(&WebSearchTool, &json!({"query": "a"}), &ctx);
     assert!(matches!(
         vr,
         coco_tool_runtime::ValidationResult::Invalid { .. }
@@ -233,7 +240,8 @@ async fn test_websearch_rejects_short_query() {
 #[tokio::test]
 async fn test_websearch_rejects_both_filters() {
     let ctx = ToolUseContext::test_default();
-    let vr = WebSearchTool.validate_input(
+    let vr = <WebSearchTool as DynTool>::validate_input(
+        &WebSearchTool,
         &json!({
             "query": "rust",
             "allowed_domains": ["rust-lang.org"],
@@ -250,14 +258,19 @@ async fn test_websearch_rejects_both_filters() {
 #[tokio::test]
 async fn test_websearch_accepts_valid_query() {
     let ctx = ToolUseContext::test_default();
-    let vr = WebSearchTool.validate_input(&json!({"query": "rust lang"}), &ctx);
+    let vr = <WebSearchTool as DynTool>::validate_input(
+        &WebSearchTool,
+        &json!({"query": "rust lang"}),
+        &ctx,
+    );
     assert!(matches!(vr, coco_tool_runtime::ValidationResult::Valid));
 }
 
 #[tokio::test]
 async fn test_websearch_accepts_allowed_domains_alone() {
     let ctx = ToolUseContext::test_default();
-    let vr = WebSearchTool.validate_input(
+    let vr = <WebSearchTool as DynTool>::validate_input(
+        &WebSearchTool,
         &json!({"query": "rust", "allowed_domains": ["rust-lang.org"]}),
         &ctx,
     );
@@ -273,7 +286,11 @@ async fn test_websearch_accepts_allowed_domains_alone() {
 #[test]
 fn test_websearch_description_includes_sources_requirement() {
     use coco_tool_runtime::DescriptionOptions;
-    let desc = WebSearchTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
+    let desc = <WebSearchTool as DynTool>::description(
+        &WebSearchTool,
+        &json!({}),
+        &DescriptionOptions::default(),
+    );
     assert!(
         desc.contains("CRITICAL REQUIREMENT"),
         "WebSearch description must include the CRITICAL REQUIREMENT block"
@@ -291,7 +308,11 @@ fn test_websearch_description_includes_sources_requirement() {
 #[test]
 fn test_websearch_description_includes_current_year() {
     use coco_tool_runtime::DescriptionOptions;
-    let desc = WebSearchTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
+    let desc = <WebSearchTool as DynTool>::description(
+        &WebSearchTool,
+        &json!({}),
+        &DescriptionOptions::default(),
+    );
     // Today's date is 2026 — the dynamic month/year injection should
     // include "2026" (or whatever year chrono::Local::now() reports).
     let now_year = chrono::Datelike::year(&chrono::Local::now());
@@ -359,29 +380,41 @@ fn test_html_to_markdown_decodes_entities() {
 
 #[test]
 fn test_webfetch_is_read_only() {
-    assert!(WebFetchTool.is_read_only(&serde_json::Value::Null));
+    assert!(<WebFetchTool as DynTool>::is_read_only(
+        &WebFetchTool,
+        &json!({"url": "https://example.com", "prompt": "x"})
+    ));
 }
 
 #[test]
 fn test_webfetch_is_concurrency_safe() {
-    assert!(WebFetchTool.is_concurrency_safe(&serde_json::Value::Null));
+    assert!(<WebFetchTool as DynTool>::is_concurrency_safe(
+        &WebFetchTool,
+        &json!({"url": "https://example.com", "prompt": "x"})
+    ));
 }
 
 #[tokio::test]
 async fn test_webfetch_rejects_empty_url() {
     let ctx = ToolUseContext::test_default();
-    let result = WebFetchTool
-        .execute(json!({"url": "", "prompt": "what is this"}), &ctx)
-        .await;
+    let result = <WebFetchTool as DynTool>::execute(
+        &WebFetchTool,
+        json!({"url": "", "prompt": "what is this"}),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err());
 }
 
 #[tokio::test]
 async fn test_webfetch_rejects_empty_prompt() {
     let ctx = ToolUseContext::test_default();
-    let result = WebFetchTool
-        .execute(json!({"url": "https://example.com", "prompt": ""}), &ctx)
-        .await;
+    let result = <WebFetchTool as DynTool>::execute(
+        &WebFetchTool,
+        json!({"url": "https://example.com", "prompt": ""}),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err());
 }
 
@@ -967,7 +1000,7 @@ fn webfetch_render_picks_extracted_when_llm_extraction_succeeded() {
         "truncated": false,
         "extraction_mode": "llm",
     });
-    let parts = WebFetchTool.render_for_model(&data);
+    let parts = <WebFetchTool as DynTool>::render_for_model(&WebFetchTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -984,7 +1017,7 @@ fn webfetch_render_falls_back_to_content_when_extraction_unavailable() {
         "truncated": false,
         "extraction_mode": "raw",
     });
-    let parts = WebFetchTool.render_for_model(&data);
+    let parts = <WebFetchTool as DynTool>::render_for_model(&WebFetchTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -1001,7 +1034,7 @@ fn webfetch_render_emits_redirect_blocked_message() {
         "new_url": "https://other.example.com/",
         "message": "The URL redirected to a different origin (https://other.example.com/). Please use WebFetch again.",
     });
-    let parts = WebFetchTool.render_for_model(&data);
+    let parts = <WebFetchTool as DynTool>::render_for_model(&WebFetchTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };

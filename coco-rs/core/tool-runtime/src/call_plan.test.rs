@@ -181,6 +181,10 @@ fn test_runnable_plan_carries_prepared_call() {
     struct DummyTool;
     #[async_trait::async_trait]
     impl crate::traits::Tool for DummyTool {
+        // Migration scaffold: assoc types pinned to `Value`.
+        type Input = serde_json::Value;
+        type Output = serde_json::Value;
+
         fn id(&self) -> ToolId {
             ToolId::Custom("dummy".into())
         }

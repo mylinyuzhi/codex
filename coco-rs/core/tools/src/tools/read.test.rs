@@ -1,6 +1,6 @@
 use crate::tools::read::ReadTool;
 use coco_tool_runtime::DescriptionOptions;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
@@ -13,7 +13,9 @@ use serde_json::json;
 // the tool's full surface.
 #[test]
 fn test_read_description_mentions_multimodal_capabilities() {
-    let desc = ReadTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
+    let fixture = json!({"file_path": "/tmp/x"});
+    let desc =
+        <ReadTool as DynTool>::description(&ReadTool, &fixture, &DescriptionOptions::default());
     assert!(desc.contains("PNG"), "missing image format hint");
     assert!(desc.contains("PDF"), "missing PDF support hint");
     assert!(
@@ -31,10 +33,13 @@ async fn test_read_basic_file() {
     std::fs::write(&file, "line one\nline two\nline three\n").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(text.contains("1\tline one"));
@@ -54,13 +59,13 @@ async fn test_read_with_offset_limit() {
     std::fs::write(&file, &content).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "offset": 10, "limit": 5}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap(), "offset": 10, "limit": 5}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(text.contains("10\tline 10"), "got: {text}");
@@ -79,13 +84,13 @@ async fn test_read_offset_zero_and_one_equivalent() {
 
     let ctx = ToolUseContext::test_default();
     for offset in [0_u64, 1] {
-        let result = ReadTool
-            .execute(
-                json!({"file_path": file.to_str().unwrap(), "offset": offset, "limit": 1}),
-                &ctx,
-            )
-            .await
-            .unwrap();
+        let result = <ReadTool as DynTool>::execute(
+            &ReadTool,
+            json!({"file_path": file.to_str().unwrap(), "offset": offset, "limit": 1}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         let text = result.data["file"]["content"].as_str().unwrap();
         assert!(
             text.contains("1\tfirst"),
@@ -97,9 +102,12 @@ async fn test_read_offset_zero_and_one_equivalent() {
 #[tokio::test]
 async fn test_read_nonexistent_file() {
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": "/nonexistent/file.txt"}), &ctx)
-        .await;
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": "/nonexistent/file.txt"}),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -113,10 +121,13 @@ async fn test_read_empty_file() {
     std::fs::File::create(&file).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(text.contains("empty"));
@@ -172,10 +183,13 @@ async fn test_read_image_file() {
     std::fs::write(&file, real_image_bytes(image::ImageFormat::Png)).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Post-D1: the image goes through resize+re-encode and returns as a
     // multimodal block with processed bytes.
@@ -186,9 +200,12 @@ async fn test_read_image_file() {
 async fn test_read_directory_error() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": dir.path().to_str().unwrap()}), &ctx)
-        .await;
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": dir.path().to_str().unwrap()}),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -202,10 +219,13 @@ async fn test_read_binary_file() {
     std::fs::write(&file, b"\x00\x01\x02\x03").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(text.contains("binary"));
@@ -228,10 +248,13 @@ async fn test_read_png_returns_base64_block() {
     std::fs::write(&file, real_image_bytes(image::ImageFormat::Png)).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let data = &result.data;
     // TS-shaped image envelope: `{ type: 'image', file: { base64,
@@ -255,10 +278,13 @@ async fn test_read_jpeg_returns_base64_block() {
     std::fs::write(&file, real_image_bytes(image::ImageFormat::Jpeg)).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["type"], "image");
     assert_eq!(result.data["file"]["type"], "image/jpeg");
@@ -272,10 +298,13 @@ async fn test_read_jpeg_alt_extension() {
     std::fs::write(&file, real_image_bytes(image::ImageFormat::Jpeg)).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.data["file"]["type"], "image/jpeg");
 }
 
@@ -286,10 +315,13 @@ async fn test_read_webp_returns_base64_block() {
     std::fs::write(&file, real_image_bytes(image::ImageFormat::WebP)).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.data["file"]["type"], "image/webp");
 }
 
@@ -300,10 +332,13 @@ async fn test_read_gif_returns_base64_block() {
     std::fs::write(&file, real_image_bytes(image::ImageFormat::Gif)).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     // GIF round-trips through coco-utils-image which re-encodes to PNG
     // for formats without a lossless path (GIF falls into this bucket
     // because the image crate can't encode-to-GIF without extra
@@ -345,10 +380,13 @@ async fn test_read_large_image_gets_resized() {
     std::fs::write(&file, &encoded).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Sanity: still a valid image block.
     assert_eq!(result.data["type"], "image");
@@ -394,10 +432,13 @@ async fn test_read_populates_nested_memory_triggers() {
     std::fs::write(&file, "some content\n").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let _ = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let _ = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let triggers = ctx.nested_memory_attachment_triggers.read().await;
     let canonical = std::fs::canonicalize(&file).unwrap();
@@ -417,10 +458,13 @@ async fn test_read_small_image_dimensions_unchanged() {
     std::fs::write(&file, real_image_bytes(image::ImageFormat::Png)).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let dims = &result.data["file"]["dimensions"];
     // 1×1 fixture from real_image_bytes — both original and display
@@ -442,10 +486,13 @@ async fn test_read_svg_returns_placeholder_not_base64() {
     std::fs::write(&file, b"<svg></svg>").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     // SVG is in PLACEHOLDER_IMAGE_EXTENSIONS, so we return a text
     // placeholder — not a multimodal image block.
     let text = result.data["file"]["content"].as_str().unwrap();
@@ -463,10 +510,13 @@ async fn test_read_bmp_returns_placeholder() {
     std::fs::write(&file, b"BM").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(text.contains("bmp"));
     assert!(text.contains("not supported"));
@@ -478,9 +528,8 @@ async fn test_read_bmp_returns_placeholder() {
 #[tokio::test]
 async fn test_read_blocks_dev_zero() {
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": "/dev/zero"}), &ctx)
-        .await;
+    let result =
+        <ReadTool as DynTool>::execute(&ReadTool, json!({"file_path": "/dev/zero"}), &ctx).await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("device"), "error should mention device: {err}");
@@ -489,9 +538,8 @@ async fn test_read_blocks_dev_zero() {
 #[tokio::test]
 async fn test_read_blocks_dev_stdin() {
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": "/dev/stdin"}), &ctx)
-        .await;
+    let result =
+        <ReadTool as DynTool>::execute(&ReadTool, json!({"file_path": "/dev/stdin"}), &ctx).await;
     assert!(result.is_err());
 }
 
@@ -500,9 +548,8 @@ async fn test_read_blocks_dev_stdin() {
 #[tokio::test]
 async fn test_read_dev_null_is_not_blocked() {
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": "/dev/null"}), &ctx)
-        .await;
+    let result =
+        <ReadTool as DynTool>::execute(&ReadTool, json!({"file_path": "/dev/null"}), &ctx).await;
     // Either succeeds (treating as empty file) or fails with a different
     // reason — the key assertion is the error is NOT "cannot read device
     // file" which would only come from the blocklist.
@@ -531,10 +578,13 @@ async fn test_read_utf8_with_bom() {
     std::fs::write(&file, &bytes).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(text.contains("hello"), "got: {text}");
@@ -559,10 +609,13 @@ async fn test_read_utf16le_bom() {
     std::fs::write(&file, &bytes).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(text.contains("hi"), "should decode UTF-16LE: {text}");
@@ -583,9 +636,12 @@ async fn test_read_check_permissions_allows_cwd_path() {
     let mut ctx = ToolUseContext::test_default();
     ctx.cwd_override = Some(dir.path().to_path_buf());
 
-    let decision = ReadTool
-        .check_permissions(&json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await;
+    let decision = <ReadTool as DynTool>::check_permissions(
+        &ReadTool,
+        &json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await;
     assert!(matches!(decision, ToolCheckResult::Allow { .. }));
 }
 
@@ -633,9 +689,12 @@ async fn test_read_malformed_pdf_errors_cleanly() {
     std::fs::write(&file, b"not a real pdf").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await;
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err(), "malformed PDF should error");
     let err = result.unwrap_err().to_string();
@@ -659,10 +718,13 @@ async fn test_read_byte_cap_on_long_lines() {
     std::fs::write(&file, &long_line).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let text = result.data["file"]["content"].as_str().unwrap();
     // The first line is emitted in full (the `!output.is_empty()` guard
@@ -687,10 +749,13 @@ async fn test_read_byte_cap_multiple_long_lines() {
     std::fs::write(&file, &content).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(
@@ -714,13 +779,13 @@ async fn test_read_offset_beyond_file() {
     std::fs::write(&file, "line1\nline2\nline3\n").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "offset": 100}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap(), "offset": 100}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(text.contains("shorter than provided offset"), "got: {text}");
@@ -780,10 +845,13 @@ async fn test_read_notebook_returns_structured_cells() {
     );
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // TS-shaped envelope.
     assert_eq!(result.data["type"], "notebook");
@@ -828,10 +896,13 @@ async fn test_read_notebook_synthesizes_cell_id_when_missing() {
     );
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let cells = result.data["file"]["cells"].as_array().unwrap();
     assert_eq!(cells[0]["cell_id"], "cell-0");
@@ -860,10 +931,13 @@ async fn test_read_notebook_truncates_large_outputs() {
     );
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let outputs = result.data["file"]["cells"][0]["outputs"]
         .as_array()
@@ -898,10 +972,13 @@ async fn test_read_notebook_stream_output() {
     );
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let outputs = result.data["file"]["cells"][0]["outputs"]
         .as_array()
@@ -932,10 +1009,13 @@ async fn test_read_notebook_error_output() {
     );
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let outputs = result.data["file"]["cells"][0]["outputs"]
         .as_array()
@@ -971,10 +1051,13 @@ async fn test_read_notebook_image_output() {
     );
 
     let ctx = ToolUseContext::test_default();
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let output = &result.data["file"]["cells"][0]["outputs"][0];
     assert_eq!(output["output_type"], "display_data");
@@ -1011,10 +1094,13 @@ async fn test_read_dedup_same_call_twice() {
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
 
     // First call — full content returned in the TS-shaped text envelope.
-    let first = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let first = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(first.data["type"], "text");
     let first_text = first.data["file"]["content"]
         .as_str()
@@ -1022,10 +1108,13 @@ async fn test_read_dedup_same_call_twice() {
     assert!(first_text.contains("alpha"));
 
     // Second call — should hit the dedup stub.
-    let second = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let second = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         second.data["type"], "file_unchanged",
         "second identical Read should return file_unchanged stub, got: {:?}",
@@ -1054,8 +1143,12 @@ async fn test_read_dedup_same_explicit_range() {
         "offset": 10,
         "limit": 5
     });
-    let _first = ReadTool.execute(args.clone(), &ctx).await.unwrap();
-    let second = ReadTool.execute(args, &ctx).await.unwrap();
+    let _first = <ReadTool as DynTool>::execute(&ReadTool, args.clone(), &ctx)
+        .await
+        .unwrap();
+    let second = <ReadTool as DynTool>::execute(&ReadTool, args, &ctx)
+        .await
+        .unwrap();
     assert_eq!(
         second.data["type"], "file_unchanged",
         "second Read with identical offset/limit should dedup, got: {:?}",
@@ -1079,20 +1172,20 @@ async fn test_read_dedup_skipped_for_different_range() {
     let mut ctx = ToolUseContext::test_default();
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
 
-    let _first = ReadTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "offset": 10, "limit": 5}),
-            &ctx,
-        )
-        .await
-        .unwrap();
-    let second = ReadTool
-        .execute(
-            json!({"file_path": file.to_str().unwrap(), "offset": 20, "limit": 5}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let _first = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap(), "offset": 10, "limit": 5}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let second = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap(), "offset": 20, "limit": 5}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     // Should be the TS-shaped text envelope, not a file_unchanged stub.
     assert_eq!(
         second.data["type"], "text",
@@ -1119,10 +1212,13 @@ async fn test_read_dedup_invalidated_by_mtime_change() {
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
 
     // Prime the cache.
-    let _first = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let _first = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Forge a stale cached mtime (1 ms behind the disk mtime) so the dedup
     // gate fails on the second call. This is more robust than relying on
@@ -1142,10 +1238,13 @@ async fn test_read_dedup_invalidated_by_mtime_change() {
         }
     }
 
-    let second = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let second = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     // Cache mtime is stale → dedup gate fails → fresh read returned.
     assert_eq!(second.data["type"], "text");
     let text = second.data["file"]["content"]
@@ -1191,10 +1290,13 @@ async fn test_read_dedup_skipped_after_edit() {
         );
     }
 
-    let result = ReadTool
-        .execute(json!({"file_path": file.to_str().unwrap()}), &ctx)
-        .await
-        .unwrap();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     // Should NOT be a stub — the entry came from `set`, not
     // `set_from_read`, so dedup is skipped. The result is the TS-shaped
     // text envelope.
@@ -1222,7 +1324,7 @@ fn render_for_model_image_emits_filedata_part() {
             "dimensions": { "originalWidth": 100, "originalHeight": 100 },
         },
     });
-    let parts = ReadTool.render_for_model(&data);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &data);
     assert_eq!(
         parts,
         vec![ToolResultContentPart::FileData {
@@ -1250,7 +1352,7 @@ fn render_for_model_text_emits_content_only_no_json_wrapper() {
             "totalLines": 2,
         },
     });
-    let parts = ReadTool.render_for_model(&data);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &data);
     assert_eq!(
         parts,
         vec![ToolResultContentPart::Text {
@@ -1270,7 +1372,7 @@ fn render_for_model_pdf_emits_extracted_content() {
             "totalPages": 3,
         },
     });
-    let parts = ReadTool.render_for_model(&data);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &data);
     let [ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
         panic!("expected single Text part, got {parts:?}");
     };
@@ -1287,7 +1389,7 @@ fn render_for_model_file_unchanged_uses_ts_stub_phrasing() {
         "type": "file_unchanged",
         "file": { "filePath": "/tmp/foo.py" },
     });
-    let parts = ReadTool.render_for_model(&data);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &data);
     let [ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
         panic!("expected single Text part, got {parts:?}");
     };
@@ -1328,7 +1430,7 @@ fn render_for_model_notebook_merges_adjacent_text_into_one_part() {
             ],
         },
     });
-    let parts = ReadTool.render_for_model(&data);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &data);
     assert_eq!(
         parts.len(),
         1,
@@ -1374,7 +1476,7 @@ fn render_for_model_notebook_image_output_becomes_filedata_part() {
             ],
         },
     });
-    let parts = ReadTool.render_for_model(&data);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &data);
     assert_eq!(parts.len(), 2, "expected [Text, FileData], got {parts:?}");
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("part 0 should be Text, got {parts:?}");
@@ -1431,7 +1533,7 @@ fn render_for_model_notebook_image_between_text_keeps_three_parts() {
             ],
         },
     });
-    let parts = ReadTool.render_for_model(&data);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &data);
     assert_eq!(
         parts.len(),
         3,
@@ -1458,7 +1560,7 @@ fn render_for_model_notebook_non_python_code_cell_emits_language_tag() {
             ],
         },
     });
-    let parts = ReadTool.render_for_model(&data);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };

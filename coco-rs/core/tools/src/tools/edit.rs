@@ -7,10 +7,10 @@ use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolCheckResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use serde_json::Value;
-use std::collections::HashMap;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::Path;
 
 /// Long-form tool description shown to the model.
@@ -33,12 +33,45 @@ Usage:
 - The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.
 - Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.";
 
+/// Typed input for [`EditTool`].
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct EditInput {
+    /// The absolute path to the file to modify
+    pub file_path: String,
+    /// The text to replace
+    pub old_string: String,
+    /// The replacement text (must differ from old_string)
+    pub new_string: String,
+    /// Replace all occurrences (default false)
+    #[serde(default)]
+    pub replace_all: bool,
+}
+
+/// Typed output for [`EditTool`]. Field names preserve TS camelCase
+/// wire format (`FileEditTool.ts:567-568`); `userModified` is always
+/// `false` in coco-rs since there's no TUI accept-with-edits overlay
+/// equivalent of the TS feature.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct EditOutput {
+    #[serde(default, rename = "filePath")]
+    pub file_path: String,
+    #[serde(default, rename = "replaceAll")]
+    pub replace_all: bool,
+    #[serde(default, rename = "userModified")]
+    pub user_modified: bool,
+    #[serde(default, rename = "replacementCount")]
+    pub replacement_count: usize,
+}
+
 /// Edit tool — performs exact string replacements in files.
 /// Single replacement requires unique match; use replace_all for multiple.
 pub struct EditTool;
 
 #[async_trait::async_trait]
 impl Tool for EditTool {
+    type Input = EditInput;
+    type Output = EditOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Edit)
     }
@@ -47,104 +80,52 @@ impl Tool for EditTool {
         ToolName::Edit.as_str()
     }
 
-    fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &EditInput, _options: &DescriptionOptions) -> String {
         EDIT_TOOL_DESCRIPTION.into()
     }
 
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut props = HashMap::new();
-        props.insert(
-            "file_path".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The absolute path to the file to modify"
-            }),
-        );
-        props.insert(
-            "old_string".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The text to replace"
-            }),
-        );
-        props.insert(
-            "new_string".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The replacement text (must differ from old_string)"
-            }),
-        );
-        props.insert(
-            "replace_all".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Replace all occurrences (default false)",
-                "default": false
-            }),
-        );
-        ToolInputSchema {
-            properties: props,
-            required: Vec::new(),
-        }
-    }
-
-    fn is_destructive(&self, _input: &Value) -> bool {
+    fn is_destructive(&self, _input: &EditInput) -> bool {
         true
     }
 
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let path = input.get("file_path").and_then(|v| v.as_str())?;
-        Some(format!("Editing {path}"))
+    fn get_activity_description(&self, input: &EditInput) -> Option<String> {
+        Some(format!("Editing {path}", path = input.file_path))
     }
 
-    fn get_path(&self, input: &Value) -> Option<String> {
-        input
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+    fn get_path(&self, input: &EditInput) -> Option<String> {
+        Some(input.file_path.clone())
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
-        if input.get("file_path").and_then(|v| v.as_str()).is_none() {
+    fn validate_input(&self, input: &EditInput, _ctx: &ToolUseContext) -> ValidationResult {
+        if input.file_path.is_empty() {
             return ValidationResult::invalid("missing required field: file_path");
         }
-        if input.get("old_string").and_then(|v| v.as_str()).is_none() {
-            return ValidationResult::invalid("missing required field: old_string");
-        }
-        if input.get("new_string").and_then(|v| v.as_str()).is_none() {
-            return ValidationResult::invalid("missing required field: new_string");
-        }
-        let old = input["old_string"].as_str().unwrap_or("");
-        let new = input["new_string"].as_str().unwrap_or("");
-        if old == new {
+        // `old_string` and `new_string` are required at the struct
+        // level — schema-required, parse-required. The semantic check
+        // is that they must differ; empty values are otherwise
+        // accepted (insert-at-empty-string is a legit use case).
+        if input.old_string == input.new_string {
             return ValidationResult::invalid("old_string and new_string must be different");
         }
         ValidationResult::Valid
     }
 
-    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
-        let Some(path) = input.get("file_path").and_then(Value::as_str) else {
-            return ToolCheckResult::Passthrough;
-        };
+    async fn check_permissions(&self, input: &EditInput, ctx: &ToolUseContext) -> ToolCheckResult {
         crate::tools::write_permissions::check_write_permission_for_path(
-            path,
+            &input.file_path,
             ctx,
             ToolName::Edit.as_str(),
             "edit a file",
         )
     }
 
-    /// Branch on `replaceAll` to emit the TS-shaped confirmation. TS
+    /// Branch on `replace_all` to emit the TS-shaped confirmation. TS
     /// parity: `FileEditTool.ts:575-595::mapToolResultToToolResultBlockParam`.
-    /// `userModified` is always false in coco-rs (no TUI accept-with-edits
+    /// `user_modified` is always false in coco-rs (no TUI accept-with-edits
     /// overlay) — the corresponding modifiedNote branch never fires.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let file_path = data.get("filePath").and_then(Value::as_str).unwrap_or("");
-        let replace_all = data
-            .get("replaceAll")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let text = if replace_all {
+    fn render_for_model(&self, out: &EditOutput) -> Vec<ToolResultContentPart> {
+        let file_path = out.file_path.as_str();
+        let text = if out.replace_all {
             format!(
                 "The file {file_path} has been updated. All occurrences were successfully replaced."
             )
@@ -159,31 +140,13 @@ impl Tool for EditTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: EditInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let file_path = input["file_path"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidInput {
-                message: "missing file_path".into(),
-                error_code: None,
-            })?;
-        let old_string = input["old_string"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidInput {
-                message: "missing old_string".into(),
-                error_code: None,
-            })?;
-        let new_string = input["new_string"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidInput {
-                message: "missing new_string".into(),
-                error_code: None,
-            })?;
-        let replace_all = input
-            .get("replace_all")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+    ) -> Result<ToolResult<EditOutput>, ToolError> {
+        let file_path = input.file_path.as_str();
+        let old_string = input.old_string.as_str();
+        let new_string = input.new_string.as_str();
+        let replace_all = input.replace_all;
 
         let path = Path::new(file_path);
 
@@ -385,12 +348,12 @@ impl Tool for EditTool {
         // currently track `userModified` (that's a TUI overlay state for
         // a feature we don't have); always emit it as false.
         Ok(ToolResult {
-            data: serde_json::json!({
-                "filePath": file_path,
-                "replaceAll": replace_all,
-                "userModified": false,
-                "replacementCount": count,
-            }),
+            data: EditOutput {
+                file_path: file_path.to_string(),
+                replace_all,
+                user_modified: false,
+                replacement_count: count,
+            },
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

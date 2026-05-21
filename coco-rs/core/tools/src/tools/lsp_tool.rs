@@ -15,7 +15,6 @@
 //!     JSON-RPC request. Implementation lives in
 //!     `app/cli/src/lsp_handle_adapter.rs`.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -26,8 +25,8 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::Feature;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
@@ -53,27 +52,38 @@ use crate::tools::lsp::format_workspace_symbols;
 use crate::tools::lsp::path_to_file_uri;
 use crate::tools::lsp::validate_lsp_file;
 
-/// Parsed tool input — mirrors TS `LSPTool` discriminated-union schema.
+/// Typed tool input — mirrors TS `LSPTool` discriminated-union schema.
 ///
 /// `line` / `character` are 1-based (user-facing), converted to LSP's
 /// 0-based positions in [`build_params`]. `WorkspaceSymbol` ignores
 /// position; `DocumentSymbol` ignores position; everything else requires
 /// it.
-#[derive(Debug, Clone, Deserialize)]
-struct LspInput {
-    operation: LspAction,
+///
+/// `filePath` (camelCase) preserved on the wire for TS parity
+/// (`tools/LSPTool/schemas.ts`).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct LspInput {
+    /// LSP operation to perform
+    pub operation: LspAction,
+    /// Absolute path to the file the query is anchored on. For
+    /// `workspaceSymbol` this anchors the server selection.
     #[serde(rename = "filePath")]
-    file_path: String,
+    pub file_path: String,
+    /// 1-based line number (required for position-based operations)
     #[serde(default)]
-    line: Option<i32>,
+    pub line: Option<i32>,
+    /// 1-based character column (required for position-based operations)
     #[serde(default)]
-    character: Option<i32>,
+    pub character: Option<i32>,
 }
 
 pub struct LspTool;
 
 #[async_trait::async_trait]
 impl Tool for LspTool {
+    type Input = LspInput;
+    type Output = crate::tools::lsp::LspOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Lsp)
     }
@@ -86,7 +96,7 @@ impl Tool for LspTool {
         ctx.features.enabled(Feature::Lsp) && ctx.lsp.is_connected()
     }
 
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &LspInput, _options: &DescriptionOptions) -> String {
         // TS parity: `tools/LSPTool/prompt.ts::DESCRIPTION`. Multi-line
         // enumeration is what the model expects — single-line summaries
         // hurt operation-name retrieval on small models.
@@ -112,51 +122,10 @@ Note: LSP servers must be configured for the file type. If no server is availabl
             .into()
     }
 
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "operation".into(),
-            json!({
-                "type": "string",
-                "enum": [
-                    "goToDefinition", "findReferences", "hover",
-                    "documentSymbol", "workspaceSymbol", "goToImplementation",
-                    "prepareCallHierarchy", "incomingCalls", "outgoingCalls"
-                ],
-                "description": "LSP operation to perform"
-            }),
-        );
-        p.insert(
-            "filePath".into(),
-            json!({
-                "type": "string",
-                "description": "Absolute path to the file the query is anchored on. \
-                                For `workspaceSymbol` this anchors the server selection."
-            }),
-        );
-        p.insert(
-            "line".into(),
-            json!({
-                "type": "integer",
-                "minimum": 1,
-                "description": "1-based line number (required for position-based operations)"
-            }),
-        );
-        p.insert(
-            "character".into(),
-            json!({
-                "type": "integer",
-                "minimum": 1,
-                "description": "1-based character column (required for position-based operations)"
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
+    fn is_read_only(&self, _input: &LspInput) -> bool {
+        true
     }
-
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
         true
     }
 
@@ -166,7 +135,7 @@ Note: LSP servers must be configured for the file type. If no server is availabl
 
     /// LSP queries are side-effect-free and safe to issue in parallel
     /// — the language server itself handles concurrent requests.
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &LspInput) -> bool {
         true
     }
 
@@ -180,22 +149,16 @@ Note: LSP servers must be configured for the file type. If no server is availabl
 
     async fn execute(
         &self,
-        input: Value,
+        input: LspInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let parsed: LspInput =
-            serde_json::from_value(input).map_err(|e| ToolError::InvalidInput {
-                message: format!("invalid LSP input: {e}"),
-                error_code: None,
-            })?;
-
-        if parsed.operation.requires_position()
-            && (parsed.line.is_none() || parsed.character.is_none())
+    ) -> Result<ToolResult<LspOutput>, ToolError> {
+        if input.operation.requires_position()
+            && (input.line.is_none() || input.character.is_none())
         {
             return Err(ToolError::InvalidInput {
                 message: format!(
                     "operation `{}` requires both `line` and `character`",
-                    parsed.operation.as_str()
+                    input.operation.as_str()
                 ),
                 error_code: None,
             });
@@ -212,7 +175,7 @@ Note: LSP servers must be configured for the file type. If no server is availabl
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
 
-        let raw_path = PathBuf::from(&parsed.file_path);
+        let raw_path = PathBuf::from(&input.file_path);
         let resolved_path = if raw_path.is_absolute() {
             raw_path
         } else {
@@ -238,20 +201,15 @@ Note: LSP servers must be configured for the file type. If no server is availabl
             message: format!("could not build file:// URI for {}", path.display()),
             error_code: None,
         })?;
-        let params = build_params(parsed.operation, &uri, parsed.line, parsed.character);
+        let params = build_params(input.operation, &uri, input.line, input.character);
 
-        let raw = dispatch(ctx, parsed.operation, &path, params).await?;
+        let raw = dispatch(ctx, input.operation, &path, params).await?;
 
         let cwd = cwd_buf.to_str();
-        let output = format_output(parsed.operation, &raw, &parsed.file_path, cwd)?;
+        let output = format_output(input.operation, &raw, &input.file_path, cwd)?;
 
         Ok(ToolResult {
-            // `LspOutput` is a plain struct of `String` / `Option<i32>` so
-            // `to_value` is infallible in practice; `.unwrap_or_default()`
-            // matches the rest of the tool crate (see `task_tools`,
-            // `plan_mode`, `scheduling`) and keeps us out of the
-            // `clippy::expect_used` lint.
-            data: serde_json::to_value(output).unwrap_or_default(),
+            data: output,
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

@@ -2,8 +2,6 @@
 //!
 //! TS: `tools/SendMessageTool/`.
 
-use std::collections::HashMap;
-
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
@@ -11,14 +9,45 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
+
+/// Typed input for [`SendMessageTool`].
+///
+/// `message` stays `Value` because the wire shape is a union of
+/// `string` and structured object variants (`shutdown_request`,
+/// `shutdown_response`, `plan_approval_response`). Typing this as
+/// `#[serde(untagged)] enum` would be more precise but the runtime
+/// branches purely on `message.is_string()` anyway.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SendMessageInput {
+    /// Target agent name, "*" for broadcast, or agent ID
+    pub to: String,
+    /// Brief summary of the message (5-10 words). Required when
+    /// `message` is a plain string (used by the leader UI message
+    /// stack); structured messages skip it.
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Message content (string or structured object — see TS
+    /// `SendMessageTool.ts` for the structured variants like
+    /// `shutdown_request`, `plan_approval_response`).
+    pub message: Value,
+}
 
 pub struct SendMessageTool;
 
 #[async_trait::async_trait]
 impl Tool for SendMessageTool {
+    type Input = SendMessageInput;
+    /// Output is `Value` because the wire shape is a tagged union:
+    /// bare confirmation string from `agent.send_message` for the
+    /// running-agent path, or `{auto_resumed, original_agent_id,
+    /// resumed_as, message}` envelope for the terminal-target
+    /// auto-resume path.
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::SendMessage)
     }
@@ -28,53 +57,10 @@ impl Tool for SendMessageTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::AgentTeams)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &SendMessageInput, _options: &DescriptionOptions) -> String {
         "Send a message to another agent in the team. Use the agent's name \
          as target, or \"*\" to broadcast to all teammates."
             .into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "to".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Target agent name, \"*\" for broadcast, or agent ID"
-            }),
-        );
-        p.insert(
-            "summary".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Brief summary of the message (5-10 words)"
-            }),
-        );
-        p.insert(
-            "message".into(),
-            serde_json::json!({
-                "description": "Message content (string or structured object)",
-                "oneOf": [
-                    {"type": "string"},
-                    {"type": "object", "properties": {
-                        "type": {"type": "string", "enum": [
-                            "shutdown_request", "shutdown_response", "plan_approval_response"
-                        ]},
-                        "request_id": {"type": "string"},
-                        "approve": {"type": "boolean"},
-                        "reason": {"type": "string"},
-                        "feedback": {"type": "string"}
-                    }}
-                ]
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            // TS `SendMessageTool.ts`: `to` and `message` are required;
-            // `summary` is required at runtime when `message` is a plain
-            // string (enforced in `execute()` because JSON Schema can't
-            // express conditional-required).
-            required: vec!["to".into(), "message".into()],
-        }
     }
     fn should_defer(&self) -> bool {
         true
@@ -85,13 +71,13 @@ impl Tool for SendMessageTool {
 
     /// Render either the prebuilt `message` field (auto-resumed path)
     /// or the bare confirmation string returned by `agent.send_message`.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let text = if let Some(s) = data.as_str() {
+    fn render_for_model(&self, out: &Value) -> Vec<ToolResultContentPart> {
+        let text = if let Some(s) = out.as_str() {
             s.to_string()
-        } else if let Some(msg) = data.get("message").and_then(Value::as_str) {
+        } else if let Some(msg) = out.get("message").and_then(Value::as_str) {
             msg.to_string()
         } else {
-            serde_json::to_string(data).unwrap_or_default()
+            serde_json::to_string(out).unwrap_or_default()
         };
         vec![ToolResultContentPart::Text {
             text,
@@ -101,12 +87,10 @@ impl Tool for SendMessageTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: SendMessageInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let to = input.get("to").and_then(|v| v.as_str()).unwrap_or_default();
-
-        if to.is_empty() {
+        if input.to.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "target agent name or ID ('to') is required".into(),
                 error_code: None,
@@ -116,18 +100,11 @@ impl Tool for SendMessageTool {
         // TS `SendMessageTool.ts:668-674`: `summary` is required for plain
         // string messages (used by the leader's UI message-stack); structured
         // messages skip it because the type discriminator carries the intent.
-        let raw_message = input
-            .get("message")
-            .ok_or_else(|| ToolError::InvalidInput {
-                message: "message content is required".into(),
-                error_code: None,
-            })?;
-
-        let is_string_message = raw_message.is_string();
-        let content = if let Some(s) = raw_message.as_str() {
+        let is_string_message = input.message.is_string();
+        let content = if let Some(s) = input.message.as_str() {
             s.to_string()
         } else {
-            serde_json::to_string(raw_message).unwrap_or_default()
+            serde_json::to_string(&input.message).unwrap_or_default()
         };
 
         if content.is_empty() {
@@ -138,10 +115,7 @@ impl Tool for SendMessageTool {
         }
 
         if is_string_message {
-            let summary = input
-                .get("summary")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
+            let summary = input.summary.as_deref().unwrap_or("");
             if summary.is_empty() {
                 return Err(ToolError::InvalidInput {
                     message: "summary is required when sending a plain-text message \
@@ -151,6 +125,8 @@ impl Tool for SendMessageTool {
                 });
             }
         }
+
+        let to = input.to.as_str();
 
         // Probe the task handle for the target's current state — drives
         // both the auto-resume branch (terminal target) and the

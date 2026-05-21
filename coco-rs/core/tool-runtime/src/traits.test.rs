@@ -13,6 +13,10 @@ struct EchoTool;
 
 #[async_trait::async_trait]
 impl Tool for EchoTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Read)
     }
@@ -56,7 +60,13 @@ impl Tool for EchoTool {
 
 #[test]
 fn test_tool_default_flags() {
-    let tool = EchoTool;
+    // Exercise via `&dyn DynTool` — the erased path is what registry /
+    // executor actually hit at runtime. Going through the dyn boundary
+    // also avoids the typed-vs-erased method-name ambiguity that would
+    // otherwise hit `EchoTool` (which has both `Tool::is_read_only` and
+    // the blanket-derived `DynTool::is_read_only` in scope when called
+    // by method syntax on the concrete type).
+    let tool: &dyn DynTool = &EchoTool;
     let ctx = crate::context::ToolUseContext::test_default();
     assert!(tool.is_enabled(&ctx));
     assert!(tool.is_read_only(&json!({})));
@@ -92,6 +102,10 @@ fn test_is_mcp_derives_from_mcp_info() {
     struct McpStub;
     #[async_trait::async_trait]
     impl Tool for McpStub {
+        // Migration scaffold: assoc types pinned to `Value`.
+        type Input = serde_json::Value;
+        type Output = serde_json::Value;
+
         fn id(&self) -> coco_types::ToolId {
             coco_types::ToolId::Custom("mcp__server__tool".into())
         }
@@ -123,15 +137,16 @@ fn test_is_mcp_derives_from_mcp_info() {
             unimplemented!()
         }
     }
+    let stub: &dyn DynTool = &McpStub;
     assert!(
-        McpStub.is_mcp(),
+        stub.is_mcp(),
         "tool with mcp_info() set must return is_mcp() = true"
     );
 }
 
 #[test]
 fn test_validation_result_default_valid() {
-    let tool = EchoTool;
+    let tool: &dyn DynTool = &EchoTool;
     let ctx = ToolUseContext::test_default();
     let result = tool.validate_input(&json!({"text": "hello"}), &ctx);
     assert!(result.is_valid());
@@ -139,7 +154,7 @@ fn test_validation_result_default_valid() {
 
 #[test]
 fn test_backfill_default_noop() {
-    let tool = EchoTool;
+    let tool: &dyn DynTool = &EchoTool;
     let mut input = json!({"key": "value"});
     tool.backfill_observable_input(&mut input);
     assert_eq!(input, json!({"key": "value"}));
@@ -167,7 +182,7 @@ fn test_prompt_options_to_description_options() {
 /// non-overriding tool's wire output silently changes.
 #[test]
 fn render_for_model_default_is_singleton_json_text() {
-    let tool = EchoTool;
+    let tool: &dyn DynTool = &EchoTool;
     let data = json!({"foo": 42, "bar": ["a", "b"]});
     let parts = tool.render_for_model(&data);
 
@@ -183,7 +198,7 @@ fn render_for_model_default_is_singleton_json_text() {
 
 #[test]
 fn render_for_model_default_handles_null_data() {
-    let tool = EchoTool;
+    let tool: &dyn DynTool = &EchoTool;
     let parts = tool.render_for_model(&Value::Null);
     assert_eq!(
         parts,

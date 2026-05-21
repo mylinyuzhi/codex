@@ -1,5 +1,5 @@
 use super::VerifyPlanExecutionTool;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
@@ -10,9 +10,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 fn text(result: &coco_messages::ToolResult<serde_json::Value>) -> String {
-    match VerifyPlanExecutionTool
-        .render_for_model(&result.data)
-        .as_slice()
+    match <VerifyPlanExecutionTool as DynTool>::render_for_model(
+        &VerifyPlanExecutionTool,
+        &result.data,
+    )
+    .as_slice()
     {
         [coco_tool_runtime::ToolResultContentPart::Text { text, .. }] => text.clone(),
         _ => panic!("expected single text result"),
@@ -30,13 +32,13 @@ async fn execute_clears_pending_plan_verification() {
     ctx.session_id_for_history = Some("session-1".into());
     ctx.plans_dir = Some(std::env::temp_dir());
 
-    let mut result = VerifyPlanExecutionTool
-        .execute(
-            json!({"summary": "checked files and tests", "issues": ""}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let mut result = <VerifyPlanExecutionTool as DynTool>::execute(
+        &VerifyPlanExecutionTool,
+        json!({"summary": "checked files and tests", "issues": ""}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let patch = result
         .app_state_patch
         .take()
@@ -58,10 +60,10 @@ async fn execute_is_idempotent_without_pending_verification() {
     let mut ctx = ToolUseContext::test_default();
     ctx.app_state = Some(app_state.clone().into());
 
-    let result = VerifyPlanExecutionTool
-        .execute(json!({}), &ctx)
-        .await
-        .unwrap();
+    let result =
+        <VerifyPlanExecutionTool as DynTool>::execute(&VerifyPlanExecutionTool, json!({}), &ctx)
+            .await
+            .unwrap();
 
     assert_eq!(result.data["status"], "no_pending_verification");
     assert!(text(&result).contains("No pending plan verification"));
@@ -72,9 +74,12 @@ async fn check_permissions_allows_without_prompt() {
     let mut ctx = ToolUseContext::test_default();
     ctx.permission_context.mode = PermissionMode::Default;
 
-    let decision = VerifyPlanExecutionTool
-        .check_permissions(&json!({}), &ctx)
-        .await;
+    let decision = <VerifyPlanExecutionTool as DynTool>::check_permissions(
+        &VerifyPlanExecutionTool,
+        &json!({}),
+        &ctx,
+    )
+    .await;
 
     match decision {
         coco_types::ToolCheckResult::Allow {
@@ -91,12 +96,11 @@ async fn check_permissions_allows_without_prompt() {
 #[test]
 fn identity_and_schema() {
     assert_eq!(
-        VerifyPlanExecutionTool.name(),
+        <VerifyPlanExecutionTool as DynTool>::name(&VerifyPlanExecutionTool,),
         ToolName::VerifyPlanExecution.as_str()
     );
     assert!(
-        VerifyPlanExecutionTool
-            .input_schema()
+        <VerifyPlanExecutionTool as DynTool>::input_schema(&VerifyPlanExecutionTool,)
             .properties
             .contains_key("summary")
     );

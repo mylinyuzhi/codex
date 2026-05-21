@@ -5,41 +5,55 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use serde_json::Value;
-use std::collections::HashMap;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 
 // ── SleepTool ──
+
+/// Typed input for [`SleepTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct SleepInput {
+    /// Number of seconds to sleep. Defaults to `1.0` when omitted.
+    /// Capped at 300 seconds (5 minutes) to prevent indefinite
+    /// blocking.
+    #[serde(default)]
+    pub seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SleepOutput {
+    /// Human-readable confirmation message.
+    pub message: String,
+    /// Actual seconds slept (post-cap).
+    pub seconds: f64,
+}
 
 pub struct SleepTool;
 
 #[async_trait::async_trait]
 impl Tool for SleepTool {
+    type Input = SleepInput;
+    type Output = SleepOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Sleep)
     }
     fn name(&self) -> &str {
         ToolName::Sleep.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &SleepInput, _options: &DescriptionOptions) -> String {
         "Sleep for a specified number of seconds.".into()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "seconds".into(),
-            serde_json::json!({"type": "number", "description": "Number of seconds to sleep"}),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
-    }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &SleepInput) -> bool {
         true
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    /// Pure time-passing — Plan mode keeps Sleep visible.
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &SleepInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -49,27 +63,19 @@ impl Tool for SleepTool {
         Some("pause execution for a configurable number of seconds")
     }
 
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let text = data
-            .get("message")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+    fn render_for_model(&self, out: &SleepOutput) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
-            text,
+            text: out.message.clone(),
             provider_options: None,
         }]
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: SleepInput,
         _ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let seconds = input
-            .get("seconds")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(1.0);
+    ) -> Result<ToolResult<SleepOutput>, ToolError> {
+        let seconds = input.seconds.unwrap_or(1.0);
 
         if seconds < 0.0 {
             return Err(ToolError::InvalidInput {
@@ -84,10 +90,10 @@ impl Tool for SleepTool {
         tokio::time::sleep(duration).await;
 
         Ok(ToolResult {
-            data: serde_json::json!({
-                "message": format!("Slept for {capped:.1} seconds"),
-                "seconds": capped,
-            }),
+            data: SleepOutput {
+                message: format!("Slept for {capped:.1} seconds"),
+                seconds: capped,
+            },
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
@@ -104,33 +110,44 @@ pub use super::powershell_tool::PowerShellTool;
 
 // ── ReplTool ──
 
+/// Typed input for [`ReplTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct ReplInput {
+    /// Programming language for the REPL (e.g., `python`, `node`).
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Command to execute in the REPL.
+    #[serde(default)]
+    pub command: Option<String>,
+}
+
+/// REPL output. Currently unused — the tool errors out at the
+/// `execute` boundary. Kept typed so a future REPL backend can
+/// produce structured output (stdout / language metadata / continuation
+/// state) without breaking the trait.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ReplOutput {
+    #[serde(default)]
+    pub stdout: String,
+    #[serde(default)]
+    pub stderr: String,
+}
+
 pub struct ReplTool;
 
 #[async_trait::async_trait]
 impl Tool for ReplTool {
+    type Input = ReplInput;
+    type Output = ReplOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Repl)
     }
     fn name(&self) -> &str {
         ToolName::Repl.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &ReplInput, _options: &DescriptionOptions) -> String {
         "Start an interactive REPL session for a supported language.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "language".into(),
-            serde_json::json!({"type": "string", "description": "Programming language for the REPL (e.g., python, node)"}),
-        );
-        p.insert(
-            "command".into(),
-            serde_json::json!({"type": "string", "description": "Command to execute in the REPL"}),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
     }
 
     fn is_transparent_wrapper(&self) -> bool {
@@ -139,9 +156,9 @@ impl Tool for ReplTool {
 
     async fn execute(
         &self,
-        _input: Value,
+        _input: ReplInput,
         _ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
+    ) -> Result<ToolResult<ReplOutput>, ToolError> {
         Err(ToolError::ExecutionFailed {
             message: "REPL tool is not available in this context. \
                       Use the Bash tool to run language-specific commands instead \
@@ -154,35 +171,42 @@ impl Tool for ReplTool {
 
 // ── SyntheticOutputTool ──
 
+/// Typed input for [`SyntheticOutputTool`]. The single `output` field
+/// is what the tool echoes back verbatim.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct SyntheticOutputInput {
+    /// Output text to emit
+    #[serde(default)]
+    pub output: String,
+}
+
 pub struct SyntheticOutputTool;
 
 #[async_trait::async_trait]
 impl Tool for SyntheticOutputTool {
+    type Input = SyntheticOutputInput;
+    /// Output is the raw echo string — `render_for_model` emits it
+    /// unwrapped so SDK consumers see the verbatim text rather than a
+    /// JSON-quoted envelope.
+    type Output = String;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::SyntheticOutput)
     }
     fn name(&self) -> &str {
         ToolName::SyntheticOutput.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &SyntheticOutputInput, _options: &DescriptionOptions) -> String {
         "Emit synthetic output for SDK integrations. Returns the provided output text directly."
             .into()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "output".into(),
-            serde_json::json!({"type": "string", "description": "Output text to emit"}),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
-    }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &SyntheticOutputInput) -> bool {
         true
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &SyntheticOutputInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -192,21 +216,22 @@ impl Tool for SyntheticOutputTool {
         Some("emit synthetic output for SDK integration scenarios")
     }
 
-    /// `data` is the verbatim output string. Unwrap to avoid JSON
-    /// escaping the raw text.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        coco_tool_runtime::render_text_or_json(data)
+    /// `out` is the verbatim output string — emit unwrapped to avoid
+    /// JSON escaping the raw text.
+    fn render_for_model(&self, out: &String) -> Vec<ToolResultContentPart> {
+        vec![ToolResultContentPart::Text {
+            text: out.clone(),
+            provider_options: None,
+        }]
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: SyntheticOutputInput,
         _ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let output = input.get("output").and_then(|v| v.as_str()).unwrap_or("");
-
+    ) -> Result<ToolResult<String>, ToolError> {
         Ok(ToolResult {
-            data: serde_json::json!(output),
+            data: input.output,
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

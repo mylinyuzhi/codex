@@ -9,13 +9,29 @@ use coco_tool_runtime::tool_result_storage;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+
+/// Typed input for [`McpAuthTool`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct McpAuthInput {
+    /// Name of the MCP server to authenticate with
+    #[serde(default)]
+    pub server_name: String,
+}
 
 pub struct McpAuthTool;
 
 #[async_trait::async_trait]
 impl Tool for McpAuthTool {
+    type Input = McpAuthInput;
+    /// Output is the bare status string from the MCP authenticator —
+    /// rendered unwrapped so the model sees readable prose, not a
+    /// JSON-quoted string.
+    type Output = String;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::McpAuth)
     }
@@ -28,86 +44,80 @@ impl Tool for McpAuthTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Mcp)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &McpAuthInput, _options: &DescriptionOptions) -> String {
         "Authenticate with an MCP server to enable tool and resource access.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "server_name".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Name of the MCP server to authenticate with"
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
     }
 
     async fn check_permissions(
         &self,
-        input: &Value,
+        input: &McpAuthInput,
         _ctx: &ToolUseContext,
     ) -> coco_types::ToolCheckResult {
         coco_types::ToolCheckResult::Allow {
-            updated_input: Some(input.clone()),
+            updated_input: serde_json::to_value(input).ok(),
             feedback: None,
         }
     }
 
-    fn to_auto_classifier_input(&self, input: &Value) -> String {
-        input
-            .get("server_name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
+    fn to_auto_classifier_input(&self, input: &McpAuthInput) -> String {
+        input.server_name.clone()
     }
 
-    /// `data` is a bare auth status string. Unwrap.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        coco_tool_runtime::render_text_or_json(data)
+    fn render_for_model(&self, out: &String) -> Vec<ToolResultContentPart> {
+        vec![ToolResultContentPart::Text {
+            text: out.clone(),
+            provider_options: None,
+        }]
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: McpAuthInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let server_name = input
-            .get("server_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-
-        if server_name.is_empty() {
+    ) -> Result<ToolResult<String>, ToolError> {
+        if input.server_name.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "server_name is required".into(),
                 error_code: None,
             });
         }
 
-        match ctx.mcp.authenticate(server_name).await {
-            Ok(msg) => Ok(ToolResult {
-                data: serde_json::json!(msg),
-                new_messages: vec![],
-                app_state_patch: None,
-                permission_updates: Vec::new(),
-            }),
-            Err(e) => Ok(ToolResult {
-                data: serde_json::json!(format!("Authentication failed for {server_name}: {e}")),
-                new_messages: vec![],
-                app_state_patch: None,
-                permission_updates: Vec::new(),
-            }),
-        }
+        let message = match ctx.mcp.authenticate(&input.server_name).await {
+            Ok(msg) => msg,
+            Err(e) => format!(
+                "Authentication failed for {server}: {e}",
+                server = input.server_name
+            ),
+        };
+
+        Ok(ToolResult {
+            data: message,
+            new_messages: vec![],
+            app_state_patch: None,
+            permission_updates: Vec::new(),
+        })
     }
+}
+
+/// Typed input for [`ListMcpResourcesTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct ListMcpResourcesInput {
+    /// Optional MCP server name to filter resources
+    #[serde(default)]
+    pub server_name: Option<String>,
 }
 
 pub struct ListMcpResourcesTool;
 
 #[async_trait::async_trait]
 impl Tool for ListMcpResourcesTool {
+    type Input = ListMcpResourcesInput;
+    /// Output is `Value` because the wire shape is a union (bare
+    /// status string for empty/error, JSON array for results). TS
+    /// `ListMcpResourcesTool.ts:108-122` treats both shapes the same
+    /// way via `jsonStringify(content)` on the model-visible side.
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::ListMcpResources)
     }
@@ -117,31 +127,20 @@ impl Tool for ListMcpResourcesTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Mcp)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &ListMcpResourcesInput, _options: &DescriptionOptions) -> String {
         "List resources available on MCP servers.".into()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "server_name".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Optional MCP server name to filter resources"
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
+    fn is_read_only(&self, _input: &ListMcpResourcesInput) -> bool {
+        true
     }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
         true
     }
     /// TS `ListMcpResourcesTool.ts`: `isConcurrencySafe() { return true }`.
     /// Listing resources from one or more MCP servers is read-only and
     /// independent across servers — the executor can fan out concurrent
     /// listing calls.
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &ListMcpResourcesInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -157,16 +156,16 @@ impl Tool for ListMcpResourcesTool {
     /// branches and a JSON array for non-empty; this render unwraps
     /// the bare string and JSON-stringifies the array — byte-identical
     /// to TS in both cases.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        coco_tool_runtime::render_text_or_json(data)
+    fn render_for_model(&self, out: &Value) -> Vec<ToolResultContentPart> {
+        coco_tool_runtime::render_text_or_json(out)
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: ListMcpResourcesInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let server_name = input.get("server_name").and_then(|v| v.as_str());
+        let server_name = input.server_name.as_deref();
 
         match ctx.mcp.list_resources(server_name).await {
             Ok(resources) => {
@@ -209,10 +208,27 @@ impl Tool for ListMcpResourcesTool {
     }
 }
 
+/// Typed input for [`ReadMcpResourceTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct ReadMcpResourceInput {
+    /// Name of the MCP server
+    #[serde(default)]
+    pub server_name: String,
+    /// URI of the resource to read
+    #[serde(default)]
+    pub resource_uri: String,
+}
+
 pub struct ReadMcpResourceTool;
 
 #[async_trait::async_trait]
 impl Tool for ReadMcpResourceTool {
+    type Input = ReadMcpResourceInput;
+    /// Output is `Value` because the wire shape varies: single content
+    /// envelope, multi-content `{contents: [...]}`, or a bare error
+    /// string. The renderer treats them uniformly.
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::ReadMcpResource)
     }
@@ -222,37 +238,19 @@ impl Tool for ReadMcpResourceTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Mcp)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &ReadMcpResourceInput, _options: &DescriptionOptions) -> String {
         "Read a specific resource from an MCP server.".into()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "server_name".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Name of the MCP server"
-            }),
-        );
-        p.insert(
-            "resource_uri".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "URI of the resource to read"
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
+    fn is_read_only(&self, _input: &ReadMcpResourceInput) -> bool {
+        true
     }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
         true
     }
     /// TS `ReadMcpResourceTool.ts`: `isConcurrencySafe() { return true }`.
     /// Resource reads are side-effect-free; multiple reads to the same or
     /// different resources can run in parallel.
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &ReadMcpResourceInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -267,44 +265,39 @@ impl Tool for ReadMcpResourceTool {
     /// default impl. The override exists only to unwrap the error-path
     /// bare string (which would otherwise be JSON-quoted) so the wire
     /// matches TS's plain string error format.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        if let Some(text) = data.get("persisted_output").and_then(Value::as_str) {
+    fn render_for_model(&self, out: &Value) -> Vec<ToolResultContentPart> {
+        if let Some(text) = out.get("persisted_output").and_then(Value::as_str) {
             return vec![ToolResultContentPart::Text {
                 text: text.to_string(),
                 provider_options: None,
             }];
         }
-        coco_tool_runtime::render_text_or_json(data)
+        coco_tool_runtime::render_text_or_json(out)
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: ReadMcpResourceInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let server_name = input
-            .get("server_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let resource_uri = input
-            .get("resource_uri")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-
-        if server_name.is_empty() {
+        if input.server_name.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "server_name is required".into(),
                 error_code: None,
             });
         }
-        if resource_uri.is_empty() {
+        if input.resource_uri.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "resource_uri is required".into(),
                 error_code: None,
             });
         }
 
-        match ctx.mcp.read_resource(server_name, resource_uri).await {
+        match ctx
+            .mcp
+            .read_resource(&input.server_name, &input.resource_uri)
+            .await
+        {
             Ok(contents) => {
                 let total = contents.len();
                 let mut rendered = Vec::with_capacity(total);
@@ -326,7 +319,9 @@ impl Tool for ReadMcpResourceTool {
             }
             Err(e) => Ok(ToolResult {
                 data: serde_json::json!(format!(
-                    "Failed to read resource {resource_uri} from {server_name}: {e}"
+                    "Failed to read resource {uri} from {server}: {e}",
+                    uri = input.resource_uri,
+                    server = input.server_name
                 )),
                 new_messages: vec![],
                 app_state_patch: None,
@@ -382,6 +377,13 @@ impl McpTool {
 
 #[async_trait::async_trait]
 impl Tool for McpTool {
+    /// `McpTool` is the **dynamic** wrapper — its input schema is
+    /// supplied by the connected MCP server at runtime via
+    /// `self.info.input_schema`. No compile-time Rust type can describe
+    /// it, so `Value` is the correct assoc type here (and only here).
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Mcp {
             server: self.info.server_name.clone(),

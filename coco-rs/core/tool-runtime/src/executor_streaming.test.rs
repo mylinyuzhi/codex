@@ -36,6 +36,10 @@ struct ConfigurableTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for ConfigurableTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom(self.name.clone())
     }
@@ -79,7 +83,7 @@ fn prepared(
     started: Arc<AtomicI32>,
     sleep_ms: u64,
 ) -> PreparedToolCall {
-    let tool: Arc<dyn crate::traits::Tool> = Arc::new(ConfigurableTool {
+    let tool: Arc<dyn crate::traits::DynTool> = Arc::new(ConfigurableTool {
         name: name.into(),
         safe,
         started_counter: started,

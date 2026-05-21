@@ -23,8 +23,6 @@
 //! `tokio::fs::write` so a pre-edit backup is captured for the rewind
 //! subsystem (TS: `NotebookEditTool.ts:312` calls `fileHistoryTrackEdit`).
 
-use std::collections::HashMap;
-
 use async_trait::async_trait;
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -34,14 +32,125 @@ use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolCheckResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
+
+/// Cell type for the `insert` mode. `raw` is not supported (matches TS
+/// `NotebookEditTool.ts` limitation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotebookCellType {
+    #[default]
+    Code,
+    Markdown,
+}
+
+impl NotebookCellType {
+    fn as_str(self) -> &'static str {
+        match self {
+            NotebookCellType::Code => "code",
+            NotebookCellType::Markdown => "markdown",
+        }
+    }
+}
+
+/// Edit operation to perform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotebookEditMode {
+    /// Replace the cell at `cell_id` with `new_source`.
+    #[default]
+    Replace,
+    /// Insert a new cell at `cell_id`'s position (or position 0 when
+    /// `cell_id` is empty).
+    Insert,
+    /// Delete the cell at `cell_id`.
+    Delete,
+}
+
+/// Typed input for [`NotebookEditTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct NotebookEditInput {
+    /// Absolute path to the .ipynb notebook file
+    #[serde(default)]
+    pub notebook_path: String,
+    /// Cell ID or 'cell-N' numeric index
+    #[serde(default)]
+    pub cell_id: String,
+    /// New source content for the cell
+    #[serde(default)]
+    pub new_source: String,
+    /// Cell type (required for insert mode)
+    #[serde(default)]
+    pub cell_type: Option<NotebookCellType>,
+    /// Edit operation: replace (default), insert (new cell), or delete
+    #[serde(default)]
+    pub edit_mode: NotebookEditMode,
+}
+
+/// Typed output for [`NotebookEditTool`]. Tagged union keyed by
+/// `edit_mode` so each variant carries only the id field it owns:
+/// `replace`/`delete` resolve the existing `cell_id`, `insert` emits a
+/// fresh `new_cell_id` (or `null` when nbformat < 4.5).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "edit_mode", rename_all = "snake_case")]
+pub enum NotebookEditOutput {
+    Replace {
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        notebook_path: String,
+        #[serde(default)]
+        cell_index: usize,
+        /// Resolved cell id from the underlying notebook. `None` when
+        /// the notebook uses nbformat < 4.5 (no per-cell ids).
+        #[serde(default)]
+        cell_id: Option<String>,
+    },
+    Insert {
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        notebook_path: String,
+        #[serde(default)]
+        cell_index: usize,
+        /// Freshly-generated cell id (nbformat ≥ 4.5) or `null` for
+        /// older notebooks. Serialized as JSON `null` rather than
+        /// omitted, mirroring TS `NotebookEditTool.ts:380-390`.
+        new_cell_id: Option<String>,
+    },
+    Delete {
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        notebook_path: String,
+        #[serde(default)]
+        cell_index: usize,
+        #[serde(default)]
+        cell_id: Option<String>,
+    },
+}
+
+impl NotebookEditOutput {
+    fn message(&self) -> &str {
+        match self {
+            NotebookEditOutput::Replace { message, .. }
+            | NotebookEditOutput::Insert { message, .. }
+            | NotebookEditOutput::Delete { message, .. } => message,
+        }
+    }
+}
 
 pub struct NotebookEditTool;
 
 #[async_trait]
 impl Tool for NotebookEditTool {
+    type Input = NotebookEditInput;
+    type Output = NotebookEditOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::NotebookEdit)
     }
@@ -51,35 +160,8 @@ impl Tool for NotebookEditTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::NotebookEdit)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &NotebookEditInput, _options: &DescriptionOptions) -> String {
         "Edit a cell in a Jupyter notebook (.ipynb file). Supports replace, insert, and delete operations.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "notebook_path".into(),
-            serde_json::json!({"type": "string", "description": "Absolute path to the .ipynb notebook file"}),
-        );
-        p.insert(
-            "cell_id".into(),
-            serde_json::json!({"type": "string", "description": "Cell ID or 'cell-N' numeric index"}),
-        );
-        p.insert(
-            "new_source".into(),
-            serde_json::json!({"type": "string", "description": "New source content for the cell"}),
-        );
-        p.insert(
-            "cell_type".into(),
-            serde_json::json!({"type": "string", "enum": ["code", "markdown"], "description": "Cell type (required for insert mode)"}),
-        );
-        p.insert(
-            "edit_mode".into(),
-            serde_json::json!({"type": "string", "enum": ["replace", "insert", "delete"], "description": "Edit operation: replace (default), insert (new cell), or delete"}),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
     }
     fn should_defer(&self) -> bool {
         true
@@ -88,12 +170,16 @@ impl Tool for NotebookEditTool {
         Some("edit a Jupyter notebook ipynb cell")
     }
 
-    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
-        let Some(path) = input.get("notebook_path").and_then(Value::as_str) else {
+    async fn check_permissions(
+        &self,
+        input: &NotebookEditInput,
+        ctx: &ToolUseContext,
+    ) -> ToolCheckResult {
+        if input.notebook_path.is_empty() {
             return ToolCheckResult::Passthrough;
-        };
+        }
         crate::tools::write_permissions::check_write_permission_for_path(
-            path,
+            &input.notebook_path,
             ctx,
             ToolName::NotebookEdit.as_str(),
             "edit a notebook",
@@ -103,27 +189,19 @@ impl Tool for NotebookEditTool {
     /// Render the edit envelope as the prebuilt `message` field so the
     /// model gets the human-readable summary directly. notebook_path /
     /// cell_index / cell_id are TUI/state concerns.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let text = data
-            .get("message")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+    fn render_for_model(&self, out: &NotebookEditOutput) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
-            text,
+            text: out.message().to_string(),
             provider_options: None,
         }]
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: NotebookEditInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let notebook_path = input
-            .get("notebook_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+    ) -> Result<ToolResult<NotebookEditOutput>, ToolError> {
+        let notebook_path = input.notebook_path.as_str();
 
         if notebook_path.is_empty() {
             return Err(ToolError::InvalidInput {
@@ -132,12 +210,8 @@ impl Tool for NotebookEditTool {
             });
         }
 
-        let edit_mode = input
-            .get("edit_mode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("replace");
-
-        let cell_id = input.get("cell_id").and_then(|v| v.as_str()).unwrap_or("");
+        let edit_mode = input.edit_mode;
+        let cell_id = input.cell_id.as_str();
 
         // Enforce read-before-edit, matching TS `NotebookEditTool.ts:218-237`.
         // Without this guard the model can edit a notebook it never saw (or
@@ -209,7 +283,7 @@ impl Tool for NotebookEditTool {
         // Resolve cell index from cell_id. For insert with an empty
         // cell_id we default to position 0 so the model can create the
         // first cell without having to pass "0" explicitly.
-        let cell_index = if edit_mode == "insert" && cell_id.is_empty() {
+        let cell_index = if matches!(edit_mode, NotebookEditMode::Insert) && cell_id.is_empty() {
             0
         } else {
             resolve_cell_index(cells, cell_id)?
@@ -236,11 +310,8 @@ impl Tool for NotebookEditTool {
         };
 
         let result_msg = match edit_mode {
-            "replace" => {
-                let new_source = input
-                    .get("new_source")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+            NotebookEditMode::Replace => {
+                let new_source = input.new_source.as_str();
 
                 if cell_index >= cells.len() {
                     return Err(ToolError::InvalidInput {
@@ -268,23 +339,18 @@ impl Tool for NotebookEditTool {
                 let id = displayed_cell_id(Some(cell_id));
                 format!("Updated cell {id} with {new_source}")
             }
-            "insert" => {
-                let new_source = input
-                    .get("new_source")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let cell_type = input
-                    .get("cell_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("code");
+            NotebookEditMode::Insert => {
+                let new_source = input.new_source.as_str();
+                let cell_type = input.cell_type.unwrap_or(NotebookCellType::Code);
+                let cell_type_str = cell_type.as_str();
 
                 let mut new_cell = serde_json::json!({
-                    "cell_type": cell_type,
+                    "cell_type": cell_type_str,
                     "source": source_to_lines(new_source),
                     "metadata": {},
                 });
 
-                if cell_type == "code" {
+                if matches!(cell_type, NotebookCellType::Code) {
                     new_cell["execution_count"] = Value::Null;
                     new_cell["outputs"] = Value::Array(vec![]);
                 }
@@ -306,7 +372,7 @@ impl Tool for NotebookEditTool {
                 let id = displayed_cell_id(new_cell_id.as_deref());
                 format!("Inserted cell {id} with {new_source}")
             }
-            "delete" => {
+            NotebookEditMode::Delete => {
                 if cell_index >= cells.len() {
                     return Err(ToolError::InvalidInput {
                         message: format!(
@@ -324,14 +390,6 @@ impl Tool for NotebookEditTool {
                 cells.remove(cell_index);
                 let id = displayed_cell_id(Some(cell_id));
                 format!("Deleted cell {id}")
-            }
-            other => {
-                return Err(ToolError::InvalidInput {
-                    message: format!(
-                        "Unknown edit_mode '{other}'. Must be replace, insert, or delete"
-                    ),
-                    error_code: None,
-                });
             }
         };
 
@@ -373,21 +431,28 @@ impl Tool for NotebookEditTool {
         // (or null when nbformat < 4.5). For replace/delete: include
         // `cell_id` from the resolved cell. Always include `cell_index`
         // for debuggability.
-        let mut data = serde_json::json!({
-            "message": result_msg,
-            "notebook_path": notebook_path,
-            "cell_index": cell_index,
-            "edit_mode": edit_mode,
-        });
-        if edit_mode == "insert" {
-            // TS emits `new_cell_id` even when null (nbformat < 4.5).
-            data["new_cell_id"] = match new_cell_id {
-                Some(id) => Value::String(id),
-                None => Value::Null,
-            };
-        } else if let Some(id) = resolved_cell_id {
-            data["cell_id"] = Value::String(id);
-        }
+        let notebook_path_string = notebook_path.to_string();
+        let data = match edit_mode {
+            NotebookEditMode::Replace => NotebookEditOutput::Replace {
+                message: result_msg,
+                notebook_path: notebook_path_string,
+                cell_index,
+                cell_id: resolved_cell_id,
+            },
+            NotebookEditMode::Insert => NotebookEditOutput::Insert {
+                message: result_msg,
+                notebook_path: notebook_path_string,
+                cell_index,
+                // TS emits `new_cell_id` even when null (nbformat < 4.5).
+                new_cell_id,
+            },
+            NotebookEditMode::Delete => NotebookEditOutput::Delete {
+                message: result_msg,
+                notebook_path: notebook_path_string,
+                cell_index,
+                cell_id: resolved_cell_id,
+            },
+        };
 
         Ok(ToolResult {
             data,

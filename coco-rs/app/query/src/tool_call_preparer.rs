@@ -12,8 +12,8 @@ use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
 use coco_tool_runtime::CanUseToolDecision;
 use coco_tool_runtime::DecisionReason;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::PendingToolCall;
-use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
@@ -226,7 +226,7 @@ async fn resolve_effective_input_from_pre_hook(
     ctx: &ToolUseContext,
     tool_call: &ToolCallPart,
     tool_id: &ToolId,
-    tool: &Arc<dyn Tool>,
+    tool: &Arc<dyn DynTool>,
     pre_tool_outcome: PreToolUseOutcome,
     completion_event_mode: ToolCompletionEventMode,
 ) -> Option<(
@@ -263,7 +263,7 @@ async fn resolve_effective_input_from_pre_hook(
 #[allow(clippy::too_many_arguments)]
 async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     tool_call: &ToolCallPart,
-    tool: &Arc<dyn Tool>,
+    tool: &Arc<dyn DynTool>,
     effective_input: &Value,
     ctx: &ToolUseContext,
     history_messages: &[M],
@@ -456,7 +456,7 @@ fn can_use_tool_reason_label(reason: &DecisionReason) -> String {
 /// `updatedInput` on downstream allows so a tool can normalize
 /// input even when a user-allow rule is present.
 async fn evaluate_with_rules(
-    tool: &Arc<dyn Tool>,
+    tool: &Arc<dyn DynTool>,
     effective_input: &Value,
     ctx: &ToolUseContext,
 ) -> PermissionDecision {
@@ -604,7 +604,7 @@ async fn resolve_effective_input_from_permission(
     ctx: &ToolUseContext,
     tool_call: &ToolCallPart,
     tool_id: &ToolId,
-    tool: &Arc<dyn Tool>,
+    tool: &Arc<dyn DynTool>,
     permission_outcome: PermissionOutcome,
     effective_input: Value,
     completion_event_mode: ToolCompletionEventMode,
@@ -680,7 +680,7 @@ async fn validate_effective_input_or_complete_error(
     ctx: &ToolUseContext,
     tool_call: &ToolCallPart,
     tool_id: &ToolId,
-    tool: &Arc<dyn Tool>,
+    tool: &Arc<dyn DynTool>,
     input: Value,
     completion_event_mode: ToolCompletionEventMode,
 ) -> Option<Value> {

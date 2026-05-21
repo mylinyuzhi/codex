@@ -3,6 +3,7 @@
 
 use super::ToolRegistry;
 use crate::traits::DescriptionOptions;
+use crate::traits::DynTool;
 use crate::traits::McpToolInfo;
 use crate::traits::Tool;
 use coco_messages::ToolResult;
@@ -25,6 +26,10 @@ struct StubTool {
 
 #[async_trait::async_trait]
 impl Tool for StubTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom(self.name.clone())
     }
@@ -195,6 +200,10 @@ struct GatedTool {
 
 #[async_trait::async_trait]
 impl Tool for GatedTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         self.id.clone()
     }
@@ -274,7 +283,7 @@ fn doc_example_registry() -> ToolRegistry {
     reg
 }
 
-fn names(tools: &[Arc<dyn Tool>]) -> std::collections::HashSet<String> {
+fn names(tools: &[Arc<dyn DynTool>]) -> std::collections::HashSet<String> {
     tools.iter().map(|t| t.name().to_string()).collect()
 }
 

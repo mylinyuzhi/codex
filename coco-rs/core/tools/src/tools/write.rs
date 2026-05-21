@@ -7,10 +7,10 @@ use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolCheckResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use serde_json::Value;
-use std::collections::HashMap;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::Path;
 
 /// Long-form tool description shown to the model.
@@ -29,12 +29,50 @@ Usage:
 - NEVER create documentation files (*.md) or README files unless explicitly requested by the User.
 - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.";
 
+/// Typed input for [`WriteTool`].
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct WriteInput {
+    /// The absolute path to the file to write
+    pub file_path: String,
+    /// The content to write to the file
+    pub content: String,
+}
+
+/// Typed output for [`WriteTool`] — tagged enum keyed by the operation
+/// performed. `filePath` is camelCase on the wire for TS parity
+/// (`FileWriteTool.ts:418-433 mapToolResultToToolResultBlockParam`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WriteOutput {
+    /// New file created. `filePath` is the resolved absolute path.
+    Create {
+        #[serde(rename = "filePath")]
+        file_path: String,
+    },
+    /// Existing file overwritten.
+    Update {
+        #[serde(rename = "filePath")]
+        file_path: String,
+    },
+}
+
+impl WriteOutput {
+    fn file_path(&self) -> &str {
+        match self {
+            WriteOutput::Create { file_path } | WriteOutput::Update { file_path } => file_path,
+        }
+    }
+}
+
 /// Write tool — creates or overwrites a file.
 /// Creates parent directories as needed.
 pub struct WriteTool;
 
 #[async_trait::async_trait]
 impl Tool for WriteTool {
+    type Input = WriteInput;
+    type Output = WriteOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Write)
     }
@@ -43,80 +81,50 @@ impl Tool for WriteTool {
         ToolName::Write.as_str()
     }
 
-    fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &WriteInput, _options: &DescriptionOptions) -> String {
         WRITE_TOOL_DESCRIPTION.into()
     }
 
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut props = HashMap::new();
-        props.insert(
-            "file_path".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The absolute path to the file to write"
-            }),
-        );
-        props.insert(
-            "content".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The content to write to the file"
-            }),
-        );
-        ToolInputSchema {
-            properties: props,
-            required: Vec::new(),
-        }
-    }
-
-    fn is_destructive(&self, _input: &Value) -> bool {
+    fn is_destructive(&self, _input: &WriteInput) -> bool {
         true
     }
 
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let path = input.get("file_path").and_then(|v| v.as_str())?;
-        Some(format!("Writing {path}"))
+    fn get_activity_description(&self, input: &WriteInput) -> Option<String> {
+        Some(format!("Writing {path}", path = input.file_path))
     }
 
-    fn get_path(&self, input: &Value) -> Option<String> {
-        input
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+    fn get_path(&self, input: &WriteInput) -> Option<String> {
+        Some(input.file_path.clone())
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
-        if input.get("file_path").and_then(|v| v.as_str()).is_none() {
+    fn validate_input(&self, input: &WriteInput, _ctx: &ToolUseContext) -> ValidationResult {
+        if input.file_path.is_empty() {
             return ValidationResult::invalid("missing required field: file_path");
         }
-        if input.get("content").and_then(|v| v.as_str()).is_none() {
-            return ValidationResult::invalid("missing required field: content");
-        }
+        // Note: `content: String` deserialized successfully, so it's
+        // present; empty content is a legitimate "truncate" use case.
+        let _ = &input.content;
         ValidationResult::Valid
     }
 
-    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
-        let Some(path) = input.get("file_path").and_then(Value::as_str) else {
-            return ToolCheckResult::Passthrough;
-        };
+    async fn check_permissions(&self, input: &WriteInput, ctx: &ToolUseContext) -> ToolCheckResult {
         crate::tools::write_permissions::check_write_permission_for_path(
-            path,
+            &input.file_path,
             ctx,
             ToolName::Write.as_str(),
             "write to a file",
         )
     }
 
-    /// Branch on `data["type"]` ∈ {"create", "update"} to emit the
-    /// TS-shaped confirmation message. TS parity:
-    /// `FileWriteTool.ts:418-433::mapToolResultToToolResultBlockParam`.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let file_path = data.get("filePath").and_then(Value::as_str).unwrap_or("");
-        let op_type = data.get("type").and_then(Value::as_str).unwrap_or("");
-        let text = match op_type {
-            "create" => format!("File created successfully at: {file_path}"),
-            "update" => format!("The file {file_path} has been updated successfully."),
-            _ => serde_json::to_string(data).unwrap_or_default(),
+    /// Branch on the tagged enum to emit the TS-shaped confirmation
+    /// message. TS parity: `FileWriteTool.ts:418-433::mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, out: &WriteOutput) -> Vec<ToolResultContentPart> {
+        let file_path = out.file_path();
+        let text = match out {
+            WriteOutput::Create { .. } => format!("File created successfully at: {file_path}"),
+            WriteOutput::Update { .. } => {
+                format!("The file {file_path} has been updated successfully.")
+            }
         };
         vec![ToolResultContentPart::Text {
             text,
@@ -126,21 +134,11 @@ impl Tool for WriteTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: WriteInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let file_path = input["file_path"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidInput {
-                message: "missing file_path".into(),
-                error_code: None,
-            })?;
-        let content = input["content"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidInput {
-                message: "missing content".into(),
-                error_code: None,
-            })?;
+    ) -> Result<ToolResult<WriteOutput>, ToolError> {
+        let file_path = input.file_path.as_str();
+        let content = input.content.as_str();
 
         let path = Path::new(file_path);
 
@@ -303,15 +301,19 @@ impl Tool for WriteTool {
         // binding / RPC failure all become silent no-ops.
         ctx.lsp.notify_save(path).await;
 
-        // TS `FileWriteTool.ts:418-433` — return structured `{type, filePath}`
-        // so render_for_model can branch on the operation type. The
-        // wire output is built in render_for_model, not here.
-        let op_type = if is_new { "create" } else { "update" };
+        // TS `FileWriteTool.ts:418-433` — return structured tagged
+        // envelope so render_for_model can branch on operation type.
+        let data = if is_new {
+            WriteOutput::Create {
+                file_path: file_path.to_string(),
+            }
+        } else {
+            WriteOutput::Update {
+                file_path: file_path.to_string(),
+            }
+        };
         Ok(ToolResult {
-            data: serde_json::json!({
-                "type": op_type,
-                "filePath": file_path,
-            }),
+            data,
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

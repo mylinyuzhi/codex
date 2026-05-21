@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
@@ -17,7 +17,7 @@ use crate::helpers::complete_tool_call_with_error_mode;
 /// Resolved and validated tool call ready for permission/hook/execution.
 pub(crate) struct PreparedToolCall {
     pub tool_id: ToolId,
-    pub tool: Arc<dyn Tool>,
+    pub tool: Arc<dyn DynTool>,
 }
 
 /// Prepare one committed assistant tool call.

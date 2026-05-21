@@ -21,7 +21,7 @@ use coco_messages::create_tool_result_message_with_parts;
 use coco_system_reminder::AttachmentType as ReminderAttachmentType;
 use coco_system_reminder::SystemReminder;
 use coco_system_reminder::inject_reminders;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolCallErrorKind;
 use coco_tool_runtime::ToolMessagePath;
 use coco_tool_runtime::ToolSideEffects;
@@ -43,7 +43,7 @@ pub(crate) struct RunOneTail<'a> {
     pub tool_id: ToolId,
     pub tool_name: String,
     pub model_index: usize,
-    pub tool: Arc<dyn Tool>,
+    pub tool: Arc<dyn DynTool>,
     pub effective_input: Value,
     pub execute_result: Result<ToolResult<Value>, coco_tool_runtime::ToolError>,
     pub hooks: Option<&'a Arc<HookRegistry>>,

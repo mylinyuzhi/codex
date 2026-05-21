@@ -22,10 +22,10 @@ use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::powershell::analyze_ps_security;
@@ -39,10 +39,47 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// Max pwsh command timeout (10 minutes) — matches Bash max.
 const MAX_TIMEOUT_MS: u64 = 600_000;
 
+/// Typed input for [`PowerShellTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct PowerShellInput {
+    /// The PowerShell command to execute
+    #[serde(default)]
+    pub command: String,
+    /// Optional timeout in milliseconds. Defaults to 120000 (2 min)
+    /// and cannot exceed 600000 (10 min).
+    #[serde(default)]
+    pub timeout: Option<u64>,
+    /// Set to true to run this command in the background. Returns
+    /// immediately with a task_id.
+    #[serde(default)]
+    pub run_in_background: bool,
+    /// Set this to true to dangerously override sandbox mode and run
+    /// commands without sandboxing.
+    ///
+    /// R7-T23: TS `PowerShellTool.tsx` exposes the same
+    /// `dangerouslyDisableSandbox` opt-out as BashTool. Wire-format
+    /// `dangerouslyDisableSandbox` (camelCase) for TS parity.
+    #[serde(default, rename = "dangerouslyDisableSandbox")]
+    pub dangerously_disable_sandbox: bool,
+    /// Optional human-readable description for the background-task UI.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 pub struct PowerShellTool;
 
 #[async_trait::async_trait]
 impl Tool for PowerShellTool {
+    type Input = PowerShellInput;
+    /// Output is `Value` because the wire shape is a tagged union of
+    /// fg / bg / auto-bg-promotion envelopes (`{stdout, stderr,
+    /// exitCode, interrupted}` vs `{task_id, status: "background",
+    /// message}` vs the latter + `backgroundTaskId` /
+    /// `assistantAutoBackgrounded` / `backgroundedByUser`). Modeling
+    /// as a tagged enum would require a `Bash`-style refactor of the
+    /// renderer; deferred to a follow-up TS-parity pass.
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::PowerShell)
     }
@@ -51,74 +88,28 @@ impl Tool for PowerShellTool {
         ToolName::PowerShell.as_str()
     }
 
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &PowerShellInput, _options: &DescriptionOptions) -> String {
         "Execute a PowerShell command via pwsh. Subject to CLM type allowlist \
          and git-internal-path safety checks — unsafe commands are rejected \
          without running."
             .into()
     }
 
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "command".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The PowerShell command to execute"
-            }),
-        );
-        p.insert(
-            "timeout".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Optional timeout in milliseconds. Defaults to 120000 (2 min) \
-                                and cannot exceed 600000 (10 min)."
-            }),
-        );
-        p.insert(
-            "run_in_background".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Set to true to run this command in the background. \
-                                Returns immediately with a task_id."
-            }),
-        );
-        // R7-T23: TS `PowerShellTool.tsx` exposes the same
-        // `dangerouslyDisableSandbox` opt-out as BashTool. Without
-        // this field the schema rejected legitimate uses where the
-        // user explicitly approved sandbox bypass for a specific
-        // PowerShell command.
-        p.insert(
-            "dangerouslyDisableSandbox".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
-    }
-
     /// Mirror Bash's read-only fast path. TS
     /// `isSearchOrReadPowerShellCommand` (`readOnlyValidation.ts`) runs
     /// the same classifier; a command classified as search/read is
     /// concurrency-safe and skips the user-approval flow upstream.
-    fn is_read_only(&self, input: &Value) -> bool {
-        let Some(cmd) = input.get("command").and_then(|v| v.as_str()) else {
-            return false;
-        };
-        let (is_search, is_read) = classify_ps_command(cmd);
+    fn is_read_only(&self, input: &PowerShellInput) -> bool {
+        let (is_search, is_read) = classify_ps_command(&input.command);
         is_search || is_read
     }
 
-    fn is_concurrency_safe(&self, input: &Value) -> bool {
-        self.is_read_only(input)
+    fn is_concurrency_safe(&self, input: &PowerShellInput) -> bool {
+        Tool::is_read_only(self, input)
     }
 
-    fn is_destructive(&self, input: &Value) -> bool {
-        !self.is_read_only(input)
+    fn is_destructive(&self, input: &PowerShellInput) -> bool {
+        !Tool::is_read_only(self, input)
     }
 
     fn should_defer(&self) -> bool {
@@ -128,13 +119,15 @@ impl Tool for PowerShellTool {
         Some("run pwsh PowerShell commands on Windows")
     }
 
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let command = input.get("command").and_then(|v| v.as_str())?;
-        let truncated: String = command.chars().take(57).collect();
-        Some(if truncated.len() < command.len() {
+    fn get_activity_description(&self, input: &PowerShellInput) -> Option<String> {
+        if input.command.is_empty() {
+            return None;
+        }
+        let truncated: String = input.command.chars().take(57).collect();
+        Some(if truncated.len() < input.command.len() {
             format!("Running pwsh {truncated}...")
         } else {
-            format!("Running pwsh {command}")
+            format!("Running pwsh {command}", command = input.command)
         })
     }
 
@@ -143,11 +136,11 @@ impl Tool for PowerShellTool {
         coco_tool_runtime::ResultSizeBound::Chars(30_000)
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
-        if input.get("command").and_then(|v| v.as_str()).is_none() {
+    fn validate_input(&self, input: &PowerShellInput, _ctx: &ToolUseContext) -> ValidationResult {
+        if input.command.is_empty() {
             return ValidationResult::invalid("missing required field: command");
         }
-        if let Some(timeout) = input.get("timeout").and_then(serde_json::Value::as_u64)
+        if let Some(timeout) = input.timeout
             && timeout > MAX_TIMEOUT_MS
         {
             return ValidationResult::invalid(format!(
@@ -260,16 +253,15 @@ impl Tool for PowerShellTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: PowerShellInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let command = input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidInput {
+        if input.command.is_empty() {
+            return Err(ToolError::InvalidInput {
                 message: "missing command".into(),
                 error_code: None,
-            })?;
+            });
+        }
 
         // ── Stage 1: CLM type + git-internal guard ──
         //
@@ -279,9 +271,9 @@ impl Tool for PowerShellTool {
         // Read-only commands skip this gate because a harmless
         // `Get-Content ./x` must not be blocked because it mentions
         // `[IO.File]::ReadAllText(...)` in a string literal.
-        let (is_search, is_read) = classify_ps_command(command);
+        let (is_search, is_read) = classify_ps_command(&input.command);
         if !(is_search || is_read) {
-            let result = analyze_ps_security(command);
+            let result = analyze_ps_security(&input.command);
             if !result.is_safe {
                 let reason = result
                     .reason
@@ -301,7 +293,7 @@ impl Tool for PowerShellTool {
         // used for NTLM credential leakage. TS
         // `tools/PowerShellTool/pathValidation.ts` rejects any non-
         // whitelisted UNC path before execution.
-        for token in command.split_ascii_whitespace() {
+        for token in input.command.split_ascii_whitespace() {
             if is_vulnerable_unc_path(token) {
                 return Err(ToolError::PermissionDenied {
                     message: format!(
@@ -312,13 +304,8 @@ impl Tool for PowerShellTool {
             }
         }
 
-        let run_in_background = input
-            .get("run_in_background")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-
-        if run_in_background {
-            return execute_background(command, &input, ctx).await;
+        if input.run_in_background {
+            return execute_background(&input, ctx).await;
         }
 
         // Sandbox decision parity with Bash. Resolve the active state +
@@ -329,21 +316,15 @@ impl Tool for PowerShellTool {
         } else {
             None
         };
-        let sandbox_bypass = SandboxBypass::from_flag(
-            input
-                .get("dangerouslyDisableSandbox")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
-        );
+        let sandbox_bypass = SandboxBypass::from_flag(input.dangerously_disable_sandbox);
 
-        execute_foreground(command, &input, ctx, sandbox_state, sandbox_bypass).await
+        execute_foreground(&input, ctx, sandbox_state, sandbox_bypass).await
     }
 }
 
 /// Spawn the command as a background task via `task_handle`.
 async fn execute_background(
-    command: &str,
-    input: &Value,
+    input: &PowerShellInput,
     ctx: &ToolUseContext,
 ) -> Result<ToolResult<Value>, ToolError> {
     let task_handle = ctx
@@ -357,17 +338,20 @@ async fn execute_background(
     // Wrap the command in the same pwsh invocation we use for
     // foreground. The task handle runs the shell for us; we just feed
     // the wrapped command string through.
-    let wrapped = format!("pwsh -NoProfile -NonInteractive -Command {command:?}");
+    let wrapped = format!(
+        "pwsh -NoProfile -NonInteractive -Command {command:?}",
+        command = input.command
+    );
     let description = input
-        .get("description")
-        .and_then(|v| v.as_str())
+        .description
+        .as_deref()
         .filter(|s| !s.is_empty())
         .map(String::from)
         .unwrap_or_else(|| "PowerShell background task".into());
     let task_id = task_handle
         .spawn_shell_task(coco_tool_runtime::BackgroundShellRequest {
             command: wrapped,
-            timeout_ms: input.get("timeout").and_then(serde_json::Value::as_i64),
+            timeout_ms: input.timeout.map(|t| t as i64),
             description,
             tool_use_id: ctx.tool_use_id.clone(),
             agent_id: ctx.agent_id.as_ref().map(ToString::to_string),
@@ -416,15 +400,14 @@ async fn execute_background(
 /// recover the original UTF-16 BOM-prefixed text without going through
 /// the lossy String conversion the executor applies for display.
 async fn execute_foreground(
-    command: &str,
-    input: &Value,
+    input: &PowerShellInput,
     ctx: &ToolUseContext,
     sandbox_state: Option<Arc<SandboxState>>,
     sandbox_bypass: SandboxBypass,
 ) -> Result<ToolResult<Value>, ToolError> {
+    let command = input.command.as_str();
     let timeout_ms = input
-        .get("timeout")
-        .and_then(serde_json::Value::as_u64)
+        .timeout
         .unwrap_or(DEFAULT_TIMEOUT_MS)
         .min(MAX_TIMEOUT_MS);
 

@@ -84,7 +84,8 @@ fn test_parse_select_query_preserves_tool_name_case() {
 
 mod render_tests {
     use super::super::ToolSearchTool;
-    use coco_tool_runtime::Tool;
+    use coco_tool_runtime::DynTool;
+
     use coco_tool_runtime::ToolResultContentPart;
     use serde_json::json;
 
@@ -95,7 +96,7 @@ mod render_tests {
             "query": "file",
             "total_deferred_tools": 12,
         });
-        let parts = ToolSearchTool.render_for_model(&data);
+        let parts = <ToolSearchTool as DynTool>::render_for_model(&ToolSearchTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -113,7 +114,7 @@ mod render_tests {
             "query": "missing",
             "total_deferred_tools": 0,
         });
-        let parts = ToolSearchTool.render_for_model(&data);
+        let parts = <ToolSearchTool as DynTool>::render_for_model(&ToolSearchTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -131,7 +132,7 @@ mod render_tests {
             "total_deferred_tools": 0,
             "pending_mcp_servers": ["server-a", "server-b"],
         });
-        let parts = ToolSearchTool.render_for_model(&data);
+        let parts = <ToolSearchTool as DynTool>::render_for_model(&ToolSearchTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -154,7 +155,7 @@ mod render_tests {
             "total_deferred_tools": 12,
             "render_as_tool_reference": true,
         });
-        let parts = ToolSearchTool.render_for_model(&data);
+        let parts = <ToolSearchTool as DynTool>::render_for_model(&ToolSearchTool, &data);
         assert_eq!(parts.len(), 2);
 
         for (idx, expected_name) in ["WebFetch", "WebSearch"].iter().enumerate() {
@@ -186,7 +187,7 @@ mod render_tests {
             "total_deferred_tools": 0,
             "render_as_tool_reference": true,
         });
-        let parts = ToolSearchTool.render_for_model(&data);
+        let parts = <ToolSearchTool as DynTool>::render_for_model(&ToolSearchTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part for empty match, got {:?}", parts[0]);
         };
@@ -201,7 +202,7 @@ mod render_tests {
             "total_deferred_tools": 0,
             "pending_mcp_servers": [],
         });
-        let parts = ToolSearchTool.render_for_model(&data);
+        let parts = <ToolSearchTool as DynTool>::render_for_model(&ToolSearchTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -216,6 +217,7 @@ mod execute_tests {
     use async_trait::async_trait;
     use coco_messages::ToolResult;
     use coco_tool_runtime::DescriptionOptions;
+    use coco_tool_runtime::DynTool;
     use coco_tool_runtime::Tool;
     use coco_tool_runtime::ToolError;
     use coco_tool_runtime::ToolRegistry;
@@ -237,6 +239,10 @@ mod execute_tests {
 
     #[async_trait]
     impl Tool for StubTool {
+        // Migration scaffold: assoc types pinned to `Value`.
+        type Input = serde_json::Value;
+        type Output = serde_json::Value;
+
         fn id(&self) -> ToolId {
             ToolId::Custom(self.name.clone())
         }
@@ -293,7 +299,7 @@ mod execute_tests {
     /// Build a context whose registry holds the given tools. The
     /// `ToolSearch` tool itself is not registered — `execute` only
     /// consults `ctx.tools.all()`, not `ctx.tools.get_by_name(...)`.
-    fn ctx_with_tools(tools: Vec<Arc<dyn Tool>>) -> ToolUseContext {
+    fn ctx_with_tools(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
         let registry = ToolRegistry::new();
         for t in tools {
             registry.register(t);
@@ -310,10 +316,13 @@ mod execute_tests {
             deferred("WebSearch", "Search the web", Some("search the web")),
             eager("Read", "Read a file"),
         ]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "select:WebFetch,WebSearch"}), &ctx)
-            .await
-            .expect("select executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:WebFetch,WebSearch"}),
+            &ctx,
+        )
+        .await
+        .expect("select executes");
         // matches: exact resolved names from the deferred pool.
         let matches: Vec<&str> = result.data["matches"]
             .as_array()
@@ -336,10 +345,13 @@ mod execute_tests {
     #[tokio::test]
     async fn select_mode_drops_unknown_names_silently() {
         let ctx = ctx_with_tools(vec![deferred("WebFetch", "Fetch URL", None)]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "select:WebFetch,NonExistent"}), &ctx)
-            .await
-            .expect("select executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:WebFetch,NonExistent"}),
+            &ctx,
+        )
+        .await
+        .expect("select executes");
         let matches: Vec<&str> = result.data["matches"]
             .as_array()
             .unwrap()
@@ -355,10 +367,13 @@ mod execute_tests {
         // that lets the model proceed without retry churn." — the
         // matched name still ends up in `matches` and the patch.
         let ctx = ctx_with_tools(vec![eager("Read", "Read a file")]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "select:Read"}), &ctx)
-            .await
-            .expect("select executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:Read"}),
+            &ctx,
+        )
+        .await
+        .expect("select executes");
         let matches: Vec<&str> = result.data["matches"]
             .as_array()
             .unwrap()
@@ -371,10 +386,13 @@ mod execute_tests {
     #[tokio::test]
     async fn select_mode_rejects_empty_name_list() {
         let ctx = ctx_with_tools(vec![]);
-        let err = ToolSearchTool
-            .execute(json!({"query": "select:"}), &ctx)
-            .await
-            .expect_err("empty select must error");
+        let err = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:"}),
+            &ctx,
+        )
+        .await
+        .expect_err("empty select must error");
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
@@ -387,10 +405,13 @@ mod execute_tests {
             deferred("WebFetch", "Fetch a URL", None),
             deferred("WebSearch", "Search the web", None),
         ]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "WebFetch"}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "WebFetch"}),
+            &ctx,
+        )
+        .await
+        .expect("keyword executes");
         let matches: Vec<&str> = result.data["matches"]
             .as_array()
             .unwrap()
@@ -409,10 +430,13 @@ mod execute_tests {
             deferred("mcp__slack__list_channels", "Slack list", None),
             deferred("mcp__github__create_issue", "GH issue", None),
         ]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "mcp__slack"}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "mcp__slack"}),
+            &ctx,
+        )
+        .await
+        .expect("keyword executes");
         let matches: Vec<String> = result.data["matches"]
             .as_array()
             .unwrap()
@@ -432,10 +456,13 @@ mod execute_tests {
             deferred("NotebookEdit", "Edit a cell", None),
             deferred("EditFile", "Edit a notebook file", None),
         ]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "notebook"}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "notebook"}),
+            &ctx,
+        )
+        .await
+        .expect("keyword executes");
         let matches: Vec<&str> = result.data["matches"]
             .as_array()
             .unwrap()
@@ -458,10 +485,13 @@ mod execute_tests {
             deferred("mcp__github__create_issue", "Create an issue", None),
             deferred("mcp__slack__list_channels", "List channels", None),
         ]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "+slack send"}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "+slack send"}),
+            &ctx,
+        )
+        .await
+        .expect("keyword executes");
         let matches: Vec<String> = result.data["matches"]
             .as_array()
             .unwrap()
@@ -495,10 +525,10 @@ mod execute_tests {
             eager("ReadFile", "Read content from a file"),
             deferred("WebFetch", "Fetch a URL", None),
         ]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "file"}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result =
+            <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": "file"}), &ctx)
+                .await
+                .expect("keyword executes");
         let matches: Vec<&str> = result.data["matches"]
             .as_array()
             .unwrap()
@@ -519,10 +549,13 @@ mod execute_tests {
             deferred("TaskList", "list tasks", None),
             deferred("TaskUpdate", "update task", None),
         ]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "task", "max_results": 2}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "task", "max_results": 2}),
+            &ctx,
+        )
+        .await
+        .expect("keyword executes");
         let matches = result.data["matches"].as_array().unwrap();
         assert_eq!(matches.len(), 2);
     }
@@ -530,8 +563,7 @@ mod execute_tests {
     #[tokio::test]
     async fn empty_query_is_rejected() {
         let ctx = ctx_with_tools(vec![]);
-        let err = ToolSearchTool
-            .execute(json!({"query": ""}), &ctx)
+        let err = <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": ""}), &ctx)
             .await
             .expect_err("empty query must error");
         assert!(matches!(err, ToolError::InvalidInput { .. }));
@@ -540,10 +572,10 @@ mod execute_tests {
     #[tokio::test]
     async fn keyword_match_emits_promotion_patch() {
         let ctx = ctx_with_tools(vec![deferred("WebFetch", "Fetch a URL", None)]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "fetch"}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result =
+            <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": "fetch"}), &ctx)
+                .await
+                .expect("keyword executes");
         let patch = result.app_state_patch.expect("non-empty match emits patch");
         let mut state = coco_types::ToolAppState::default();
         patch(&mut state);
@@ -553,10 +585,13 @@ mod execute_tests {
     #[tokio::test]
     async fn keyword_no_match_emits_no_patch() {
         let ctx = ctx_with_tools(vec![deferred("WebFetch", "Fetch a URL", None)]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "totally-unrelated-query"}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "totally-unrelated-query"}),
+            &ctx,
+        )
+        .await
+        .expect("keyword executes");
         assert!(result.app_state_patch.is_none());
         let matches = result.data["matches"].as_array().unwrap();
         assert!(matches.is_empty());
@@ -568,7 +603,7 @@ mod execute_tests {
     /// `model_supports_client_side_tool_search` is also true because
     /// every server-side-capable model can run the client-side
     /// fallback if the beta header ever fails to negotiate.
-    fn ctx_with_tools_capable(tools: Vec<Arc<dyn Tool>>) -> ToolUseContext {
+    fn ctx_with_tools_capable(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
         let mut ctx = ctx_with_tools(tools);
         ctx.model_supports_tool_reference = true;
         ctx.model_supports_client_side_tool_search = true;
@@ -578,7 +613,7 @@ mod execute_tests {
     /// Client-side-only capable ctx (GPT-5, Gemini, DeepSeek, Haiku).
     /// Used to verify the universal promotion path remains active
     /// when the model only declares `ClientSideToolSearch`.
-    fn ctx_with_tools_client_capable(tools: Vec<Arc<dyn Tool>>) -> ToolUseContext {
+    fn ctx_with_tools_client_capable(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
         let mut ctx = ctx_with_tools(tools);
         ctx.model_supports_client_side_tool_search = true;
         ctx
@@ -593,10 +628,13 @@ mod execute_tests {
     async fn capable_model_select_skips_patch_and_tags_envelope() {
         let ctx =
             ctx_with_tools_capable(vec![deferred("WebFetch", "Fetch URL", Some("fetch a URL"))]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "select:WebFetch"}), &ctx)
-            .await
-            .expect("select executes");
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:WebFetch"}),
+            &ctx,
+        )
+        .await
+        .expect("select executes");
         assert_eq!(result.data["matches"], json!(["WebFetch"]));
         assert_eq!(result.data["render_as_tool_reference"], json!(true));
         assert!(
@@ -609,10 +647,10 @@ mod execute_tests {
     #[tokio::test]
     async fn capable_model_keyword_skips_patch_and_tags_envelope() {
         let ctx = ctx_with_tools_capable(vec![deferred("WebFetch", "Fetch a URL", None)]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "fetch"}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result =
+            <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": "fetch"}), &ctx)
+                .await
+                .expect("keyword executes");
         let matches: Vec<&str> = result.data["matches"]
             .as_array()
             .unwrap()
@@ -637,7 +675,7 @@ mod execute_tests {
     async fn tool_search_tool_hidden_when_feature_off() {
         let mut ctx = ctx_with_tools_client_capable(vec![]);
         assert!(
-            ToolSearchTool.is_enabled(&ctx),
+            <ToolSearchTool as DynTool>::is_enabled(&ToolSearchTool, &ctx),
             "feature on + client-side cap → ToolSearch exposed"
         );
 
@@ -645,7 +683,7 @@ mod execute_tests {
         disabled.disable(coco_types::Feature::ToolSearch);
         ctx.features = Arc::new(disabled);
         assert!(
-            !ToolSearchTool.is_enabled(&ctx),
+            !<ToolSearchTool as DynTool>::is_enabled(&ToolSearchTool, &ctx),
             "feature off → ToolSearch hidden even with client-side cap"
         );
     }
@@ -663,7 +701,7 @@ mod execute_tests {
         assert!(!ctx.model_supports_tool_reference);
         assert!(!ctx.model_supports_client_side_tool_search);
         assert!(
-            !ToolSearchTool.is_enabled(&ctx),
+            !<ToolSearchTool as DynTool>::is_enabled(&ToolSearchTool, &ctx),
             "no capability → ToolSearch must hide regardless of feature flag"
         );
         assert!(!ctx.tool_search_active());
@@ -677,10 +715,10 @@ mod execute_tests {
     #[tokio::test]
     async fn client_side_only_model_keeps_patch_and_omits_tag() {
         let ctx = ctx_with_tools_client_capable(vec![deferred("WebFetch", "Fetch a URL", None)]);
-        let result = ToolSearchTool
-            .execute(json!({"query": "fetch"}), &ctx)
-            .await
-            .expect("keyword executes");
+        let result =
+            <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": "fetch"}), &ctx)
+                .await
+                .expect("keyword executes");
         assert!(result.data.get("render_as_tool_reference").is_none());
         let patch = result
             .app_state_patch

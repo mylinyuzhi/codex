@@ -2,8 +2,6 @@
 //!
 //! TS: `tools/SkillTool/`.
 
-use std::collections::HashMap;
-
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
@@ -11,81 +9,96 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
+
+/// Typed input for [`SkillTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct SkillInput {
+    /// The skill name to invoke (e.g. 'commit', 'review-pr', 'pdf')
+    #[serde(default)]
+    pub skill: String,
+    /// Optional arguments for the skill
+    #[serde(default)]
+    pub args: Option<String>,
+}
+
+/// Typed output for [`SkillTool`]. Tagged union of `inline` (resolved
+/// prompt fed back into the agent's history) and `forked` (child agent
+/// ran in its own session, output aggregated).
+///
+/// TS parity: `SkillTool.ts:301-326 outputSchema`. Wire field names
+/// preserved (`commandName`, `agentId`) via `rename` for cross-runtime
+/// transcript compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SkillOutput {
+    /// Inline path — the resolved prompt was spliced into history via
+    /// `new_messages`; the renderer emits `Launching skill: {name}`.
+    Inline {
+        #[serde(default)]
+        success: bool,
+        #[serde(rename = "commandName", default)]
+        command_name: String,
+        #[serde(default)]
+        summary: String,
+        /// Raw JSON message Values handed to the runtime's
+        /// `Value → Message` adapter. Kept as `Vec<Value>` because the
+        /// concrete `Message` type lives outside this module.
+        #[serde(default)]
+        new_messages: Vec<Value>,
+    },
+    /// Forked path — the skill ran as a subagent; the renderer emits
+    /// `Skill "{name}" completed (forked execution).\n\nResult:\n...`.
+    Forked {
+        #[serde(default)]
+        success: bool,
+        #[serde(rename = "commandName", default)]
+        command_name: String,
+        #[serde(rename = "agentId", default)]
+        agent_id: String,
+        #[serde(default)]
+        result: String,
+    },
+}
 
 pub struct SkillTool;
 
 #[async_trait::async_trait]
 impl Tool for SkillTool {
+    type Input = SkillInput;
+    type Output = SkillOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Skill)
     }
     fn name(&self) -> &str {
         ToolName::Skill.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &SkillInput, _options: &DescriptionOptions) -> String {
         "Execute a skill within the main conversation. Skills provide specialized \
          capabilities and domain knowledge."
             .into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "skill".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The skill name to invoke (e.g. 'commit', 'review-pr', 'pdf')"
-            }),
-        );
-        p.insert(
-            "args".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Optional arguments for the skill"
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
     }
 
     /// Render the skill envelope. TS parity:
     /// `SkillTool.ts:843-862 mapToolResultToToolResultBlockParam`,
     /// data shape per `SkillTool.ts:301-326 outputSchema`.
-    ///
-    /// Two branches keyed off the `status` field added by execute:
-    /// - `"inline"`: model sees `Launching skill: {commandName}` —
-    ///   the resolved prompt is fed back into the agent's history
-    ///   via `new_messages`, not the tool result.
-    /// - `"forked"`: model sees `Skill "{commandName}" completed
-    ///   (forked execution).\n\nResult:\n{result}` — the child
-    ///   agent ran in its own session and the aggregated output is
-    ///   echoed here.
-    ///
-    /// The pre-Phase-7 single-string envelope is supported as a
-    /// fallback so older transcripts and `NoOpSkillHandle` test
-    /// doubles still render sensibly.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let status = data.get("status").and_then(Value::as_str);
-        let command_name = data
-            .get("commandName")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let text = match status {
-            Some("forked") => {
-                let result = data.get("result").and_then(Value::as_str).unwrap_or("");
-                format!(
-                    "Skill \"{command_name}\" completed (forked execution).\n\nResult:\n{result}"
-                )
+    fn render_for_model(&self, out: &SkillOutput) -> Vec<ToolResultContentPart> {
+        let text = match out {
+            SkillOutput::Inline { command_name, .. } => {
+                format!("Launching skill: {command_name}")
             }
-            Some("inline") => format!("Launching skill: {command_name}"),
-            _ => data
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default()),
+            SkillOutput::Forked {
+                command_name,
+                result,
+                ..
+            } => format!(
+                "Skill \"{command_name}\" completed (forked execution).\n\nResult:\n{result}"
+            ),
         };
         vec![ToolResultContentPart::Text {
             text,
@@ -95,25 +108,18 @@ impl Tool for SkillTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: SkillInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let skill_name = input
-            .get("skill")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-
-        if skill_name.is_empty() {
+    ) -> Result<ToolResult<SkillOutput>, ToolError> {
+        if input.skill.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "skill name is required".into(),
                 error_code: None,
             });
         }
 
-        let args = input
-            .get("args")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
+        let skill_name = input.skill.as_str();
+        let args = input.args.as_deref().unwrap_or_default();
 
         // Skills route through the dedicated `SkillHandle` (Phase 7 split)
         // rather than `AgentHandle` — skills are a different runtime
@@ -133,17 +139,6 @@ impl Tool for SkillTool {
                 source: None,
             })?;
 
-        // Flatten `SkillInvocationResult` into a TS-shaped envelope so
-        // render can produce `Launching skill: ...` (inline) or
-        // `Skill "..." completed (forked execution).\n\nResult:\n...`
-        // (forked) per `SkillTool.ts:843-862`. Field names match the TS
-        // `outputSchema` at `SkillTool.ts:301-326` (`status`/`result`,
-        // not `mode`/`output`) so transcript readers see the same wire
-        // shape across runtimes. The inline `new_messages` are
-        // preserved on the data envelope as raw JSON `Value`s for the
-        // runtime to splice at the seam where Value→Message conversion
-        // lives — this tool's `new_messages: Vec<Message>` slot stays
-        // empty.
         // Pull `permission_updates` off the inline variant so the
         // skill's `allowed-tools` frontmatter folds into the running
         // session config via the executor's `PermissionRuleHandle`.
@@ -154,24 +149,28 @@ impl Tool for SkillTool {
                 summary,
                 new_messages,
                 permission_updates,
-            } => (
-                serde_json::json!({
-                    "status": "inline",
-                    "success": true,
-                    "commandName": skill_name,
-                    "summary": summary,
-                    "new_messages": new_messages,
-                }),
-                permission_updates,
-            ),
+            } => {
+                let new_messages_value: Vec<Value> = new_messages
+                    .iter()
+                    .map(|m| serde_json::to_value(m).unwrap_or(Value::Null))
+                    .collect();
+                (
+                    SkillOutput::Inline {
+                        success: true,
+                        command_name: skill_name.to_string(),
+                        summary,
+                        new_messages: new_messages_value,
+                    },
+                    permission_updates,
+                )
+            }
             coco_tool_runtime::SkillInvocationResult::Forked { agent_id, output } => (
-                serde_json::json!({
-                    "status": "forked",
-                    "success": true,
-                    "commandName": skill_name,
-                    "agentId": agent_id,
-                    "result": output,
-                }),
+                SkillOutput::Forked {
+                    success: true,
+                    command_name: skill_name.to_string(),
+                    agent_id,
+                    result: output,
+                },
                 Vec::new(),
             ),
         };

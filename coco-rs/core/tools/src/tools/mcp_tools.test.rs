@@ -1,6 +1,6 @@
 use super::*;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::McpToolAnnotations;
-use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::mcp_handle::McpContentBlock;
@@ -27,6 +27,7 @@ fn make_mcp_tool() -> McpTool {
 #[test]
 fn always_load_defaults_to_false_so_mcp_tools_are_deferred() {
     let tool = make_mcp_tool();
+    let tool: &dyn DynTool = &tool;
     assert!(tool.should_defer(), "MCP tools defer by default");
     assert!(
         !tool.always_load(),
@@ -53,6 +54,8 @@ fn always_load_propagates_from_meta_opt_out() {
         schema,
         annotations,
     );
+
+    let tool: &dyn DynTool = &tool;
     assert!(tool.always_load(), "always_load flows through annotations");
     // `should_defer()` stays `true` — the registry filter is what
     // decides whether to surface the schema: `should_defer() &&
@@ -92,7 +95,7 @@ fn list_mcp_resources_render_empty_string_path() {
     let data = json!(
         "No resources found. MCP servers may still provide tools even if they have no resources."
     );
-    let parts = ListMcpResourcesTool.render_for_model(&data);
+    let parts = <ListMcpResourcesTool as DynTool>::render_for_model(&ListMcpResourcesTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -106,7 +109,7 @@ fn list_mcp_resources_render_array_uses_json_stringify() {
     let data = json!([
         {"uri": "u1", "name": "n1", "description": "d1", "mime_type": "text/plain"},
     ]);
-    let parts = ListMcpResourcesTool.render_for_model(&data);
+    let parts = <ListMcpResourcesTool as DynTool>::render_for_model(&ListMcpResourcesTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -117,7 +120,7 @@ fn list_mcp_resources_render_array_uses_json_stringify() {
 #[test]
 fn read_mcp_resource_render_uses_json_stringify() {
     let data = json!({"uri": "u1", "text": "hello", "mime_type": "text/plain"});
-    let parts = ReadMcpResourceTool.render_for_model(&data);
+    let parts = <ReadMcpResourceTool as DynTool>::render_for_model(&ReadMcpResourceTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -131,23 +134,32 @@ async fn mcp_auth_tool_forwards_to_generic_handle() {
     ctx.mcp = Arc::new(AuthHandle {
         message: "Authentication started".into(),
     });
-    assert!(!McpAuthTool.is_read_only(&json!({"server_name": "srv"})));
+    assert!(!<McpAuthTool as DynTool>::is_read_only(
+        &McpAuthTool,
+        &json!({"server_name": "srv"})
+    ));
     assert_eq!(
-        McpAuthTool.to_auto_classifier_input(&json!({"server_name": "srv"})),
+        <McpAuthTool as DynTool>::to_auto_classifier_input(
+            &McpAuthTool,
+            &json!({"server_name": "srv"})
+        ),
         "srv"
     );
-    let permission = McpAuthTool
-        .check_permissions(&json!({"server_name": "srv"}), &ctx)
-        .await;
+    let permission = <McpAuthTool as DynTool>::check_permissions(
+        &McpAuthTool,
+        &json!({"server_name": "srv"}),
+        &ctx,
+    )
+    .await;
     let coco_types::ToolCheckResult::Allow { updated_input, .. } = permission else {
         panic!("McpAuthTool should explicitly allow its auth-start input");
     };
     assert_eq!(updated_input, Some(json!({"server_name": "srv"})));
 
-    let result = McpAuthTool
-        .execute(json!({"server_name": "srv"}), &ctx)
-        .await
-        .unwrap();
+    let result =
+        <McpAuthTool as DynTool>::execute(&McpAuthTool, json!({"server_name": "srv"}), &ctx)
+            .await
+            .unwrap();
 
     assert_eq!(result.data, json!("Authentication started"));
 }
@@ -160,6 +172,7 @@ async fn mcp_auth_tool_forwards_to_generic_handle() {
 fn render_decodes_text_block_array_into_text_part() {
     // Success path: data is a bare array of `{type, text/data, ...}` blocks.
     let tool = make_mcp_tool();
+    let tool: &dyn DynTool = &tool;
     let data = json!([
         {"type": "text", "text": "first chunk"},
         {"type": "text", "text": "second chunk"},
@@ -179,6 +192,7 @@ fn render_decodes_text_block_array_into_text_part() {
 #[test]
 fn render_decodes_image_block_into_filedata_part() {
     let tool = make_mcp_tool();
+    let tool: &dyn DynTool = &tool;
     let data = json!([
         {"type": "image", "data": "iVBOR...", "mime_type": "image/png"},
     ]);
@@ -204,6 +218,7 @@ fn render_handles_mixed_text_and_image_in_order() {
     // Text + image + text — order must be preserved so the model sees
     // captions adjacent to the screenshot they describe.
     let tool = make_mcp_tool();
+    let tool: &dyn DynTool = &tool;
     let data = json!([
         {"type": "text", "text": "Screenshot of the page:"},
         {"type": "image", "data": "iVBOR...", "mime_type": "image/png"},
@@ -220,6 +235,7 @@ fn render_handles_mixed_text_and_image_in_order() {
 fn render_decodes_error_envelope_content() {
     // Error path: data is `{error: true, content: [...]}`.
     let tool = make_mcp_tool();
+    let tool: &dyn DynTool = &tool;
     let data = json!({
         "error": true,
         "content": [
@@ -240,6 +256,7 @@ fn render_unknown_block_falls_back_to_json_string() {
     // Empty parts list triggers the JSON fallback so the model still
     // sees something rather than getting a silent empty result.
     let tool = make_mcp_tool();
+    let tool: &dyn DynTool = &tool;
     let data = json!([
         {"type": "audio", "data": "...", "mime_type": "audio/wav"},
     ]);
@@ -268,17 +285,18 @@ async fn read_mcp_resource_persists_blob_to_session_tool_results() {
         mime_type: "image/png".into(),
     });
 
-    let result = ReadMcpResourceTool
-        .execute(
-            json!({
-                "server_name": "srv",
-                "resource_uri": "mcp://file",
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
-    let rendered = ReadMcpResourceTool.render_for_model(&result.data);
+    let result = <ReadMcpResourceTool as DynTool>::execute(
+        &ReadMcpResourceTool,
+        json!({
+            "server_name": "srv",
+            "resource_uri": "mcp://file",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let rendered =
+        <ReadMcpResourceTool as DynTool>::render_for_model(&ReadMcpResourceTool, &result.data);
     let ToolResultContentPart::Text { text, .. } = &rendered[0] else {
         panic!("expected Text part");
     };
@@ -303,16 +321,16 @@ async fn read_mcp_resource_preserves_multiple_contents() {
         blob: base64::engine::general_purpose::STANDARD.encode(bytes),
     });
 
-    let result = ReadMcpResourceTool
-        .execute(
-            json!({
-                "server_name": "srv",
-                "resource_uri": "mcp://bundle",
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <ReadMcpResourceTool as DynTool>::execute(
+        &ReadMcpResourceTool,
+        json!({
+            "server_name": "srv",
+            "resource_uri": "mcp://bundle",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let contents = result.data["contents"].as_array().unwrap();
     assert_eq!(contents.len(), 2);
@@ -346,6 +364,8 @@ async fn dynamic_mcp_tool_persists_embedded_resource_blob() {
     });
 
     let tool = make_mcp_tool();
+
+    let tool: &dyn DynTool = &tool;
     let result = tool.execute(json!({}), &ctx).await.unwrap();
     let parts = tool.render_for_model(&result.data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {

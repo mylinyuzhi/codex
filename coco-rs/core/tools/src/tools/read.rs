@@ -8,10 +8,10 @@ use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::Path;
 
 /// Default number of lines to read if no limit specified.
@@ -113,12 +113,43 @@ const BLOCKED_DEVICE_PATHS: &[&str] = &[
     "/dev/fd/2",
 ];
 
+/// Typed input for [`ReadTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct ReadInput {
+    /// The absolute path to the file to read
+    #[serde(default)]
+    pub file_path: String,
+    /// The line number to start reading from. Only provide if the
+    /// file is too large to read at once. 1-based — TS converts via
+    /// `offset === 0 ? 0 : offset - 1`, so both 0 and 1 mean "start
+    /// from the first line".
+    #[serde(default)]
+    pub offset: Option<i64>,
+    /// The number of lines to read. Only provide if the file is too
+    /// large to read at once.
+    #[serde(default)]
+    pub limit: Option<i64>,
+    /// Page range for PDF files (e.g., "1-5", "3", "10-20"). Only
+    /// applicable to PDF files. Maximum 20 pages per request.
+    #[serde(default)]
+    pub pages: Option<String>,
+}
+
 /// Read tool — reads file contents with line numbers (cat -n format).
 /// Supports text files, offset/limit, image detection, binary detection.
 pub struct ReadTool;
 
 #[async_trait::async_trait]
 impl Tool for ReadTool {
+    type Input = ReadInput;
+    /// Output is `Value` — the wire shape is a tagged union of
+    /// `{type: "text", file: {content}}`, `{type: "image", file:
+    /// {base64, type}}`, `{type: "pdf", ...}`, `{type: "notebook",
+    /// file: {cells: [...]}}` and `{type: "file_unchanged"}`. Modeling
+    /// as a tagged enum would mean a big follow-up refactor of the
+    /// renderer; deferred to a TS-parity output-typing pass.
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Read)
     }
@@ -134,79 +165,41 @@ impl Tool for ReadTool {
         coco_tool_runtime::ResultSizeBound::Unbounded
     }
 
-    fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &ReadInput, _options: &DescriptionOptions) -> String {
         READ_TOOL_DESCRIPTION.into()
     }
 
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut props = HashMap::new();
-        props.insert(
-            "file_path".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The absolute path to the file to read"
-            }),
-        );
-        // TS: `FileReadTool.ts:230-235`. Description and semantics match TS
-        // exactly: `offset` is the 1-based line number to start reading from
-        // (TS converts via `offset === 0 ? 0 : offset - 1`, so both 0 and 1
-        // mean "start from the first line"). `limit` is optional; when
-        // omitted TS falls back to a byte-size budget, coco-rs uses
-        // `DEFAULT_LINE_LIMIT`.
-        props.insert(
-            "offset".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "The line number to start reading from. Only provide if the file is too large to read at once",
-                "minimum": 0
-            }),
-        );
-        props.insert(
-            "limit".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "The number of lines to read. Only provide if the file is too large to read at once.",
-                "exclusiveMinimum": 0
-            }),
-        );
-        props.insert(
-            "pages".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files."
-            }),
-        );
-        ToolInputSchema {
-            properties: props,
-            required: Vec::new(),
+    fn is_read_only(&self, _input: &ReadInput) -> bool {
+        true
+    }
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _input: &ReadInput) -> bool {
+        true
+    }
+
+    fn get_activity_description(&self, input: &ReadInput) -> Option<String> {
+        if input.file_path.is_empty() {
+            return None;
         }
+        Some(format!("Reading {path}", path = input.file_path))
     }
 
-    fn is_read_only(&self, _input: &Value) -> bool {
-        true
-    }
-
-    fn is_concurrency_safe(&self, _input: &Value) -> bool {
-        true
-    }
-
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let path = input.get("file_path").and_then(|v| v.as_str())?;
-        Some(format!("Reading {path}"))
-    }
-
-    fn is_search_or_read_command(&self, _input: &Value) -> Option<SearchReadInfo> {
+    fn is_search_or_read_command(&self, _input: &ReadInput) -> Option<SearchReadInfo> {
         Some(SearchReadInfo {
             is_read: true,
             ..SearchReadInfo::default()
         })
     }
 
-    fn get_path(&self, input: &Value) -> Option<String> {
-        input
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+    fn get_path(&self, input: &ReadInput) -> Option<String> {
+        if input.file_path.is_empty() {
+            None
+        } else {
+            Some(input.file_path.clone())
+        }
     }
 
     /// R6-T20: file-read permission gate. TS routes every Read through
@@ -218,32 +211,32 @@ impl Tool for ReadTool {
     /// rule + mode-fallthrough evaluation.
     async fn check_permissions(
         &self,
-        input: &Value,
+        input: &ReadInput,
         ctx: &ToolUseContext,
     ) -> coco_types::ToolCheckResult {
-        let Some(file_path) = input.get("file_path").and_then(|v| v.as_str()) else {
+        if input.file_path.is_empty() {
             return coco_types::ToolCheckResult::Passthrough;
-        };
+        }
         let matcher = crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
             &ctx.tool_config.file_read_ignore_patterns,
         );
         crate::tools::read_permissions::check_read_permission_with_matcher(
-            Path::new(file_path),
+            Path::new(&input.file_path),
             &matcher,
             ctx,
         )
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
-        if input.get("file_path").and_then(|v| v.as_str()).is_none() {
+    fn validate_input(&self, input: &ReadInput, _ctx: &ToolUseContext) -> ValidationResult {
+        if input.file_path.is_empty() {
             return ValidationResult::invalid("missing required field: file_path");
         }
-        if let Some(offset) = input.get("offset").and_then(serde_json::Value::as_i64)
+        if let Some(offset) = input.offset
             && offset < 0
         {
             return ValidationResult::invalid("offset must be non-negative");
         }
-        if let Some(limit) = input.get("limit").and_then(serde_json::Value::as_i64)
+        if let Some(limit) = input.limit
             && limit <= 0
         {
             return ValidationResult::invalid("limit must be positive");
@@ -253,16 +246,16 @@ impl Tool for ReadTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: ReadInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let file_path = input
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidInput {
+        if input.file_path.is_empty() {
+            return Err(ToolError::InvalidInput {
                 message: "missing file_path".into(),
                 error_code: None,
-            })?;
+            });
+        }
+        let file_path = input.file_path.as_str();
 
         let path = Path::new(file_path);
 
@@ -329,14 +322,8 @@ impl Tool for ReadTool {
         // Notebooks/PDFs/images bypass the dedup because their content
         // type isn't a plain text snapshot — they go through specialized
         // read paths below that overwrite the cache anyway.
-        let dedup_offset = input
-            .get("offset")
-            .and_then(serde_json::Value::as_i64)
-            .map(|v| v as i32);
-        let dedup_limit = input
-            .get("limit")
-            .and_then(serde_json::Value::as_i64)
-            .map(|v| v as i32);
+        let dedup_offset = input.offset.map(|v| v as i32);
+        let dedup_limit = input.limit.map(|v| v as i32);
         // Only attempt dedup for plain text reads. Image/PDF/notebook
         // paths fall through to their dedicated handlers below — they
         // call `record_file_read` themselves and never need a stub.
@@ -441,7 +428,7 @@ impl Tool for ReadTool {
             if ext_lower == "pdf" {
                 crate::record_file_read(ctx, path, String::new(), None, None, None, None).await;
                 crate::track_nested_memory_attachment(ctx, path).await;
-                let pages = input.get("pages").and_then(|v| v.as_str());
+                let pages = input.pages.as_deref();
                 return read_pdf(file_path, pages);
             }
 
@@ -490,19 +477,20 @@ impl Tool for ReadTool {
         let lines: Vec<&str> = content.lines().collect();
         let total_lines = lines.len();
 
-        // TS: `FileReadTool.ts:497` — default `offset = 1` (1-based). Inputs
-        // are read as `u64` so negatives hit serde's bounds and never reach
-        // this path. We accept both `0` and `1` as "start from the first
-        // line" because TS does (`const lineOffset = offset === 0 ? 0 :
-        // offset - 1`).
+        // TS: `FileReadTool.ts:497` — default `offset = 1` (1-based).
+        // `validate_input` already rejected negative `offset` / non-positive
+        // `limit`, so casting to `usize` here is safe. Both `0` and `1`
+        // are treated as "start from the first line" (TS: `const
+        // lineOffset = offset === 0 ? 0 : offset - 1`).
         let offset = input
-            .get("offset")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(1) as usize;
+            .offset
+            .filter(|n| *n >= 0)
+            .map(|n| n as usize)
+            .unwrap_or(1);
         let limit = input
-            .get("limit")
-            .and_then(serde_json::Value::as_u64)
-            .map(|v| v as usize)
+            .limit
+            .filter(|n| *n > 0)
+            .map(|n| n as usize)
             .unwrap_or(DEFAULT_LINE_LIMIT);
 
         // Convert user-facing 1-based offset → internal 0-based start index.

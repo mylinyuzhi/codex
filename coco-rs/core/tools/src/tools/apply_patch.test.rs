@@ -1,4 +1,5 @@
 use super::*;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::Features;
 use coco_types::PermissionBehavior;
@@ -12,7 +13,7 @@ use std::sync::Arc;
 
 #[test]
 fn is_enabled_only_when_model_adds_apply_patch() {
-    let tool = ApplyPatchTool;
+    let tool: &dyn DynTool = &ApplyPatchTool;
 
     // Default overrides — model does NOT add apply_patch as extra.
     let mut ctx = ToolUseContext::test_default();
@@ -39,7 +40,8 @@ async fn check_permissions_accept_edits_allows_cwd_patch() {
         "patch": "*** Begin Patch\n*** Add File: notes.txt\n+hello\n*** End Patch\n"
     });
 
-    let result = ApplyPatchTool.check_permissions(&input, &ctx).await;
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
 
     assert!(matches!(result, ToolCheckResult::Allow { .. }));
 }
@@ -67,7 +69,8 @@ async fn check_permissions_path_scoped_edit_rule_allows_patch() {
         "patch": "*** Begin Patch\n*** Add File: notes.txt\n+hello\n*** End Patch\n"
     });
 
-    let result = ApplyPatchTool.check_permissions(&input, &ctx).await;
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
 
     assert!(matches!(result, ToolCheckResult::Allow { .. }));
 }
@@ -82,7 +85,8 @@ async fn check_permissions_suspicious_path_requires_approval() {
         "patch": "*** Begin Patch\n*** Add File: GIT~1/config\n+hello\n*** End Patch\n"
     });
 
-    let result = ApplyPatchTool.check_permissions(&input, &ctx).await;
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
 
     assert!(matches!(result, ToolCheckResult::Ask { .. }));
 }
@@ -97,7 +101,8 @@ async fn check_permissions_mixed_internal_and_unsafe_paths_requires_approval() {
         "patch": "*** Begin Patch\n*** Add File: .claude/plans/plan.md\n+ok\n*** Add File: GIT~1/config\n+bad\n*** End Patch\n"
     });
 
-    let result = ApplyPatchTool.check_permissions(&input, &ctx).await;
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
 
     assert!(matches!(result, ToolCheckResult::Ask { .. }));
 }
@@ -117,7 +122,8 @@ async fn check_permissions_default_ask_includes_write_suggestions() {
         )
     });
 
-    let result = ApplyPatchTool.check_permissions(&input, &ctx).await;
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
 
     let ToolCheckResult::Ask { suggestions, .. } = result else {
         panic!("expected ask");

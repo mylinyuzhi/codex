@@ -16,6 +16,7 @@ use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -24,12 +25,62 @@ use serde_json::Value;
 /// `getAutoBackgroundMs() = 120_000` (`AgentTool.tsx:74`).
 pub const DEFAULT_AUTO_BACKGROUND_MS: u64 = 120_000;
 
+/// Typed input for [`AgentTool`].
+///
+/// The model-facing schema is built by the manual
+/// [`AgentTool::input_schema`] override (TS-mirror with precise
+/// descriptions and enum lists). This struct only owns the runtime
+/// shape used by [`AgentTool::execute`] — adding fields here without
+/// adding them to `input_schema()` keeps them as
+/// internal-passthrough (e.g. `mcp_servers` is set by permission /
+/// hook rewrites, never by the model).
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct AgentInput {
+    /// The task for the agent to perform
+    #[serde(default)]
+    pub prompt: String,
+    /// A short (3-5 word) description of the task
+    #[serde(default)]
+    pub description: String,
+    /// The type of specialized agent to use for this task
+    #[serde(default)]
+    pub subagent_type: Option<String>,
+    /// Set to true to run this agent in the background. You will be
+    /// notified when it completes.
+    #[serde(default)]
+    pub run_in_background: bool,
+    /// Isolation mode. "worktree" creates a temporary git worktree.
+    #[serde(default)]
+    pub isolation: Option<String>,
+    /// Name for the spawned agent. Makes it addressable via
+    /// SendMessage({to: name}) while running.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Team name for spawning. Uses current team context if omitted.
+    #[serde(default)]
+    pub team_name: Option<String>,
+    /// Permission mode for spawned teammate (camelCase wire format,
+    /// e.g. "plan", "acceptEdits"). Parsed by
+    /// `coco_types::PermissionMode`.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Absolute path to run the agent in. Mutually exclusive with
+    /// `isolation: "worktree"`.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// (Internal) MCP server allowlist for fail-fast readiness check.
+    /// Not in the model-facing schema; set by permission / hook
+    /// rewrites that scope a spawn to specific MCP servers.
+    #[serde(default)]
+    pub mcp_servers: Option<Vec<String>>,
+}
+
 /// Typed envelope returned by [`AgentTool::execute`] and consumed by
 /// [`AgentTool::render_for_model`]. Replaces the previous untyped
 /// `serde_json::Value` round-trip — both producer and consumer live in
 /// this crate, so a discriminated union is strictly type-safer and
 /// matches TS's tagged union (`AgentToolToolResultParam`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AgentSpawnRenderResult {
     /// Synchronous spawn returned a final result.
@@ -87,20 +138,13 @@ pub enum AgentSpawnRenderResult {
     Failed { error: String },
 }
 
-impl AgentSpawnRenderResult {
-    /// Convenience: `serde_json::to_value` for callers that still
-    /// stage the data inside the legacy `ToolResult.data: Value`
-    /// field. Internal consumers should prefer the typed variant
-    /// directly via `match`.
-    pub fn into_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(Value::Null)
-    }
-}
-
 pub struct AgentTool;
 
 #[async_trait::async_trait]
 impl Tool for AgentTool {
+    type Input = AgentInput;
+    type Output = AgentSpawnRenderResult;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Agent)
     }
@@ -110,7 +154,7 @@ impl Tool for AgentTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::AgentTeams)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &AgentInput, _options: &DescriptionOptions) -> String {
         // Static fallback when prompt() isn't called (e.g. tools that
         // route through `description` directly). The dynamic agent
         // listing — TS parity for `getPrompt(filteredAgents, ...)` —
@@ -138,7 +182,11 @@ impl Tool for AgentTool {
     /// snapshot was threaded into `PromptOptions` (e.g. test paths).
     async fn prompt(&self, options: &coco_tool_runtime::PromptOptions) -> String {
         let Some(catalog) = options.agent_catalog.as_ref() else {
-            return self.description(&Value::Null, &options.as_description_options());
+            return Tool::description(
+                self,
+                &AgentInput::default(),
+                &options.as_description_options(),
+            );
         };
         let renderer = coco_subagent::AgentToolPromptRenderer::new(catalog);
         let render_opts = coco_subagent::PromptOptions {
@@ -163,7 +211,7 @@ impl Tool for AgentTool {
     /// this override they were forced into per-call `SingleUnsafe` batches,
     /// serializing parallel exploration workflows like
     /// `Agent(...) Agent(...) Agent(...)` and multiplying latency by N.
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &AgentInput) -> bool {
         true
     }
 
@@ -307,12 +355,36 @@ impl Tool for AgentTool {
     /// parity with `AgentTool.tsx:110-125 lazySchema()` which calls
     /// `.omit({ run_in_background: true })` under either
     /// `isBackgroundTasksDisabled` or `isForkSubagentEnabled()`.
+    ///
+    /// Legacy properties-map path. Live runtime seams now go through
+    /// [`Self::input_json_schema_for_session`] which mutates the full
+    /// JSON Schema; this override stays for older callers that still
+    /// consume `ToolInputSchema` directly (e.g. tests).
     fn input_schema_for_session(&self, ctx: &SchemaContext) -> ToolInputSchema {
-        let mut schema = self.input_schema();
+        let mut schema = Tool::input_schema(self);
         if ctx.background_tasks_disabled || ctx.fork_mode_active {
             schema.properties.remove("run_in_background");
         }
         schema
+    }
+
+    /// Session-aware **full JSON Schema** (the path the model-facing
+    /// seam reads). Drops `run_in_background` from `properties` and
+    /// `required` when the runtime would silently veto it. TS parity:
+    /// `AgentTool.tsx:110-125 lazySchema().omit({ run_in_background: true })`.
+    fn input_json_schema_for_session(&self, ctx: &SchemaContext) -> Option<Value> {
+        let mut schema = Tool::input_json_schema(self)?;
+        if (ctx.background_tasks_disabled || ctx.fork_mode_active)
+            && let Some(obj) = schema.as_object_mut()
+        {
+            if let Some(props) = obj.get_mut("properties").and_then(Value::as_object_mut) {
+                props.remove("run_in_background");
+            }
+            if let Some(required) = obj.get_mut("required").and_then(Value::as_array_mut) {
+                required.retain(|v| v.as_str() != Some("run_in_background"));
+            }
+        }
+        Some(schema)
     }
 
     /// Render the spawn-result envelope into model-visible text. TS
@@ -320,28 +392,8 @@ impl Tool for AgentTool {
     /// (4 branches: teammate_spawned / async_launched / completed /
     /// failed). `remote_launched` is CCR-specific with no coco-rs
     /// producer.
-    ///
-    /// Consumes the typed [`AgentSpawnRenderResult`] envelope that
-    /// [`AgentTool::execute`] stages on `ToolResult.data`. The legacy
-    /// `serde_json::Value` field-poking path is gone — both producer
-    /// and consumer live in this crate, so a `match` on the typed
-    /// envelope is strictly safer.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        // Producer guarantee: `data` is always the wire form of
-        // `AgentSpawnRenderResult`. Tolerate the case where it doesn't
-        // deserialise (e.g. a third-party caller staged a different
-        // shape) by falling back to a serialised dump rather than
-        // panicking.
-        let envelope: AgentSpawnRenderResult = match serde_json::from_value(data.clone()) {
-            Ok(v) => v,
-            Err(_) => {
-                return vec![ToolResultContentPart::Text {
-                    text: serde_json::to_string(data).unwrap_or_default(),
-                    provider_options: None,
-                }];
-            }
-        };
-        let text = match envelope {
+    fn render_for_model(&self, envelope: &AgentSpawnRenderResult) -> Vec<ToolResultContentPart> {
+        let text = match envelope.clone() {
             AgentSpawnRenderResult::TeammateSpawned {
                 agent_id,
                 name,
@@ -419,9 +471,9 @@ impl Tool for AgentTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: AgentInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
+    ) -> Result<ToolResult<AgentSpawnRenderResult>, ToolError> {
         // Snapshot every `ctx.app_state` field we'll need into locals at
         // entry so subsequent awaits can't observe a torn read.
         // TS runs single-threaded; Rust must capture once.
@@ -431,10 +483,7 @@ impl Tool for AgentTool {
             false
         };
 
-        let prompt = input
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
+        let prompt = input.prompt.as_str();
 
         if prompt.is_empty() {
             return Err(ToolError::InvalidInput {
@@ -444,15 +493,10 @@ impl Tool for AgentTool {
         }
 
         // TS `AgentTool.tsx:83` — `description: z.string()` (required, not
-        // `.optional()`). `ToolInputSchema` in coco-rs doesn't carry a
-        // `required` list yet (one-off field — the schema is just a
-        // properties map), so enforce here at the boundary.
-        let description_str = input
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-
-        if description_str.is_empty() {
+        // `.optional()`). Already enforced by `AgentInput` at deserialise
+        // time; defensive empty-string guard catches the model literally
+        // sending `""`.
+        if input.description.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "description is required and must be non-empty (3-5 word summary)".into(),
                 error_code: None,
@@ -464,7 +508,7 @@ impl Tool for AgentTool {
         // builds forward to CCR, but the 3p Rust agent returns a
         // clean model-visible error instead of silently falling back
         // to sync mode.
-        if let Some("remote") = input.get("isolation").and_then(|v| v.as_str()) {
+        if input.isolation.as_deref() == Some("remote") {
             return Err(ToolError::ExecutionFailed {
                 message: "Isolation mode 'remote' is not supported in this build. \
                           Use 'worktree' for local isolation or omit the field for \
@@ -481,14 +525,14 @@ impl Tool for AgentTool {
         // any server still missing here is a user error (typo /
         // mis-configured server). Fail-fast lets the model retry with a
         // corrected `mcp_servers` argument instead of blocking the turn.
-        if let Some(arr) = input.get("mcp_servers").and_then(|v| v.as_array()) {
-            let names: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
-            if !names.is_empty() {
-                check_mcp_ready(&names, ctx).await?;
-            }
+        if let Some(arr) = input.mcp_servers.as_ref()
+            && !arr.is_empty()
+        {
+            let names: Vec<&str> = arr.iter().map(String::as_str).collect();
+            check_mcp_ready(&names, ctx).await?;
         }
 
-        let requested_mode_str = input.get("mode").and_then(|v| v.as_str()).map(String::from);
+        let requested_mode_str = input.mode.clone();
         let requested_mode_enum = requested_mode_str.as_deref().and_then(|s| {
             serde_json::from_value::<coco_types::PermissionMode>(serde_json::json!(s)).ok()
         });
@@ -500,21 +544,13 @@ impl Tool for AgentTool {
             .ok()
             .and_then(|v| v.as_str().map(String::from));
 
-        let explicit_subagent_type = input
-            .get("subagent_type")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let explicit_subagent_type = input.subagent_type.clone();
         let resolved_team_name = input
-            .get("team_name")
-            .and_then(|v| v.as_str())
+            .team_name
+            .clone()
             .filter(|s| !s.is_empty())
-            .map(String::from)
             .or_else(|| ctx.team_name.clone());
-        let requested_name = input
-            .get("name")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(String::from);
+        let requested_name = input.name.clone().filter(|s| !s.is_empty());
         let is_team_spawn = resolved_team_name.is_some() && requested_name.is_some();
 
         if ctx.is_teammate && is_team_spawn {
@@ -683,11 +719,11 @@ impl Tool for AgentTool {
         // isolation: 'worktree'". Reject the conflict upfront — the
         // worktree's CWD is the worktree dir, can't override.
         let requested_cwd = input
-            .get("cwd")
-            .and_then(|v| v.as_str())
+            .cwd
+            .as_deref()
             .filter(|s| !s.is_empty())
             .map(std::path::PathBuf::from);
-        let requested_isolation = input.get("isolation").and_then(|v| v.as_str());
+        let requested_isolation = input.isolation.as_deref();
         if requested_cwd.is_some() && requested_isolation == Some("worktree") {
             return Err(ToolError::InvalidInput {
                 message: "`cwd` and `isolation: \"worktree\"` are mutually exclusive — \
@@ -704,10 +740,7 @@ impl Tool for AgentTool {
         //                     || isCoordinator
         //                     || forceAsync)
         //                    && !isBackgroundTasksDisabled
-        let run_in_background_input = input
-            .get("run_in_background")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+        let run_in_background_input = input.run_in_background;
         let definition_forces_background = resolved_definition
             .as_ref()
             .map(|d| d.background)
@@ -781,10 +814,11 @@ impl Tool for AgentTool {
         };
         let request = AgentSpawnRequest {
             prompt: prompt.to_string(),
-            description: input
-                .get("description")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            description: if input.description.is_empty() {
+                None
+            } else {
+                Some(input.description.clone())
+            },
             subagent_type: request_subagent_type,
             // `model` / `model_role` are NOT on `AgentSpawnRequest` —
             // model routing flows from `AgentDefinition` only. See the
@@ -796,10 +830,7 @@ impl Tool for AgentTool {
             auto_background_ms,
             enable_summarization,
             session_id: ctx.session_id_for_history.clone().unwrap_or_default(),
-            isolation: input
-                .get("isolation")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            isolation: input.isolation.clone(),
             name: requested_name,
             team_name: resolved_team_name.clone(),
             mode: effective_mode_str,
@@ -942,7 +973,7 @@ impl Tool for AgentTool {
         };
 
         Ok(ToolResult {
-            data: envelope.into_value(),
+            data: envelope,
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

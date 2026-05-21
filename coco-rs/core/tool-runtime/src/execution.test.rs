@@ -113,6 +113,10 @@ struct ValidateRawExecuteStrippedBashTool;
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Bash)
     }
@@ -209,6 +213,10 @@ struct EchoTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for EchoTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom("Echo".into())
     }

@@ -2,7 +2,7 @@
 
 use super::EnterPlanModeTool;
 use super::ExitPlanModeTool;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::AgentId;
@@ -26,7 +26,7 @@ fn ctx_with_mode(mode: PermissionMode) -> ToolUseContext {
 /// store when the patch returned in `ToolResult::app_state_patch`
 /// is actually applied.
 async fn execute_and_apply_patch(
-    tool: &(dyn Tool + Send + Sync),
+    tool: &(dyn DynTool + Send + Sync),
     input: Value,
     ctx: &ToolUseContext,
     state: &std::sync::Arc<tokio::sync::RwLock<ToolAppState>>,
@@ -45,7 +45,7 @@ async fn execute_and_apply_patch(
 async fn enter_plan_mode_rejects_in_agent_context() {
     let mut ctx = ctx_with_mode(PermissionMode::Default);
     ctx.agent_id = Some(AgentId::new("aabcdef0"));
-    let result = EnterPlanModeTool.execute(json!({}), &ctx).await;
+    let result = <EnterPlanModeTool as DynTool>::execute(&EnterPlanModeTool, json!({}), &ctx).await;
     assert!(result.is_err(), "agent contexts must be rejected");
     assert!(result.unwrap_err().to_string().contains("agent"));
 }
@@ -53,7 +53,9 @@ async fn enter_plan_mode_rejects_in_agent_context() {
 #[tokio::test]
 async fn enter_plan_mode_returns_confirmation_message() {
     let ctx = ctx_with_mode(PermissionMode::Default);
-    let result = EnterPlanModeTool.execute(json!({}), &ctx).await.unwrap();
+    let result = <EnterPlanModeTool as DynTool>::execute(&EnterPlanModeTool, json!({}), &ctx)
+        .await
+        .unwrap();
     let msg = result
         .data
         .get("message")
@@ -108,7 +110,7 @@ async fn enter_plan_mode_idempotent_does_not_stash_self() {
 
 #[test]
 fn enter_plan_mode_schema_has_no_parameters() {
-    let schema = EnterPlanModeTool.input_schema();
+    let schema = <EnterPlanModeTool as DynTool>::input_schema(&EnterPlanModeTool);
     assert!(
         schema.properties.is_empty(),
         "EnterPlanMode takes no parameters"
@@ -120,7 +122,7 @@ fn enter_plan_mode_schema_has_no_parameters() {
 #[test]
 fn exit_plan_mode_rejects_when_not_in_plan_mode() {
     let ctx = ctx_with_mode(PermissionMode::Default);
-    let vr = ExitPlanModeTool.validate_input(&json!({}), &ctx);
+    let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &json!({}), &ctx);
     match vr {
         ValidationResult::Invalid {
             message,
@@ -136,7 +138,7 @@ fn exit_plan_mode_rejects_when_not_in_plan_mode() {
 #[test]
 fn exit_plan_mode_allows_when_in_plan_mode() {
     let ctx = ctx_with_mode(PermissionMode::Plan);
-    let vr = ExitPlanModeTool.validate_input(&json!({}), &ctx);
+    let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &json!({}), &ctx);
     assert!(matches!(vr, ValidationResult::Valid));
 }
 
@@ -144,7 +146,7 @@ fn exit_plan_mode_allows_when_in_plan_mode() {
 fn exit_plan_mode_teammate_bypasses_validation() {
     let mut ctx = ctx_with_mode(PermissionMode::Default);
     ctx.is_teammate = true;
-    let vr = ExitPlanModeTool.validate_input(&json!({}), &ctx);
+    let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &json!({}), &ctx);
     assert!(matches!(vr, ValidationResult::Valid));
 }
 
@@ -152,7 +154,8 @@ fn exit_plan_mode_teammate_bypasses_validation() {
 async fn exit_plan_mode_teammate_bypasses_permission_prompt() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.is_teammate = true;
-    let decision = ExitPlanModeTool.check_permissions(&json!({}), &ctx).await;
+    let decision =
+        <ExitPlanModeTool as DynTool>::check_permissions(&ExitPlanModeTool, &json!({}), &ctx).await;
     assert!(matches!(
         decision,
         coco_types::ToolCheckResult::Allow { .. }
@@ -162,7 +165,8 @@ async fn exit_plan_mode_teammate_bypasses_permission_prompt() {
 #[tokio::test]
 async fn exit_plan_mode_non_teammate_asks_for_confirmation() {
     let ctx = ctx_with_mode(PermissionMode::Plan);
-    let decision = ExitPlanModeTool.check_permissions(&json!({}), &ctx).await;
+    let decision =
+        <ExitPlanModeTool as DynTool>::check_permissions(&ExitPlanModeTool, &json!({}), &ctx).await;
     match decision {
         coco_types::ToolCheckResult::Ask {
             message, choices, ..
@@ -182,7 +186,8 @@ async fn exit_plan_mode_offers_clear_context_choice_when_setting_enabled() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.plan_mode_settings.show_clear_context_on_exit = true;
 
-    let decision = ExitPlanModeTool.check_permissions(&json!({}), &ctx).await;
+    let decision =
+        <ExitPlanModeTool as DynTool>::check_permissions(&ExitPlanModeTool, &json!({}), &ctx).await;
     match decision {
         coco_types::ToolCheckResult::Ask { choices, .. } => {
             let choices = choices.expect("expected choices when setting is on");
@@ -518,7 +523,9 @@ async fn exit_plan_mode_reads_plan_from_disk() {
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
 
-    let result = ExitPlanModeTool.execute(json!({}), &ctx).await.unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
+        .await
+        .unwrap();
     let plan = result
         .data
         .get("plan")
@@ -557,10 +564,13 @@ async fn exit_plan_mode_input_plan_wins_over_disk() {
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
 
-    let result = ExitPlanModeTool
-        .execute(json!({"plan": "edited plan from CCR"}), &ctx)
-        .await
-        .unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        json!({"plan": "edited plan from CCR"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let plan = result
         .data
         .get("plan")
@@ -590,28 +600,37 @@ async fn exit_plan_mode_injected_disk_plan_not_marked_as_user_edit() {
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
 
-    let result = ExitPlanModeTool
-        .execute(json!({"plan": "on-disk plan"}), &ctx)
-        .await
-        .unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        json!({"plan": "on-disk plan"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data.get("planWasEdited"), None);
 }
 
 #[test]
 fn exit_plan_mode_schema_exposes_allowed_prompts() {
-    let schema = ExitPlanModeTool.input_schema();
+    let schema = <ExitPlanModeTool as DynTool>::input_schema(&ExitPlanModeTool);
     assert!(schema.properties.contains_key("allowedPrompts"));
 }
 
 #[test]
 fn exit_plan_mode_name_matches_registry() {
-    assert_eq!(ExitPlanModeTool.name(), ToolName::ExitPlanMode.as_str());
+    assert_eq!(
+        <ExitPlanModeTool as DynTool>::name(&ExitPlanModeTool,),
+        ToolName::ExitPlanMode.as_str()
+    );
 }
 
 #[test]
 fn enter_plan_mode_name_matches_registry() {
-    assert_eq!(EnterPlanModeTool.name(), ToolName::EnterPlanMode.as_str());
+    assert_eq!(
+        <EnterPlanModeTool as DynTool>::name(&EnterPlanModeTool,),
+        ToolName::EnterPlanMode.as_str()
+    );
 }
 
 // ── Teammate approval flow ──
@@ -683,7 +702,9 @@ async fn teammate_exit_plan_writes_approval_request_to_team_lead() {
     // (`env::set_var` is unsafe in newer Rust + banned by CLAUDE.md).
     ctx.agent_id = Some(coco_types::AgentId::new("alice"));
 
-    let result = ExitPlanModeTool.execute(json!({}), &ctx).await.unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
+        .await
+        .unwrap();
 
     // Result shape signals "awaiting leader approval".
     assert_eq!(
@@ -751,7 +772,7 @@ async fn teammate_exit_plan_with_empty_plan_errors() {
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.mailbox = Arc::new(CapturingMailbox::default());
 
-    let result = ExitPlanModeTool.execute(json!({}), &ctx).await;
+    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx).await;
     assert!(result.is_err());
     assert!(
         result
@@ -782,7 +803,9 @@ async fn voluntary_teammate_exits_locally_without_mailbox_write() {
     ctx.app_state = Some(Arc::new(tokio::sync::RwLock::new(ToolAppState::default())).into());
     ctx.mailbox = capture.clone();
 
-    let result = ExitPlanModeTool.execute(json!({}), &ctx).await.unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
+        .await
+        .unwrap();
 
     // No awaiting flag — normal exit semantics.
     assert_eq!(
@@ -822,7 +845,9 @@ async fn verify_execution_disabled_by_default_skips_verification() {
     );
     ctx.plan_verify_execution = false;
 
-    let result = ExitPlanModeTool.execute(json!({}), &ctx).await.unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
+        .await
+        .unwrap();
     assert_eq!(
         result.data.get("planVerification").and_then(Value::as_str),
         None,
@@ -851,7 +876,9 @@ async fn verify_execution_enabled_flags_stale_plan() {
     );
     ctx.plan_verify_execution = true;
 
-    let result = ExitPlanModeTool.execute(json!({}), &ctx).await.unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
+        .await
+        .unwrap();
     assert_eq!(
         result.data.get("planVerification").and_then(Value::as_str),
         Some("not_edited"),
@@ -1005,7 +1032,7 @@ async fn enter_plan_mode_prompt_five_phase_matches_ts_byte_precise() {
         is_plan_interview_phase: false,
         ..Default::default()
     };
-    let actual = EnterPlanModeTool.prompt(&opts).await;
+    let actual = <EnterPlanModeTool as DynTool>::prompt(&EnterPlanModeTool, &opts).await;
     ts_assert_eq!(actual, TS_ENTER_PLAN_MODE_PROMPT_FIVE_PHASE);
 }
 
@@ -1019,7 +1046,7 @@ async fn enter_plan_mode_prompt_interview_omits_what_happens() {
         is_plan_interview_phase: true,
         ..Default::default()
     };
-    let actual = EnterPlanModeTool.prompt(&opts).await;
+    let actual = <EnterPlanModeTool as DynTool>::prompt(&EnterPlanModeTool, &opts).await;
     assert!(
         !actual.contains("## What Happens in Plan Mode"),
         "interview-phase prompt must omit 'What Happens' section"
@@ -1062,7 +1089,7 @@ Ensure your plan is complete and unambiguous:
 #[tokio::test]
 async fn exit_plan_mode_prompt_matches_ts_byte_precise() {
     let opts = PromptOptions::default();
-    let actual = ExitPlanModeTool.prompt(&opts).await;
+    let actual = <ExitPlanModeTool as DynTool>::prompt(&ExitPlanModeTool, &opts).await;
     ts_assert_eq!(actual, TS_EXIT_PLAN_MODE_PROMPT);
 }
 
@@ -1102,7 +1129,9 @@ async fn enter_plan_mode_execute_data_carries_short_confirmation_and_flag() {
     // matches TS `EnterPlanModeTool.ts::call` shape exactly.
     let mut ctx = ctx_with_mode(PermissionMode::Default);
     ctx.is_plan_interview_phase = false;
-    let result = EnterPlanModeTool.execute(json!({}), &ctx).await.unwrap();
+    let result = <EnterPlanModeTool as DynTool>::execute(&EnterPlanModeTool, json!({}), &ctx)
+        .await
+        .unwrap();
     let msg = result
         .data
         .get("message")
@@ -1119,7 +1148,9 @@ async fn enter_plan_mode_execute_data_carries_short_confirmation_and_flag() {
 
     let mut ctx = ctx_with_mode(PermissionMode::Default);
     ctx.is_plan_interview_phase = true;
-    let result = EnterPlanModeTool.execute(json!({}), &ctx).await.unwrap();
+    let result = <EnterPlanModeTool as DynTool>::execute(&EnterPlanModeTool, json!({}), &ctx)
+        .await
+        .unwrap();
     assert_eq!(
         result.data.get("isInterviewPhase").and_then(Value::as_bool),
         Some(true)
@@ -1135,7 +1166,7 @@ fn enter_plan_mode_render_for_model_five_phase_branch() {
         "message": "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.",
         "isInterviewPhase": false,
     });
-    let parts = EnterPlanModeTool.render_for_model(&data);
+    let parts = <EnterPlanModeTool as DynTool>::render_for_model(&EnterPlanModeTool, &data);
     let [coco_tool_runtime::ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
         panic!("expected single Text part, got {parts:?}");
     };
@@ -1150,7 +1181,7 @@ fn enter_plan_mode_render_for_model_interview_branch() {
         "message": "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.",
         "isInterviewPhase": true,
     });
-    let parts = EnterPlanModeTool.render_for_model(&data);
+    let parts = <EnterPlanModeTool as DynTool>::render_for_model(&EnterPlanModeTool, &data);
     let [coco_tool_runtime::ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
         panic!("expected single Text part, got {parts:?}");
     };
@@ -1169,7 +1200,7 @@ fn exit_plan_mode_render_for_model_routes_through_build_instructions() {
         "filePath": "/tmp/plan.md",
         "planWasEdited": true,
     });
-    let parts = ExitPlanModeTool.render_for_model(&data);
+    let parts = <ExitPlanModeTool as DynTool>::render_for_model(&ExitPlanModeTool, &data);
     let [coco_tool_runtime::ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
         panic!("expected single Text part, got {parts:?}");
     };

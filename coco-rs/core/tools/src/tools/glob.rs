@@ -42,10 +42,9 @@ use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use serde_json::Value;
-use std::collections::HashMap;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -64,12 +63,39 @@ const GLOB_DESCRIPTION: &str = "\
 - Use this tool when you need to find files by name patterns
 - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead";
 
+/// Typed input for [`GlobTool`].
+///
+/// TS parity: `GlobTool.ts` `inputSchema` (`pattern` required,
+/// `path` optional). Doc comments propagate to the model-visible
+/// schema as field `description`s.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct GlobInput {
+    /// The glob pattern to match files against
+    pub pattern: String,
+    /// The directory to search in. If not specified, the current
+    /// working directory will be used. IMPORTANT: Omit this field to
+    /// use the default directory. DO NOT enter "undefined" or "null"
+    /// — simply omit it for the default behavior. Must be a valid
+    /// directory path if provided.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 /// Glob tool — fast file pattern matching.
-/// Returns matching file paths sorted by modification time (most recent first).
+/// Returns matching file paths sorted by modification time (oldest first,
+/// matching `rg --files --sort=modified`).
 pub struct GlobTool;
 
 #[async_trait::async_trait]
 impl Tool for GlobTool {
+    type Input = GlobInput;
+    /// Output is the pre-joined model-visible text (filenames + optional
+    /// truncation hint, or `"No files found"`). TS-parity `GlobOutput
+    /// { filenames, num_files, truncated }` is a follow-up — see the
+    /// `tool-result-rendering` design note. For now the renderer is a
+    /// pass-through, matching the pre-typed behaviour.
+    type Output = String;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Glob)
     }
@@ -78,42 +104,22 @@ impl Tool for GlobTool {
         ToolName::Glob.as_str()
     }
 
-    fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &GlobInput, _options: &DescriptionOptions) -> String {
         GLOB_DESCRIPTION.into()
     }
 
-    fn input_schema(&self) -> ToolInputSchema {
-        // Descriptions byte-for-byte match TS `GlobTool.ts` inputSchema.
-        let mut props = HashMap::new();
-        props.insert(
-            "pattern".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The glob pattern to match files against"
-            }),
-        );
-        props.insert(
-            "path".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided."
-            }),
-        );
-        ToolInputSchema {
-            properties: props,
-            required: Vec::new(),
-        }
-    }
-
     /// Glob never modifies state (TS: `isReadOnly() = true`).
-    fn is_read_only(&self, _input: &Value) -> bool {
+    fn is_read_only(&self, _input: &GlobInput) -> bool {
+        true
+    }
+    fn is_always_read_only(&self) -> bool {
         true
     }
 
     /// Safe to run in parallel with other concurrency-safe tools. Batches
     /// with Grep/Read/etc. via the `StreamingToolExecutor`.
     /// TS: `isConcurrencySafe() = true`.
-    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &GlobInput) -> bool {
         true
     }
 
@@ -122,22 +128,20 @@ impl Tool for GlobTool {
         coco_tool_runtime::ResultSizeBound::Chars(100_000)
     }
 
-    /// The execute path already builds the final user-facing string
-    /// (`"Found N files\nfile1\nfile2..."`) and stores it as a JSON
-    /// string in `data`. The default render would JSON-stringify that
-    /// again, escaping every newline. Skip the JSON wrapper and emit
-    /// the bare string as a single Text part. TS parity:
-    /// `GlobTool.ts::mapToolResultToToolResultBlockParam`.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        coco_tool_runtime::render_text_or_json(data)
+    /// `Self::Output = String` — render emits the prebuilt text directly.
+    /// TS parity: `GlobTool.ts::mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, out: &String) -> Vec<ToolResultContentPart> {
+        vec![ToolResultContentPart::Text {
+            text: out.clone(),
+            provider_options: None,
+        }]
     }
 
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let pattern = input.get("pattern").and_then(|v| v.as_str())?;
-        Some(format!("Searching for {pattern}"))
+    fn get_activity_description(&self, input: &GlobInput) -> Option<String> {
+        Some(format!("Searching for {pattern}", pattern = input.pattern))
     }
 
-    fn is_search_or_read_command(&self, _input: &Value) -> Option<SearchReadInfo> {
+    fn is_search_or_read_command(&self, _input: &GlobInput) -> Option<SearchReadInfo> {
         Some(SearchReadInfo {
             is_search: true,
             ..SearchReadInfo::default()
@@ -149,10 +153,10 @@ impl Tool for GlobTool {
     /// inside `run_glob_search`.
     async fn check_permissions(
         &self,
-        input: &Value,
+        input: &GlobInput,
         ctx: &ToolUseContext,
     ) -> coco_types::ToolCheckResult {
-        let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+        let Some(path) = input.path.as_deref() else {
             return coco_types::ToolCheckResult::Passthrough;
         };
         let matcher = crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
@@ -165,8 +169,11 @@ impl Tool for GlobTool {
         )
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
-        if input.get("pattern").and_then(|v| v.as_str()).is_none() {
+    fn validate_input(&self, input: &GlobInput, _ctx: &ToolUseContext) -> ValidationResult {
+        // Schema-level validation already enforced `pattern` is a
+        // present String; reject empty strings here as a TS-parity
+        // semantic gate (TS treats `""` as no pattern).
+        if input.pattern.is_empty() {
             return ValidationResult::invalid("missing required field: pattern");
         }
         ValidationResult::Valid
@@ -174,17 +181,9 @@ impl Tool for GlobTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: GlobInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let pattern = input
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidInput {
-                message: "missing pattern".into(),
-                error_code: None,
-            })?;
-
+    ) -> Result<ToolResult<String>, ToolError> {
         // Resolve the working directory. Worktree-isolated agents set
         // `ctx.cwd_override`; otherwise we fall back to the process CWD.
         // Relative `path` arguments are resolved against this base.
@@ -194,7 +193,7 @@ impl Tool for GlobTool {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/"));
 
-        let search_path = match input.get("path").and_then(|v| v.as_str()) {
+        let search_path = match input.path.as_deref() {
             Some(p) => {
                 let path = Path::new(p);
                 if path.is_absolute() {
@@ -224,7 +223,7 @@ impl Tool for GlobTool {
 
         // Move owned values into the blocking closure — no redundant clones.
         let cancel = ctx.cancel.clone();
-        let pattern_owned = pattern.to_string();
+        let pattern_owned = input.pattern.clone();
         let read_ignore_matcher =
             crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
                 &ctx.tool_config.file_read_ignore_patterns,
@@ -268,7 +267,7 @@ impl Tool for GlobTool {
         };
 
         Ok(ToolResult {
-            data: serde_json::json!(output),
+            data: output,
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

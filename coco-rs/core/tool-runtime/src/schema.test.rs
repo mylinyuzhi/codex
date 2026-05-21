@@ -35,6 +35,10 @@ struct TestTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for TestTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom(self.name.clone())
     }
