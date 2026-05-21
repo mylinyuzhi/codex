@@ -177,7 +177,7 @@ impl ToolSchemaValidator {
     /// `Result`'s `Err` variant.
     pub async fn validate_collect(
         &self,
-        tool: &dyn Tool,
+        tool: &dyn DynTool,
         input: &Value,
     ) -> Result<Result<(), Vec<SchemaIssue>>, SchemaValidationError> {
         let tool_id = tool.id();

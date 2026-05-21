@@ -28,7 +28,7 @@ use coco_llm_types::ToolInputInvalidReason;
 use coco_tool_runtime::SchemaIssue;
 use coco_tool_runtime::SchemaValidationError;
 use coco_tool_runtime::ToolSchemaValidator;
-use coco_tool_runtime::traits::Tool;
+use coco_tool_runtime::traits::DynTool;
 use serde_json::Value;
 
 use crate::tool_input_parse::parse_tool_arguments_or_empty;
@@ -63,7 +63,7 @@ pub fn normalize_value_string(input: &mut Value) {
 /// earlier provider-side classification stands.
 pub async fn validate_tool_call(
     tc: &mut ToolCallPart,
-    tool: Option<&Arc<dyn Tool>>,
+    tool: Option<&Arc<dyn DynTool>>,
     validator: &ToolSchemaValidator,
 ) {
     if tc.invalid {

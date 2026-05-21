@@ -142,7 +142,7 @@ use std::sync::Arc as StdArc;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolUseContext;
-use coco_tool_runtime::traits::Tool;
+use coco_tool_runtime::traits::DynTool;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -167,7 +167,13 @@ impl MockTool {
 }
 
 #[async_trait::async_trait]
-impl Tool for MockTool {
+impl coco_tool_runtime::traits::Tool for MockTool {
+    // Migration scaffold: assoc types pinned to `Value` — MockTool sets
+    // schema dynamically via `input_json_schema` rather than driving it
+    // from a typed `JsonSchema` struct.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         self.id.clone()
     }
@@ -180,6 +186,7 @@ impl Tool for MockTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn input_json_schema(&self) -> Option<serde_json::Value> {
@@ -200,7 +207,7 @@ impl Tool for MockTool {
     }
 }
 
-fn bash_tool() -> StdArc<dyn Tool> {
+fn bash_tool() -> StdArc<dyn DynTool> {
     StdArc::new(MockTool::new(
         ToolName::Bash,
         json!({
@@ -215,7 +222,7 @@ fn bash_tool() -> StdArc<dyn Tool> {
     ))
 }
 
-fn read_tool() -> StdArc<dyn Tool> {
+fn read_tool() -> StdArc<dyn DynTool> {
     StdArc::new(MockTool::new(
         ToolName::Read,
         json!({
@@ -240,7 +247,7 @@ fn mk_tc(name: &str, input: serde_json::Value) -> ToolCallPart {
 async fn run_pipeline(
     raw_arguments: &str,
     tool_name: &str,
-    tool: Option<&StdArc<dyn Tool>>,
+    tool: Option<&StdArc<dyn DynTool>>,
 ) -> ToolCallPart {
     let input = parse_tool_arguments_or_empty(raw_arguments, tool_name);
     let mut tc = mk_tc(tool_name, input);
@@ -450,7 +457,7 @@ async fn matrix_multi_tool_call_mixed_outcomes() {
         provider_hint: &'static str,
         tool_name: &'static str,
         raw_arguments: &'static str,
-        tool: Option<StdArc<dyn Tool>>,
+        tool: Option<StdArc<dyn DynTool>>,
         expected_valid: bool,
         expected_message_contains: Option<&'static str>,
     }
