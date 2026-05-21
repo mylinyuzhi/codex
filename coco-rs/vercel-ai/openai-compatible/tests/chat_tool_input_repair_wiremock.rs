@@ -137,9 +137,6 @@ async fn compat_nonstream_empty_arguments_becomes_empty_object() {
 #[tokio::test]
 async fn compat_nonstream_unrecoverable_layer_1_does_not_invalidate() {
     let tc = dispatch("\u{0000}!!!@@@%%%").await;
-    assert!(matches!(
-        tc.input,
-        serde_json::Value::Object(_) | serde_json::Value::Null
-    ));
+    assert_ne!(tc.input, serde_json::json!({}));
     assert!(!tc.invalid);
 }

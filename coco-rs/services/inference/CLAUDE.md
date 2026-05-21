@@ -45,10 +45,17 @@ each owning a distinct concern:
   `vercel-ai-openai-compatible`, `vercel-ai-anthropic`,
   `vercel-ai-google`). Calls
   `vercel_ai_provider_utils::parse_tool_arguments_or_empty` inline
-  while building each `ToolCallPart`. Parse failure → `Value::Object({})`
-  passthrough (mirrors TS `parsed ?? {}` in
-  `utils/messages.ts:2694`). Adapters never raise `invalid=true`
-  for repairable input; that decision belongs to Layer 2.
+  while building each `ToolCallPart`. Two-tier fallback:
+  (a) empty / whitespace-only input → `Value::Object({})` (the
+  parameterless-tool convention); (b) non-empty unrecoverable
+  garbage → `Value::String(raw)` so the raw model output is
+  preserved for downstream diagnostics + `<tool_use_error>` echoes.
+  **Coco-rs deviation from TS** `parsed ?? {}`
+  (`utils/messages.ts:2694`): TS substitutes `{}` so the validator
+  reports "missing fields" only; coco-rs keeps the raw string so
+  Layer 2 + telemetry have the full signal. Adapters never raise
+  `invalid=true` for any input; classification is Layer 2's job
+  exclusively (uniform contract across providers).
 - **Layer 2 — `app/query/src/tool_input_validate.rs`**.
   `validate_tool_call` runs `Value::String` recovery + JSON Schema
   validation via the existing
@@ -72,6 +79,34 @@ each owning a distinct concern:
 If you find yourself adding tool-input parsing or validation
 logic to `vercel-ai/ai/src/generate_text/`, you almost certainly
 want `app/query` instead.
+
+**Why Layer 2 lives in `app/query`, not here**: `coco-inference` is
+deliberately tool-agnostic — it carries no dependency on
+`coco-tool-runtime` and no awareness of the per-tool JSON Schema
+registry that drives validation. Other `ApiClient` callers
+(compaction, side-queries, auto-mode classifier, title generation,
+hook LLM) all pass `tools: None` and therefore have nothing to
+validate against. Layer 2 sits at the only path that actually
+executes tools (the agent loop's `tool_call_preparer`), where the
+`ToolSchemaValidator` is already on `ToolUseContext`. The wire-level
+wiremock tests under each `vercel-ai-*/tests/*_wiremock.rs` lock the
+Layer 1 contract; the end-to-end coverage of Layer 2 lives in
+`app/query/tests/tool_input_error_chain.rs` +
+`app/query/src/tool_input_validate.test.rs`.
+
+**Double-parse on Anthropic streaming** (documented for awareness,
+not a correctness issue): when `parse_with_repair` fails inside the
+adapter's `content_block_stop` handler, the adapter forwards the
+raw `input_json` string verbatim. Engine reconstruction then runs
+`parse_tool_arguments_or_empty` on the same string, and Layer 2's
+`normalize_value_string` may parse it a third time when handling
+`Value::String` inputs. Each pass is pure (no side effects), so
+this is wasted work, not wrong work. The uniform "Layer 1 never
+unilaterally invalidates" contract is preserved across providers
+at the cost of two extra parse attempts on the same garbage. A
+future optimization could short-circuit by emitting `Value::String`
+directly from the adapter — covered as a TODO in the file's
+content_block_stop comment.
 
 ## Design Notes
 

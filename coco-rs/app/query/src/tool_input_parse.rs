@@ -19,11 +19,19 @@ use coco_utils_json_repair::RepairOutcome;
 use coco_utils_json_repair::parse_with_repair;
 use serde_json::Value;
 
-/// Parse tool-call arguments, falling back to `Value::Object({})`
-/// when even repair fails. Emits a `warn!` on both repair-assisted
-/// parses and total failures so ops can monitor real-world repair
-/// frequency without sampling code.
+/// Parse tool-call arguments with two fallback rules — see the doc
+/// on the parallel [`vercel_ai_provider_utils::parse_tool_arguments_or_empty`]
+/// for the rationale (this is the engine-side mirror used by the
+/// streaming reconstruction seam).
+///
+/// 1. Empty / whitespace-only input → `Value::Object({})`
+/// 2. Non-empty unrecoverable → `Value::String(raw)` (preserves the
+///    model's raw output for downstream diagnostics and the
+///    `<tool_use_error>` body)
 pub fn parse_tool_arguments_or_empty(raw: &str, tool_name: &str) -> Value {
+    if raw.trim().is_empty() {
+        return Value::Object(Default::default());
+    }
     match parse_with_repair(raw) {
         Ok((v, RepairOutcome::Clean)) => v,
         Ok((v, RepairOutcome::Repaired)) => {
@@ -41,9 +49,9 @@ pub fn parse_tool_arguments_or_empty(raw: &str, tool_name: &str) -> Value {
                 tool_name,
                 args_bytes = raw.len(),
                 error = %err,
-                "tool-call arguments parse failed; falling back to empty object"
+                "tool-call arguments parse failed; preserving raw string for downstream diagnostics"
             );
-            Value::Object(Default::default())
+            Value::String(raw.to_string())
         }
     }
 }

@@ -57,12 +57,18 @@ use tokio_util::sync::CancellationToken;
 /// Mirror what `vercel_ai_provider_utils::parse_tool_arguments_or_empty`
 /// does, so tests using `MockToolEmission::FromRawArguments` reproduce
 /// the exact Layer-1 outcome that real adapters produce.
+///
+/// Empty input → `{}` (parameterless convention); non-empty
+/// unrecoverable → `Value::String(raw)` (preserves diagnostics).
 fn parse_raw_arguments_like_adapter(raw: &str) -> serde_json::Value {
     use coco_utils_json_repair::RepairOutcome;
     use coco_utils_json_repair::parse_with_repair;
+    if raw.trim().is_empty() {
+        return serde_json::Value::Object(serde_json::Map::new());
+    }
     match parse_with_repair(raw) {
         Ok((v, RepairOutcome::Clean | RepairOutcome::Repaired)) => v,
-        Err(_) => serde_json::Value::Object(serde_json::Map::new()),
+        Err(_) => serde_json::Value::String(raw.to_string()),
     }
 }
 

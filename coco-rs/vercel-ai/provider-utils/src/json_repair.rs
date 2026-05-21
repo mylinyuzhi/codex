@@ -63,16 +63,35 @@ pub fn parse_with_repair(raw: &str) -> Result<(Value, RepairOutcome), String> {
     Ok((value, RepairOutcome::Repaired))
 }
 
-/// Adapter convenience: parse raw tool-call `arguments` and fall back
-/// to `Value::Object({})` on failure (instead of `Err`). Emits a
-/// `warn!` on both repair-assisted parses and total failures so ops
-/// can monitor real-world repair frequency without sampling code.
+/// Adapter convenience: parse raw tool-call `arguments` with two
+/// fallback rules:
 ///
-/// Mirrors TS Claude Code's `parsed ?? {}` in
-/// `utils/messages.ts:2694` — pushing the failure signal to Layer 2
-/// schema validation lets the agent loop report specific missing
-/// fields back to the model, rather than an opaque "JSON broken".
+/// 1. **Empty / whitespace-only input** → `Value::Object({})`.
+///    Some providers emit `arguments: ""` for tools with no
+///    parameters; treating this as `{}` lets the schema validator
+///    accept it on parameterless tools.
+/// 2. **Non-empty but unrecoverable** → `Value::String(raw)`. The
+///    model's original output survives intact for diagnostics
+///    (logs) and is visible to downstream layers — Layer 2's
+///    schema validator surfaces `"expected object, got string"`
+///    AND the raw bytes can be echoed back to the LLM if the agent
+///    loop wants to reflect the malformed input verbatim.
+///
+/// **Coco-rs deviation from TS Claude Code's `parsed ?? {}`
+/// (`utils/messages.ts:2694`)**: TS substitutes `{}` so the LLM
+/// gets a "missing required field" reply on the next turn; coco-rs
+/// keeps the raw string so the validator + telemetry have full
+/// signal. The trade-off chosen here favours diagnosability and
+/// model-side context: the raw output is visible to whatever path
+/// builds the final `<tool_use_error>` body.
+///
+/// Emits a `warn!` on both repair-assisted parses and total
+/// failures so ops can monitor real-world repair frequency without
+/// sampling code.
 pub fn parse_tool_arguments_or_empty(raw: &str, tool_name: &str) -> Value {
+    if raw.trim().is_empty() {
+        return Value::Object(Default::default());
+    }
     match parse_with_repair(raw) {
         Ok((v, RepairOutcome::Clean)) => v,
         Ok((v, RepairOutcome::Repaired)) => {
@@ -90,9 +109,9 @@ pub fn parse_tool_arguments_or_empty(raw: &str, tool_name: &str) -> Value {
                 tool_name,
                 args_bytes = raw.len(),
                 error = %err,
-                "tool-call arguments parse failed; falling back to empty object"
+                "tool-call arguments parse failed; preserving raw string for downstream diagnostics"
             );
-            Value::Object(Default::default())
+            Value::String(raw.to_string())
         }
     }
 }

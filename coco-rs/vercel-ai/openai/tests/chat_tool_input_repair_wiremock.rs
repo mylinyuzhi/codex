@@ -146,33 +146,22 @@ async fn openai_chat_nonstream_markdown_fence_is_repaired() {
 }
 
 #[tokio::test]
-async fn openai_chat_nonstream_unrecoverable_falls_back_to_empty_object() {
-    // Pure garbage — `parse_with_repair` returns Err; the adapter
-    // falls back to `Value::Object({})` so Layer 2 schema validation
-    // can report specific missing fields. **Critically, `invalid`
-    // stays `false`** — we want the schema validator to do the
-    // classification, not Layer 1.
-    let tc = dispatch_with_arguments("\u{0000}!!!@@@%%%").await;
-    // `llm_json::repair_json` is intentionally aggressive — for some
-    // garbage inputs it salvages to `Value::Null` (e.g. when the
-    // leading NUL byte parses as the JSON `null` literal); for
-    // others it lands on `Value::Object({})`. Both shapes hand
-    // Layer 2 a non-string value, which the schema validator then
-    // classifies as a type mismatch and emits the
-    // `InputValidationError` wrap with the precise expected type.
+async fn openai_chat_nonstream_unrecoverable_preserves_raw_string() {
+    // Pure garbage — `parse_with_repair` returns `Err`; the adapter
+    // preserves the raw bytes as `Value::String(raw)` so Layer 2's
+    // schema validator says "expected object, got string" AND the
+    // model's original output is recoverable for diagnostics.
     //
     // The contract we lock here: Layer 1 **does not unilaterally
     // invalidate** — whatever `parse_with_repair` returns flows
-    // through verbatim, and `invalid` stays false. Classification
-    // is Layer 2's job.
-    assert!(
-        matches!(
-            tc.input,
-            serde_json::Value::Object(_) | serde_json::Value::Null
-        ),
-        "expected object or null fallback, got {:?}",
-        tc.input
-    );
+    // through (or the raw string is preserved); classification is
+    // Layer 2's job.
+    let raw = "\u{0000}!!!@@@%%%";
+    let tc = dispatch_with_arguments(raw).await;
+    // Accept either: (a) llm_json salvaged into some Value, or
+    // (b) we preserved Value::String(raw). The forbidden outcome
+    // is silently substituting `{}` (information loss).
+    assert_ne!(tc.input, serde_json::json!({}), "must not drop raw input");
     assert!(
         !tc.invalid,
         "Layer 1 must not unilaterally invalidate; Layer 2 owns that decision"

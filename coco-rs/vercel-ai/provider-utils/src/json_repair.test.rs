@@ -1,4 +1,5 @@
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 
 use super::RepairOutcome;
@@ -157,15 +158,25 @@ fn provider_matrix_array_root_falls_back_to_empty() {
 }
 
 #[test]
-fn provider_matrix_pure_garbage_falls_back_to_empty_object() {
+fn provider_matrix_pure_garbage_preserves_raw_string() {
     // When repair truly fails (e.g., bytes that can't be salvaged
-    // into JSON), we hand Layer 2 an empty object so the schema
-    // validator names the missing fields.
-    let v = parse_tool_arguments_or_empty("\u{0000}\u{0001}}!{!!!", "Tool");
-    // Either repair somehow salvaged it (Object) or fell back to {}.
-    // In both cases the result is an object — the contract Layer 2
-    // depends on.
-    assert!(v.is_object(), "got {v}");
+    // into JSON), we hand Layer 2 a `Value::String(raw)` so the
+    // schema validator surfaces "expected object, got string" AND
+    // the raw bytes survive for downstream diagnostics.
+    let raw = "\u{0000}\u{0001}}!{!!!";
+    let v = parse_tool_arguments_or_empty(raw, "Tool");
+    // Either repair salvaged it into some Value, or we preserved
+    // the raw string. Both shapes carry diagnostic signal — the
+    // contract: `invalid` stays false and the raw model output is
+    // not silently replaced with `{}`.
+    if let Value::String(s) = &v {
+        assert_eq!(s, raw, "preserved raw bytes verbatim");
+    } else {
+        // llm_json salvaged something — accept any non-empty-object
+        // result as long as the helper didn't unilaterally drop
+        // information.
+        assert_ne!(v, json!({}), "must not silently substitute {{}}");
+    }
 }
 
 #[test]
