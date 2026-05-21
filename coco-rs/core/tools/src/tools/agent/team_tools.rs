@@ -4,8 +4,6 @@
 //! because both have a tiny surface and share the `AgentHandle`-routed
 //! dispatch shape.
 
-use std::collections::HashMap;
-
 use coco_messages::ToolResult;
 use coco_tool_runtime::CreateTeamRequest;
 use coco_tool_runtime::DescriptionOptions;
@@ -14,14 +12,44 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use serde_json::Value;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
+
+/// Typed input for [`TeamCreateTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TeamCreateInput {
+    /// Name for the new team
+    #[serde(default)]
+    pub team_name: String,
+    /// Optional description of the team's purpose
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Lead agent type (e.g. 'team-lead', 'researcher')
+    #[serde(default)]
+    pub agent_type: Option<String>,
+}
+
+/// Typed output for [`TeamCreateTool`]. All fields default so partial
+/// fixtures (`json!({"team_name": "x"})`) round-trip via the blanket.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TeamCreateOutput {
+    #[serde(default)]
+    pub team_name: String,
+    #[serde(default)]
+    pub lead_agent_id: String,
+    #[serde(default)]
+    pub task_list_id: String,
+}
 
 pub struct TeamCreateTool;
 
 #[async_trait::async_trait]
 impl Tool for TeamCreateTool {
+    type Input = TeamCreateInput;
+    type Output = TeamCreateOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TeamCreate)
     }
@@ -31,33 +59,8 @@ impl Tool for TeamCreateTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::AgentTeams)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &TeamCreateInput, _options: &DescriptionOptions) -> String {
         "Create a team of agents for collaborative work.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "team_name".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Name for the new team"
-            }),
-        );
-        p.insert(
-            "description".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Optional description of the team's purpose"
-            }),
-        );
-        p.insert(
-            "agent_type".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Lead agent type (e.g. 'team-lead', 'researcher')"
-            }),
-        );
-        ToolInputSchema { properties: p }
     }
     fn should_defer(&self) -> bool {
         true
@@ -66,22 +69,25 @@ impl Tool for TeamCreateTool {
         Some("create a new swarm team with a lead agent")
     }
 
-    /// `data` is the bare confirmation string from `agent.create_team`.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        coco_tool_runtime::render_text_or_json(data)
+    /// Render a compact confirmation. The created `team_name` /
+    /// `lead_agent_id` / `task_list_id` are model-visible but the
+    /// typical follow-up just needs to know "team is up" — match the
+    /// pre-typed default JSON dump shape so consumers can pivot off
+    /// `data["team_name"]` etc.
+    fn render_for_model(&self, out: &TeamCreateOutput) -> Vec<ToolResultContentPart> {
+        let text = serde_json::to_string(out).unwrap_or_default();
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: TeamCreateInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let name = input
-            .get("team_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-
-        if name.is_empty() {
+    ) -> Result<ToolResult<TeamCreateOutput>, ToolError> {
+        if input.team_name.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "team_name is required".into(),
                 error_code: None,
@@ -106,7 +112,7 @@ impl Tool for TeamCreateTool {
         let result = ctx
             .agent
             .create_team(CreateTeamRequest {
-                requested_name: name.to_string(),
+                requested_name: input.team_name.clone(),
                 leader_agent_id: ctx.agent_id.as_ref().map(ToString::to_string),
                 leader_session_id,
                 cwd,
@@ -121,11 +127,11 @@ impl Tool for TeamCreateTool {
             })?;
 
         Ok(ToolResult {
-            data: serde_json::json!({
-                "team_name": result.team_name,
-                "lead_agent_id": result.lead_agent_id,
-                "task_list_id": result.task_list_id,
-            }),
+            data: TeamCreateOutput {
+                team_name: result.team_name,
+                lead_agent_id: result.lead_agent_id,
+                task_list_id: result.task_list_id,
+            },
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
@@ -133,10 +139,30 @@ impl Tool for TeamCreateTool {
     }
 }
 
+/// Typed input for [`TeamDeleteTool`] — no parameters.
+///
+/// TS `TeamDeleteTool.ts:21`: `inputSchema = z.strictObject({})` — the
+/// tool reads the team name from the active session context, not from
+/// tool input.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TeamDeleteInput {}
+
+/// Typed output for [`TeamDeleteTool`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TeamDeleteOutput {
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub message: String,
+}
+
 pub struct TeamDeleteTool;
 
 #[async_trait::async_trait]
 impl Tool for TeamDeleteTool {
+    type Input = TeamDeleteInput;
+    type Output = TeamDeleteOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TeamDelete)
     }
@@ -146,17 +172,8 @@ impl Tool for TeamDeleteTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::AgentTeams)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &TeamDeleteInput, _options: &DescriptionOptions) -> String {
         "Clean up team and task directories when the swarm is complete".into()
-    }
-    /// TS `TeamDeleteTool.ts:21`: `inputSchema = z.strictObject({})` — the
-    /// tool reads the team name from the active session context, not from
-    /// tool input. Match the wire shape exactly so callers built against
-    /// the TS contract round-trip without per-call adapter logic.
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-        }
     }
     fn should_defer(&self) -> bool {
         true
@@ -167,23 +184,18 @@ impl Tool for TeamDeleteTool {
 
     /// Render the prebuilt `message` field — `success` flag is for
     /// callers that key off `data["success"]`.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let text = data
-            .get("message")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+    fn render_for_model(&self, out: &TeamDeleteOutput) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
-            text,
+            text: out.message.clone(),
             provider_options: None,
         }]
     }
 
     async fn execute(
         &self,
-        _input: Value,
+        _input: TeamDeleteInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
+    ) -> Result<ToolResult<TeamDeleteOutput>, ToolError> {
         let result = ctx
             .agent
             .delete_team()
@@ -194,7 +206,10 @@ impl Tool for TeamDeleteTool {
             })?;
 
         Ok(ToolResult {
-            data: serde_json::json!({ "success": true, "message": result }),
+            data: TeamDeleteOutput {
+                success: true,
+                message: result,
+            },
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

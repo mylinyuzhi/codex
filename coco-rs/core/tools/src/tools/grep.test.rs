@@ -1,5 +1,5 @@
 use crate::tools::grep::GrepTool;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
@@ -13,24 +13,35 @@ fn text(result: &coco_messages::ToolResult<serde_json::Value>) -> &str {
 
 #[test]
 fn test_grep_is_read_only() {
-    assert!(GrepTool.is_read_only(&serde_json::Value::Null));
+    assert!(<GrepTool as DynTool>::is_read_only(
+        &GrepTool,
+        &serde_json::json!({"pattern": "x"})
+    ));
 }
 
 #[test]
 fn test_grep_is_concurrency_safe() {
-    assert!(GrepTool.is_concurrency_safe(&serde_json::Value::Null));
+    assert!(<GrepTool as DynTool>::is_concurrency_safe(
+        &GrepTool,
+        &serde_json::json!({"pattern": "x"})
+    ));
 }
 
 #[test]
 fn test_grep_is_not_destructive() {
-    assert!(!GrepTool.is_destructive(&serde_json::Value::Null));
+    assert!(!<GrepTool as DynTool>::is_destructive(
+        &GrepTool,
+        &serde_json::json!({"pattern": "x"})
+    ));
 }
 
 #[test]
 fn test_grep_is_search_command() {
-    let info = GrepTool
-        .is_search_or_read_command(&serde_json::Value::Null)
-        .expect("Grep should report as search command");
+    let info = <GrepTool as DynTool>::is_search_or_read_command(
+        &GrepTool,
+        &serde_json::json!({"pattern": "x"}),
+    )
+    .expect("Grep should report as search command");
     assert!(info.is_search);
 }
 
@@ -46,17 +57,17 @@ async fn test_grep_files_with_matches() {
     std::fs::write(dir.path().join("c.txt"), "no match here").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "hello",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "files_with_matches"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "hello",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "files_with_matches"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("a.rs"), "should contain a.rs, got: {t}");
@@ -73,17 +84,17 @@ async fn test_grep_content_mode() {
     std::fs::write(dir.path().join("test.rs"), "line1\nfn hello()\nline3").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "hello",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "hello",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("fn hello()"), "should contain match: {t}");
@@ -97,17 +108,17 @@ async fn test_grep_count_mode() {
     std::fs::write(dir.path().join("multi.rs"), "fn a()\nfn b()\nfn c()").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "fn",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "count"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "fn",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "count"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains(":3"), "should have count 3: {t}");
@@ -127,18 +138,18 @@ async fn test_grep_case_insensitive() {
     std::fs::write(dir.path().join("mixed.txt"), "Hello\nhello\nHELLO").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "hello",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "count",
-                "-i": true
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "hello",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "count",
+            "-i": true
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains(":3"), "should match all 3 lines: {t}");
@@ -150,16 +161,16 @@ async fn test_grep_no_matches() {
     std::fs::write(dir.path().join("empty.txt"), "nothing here").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "zzzzz",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "zzzzz",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     // Default output_mode is files_with_matches, so empty result = "No files found"
@@ -176,18 +187,18 @@ async fn test_grep_context_lines() {
     .unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "MATCH",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content",
-                "-C": 1
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "MATCH",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content",
+            "-C": 1
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("line2"), "should have before-context: {t}");
@@ -202,17 +213,17 @@ async fn test_grep_single_file() {
     std::fs::write(&file, "alpha\nbeta\ngamma").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "beta",
-                "path": file.to_str().unwrap(),
-                "output_mode": "content"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "beta",
+            "path": file.to_str().unwrap(),
+            "output_mode": "content"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("beta"), "should contain beta: {t}");
@@ -236,16 +247,16 @@ async fn test_grep_binary_skipped() {
     .unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "search_me",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "search_me",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("text.rs"), "should find text file: {t}");
@@ -267,16 +278,16 @@ async fn test_grep_vcs_dirs_excluded() {
     std::fs::write(git_dir.join("config"), "fn hello() {}").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "hello",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "hello",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("main.rs"), "should find main.rs: {t}");
@@ -295,19 +306,19 @@ async fn test_grep_context_precedence() {
     let ctx = ToolUseContext::test_default();
 
     // `context` param should take precedence over `-C`
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "MATCH",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content",
-                "context": 1,
-                "-C": 3
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "MATCH",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content",
+            "context": 1,
+            "-C": 3
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     // context=1 should show 1 line before/after, NOT 3
@@ -335,17 +346,17 @@ async fn test_grep_head_limit_zero_unlimited() {
     }
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "match_target",
-                "path": dir.path().to_str().unwrap(),
-                "head_limit": 0
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "match_target",
+            "path": dir.path().to_str().unwrap(),
+            "head_limit": 0
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -365,18 +376,18 @@ async fn test_grep_multiline() {
     std::fs::write(dir.path().join("multi.txt"), "fn hello() {\n    world\n}").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "hello.*world",
-                "multiline": true,
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "hello.*world",
+            "multiline": true,
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -400,17 +411,17 @@ async fn test_grep_mtime_sorting() {
     std::fs::write(dir.path().join("new.txt"), "match_here").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "match_here",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "files_with_matches"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "match_here",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "files_with_matches"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     // Newest first
@@ -429,7 +440,7 @@ async fn test_grep_mtime_sorting() {
 #[tokio::test]
 async fn test_grep_max_result_size_bound() {
     assert_eq!(
-        GrepTool.max_result_size_bound(),
+        <GrepTool as DynTool>::max_result_size_bound(&GrepTool,),
         coco_tool_runtime::ResultSizeBound::Chars(20_000),
     );
 }
@@ -445,17 +456,17 @@ async fn test_grep_type_filter() {
     std::fs::write(dir.path().join("code.py"), "def target(): pass").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "type": "rust"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "type": "rust"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("code.rs"), "should match rust file: {t}");
@@ -473,17 +484,17 @@ async fn test_grep_glob_filter() {
     std::fs::write(dir.path().join("b.txt"), "target here too").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "glob": "*.rs"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "glob": "*.rs"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("a.rs"), "should match .rs file: {t}");
@@ -502,18 +513,18 @@ async fn test_grep_offset() {
     }
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "files_with_matches",
-                "offset": 3
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "files_with_matches",
+            "offset": 3
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -538,17 +549,17 @@ async fn test_grep_files_header_no_pagination_when_not_truncated() {
     std::fs::write(dir.path().join("a.rs"), "target").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "files_with_matches"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "files_with_matches"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     // TS format: "Found N files" with no pagination/offset info
@@ -572,18 +583,18 @@ async fn test_grep_files_header_has_pagination_when_truncated() {
     }
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "files_with_matches",
-                "head_limit": 2
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "files_with_matches",
+            "head_limit": 2
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     // First line should be header with limit info
@@ -601,17 +612,17 @@ async fn test_grep_content_no_footer_when_not_truncated() {
     std::fs::write(dir.path().join("f.txt"), "target").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -629,18 +640,18 @@ async fn test_grep_content_footer_format() {
     }
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content",
-                "head_limit": 2
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content",
+            "head_limit": 2
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -657,17 +668,17 @@ async fn test_grep_count_summary_format() {
     std::fs::write(dir.path().join("b.txt"), "x x").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "x",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "count"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "x",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "count"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     // TS: "Found N total occurrence(s) across M file(s)."
@@ -684,17 +695,17 @@ async fn test_grep_count_summary_singular() {
     std::fs::write(dir.path().join("one.txt"), "singleton").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "singleton",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "count"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "singleton",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "count"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -712,18 +723,18 @@ async fn test_grep_offset_adds_pagination_info() {
     }
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content",
-                "offset": 2
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content",
+            "offset": 2
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -742,18 +753,18 @@ async fn test_grep_context_breaks() {
     .unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "match",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content",
-                "-A": 1
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "match",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content",
+            "-A": 1
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("match1"), "should have first match: {t}");
@@ -778,8 +789,16 @@ async fn test_grep_parallel_execution() {
     let path = dir.path().to_str().unwrap().to_string();
 
     // Fire two grep calls simultaneously searching for different patterns.
-    let alpha_fut = GrepTool.execute(json!({"pattern": "alpha_target", "path": &path}), &ctx);
-    let beta_fut = GrepTool.execute(json!({"pattern": "beta_target", "path": &path}), &ctx);
+    let alpha_fut = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({"pattern": "alpha_target", "path": &path}),
+        &ctx,
+    );
+    let beta_fut = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({"pattern": "beta_target", "path": &path}),
+        &ctx,
+    );
     let (alpha_res, beta_res) = tokio::join!(alpha_fut, beta_fut);
 
     let alpha_text = text(alpha_res.as_ref().unwrap());
@@ -811,16 +830,16 @@ async fn test_grep_respects_cancellation() {
     ctx.cancel = tokio_util::sync::CancellationToken::new();
     ctx.cancel.cancel(); // fire before execute
 
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .expect("cancelled grep still returns Ok with partial/empty results");
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .expect("cancelled grep still returns Ok with partial/empty results");
 
     let t = text(&result);
     // The walker should see the cancel on the first iteration and bail out
@@ -843,17 +862,17 @@ async fn test_grep_count_empty_includes_summary() {
     std::fs::write(dir.path().join("a.txt"), "no target here").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "zzzzz",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "count"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "zzzzz",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "count"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert_eq!(
@@ -869,17 +888,17 @@ async fn test_grep_content_empty_no_footer() {
     std::fs::write(dir.path().join("a.txt"), "no target").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "zzzzz",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "zzzzz",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert_eq!(t, "No matches found", "content empty: {t}");
@@ -892,18 +911,18 @@ async fn test_grep_content_empty_with_offset_keeps_pagination() {
     std::fs::write(dir.path().join("a.txt"), "no target").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "zzzzz",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content",
-                "offset": 5
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "zzzzz",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content",
+            "offset": 5
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert_eq!(
@@ -926,17 +945,17 @@ async fn test_grep_glob_filter_whitespace() {
     std::fs::write(dir.path().join("c.py"), "target").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "glob": "*.js *.ts"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "glob": "*.js *.ts"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("a.js"), "should match .js: {t}");
@@ -953,17 +972,17 @@ async fn test_grep_glob_filter_comma() {
     std::fs::write(dir.path().join("c.py"), "target").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "glob": "*.js,*.ts"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "glob": "*.js,*.ts"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("a.js"), "should match .js: {t}");
@@ -980,17 +999,17 @@ async fn test_grep_glob_filter_braces() {
     std::fs::write(dir.path().join("c.py"), "target").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "target",
-                "path": dir.path().to_str().unwrap(),
-                "glob": "*.{js,ts}"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "glob": "*.{js,ts}"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("a.js"), "should match .js: {t}");
@@ -1008,18 +1027,18 @@ async fn test_grep_line_numbers_suppressed() {
     std::fs::write(dir.path().join("f.txt"), "line1\nMATCH\nline3").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "MATCH",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content",
-                "-n": false
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "MATCH",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content",
+            "-n": false
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("MATCH"), "should contain match: {t}");
@@ -1040,17 +1059,17 @@ async fn test_grep_line_numbers_default_on() {
     std::fs::write(dir.path().join("f.txt"), "line1\nMATCH\nline3").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GrepTool
-        .execute(
-            json!({
-                "pattern": "MATCH",
-                "path": dir.path().to_str().unwrap(),
-                "output_mode": "content"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "MATCH",
+            "path": dir.path().to_str().unwrap(),
+            "output_mode": "content"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -1074,8 +1093,7 @@ async fn test_grep_respects_cwd_override() {
     ctx.cwd_override = Some(inner.path().to_path_buf());
 
     // No explicit `path` → tool defaults to cwd_override.
-    let result = GrepTool
-        .execute(json!({"pattern": "target"}), &ctx)
+    let result = <GrepTool as DynTool>::execute(&GrepTool, json!({"pattern": "target"}), &ctx)
         .await
         .unwrap();
 
@@ -1092,7 +1110,7 @@ async fn test_grep_respects_cwd_override() {
 fn render_for_model_unwraps_files_with_matches() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!("Found 2 files\n/abs/a.rs\n/abs/b.rs");
-    let parts = GrepTool.render_for_model(&data);
+    let parts = <GrepTool as DynTool>::render_for_model(&GrepTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -1103,7 +1121,7 @@ fn render_for_model_unwraps_files_with_matches() {
 fn render_for_model_unwraps_content_mode() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!("/abs/a.rs:1:fn main() {}\n/abs/b.rs:5:fn helper() {}");
-    let parts = GrepTool.render_for_model(&data);
+    let parts = <GrepTool as DynTool>::render_for_model(&GrepTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -1114,7 +1132,7 @@ fn render_for_model_unwraps_content_mode() {
 fn render_for_model_no_matches_branch() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!("No matches found");
-    let parts = GrepTool.render_for_model(&data);
+    let parts = <GrepTool as DynTool>::render_for_model(&GrepTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };

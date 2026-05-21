@@ -4,8 +4,13 @@ use crate::tools::edit::EditTool;
 #[test]
 fn test_edit_description_includes_uniqueness_warning() {
     use coco_tool_runtime::DescriptionOptions;
-    use coco_tool_runtime::Tool;
-    let desc = EditTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
+
+    // Description is input-independent, but the blanket DynTool path
+    // needs a valid Input fixture to deserialize before calling the
+    // typed Tool::description.
+    let fixture = serde_json::json!({"file_path": "/tmp/x", "old_string": "a", "new_string": "b"});
+    let desc =
+        <EditTool as DynTool>::description(&EditTool, &fixture, &DescriptionOptions::default());
     assert!(
         desc.contains("must use your `Read` tool"),
         "Edit description should warn about read-before-edit requirement"
@@ -19,7 +24,7 @@ fn test_edit_description_includes_uniqueness_warning() {
         "Edit description should mention replace_all"
     );
 }
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
@@ -30,17 +35,17 @@ async fn test_edit_single_replacement() {
     std::fs::write(&file, "fn hello() {\n    println!(\"hi\");\n}\n").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "println!(\"hi\")",
-                "new_string": "println!(\"hello world\")"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "println!(\"hi\")",
+            "new_string": "println!(\"hello world\")"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // TS shape: `{filePath, replaceAll, userModified, replacementCount}`.
     assert_eq!(result.data["filePath"], file.to_str().unwrap());
@@ -58,18 +63,18 @@ async fn test_edit_replace_all() {
     std::fs::write(&file, "foo bar foo baz foo").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "foo",
-                "new_string": "qux",
-                "replace_all": true
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "foo",
+            "new_string": "qux",
+            "replace_all": true
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["replaceAll"], true);
     assert_eq!(result.data["replacementCount"], 3);
@@ -84,16 +89,16 @@ async fn test_edit_not_unique_error() {
     std::fs::write(&file, "aaa bbb aaa").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "aaa",
-                "new_string": "ccc"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "aaa",
+            "new_string": "ccc"
+        }),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -107,16 +112,16 @@ async fn test_edit_not_found_error() {
     std::fs::write(&file, "hello world").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "zzz",
-                "new_string": "xxx"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "zzz",
+            "new_string": "xxx"
+        }),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -125,7 +130,7 @@ async fn test_edit_not_found_error() {
 
 #[tokio::test]
 async fn test_edit_same_string_error() {
-    let tool = EditTool;
+    let tool: &dyn DynTool = &EditTool;
     let ctx = coco_tool_runtime::ToolUseContext::test_default();
     let result = tool.validate_input(
         &json!({
@@ -145,16 +150,16 @@ async fn test_edit_same_string_error() {
 #[tokio::test]
 async fn test_edit_file_not_found() {
     let ctx = ToolUseContext::test_default();
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": "/nonexistent/file.txt",
-                "old_string": "a",
-                "new_string": "b"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": "/nonexistent/file.txt",
+            "old_string": "a",
+            "new_string": "b"
+        }),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err());
 }
@@ -175,17 +180,17 @@ async fn test_edit_matches_curly_quotes() {
     std::fs::write(&file, curly_content).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "\"hello\"",  // Model uses straight quotes
-                "new_string": "\"hi\""
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "\"hello\"",  // Model uses straight quotes
+            "new_string": "\"hi\""
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Structured result: presence of `filePath` is sufficient — the
     // model-visible message is exercised in render_for_model tests.
@@ -209,17 +214,17 @@ async fn test_edit_matches_curly_single_quotes() {
     std::fs::write(&file, content).unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "it's",
-                "new_string": "that's"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "it's",
+            "new_string": "that's"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Structured result: presence of `filePath` is sufficient — the
     // model-visible message is exercised in render_for_model tests.
@@ -256,17 +261,17 @@ async fn test_edit_strips_trailing_whitespace_from_new_string() {
 
     let ctx = ToolUseContext::test_default();
     // Note the trailing spaces on `println!("hello");   ` and on the closing brace.
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "    println!(\"hi\");\n}",
-                "new_string": "    println!(\"hello\");   \n}  "
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "    println!(\"hi\");\n}",
+            "new_string": "    println!(\"hello\");   \n}  "
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert!(
         result.data["filePath"].is_string(),
         "expected filePath in data: {:?}",
@@ -297,17 +302,17 @@ async fn test_edit_preserves_trailing_whitespace_in_markdown() {
 
     let ctx = ToolUseContext::test_default();
     // Replace with content that has trailing 2-space hard line break.
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "line one",
-                "new_string": "line one  "
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "line one",
+            "new_string": "line one  "
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert!(
         result.data["filePath"].is_string(),
         "expected filePath in data: {:?}",
@@ -330,17 +335,17 @@ async fn test_edit_markdown_extension_case_insensitive() {
         std::fs::write(&file, "hello\n").unwrap();
 
         let ctx = ToolUseContext::test_default();
-        let result = EditTool
-            .execute(
-                json!({
-                    "file_path": file.to_str().unwrap(),
-                    "old_string": "hello",
-                    "new_string": "world  "
-                }),
-                &ctx,
-            )
-            .await
-            .unwrap();
+        let result = <EditTool as DynTool>::execute(
+            &EditTool,
+            json!({
+                "file_path": file.to_str().unwrap(),
+                "old_string": "hello",
+                "new_string": "world  "
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert!(
             result.data["filePath"].is_string(),
             "expected filePath in data: {:?}",
@@ -372,17 +377,17 @@ async fn test_edit_desanitizes_sanitized_tags_in_old_string() {
     // `<name>`/`</name>` before matching, which DOES match. Then the
     // same rewrite is applied to new_string so the final edit
     // replaces the real tag with a real tag.
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "<n>OK</n>",
-                "new_string": "<n>UPDATED</n>"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "<n>OK</n>",
+            "new_string": "<n>UPDATED</n>"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert!(
         result.data["filePath"].is_string(),
         "expected filePath in data: {:?}",
@@ -428,16 +433,16 @@ async fn test_edit_detects_content_drift_in_race() {
         );
     }
 
-    let result = EditTool
-        .execute(
-            json!({
-                "file_path": file.to_str().unwrap(),
-                "old_string": "current",
-                "new_string": "changed"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "current",
+            "new_string": "changed"
+        }),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err(), "content drift must be detected");
     let err = result.unwrap_err().to_string();
@@ -457,7 +462,7 @@ async fn test_edit_detects_content_drift_in_race() {
 fn edit_render_single_replacement_branch() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!({"filePath": "/abs/file.rs", "replaceAll": false, "userModified": false});
-    let parts = EditTool.render_for_model(&data);
+    let parts = <EditTool as DynTool>::render_for_model(&EditTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -469,7 +474,7 @@ fn edit_render_single_replacement_branch() {
 fn edit_render_replace_all_branch() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!({"filePath": "/abs/multi.rs", "replaceAll": true, "userModified": false});
-    let parts = EditTool.render_for_model(&data);
+    let parts = <EditTool as DynTool>::render_for_model(&EditTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };

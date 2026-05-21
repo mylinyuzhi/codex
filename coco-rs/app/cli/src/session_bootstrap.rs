@@ -273,10 +273,27 @@ pub async fn install_session_late_binds(
         .join("cache")
         .join("tasks")
         .join(&task_session_id);
-    let task_runtime = Arc::new(crate::task_runtime::TaskRuntime::with_session_dir(
-        Arc::new(coco_tasks::TaskManager::new()),
-        task_session_dir,
-    ));
+    // Wire the session-scoped `CommandQueue` into the TaskRuntime
+    // via the `NotificationSink` trait so terminal lifecycle events
+    // (mark_completed / mark_failed / kill_task / bg shell exit)
+    // push a `<task-notification>` envelope onto the queue. The
+    // engine's per-turn drain
+    // (`engine_finalize_turn::drain_command_queue_into_history`)
+    // then injects it as a User message wrapped in
+    // `<system-reminder>` — TS parity for
+    // `enqueuePendingNotification({mode: 'task-notification'})`.
+    let sink: coco_tasks::NotificationSinkRef = Arc::new(
+        crate::command_queue_sink::CommandQueueNotificationSink::new(
+            runtime.command_queue().clone(),
+        ),
+    );
+    let task_runtime = Arc::new(
+        crate::task_runtime::TaskRuntime::with_session_dir(
+            Arc::new(coco_tasks::TaskManager::new()),
+            task_session_dir,
+        )
+        .with_notification_sink(sink),
+    );
     runtime.attach_task_runtime(task_runtime).await;
     let task_list_id = coco_tasks::resolve_task_list_id(None, None, &task_session_id);
     let task_list_root = coco_config::global_config::config_home().join("tasks");

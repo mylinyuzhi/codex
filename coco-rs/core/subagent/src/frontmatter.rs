@@ -9,7 +9,7 @@ use std::path::Path;
 use coco_frontmatter::FrontmatterValue;
 use coco_types::{
     AgentColorName, AgentDefinition, AgentIsolation, AgentMcpServerSpec, AgentSource, AgentTypeId,
-    MemoryScope, ModelRole,
+    MemoryScope, ModelRole, ReasoningEffort,
 };
 
 use crate::validation::ValidationError;
@@ -104,16 +104,31 @@ pub fn parse_agent_markdown(
             Err(_) => warnings.push(ValidationError::InvalidModelRole { value: raw }),
         }
     }
-    if let Some(effort) = read_str(frontmatter, "effort").or_else(|| {
-        // TS `parseEffortValue` accepts `effort: 64000` numeric form too.
-        read_int(frontmatter, "effort").map(|n| n.to_string())
-    }) {
-        match validate_effort(&effort) {
-            Some(e) => def.effort = Some(e),
-            None => warnings.push(ValidationError::InvalidFrontmatter {
-                message: format!("effort: unrecognized value `{effort}`"),
+    if let Some(effort) = read_str(frontmatter, "effort") {
+        match effort.trim().parse::<ReasoningEffort>() {
+            Ok(e) => def.effort = Some(e),
+            Err(_) => warnings.push(ValidationError::InvalidFrontmatter {
+                message: format!(
+                    "effort: unrecognized value `{effort}` (expected one of \
+                     off/auto/minimal/low/medium/high/xhigh, or alias `max`)"
+                ),
             }),
         }
+    } else if read_int(frontmatter, "effort").is_some() {
+        // TS `parseEffortValue` overloads `effort:` with a numeric
+        // (budget-tokens) form. coco-rs's downstream
+        // (`session_runtime::thinking_level_for_effort_from`) takes
+        // a `ReasoningEffort` enum directly — there is no consumer
+        // for numeric input, so accepting it would silently drop
+        // the operator's intent. Reject loudly and point at the
+        // proper config surface.
+        warnings.push(ValidationError::InvalidFrontmatter {
+            message: "effort: numeric form is not accepted — `effort:` is a lookup key into \
+                      the model's `supported_thinking_levels`, not a budget number. Use one \
+                      of off/auto/minimal/low/medium/high/xhigh (or `max`). For a custom \
+                      budget, configure `settings.models.<role>.thinking_level.budget_tokens`."
+                .into(),
+        });
     }
     if let Some(initial) = read_str_aliased(frontmatter, &["initialPrompt", "initial_prompt"]) {
         def.initial_prompt = Some(initial);
@@ -330,20 +345,10 @@ fn read_csv_or_list_aliased(
     keys.iter().find_map(|k| read_csv_or_list(map, k))
 }
 
-/// TS `parseEffortValue` (`utils/effort.ts:71-87`) accepts the four named
-/// levels plus any numeric token. Anything else is rejected.
-const VALID_EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "max"];
-
-fn validate_effort(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if VALID_EFFORT_LEVELS.contains(&trimmed) {
-        return Some(trimmed.to_owned());
-    }
-    if trimmed.parse::<i64>().is_ok() {
-        return Some(trimmed.to_owned());
-    }
-    None
-}
+// `validate_effort` deleted — parsing happens inline via
+// `ReasoningEffort::from_str`. The numeric branch was dead code: the
+// downstream consumer (`thinking_level_for_effort_from`) takes the
+// enum, so numeric input was silently dropped.
 
 /// TS `PermissionMode` (`types/permissions.ts`). Coco-rs accepts the same
 /// nine variants; unrecognized values surface as a warning.

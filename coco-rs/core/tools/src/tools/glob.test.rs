@@ -1,5 +1,5 @@
 use crate::tools::glob::GlobTool;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
@@ -13,24 +13,35 @@ fn text(result: &coco_messages::ToolResult<serde_json::Value>) -> &str {
 
 #[test]
 fn test_glob_is_read_only() {
-    assert!(GlobTool.is_read_only(&serde_json::Value::Null));
+    assert!(<GlobTool as DynTool>::is_read_only(
+        &GlobTool,
+        &serde_json::json!({"pattern": "*"})
+    ));
 }
 
 #[test]
 fn test_glob_is_concurrency_safe() {
-    assert!(GlobTool.is_concurrency_safe(&serde_json::Value::Null));
+    assert!(<GlobTool as DynTool>::is_concurrency_safe(
+        &GlobTool,
+        &serde_json::json!({"pattern": "*"})
+    ));
 }
 
 #[test]
 fn test_glob_is_not_destructive() {
-    assert!(!GlobTool.is_destructive(&serde_json::Value::Null));
+    assert!(!<GlobTool as DynTool>::is_destructive(
+        &GlobTool,
+        &serde_json::json!({"pattern": "*"})
+    ));
 }
 
 #[test]
 fn test_glob_is_search_command() {
-    let info = GlobTool
-        .is_search_or_read_command(&serde_json::Value::Null)
-        .expect("Glob should report as search command");
+    let info = <GlobTool as DynTool>::is_search_or_read_command(
+        &GlobTool,
+        &serde_json::json!({"pattern": "*"}),
+    )
+    .expect("Glob should report as search command");
     assert!(info.is_search);
 }
 
@@ -46,16 +57,16 @@ async fn test_glob_pattern_match() {
     std::fs::write(dir.path().join("c.txt"), "text file").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "*.rs",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "*.rs",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("a.rs"), "should match a.rs: {t}");
@@ -72,16 +83,16 @@ async fn test_glob_recursive_pattern() {
     std::fs::write(sub.join("nested.rs"), "nested").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "**/*.rs",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "**/*.rs",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(t.contains("root.rs"), "should find root file: {t}");
@@ -94,16 +105,16 @@ async fn test_glob_no_matches() {
     std::fs::write(dir.path().join("a.txt"), "hello").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "*.xyz",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "*.xyz",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert_eq!(t, "No files found");
@@ -114,15 +125,15 @@ async fn test_glob_invalid_pattern() {
     let dir = tempfile::tempdir().unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "[invalid",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "[invalid",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err(), "should error on invalid glob pattern");
 }
@@ -138,16 +149,16 @@ async fn test_glob_hidden_files_included() {
     std::fs::write(dir.path().join("visible"), "public").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "*",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "*",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -167,16 +178,16 @@ async fn test_glob_no_gitignore_by_default() {
     std::fs::write(dir.path().join("debug.log"), "log").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "*",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "*",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -196,16 +207,16 @@ async fn test_glob_mtime_sorting_matches_ts() {
     std::fs::write(dir.path().join("new.txt"), "new").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "*.txt",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "*.txt",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     let new_pos = t.find("new.txt").expect("should find new.txt");
@@ -231,16 +242,16 @@ async fn test_glob_truncation_message() {
     let mut ctx = ToolUseContext::test_default();
     ctx.glob_limits.max_results = Some(3);
 
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "*.txt",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "*.txt",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     assert!(
@@ -256,7 +267,7 @@ async fn test_glob_truncation_message() {
 #[tokio::test]
 async fn test_glob_max_result_size_bound() {
     assert_eq!(
-        GlobTool.max_result_size_bound(),
+        <GlobTool as DynTool>::max_result_size_bound(&GlobTool,),
         coco_tool_runtime::ResultSizeBound::Chars(100_000),
     );
 }
@@ -279,16 +290,16 @@ async fn test_glob_reads_glob_limits() {
     let mut ctx = ToolUseContext::test_default();
     ctx.glob_limits.max_results = Some(5);
 
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "*.rs",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "*.rs",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let t = text(&result);
     let file_count = t.lines().filter(|l| l.ends_with(".rs")).count();
@@ -313,8 +324,10 @@ async fn test_glob_parallel_execution() {
     let ctx = ToolUseContext::test_default();
     let path = dir.path().to_str().unwrap().to_string();
 
-    let rs_fut = GlobTool.execute(json!({"pattern": "*.rs", "path": &path}), &ctx);
-    let md_fut = GlobTool.execute(json!({"pattern": "*.md", "path": &path}), &ctx);
+    let rs_fut =
+        <GlobTool as DynTool>::execute(&GlobTool, json!({"pattern": "*.rs", "path": &path}), &ctx);
+    let md_fut =
+        <GlobTool as DynTool>::execute(&GlobTool, json!({"pattern": "*.md", "path": &path}), &ctx);
     let (rs_res, md_res) = tokio::join!(rs_fut, md_fut);
 
     let rs_text = text(rs_res.as_ref().unwrap());
@@ -338,16 +351,16 @@ async fn test_glob_respects_cancellation() {
     ctx.cancel = tokio_util::sync::CancellationToken::new();
     ctx.cancel.cancel();
 
-    let result = GlobTool
-        .execute(
-            json!({
-                "pattern": "*.txt",
-                "path": dir.path().to_str().unwrap()
-            }),
-            &ctx,
-        )
-        .await
-        .expect("cancelled glob should still return Ok");
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({
+            "pattern": "*.txt",
+            "path": dir.path().to_str().unwrap()
+        }),
+        &ctx,
+    )
+    .await
+    .expect("cancelled glob should still return Ok");
 
     let t = text(&result);
     assert_eq!(
@@ -368,8 +381,7 @@ async fn test_glob_respects_cwd_override() {
     let mut ctx = ToolUseContext::test_default();
     ctx.cwd_override = Some(inner.path().to_path_buf());
 
-    let result = GlobTool
-        .execute(json!({"pattern": "*.rs"}), &ctx)
+    let result = <GlobTool as DynTool>::execute(&GlobTool, json!({"pattern": "*.rs"}), &ctx)
         .await
         .unwrap();
 
@@ -386,7 +398,7 @@ async fn test_glob_respects_cwd_override() {
 fn render_for_model_unwraps_data_string_into_text_part() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!("Found 2 files\n/abs/a.rs\n/abs/b.rs");
-    let parts = GlobTool.render_for_model(&data);
+    let parts = <GlobTool as DynTool>::render_for_model(&GlobTool, &data);
     assert_eq!(parts.len(), 1);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
@@ -399,7 +411,7 @@ fn render_for_model_unwraps_data_string_into_text_part() {
 fn render_for_model_no_files_branch() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!("No files found");
-    let parts = GlobTool.render_for_model(&data);
+    let parts = <GlobTool as DynTool>::render_for_model(&GlobTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };

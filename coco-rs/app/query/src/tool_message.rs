@@ -26,7 +26,7 @@
 #![allow(dead_code)]
 
 use coco_messages::Message;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 
 /// Which lifecycle path produced this bucket set.
 ///
@@ -75,7 +75,7 @@ impl ToolMessageOrder {
     /// keeps the MCP branch tied to the same predicate the runner
     /// uses elsewhere and avoids drift between registry key and
     /// runtime tool metadata.
-    pub(crate) fn for_tool(tool: &dyn Tool) -> Self {
+    pub(crate) fn for_tool(tool: &dyn DynTool) -> Self {
         if tool.is_mcp() {
             Self::Mcp
         } else {
@@ -90,7 +90,7 @@ impl ToolMessageOrder {
 /// (`toolExecution.ts:815`, :1478, :1515, :1541, :1566, :1572, :1585).
 /// Buckets are runner-local; the scheduler never inspects them. They
 /// collapse into a `Vec<Message>` via [`ToolMessageBuckets::flatten`]
-/// while the runner still holds the `Arc<dyn Tool>` (so the MCP
+/// while the runner still holds the `Arc<dyn DynTool>` (so the MCP
 /// predicate agrees with the tool implementation).
 #[derive(Debug, Default)]
 pub(crate) struct ToolMessageBuckets {

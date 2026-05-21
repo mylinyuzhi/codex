@@ -5,8 +5,6 @@
 //!
 //! Backed by [`coco_apply_patch::apply_patch`] + [`coco_exec_server::LOCAL_FS`].
 
-use std::collections::HashMap;
-
 use async_trait::async_trait;
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -16,15 +14,33 @@ use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::error::ToolError;
 use coco_types::ToolCheckResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use coco_utils_absolute_path::AbsolutePathBuf;
-use serde_json::Value;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
+
+/// Typed input for [`ApplyPatchTool`].
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ApplyPatchInput {
+    /// Patch body wrapped in `*** Begin Patch` / `*** End Patch`.
+    pub patch: String,
+}
+
+/// Typed output — stdout / stderr emitted by `coco_apply_patch::apply_patch`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ApplyPatchOutput {
+    pub stdout: String,
+    pub stderr: String,
+}
 
 pub struct ApplyPatchTool;
 
 #[async_trait]
 impl Tool for ApplyPatchTool {
+    type Input = ApplyPatchInput;
+    type Output = ApplyPatchOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::ApplyPatch)
     }
@@ -41,37 +57,26 @@ impl Tool for ApplyPatchTool {
             .is_extra(&ToolId::Builtin(ToolName::ApplyPatch))
     }
 
-    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+    fn description(&self, _input: &ApplyPatchInput, _options: &DescriptionOptions) -> String {
         "Apply a unified-diff-style patch to one or more files. The patch \
          body must follow the `*** Begin Patch` / `*** End Patch` envelope \
          emitted by gpt-5."
             .into()
     }
 
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "patch".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Patch body wrapped in `*** Begin Patch` / `*** End Patch`."
-            }),
-        );
-        ToolInputSchema { properties: p }
-    }
-
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &ApplyPatchInput) -> bool {
         false
     }
 
-    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
-        let Some(patch) = input.get("patch").and_then(Value::as_str) else {
-            return ToolCheckResult::Passthrough;
-        };
+    async fn check_permissions(
+        &self,
+        input: &ApplyPatchInput,
+        ctx: &ToolUseContext,
+    ) -> ToolCheckResult {
         let Ok(cwd) = apply_patch_cwd(ctx) else {
             return ToolCheckResult::Passthrough;
         };
-        let Ok(paths) = affected_paths_from_patch(patch, &cwd) else {
+        let Ok(paths) = affected_paths_from_patch(&input.patch, &cwd) else {
             return ToolCheckResult::Passthrough;
         };
         if paths.is_empty() {
@@ -100,20 +105,10 @@ impl Tool for ApplyPatchTool {
 
     /// Render `{stdout, stderr}` by joining stdout + stderr with a
     /// newline (skip empty pieces). Same shape as a simplified Bash.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let stdout = data
-            .get("stdout")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim_end()
-            .to_string();
-        let stderr = data
-            .get("stderr")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        let combined = [stdout.as_str(), stderr.as_str()]
+    fn render_for_model(&self, out: &ApplyPatchOutput) -> Vec<ToolResultContentPart> {
+        let stdout = out.stdout.trim_end();
+        let stderr = out.stderr.trim();
+        let combined = [stdout, stderr]
             .into_iter()
             .filter(|s| !s.is_empty())
             .collect::<Vec<&str>>()
@@ -126,17 +121,10 @@ impl Tool for ApplyPatchTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: ApplyPatchInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let patch =
-            input
-                .get("patch")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ToolError::InvalidInput {
-                    message: "`patch` is required and must be a string".into(),
-                    error_code: None,
-                })?;
+    ) -> Result<ToolResult<ApplyPatchOutput>, ToolError> {
+        let patch = &input.patch;
 
         let cwd_path = ctx
             .cwd_override
@@ -196,12 +184,10 @@ impl Tool for ApplyPatchTool {
             ctx.lsp.notify_save(path.as_path()).await;
         }
 
-        let out = String::from_utf8_lossy(&stdout).to_string();
-        let err = String::from_utf8_lossy(&stderr).to_string();
-        Ok(ToolResult::data(serde_json::json!({
-            "stdout": out,
-            "stderr": err,
-        })))
+        Ok(ToolResult::data(ApplyPatchOutput {
+            stdout: String::from_utf8_lossy(&stdout).to_string(),
+            stderr: String::from_utf8_lossy(&stderr).to_string(),
+        }))
     }
 }
 

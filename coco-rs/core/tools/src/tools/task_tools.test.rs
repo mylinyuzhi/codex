@@ -9,19 +9,19 @@
 
 use super::TaskCreateTool;
 use super::TaskStopTool;
-use coco_tool_runtime::BackgroundTaskInfo;
-use coco_tool_runtime::BackgroundTaskStatus;
-use coco_tool_runtime::TaskHandle;
-use coco_tool_runtime::TaskOutputDelta;
-use coco_tool_runtime::Tool;
-use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::DynTool;
+use coco_tool_runtime::{
+    BackgroundShellRequest, ShellTaskSpawner, TaskController, TaskOutputDelta, TaskReader,
+    TerminalSignal, ToolUseContext,
+};
+use coco_types::{TaskStateBase, TaskStatus, TaskType};
 use serde_json::json;
 use std::sync::Arc;
 
 /// Test double that tracks `kill_task` / `get_task_status` calls and
 /// returns canned results. Exercises the TS-aligned TaskStop/TaskOutput
 /// paths (which only operate on `appState.tasks`, i.e. the running-task
-/// registry — represented in coco-rs by `TaskHandle`).
+/// registry).
 #[derive(Default)]
 struct RecordingTaskHandle {
     known_ids: std::sync::Mutex<Vec<String>>,
@@ -40,18 +40,28 @@ impl RecordingTaskHandle {
     }
 }
 
-#[async_trait::async_trait]
-impl TaskHandle for RecordingTaskHandle {
-    async fn spawn_shell_task(
-        &self,
-        _request: coco_tool_runtime::BackgroundShellRequest,
-    ) -> Result<String, coco_error::BoxedError> {
-        unimplemented!("not used in these tests")
+fn canned_state(task_id: &str) -> TaskStateBase {
+    TaskStateBase {
+        id: task_id.into(),
+        task_type: TaskType::LocalBash,
+        status: TaskStatus::Running,
+        description: String::new(),
+        tool_use_id: None,
+        start_time: 0,
+        end_time: None,
+        total_paused_ms: None,
+        output_file: String::new(),
+        output_offset: 0,
+        extras: coco_types::TaskExtras::None,
     }
+}
+
+#[async_trait::async_trait]
+impl TaskReader for RecordingTaskHandle {
     async fn get_task_status(
         &self,
         task_id: &str,
-    ) -> Result<BackgroundTaskInfo, coco_error::BoxedError> {
+    ) -> Result<TaskStateBase, coco_error::BoxedError> {
         if self
             .known_ids
             .lock()
@@ -59,15 +69,7 @@ impl TaskHandle for RecordingTaskHandle {
             .iter()
             .any(|id| id == task_id)
         {
-            Ok(BackgroundTaskInfo {
-                task_id: task_id.into(),
-                status: BackgroundTaskStatus::Running,
-                summary: None,
-                output_file: None,
-                tool_use_id: None,
-                elapsed_seconds: 0.0,
-                notified: false,
-            })
+            Ok(canned_state(task_id))
         } else {
             Err(Box::new(coco_error::PlainError::new(
                 format!("unknown background task: {task_id}"),
@@ -86,6 +88,28 @@ impl TaskHandle for RecordingTaskHandle {
             is_complete: false,
         })
     }
+    async fn list_tasks(&self) -> Vec<TaskStateBase> {
+        Vec::new()
+    }
+    async fn subscribe_terminal(&self, _: &str) -> Option<TerminalSignal> {
+        None
+    }
+    async fn detach_handle(&self, _: &str) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        None
+    }
+    async fn read_terminal_outputs(
+        &self,
+        _: &str,
+    ) -> Result<coco_tool_runtime::TerminalOutputs, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "read_terminal_outputs not used in these tests",
+            coco_error::StatusCode::Internal,
+        )))
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskController for RecordingTaskHandle {
     async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
         if self
             .known_ids
@@ -103,11 +127,18 @@ impl TaskHandle for RecordingTaskHandle {
             )))
         }
     }
-    async fn list_tasks(&self) -> Vec<BackgroundTaskInfo> {
-        Vec::new()
+    async fn signal_detach(&self, _: &str) -> coco_tool_runtime::DetachOutcome {
+        coco_tool_runtime::DetachOutcome::Unknown
     }
-    async fn poll_notifications(&self) -> Vec<BackgroundTaskInfo> {
-        Vec::new()
+}
+
+#[async_trait::async_trait]
+impl ShellTaskSpawner for RecordingTaskHandle {
+    async fn spawn_shell_task(
+        &self,
+        _request: BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError> {
+        unimplemented!("not used in these tests")
     }
 }
 
@@ -121,7 +152,7 @@ impl TaskHandle for RecordingTaskHandle {
 #[tokio::test]
 async fn test_task_stop_rejects_missing_id() {
     let ctx = ToolUseContext::test_default();
-    let result = TaskStopTool.execute(json!({}), &ctx).await;
+    let result = <TaskStopTool as DynTool>::execute(&TaskStopTool, json!({}), &ctx).await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
@@ -140,10 +171,10 @@ async fn test_task_stop_accepts_task_id_for_background_task() {
     let mut ctx = ToolUseContext::test_default();
     ctx.task_handle = Some(handle.clone());
 
-    let stop_result = TaskStopTool
-        .execute(json!({"task_id": "bg-1"}), &ctx)
-        .await
-        .unwrap();
+    let stop_result =
+        <TaskStopTool as DynTool>::execute(&TaskStopTool, json!({"task_id": "bg-1"}), &ctx)
+            .await
+            .unwrap();
     assert_eq!(stop_result.data["task_id"], "bg-1");
     assert_eq!(stop_result.data["task_type"], "background");
     assert_eq!(handle.killed(), vec!["bg-1".to_string()]);
@@ -156,10 +187,10 @@ async fn test_task_stop_accepts_shell_id_alias() {
     let mut ctx = ToolUseContext::test_default();
     ctx.task_handle = Some(handle.clone());
 
-    let stop_result = TaskStopTool
-        .execute(json!({"shell_id": "bg-2"}), &ctx)
-        .await
-        .unwrap();
+    let stop_result =
+        <TaskStopTool as DynTool>::execute(&TaskStopTool, json!({"shell_id": "bg-2"}), &ctx)
+            .await
+            .unwrap();
     assert_eq!(stop_result.data["task_id"], "bg-2");
     assert_eq!(stop_result.data["task_type"], "background");
 }
@@ -171,10 +202,10 @@ async fn test_task_stop_accepts_legacy_taskid_alias() {
     let mut ctx = ToolUseContext::test_default();
     ctx.task_handle = Some(handle.clone());
 
-    let stop_result = TaskStopTool
-        .execute(json!({"taskId": "bg-3"}), &ctx)
-        .await
-        .unwrap();
+    let stop_result =
+        <TaskStopTool as DynTool>::execute(&TaskStopTool, json!({"taskId": "bg-3"}), &ctx)
+            .await
+            .unwrap();
     assert_eq!(stop_result.data["task_id"], "bg-3");
     assert_eq!(stop_result.data["task_type"], "background");
 }
@@ -186,15 +217,17 @@ async fn test_task_stop_accepts_legacy_taskid_alias() {
 #[tokio::test]
 async fn test_task_stop_rejects_plan_item_id() {
     let ctx = ToolUseContext::test_default();
-    let create = TaskCreateTool
-        .execute(json!({"subject": "plan item", "description": "x"}), &ctx)
-        .await
-        .unwrap();
+    let create = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "plan item", "description": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let tid = create.data["task"]["id"].as_str().unwrap().to_string();
 
     // No TaskHandle registered for this id → must error out.
-    let err = TaskStopTool
-        .execute(json!({"task_id": tid}), &ctx)
+    let err = <TaskStopTool as DynTool>::execute(&TaskStopTool, json!({"task_id": tid}), &ctx)
         .await
         .expect_err("plan-item id must not be accepted by TaskStop");
     let msg = err.to_string();
@@ -214,9 +247,12 @@ async fn test_task_stop_unknown_id_returns_error() {
     // perceives the two cases differently — errors trigger retry logic,
     // successful tool results don't.
     let ctx = ToolUseContext::test_default();
-    let result = TaskStopTool
-        .execute(json!({"task_id": "nonexistent-id-12345"}), &ctx)
-        .await;
+    let result = <TaskStopTool as DynTool>::execute(
+        &TaskStopTool,
+        json!({"task_id": "nonexistent-id-12345"}),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err(), "unknown ID should surface as tool error");
     let err = result.unwrap_err().to_string();
     assert!(
@@ -238,19 +274,19 @@ use super::TaskOutputTool;
 #[tokio::test]
 async fn test_task_output_returns_null_for_plan_item_id() {
     let ctx = ToolUseContext::test_default();
-    let create = TaskCreateTool
-        .execute(
-            json!({"subject": "snapshot test", "description": "x"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let create = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "snapshot test", "description": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let tid = create.data["task"]["id"].as_str().unwrap().to_string();
 
-    let result = TaskOutputTool
-        .execute(json!({"task_id": tid}), &ctx)
-        .await
-        .unwrap();
+    let result =
+        <TaskOutputTool as DynTool>::execute(&TaskOutputTool, json!({"task_id": tid}), &ctx)
+            .await
+            .unwrap();
     assert_eq!(result.data["retrieval_status"], "not_ready");
     assert!(result.data["task"].is_null());
 }
@@ -263,10 +299,13 @@ async fn test_task_output_accepts_legacy_taskid() {
     let mut ctx = ToolUseContext::test_default();
     ctx.task_handle = Some(handle);
 
-    let result = TaskOutputTool
-        .execute(json!({"taskId": "bg-output", "block": false}), &ctx)
-        .await
-        .unwrap();
+    let result = <TaskOutputTool as DynTool>::execute(
+        &TaskOutputTool,
+        json!({"taskId": "bg-output", "block": false}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.data["task"]["task_id"], "bg-output");
     assert_eq!(result.data["task"]["task_type"], "background");
 }
@@ -276,10 +315,13 @@ async fn test_task_output_accepts_legacy_taskid() {
 #[tokio::test]
 async fn test_task_output_unknown_id_returns_error() {
     let ctx = ToolUseContext::test_default();
-    let result = TaskOutputTool
-        .execute(json!({"task_id": "nonexistent-xyz"}), &ctx)
-        .await
-        .unwrap();
+    let result = <TaskOutputTool as DynTool>::execute(
+        &TaskOutputTool,
+        json!({"task_id": "nonexistent-xyz"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.data["retrieval_status"], "not_ready");
     assert!(result.data["task"].is_null());
     let err = result.data["error"].as_str().unwrap_or_default();
@@ -290,7 +332,7 @@ async fn test_task_output_unknown_id_returns_error() {
 #[tokio::test]
 async fn test_task_output_rejects_missing_id() {
     let ctx = ToolUseContext::test_default();
-    let result = TaskOutputTool.execute(json!({}), &ctx).await;
+    let result = <TaskOutputTool as DynTool>::execute(&TaskOutputTool, json!({}), &ctx).await;
     assert!(result.is_err());
 }
 
@@ -303,7 +345,7 @@ async fn test_task_output_rejects_missing_id() {
 /// instead assert the schema DEFAULT by inspecting the JSON description.
 #[test]
 fn test_task_output_schema_documents_block_default_true() {
-    let schema = TaskOutputTool.input_schema();
+    let schema = <TaskOutputTool as DynTool>::input_schema(&TaskOutputTool);
     let block_prop = schema.properties.get("block").unwrap();
     let desc = block_prop["description"].as_str().unwrap();
     assert!(
@@ -322,13 +364,13 @@ async fn test_task_stop_canonical_precedence() {
     ctx.task_handle = Some(handle.clone());
 
     // Both `task_id` (valid) and `shell_id` (garbage) — canonical must win.
-    let stop_result = TaskStopTool
-        .execute(
-            json!({"task_id": "bg-canonical", "shell_id": "garbage-id"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let stop_result = <TaskStopTool as DynTool>::execute(
+        &TaskStopTool,
+        json!({"task_id": "bg-canonical", "shell_id": "garbage-id"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(stop_result.data["task_id"], "bg-canonical");
     assert_eq!(stop_result.data["task_type"], "background");
     assert_eq!(handle.killed(), vec!["bg-canonical".to_string()]);
@@ -352,7 +394,7 @@ use super::TodoWriteTool;
 ///   - NO `id` field
 #[test]
 fn test_todo_write_schema_matches_ts() {
-    let schema = TodoWriteTool.input_schema();
+    let schema = <TodoWriteTool as DynTool>::input_schema(&TodoWriteTool);
     let todos_prop = schema.properties.get("todos").unwrap();
     let items = &todos_prop["items"];
     let required = items["required"].as_array().unwrap();
@@ -387,26 +429,25 @@ async fn test_todo_write_output_shape_matches_ts() {
     let ctx = ToolUseContext::test_default();
 
     // Clear any leftover state from parallel tests.
-    let _ = TodoWriteTool
-        .execute(json!({"todos": []}), &ctx)
+    let _ = <TodoWriteTool as DynTool>::execute(&TodoWriteTool, json!({"todos": []}), &ctx)
         .await
         .unwrap();
 
-    let result = TodoWriteTool
-        .execute(
-            json!({
-                "todos": [
-                    {
-                        "content": "write the tests",
-                        "status": "pending",
-                        "activeForm": "Writing the tests"
-                    }
-                ]
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <TodoWriteTool as DynTool>::execute(
+        &TodoWriteTool,
+        json!({
+            "todos": [
+                {
+                    "content": "write the tests",
+                    "status": "pending",
+                    "activeForm": "Writing the tests"
+                }
+            ]
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // TS output keys.
     assert!(result.data["oldTodos"].is_array(), "oldTodos missing");
@@ -430,16 +471,16 @@ async fn test_todo_write_output_shape_matches_ts() {
 #[tokio::test]
 async fn test_todo_write_rejects_missing_active_form() {
     let ctx = ToolUseContext::test_default();
-    let result = TodoWriteTool
-        .execute(
-            json!({
-                "todos": [
-                    {"content": "x", "status": "pending"}
-                ]
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <TodoWriteTool as DynTool>::execute(
+        &TodoWriteTool,
+        json!({
+            "todos": [
+                {"content": "x", "status": "pending"}
+            ]
+        }),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err(), "missing activeForm must error");
 }
 
@@ -447,16 +488,16 @@ async fn test_todo_write_rejects_missing_active_form() {
 #[tokio::test]
 async fn test_todo_write_rejects_empty_content() {
     let ctx = ToolUseContext::test_default();
-    let result = TodoWriteTool
-        .execute(
-            json!({
-                "todos": [
-                    {"content": "", "status": "pending", "activeForm": "Doing"}
-                ]
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <TodoWriteTool as DynTool>::execute(
+        &TodoWriteTool,
+        json!({
+            "todos": [
+                {"content": "", "status": "pending", "activeForm": "Doing"}
+            ]
+        }),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err(), "empty content must error");
 }
 
@@ -464,16 +505,16 @@ async fn test_todo_write_rejects_empty_content() {
 #[tokio::test]
 async fn test_todo_write_rejects_bad_status() {
     let ctx = ToolUseContext::test_default();
-    let result = TodoWriteTool
-        .execute(
-            json!({
-                "todos": [
-                    {"content": "x", "status": "cancelled", "activeForm": "Doing"}
-                ]
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <TodoWriteTool as DynTool>::execute(
+        &TodoWriteTool,
+        json!({
+            "todos": [
+                {"content": "x", "status": "cancelled", "activeForm": "Doing"}
+            ]
+        }),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err(), "status=cancelled must error");
 }
 
@@ -494,18 +535,18 @@ use super::TaskUpdateTool;
 #[tokio::test]
 async fn test_task_create_output_shape_ts() {
     let ctx = ToolUseContext::test_default();
-    let result = TaskCreateTool
-        .execute(
-            json!({
-                "subject": "write docs",
-                "description": "update the CLAUDE.md",
-                "activeForm": "Writing docs",
-                "metadata": {"priority": "high"}
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({
+            "subject": "write docs",
+            "description": "update the CLAUDE.md",
+            "activeForm": "Writing docs",
+            "metadata": {"priority": "high"}
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Exactly {task: {id, subject}} — no other keys leak.
     let task = result.data["task"].as_object().unwrap();
@@ -530,19 +571,19 @@ async fn test_task_create_output_shape_ts() {
 #[tokio::test]
 async fn test_task_get_output_shape_ts() {
     let ctx = ToolUseContext::test_default();
-    let create = TaskCreateTool
-        .execute(
-            json!({"subject": "test get", "description": "test description"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let create = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "test get", "description": "test description"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let tid = create.data["task"]["id"].as_str().unwrap().to_string();
 
-    let result = TaskGetTool
-        .execute(json!({"taskId": tid.clone()}), &ctx)
-        .await
-        .unwrap();
+    let result =
+        <TaskGetTool as DynTool>::execute(&TaskGetTool, json!({"taskId": tid.clone()}), &ctx)
+            .await
+            .unwrap();
 
     // Wrapped in `task`.
     let task = result.data["task"].as_object().unwrap();
@@ -563,10 +604,10 @@ async fn test_task_get_output_shape_ts() {
 #[tokio::test]
 async fn test_task_get_unknown_returns_null() {
     let ctx = ToolUseContext::test_default();
-    let result = TaskGetTool
-        .execute(json!({"taskId": "no-such-id"}), &ctx)
-        .await
-        .unwrap();
+    let result =
+        <TaskGetTool as DynTool>::execute(&TaskGetTool, json!({"taskId": "no-such-id"}), &ctx)
+            .await
+            .unwrap();
     assert!(result.data["task"].is_null());
 }
 
@@ -584,15 +625,17 @@ async fn test_task_list_output_shape_ts() {
             .unwrap()
             .as_nanos()
     );
-    let _ = TaskCreateTool
-        .execute(
-            json!({"subject": &unique, "description": "check list shape"}),
-            &ctx,
-        )
+    let _ = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": &unique, "description": "check list shape"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let result = <TaskListTool as DynTool>::execute(&TaskListTool, json!({}), &ctx)
         .await
         .unwrap();
-
-    let result = TaskListTool.execute(json!({}), &ctx).await.unwrap();
 
     let tasks = result.data["tasks"].as_array().unwrap();
     // Find our task by subject.
@@ -621,13 +664,13 @@ async fn test_task_list_filters_internal_tasks() {
             .unwrap()
             .as_nanos()
     );
-    let _ = TaskCreateTool
-        .execute(
-            json!({"subject": &unique_visible, "description": "x"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let _ = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": &unique_visible, "description": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     // Create an internal task with _internal metadata.
     let unique_internal = format!(
         "internal-{}",
@@ -636,19 +679,21 @@ async fn test_task_list_filters_internal_tasks() {
             .unwrap()
             .as_nanos()
     );
-    let _ = TaskCreateTool
-        .execute(
-            json!({
-                "subject": &unique_internal,
-                "description": "y",
-                "metadata": {"_internal": true}
-            }),
-            &ctx,
-        )
+    let _ = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({
+            "subject": &unique_internal,
+            "description": "y",
+            "metadata": {"_internal": true}
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let result = <TaskListTool as DynTool>::execute(&TaskListTool, json!({}), &ctx)
         .await
         .unwrap();
-
-    let result = TaskListTool.execute(json!({}), &ctx).await.unwrap();
     let tasks = result.data["tasks"].as_array().unwrap();
     assert!(
         tasks
@@ -669,26 +714,26 @@ async fn test_task_list_filters_internal_tasks() {
 #[tokio::test]
 async fn test_task_update_output_shape_ts() {
     let ctx = ToolUseContext::test_default();
-    let create = TaskCreateTool
-        .execute(
-            json!({"subject": "test update", "description": "start"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let create = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "test update", "description": "start"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let tid = create.data["task"]["id"].as_str().unwrap().to_string();
 
-    let result = TaskUpdateTool
-        .execute(
-            json!({
-                "taskId": tid.clone(),
-                "status": "in_progress",
-                "description": "new description"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({
+            "taskId": tid.clone(),
+            "status": "in_progress",
+            "description": "new description"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["success"], true);
     assert_eq!(result.data["taskId"], json!(tid));
@@ -709,13 +754,13 @@ async fn test_task_update_output_shape_ts() {
 #[tokio::test]
 async fn test_task_update_unknown_id_shape() {
     let ctx = ToolUseContext::test_default();
-    let result = TaskUpdateTool
-        .execute(
-            json!({"taskId": "no-such-task", "status": "completed"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": "no-such-task", "status": "completed"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.data["success"], false);
     assert_eq!(result.data["taskId"], "no-such-task");
     assert!(result.data["error"].as_str().unwrap().contains("not found"));
@@ -730,10 +775,13 @@ async fn test_task_update_unknown_id_shape() {
 #[tokio::test]
 async fn test_task_create_emits_snapshot_and_auto_expand() {
     let ctx = ToolUseContext::test_default();
-    let result = TaskCreateTool
-        .execute(json!({"subject": "panel item", "description": "x"}), &ctx)
-        .await
-        .unwrap();
+    let result = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "panel item", "description": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let patch = result.app_state_patch.expect("patch must be emitted");
     let mut state = coco_types::ToolAppState::default();
@@ -752,26 +800,32 @@ async fn test_task_update_sets_verification_nudge_in_patch() {
     ctx.agent_id = None; // main thread
     let mut ids = Vec::new();
     for i in 0..3 {
-        let r = TaskCreateTool
-            .execute(
-                json!({"subject": format!("step {i}"), "description": ""}),
-                &ctx,
-            )
-            .await
-            .unwrap();
+        let r = <TaskCreateTool as DynTool>::execute(
+            &TaskCreateTool,
+            json!({"subject": format!("step {i}"), "description": ""}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         ids.push(r.data["task"]["id"].as_str().unwrap().to_string());
     }
     for id in &ids[..2] {
-        let _ = TaskUpdateTool
-            .execute(json!({"taskId": id, "status": "completed"}), &ctx)
-            .await
-            .unwrap();
-    }
-    // Final completion — patch must flip the nudge flag.
-    let result = TaskUpdateTool
-        .execute(json!({"taskId": ids[2], "status": "completed"}), &ctx)
+        let _ = <TaskUpdateTool as DynTool>::execute(
+            &TaskUpdateTool,
+            json!({"taskId": id, "status": "completed"}),
+            &ctx,
+        )
         .await
         .unwrap();
+    }
+    // Final completion — patch must flip the nudge flag.
+    let result = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": ids[2], "status": "completed"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let patch = result.app_state_patch.expect("patch must be emitted");
     let mut state = coco_types::ToolAppState::default();
     patch(&mut state);
@@ -786,15 +840,15 @@ async fn test_todo_write_emits_snapshot_keyed_by_agent() {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent_id = Some(AgentId::new("subagent-7"));
 
-    let result = TodoWriteTool
-        .execute(
-            json!({"todos": [
-                {"content": "item", "status": "pending", "activeForm": "Doing it"}
-            ]}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <TodoWriteTool as DynTool>::execute(
+        &TodoWriteTool,
+        json!({"todos": [
+            {"content": "item", "status": "pending", "activeForm": "Doing it"}
+        ]}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let patch = result.app_state_patch.expect("patch must be emitted");
     let mut state = coco_types::ToolAppState::default();
     patch(&mut state);
@@ -813,22 +867,24 @@ async fn test_todo_write_emits_snapshot_keyed_by_agent() {
 #[tokio::test]
 async fn test_task_get_surfaces_completed_plan_item() {
     let ctx = ToolUseContext::test_default();
-    let create = TaskCreateTool
-        .execute(
-            json!({"subject": "terminal test", "description": "x"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let create = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "terminal test", "description": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let tid = create.data["task"]["id"].as_str().unwrap().to_string();
 
-    let _ = TaskUpdateTool
-        .execute(json!({"taskId": tid.clone(), "status": "completed"}), &ctx)
-        .await
-        .unwrap();
+    let _ = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": tid.clone(), "status": "completed"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
-    let got = TaskGetTool
-        .execute(json!({"taskId": tid}), &ctx)
+    let got = <TaskGetTool as DynTool>::execute(&TaskGetTool, json!({"taskId": tid}), &ctx)
         .await
         .unwrap();
     assert_eq!(got.data["task"]["status"], "completed");
@@ -847,22 +903,27 @@ use coco_tool_runtime::MailboxHandle;
 #[tokio::test]
 async fn test_task_update_delete_status_removes_task() {
     let ctx = ToolUseContext::test_default();
-    let create = TaskCreateTool
-        .execute(json!({"subject": "to delete", "description": "x"}), &ctx)
-        .await
-        .unwrap();
+    let create = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "to delete", "description": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let tid = create.data["task"]["id"].as_str().unwrap().to_string();
 
-    let result = TaskUpdateTool
-        .execute(json!({"taskId": tid.clone(), "status": "deleted"}), &ctx)
-        .await
-        .unwrap();
+    let result = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": tid.clone(), "status": "deleted"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.data["success"], true);
     assert_eq!(result.data["statusChange"]["to"], "deleted");
 
     // Subsequent get must return null.
-    let got = TaskGetTool
-        .execute(json!({"taskId": tid}), &ctx)
+    let got = <TaskGetTool as DynTool>::execute(&TaskGetTool, json!({"taskId": tid}), &ctx)
         .await
         .unwrap();
     assert!(got.data["task"].is_null(), "deleted task should vanish");
@@ -873,28 +934,36 @@ async fn test_task_update_delete_status_removes_task() {
 #[tokio::test]
 async fn test_task_list_filters_resolved_blockers_from_blocked_by() {
     let ctx = ToolUseContext::test_default();
-    let a = TaskCreateTool
-        .execute(json!({"subject": "a", "description": ""}), &ctx)
-        .await
-        .unwrap();
-    let b = TaskCreateTool
-        .execute(json!({"subject": "b", "description": ""}), &ctx)
-        .await
-        .unwrap();
+    let a = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "a", "description": ""}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let b = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "b", "description": ""}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let a_id = a.data["task"]["id"].as_str().unwrap().to_string();
     let b_id = b.data["task"]["id"].as_str().unwrap().to_string();
 
     // Set: a blocks b → b.blockedBy = [a].
-    let _ = TaskUpdateTool
-        .execute(
-            json!({"taskId": b_id.clone(), "addBlockedBy": [a_id.clone()]}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let _ = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": b_id.clone(), "addBlockedBy": [a_id.clone()]}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Before resolving a, b's blockedBy contains a.
-    let list = TaskListTool.execute(json!({}), &ctx).await.unwrap();
+    let list = <TaskListTool as DynTool>::execute(&TaskListTool, json!({}), &ctx)
+        .await
+        .unwrap();
     let b_entry = list.data["tasks"]
         .as_array()
         .unwrap()
@@ -909,11 +978,16 @@ async fn test_task_list_filters_resolved_blockers_from_blocked_by() {
     );
 
     // After a completes, b.blockedBy should be filtered out.
-    let _ = TaskUpdateTool
-        .execute(json!({"taskId": a_id, "status": "completed"}), &ctx)
+    let _ = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": a_id, "status": "completed"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let list = <TaskListTool as DynTool>::execute(&TaskListTool, json!({}), &ctx)
         .await
         .unwrap();
-    let list = TaskListTool.execute(json!({}), &ctx).await.unwrap();
     let b_entry = list.data["tasks"]
         .as_array()
         .unwrap()
@@ -935,30 +1009,36 @@ async fn test_task_update_verification_nudge_main_thread_all_done() {
     ctx.agent_id = None; // main thread
     let mut ids = Vec::new();
     for i in 0..3 {
-        let created = TaskCreateTool
-            .execute(
-                json!({"subject": format!("step {i}"), "description": ""}),
-                &ctx,
-            )
-            .await
-            .unwrap();
+        let created = <TaskCreateTool as DynTool>::execute(
+            &TaskCreateTool,
+            json!({"subject": format!("step {i}"), "description": ""}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         ids.push(created.data["task"]["id"].as_str().unwrap().to_string());
     }
 
     // Complete the first two with no nudge yet.
     for id in ids.iter().take(2) {
-        let res = TaskUpdateTool
-            .execute(json!({"taskId": id, "status": "completed"}), &ctx)
-            .await
-            .unwrap();
+        let res = <TaskUpdateTool as DynTool>::execute(
+            &TaskUpdateTool,
+            json!({"taskId": id, "status": "completed"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(res.data["verificationNudgeNeeded"], false);
     }
 
     // Final completion → all done, none match verify → nudge.
-    let res = TaskUpdateTool
-        .execute(json!({"taskId": ids[2], "status": "completed"}), &ctx)
-        .await
-        .unwrap();
+    let res = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": ids[2], "status": "completed"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(res.data["verificationNudgeNeeded"], true);
 }
 
@@ -969,22 +1049,31 @@ async fn test_task_update_verification_nudge_skipped_when_verify_task_exists() {
     ctx.agent_id = None;
     let mut ids = Vec::new();
     for subject in ["impl", "test", "Verify output"] {
-        let created = TaskCreateTool
-            .execute(json!({"subject": subject, "description": ""}), &ctx)
-            .await
-            .unwrap();
+        let created = <TaskCreateTool as DynTool>::execute(
+            &TaskCreateTool,
+            json!({"subject": subject, "description": ""}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         ids.push(created.data["task"]["id"].as_str().unwrap().to_string());
     }
     for id in &ids[..2] {
-        let _ = TaskUpdateTool
-            .execute(json!({"taskId": id, "status": "completed"}), &ctx)
-            .await
-            .unwrap();
-    }
-    let res = TaskUpdateTool
-        .execute(json!({"taskId": ids[2], "status": "completed"}), &ctx)
+        let _ = <TaskUpdateTool as DynTool>::execute(
+            &TaskUpdateTool,
+            json!({"taskId": id, "status": "completed"}),
+            &ctx,
+        )
         .await
         .unwrap();
+    }
+    let res = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": ids[2], "status": "completed"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         res.data["verificationNudgeNeeded"], false,
         "verify task present → no nudge"
@@ -999,25 +1088,31 @@ async fn test_task_update_verification_nudge_skipped_in_subagent() {
     ctx.agent_id = Some(AgentId::new("subagent-1"));
     let mut ids = Vec::new();
     for i in 0..3 {
-        let created = TaskCreateTool
-            .execute(
-                json!({"subject": format!("step {i}"), "description": ""}),
-                &ctx,
-            )
-            .await
-            .unwrap();
+        let created = <TaskCreateTool as DynTool>::execute(
+            &TaskCreateTool,
+            json!({"subject": format!("step {i}"), "description": ""}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         ids.push(created.data["task"]["id"].as_str().unwrap().to_string());
     }
     for id in &ids[..2] {
-        let _ = TaskUpdateTool
-            .execute(json!({"taskId": id, "status": "completed"}), &ctx)
-            .await
-            .unwrap();
-    }
-    let res = TaskUpdateTool
-        .execute(json!({"taskId": ids[2], "status": "completed"}), &ctx)
+        let _ = <TaskUpdateTool as DynTool>::execute(
+            &TaskUpdateTool,
+            json!({"taskId": id, "status": "completed"}),
+            &ctx,
+        )
         .await
         .unwrap();
+    }
+    let res = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": ids[2], "status": "completed"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         res.data["verificationNudgeNeeded"], false,
         "subagents never receive the nudge"
@@ -1082,19 +1177,22 @@ async fn test_task_update_owner_change_writes_mailbox() {
     ctx.team_name = Some("alpha-team".into());
     ctx.mailbox = mailbox.clone();
 
-    let created = TaskCreateTool
-        .execute(
-            json!({"subject": "fix bug", "description": "find root cause"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let created = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "fix bug", "description": "find root cause"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let tid = created.data["task"]["id"].as_str().unwrap().to_string();
 
-    let _ = TaskUpdateTool
-        .execute(json!({"taskId": tid.clone(), "owner": "bob"}), &ctx)
-        .await
-        .unwrap();
+    let _ = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": tid.clone(), "owner": "bob"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let calls = mailbox.calls();
     assert_eq!(calls.len(), 1, "exactly one mailbox write expected");
@@ -1118,19 +1216,22 @@ async fn test_task_update_auto_owner_on_in_progress() {
     ctx.team_name = Some("alpha-team".into());
     ctx.mailbox = mailbox.clone();
 
-    let created = TaskCreateTool
-        .execute(json!({"subject": "claim me", "description": "x"}), &ctx)
-        .await
-        .unwrap();
+    let created = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "claim me", "description": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let tid = created.data["task"]["id"].as_str().unwrap().to_string();
 
-    let res = TaskUpdateTool
-        .execute(
-            json!({"taskId": tid.clone(), "status": "in_progress"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let res = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": tid.clone(), "status": "in_progress"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let has_owner = res.data["updatedFields"]
         .as_array()
         .unwrap()
@@ -1142,8 +1243,7 @@ async fn test_task_update_auto_owner_on_in_progress() {
         res.data["updatedFields"]
     );
 
-    let got = TaskGetTool
-        .execute(json!({"taskId": tid}), &ctx)
+    let got = <TaskGetTool as DynTool>::execute(&TaskGetTool, json!({"taskId": tid}), &ctx)
         .await
         .unwrap();
     let _ = got; // owner isn't projected into TaskGet output; validate via mailbox write
@@ -1159,16 +1259,22 @@ async fn test_task_update_auto_owner_skipped_outside_swarm() {
     ctx.is_teammate = false;
     ctx.agent_name = Some("alice".into());
 
-    let created = TaskCreateTool
-        .execute(json!({"subject": "x", "description": ""}), &ctx)
-        .await
-        .unwrap();
+    let created = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "x", "description": ""}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let tid = created.data["task"]["id"].as_str().unwrap().to_string();
 
-    let res = TaskUpdateTool
-        .execute(json!({"taskId": tid, "status": "in_progress"}), &ctx)
-        .await
-        .unwrap();
+    let res = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": tid, "status": "in_progress"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let has_owner = res.data["updatedFields"]
         .as_array()
         .unwrap()
@@ -1183,7 +1289,8 @@ async fn test_task_update_auto_owner_skipped_outside_swarm() {
 
 mod todo_write_render_tests {
     use crate::tools::task_tools::TodoWriteTool;
-    use coco_tool_runtime::Tool;
+    use coco_tool_runtime::DynTool;
+
     use coco_tool_runtime::ToolResultContentPart;
     use serde_json::json;
 
@@ -1194,7 +1301,7 @@ mod todo_write_render_tests {
             "newTodos": [{"content": "task", "status": "pending", "activeForm": "Doing task"}],
             "verificationNudgeNeeded": false,
         });
-        let parts = TodoWriteTool.render_for_model(&data);
+        let parts = <TodoWriteTool as DynTool>::render_for_model(&TodoWriteTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1209,7 +1316,7 @@ mod todo_write_render_tests {
             "newTodos": [],
             "verificationNudgeNeeded": true,
         });
-        let parts = TodoWriteTool.render_for_model(&data);
+        let parts = <TodoWriteTool as DynTool>::render_for_model(&TodoWriteTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1227,14 +1334,15 @@ mod task_render_tests {
     use crate::tools::task_tools::TaskOutputTool;
     use crate::tools::task_tools::TaskStopTool;
     use crate::tools::task_tools::TaskUpdateTool;
-    use coco_tool_runtime::Tool;
+    use coco_tool_runtime::DynTool;
+
     use coco_tool_runtime::ToolResultContentPart;
     use serde_json::json;
 
     #[test]
     fn task_create_render_emits_subject_line() {
         let data = json!({"task": {"id": "t-1", "subject": "Investigate auth"}});
-        let parts = TaskCreateTool.render_for_model(&data);
+        let parts = <TaskCreateTool as DynTool>::render_for_model(&TaskCreateTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1254,7 +1362,7 @@ mod task_render_tests {
                 "blockedBy": ["t-2", "t-3"],
             }
         });
-        let parts = TaskGetTool.render_for_model(&data);
+        let parts = <TaskGetTool as DynTool>::render_for_model(&TaskGetTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1269,7 +1377,7 @@ mod task_render_tests {
     #[test]
     fn task_get_render_not_found() {
         let data = json!({"task": null});
-        let parts = TaskGetTool.render_for_model(&data);
+        let parts = <TaskGetTool as DynTool>::render_for_model(&TaskGetTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1280,7 +1388,7 @@ mod task_render_tests {
     #[test]
     fn task_list_render_empty() {
         let data = json!({"tasks": []});
-        let parts = TaskListTool.render_for_model(&data);
+        let parts = <TaskListTool as DynTool>::render_for_model(&TaskListTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1296,7 +1404,7 @@ mod task_render_tests {
                 {"id": "t-2", "subject": "Second", "status": "in_progress", "blockedBy": []},
             ]
         });
-        let parts = TaskListTool.render_for_model(&data);
+        let parts = <TaskListTool as DynTool>::render_for_model(&TaskListTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1318,7 +1426,7 @@ mod task_render_tests {
                 },
             ]
         });
-        let parts = TaskListTool.render_for_model(&data);
+        let parts = <TaskListTool as DynTool>::render_for_model(&TaskListTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1338,7 +1446,7 @@ mod task_render_tests {
             "verificationNudgeNeeded": false,
             "statusChange": {"from": "pending", "to": "in_progress"},
         });
-        let parts = TaskUpdateTool.render_for_model(&data);
+        let parts = <TaskUpdateTool as DynTool>::render_for_model(&TaskUpdateTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1356,7 +1464,7 @@ mod task_render_tests {
             "verificationNudgeNeeded": true,
             "statusChange": {"from": "in_progress", "to": "completed"},
         });
-        let parts = TaskUpdateTool.render_for_model(&data);
+        let parts = <TaskUpdateTool as DynTool>::render_for_model(&TaskUpdateTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1378,7 +1486,7 @@ mod task_render_tests {
             "completedNudgeNeeded": true,
             "statusChange": {"from": "in_progress", "to": "completed"},
         });
-        let parts = TaskUpdateTool.render_for_model(&data);
+        let parts = <TaskUpdateTool as DynTool>::render_for_model(&TaskUpdateTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1401,7 +1509,7 @@ mod task_render_tests {
             "verificationNudgeNeeded": true,
             "statusChange": {"from": "in_progress", "to": "completed"},
         });
-        let parts = TaskUpdateTool.render_for_model(&data);
+        let parts = <TaskUpdateTool as DynTool>::render_for_model(&TaskUpdateTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1423,7 +1531,7 @@ mod task_render_tests {
             "verificationNudgeNeeded": false,
             "statusChange": {"from": "in_progress", "to": "completed"},
         });
-        let parts = TaskUpdateTool.render_for_model(&data);
+        let parts = <TaskUpdateTool as DynTool>::render_for_model(&TaskUpdateTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1439,7 +1547,7 @@ mod task_render_tests {
             "updatedFields": [],
             "error": "Permission denied",
         });
-        let parts = TaskUpdateTool.render_for_model(&data);
+        let parts = <TaskUpdateTool as DynTool>::render_for_model(&TaskUpdateTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1449,7 +1557,7 @@ mod task_render_tests {
     #[test]
     fn task_update_render_error_falls_back_to_not_found() {
         let data = json!({"success": false, "taskId": "t-99", "updatedFields": []});
-        let parts = TaskUpdateTool.render_for_model(&data);
+        let parts = <TaskUpdateTool as DynTool>::render_for_model(&TaskUpdateTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1465,7 +1573,7 @@ mod task_render_tests {
             "task_id": "bg-1",
             "task_type": "background",
         });
-        let parts = TaskStopTool.render_for_model(&data);
+        let parts = <TaskStopTool as DynTool>::render_for_model(&TaskStopTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1488,7 +1596,7 @@ mod task_render_tests {
                 "exitCode": 0,
             }
         });
-        let parts = TaskOutputTool.render_for_model(&data);
+        let parts = <TaskOutputTool as DynTool>::render_for_model(&TaskOutputTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1509,7 +1617,7 @@ mod task_render_tests {
             "retrieval_status": "not_ready",
             "task": {"task_id": "bg-2", "task_type": "background", "status": "unknown", "description": "", "output": ""}
         });
-        let parts = TaskOutputTool.render_for_model(&data);
+        let parts = <TaskOutputTool as DynTool>::render_for_model(&TaskOutputTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1531,7 +1639,7 @@ mod task_render_tests {
                 "output": "result",
             }
         });
-        let parts = TaskOutputTool.render_for_model(&data);
+        let parts = <TaskOutputTool as DynTool>::render_for_model(&TaskOutputTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1561,27 +1669,48 @@ fn ctx_with_task_v2(enabled: bool) -> ToolUseContext {
 fn task_v2_on_exposes_v2_hides_todo_write() {
     let ctx = ctx_with_task_v2(true);
     assert!(
-        !TodoWriteTool.is_enabled(&ctx),
+        !<TodoWriteTool as DynTool>::is_enabled(&TodoWriteTool, &ctx),
         "V2 mode → TodoWrite hidden"
     );
-    assert!(TaskCreateTool.is_enabled(&ctx));
-    assert!(TaskGetTool.is_enabled(&ctx));
-    assert!(TaskListTool.is_enabled(&ctx));
-    assert!(TaskUpdateTool.is_enabled(&ctx));
+    assert!(<TaskCreateTool as DynTool>::is_enabled(
+        &TaskCreateTool,
+        &ctx
+    ));
+    assert!(<TaskGetTool as DynTool>::is_enabled(&TaskGetTool, &ctx));
+    assert!(<TaskListTool as DynTool>::is_enabled(&TaskListTool, &ctx));
+    assert!(<TaskUpdateTool as DynTool>::is_enabled(
+        &TaskUpdateTool,
+        &ctx
+    ));
     // Background-task tools unaffected by the V1/V2 gate.
-    assert!(TaskOutputTool.is_enabled(&ctx));
-    assert!(TaskStopTool.is_enabled(&ctx));
+    assert!(<TaskOutputTool as DynTool>::is_enabled(
+        &TaskOutputTool,
+        &ctx
+    ));
+    assert!(<TaskStopTool as DynTool>::is_enabled(&TaskStopTool, &ctx));
 }
 
 #[test]
 fn task_v2_off_exposes_todo_write_hides_v2() {
     let ctx = ctx_with_task_v2(false);
-    assert!(TodoWriteTool.is_enabled(&ctx), "V1 mode → TodoWrite shown");
-    assert!(!TaskCreateTool.is_enabled(&ctx));
-    assert!(!TaskGetTool.is_enabled(&ctx));
-    assert!(!TaskListTool.is_enabled(&ctx));
-    assert!(!TaskUpdateTool.is_enabled(&ctx));
+    assert!(
+        <TodoWriteTool as DynTool>::is_enabled(&TodoWriteTool, &ctx),
+        "V1 mode → TodoWrite shown"
+    );
+    assert!(!<TaskCreateTool as DynTool>::is_enabled(
+        &TaskCreateTool,
+        &ctx
+    ));
+    assert!(!<TaskGetTool as DynTool>::is_enabled(&TaskGetTool, &ctx));
+    assert!(!<TaskListTool as DynTool>::is_enabled(&TaskListTool, &ctx));
+    assert!(!<TaskUpdateTool as DynTool>::is_enabled(
+        &TaskUpdateTool,
+        &ctx
+    ));
     // Background-task tools unaffected by the V1/V2 gate.
-    assert!(TaskOutputTool.is_enabled(&ctx));
-    assert!(TaskStopTool.is_enabled(&ctx));
+    assert!(<TaskOutputTool as DynTool>::is_enabled(
+        &TaskOutputTool,
+        &ctx
+    ));
+    assert!(<TaskStopTool as DynTool>::is_enabled(&TaskStopTool, &ctx));
 }

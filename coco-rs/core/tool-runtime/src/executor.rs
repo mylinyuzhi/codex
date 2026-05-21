@@ -30,7 +30,7 @@ use crate::call_plan::UnstampedToolCallOutcome;
 use crate::context::ToolUseContext;
 use crate::error::SyntheticToolError;
 use crate::error::ToolError;
-use crate::traits::Tool;
+use crate::traits::DynTool;
 use crate::traits::ToolProgress;
 
 /// Default maximum concurrent tool executions.
@@ -71,7 +71,7 @@ pub enum ToolBatch {
 /// A pending tool call waiting for execution.
 pub struct PendingToolCall {
     pub tool_use_id: String,
-    pub tool: Arc<dyn Tool>,
+    pub tool: Arc<dyn DynTool>,
     pub input: Value,
 }
 
@@ -113,7 +113,7 @@ impl std::fmt::Debug for ToolCallResult {
 #[allow(dead_code)]
 struct TrackedTool {
     tool_use_id: String,
-    tool: Arc<dyn Tool>,
+    tool: Arc<dyn DynTool>,
     input: Value,
     status: ToolStatus,
     is_concurrency_safe: bool,
@@ -232,7 +232,7 @@ impl StreamingToolExecutor {
     ///
     /// TS: `addTool(block, assistantMessage)` — safe tools start immediately
     /// if only safe tools are currently running.
-    pub fn add_tool(&mut self, tool_use_id: String, tool: Arc<dyn Tool>, input: Value) {
+    pub fn add_tool(&mut self, tool_use_id: String, tool: Arc<dyn DynTool>, input: Value) {
         let is_concurrency_safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tool.is_concurrency_safe(&input)
         }))

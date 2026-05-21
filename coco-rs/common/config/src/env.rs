@@ -205,6 +205,19 @@ pub enum EnvKey {
     /// Useful for sandbox / CI environments that want deterministic
     /// blocking behavior.
     CocoBackgroundTasksDisable,
+    /// Enable auto-detach of long-running foreground AgentTool spawns.
+    /// When set to a positive integer (milliseconds), foreground sub-agents
+    /// that haven't completed by this deadline fire `signal_detach` so the
+    /// parent's awaiter unblocks with `AsyncLaunched` and the engine keeps
+    /// running in the background. Setting truthy (`1` / `true` / `on`)
+    /// without a number uses the TS default `120_000` (2 minutes).
+    ///
+    /// TS parity: `AgentTool.tsx:72-77` `getAutoBackgroundMs()` returns
+    /// `120_000` when `CLAUDE_AUTO_BACKGROUND_TASKS` is truthy OR when
+    /// the `tengu_auto_background_agents` GrowthBook gate is on; otherwise
+    /// `0` (disabled). coco-rs has no GrowthBook shim — the env var is the
+    /// only opt-in.
+    CocoAutoBackgroundTasks,
     /// Enable periodic AgentSummary timers for TUI users. Default
     /// off (TS parity — SDK clients opt-in via the
     /// `agentProgressSummaries: true` control message; TUI users
@@ -322,6 +335,7 @@ impl EnvKey {
             Self::CocoPromptSuggestionDisable => "COCO_PROMPT_SUGGESTION_DISABLE",
             Self::CocoBareMode => "COCO_BARE_MODE",
             Self::CocoBackgroundTasksDisable => "COCO_BACKGROUND_TASKS_DISABLE",
+            Self::CocoAutoBackgroundTasks => "COCO_AUTO_BACKGROUND_TASKS",
             Self::CocoAgentSummaryEnable => "COCO_AGENT_SUMMARY_ENABLE",
             Self::CocoAgentListInMessages => "COCO_AGENT_LIST_IN_MESSAGES",
             Self::Tmux => "TMUX",

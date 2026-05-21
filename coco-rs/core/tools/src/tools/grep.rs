@@ -49,7 +49,6 @@ use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::BinaryDetection;
@@ -58,7 +57,8 @@ use grep_searcher::SearcherBuilder;
 use grep_searcher::Sink;
 use grep_searcher::SinkContext;
 use grep_searcher::SinkMatch;
-use serde_json::Value;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
@@ -234,11 +234,89 @@ impl Default for ContentFormatOptions {
 // Tool implementation
 // ---------------------------------------------------------------------------
 
+/// Typed input for [`GrepTool`].
+///
+/// Wire-shape preserves TS `GrepTool.ts` exactly: dashed flag names
+/// `-A` / `-B` / `-C` / `-i` / `-n` come straight from the ripgrep CLI
+/// vocabulary and round through `#[serde(rename)]`. The Rust idents
+/// use descriptive snake_case (`before_context_short`, etc.).
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct GrepInput {
+    /// The regular expression pattern to search for in file contents
+    #[serde(default)]
+    pub pattern: String,
+    /// File or directory to search in (rg PATH). Defaults to current
+    /// working directory.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Glob pattern to filter files (e.g. "*.js", "*.{ts,tsx}") -
+    /// maps to rg --glob
+    #[serde(default)]
+    pub glob: Option<String>,
+    /// Output mode: "content" shows matching lines (supports
+    /// -A/-B/-C context, -n line numbers, head_limit),
+    /// "files_with_matches" shows file paths (supports head_limit),
+    /// "count" shows match counts (supports head_limit). Defaults to
+    /// "files_with_matches".
+    #[serde(default)]
+    pub output_mode: Option<GrepOutputMode>,
+    /// Number of lines to show before each match (rg -B). Requires
+    /// output_mode: "content", ignored otherwise.
+    #[serde(default, rename = "-B")]
+    pub before_context_short: Option<i64>,
+    /// Number of lines to show after each match (rg -A). Requires
+    /// output_mode: "content", ignored otherwise.
+    #[serde(default, rename = "-A")]
+    pub after_context_short: Option<i64>,
+    /// Alias for context.
+    #[serde(default, rename = "-C")]
+    pub context_short: Option<i64>,
+    /// Number of lines to show before and after each match (rg -C).
+    /// Requires output_mode: "content", ignored otherwise.
+    #[serde(default)]
+    pub context: Option<i64>,
+    /// Show line numbers in output (rg -n). Requires output_mode:
+    /// "content", ignored otherwise. Defaults to true.
+    #[serde(default, rename = "-n")]
+    pub show_line_numbers: Option<bool>,
+    /// Case insensitive search (rg -i)
+    #[serde(default, rename = "-i")]
+    pub case_insensitive: bool,
+    /// File type to search (rg --type). Common types: js, py, rust,
+    /// go, java, etc. More efficient than `glob` for standard file
+    /// types. Wire key is `type`; Rust ident is `file_type` to avoid
+    /// the keyword collision.
+    #[serde(default, rename = "type")]
+    pub file_type: Option<String>,
+    /// Limit output to first N lines/entries, equivalent to "| head -N".
+    /// Works across all output modes. Defaults to 250 when
+    /// unspecified. Pass 0 for unlimited (use sparingly — large
+    /// result sets waste context).
+    #[serde(default)]
+    pub head_limit: Option<i64>,
+    /// Skip first N lines/entries before applying head_limit,
+    /// equivalent to "| tail -n +N | head -N". Works across all
+    /// output modes. Defaults to 0.
+    #[serde(default)]
+    pub offset: Option<i64>,
+    /// Enable multiline mode where . matches newlines and patterns
+    /// can span lines (rg -U --multiline-dotall). Default: false.
+    #[serde(default)]
+    pub multiline: bool,
+}
+
 /// Grep tool — content search using ripgrep core libraries.
 pub struct GrepTool;
 
 #[async_trait::async_trait]
 impl Tool for GrepTool {
+    type Input = GrepInput;
+    /// Output is the pre-formatted user-visible text (content /
+    /// files_with_matches / count modes all build their final string
+    /// inside `execute`). Rendered unwrapped so the model sees the
+    /// raw lines without JSON escaping.
+    type Output = String;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Grep)
     }
@@ -247,118 +325,15 @@ impl Tool for GrepTool {
         ToolName::Grep.as_str()
     }
 
-    fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &GrepInput, _options: &DescriptionOptions) -> String {
         GREP_DESCRIPTION.into()
     }
 
-    fn input_schema(&self) -> ToolInputSchema {
-        // Descriptions are byte-for-byte copies of TS Claude Code
-        // `GrepTool.ts` so the model sees an identical schema across runtimes.
-        let mut props = HashMap::new();
-        props.insert(
-            "pattern".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The regular expression pattern to search for in file contents"
-            }),
-        );
-        props.insert(
-            "path".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "File or directory to search in (rg PATH). Defaults to current working directory."
-            }),
-        );
-        props.insert(
-            "glob".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob"
-            }),
-        );
-        props.insert(
-            "output_mode".into(),
-            serde_json::json!({
-                "type": "string",
-                "enum": ["content", "files_with_matches", "count"],
-                "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\"."
-            }),
-        );
-        props.insert(
-            "-B".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Number of lines to show before each match (rg -B). Requires output_mode: \"content\", ignored otherwise."
-            }),
-        );
-        props.insert(
-            "-A".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Number of lines to show after each match (rg -A). Requires output_mode: \"content\", ignored otherwise."
-            }),
-        );
-        props.insert(
-            "-C".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Alias for context."
-            }),
-        );
-        props.insert(
-            "context".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignored otherwise."
-            }),
-        );
-        props.insert(
-            "-n".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Show line numbers in output (rg -n). Requires output_mode: \"content\", ignored otherwise. Defaults to true."
-            }),
-        );
-        props.insert(
-            "-i".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Case insensitive search (rg -i)"
-            }),
-        );
-        props.insert(
-            "type".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types."
-            }),
-        );
-        props.insert(
-            "head_limit".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context)."
-            }),
-        );
-        props.insert(
-            "offset".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Skip first N lines/entries before applying head_limit, equivalent to \"| tail -n +N | head -N\". Works across all output modes. Defaults to 0."
-            }),
-        );
-        props.insert(
-            "multiline".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."
-            }),
-        );
-        ToolInputSchema { properties: props }
-    }
-
     /// Grep never modifies state (TS: `isReadOnly() = true`).
-    fn is_read_only(&self, _input: &Value) -> bool {
+    fn is_read_only(&self, _input: &GrepInput) -> bool {
+        true
+    }
+    fn is_always_read_only(&self) -> bool {
         true
     }
 
@@ -366,7 +341,7 @@ impl Tool for GrepTool {
     /// `StreamingToolExecutor` batches consecutive safe tools and dispatches
     /// them via `tokio::spawn` up to `COCO_MAX_TOOL_USE_CONCURRENCY`
     /// (default 10). TS: `isConcurrencySafe() = true`.
-    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &GrepInput) -> bool {
         true
     }
 
@@ -375,22 +350,23 @@ impl Tool for GrepTool {
         coco_tool_runtime::ResultSizeBound::Chars(20_000)
     }
 
-    /// The execute path already builds the final user-facing string for
-    /// each output_mode (content / files_with_matches / count) — see
-    /// `format_content`, `format_files_with_matches`, `format_count`.
-    /// The default render would JSON-stringify the wrapper string,
-    /// escaping every match line; instead emit it as a bare Text part.
+    /// `Self::Output = String` — emit unwrapped (no JSON escape).
     /// TS parity: `GrepTool.ts::mapToolResultToToolResultBlockParam`.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        coco_tool_runtime::render_text_or_json(data)
+    fn render_for_model(&self, out: &String) -> Vec<ToolResultContentPart> {
+        vec![ToolResultContentPart::Text {
+            text: out.clone(),
+            provider_options: None,
+        }]
     }
 
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let pattern = input.get("pattern").and_then(|v| v.as_str())?;
-        Some(format!("Searching for {pattern}"))
+    fn get_activity_description(&self, input: &GrepInput) -> Option<String> {
+        if input.pattern.is_empty() {
+            return None;
+        }
+        Some(format!("Searching for {pattern}", pattern = input.pattern))
     }
 
-    fn is_search_or_read_command(&self, _input: &Value) -> Option<SearchReadInfo> {
+    fn is_search_or_read_command(&self, _input: &GrepInput) -> Option<SearchReadInfo> {
         Some(SearchReadInfo {
             is_search: true,
             ..SearchReadInfo::default()
@@ -402,10 +378,10 @@ impl Tool for GrepTool {
     /// `is_read_ignored_with_matcher` inside `search_one_file`.
     async fn check_permissions(
         &self,
-        input: &Value,
+        input: &GrepInput,
         ctx: &ToolUseContext,
     ) -> coco_types::ToolCheckResult {
-        let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+        let Some(path) = input.path.as_deref() else {
             return coco_types::ToolCheckResult::Passthrough;
         };
         let matcher = crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
@@ -418,8 +394,8 @@ impl Tool for GrepTool {
         )
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
-        if input.get("pattern").and_then(|v| v.as_str()).is_none() {
+    fn validate_input(&self, input: &GrepInput, _ctx: &ToolUseContext) -> ValidationResult {
+        if input.pattern.is_empty() {
             return ValidationResult::invalid("missing required field: pattern");
         }
         ValidationResult::Valid
@@ -427,16 +403,15 @@ impl Tool for GrepTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: GrepInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let pattern = input
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidInput {
+    ) -> Result<ToolResult<String>, ToolError> {
+        if input.pattern.is_empty() {
+            return Err(ToolError::InvalidInput {
                 message: "missing pattern".into(),
                 error_code: None,
-            })?;
+            });
+        }
 
         // Resolve the working directory. Worktree-isolated agents set
         // `ctx.cwd_override`; otherwise we fall back to the process CWD.
@@ -447,7 +422,7 @@ impl Tool for GrepTool {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/"));
 
-        let search_path = match input.get("path").and_then(|v| v.as_str()) {
+        let search_path = match input.path.as_deref() {
             Some(p) => {
                 let path = Path::new(p);
                 if path.is_absolute() {
@@ -467,60 +442,60 @@ impl Tool for GrepTool {
         }
 
         let output_mode = input
-            .get("output_mode")
-            .and_then(|v| v.as_str())
-            .and_then(|s| match s {
-                "content" => Some(GrepOutputMode::Content),
-                "files_with_matches" => Some(GrepOutputMode::FilesWithMatches),
-                "count" => Some(GrepOutputMode::Count),
-                _ => None,
-            })
+            .output_mode
             .unwrap_or(GrepOutputMode::FilesWithMatches);
 
-        let case_insensitive = input.get("-i").and_then(Value::as_bool).unwrap_or(false);
-
-        let multiline = input
-            .get("multiline")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        let case_insensitive = input.case_insensitive;
+        let multiline = input.multiline;
 
         // Context precedence (TS): context > -C > separate -B/-A
         let context_both = input
-            .get("context")
-            .or_else(|| input.get("-C"))
-            .and_then(Value::as_u64)
-            .map(|v| v as usize);
+            .context
+            .or(input.context_short)
+            .filter(|n| *n >= 0)
+            .map(|n| n as usize);
         let before_context = context_both
-            .or_else(|| input.get("-B").and_then(Value::as_u64).map(|v| v as usize))
+            .or_else(|| {
+                input
+                    .before_context_short
+                    .filter(|n| *n >= 0)
+                    .map(|n| n as usize)
+            })
             .unwrap_or(0);
         let after_context = context_both
-            .or_else(|| input.get("-A").and_then(Value::as_u64).map(|v| v as usize))
+            .or_else(|| {
+                input
+                    .after_context_short
+                    .filter(|n| *n >= 0)
+                    .map(|n| n as usize)
+            })
             .unwrap_or(0);
 
         // head_limit: None→250, Some(0)→unlimited
-        let head_limit_raw = input
-            .get("head_limit")
-            .and_then(Value::as_u64)
-            .map(|v| v as usize);
-        let effective_limit = match head_limit_raw {
+        let effective_limit = match input.head_limit {
             Some(0) => usize::MAX,
-            Some(n) => n,
-            None => DEFAULT_HEAD_LIMIT,
+            Some(n) if n > 0 => n as usize,
+            _ => DEFAULT_HEAD_LIMIT,
         };
 
-        let offset = input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let offset = input
+            .offset
+            .filter(|n| *n > 0)
+            .map(|n| n as usize)
+            .unwrap_or(0);
 
         // TS `GrepTool.ts:68` `-n: semanticBoolean(z.boolean().optional())`
         // defaults to `true`. Passing `-n: false` suppresses line numbers
         // in content-mode output. R5-T13.
-        let show_line_numbers = input.get("-n").and_then(Value::as_bool).unwrap_or(true);
+        let show_line_numbers = input.show_line_numbers.unwrap_or(true);
         let content_opts = ContentFormatOptions { show_line_numbers };
 
-        let glob_filter = input.get("glob").and_then(|v| v.as_str()).map(String::from);
-        let type_filter = input.get("type").and_then(|v| v.as_str()).map(String::from);
+        let glob_filter = input.glob.clone();
+        let type_filter = input.file_type.clone();
+        let pattern = input.pattern.clone();
 
         let params = GrepSearchParams {
-            pattern: pattern.to_string(),
+            pattern,
             case_insensitive,
             multiline,
             before_context,
@@ -565,7 +540,7 @@ impl Tool for GrepTool {
             format_grep_output(&result, output_mode, offset, effective_limit, content_opts);
 
         Ok(ToolResult {
-            data: serde_json::json!(result_text),
+            data: result_text,
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

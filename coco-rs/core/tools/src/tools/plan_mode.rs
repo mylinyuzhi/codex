@@ -22,12 +22,11 @@ use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::PermissionMode;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Typed result payload for [`ExitPlanModeTool`]. Producers: `execute`
 /// (creates it) serializes to `Value` at the Tool-trait boundary.
@@ -208,15 +207,27 @@ User: \"What files handle routing?\"
     )
 }
 
+/// Typed input for [`EnterPlanModeTool`] — no parameters. TS
+/// `EnterPlanModeTool.ts` declares an empty input schema.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct EnterPlanModeInput {}
+
 #[async_trait::async_trait]
 impl Tool for EnterPlanModeTool {
+    type Input = EnterPlanModeInput;
+    /// Output is `Value` — the renderer reads `message` +
+    /// `isInterviewPhase` positionally. Could be a typed
+    /// `{message, isInterviewPhase}` struct in a follow-up; current
+    /// shape stays compatible with the existing test fixtures.
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::EnterPlanMode)
     }
     fn name(&self) -> &str {
         ToolName::EnterPlanMode.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &EnterPlanModeInput, _options: &DescriptionOptions) -> String {
         "Requests permission to enter plan mode for complex tasks requiring \
          exploration and design"
             .into()
@@ -227,15 +238,13 @@ impl Tool for EnterPlanModeTool {
     fn user_facing_name(&self) -> &str {
         ""
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-        }
-    }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &EnterPlanModeInput) -> bool {
         true
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &EnterPlanModeInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -247,7 +256,7 @@ impl Tool for EnterPlanModeTool {
 
     async fn execute(
         &self,
-        _input: Value,
+        _input: EnterPlanModeInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         // TS: agents cannot enter plan mode (EnterPlanModeTool.ts:78)
@@ -390,15 +399,58 @@ fn exit_plan_mode_prompt() -> String {
     )
 }
 
+/// Single entry in the `allowedPrompts` array — pre-approved tool / prompt
+/// pair that the model is signaling it intends to use when plan is approved.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct ExitPlanAllowedPrompt {
+    /// The tool this prompt applies to
+    #[serde(default)]
+    pub tool: Option<String>,
+    /// Semantic description of the action
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+/// Typed input for [`ExitPlanModeTool`].
+///
+/// The schema-visible field is `allowedPrompts` (TS-mirror). Two
+/// additional fields ride along internally: `plan` is spliced by the
+/// query layer (TS `normalizeToolInput` parity — injects the on-disk
+/// plan content into the tool's input for hooks/SDK/transcript), and
+/// `user_choice` is spliced by the TUI permission-multichoice dialog.
+/// The model is taught to emit only `allowedPrompts`.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct ExitPlanModeInput {
+    /// Prompt-based permissions needed to implement the plan.
+    #[serde(default, rename = "allowedPrompts")]
+    pub allowed_prompts: Option<Vec<ExitPlanAllowedPrompt>>,
+    /// (Internal) Plan content spliced by the query layer before
+    /// invocation so hooks see the full plan body — TS parity with
+    /// `normalizeToolInput`. Model never populates this.
+    #[serde(default)]
+    pub plan: Option<String>,
+    /// (Internal) User's choice from the multi-option permission
+    /// dialog: `yes-keep-context`, `yes-clear-context`, or `no`. The
+    /// TUI splices it via `PermissionOutcome::Allow.updated_input`.
+    #[serde(default)]
+    pub user_choice: Option<String>,
+}
+
 #[async_trait::async_trait]
 impl Tool for ExitPlanModeTool {
+    type Input = ExitPlanModeInput;
+    /// Output is `Value` — `ExitPlanModeOutput` is rich (multiple
+    /// flags + nested `PlanVerificationOutcome` from coco-context that
+    /// lacks JsonSchema). Renderer continues reading positional fields.
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::ExitPlanMode)
     }
     fn name(&self) -> &str {
         ToolName::ExitPlanMode.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &ExitPlanModeInput, _options: &DescriptionOptions) -> String {
         "Prompts the user to exit plan mode and start coding".into()
     }
     async fn prompt(&self, _options: &PromptOptions) -> String {
@@ -407,28 +459,10 @@ impl Tool for ExitPlanModeTool {
     fn user_facing_name(&self) -> &str {
         ""
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "allowedPrompts".into(),
-            serde_json::json!({
-                "type": "array",
-                "description": "Prompt-based permissions needed to implement the plan.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "tool": { "type": "string", "description": "The tool this prompt applies to" },
-                        "prompt": { "type": "string", "description": "Semantic description of the action" }
-                    }
-                }
-            }),
-        );
-        ToolInputSchema { properties: p }
-    }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &ExitPlanModeInput) -> bool {
         false
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &ExitPlanModeInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -443,7 +477,7 @@ impl Tool for ExitPlanModeTool {
     /// TS: ExitPlanModeV2Tool.ts:195-219
     /// Teammates bypass validation — their AppState may show the leader's mode,
     /// so `isPlanModeRequired()` is the real source of truth for teammates.
-    fn validate_input(&self, _input: &Value, ctx: &ToolUseContext) -> ValidationResult {
+    fn validate_input(&self, _input: &ExitPlanModeInput, ctx: &ToolUseContext) -> ValidationResult {
         // Teammates always pass validation (TS: isTeammate() check).
         // Note: agent_id.is_some() is NOT the same as isTeammate().
         // Regular subagents have agent_id but are NOT teammates.
@@ -470,7 +504,7 @@ impl Tool for ExitPlanModeTool {
     /// leader, otherwise exits locally.
     async fn check_permissions(
         &self,
-        _input: &Value,
+        _input: &ExitPlanModeInput,
         ctx: &ToolUseContext,
     ) -> coco_types::ToolCheckResult {
         // Teammates bypass the permission UI (TS: isTeammate() check).
@@ -524,7 +558,7 @@ impl Tool for ExitPlanModeTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: ExitPlanModeInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         let is_agent = ctx.agent_id.is_some();
@@ -538,7 +572,7 @@ impl Tool for ExitPlanModeTool {
         // `plansDirectory` setting + project root); fall back to the legacy
         // `config_home`-only resolution for older call sites that haven't
         // migrated to populating `ctx.plans_dir`.
-        let input_plan = input.get("plan").and_then(|v| v.as_str()).map(String::from);
+        let input_plan = input.plan.clone();
         let session_id = ctx.session_id_for_history.as_deref();
         let plans_dir = ctx.plans_dir.clone().or_else(|| {
             ctx.config_home
@@ -763,10 +797,7 @@ impl Tool for ExitPlanModeTool {
         // the multi-choice dialog is enabled, the TUI echoes the picked
         // option as `input.user_choice`. `yes-clear-context` schedules
         // a `MessageHistory::clear()` at the next turn boundary.
-        let clear_history_requested = input
-            .get("user_choice")
-            .and_then(|v| v.as_str())
-            .is_some_and(|v| v == "yes-clear-context");
+        let clear_history_requested = input.user_choice.as_deref() == Some("yes-clear-context");
 
         // Queue the full ExitPlanMode transition. TS parity:
         // `ExitPlanModeV2Tool.ts:357-403` is one big `setAppState`;

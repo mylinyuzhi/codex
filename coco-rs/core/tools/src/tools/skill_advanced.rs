@@ -66,7 +66,7 @@ pub struct ResolvedSkill {
     /// Whether the model is allowed to invoke this skill (vs. user-only).
     pub allow_model_invocation: bool,
     /// Optional effort level override.
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
 }
 
 // ── Skill output ──

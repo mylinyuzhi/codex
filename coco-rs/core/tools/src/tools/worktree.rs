@@ -17,17 +17,40 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use serde_json::Value;
-use std::collections::HashMap;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 
 // ── EnterWorktreeTool ──
+
+/// Typed input for [`EnterWorktreeTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct EnterWorktreeInput {
+    /// Branch name for the worktree
+    #[serde(default)]
+    pub branch: String,
+    /// Path for the worktree directory (optional, defaults to
+    /// `../worktrees/<branch>`)
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// Typed output for [`EnterWorktreeTool`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct EnterWorktreeOutput {
+    pub message: String,
+    pub path: String,
+    pub branch: String,
+}
 
 pub struct EnterWorktreeTool;
 
 #[async_trait::async_trait]
 impl Tool for EnterWorktreeTool {
+    type Input = EnterWorktreeInput;
+    type Output = EnterWorktreeOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::EnterWorktree)
     }
@@ -37,20 +60,8 @@ impl Tool for EnterWorktreeTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Worktree)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &EnterWorktreeInput, _options: &DescriptionOptions) -> String {
         "Create and enter a git worktree for isolated work on a branch.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "branch".into(),
-            serde_json::json!({"type": "string", "description": "Branch name for the worktree"}),
-        );
-        p.insert(
-            "path".into(),
-            serde_json::json!({"type": "string", "description": "Path for the worktree directory (optional, defaults to ../worktrees/<branch>)"}),
-        );
-        ToolInputSchema { properties: p }
     }
     fn should_defer(&self) -> bool {
         true
@@ -62,28 +73,19 @@ impl Tool for EnterWorktreeTool {
     /// Emit the prebuilt `message` field as plain text — the model
     /// doesn't need the path/branch fields separately, they're already
     /// in the message. Skips JSON envelope overhead.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let text = data
-            .get("message")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+    fn render_for_model(&self, out: &EnterWorktreeOutput) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
-            text,
+            text: out.message.clone(),
             provider_options: None,
         }]
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: EnterWorktreeInput,
         _ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let branch = input
-            .get("branch")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+    ) -> Result<ToolResult<EnterWorktreeOutput>, ToolError> {
+        let branch = input.branch.trim();
 
         if branch.is_empty() {
             return Err(ToolError::InvalidInput {
@@ -93,9 +95,8 @@ impl Tool for EnterWorktreeTool {
         }
 
         let worktree_path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(std::string::ToString::to_string)
+            .path
+            .clone()
             .unwrap_or_else(|| format!("../worktrees/{branch}"));
 
         let output = tokio::process::Command::new("git")
@@ -128,11 +129,11 @@ impl Tool for EnterWorktreeTool {
         }
 
         Ok(ToolResult {
-            data: serde_json::json!({
-                "message": format!("Created worktree at '{worktree_path}' on branch '{branch}'"),
-                "path": worktree_path,
-                "branch": branch,
-            }),
+            data: EnterWorktreeOutput {
+                message: format!("Created worktree at '{worktree_path}' on branch '{branch}'"),
+                path: worktree_path,
+                branch: branch.to_string(),
+            },
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
@@ -162,10 +163,60 @@ impl Tool for EnterWorktreeTool {
 // other restoration targets in the result payload so the query engine
 // can apply them in its SessionEnd-like cleanup hook.
 
+/// Typed input for [`ExitWorktreeTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct ExitWorktreeInput {
+    /// Path of the worktree to remove
+    #[serde(default)]
+    pub path: String,
+    /// Force removal even with uncommitted changes
+    #[serde(default)]
+    pub force: bool,
+    /// Absolute path to restore as the process cwd after the worktree
+    /// is removed. If omitted, defaults to the parent directory of the
+    /// worktree.
+    #[serde(default)]
+    pub previous_cwd: Option<String>,
+}
+
+/// Restoration metadata for the query-engine cleanup hook. Layers
+/// 2–6 (from `ExitWorktreeTool.ts:126-145`) can't be performed by the
+/// tool itself; this struct reports what the upper layer still needs
+/// to restore.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ExitWorktreeRestoration {
+    /// Process-cwd target the tool resolved (explicit `previous_cwd`,
+    /// then the worktree's parent dir, then `current_dir`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd_target: Option<String>,
+    /// True iff `std::env::set_current_dir(cwd_target)` succeeded.
+    #[serde(default)]
+    pub cwd_restored: bool,
+    /// Set when set_current_dir failed; the upper-layer cleanup hook
+    /// may want to surface this to the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd_restore_error: Option<String>,
+    /// Layers the upper-layer cleanup hook still needs to handle.
+    /// Currently always the same five labels; kept as a typed Vec so
+    /// future layers can be added without breaking the wire shape.
+    #[serde(default)]
+    pub pending_layers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ExitWorktreeOutput {
+    pub message: String,
+    pub path: String,
+    pub restoration: ExitWorktreeRestoration,
+}
+
 pub struct ExitWorktreeTool;
 
 #[async_trait::async_trait]
 impl Tool for ExitWorktreeTool {
+    type Input = ExitWorktreeInput;
+    type Output = ExitWorktreeOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::ExitWorktree)
     }
@@ -175,33 +226,12 @@ impl Tool for ExitWorktreeTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Worktree)
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &ExitWorktreeInput, _options: &DescriptionOptions) -> String {
         "Remove a git worktree and return to the previous working directory. \
          Restores the process CWD if it was inside the worktree being removed \
          and returns a `restoration` block describing the session state to \
          rebuild (hooks, system prompt, memory caches)."
             .into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "path".into(),
-            serde_json::json!({"type": "string", "description": "Path of the worktree to remove"}),
-        );
-        p.insert(
-            "force".into(),
-            serde_json::json!({"type": "boolean", "description": "Force removal even with uncommitted changes"}),
-        );
-        p.insert(
-            "previous_cwd".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Absolute path to restore as the process cwd after the \
-                               worktree is removed. If omitted, defaults to the parent \
-                               directory of the worktree."
-            }),
-        );
-        ToolInputSchema { properties: p }
     }
     fn should_defer(&self) -> bool {
         true
@@ -212,28 +242,19 @@ impl Tool for ExitWorktreeTool {
 
     /// Emit the prebuilt `message` field; restoration metadata is for
     /// the query-engine cleanup hook, not the model.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let text = data
-            .get("message")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+    fn render_for_model(&self, out: &ExitWorktreeOutput) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
-            text,
+            text: out.message.clone(),
             provider_options: None,
         }]
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: ExitWorktreeInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+    ) -> Result<ToolResult<ExitWorktreeOutput>, ToolError> {
+        let path = input.path.trim();
 
         if path.is_empty() {
             return Err(ToolError::InvalidInput {
@@ -241,11 +262,6 @@ impl Tool for ExitWorktreeTool {
                 error_code: None,
             });
         }
-
-        let force = input
-            .get("force")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
 
         // Resolve the restoration target BEFORE we remove the worktree.
         // Three sources in priority order:
@@ -255,10 +271,7 @@ impl Tool for ExitWorktreeTool {
         //      cwd is inside the worktree this will fail step 1 below
         //      and leave the caller in a dangling dir. Better than
         //      panicking, though.
-        let explicit_prev = input
-            .get("previous_cwd")
-            .and_then(|v| v.as_str())
-            .map(std::path::PathBuf::from);
+        let explicit_prev = input.previous_cwd.as_deref().map(std::path::PathBuf::from);
 
         let worktree_path = std::path::PathBuf::from(path);
         let parent_fallback = worktree_path.parent().map(std::path::Path::to_path_buf);
@@ -267,7 +280,7 @@ impl Tool for ExitWorktreeTool {
             .or_else(|| std::env::current_dir().ok());
 
         let mut args = vec!["worktree", "remove"];
-        if force {
+        if input.force {
             args.push("--force");
         }
         args.push(path);
@@ -319,29 +332,32 @@ impl Tool for ExitWorktreeTool {
             }
         }
 
+        let cwd_target = restore_target
+            .as_ref()
+            .and_then(|p| p.to_str().map(String::from));
+
         // Layers 2-6: report what the query-engine layer still needs to
         // restore. These are keys the caller can use to drive its own
         // cleanup hook — the tool itself can't touch them because they
         // live in a higher-layer state tree that's not accessible via
         // ToolUseContext.
         Ok(ToolResult {
-            data: serde_json::json!({
-                "message": format!("Removed worktree at '{path}'"),
-                "path": path,
-                "restoration": {
-                    "cwd_target": restore_target.as_ref().and_then(|p| p.to_str()),
-                    "cwd_restored": cwd_restored,
-                    "cwd_restore_error": restore_error,
-                    // Follow-up layers for the query-engine cleanup hook:
-                    "pending_layers": [
-                        "originalCwd",
-                        "projectRoot",
-                        "hooksSnapshot",
-                        "systemPromptSections",
-                        "memoryCaches",
-                    ]
-                }
-            }),
+            data: ExitWorktreeOutput {
+                message: format!("Removed worktree at '{path}'"),
+                path: path.to_string(),
+                restoration: ExitWorktreeRestoration {
+                    cwd_target,
+                    cwd_restored,
+                    cwd_restore_error: restore_error,
+                    pending_layers: vec![
+                        "originalCwd".into(),
+                        "projectRoot".into(),
+                        "hooksSnapshot".into(),
+                        "systemPromptSections".into(),
+                        "memoryCaches".into(),
+                    ],
+                },
+            },
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

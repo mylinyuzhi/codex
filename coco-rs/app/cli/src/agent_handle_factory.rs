@@ -330,7 +330,8 @@ pub async fn build_agent_team_wiring(
     // initializeAgentMcpServers`. String-ref entries don't need this
     // wire — they reuse the parent's pre-existing connection.
     if let Some(mcp) = runtime.current_mcp_handle().await {
-        handle.set_mcp_handle(mcp);
+        handle.set_mcp_handle(mcp.clone());
+        install_coco_guide_context_builder(&mut handle, runtime.clone(), mcp).await;
     }
 
     // Auto-sync per-agent project snapshots into local memory dirs at
@@ -345,6 +346,98 @@ pub async fn build_agent_team_wiring(
     Some(AgentTeamWiring {
         agent_handle: Arc::new(handle),
     })
+}
+
+/// Install the coco-guide dynamic-context builder onto the swarm
+/// handle. TS parity: `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`
+/// reads runtime context off `toolUseContext.options` —
+/// `commands` / `agentDefinitions.activeAgents` / `mcpClients` /
+/// `getSettings_DEPRECATED()` — and emits the dynamic block when at
+/// least one source is non-empty.
+///
+/// In coco-rs the equivalent data lives across three crates; the
+/// closure captures `Arc`-shared handles that resolve the snapshot
+/// at spawn time (so a re-loaded command registry or settings change
+/// before the next spawn picks up the latest state). Failure to
+/// install (no MCP wired) leaves the static prompt — TS-parity for
+/// the "no toolUseContext.options.mcpClients" branch.
+async fn install_coco_guide_context_builder(
+    handle: &mut coco_coordinator::agent_handle::SwarmAgentHandle,
+    runtime: Arc<SessionRuntime>,
+    mcp_handle: coco_tool_runtime::McpHandleRef,
+) {
+    use std::sync::Arc as StdArc;
+
+    let runtime_for_builder = runtime;
+    let mcp_for_builder = mcp_handle;
+    let builder: coco_coordinator::agent_handle::CocoGuideContextBuilder = StdArc::new(move || {
+        // The closure must be sync to fit the trait, but the
+        // accessors on SessionRuntime / McpHandle are async.
+        // Use `block_in_place` + the current Tokio handle to bridge.
+        // Spawn time is rare (one coco-guide spawn per user
+        // request), so the block-in-place cost is negligible.
+        let runtime_inner = runtime_for_builder.clone();
+        let mcp_inner = mcp_for_builder.clone();
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                let cmd_reg = runtime_inner.current_command_registry().await;
+                // Slash commands: split prompt-type into custom (non-plugin)
+                // and plugin-sourced, matching TS filter shape at
+                // `claudeCodeGuideAgent.ts:128 / :162-164`.
+                let mut custom_commands: Vec<coco_subagent::GuideCommandEntry> = Vec::new();
+                let mut plugin_commands: Vec<coco_subagent::GuideCommandEntry> = Vec::new();
+                for cmd in cmd_reg.all() {
+                    if !matches!(cmd.command_type, coco_types::CommandType::Prompt(_)) {
+                        continue;
+                    }
+                    let entry = coco_subagent::GuideCommandEntry {
+                        name: cmd.base.name.clone(),
+                        description: cmd.base.description.clone(),
+                    };
+                    if matches!(
+                        cmd.base.loaded_from,
+                        Some(coco_types::CommandSource::Plugin)
+                    ) {
+                        plugin_commands.push(entry);
+                    } else {
+                        custom_commands.push(entry);
+                    }
+                }
+
+                // Active non-built-in agents. TS filter:
+                // `agentDefinitions.activeAgents.filter(a => a.source !== 'built-in')`.
+                let catalog = runtime_inner.current_agent_catalog().await;
+                let custom_agents: Vec<coco_subagent::GuideAgentEntry> = catalog
+                    .active()
+                    .filter(|def| {
+                        def.source.as_str() != coco_types::CommandSource::Builtin.as_str()
+                    })
+                    .map(|def| coco_subagent::GuideAgentEntry {
+                        agent_type: def.agent_type.to_string(),
+                        when_to_use: def.when_to_use.clone().unwrap_or_default(),
+                    })
+                    .collect();
+
+                let mcp_servers = mcp_inner.connected_servers().await;
+
+                // Settings: pretty-print the resolved Settings via serde.
+                // Empty string when serialisation fails (rare; serde never
+                // panics on the well-typed Settings struct).
+                let settings_json =
+                    serde_json::to_string_pretty(&runtime_inner.runtime_config.settings.merged)
+                        .unwrap_or_default();
+
+                coco_subagent::CocoGuideDynamicContext {
+                    custom_commands,
+                    plugin_commands,
+                    custom_agents,
+                    mcp_servers,
+                    settings_json,
+                }
+            })
+        })
+    });
+    handle.set_coco_guide_context_builder(builder);
 }
 
 /// Walk every known agent type's snapshot dir under

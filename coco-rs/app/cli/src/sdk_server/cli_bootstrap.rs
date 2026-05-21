@@ -17,14 +17,19 @@ use async_trait::async_trait;
 use coco_commands::CommandRegistry;
 use coco_inference::auth::AuthMethod;
 use coco_subagent::AgentDefinitionStore;
+use coco_subagent::AgentDefinitionValidator;
 use coco_subagent::BuiltinAgentCatalog;
 use coco_subagent::definition_store::AgentSearchPaths;
 use coco_types::AgentDefinition;
+use coco_types::AgentSource;
+use coco_types::AgentTypeId;
 use coco_types::FastModeState;
 use coco_types::SdkAccountInfo;
 use coco_types::SdkAgentInfo;
 use coco_types::SdkApiProvider;
 use coco_types::SdkSlashCommand;
+use std::collections::HashMap;
+use std::str::FromStr;
 
 use crate::sdk_server::handlers::InitializeBootstrap;
 
@@ -262,6 +267,70 @@ pub fn auth_method_to_account(auth: &AuthMethod) -> SdkAccountInfo {
             SdkAccountInfo::default()
         }
     }
+}
+
+/// Parse the `agents` map from a `SDKControlInitializeRequest` into
+/// validated [`AgentDefinition`] entries. Mirrors TS
+/// `parseAgentsFromJson(agentsJson, 'flagSettings')` at
+/// `tools/AgentTool/loadAgentsDir.ts:521-536`.
+///
+/// The map's keys ARE the agent type names (authoritative); each value
+/// is the agent's JSON shape. Per entry:
+///
+/// 1. Deserialize the value as `AgentDefinition` (forgiving — missing
+///    optional fields default).
+/// 2. Override `agent_type` with the map key (TS parity: the key wins
+///    over any name embedded in the value).
+/// 3. Stamp `source = AgentSource::FlagSettings`.
+/// 4. Run `AgentDefinitionValidator::check` — drop the entry on
+///    semantic errors but keep going on the rest.
+///
+/// Returns `(accepted, errors)`. Caller logs `errors` at warn level
+/// and proceeds with `accepted` — TS doesn't fail the initialize
+/// handshake on parse errors, just logs and continues with the
+/// successful subset (`logForDebugging` + `logError`).
+pub fn parse_sdk_agent_definitions(
+    agents: &HashMap<String, serde_json::Value>,
+) -> (Vec<AgentDefinition>, Vec<String>) {
+    let mut accepted = Vec::with_capacity(agents.len());
+    let mut errors = Vec::new();
+    for (name, value) in agents {
+        // Step 1: deserialize value as AgentDefinition.
+        let mut def: AgentDefinition = match serde_json::from_value(value.clone()) {
+            Ok(d) => d,
+            Err(e) => {
+                errors.push(format!(
+                    "agent '{name}': JSON shape doesn't match AgentDefinition: {e}"
+                ));
+                continue;
+            }
+        };
+        // Step 2: key wins over any embedded `name`/`agent_type`.
+        def.name = name.clone();
+        def.agent_type = match AgentTypeId::from_str(name) {
+            // AgentTypeId::from_str is `Infallible` — `Custom(name)` for
+            // anything that doesn't match a built-in. Unwrap is safe.
+            Ok(t) => t,
+            Err(_) => AgentTypeId::Custom(name.clone()),
+        };
+        // Step 3: SDK-supplied agents are FlagSettings source (TS parity).
+        def.source = AgentSource::FlagSettings;
+        // Step 4: semantic validation.
+        let semantic_errors = AgentDefinitionValidator::check(&def);
+        if !semantic_errors.is_empty() {
+            errors.push(format!(
+                "agent '{name}': validation failed: {}",
+                semantic_errors
+                    .iter()
+                    .map(|e| format!("{e:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            continue;
+        }
+        accepted.push(def);
+    }
+    (accepted, errors)
 }
 
 #[cfg(test)]

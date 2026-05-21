@@ -89,7 +89,7 @@ pub struct AgentQueryConfig {
     /// so the teammate's own allow/deny gets intersected via
     /// `ToolFilter::narrow_with`.
     pub parent_tool_filter: Option<coco_types::ToolFilter>,
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
     pub use_exact_tools: bool,
     pub mcp_servers: Vec<String>,
     pub model_role: Option<coco_types::ModelRole>,
@@ -201,7 +201,7 @@ pub struct InProcessRunnerConfig {
     pub tool_overrides: Option<std::sync::Arc<coco_types::ToolOverrides>>,
     /// Parent session's Layer 4 tool filter — see `AgentQueryConfig`.
     pub parent_tool_filter: Option<coco_types::ToolFilter>,
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
     pub use_exact_tools: bool,
     pub mcp_servers: Vec<String>,
     pub disallowed_tools: Vec<String>,
@@ -394,7 +394,7 @@ pub async fn run_in_process_teammate(
             features: config.features.clone(),
             tool_overrides: config.tool_overrides.clone(),
             parent_tool_filter: config.parent_tool_filter.clone(),
-            effort: config.effort.clone(),
+            effort: config.effort,
             use_exact_tools: config.use_exact_tools,
             mcp_servers: config.mcp_servers.clone(),
             model_role: config.model_role,

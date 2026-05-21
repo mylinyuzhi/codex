@@ -323,17 +323,22 @@ impl DreamService {
 
         let start = Instant::now();
         let prompt = build_dream_prompt(&self.memory_dir, transcript_dir, &sessions_since_last);
+        // Synthetic AgentDefinition pinning `ModelRole::Memory`. See
+        // `extract.rs` for the design rationale. Single-source-of-truth:
+        // model routing flows through `AgentDefinition.model_role`
+        // (the catalog source of truth); memory forks construct an
+        // in-process synthetic def at spawn time.
+        let memory_def = std::sync::Arc::new(coco_types::AgentDefinition {
+            agent_type: coco_types::AgentTypeId::Custom("memory-internal".into()),
+            name: "memory-internal".into(),
+            model_role: Some(ModelRole::Memory),
+            ..Default::default()
+        });
         let request = AgentSpawnRequest {
             prompt,
             description: Some("auto-dream consolidation".into()),
             subagent_type: Some("general-purpose".into()),
-            // Pin to ModelRole::Memory — see extract.rs / session.rs
-            // for the same rationale. Without this, the
-            // `general-purpose` subagent_type would resolve to
-            // `ModelRole::Subagent` and operators configuring
-            // `settings.models.memory` would see no effect on dream
-            // forks.
-            model_role: Some(ModelRole::Memory),
+            definition: Some(memory_def),
             constraints: Some(AgentSpawnConstraints {
                 // No cap — TS doesn't set `maxTurns` on the dream fork
                 // (`autoDream.ts:230`); the agent stops naturally when

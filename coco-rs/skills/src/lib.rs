@@ -85,7 +85,7 @@ pub struct SkillDefinition {
     pub paths: Vec<String>,
     /// Planning/exploration depth override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
     /// Execution context: inline (default) or fork (sub-agent).
     #[serde(default)]
     pub context: SkillContext,
@@ -930,7 +930,7 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
         })
         .unwrap_or_default();
 
-    let effort = lookup_str(&["effort"]);
+    let effort = lookup_str(&["effort"]).and_then(|s| s.trim().parse().ok());
     let context = match lookup_str(&["context"]).as_deref() {
         Some("fork") => SkillContext::Fork,
         _ => SkillContext::Inline,

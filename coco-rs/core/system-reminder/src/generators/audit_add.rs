@@ -18,6 +18,25 @@
 //! the content and we emit it verbatim, mirroring the
 //! `TeammateMailboxGenerator`/`SkillListingGenerator` pre-formatted-body
 //! pattern.
+//!
+//! ## Wiring status (R1 triage)
+//!
+//! | Generator                        | Status                       | Upstream owner / blocker                                    |
+//! |----------------------------------|------------------------------|-------------------------------------------------------------|
+//! | `MaxTurnsReachedGenerator`       | ✅ wired                     | `app/query/src/engine_turn_reminders.rs:593-594`            |
+//! | `CommandPermissionsGenerator`    | ✅ wired (mailbox)           | `coco_query::ReminderMailbox.command_permissions`           |
+//! | `DynamicSkillGenerator`          | ✅ wired (mailbox)           | `coco_query::ReminderMailbox.dynamic_skill`                 |
+//! | `StructuredOutputGenerator`      | ✅ wired (mailbox)           | `coco_query::ReminderMailbox.structured_output`             |
+//! | `TeammateShutdownBatchGenerator` | ✅ wired (mailbox)           | `coco_query::ReminderMailbox.teammate_shutdown_batch`       |
+//! | `CurrentSessionMemoryGenerator`  | ⏳ pending — `None` upstream | `coco-memory` (SessionMemory). TS: `services/SessionMemory/sessionMemoryCheck.ts`. **Retained because TS has this attachment** (`attachments.ts:662-666`). |
+//! | `SkillDiscoveryGenerator`        | ⏳ pending — `None` upstream | `coco-skills` heuristic suggester. TS: `services/skillSearch/prefetch.ts`. **Retained because TS has this attachment** (`attachments.ts:538-542`). |
+//! | `ContextEfficiencyGenerator`     | ⛔ never fires in coco-rs    | Gated behind TS `feature('HISTORY_SNIP')` which coco-rs intentionally does not port (see root CLAUDE.md "Compaction — three generic strategies only"). Kept as a `None`-return so the parity-test invariant `all_attachment_type_variants_have_default_generator` enforces full coverage. |
+//!
+//! Pending generators (⏳) sit in the catalog because TS has the
+//! matching attachment variant — removing them would create a TS-
+//! parity regression. They emit when the upstream producer crate
+//! (`coco-memory` / `coco-skills`) populates the snapshot via
+//! `TurnReminderInput`.
 
 use async_trait::async_trait;
 
@@ -69,6 +88,14 @@ impl AttachmentGenerator for MaxTurnsReachedGenerator {
 /// TS `current_session_memory` (`attachments.ts:662-666`). Body is
 /// pre-formatted by `coco-memory` and threaded through
 /// [`GeneratorContext::current_session_memory`]; emit verbatim.
+///
+/// **Status (pending upstream):** `coco-memory` does not yet populate
+/// this slot. TS source is `services/SessionMemory/sessionMemoryCheck.ts`
+/// which runs the "memorable moment" classifier and emits the formatted
+/// body when it fires. Until `coco-memory` ports that classifier the
+/// generator returns `None` — TS-parity for the SessionMemory-disabled
+/// case. The variant is retained because **TS has this attachment** and
+/// removing it would be a TS-parity regression.
 #[derive(Debug, Default)]
 pub struct CurrentSessionMemoryGenerator;
 
@@ -175,6 +202,15 @@ impl AttachmentGenerator for DynamicSkillGenerator {
 
 /// TS `skill_discovery` (`attachments.ts:538-542`). UserPrompt-tier
 /// heuristic skill suggestion. Body pre-formatted by `coco-skills`.
+///
+/// **Status (pending upstream):** `coco-skills` does not yet emit a
+/// pre-formatted body for the discovery hint. TS source is
+/// `services/skillSearch/prefetch.ts::getTurnZeroSkillDiscovery`
+/// (turn-0 user-input pass) + the inter-turn prefetch path. Until
+/// `coco-skills` adopts that prefetcher and threads the result into
+/// `ReminderMailbox`, the generator returns `None` — TS-parity for
+/// the no-discovery-hit case. The variant is retained because **TS
+/// has this attachment**.
 #[derive(Debug, Default)]
 pub struct SkillDiscoveryGenerator;
 
@@ -281,8 +317,17 @@ impl AttachmentGenerator for TeammateShutdownBatchGenerator {
 
 /// TS `context_efficiency` (`attachments.ts:675-676`,
 /// `messages.ts:4150+`). A nudge to compact / snip when context is
-/// approaching the limit but auto-compact isn't available. Engine sets
-/// `ctx.context_efficiency_signal` when the threshold trips.
+/// approaching the limit but auto-compact isn't available.
+///
+/// **R1 status (intentionally dormant):** the TS counterpart is gated
+/// behind `feature('HISTORY_SNIP')`. coco-rs does not port that
+/// feature (see root CLAUDE.md "Compaction — three generic strategies
+/// only"). `ctx.context_efficiency_signal` therefore stays `false`
+/// forever and the generator never fires. Retained in the catalog so
+/// the parity-test invariant
+/// `all_attachment_type_variants_have_default_generator` continues
+/// to hold without an enum migration; will become live the day a
+/// HISTORY_SNIP-equivalent lands in coco-rs.
 #[derive(Debug, Default)]
 pub struct ContextEfficiencyGenerator;
 

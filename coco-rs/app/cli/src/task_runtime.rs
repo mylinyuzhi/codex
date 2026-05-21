@@ -1,129 +1,151 @@
-//! Production [`coco_tool_runtime::TaskHandle`] backed by
-//! [`coco_tasks::TaskManager`] (P2'+ TaskManager wiring).
+//! Production background-task runtime.
 //!
-//! ## Why
+//! `TaskRuntime` implements four traits that the tool layer + the
+//! coordinator both consume:
 //!
-//! Before this module, every production session installed
-//! `task_handle: None` on `ToolUseContext`. `TaskGet` /
-//! `TaskOutput` / `TaskStop` / `TaskList` returned "no task runtime
-//! configured" errors regardless of whether the model had spawned a
-//! background task. AgentTool's background path (P2') drove the
-//! engine in a detached tokio task but had no way to register the
-//! result so the model could address it later.
+//! - [`coco_tool_runtime::TaskReader`] — `TaskGet` / `TaskList` /
+//!   `TaskOutput` read paths. Implemented in [`reader`].
+//! - [`coco_tool_runtime::TaskController`] — `TaskStop`. Implemented
+//!   in [`controller`].
+//! - [`coco_tool_runtime::ShellTaskSpawner`] — Bash / PowerShell
+//!   `run_in_background`. Implemented in [`shell`].
+//! - [`coco_tool_runtime::AgentTaskRegistry`] — `SwarmAgentHandle`'s
+//!   background AgentTool dispatch. Implemented in [`agent`].
 //!
-//! ## Architecture
+//! ## Where each concern lives
 //!
-//! `TaskRuntime` is the single shared owner. The same `Arc` is
-//! handed to:
+//! - Lifecycle state — [`coco_tasks::TaskManager`].
+//! - Disk-backed output — [`crate::disk_task_output::DiskOutputs`].
+//! - Per-task cancel + terminal-status broadcast — [`TaskEntry`]
+//!   below, indexed by task id in `entries`.
+//! - Notification XML construction + push — done in [`agent`] / [`shell`]
+//!   using [`coco_tasks::notification`] primitives. The sink
+//!   (`Arc<dyn NotificationSink>`) is always wired; tests use
+//!   `NoOpNotificationSink` (default), production wires
+//!   [`crate::command_queue_sink::CommandQueueNotificationSink`].
+//! - Stall watchdog — [`stall::watchdog`] / [`stall::agent_watchdog`]
+//!   spawned per task.
+//! - Auto-background / auto-detach / progress timers — [`timers`].
 //!
-//! - the engine (via `wire_engine` → `with_task_handle` →
-//!   `ToolUseContext.task_handle`) for the read/control side
-//!   consumed by `Task*` tools;
-//! - `SwarmAgentHandle` (via `set_task_runtime`) for the
-//!   registration side: AgentTool's background dispatch calls
-//!   `runtime.register_agent_task(...)`, which creates the
-//!   `TaskManager` entry, allocates per-task output + cancellation,
-//!   and returns the `task_id` for the response payload.
+//! ## Module map (TS counterpart)
 //!
-//! ## Read / control surface (TaskHandle trait)
+//! | Submodule        | TS source                                                       |
+//! |------------------|-----------------------------------------------------------------|
+//! | [`agent`]        | `tasks/LocalAgentTask/LocalAgentTask.tsx`                       |
+//! | [`shell`]        | `tasks/LocalShellTask/LocalShellTask.tsx` + `killShellTasks.ts` |
+//! | [`reader`]       | `utils/task/framework.ts` (read side) + `diskOutput.ts`         |
+//! | [`controller`]   | `tasks/stopTask.ts` (kill) + `LocalAgentTask.tsx:617-650 backgroundAgentTask` + `utils/ShellCommand.ts:349-366` (detach) |
+//! | [`timers`]       | `LocalAgentTask.tsx:582-608` (autoBackgroundMs setTimeout)      |
+//! | [`stall`]        | `LocalShellTask.tsx:46-104` (startStallWatchdog)                |
 //!
-//! - `get_task_status` — maps `coco_types::TaskStatus` to
-//!   `BackgroundTaskStatus`.
-//! - `get_task_output_delta` — incremental read against the per-task
-//!   buffer with offset bookkeeping. Used by `TaskOutput`.
-//! - `kill_task` — flips the per-task cancellation token AND marks
-//!   the manager entry as `Killed`. The bg AgentTool spawn observes
-//!   the token and exits early.
-//! - `list_tasks` — snapshot of every running task.
-//! - `poll_notifications` — terminal-state tasks that the framework
-//!   should announce. Stall detection is **not** wired for agent
-//!   tasks (TS does this only for shell tasks); calls return [].
-//! - `spawn_shell_task` — out of scope for this module; bash-tool
-//!   shell tasks need a separate handle. Returns an explicit error.
+//! ## D8-narrow (deferred) — collapse the dual-store split
 //!
-//! ## Output buffer semantics — disk-backed (TS-aligned)
+//! The current architecture keys per-task state across two locks
+//! that this struct holds independently:
 //!
-//! Each task's output is funneled through
-//! [`crate::disk_task_output::DiskTaskOutput`] — a TS-aligned port
-//! of `utils/task/diskOutput.ts` that writes to
-//! `<config_home>/cache/tasks/<session_id>/<task_id>.output` via a
-//! single drain task. The 5 GB disk cap matches TS
-//! `MAX_TASK_OUTPUT_BYTES`; past it, a truncation marker is
-//! appended once and further writes are dropped.
+//! - `TaskRuntime.entries: HashMap<id, TaskEntry>` — per-task
+//!   control state (cancel token, watch sender, detach Notify,
+//!   detached AtomicBool, exit_code OnceLock).
+//! - `coco_tasks::TaskManager.tasks: HashMap<id, TaskStateBase>` —
+//!   lifecycle state (status, output_file, start/end time, extras).
 //!
-//! `read_output(task_id)` is a tail read for the periodic-summary
-//! timer (caps at 8 MiB, matches TS `DEFAULT_MAX_READ_BYTES`).
-//! `get_task_output_delta(task_id, from_offset)` is the incremental
-//! reader the `TaskOutput` tool drives.
+//! Any inconsistency between the two is a latent bug source. The
+//! adversarial review (D8) recommends collapsing into one store
+//! owned by `TaskManager`:
 //!
-//! The previous in-memory `Arc<Mutex<String>>` cap and the
-//! UTF-8-aware head-truncation logic are removed in favor of the
-//! disk file as the system of record — the file system already
-//! provides bounded reads via `pread`, and the disk cap is 600× the
-//! old in-memory cap so long coordinator workloads stop losing
-//! early context.
+//! 1. Add `tokio-util = { features = ["rt"] }` to `coco-tasks` deps
+//!    (needed for `CancellationToken`).
+//! 2. Move [`TaskEntry`] from this file into `coco-tasks::running`
+//!    (rename to `TaskControl` for clarity).
+//! 3. Replace `TaskManager.tasks: HashMap<id, TaskStateBase>` with
+//!    `HashMap<id, TaskRow { base: TaskStateBase, control: TaskControl }>`
+//!    so both halves move atomically under one lock.
+//! 4. Drop `TaskRuntime.entries` and route every read/write through
+//!    `self.manager.with_control(id, |c| ...)`-style accessors on
+//!    `TaskManager`.
+//! 5. Adjust the ~15 callsites in `agent.rs` / `shell.rs` /
+//!    `reader.rs` / `controller.rs` / `timers.rs`.
 //!
-//! Per-task output offset tracking on the consumer side is
-//! preserved by the on-disk file's stable byte ordering — readers
-//! that hold a `from_offset` from a prior call will see content
-//! after that offset on the next read, never duplicates.
-//!
-//! ## Timer-leak protection
-//!
-//! Periodic AgentSummary timers in `agent_handle_spawn.rs` race the
-//! per-task `CancellationToken` against a 30 s ticker. To bound the
-//! window between natural engine completion and timer exit,
-//! [`TaskRuntime::mark_completed`] / [`TaskRuntime::mark_failed`]
-//! BOTH cancel the token in addition to flipping the lifecycle
-//! status — so a clean engine exit terminates the timer immediately
-//! instead of waiting up to 30 s for the next `is_terminal` poll.
-//!
-//! ## Construction
-//!
-//! Production callers use [`TaskRuntime::with_session_dir`] to wire
-//! a per-session disk root (`<config_home>/cache/tasks/<session_id>`).
-//! Tests can use [`TaskRuntime::with_temp_dir`] for isolation, or
-//! the legacy `new` constructor which spins up an
-//! ephemeral temp directory — keeping existing tests unchanged.
+//! Estimated effort: L (multi-PR). Tracked as TS-parity-neutral
+//! architectural cleanup — current behavior is correct, this just
+//! eliminates the cross-lock surface.
+
+mod agent;
+mod controller;
+mod reader;
+mod shell;
+mod stall;
+mod timers;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use async_trait::async_trait;
-use coco_tasks::TaskManager;
-use coco_tool_runtime::{
-    AgentTaskRegistry, BackgroundShellRequest, BackgroundTaskInfo, BackgroundTaskStatus,
-    TaskHandle, TaskOutputDelta,
-};
-use coco_types::{TaskStatus, TaskType};
+use coco_tasks::{NoOpNotificationSink, NotificationSinkRef, TaskManager};
+use coco_types::TaskStatus;
+use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, info};
 
-use crate::disk_task_output::{DEFAULT_MAX_READ_BYTES, DiskOutputs};
+use crate::disk_task_output::DiskOutputs;
 
-/// Per-task control state held alongside the `TaskManager` entry.
-/// The `TaskManager` owns lifecycle status; the on-disk file owns
-/// content (managed by `DiskOutputs`); this struct owns the
-/// "stop me" cancellation token.
-struct TaskEntry {
-    cancel: CancellationToken,
+/// Per-task control state.
+///
+/// `cancel` fires the kill path. `status_tx` broadcasts terminal
+/// transitions so `TaskOutput` blocking reads (and any future
+/// observer) can `await` instead of polling. `watch` retains the
+/// last value, so a subscriber that arrives after the task ended
+/// still sees the terminal status.
+///
+/// `invoking_agent_id` is the routing filter on `CommandQueue` for
+/// terminal notifications — it's the agent that *called* the tool
+/// that created this task (`ctx.agent_id`), NOT a generated subagent
+/// id. Stored here (rather than re-read from `TaskManager`) because
+/// `TaskStateBase` carries `tool_use_id` but not `agent_id`. TS
+/// parity: `BashTool.tsx:910` / `AgentTool.tsx` thread
+/// `toolUseContext.agentId` through to the notification.
+///
+/// `detach` is the per-task one-shot "move to background" signal
+/// (W2). `tool.execute` in fg mode `select!`s on `.notified()`. The
+/// adjacent `detached` flag is the CAS gate that makes
+/// [`TaskRuntime::signal_detach`](controller) idempotent — mirrors TS
+/// `backgroundAgentTask`'s `if (task.isBackgrounded) return false`
+/// (`tasks/LocalAgentTask/LocalAgentTask.tsx:620-622`).
+pub(in crate::task_runtime) struct TaskEntry {
+    pub(in crate::task_runtime) cancel: CancellationToken,
+    pub(in crate::task_runtime) status_tx: watch::Sender<TaskStatus>,
+    pub(in crate::task_runtime) invoking_agent_id: Option<String>,
+    pub(in crate::task_runtime) detach: Arc<Notify>,
+    pub(in crate::task_runtime) detached: Arc<AtomicBool>,
+    /// Set once by the shell driver in `apply_shell_terminal_state`
+    /// for `Exited` outcomes. `None` for agent tasks and shell
+    /// outcomes lacking a process exit (`Cancelled` / `SpawnFailed` /
+    /// `TimedOut`). Read by [`reader::TaskReader::read_terminal_outputs`]
+    /// to compose the fg `ToolResult.data` `exitCode` field.
+    pub(in crate::task_runtime) exit_code: Arc<std::sync::OnceLock<i32>>,
 }
 
 /// Production task runtime.
 ///
-/// Cheap to clone (every field is `Arc`). Construction is intended
-/// to happen once per session in CLI bootstrap; the same `Arc<Self>`
-/// flows into the engine and into `SwarmAgentHandle`.
+/// Cheap to clone (every field is `Arc`). Construction happens once
+/// per session in CLI bootstrap; the same `Arc<Self>` flows into the
+/// engine (read/control) and into `SwarmAgentHandle` (registration).
 pub struct TaskRuntime {
-    manager: Arc<TaskManager>,
-    entries: Arc<tokio::sync::RwLock<HashMap<String, TaskEntry>>>,
-    disk: Arc<DiskOutputs>,
+    pub(in crate::task_runtime) manager: Arc<TaskManager>,
+    pub(in crate::task_runtime) entries: Arc<tokio::sync::RwLock<HashMap<String, TaskEntry>>>,
+    pub(in crate::task_runtime) disk: Arc<DiskOutputs>,
+    /// Always wired. `NoOpNotificationSink` is the default when no
+    /// producer attaches — terminal events are silently dropped,
+    /// matching TS sessions that run without a turn loop (headless
+    /// jobs / `--bare` SDK). Production attaches the
+    /// `CommandQueueNotificationSink`.
+    pub(in crate::task_runtime) notification_sink: NotificationSinkRef,
 }
 
 impl TaskRuntime {
-    /// Test-friendly constructor — creates an ephemeral temp
-    /// directory under `std::env::temp_dir()` keyed by a fresh UUID
-    /// so concurrent tests don't collide. Production callers should
-    /// use [`Self::with_session_dir`].
+    /// Test-friendly constructor — temp dir, no-op notification
+    /// sink. Production callers use [`Self::with_session_dir`] +
+    /// [`Self::with_notification_sink`].
     pub fn new(manager: Arc<TaskManager>) -> Self {
         let temp =
             std::env::temp_dir().join(format!("coco-task-rt-{}", uuid::Uuid::new_v4().simple()));
@@ -132,301 +154,50 @@ impl TaskRuntime {
 
     /// Production constructor. `session_dir` is the per-session
     /// root for on-disk task output files (typically
-    /// `<config_home>/cache/tasks/<session_id>`).
+    /// `<config_home>/cache/tasks/<session_id>`). Notification sink
+    /// defaults to no-op until [`Self::with_notification_sink`]
+    /// attaches one.
     pub fn with_session_dir(manager: Arc<TaskManager>, session_dir: std::path::PathBuf) -> Self {
+        debug!(
+            target: "coco::task_runtime",
+            session_dir = %session_dir.display(),
+            "constructing TaskRuntime"
+        );
         Self {
             manager,
             entries: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             disk: Arc::new(DiskOutputs::new(session_dir)),
+            notification_sink: Arc::new(NoOpNotificationSink),
         }
     }
 
-    /// Read access to the inner `TaskManager` — useful for callers
-    /// that already speak the typed-state API directly (e.g. the
-    /// engine's own task lifecycle emissions).
+    /// Attach the notification sink. After this call, every terminal
+    /// transition pushes a `<task-notification>` envelope through the
+    /// sink. TS parity: `enqueuePendingNotification({mode:
+    /// 'task-notification'})` (`utils/messageQueueManager.ts:142`).
+    pub fn with_notification_sink(mut self, sink: NotificationSinkRef) -> Self {
+        info!(
+            target: "coco::task_runtime",
+            "task-notification sink attached"
+        );
+        self.notification_sink = sink;
+        self
+    }
+
+    /// Read access to the inner `TaskManager`.
     pub fn manager(&self) -> &Arc<TaskManager> {
         &self.manager
     }
-
-    /// Register a background AgentTool spawn. Creates the
-    /// `TaskManager` entry, returns the `task_id`, and stores the
-    /// cancel token + output buffer keyed by id. The caller (in
-    /// `agent_handle_spawn::spawn_subagent`) drives the engine in a
-    /// detached task and uses [`Self::append_output`] +
-    /// [`Self::mark_completed`] / [`Self::mark_failed`] to update
-    /// status as the spawn progresses.
-    ///
-    /// `description` becomes the task's display label (panel +
-    /// `TaskList`). `tool_use_id` ties the registration back to the
-    /// model's invocation.
-    pub async fn register_agent_task(
-        &self,
-        description: &str,
-        tool_use_id: Option<&str>,
-        cancel: CancellationToken,
-    ) -> String {
-        let task_id = self
-            .manager
-            .create(TaskType::LocalAgent, description, /*output_file=*/ "")
-            .await;
-        if let Some(tu_id) = tool_use_id {
-            self.manager
-                .set_tool_use_id(&task_id, tu_id.to_string())
-                .await;
-        }
-        // Move to Running so the panel + lifecycle event reflect that
-        // the spawn is in progress. `create` defaults to `Pending`.
-        self.manager
-            .update_status(&task_id, TaskStatus::Running)
-            .await;
-        let entry = TaskEntry { cancel };
-        self.entries.write().await.insert(task_id.clone(), entry);
-        // Eagerly create the disk-output handle so the file path is
-        // resolved + the drain task is ready before the first
-        // append. Subsequent `disk.get_or_create(task_id)` returns
-        // the same `Arc` cheaply.
-        let _ = self.disk.get_or_create(&task_id).await;
-        task_id
-    }
-
-    /// Append text to a task's on-disk output file. Returns
-    /// immediately — the actual write runs on the per-task drain
-    /// task. Past the 5 GB disk cap (matches TS), drops chunks and
-    /// appends a single truncation marker.
-    pub async fn append_output(&self, task_id: &str, chunk: &str) {
-        let dto = self.disk.get_or_create(task_id).await;
-        dto.append(chunk);
-    }
-
-    /// Mark the task completed and store the final response text.
-    /// Cancels the per-task token so periodic timers exit promptly
-    /// instead of waiting up to 30 s for the next `is_terminal` poll.
-    pub async fn mark_completed(&self, task_id: &str, response_text: Option<&str>) {
-        if let Some(text) = response_text
-            && !text.is_empty()
-        {
-            self.append_output(task_id, text).await;
-        }
-        self.manager
-            .update_status(task_id, TaskStatus::Completed)
-            .await;
-        self.cancel_task_token(task_id).await;
-    }
-
-    /// Mark the task failed and append the error message. Cancels
-    /// the per-task token (same reason as `mark_completed`).
-    pub async fn mark_failed(&self, task_id: &str, error: &str) {
-        self.append_output(task_id, error).await;
-        self.manager
-            .update_status(task_id, TaskStatus::Failed)
-            .await;
-        self.cancel_task_token(task_id).await;
-    }
-
-    /// Fire the per-task `CancellationToken` so any tokio task
-    /// observing it (the bg spawn driver, the periodic AgentSummary
-    /// timer) can exit promptly. Idempotent — `cancel.cancel()` is
-    /// safe to call after a token already cancelled.
-    async fn cancel_task_token(&self, task_id: &str) {
-        if let Some(entry) = self.entries.read().await.get(task_id) {
-            entry.cancel.cancel();
-        }
-    }
 }
 
-#[async_trait]
-impl AgentTaskRegistry for TaskRuntime {
-    async fn register_agent_task(
-        &self,
-        description: &str,
-        tool_use_id: Option<&str>,
-        cancel: CancellationToken,
-    ) -> String {
-        TaskRuntime::register_agent_task(self, description, tool_use_id, cancel).await
-    }
-    async fn append_output(&self, task_id: &str, chunk: &str) {
-        TaskRuntime::append_output(self, task_id, chunk).await
-    }
-    async fn mark_completed(&self, task_id: &str, response_text: Option<&str>) {
-        TaskRuntime::mark_completed(self, task_id, response_text).await
-    }
-    async fn mark_failed(&self, task_id: &str, error: &str) {
-        TaskRuntime::mark_failed(self, task_id, error).await
-    }
-    async fn read_output(&self, task_id: &str) -> String {
-        // Tail-read with omitted-bytes header. Mirrors TS
-        // `getTaskOutput` (`diskOutput.ts:336-357`):
-        // returns the last `DEFAULT_MAX_READ_BYTES` (8 MiB) of the
-        // file, prepending `[N KB of earlier output omitted]\n`
-        // when the file exceeded the cap. The model sees recent
-        // activity rather than the cold start — important for long-
-        // running coordinator workloads where the head is stale.
-        let Some(dto) = self.disk.get(task_id).await else {
-            return String::new();
-        };
-        let _ = dto.flush().await;
-        dto.read_tail(DEFAULT_MAX_READ_BYTES)
-            .await
-            .unwrap_or_default()
-    }
-    async fn output_file_path(&self, task_id: &str) -> Option<std::path::PathBuf> {
-        Some(self.disk.output_path(task_id))
-    }
-    async fn is_terminal(&self, task_id: &str) -> bool {
-        self.manager
-            .get(task_id)
-            .await
-            .map(|s| s.status.is_terminal())
-            .unwrap_or(false)
-    }
-}
-
-fn boxed_msg(msg: impl Into<String>, code: coco_error::StatusCode) -> coco_error::BoxedError {
+/// Build a [`coco_error::BoxedError`] from a message + status code.
+/// Shared across the four trait impls — kept here so each submodule
+/// uses the same wrapping. Visible only inside `task_runtime::*`.
+pub(in crate::task_runtime) fn boxed_msg(
+    msg: impl Into<String>,
+    code: coco_error::StatusCode,
+) -> coco_error::BoxedError {
     Box::new(coco_error::PlainError::new(msg, code))
-}
-
-#[async_trait]
-impl TaskHandle for TaskRuntime {
-    async fn spawn_shell_task(
-        &self,
-        _: BackgroundShellRequest,
-    ) -> Result<String, coco_error::BoxedError> {
-        Err(boxed_msg(
-            "Shell-task background spawning is not wired through TaskRuntime yet. \
-             AgentTool background spawns work; Bash run_in_background does not.",
-            coco_error::StatusCode::Internal,
-        ))
-    }
-
-    async fn get_task_status(
-        &self,
-        task_id: &str,
-    ) -> Result<BackgroundTaskInfo, coco_error::BoxedError> {
-        let Some(state) = self.manager.get(task_id).await else {
-            return Err(boxed_msg(
-                format!("No running task found with ID: {task_id}"),
-                coco_error::StatusCode::FileNotFound,
-            ));
-        };
-        Ok(state_to_info(&state))
-    }
-
-    async fn get_task_output_delta(
-        &self,
-        task_id: &str,
-        from_offset: i64,
-    ) -> Result<TaskOutputDelta, coco_error::BoxedError> {
-        let Some(state) = self.manager.get(task_id).await else {
-            return Err(boxed_msg(
-                format!("No running task found with ID: {task_id}"),
-                coco_error::StatusCode::FileNotFound,
-            ));
-        };
-        // Disk-backed delta read. Flush the drain queue first so a
-        // freshly-appended chunk is visible — TS `getTaskOutputDelta`
-        // is implicitly synchronous via single-threaded JS.
-        let Some(dto) = self.disk.get(task_id).await else {
-            return Ok(TaskOutputDelta {
-                content: String::new(),
-                new_offset: from_offset,
-                is_complete: state.status.is_terminal(),
-            });
-        };
-        let _ = dto.flush().await;
-        let (content, new_offset) = match dto.read_delta(from_offset, DEFAULT_MAX_READ_BYTES).await
-        {
-            Ok(pair) => pair,
-            Err(_) => (String::new(), from_offset),
-        };
-        let is_complete = state.status.is_terminal();
-        Ok(TaskOutputDelta {
-            content,
-            new_offset,
-            is_complete,
-        })
-    }
-
-    async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
-        let cancel = self
-            .entries
-            .read()
-            .await
-            .get(task_id)
-            .map(|e| e.cancel.clone());
-        let Some(cancel) = cancel else {
-            return Err(boxed_msg(
-                format!("No running task found with ID: {task_id}"),
-                coco_error::StatusCode::FileNotFound,
-            ));
-        };
-        cancel.cancel();
-        self.manager
-            .update_status(task_id, TaskStatus::Killed)
-            .await;
-        Ok(())
-    }
-
-    async fn list_tasks(&self) -> Vec<BackgroundTaskInfo> {
-        self.manager
-            .list()
-            .await
-            .iter()
-            .map(state_to_info)
-            .collect()
-    }
-
-    async fn poll_notifications(&self) -> Vec<BackgroundTaskInfo> {
-        // Return terminal-state tasks that haven't been notified yet,
-        // and flip their `notified` flag so we don't repeat. Stall
-        // detection isn't wired for agent tasks — TS only stalls
-        // shell tasks.
-        let mut out = Vec::new();
-        let states = self.manager.list().await;
-        for state in &states {
-            if state.status.is_terminal() && !state.notified {
-                out.push(state_to_info(state));
-                self.manager.mark_notified(&state.id).await;
-            }
-        }
-        out
-    }
-}
-
-fn state_to_info(state: &coco_types::TaskStateBase) -> BackgroundTaskInfo {
-    let elapsed_seconds = match state.end_time {
-        Some(end) => (end - state.start_time).max(0) as f64 / 1000.0,
-        None => {
-            // Use system-wall-clock since start. We don't have a
-            // monotonic clock plumbed; this is best-effort.
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(state.start_time);
-            (now - state.start_time).max(0) as f64 / 1000.0
-        }
-    };
-    BackgroundTaskInfo {
-        task_id: state.id.clone(),
-        status: status_to_background(state.status),
-        summary: Some(state.description.clone()),
-        output_file: if state.output_file.is_empty() {
-            None
-        } else {
-            Some(state.output_file.clone())
-        },
-        tool_use_id: state.tool_use_id.clone(),
-        elapsed_seconds,
-        notified: state.notified,
-    }
-}
-
-fn status_to_background(s: TaskStatus) -> BackgroundTaskStatus {
-    match s {
-        TaskStatus::Pending | TaskStatus::Running => BackgroundTaskStatus::Running,
-        TaskStatus::Completed => BackgroundTaskStatus::Completed,
-        TaskStatus::Failed => BackgroundTaskStatus::Failed,
-        TaskStatus::Killed | TaskStatus::Cancelled => BackgroundTaskStatus::Killed,
-    }
 }
 
 #[cfg(test)]

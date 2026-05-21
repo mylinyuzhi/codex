@@ -26,6 +26,8 @@ use coco_types::Feature;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -223,45 +225,50 @@ fn todo_key(ctx: &ToolUseContext) -> String {
 
 // ── TaskCreateTool ────────────────────────────────────────────────────
 
+/// Typed input for [`TaskCreateTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TaskCreateInput {
+    /// Task subject/title
+    #[serde(default)]
+    pub subject: Option<String>,
+    /// Detailed task description
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Present continuous form shown in spinner when in_progress
+    /// (e.g., 'Running tests')
+    #[serde(default, rename = "activeForm")]
+    pub active_form: Option<String>,
+    /// Arbitrary metadata to attach to the task
+    #[serde(default)]
+    pub metadata: Option<HashMap<String, Value>>,
+}
+
 pub struct TaskCreateTool;
 
 #[async_trait::async_trait]
 impl Tool for TaskCreateTool {
+    type Input = TaskCreateInput;
+    /// Output is a TS-shaped `{task: {...}}` envelope built by
+    /// `project_create`. Kept as `Value` because the projection helper
+    /// is shared across the 7 task tools and they share field-shape
+    /// invariants the renderer reads positionally.
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TaskCreate)
     }
     fn name(&self) -> &str {
         ToolName::TaskCreate.as_str()
     }
-    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+    fn description(&self, _input: &TaskCreateInput, _options: &DescriptionOptions) -> String {
         "Create a new task with a subject and description.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "subject".into(),
-            serde_json::json!({"type": "string", "description": "Task subject/title"}),
-        );
-        p.insert(
-            "description".into(),
-            serde_json::json!({"type": "string", "description": "Detailed task description"}),
-        );
-        p.insert(
-            "activeForm".into(),
-            serde_json::json!({"type": "string", "description": "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')"}),
-        );
-        p.insert(
-            "metadata".into(),
-            serde_json::json!({"type": "object", "description": "Arbitrary metadata to attach to the task"}),
-        );
-        ToolInputSchema { properties: p }
     }
 
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::TaskV2)
     }
 
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &TaskCreateInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -291,27 +298,16 @@ impl Tool for TaskCreateTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: TaskCreateInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         let subject = input
-            .get("subject")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Untitled task")
-            .to_string();
-        let description = input
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let active_form = input
-            .get("activeForm")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let metadata = input
-            .get("metadata")
-            .and_then(|v| v.as_object())
-            .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+            .subject
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Untitled task".to_string());
+        let description = input.description.unwrap_or_default();
+        let active_form = input.active_form;
+        let metadata = input.metadata;
 
         let task = ctx
             .task_list
@@ -361,34 +357,41 @@ impl Tool for TaskCreateTool {
 
 // ── TaskGetTool ───────────────────────────────────────────────────────
 
+/// Typed input for [`TaskGetTool`]. Wire key is `taskId` (camelCase)
+/// for TS parity.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TaskGetInput {
+    /// The task ID to look up
+    #[serde(default, rename = "taskId")]
+    pub task_id: String,
+}
+
 pub struct TaskGetTool;
 
 #[async_trait::async_trait]
 impl Tool for TaskGetTool {
+    type Input = TaskGetInput;
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TaskGet)
     }
     fn name(&self) -> &str {
         ToolName::TaskGet.as_str()
     }
-    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+    fn description(&self, _input: &TaskGetInput, _options: &DescriptionOptions) -> String {
         "Get the status and details of a task by its ID.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "taskId".into(),
-            serde_json::json!({"type": "string", "description": "The task ID to look up"}),
-        );
-        ToolInputSchema { properties: p }
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::TaskV2)
     }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &TaskGetInput) -> bool {
         true
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &TaskGetInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -415,14 +418,10 @@ impl Tool for TaskGetTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: TaskGetInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let task_id = input
-            .get("taskId")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let task_id = input.task_id;
         if task_id.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "taskId parameter is required".into(),
@@ -482,31 +481,36 @@ fn format_task_full(task: &Value) -> String {
 
 // ── TaskListTool ──────────────────────────────────────────────────────
 
+/// Typed input for [`TaskListTool`] — no parameters.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TaskListInput {}
+
 pub struct TaskListTool;
 
 #[async_trait::async_trait]
 impl Tool for TaskListTool {
+    type Input = TaskListInput;
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TaskList)
     }
     fn name(&self) -> &str {
         ToolName::TaskList.as_str()
     }
-    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+    fn description(&self, _input: &TaskListInput, _options: &DescriptionOptions) -> String {
         "List all tasks and their current status.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-        }
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::TaskV2)
     }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &TaskListInput) -> bool {
         true
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &TaskListInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -560,7 +564,7 @@ impl Tool for TaskListTool {
 
     async fn execute(
         &self,
-        _: Value,
+        _input: TaskListInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         let all = ctx
@@ -598,78 +602,64 @@ impl Tool for TaskListTool {
 
 // ── TaskUpdateTool ────────────────────────────────────────────────────
 
+/// Typed input for [`TaskUpdateTool`]. Wire keys preserve TS camelCase
+/// (`taskId`, `activeForm`, `addBlocks`, `addBlockedBy`).
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TaskUpdateInput {
+    /// The task ID to update
+    #[serde(default, rename = "taskId")]
+    pub task_id: String,
+    /// New status — 'deleted' permanently removes the task. Stored as
+    /// `Option<String>` (not an enum) because the legal-value check
+    /// happens inside `execute` and produces a TS-shaped error for
+    /// unknown values instead of a generic serde error.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// New subject for the task
+    #[serde(default)]
+    pub subject: Option<String>,
+    /// New description
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Present continuous form for spinner
+    #[serde(default, rename = "activeForm")]
+    pub active_form: Option<String>,
+    /// New owner (agent name)
+    #[serde(default)]
+    pub owner: Option<String>,
+    /// Task IDs that cannot start until this one completes
+    #[serde(default, rename = "addBlocks")]
+    pub add_blocks: Option<Vec<String>>,
+    /// Task IDs that must complete before this one can start
+    #[serde(default, rename = "addBlockedBy")]
+    pub add_blocked_by: Option<Vec<String>>,
+    /// Metadata keys to merge (set key to null to delete)
+    #[serde(default)]
+    pub metadata: Option<HashMap<String, Value>>,
+}
+
 pub struct TaskUpdateTool;
 
 #[async_trait::async_trait]
 impl Tool for TaskUpdateTool {
+    type Input = TaskUpdateInput;
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TaskUpdate)
     }
     fn name(&self) -> &str {
         ToolName::TaskUpdate.as_str()
     }
-    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+    fn description(&self, _input: &TaskUpdateInput, _options: &DescriptionOptions) -> String {
         "Update a task's status, dependencies, or metadata.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "taskId".into(),
-            serde_json::json!({"type": "string", "description": "The task ID to update"}),
-        );
-        p.insert(
-            "status".into(),
-            serde_json::json!({
-                "type": "string",
-                "enum": ["pending", "in_progress", "completed", "deleted"],
-                "description": "New status — 'deleted' permanently removes the task"
-            }),
-        );
-        p.insert(
-            "subject".into(),
-            serde_json::json!({"type": "string", "description": "New subject for the task"}),
-        );
-        p.insert(
-            "description".into(),
-            serde_json::json!({"type": "string", "description": "New description"}),
-        );
-        p.insert(
-            "activeForm".into(),
-            serde_json::json!({"type": "string", "description": "Present continuous form for spinner"}),
-        );
-        p.insert(
-            "owner".into(),
-            serde_json::json!({"type": "string", "description": "New owner (agent name)"}),
-        );
-        p.insert(
-            "addBlocks".into(),
-            serde_json::json!({
-                "type": "array", "items": {"type": "string"},
-                "description": "Task IDs that cannot start until this one completes"
-            }),
-        );
-        p.insert(
-            "addBlockedBy".into(),
-            serde_json::json!({
-                "type": "array", "items": {"type": "string"},
-                "description": "Task IDs that must complete before this one can start"
-            }),
-        );
-        p.insert(
-            "metadata".into(),
-            serde_json::json!({
-                "type": "object",
-                "description": "Metadata keys to merge (set key to null to delete)"
-            }),
-        );
-        ToolInputSchema { properties: p }
     }
 
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::TaskV2)
     }
 
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &TaskUpdateInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -729,14 +719,10 @@ impl Tool for TaskUpdateTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: TaskUpdateInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let task_id = input
-            .get("taskId")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let task_id = input.task_id.clone();
         if task_id.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "taskId parameter is required".into(),
@@ -769,7 +755,7 @@ impl Tool for TaskUpdateTool {
 
         // ── Handle `status=deleted` — delete the task and return early.
         // TS `TaskUpdateTool.ts:213-226`.
-        if let Some("deleted") = input.get("status").and_then(|v| v.as_str()) {
+        if input.status.as_deref() == Some("deleted") {
             let deleted = ctx.task_list.delete_task(&task_id).await.map_err(|e| {
                 ToolError::ExecutionFailed {
                     message: format!("task_list.delete_task failed: {e}"),
@@ -803,29 +789,26 @@ impl Tool for TaskUpdateTool {
         let mut status_change: Option<(String, String)> = None;
         let mut newly_completed = false;
 
-        if let Some(s) = input.get("subject").and_then(|v| v.as_str())
+        if let Some(s) = input.subject.as_deref()
             && s != existing.subject
         {
             update.subject = Some(s.to_string());
             updated_fields.push("subject");
         }
-        if let Some(d) = input.get("description").and_then(|v| v.as_str())
+        if let Some(d) = input.description.as_deref()
             && d != existing.description
         {
             update.description = Some(d.to_string());
             updated_fields.push("description");
         }
-        if let Some(af) = input.get("activeForm").and_then(|v| v.as_str())
+        if let Some(af) = input.active_form.as_deref()
             && Some(af) != existing.active_form.as_deref()
         {
             update.active_form = Some(af.to_string());
             updated_fields.push("activeForm");
         }
 
-        let requested_owner = input
-            .get("owner")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let requested_owner = input.owner.clone();
         if let Some(o) = &requested_owner
             && existing.owner.as_deref() != Some(o.as_str())
         {
@@ -836,7 +819,7 @@ impl Tool for TaskUpdateTool {
         // Auto-owner assignment: when a teammate sets status=in_progress
         // without an explicit owner and the task is unclaimed, auto-
         // assign. TS `TaskUpdateTool.ts:188-199`.
-        if let Some("in_progress") = input.get("status").and_then(|v| v.as_str())
+        if input.status.as_deref() == Some("in_progress")
             && requested_owner.is_none()
             && existing.owner.is_none()
             && ctx.is_teammate
@@ -851,7 +834,7 @@ impl Tool for TaskUpdateTool {
 
         // Status transition — reject "deleted" (handled above) and
         // unknown enum values.
-        if let Some(status_str) = input.get("status").and_then(|v| v.as_str()) {
+        if let Some(status_str) = input.status.as_deref() {
             let new_status = match status_str {
                 "pending" => TaskListStatus::Pending,
                 "in_progress" => TaskListStatus::InProgress,
@@ -881,13 +864,11 @@ impl Tool for TaskUpdateTool {
         }
 
         // Metadata merge (null deletions handled inside the store).
-        if let Some(meta) = input.get("metadata").and_then(|v| v.as_object()) {
-            let merge: HashMap<String, Value> =
-                meta.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            if !merge.is_empty() {
-                update.metadata_merge = Some(merge);
-                updated_fields.push("metadata");
-            }
+        if let Some(merge) = input.metadata
+            && !merge.is_empty()
+        {
+            update.metadata_merge = Some(merge);
+            updated_fields.push("metadata");
         }
 
         // TaskCompleted hook fires BEFORE the status flip is persisted
@@ -928,36 +909,32 @@ impl Tool for TaskUpdateTool {
         }
 
         // Add blocks / blockedBy edges (these go through block_task).
-        if let Some(add_blocks) = input.get("addBlocks").and_then(|v| v.as_array()) {
+        if let Some(add_blocks) = input.add_blocks.as_deref() {
             let mut any_added = false;
-            for id_v in add_blocks {
-                if let Some(id) = id_v.as_str() {
-                    let added = ctx
-                        .task_list
-                        .block_task(&task_id, id)
-                        .await
-                        .unwrap_or(false);
-                    if added {
-                        any_added = true;
-                    }
+            for id in add_blocks {
+                let added = ctx
+                    .task_list
+                    .block_task(&task_id, id)
+                    .await
+                    .unwrap_or(false);
+                if added {
+                    any_added = true;
                 }
             }
             if any_added {
                 updated_fields.push("blocks");
             }
         }
-        if let Some(add_blocked) = input.get("addBlockedBy").and_then(|v| v.as_array()) {
+        if let Some(add_blocked) = input.add_blocked_by.as_deref() {
             let mut any_added = false;
-            for id_v in add_blocked {
-                if let Some(id) = id_v.as_str() {
-                    let added = ctx
-                        .task_list
-                        .block_task(id, &task_id)
-                        .await
-                        .unwrap_or(false);
-                    if added {
-                        any_added = true;
-                    }
+            for id in add_blocked {
+                let added = ctx
+                    .task_list
+                    .block_task(id, &task_id)
+                    .await
+                    .unwrap_or(false);
+                if added {
+                    any_added = true;
                 }
             }
             if any_added {
@@ -1042,51 +1019,48 @@ fn now_iso() -> String {
 
 // ── TaskStopTool ──────────────────────────────────────────────────────
 
+/// Typed input for [`TaskStopTool`]. The model can supply any of three
+/// aliased keys — `task_id` (canonical), `shell_id` (KillShell
+/// compatibility), or `taskId` (legacy camelCase). Schemars derives a
+/// schema that advertises ALL three as separate fields so the model
+/// sees the same surface as the hand-written schema; `serde(alias)`
+/// would only accept multiple wire names but emit one in the schema.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TaskStopInput {
+    /// The task ID to stop. Accepts IDs returned by TaskCreate,
+    /// Agent (subagent spawn), or Bash (run_in_background=true).
+    #[serde(default)]
+    pub task_id: Option<String>,
+    /// Deprecated alias for task_id (KillShell compatibility).
+    #[serde(default)]
+    pub shell_id: Option<String>,
+    /// Legacy camelCase alias for task_id.
+    #[serde(default, rename = "taskId")]
+    pub task_id_camel: Option<String>,
+}
+
 pub struct TaskStopTool;
 
 #[async_trait::async_trait]
 impl Tool for TaskStopTool {
+    type Input = TaskStopInput;
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TaskStop)
     }
     fn name(&self) -> &str {
         ToolName::TaskStop.as_str()
     }
-    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+    fn description(&self, _input: &TaskStopInput, _options: &DescriptionOptions) -> String {
         "Stop a running background task by its ID. For TODO-style plan \
          items (created via TaskCreate), use TaskUpdate with status \
          'completed' or 'deleted' instead — plan items are not tracked \
          in the running-task registry."
             .into()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "task_id".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The task ID to stop. Accepts IDs returned by TaskCreate, \
-                                Agent (subagent spawn), or Bash (run_in_background=true)."
-            }),
-        );
-        p.insert(
-            "shell_id".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Deprecated alias for task_id (KillShell compatibility)."
-            }),
-        );
-        p.insert(
-            "taskId".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Legacy camelCase alias for task_id."
-            }),
-        );
-        ToolInputSchema { properties: p }
-    }
 
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &TaskStopInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -1103,14 +1077,18 @@ impl Tool for TaskStopTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: TaskStopInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let task_id = first_non_empty(&[
-            input.get("task_id"),
-            input.get("shell_id"),
-            input.get("taskId"),
-        ])
+        let task_id = [
+            input.task_id.as_deref(),
+            input.shell_id.as_deref(),
+            input.task_id_camel.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|s| !s.is_empty())
+        .map(String::from)
         .unwrap_or_default();
         if task_id.is_empty() {
             return Err(ToolError::InvalidInput {
@@ -1151,30 +1129,44 @@ impl Tool for TaskStopTool {
     }
 }
 
-fn first_non_empty(candidates: &[Option<&Value>]) -> Option<String> {
-    for v in candidates {
-        if let Some(s) = v.and_then(|v| v.as_str())
-            && !s.is_empty()
-        {
-            return Some(s.to_string());
-        }
-    }
-    None
+// ── TaskOutputTool ────────────────────────────────────────────────────
+
+/// Typed input for [`TaskOutputTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TaskOutputInput {
+    /// The task ID to get output for (canonical name)
+    #[serde(default)]
+    pub task_id: Option<String>,
+    /// Legacy camelCase alias for task_id
+    #[serde(default, rename = "taskId")]
+    pub task_id_camel: Option<String>,
+    /// When true (default), wait for the task to complete before
+    /// returning. Set to false for an immediate snapshot.
+    #[serde(default = "default_true")]
+    pub block: bool,
+    /// Blocking timeout in milliseconds (default 30000).
+    #[serde(default)]
+    pub timeout: Option<u64>,
 }
 
-// ── TaskOutputTool ────────────────────────────────────────────────────
+fn default_true() -> bool {
+    true
+}
 
 pub struct TaskOutputTool;
 
 #[async_trait::async_trait]
 impl Tool for TaskOutputTool {
+    type Input = TaskOutputInput;
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TaskOutput)
     }
     fn name(&self) -> &str {
         ToolName::TaskOutput.as_str()
     }
-    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+    fn description(&self, _input: &TaskOutputInput, _options: &DescriptionOptions) -> String {
         "Retrieves output from a running or completed background task — a shell \
          launched with `run_in_background`, an async agent spawn, or a remote \
          session. With block=true (default), waits for the task to complete \
@@ -1182,43 +1174,13 @@ impl Tool for TaskOutputTool {
          created via TaskCreate, use TaskGet — they live in a separate namespace."
             .into()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "task_id".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The task ID to get output for (canonical name)"
-            }),
-        );
-        p.insert(
-            "taskId".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Legacy camelCase alias for task_id"
-            }),
-        );
-        p.insert(
-            "block".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "When true (default), wait for the task to complete before returning. \
-                                Set to false for an immediate snapshot."
-            }),
-        );
-        p.insert(
-            "timeout".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Blocking timeout in milliseconds (default 30000). Polls every 100ms."
-            }),
-        );
-        ToolInputSchema { properties: p }
-    }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_read_only(&self, _input: &TaskOutputInput) -> bool {
         true
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &TaskOutputInput) -> bool {
         true
     }
 
@@ -1279,31 +1241,28 @@ impl Tool for TaskOutputTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: TaskOutputInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let task_id =
-            first_non_empty(&[input.get("task_id"), input.get("taskId")]).unwrap_or_default();
+        let task_id = [input.task_id.as_deref(), input.task_id_camel.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|s| !s.is_empty())
+            .map(String::from)
+            .unwrap_or_default();
         if task_id.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "task_id (or taskId) parameter is required".into(),
                 error_code: None,
             });
         }
-        let block = input
-            .get("block")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true);
-        let timeout_ms = input
-            .get("timeout")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(30_000);
+        let block = input.block;
+        let timeout_ms = input.timeout.unwrap_or(30_000);
 
         // Stage 1: background task namespace.
         if let Some(handle) = ctx.task_handle.as_ref()
             && let Ok(initial) = handle.get_task_status(&task_id).await
         {
-            use coco_tool_runtime::BackgroundTaskStatus;
             let info = if block {
                 wait_for_task_completion(handle.as_ref(), &task_id, initial, timeout_ms).await
             } else {
@@ -1314,22 +1273,16 @@ impl Tool for TaskOutputTool {
                 .await
                 .map(|d| d.content)
                 .unwrap_or_default();
-            let retrieval = match info.status {
-                BackgroundTaskStatus::Completed
-                | BackgroundTaskStatus::Failed
-                | BackgroundTaskStatus::Killed => RetrievalStatus::Success,
-                _ if block => RetrievalStatus::Timeout,
-                _ => RetrievalStatus::NotReady,
+            let retrieval = if info.status.is_terminal() {
+                RetrievalStatus::Success
+            } else if block {
+                RetrievalStatus::Timeout
+            } else {
+                RetrievalStatus::NotReady
             };
-            let status_str = format!("{:?}", info.status).to_lowercase();
+            let status_str = task_status_wire_string(info.status);
             return Ok(ToolResult {
-                data: project_output_background(
-                    &info.task_id,
-                    &status_str,
-                    output,
-                    None,
-                    retrieval,
-                ),
+                data: project_output_background(&info.id, status_str, output, None, retrieval),
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
@@ -1353,59 +1306,79 @@ impl Tool for TaskOutputTool {
     }
 }
 
+/// Wait for a background task to reach a terminal state. Event-
+/// driven via [`TaskReader::subscribe_terminal`] — the production
+/// impl returns a `watch::Receiver` that fires exactly once on the
+/// `update_status` transition into Completed/Failed/Killed.
+///
+/// Falls back to a one-shot `get_task_status` snapshot if no
+/// terminal subscription is available (test handles without watch
+/// wiring). TS parity for the blocking semantics at
+/// `TaskOutputTool.tsx:118-142` polling loop, but replaces 100 ms
+/// polling with O(1) await — Rust has primitives JS lacks, no
+/// reason to mirror its busy-wait.
 async fn wait_for_task_completion(
-    handle: &dyn coco_tool_runtime::TaskHandle,
+    handle: &dyn coco_tool_runtime::TaskReader,
     task_id: &str,
-    initial: coco_tool_runtime::BackgroundTaskInfo,
+    initial: coco_types::TaskStateBase,
     timeout_ms: u64,
-) -> coco_tool_runtime::BackgroundTaskInfo {
-    use coco_tool_runtime::BackgroundTaskStatus;
-    if matches!(
-        initial.status,
-        BackgroundTaskStatus::Completed
-            | BackgroundTaskStatus::Failed
-            | BackgroundTaskStatus::Killed
-    ) {
+) -> coco_types::TaskStateBase {
+    if initial.status.is_terminal() {
         return initial;
     }
-    let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(timeout_ms);
-    let interval = std::time::Duration::from_millis(100);
-    let mut last = initial;
-    while start.elapsed() < timeout {
-        tokio::time::sleep(interval).await;
-        match handle.get_task_status(task_id).await {
-            Ok(info) => {
-                let terminal = matches!(
-                    info.status,
-                    BackgroundTaskStatus::Completed
-                        | BackgroundTaskStatus::Failed
-                        | BackgroundTaskStatus::Killed
-                );
-                last = info;
-                if terminal {
-                    return last;
-                }
-            }
-            Err(_) => return last,
+
+    let Some(signal) = handle.subscribe_terminal(task_id).await else {
+        return initial;
+    };
+    tokio::select! {
+        _final_status = signal.await_terminal() => {
+            handle.get_task_status(task_id).await.unwrap_or(initial)
         }
+        _ = tokio::time::sleep(timeout) => initial,
     }
-    last
+}
+
+/// Wire-string projection of [`coco_types::TaskStatus`] used in the
+/// `TaskOutput` envelope's `<status>` tag. TS parity with the lowercase
+/// strings emitted at `TaskOutputTool.tsx:99-101`.
+fn task_status_wire_string(status: coco_types::TaskStatus) -> &'static str {
+    match status {
+        coco_types::TaskStatus::Pending => "pending",
+        coco_types::TaskStatus::Running => "running",
+        coco_types::TaskStatus::Completed => "completed",
+        coco_types::TaskStatus::Failed => "failed",
+        coco_types::TaskStatus::Killed => "killed",
+    }
 }
 
 // ── TodoWriteTool ─────────────────────────────────────────────────────
+
+/// Typed input for [`TodoWriteTool`]. Items deserialize directly into
+/// the existing `TodoRecord` type (already `Serialize +
+/// Deserialize`); we add a `JsonSchema` derive at its definition.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TodoWriteInput {
+    /// The updated todo list. Pass the full list each call; the
+    /// prior list is replaced.
+    #[serde(default)]
+    pub todos: Vec<TodoRecord>,
+}
 
 pub struct TodoWriteTool;
 
 #[async_trait::async_trait]
 impl Tool for TodoWriteTool {
+    type Input = TodoWriteInput;
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TodoWrite)
     }
     fn name(&self) -> &str {
         ToolName::TodoWrite.as_str()
     }
-    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+    fn description(&self, _input: &TodoWriteInput, _options: &DescriptionOptions) -> String {
         "Write or update the in-conversation TODO list. Pass the full list each call; \
          the prior list is replaced. Each item requires content, status, and activeForm."
             .into()
@@ -1413,39 +1386,33 @@ impl Tool for TodoWriteTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         !ctx.features.enabled(Feature::TaskV2)
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "todos".into(),
-            serde_json::json!({
-                "type": "array",
-                "description": "The updated todo list",
-                "items": {
-                    "type": "object",
-                    "required": ["content", "status", "activeForm"],
-                    "properties": {
-                        "content": {"type": "string", "minLength": 1, "description": "Task description"},
-                        "status": {
-                            "type": "string",
-                            "enum": ["pending", "in_progress", "completed"],
-                            "description": "Task status"
-                        },
-                        "activeForm": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "Verb phrase shown while the task is in progress"
-                        }
-                    }
-                }
-            }),
-        );
-        ToolInputSchema { properties: p }
-    }
     fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
         Some("write the per-agent todo checklist for tracking work")
+    }
+
+    /// Override the auto-derived schema to inject the `status` enum
+    /// constraint. `TodoRecord.status` is a `String` in Rust (used
+    /// across TUI and store paths that pre-date this typing pass),
+    /// so schemars doesn't synthesize the enum on its own. TS
+    /// `TodoItemSchema.status: z.enum(['pending','in_progress','completed'])`
+    /// is restored here so the model gets the same tight schema.
+    fn input_schema(&self) -> ToolInputSchema {
+        let mut schema = coco_tool_runtime::derive_input_schema::<TodoWriteInput>();
+        if let Some(todos) = schema.properties.get_mut("todos")
+            && let Some(items) = todos.get_mut("items")
+            && let Some(props) = items.get_mut("properties")
+            && let Some(status) = props.get_mut("status")
+            && let Some(obj) = status.as_object_mut()
+        {
+            obj.insert(
+                "enum".into(),
+                serde_json::json!(["pending", "in_progress", "completed"]),
+            );
+        }
+        schema
     }
 
     /// TS parity: `TodoWriteTool.ts::mapToolResultToToolResultBlockParam`.
@@ -1473,15 +1440,10 @@ impl Tool for TodoWriteTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: TodoWriteInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let todos_value = input.get("todos").cloned().unwrap_or(Value::Array(vec![]));
-        let incoming: Vec<TodoRecord> =
-            serde_json::from_value(todos_value).map_err(|e| ToolError::InvalidInput {
-                message: format!("Invalid todos format: {e}"),
-                error_code: None,
-            })?;
+        let incoming = input.todos;
 
         for (i, item) in incoming.iter().enumerate() {
             if item.content.is_empty() {

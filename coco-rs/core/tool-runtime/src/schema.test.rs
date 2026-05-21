@@ -35,6 +35,10 @@ struct TestTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for TestTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom(self.name.clone())
     }
@@ -47,6 +51,7 @@ impl crate::traits::Tool for TestTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: self.properties.clone(),
+            required: Vec::new(),
         }
     }
     fn input_json_schema(&self) -> Option<Value> {

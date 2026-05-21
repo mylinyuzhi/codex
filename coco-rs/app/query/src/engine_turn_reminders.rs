@@ -602,8 +602,10 @@ impl QueryEngine {
             // coordinator) push snapshots when their event fires; the
             // engine drains the mailbox once per turn to populate the
             // `TurnReminderInput` slots. `current_session_memory` and
-            // `skill_discovery` have no TS creator yet (audit-gaps Round
-            // 13) — kept `None` until upstream lands them.
+            // `skill_discovery` have no upstream producer yet — kept as
+            // `None` until `coco-memory` / `coco-skills` wire them.
+            // Variants retained because TS has them
+            // (`attachments.ts:662-666` / `:538-542`).
             current_session_memory: None,
             command_permissions: mailbox_state.command_permissions,
             dynamic_skill: mailbox_state.dynamic_skill,

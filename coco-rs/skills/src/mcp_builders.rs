@@ -139,7 +139,7 @@ pub fn build_mcp_skill_default(spec: &McpSkillSpec) -> Result<SkillDefinition, S
         .map(value_to_csv_list_local)
         .unwrap_or_default();
 
-    let effort = lookup_str(&["effort"]);
+    let effort = lookup_str(&["effort"]).and_then(|s| s.trim().parse().ok());
     let context = match lookup_str(&["context"]).as_deref() {
         Some("fork") => SkillContext::Fork,
         _ => SkillContext::Inline,

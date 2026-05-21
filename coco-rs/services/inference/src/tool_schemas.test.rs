@@ -15,7 +15,10 @@ fn make_source(name: &str, desc: &str, origin: ToolSchemaOrigin) -> ToolSchemaSo
     ToolSchemaSource {
         name: name.to_string(),
         description: desc.to_string(),
-        input_schema: ToolInputSchema { properties },
+        input_schema: ToolInputSchema {
+            properties,
+            required: Vec::new(),
+        },
         origin,
     }
 }

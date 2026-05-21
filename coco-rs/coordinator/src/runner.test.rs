@@ -194,7 +194,7 @@ async fn test_get_context() {
             system_prompt: Some("You are helpful.".into()),
             allowed_tools: vec!["Read".into(), "Write".into()],
             allow_permission_prompts: true,
-            effort: Some("high".into()),
+            effort: Some(coco_types::ReasoningEffort::High),
             use_exact_tools: true,
             isolation: coco_types::AgentIsolation::Worktree,
             memory_scope: Some(coco_types::MemoryScope::Project),
@@ -214,7 +214,7 @@ async fn test_get_context() {
     assert_eq!(ctx.working_dir, "/custom/dir");
     assert_eq!(ctx.allowed_tools, vec!["Read", "Write"]);
     assert!(ctx.allow_permission_prompts);
-    assert_eq!(ctx.effort.as_deref(), Some("high"));
+    assert_eq!(ctx.effort, Some(coco_types::ReasoningEffort::High));
     assert!(ctx.use_exact_tools);
     assert_eq!(ctx.isolation, coco_types::AgentIsolation::Worktree);
     assert_eq!(ctx.memory_scope, Some(coco_types::MemoryScope::Project));

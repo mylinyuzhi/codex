@@ -1,8 +1,9 @@
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
 /// Output mode for the Grep tool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GrepOutputMode {
     /// Show matching lines with context.
@@ -15,11 +16,13 @@ pub enum GrepOutputMode {
 }
 
 /// Action for the Config tool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigAction {
     Get,
     Set,
+    /// Default — listing the known keys is the safe no-arg action.
+    #[default]
     List,
     Reset,
 }
@@ -32,7 +35,7 @@ pub enum ConfigAction {
 /// **not** an action — they flow through the passive `system_reminder`
 /// pipeline (TS: `passiveFeedback.ts`; Rust: `coco_lsp::DiagnosticsStore`
 /// + `app/query/reminder_adapters.rs`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum LspAction {
     GoToDefinition,

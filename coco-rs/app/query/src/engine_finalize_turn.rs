@@ -327,6 +327,27 @@ impl QueryEngine {
         turn_id: String,
         usage: TokenUsage,
     ) {
+        // Periodic terminal-task eviction. Fires every turn,
+        // regardless of success / failure / cancellation outcome —
+        // matches TS `applyTaskOffsetsAndEvictions`
+        // (`utils/task/framework.ts:213-249`) cadence inside
+        // `getAttachments`, which TS calls on every turn boundary
+        // regardless of how the turn ended. Without a periodic sweep,
+        // `TaskManager`'s in-memory map grows monotonically over a
+        // long session. The panel-grace gate is enforced inside
+        // (`remove_completed` keeps `retain == true` or
+        // `evict_after > now` tasks).
+        if let Some(running) = self.running_tasks.as_ref() {
+            let removed = running.remove_completed().await;
+            if removed > 0 {
+                tracing::trace!(
+                    target: "coco_query::task_runtime",
+                    removed,
+                    "per-turn evicted terminal tasks past panel-grace"
+                );
+            }
+        }
+
         // Tool-use-summary side-fork — TS `query.ts:1411-1482` spawns
         // **immediately** after `query_tool_execution_end`, BEFORE any
         // post-tool processing (queue drain, microcompact, auto-compact,

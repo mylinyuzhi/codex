@@ -11,48 +11,98 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use serde_json::Value;
-use std::collections::HashMap;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
+
+/// Message intent — controls how the UI renders the brief.
+///
+/// TS parity: `BriefTool.ts` `status: z.enum(['normal', 'proactive'])`.
+/// Wire format stays lowercase (matches TS).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BriefStatus {
+    /// Direct reply to a user request.
+    #[default]
+    Normal,
+    /// Unsolicited update (proactive surfacing).
+    Proactive,
+}
+
+/// Typed input for [`BriefTool`].
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct BriefInput {
+    /// Markdown-formatted message to the user
+    pub message: String,
+    /// File paths (absolute or relative to cwd) to attach
+    #[serde(default)]
+    pub attachments: Vec<String>,
+    /// Message intent: `normal` for direct replies, `proactive` for
+    /// unsolicited updates
+    #[serde(default)]
+    pub status: BriefStatus,
+}
+
+/// Per-attachment metadata returned by [`BriefTool::execute`].
+///
+/// The shape stays close to the legacy `serde_json::json!({...})`
+/// envelope so transcript replay across the migration boundary
+/// round-trips without surprises.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BriefAttachment {
+    pub path: String,
+    pub exists: bool,
+    /// File size in bytes. Cast from `u64` (`std::fs::Metadata::len`)
+    /// per the project's `i64`/`u64` convention; realistic file
+    /// sizes never approach `i64::MAX` (~9 EiB).
+    pub size: i64,
+    pub is_image: bool,
+}
+
+/// Typed output for [`BriefTool::execute`]. Mirrors the legacy JSON
+/// envelope (`message`/`status`/`attachments`/`timestamp`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BriefOutput {
+    pub message: String,
+    pub status: BriefStatus,
+    pub attachments: Vec<BriefAttachment>,
+    /// Millisecond Unix timestamp captured at delivery time, encoded
+    /// as a decimal string (mirrors TS where JS numbers can't safely
+    /// represent ms-precision Unix timestamps).
+    pub timestamp: String,
+}
 
 pub struct BriefTool;
 
 #[async_trait::async_trait]
 impl Tool for BriefTool {
+    type Input = BriefInput;
+    type Output = BriefOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Brief)
     }
     fn name(&self) -> &str {
         ToolName::Brief.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &BriefInput, _options: &DescriptionOptions) -> String {
         "Send a structured message to the user with optional file attachments.".into()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "message".into(),
-            serde_json::json!({"type": "string", "description": "Markdown-formatted message to the user"}),
-        );
-        p.insert(
-            "attachments".into(),
-            serde_json::json!({"type": "array", "items": {"type": "string"}, "description": "File paths (absolute or relative to cwd) to attach"}),
-        );
-        p.insert(
-            "status".into(),
-            serde_json::json!({"type": "string", "enum": ["normal", "proactive"], "description": "Message intent: 'normal' for direct replies, 'proactive' for unsolicited updates"}),
-        );
-        ToolInputSchema { properties: p }
+
+    fn is_read_only(&self, _input: &BriefInput) -> bool {
+        true
     }
-    fn is_read_only(&self, _: &Value) -> bool {
+    /// Side-channel UI delivery — semantically read-only regardless of
+    /// input shape; Plan mode keeps Brief visible.
+    fn is_always_read_only(&self) -> bool {
         true
     }
 
     /// TS `BriefTool.ts`: `isConcurrencySafe() { return true }`. Brief
     /// messages are a side-channel to the user — multiple briefs in the
     /// same turn are independent and stamped with their own timestamps.
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &BriefInput) -> bool {
         true
     }
 
@@ -60,17 +110,11 @@ impl Tool for BriefTool {
     /// The model only needs the delivery confirmation; the message body
     /// + attachments + timestamp are TUI/state concerns and would waste
     /// tokens if JSON-stringified for the model.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let n = data
-            .get("attachments")
-            .and_then(Value::as_array)
-            .map_or(0, std::vec::Vec::len);
-        let suffix = if n == 0 {
-            String::new()
-        } else if n == 1 {
-            " (1 attachment included)".to_string()
-        } else {
-            format!(" ({n} attachments included)")
+    fn render_for_model(&self, out: &BriefOutput) -> Vec<ToolResultContentPart> {
+        let suffix = match out.attachments.len() {
+            0 => String::new(),
+            1 => " (1 attachment included)".to_string(),
+            n => format!(" ({n} attachments included)"),
         };
         vec![ToolResultContentPart::Text {
             text: format!("Message delivered to user.{suffix}"),
@@ -80,26 +124,20 @@ impl Tool for BriefTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: BriefInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let message = input
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if message.is_empty() {
+    ) -> Result<ToolResult<BriefOutput>, ToolError> {
+        // Defensive empty-string guard. Pre-typed-migration this caught
+        // omitted `message`; the typed `Input` now rejects missing
+        // fields at deserialize time so this only catches the
+        // explicitly-empty `""` case (TS parity — zod `z.string()`
+        // accepts empty strings unless `.min(1)` is used).
+        if input.message.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "message parameter is required".into(),
                 error_code: None,
             });
         }
-
-        let status = input
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("normal");
 
         // Resolve attachments. Relative paths resolve against the
         // context cwd override (worktree-isolated subagents) before
@@ -110,37 +148,34 @@ impl Tool for BriefTool {
             .clone()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
-        let mut resolved_attachments: Vec<Value> = Vec::new();
-        if let Some(attachments) = input.get("attachments").and_then(|v| v.as_array()) {
-            for attachment in attachments {
-                if let Some(path_str) = attachment.as_str() {
-                    let path = if std::path::Path::new(path_str).is_absolute() {
-                        std::path::PathBuf::from(path_str)
-                    } else {
-                        resolve_root.join(path_str)
-                    };
 
-                    let meta = tokio::fs::metadata(&path).await;
-                    let exists = meta.is_ok();
-                    let size = meta.as_ref().map(std::fs::Metadata::len).unwrap_or(0);
-                    let is_image = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .is_some_and(|ext| {
-                            matches!(
-                                ext.to_lowercase().as_str(),
-                                "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
-                            )
-                        });
+        let mut resolved_attachments: Vec<BriefAttachment> = Vec::new();
+        for path_str in &input.attachments {
+            let path = if std::path::Path::new(path_str).is_absolute() {
+                std::path::PathBuf::from(path_str)
+            } else {
+                resolve_root.join(path_str)
+            };
 
-                    resolved_attachments.push(serde_json::json!({
-                        "path": path.display().to_string(),
-                        "exists": exists,
-                        "size": size,
-                        "is_image": is_image,
-                    }));
-                }
-            }
+            let meta = tokio::fs::metadata(&path).await;
+            let exists = meta.is_ok();
+            let size = meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+            let is_image = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|ext| {
+                    matches!(
+                        ext.to_lowercase().as_str(),
+                        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
+                    )
+                });
+
+            resolved_attachments.push(BriefAttachment {
+                path: path.display().to_string(),
+                exists,
+                size,
+                is_image,
+            });
         }
 
         let timestamp = std::time::SystemTime::now()
@@ -150,12 +185,12 @@ impl Tool for BriefTool {
             .to_string();
 
         Ok(ToolResult {
-            data: serde_json::json!({
-                "message": message,
-                "status": status,
-                "attachments": resolved_attachments,
-                "timestamp": timestamp,
-            }),
+            data: BriefOutput {
+                message: input.message,
+                status: input.status,
+                attachments: resolved_attachments,
+                timestamp,
+            },
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),

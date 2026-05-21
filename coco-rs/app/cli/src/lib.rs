@@ -5,6 +5,7 @@
 pub mod agent_handle_factory;
 pub mod agent_transcript_persistence;
 pub mod at_mention_turn;
+pub mod command_queue_sink;
 pub mod disk_task_output;
 pub mod elicitation_hooks;
 pub mod file_changed_watcher;
@@ -113,7 +114,7 @@ pub struct Cli {
 
     /// Reasoning effort level: low, medium, high, max.
     #[arg(long)]
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
 
     /// Allow specific tools (repeatable).
     #[arg(long, num_args = 1..)]

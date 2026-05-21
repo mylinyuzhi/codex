@@ -124,10 +124,20 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // `default_thinking_level` from `ModelInfo` then applies)
             // rather than failing the spawn — surface as a warning
             // path later if it becomes useful.
-            thinking_level: config
-                .effort
-                .as_deref()
-                .and_then(|s| s.parse::<ThinkingLevel>().ok()),
+            // `config.effort` is the typed `ReasoningEffort` discriminator
+            // selecting one entry from the resolved model's
+            // `supported_thinking_levels`. The build path lives at
+            // `session_runtime::thinking_level_for_effort_from` and is
+            // model-aware (different `budget_tokens` per model). At this
+            // engine-config layer the budget hasn't been resolved yet —
+            // we just thread the categorical level (no budget, default
+            // options) and let the downstream apply model-relative
+            // overrides where they exist.
+            thinking_level: config.effort.map(|effort| ThinkingLevel {
+                effort,
+                budget_tokens: None,
+                options: std::collections::HashMap::new(),
+            }),
             session_id: config.session_id.unwrap_or_default(),
             project_dir: None,
             // Subagent rule maps start empty, then we fold in any

@@ -46,17 +46,17 @@ async fn test_task_list() {
 }
 
 #[tokio::test]
-async fn test_stop_task() {
+async fn test_kill_task() {
     let mgr = TaskManager::new();
     let id = mgr
         .create(TaskType::LocalBash, "long running", "/tmp/out.txt")
         .await;
 
     mgr.update_status(&id, TaskStatus::Running).await;
-    mgr.stop(&id).await;
+    mgr.update_status(&id, TaskStatus::Killed).await;
 
     let task = mgr.get(&id).await.expect("task should exist");
-    assert_eq!(task.status, TaskStatus::Cancelled);
+    assert_eq!(task.status, TaskStatus::Killed);
     assert!(task.end_time.is_some());
 }
 
@@ -85,29 +85,6 @@ async fn test_task_lifecycle() {
 }
 
 #[tokio::test]
-async fn test_output_storage() {
-    let mgr = TaskManager::new();
-    let id = mgr
-        .create(TaskType::LocalBash, "echo hello", "/tmp/echo.txt")
-        .await;
-
-    // No output initially
-    assert!(mgr.get_output(&id).await.is_none());
-
-    let output = TaskOutput {
-        stdout: "hello world\n".to_string(),
-        stderr: String::new(),
-        exit_code: 0,
-    };
-    mgr.set_output(&id, output).await;
-
-    let retrieved = mgr.get_output(&id).await.expect("output should exist");
-    assert_eq!(retrieved.stdout, "hello world\n");
-    assert!(retrieved.stderr.is_empty());
-    assert_eq!(retrieved.exit_code, 0);
-}
-
-#[tokio::test]
 async fn test_remove_completed() {
     let mgr = TaskManager::new();
     let id1 = mgr.create(TaskType::LocalBash, "done", "/tmp/1.txt").await;
@@ -122,16 +99,6 @@ async fn test_remove_completed() {
     mgr.update_status(&id2, TaskStatus::Running).await;
     mgr.update_status(&id3, TaskStatus::Failed).await;
 
-    mgr.set_output(
-        &id1,
-        TaskOutput {
-            stdout: "ok".into(),
-            stderr: String::new(),
-            exit_code: 0,
-        },
-    )
-    .await;
-
     let removed = mgr.remove_completed().await;
     assert_eq!(removed, 2); // id1 (Completed) + id3 (Failed)
 
@@ -139,9 +106,6 @@ async fn test_remove_completed() {
     let remaining = mgr.list().await;
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, id2);
-
-    // Output for completed task should also be removed
-    assert!(mgr.get_output(&id1).await.is_none());
 }
 
 // ─── WS-6: event sink emission ─────────────────────────────────────────
@@ -226,14 +190,14 @@ async fn test_event_sink_failure_maps_to_failed_status() {
 }
 
 #[tokio::test]
-async fn test_event_sink_stop_maps_to_stopped_status() {
+async fn test_event_sink_killed_maps_to_stopped_status() {
     let (tx, mut rx) = mpsc::channel::<CoreEvent>(16);
     let mgr = TaskManager::new().with_event_sink(tx);
 
     let id = mgr
         .create(TaskType::LocalBash, "long job", "/tmp/out.txt")
         .await;
-    mgr.stop(&id).await;
+    mgr.update_status(&id, TaskStatus::Killed).await;
 
     let events = collect(&mut rx);
     assert_eq!(events.len(), 2);

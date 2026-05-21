@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use crate::context::ToolUseContext;
-use crate::traits::Tool;
+use crate::traits::DynTool;
 
 /// Whether the given mode permits exposing this tool to the model
 /// **at schema-definition time** (before any input exists).
@@ -16,7 +16,7 @@ use crate::traits::Tool;
 /// schema to statically-read-only tools. Every other mode lets the
 /// schema through unchanged; runtime permission rules still apply on
 /// the actual call.
-fn mode_permits_tool(mode: PermissionMode, tool: &dyn Tool) -> bool {
+fn mode_permits_tool(mode: PermissionMode, tool: &dyn DynTool) -> bool {
     match mode {
         PermissionMode::Plan => tool.is_always_read_only(),
         PermissionMode::Default
@@ -41,7 +41,7 @@ fn mode_permits_tool(mode: PermissionMode, tool: &dyn Tool) -> bool {
 /// pipeline. If a future requirement needs schema-time probing
 /// (e.g. show as "unavailable" without deregistering), add a 5th
 /// filter using `ctx.mcp` here.
-fn passes_filter_pipeline(tool: &dyn Tool, ctx: &ToolUseContext) -> bool {
+fn passes_filter_pipeline(tool: &dyn DynTool, ctx: &ToolUseContext) -> bool {
     let id = tool.id();
     tool.is_enabled(ctx)
         && ctx.tool_overrides.permits(&id)
@@ -59,7 +59,7 @@ fn passes_filter_pipeline(tool: &dyn Tool, ctx: &ToolUseContext) -> bool {
 #[derive(Default)]
 struct RegistryInner {
     /// Primary lookup: canonical name → tool.
-    tools: HashMap<String, Arc<dyn Tool>>,
+    tools: HashMap<String, Arc<dyn DynTool>>,
     /// Alias lookup: alias → canonical name.
     aliases: HashMap<String, String>,
 }
@@ -100,7 +100,7 @@ impl ToolRegistry {
     ///   from shadowing built-in tools (e.g. an MCP server advertising a
     ///   tool named "Read" is registered as "mcp__foo__Read" rather than
     ///   overwriting the real Read tool).
-    pub fn register(&self, tool: Arc<dyn Tool>) {
+    pub fn register(&self, tool: Arc<dyn DynTool>) {
         let native_name = tool.name().to_string();
         let mut inner = self
             .inner
@@ -133,12 +133,12 @@ impl ToolRegistry {
     }
 
     /// Look up a tool by ToolId.
-    pub fn get(&self, id: &ToolId) -> Option<Arc<dyn Tool>> {
+    pub fn get(&self, id: &ToolId) -> Option<Arc<dyn DynTool>> {
         self.get_by_name(&id.to_string())
     }
 
     /// Look up a tool by name or alias.
-    pub fn get_by_name(&self, name: &str) -> Option<Arc<dyn Tool>> {
+    pub fn get_by_name(&self, name: &str) -> Option<Arc<dyn DynTool>> {
         let inner = self
             .inner
             .read()
@@ -153,7 +153,7 @@ impl ToolRegistry {
     }
 
     /// Get all registered tools (clones the Arc handles).
-    pub fn all(&self) -> Vec<Arc<dyn Tool>> {
+    pub fn all(&self) -> Vec<Arc<dyn DynTool>> {
         let inner = self
             .inner
             .read()
@@ -163,7 +163,7 @@ impl ToolRegistry {
 
     /// Get enabled tools after running the full 5-layer filter pipeline.
     /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` §7.
-    pub fn enabled(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn Tool>> {
+    pub fn enabled(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
         let inner = self
             .inner
             .read()
@@ -189,7 +189,7 @@ impl ToolRegistry {
     /// every enabled tool's full schema lands in turn-1 requests.
     /// Keeps the per-Provider serialization path identical, just
     /// without the lazy-loading optimization.
-    pub fn loaded_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn Tool>> {
+    pub fn loaded_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
         let inner = self
             .inner
             .read()
@@ -218,7 +218,7 @@ impl ToolRegistry {
     /// Returns empty when [`coco_types::Feature::ToolSearch`] is
     /// off — there is no deferred pool to surface, every tool is
     /// already loaded via [`Self::loaded_tools`].
-    pub fn deferred_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn Tool>> {
+    pub fn deferred_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
         if !ctx.tool_search_active() {
             return Vec::new();
         }

@@ -31,7 +31,7 @@ use coco_types::ToolId;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use crate::traits::{ProgressSender, Tool};
+use crate::traits::{DynTool, ProgressSender};
 
 /// What [`prepare_batch`](crate::call_plan) returns for each committed
 /// assistant tool-use entry.
@@ -73,7 +73,7 @@ pub struct PreparedToolCall {
     pub tool_id: ToolId,
     /// The resolved tool. The runner already holds an `Arc`, so this
     /// is the single cheap clone across the scheduler boundary.
-    pub tool: Arc<dyn Tool>,
+    pub tool: Arc<dyn DynTool>,
     /// Already-parsed, schema-validated model input. Hook rewrites
     /// during `run_one` may replace this with a validated
     /// `updated_input` before permission / execution.
@@ -126,7 +126,7 @@ pub struct UnstampedToolCallOutcome {
     pub model_index: usize,
     /// Pre-flattened, TS-ordered message stream. The runner has
     /// already resolved the MCP / non-MCP + Success / Failure /
-    /// EarlyReturn template while it still held the `Arc<dyn Tool>`,
+    /// EarlyReturn template while it still held the `Arc<dyn DynTool>`,
     /// so `QueryEngine` appends this verbatim.
     pub ordered_messages: Vec<Message>,
     /// Which lifecycle path produced `ordered_messages`. Retained for

@@ -194,6 +194,12 @@ pub struct QueryEngine {
     /// `NoOpMailboxHandle` in [`ToolContextFactory::build`]; swarm spawn paths
     /// install a real handle via [`Self::with_mailbox`].
     pub(crate) mailbox: Option<coco_tool_runtime::MailboxHandleRef>,
+    /// Per-recipient pending-message store. `None` resolves to
+    /// `NoOpPendingMessageStore` in [`ToolContextFactory::build`].
+    /// Production wires an `InMemoryPendingMessageStore` here AND on
+    /// the SwarmAdapter — single source of truth across SendMessage
+    /// push and `agent_pending_messages` reminder drain.
+    pub(crate) pending_messages: Option<coco_tool_runtime::PendingMessageStoreRef>,
     /// MCP handle used at prompt-rendering time to read the connected
     /// server set so `AgentTool::prompt` can pre-filter agents whose
     /// `required_mcp_servers` aren't yet ready. `None` ⇒ filter is
@@ -311,7 +317,7 @@ pub struct QueryEngine {
     /// production `TaskRuntime` shared with `SwarmAgentHandle` so a
     /// bg spawn registered by the latter is addressable through the
     /// former.
-    pub(crate) task_handle: Option<coco_tool_runtime::TaskHandleRef>,
+    pub(crate) task_handle: Option<coco_tool_runtime::BackgroundTaskHandleRef>,
     /// Persistent task-list store (V2, `TaskCreate`/`TaskUpdate`/etc.).
     /// `None` resolves to `NoOpTaskListHandle` — the V2 tools then
     /// return errors on write, matching TS's "no store configured"

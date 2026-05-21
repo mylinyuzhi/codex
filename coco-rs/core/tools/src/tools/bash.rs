@@ -17,8 +17,56 @@ use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// Typed input for [`BashTool`].
+///
+/// The model-facing schema is built by the manual [`BashTool::input_schema`]
+/// override — TS-mirror with the four user-visible fields and intentionally
+/// omitting `_simulatedSedEdit` (internal; populated by the
+/// `SedEditPermissionRequest` TUI dialog).
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct BashInput {
+    /// The shell command to execute. Required by validation, but
+    /// `#[serde(default)]` lets us emit a clean "missing command" error
+    /// at the boundary instead of an opaque Serde failure.
+    #[serde(default)]
+    pub command: String,
+    /// Optional timeout (ms). Clamped to `ToolConfig::bash.max_timeout_ms`.
+    #[serde(default)]
+    pub timeout: Option<u64>,
+    /// Short description of what the command does. Falls back to the
+    /// command string when omitted (TS `BashTool.tsx:879`).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Run in the background. Returns a `task_id` immediately and emits
+    /// a `<task-notification>` on completion.
+    #[serde(default)]
+    pub run_in_background: bool,
+    /// Bypass sandbox wrapping for this command. Requires the killswitch
+    /// to be unlocked; falls open at the sandbox layer otherwise.
+    #[serde(default, rename = "dangerouslyDisableSandbox")]
+    pub dangerously_disable_sandbox: bool,
+    /// (Internal) Previewed sed-edit payload from the
+    /// `SedEditPermissionRequest` TUI dialog. NOT exposed in
+    /// `input_schema()` — the model can't synthesise this; it's only
+    /// populated by upstream rewrite when the user converts a
+    /// `sed -i ...` command into an Edit-style write.
+    #[serde(default, rename = "_simulatedSedEdit")]
+    pub simulated_sed_edit: Option<SimulatedSedEdit>,
+}
+
+/// Internal sed-edit payload — see [`BashInput::simulated_sed_edit`].
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SimulatedSedEdit {
+    #[serde(rename = "filePath")]
+    pub file_path: String,
+    #[serde(rename = "newContent")]
+    pub new_content: String,
+}
 
 fn default_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
     config.bash.default_timeout_ms.max(1) as u64
@@ -191,6 +239,13 @@ pub struct BashTool;
 
 #[async_trait::async_trait]
 impl Tool for BashTool {
+    type Input = BashInput;
+    /// Multiple wire shapes (fg text, fg image with `structuredContent`,
+    /// bg `{task_id, status}`) make a typed Output more friction than
+    /// it's worth — keep `Value` as the deliberate escape hatch (same
+    /// pattern as `ReadTool` / `PowerShellTool`).
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Bash)
     }
@@ -199,7 +254,7 @@ impl Tool for BashTool {
         ToolName::Bash.as_str()
     }
 
-    fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &BashInput, _options: &DescriptionOptions) -> String {
         BASH_TOOL_DESCRIPTION.into()
     }
 
@@ -241,7 +296,10 @@ impl Tool for BashTool {
                 "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
             }),
         );
-        ToolInputSchema { properties: props }
+        ToolInputSchema {
+            properties: props,
+            required: Vec::new(),
+        }
     }
 
     /// Read-only fast path. Mirrors TS `BashTool.isReadOnly` → `checkReadOnlyConstraints`
@@ -251,24 +309,22 @@ impl Tool for BashTool {
     ///
     /// Delegates to `coco_shell::read_only::is_read_only_command` which wraps the
     /// 40+ safe-command allowlist + conditional safety rules for git/sed/find/rg/etc.
-    fn is_read_only(&self, input: &Value) -> bool {
-        input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .map(is_read_only_command)
-            .unwrap_or(false)
+    fn is_read_only(&self, input: &BashInput) -> bool {
+        !input.command.is_empty() && is_read_only_command(&input.command)
     }
 
     /// Concurrency-safe iff read-only. TS `isConcurrencySafe` is driven by the
     /// same allowlist — read-only commands have no shared mutable state with
     /// sibling tools, so the executor can batch them with Read/Grep/Glob.
-    fn is_concurrency_safe(&self, input: &Value) -> bool {
-        self.is_read_only(input)
+    fn is_concurrency_safe(&self, input: &BashInput) -> bool {
+        Tool::is_read_only(self, input)
     }
 
-    fn get_activity_description(&self, input: &Value) -> Option<String> {
-        let command = input.get("command").and_then(|v| v.as_str())?;
-        // Truncate long commands for display (char-safe)
+    fn get_activity_description(&self, input: &BashInput) -> Option<String> {
+        if input.command.is_empty() {
+            return None;
+        }
+        let command = input.command.as_str();
         let truncated: String = command.chars().take(57).collect();
         let display = if truncated.len() < command.len() {
             format!("Running {truncated}...")
@@ -283,8 +339,8 @@ impl Tool for BashTool {
     /// `true` forced approval for every `ls`/`cat`/`git log`, which was a major UX
     /// regression vs. TS. Matches TS multi-stage pipeline where the read-only fast
     /// path (`bashPermissions.ts:1663+`) auto-allows before reaching the Ask phase.
-    fn is_destructive(&self, input: &Value) -> bool {
-        !self.is_read_only(input)
+    fn is_destructive(&self, input: &BashInput) -> bool {
+        !Tool::is_read_only(self, input)
     }
 
     /// Tool-result persistence threshold. TS: `BashTool.tsx:424`
@@ -442,12 +498,12 @@ impl Tool for BashTool {
         }]
     }
 
-    fn validate_input(&self, input: &Value, ctx: &ToolUseContext) -> ValidationResult {
-        if input.get("command").and_then(|v| v.as_str()).is_none() {
+    fn validate_input(&self, input: &BashInput, ctx: &ToolUseContext) -> ValidationResult {
+        if input.command.is_empty() {
             return ValidationResult::invalid("missing required field: command");
         }
         let max_timeout_ms = max_timeout_ms(&ctx.tool_config);
-        if let Some(timeout) = input.get("timeout").and_then(serde_json::Value::as_u64)
+        if let Some(timeout) = input.timeout
             && timeout > max_timeout_ms
         {
             return ValidationResult::invalid(format!(
@@ -459,7 +515,7 @@ impl Tool for BashTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: BashInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         // ── R7-T11: _simulatedSedEdit short-circuit ──
@@ -481,33 +537,29 @@ impl Tool for BashTool {
         // `services/tools/toolExecution.ts:756-770`). We emit a debug
         // log when the field is present so anomalous traffic is visible
         // even if the executor strip is missing.
-        if let Some(sed_input) = input.get("_simulatedSedEdit") {
+        if let Some(sed_input) = input.simulated_sed_edit.as_ref() {
             tracing::debug!(
                 "BashTool received _simulatedSedEdit input — applying as Edit-style write"
             );
             return apply_sed_edit(sed_input, ctx).await;
         }
 
-        let command = input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidInput {
+        if input.command.is_empty() {
+            return Err(ToolError::InvalidInput {
                 message: "missing command".into(),
                 error_code: None,
-            })?;
+            });
+        }
+        let command = input.command.as_str();
 
         let default_timeout_ms = default_timeout_ms(&ctx.tool_config);
         let max_timeout_ms = max_timeout_ms(&ctx.tool_config);
         let timeout_ms = input
-            .get("timeout")
-            .and_then(serde_json::Value::as_u64)
+            .timeout
             .unwrap_or(default_timeout_ms)
             .min(max_timeout_ms);
 
-        let run_in_background = input
-            .get("run_in_background")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+        let run_in_background = input.run_in_background;
 
         // R6-T18: sandbox decision. Matches TS `shouldUseSandbox(input)`
         // at `shouldUseSandbox.ts:130-153`:
@@ -521,12 +573,7 @@ impl Tool for BashTool {
         // (feature gate + bootstrap supplied the state) and forwards the
         // bypass flag.
         let sandbox_state = active_sandbox_state(ctx);
-        let sandbox_bypass = SandboxBypass::from_flag(
-            input
-                .get("dangerouslyDisableSandbox")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
-        );
+        let sandbox_bypass = SandboxBypass::from_flag(input.dangerously_disable_sandbox);
         if let Some(state) = &sandbox_state {
             let snapshot = state.command_snapshot(command, sandbox_bypass);
             if snapshot.should_wrap {
@@ -589,109 +636,287 @@ impl Tool for BashTool {
             }
         }
 
-        // Background execution: spawn task and return immediately
-        if run_in_background {
-            return execute_background(command, timeout_ms, ctx).await;
+        // TS parity (`BashTool.tsx:879`): `description: description ||
+        // command` — the model's input.description takes precedence,
+        // falling back to the command string when omitted.
+        let resolved_description = input
+            .description
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| command.to_string());
+
+        // W3: unified fg/bg execution via TaskRuntime when available.
+        // - Always spawn through `spawn_shell_task`.
+        // - `run_in_background: true` → return `{task_id, status}` now.
+        // - Otherwise → race terminal/detach/cancel/auto-detach inside
+        //   `tool.execute`, compose either fg-shape `{stdout, exitCode,
+        //   interrupted}` or bg-shape `{task_id, status, ...}`.
+        //
+        // Tests / minimal embeddings without a TaskRuntime fall back
+        // to the legacy ShellExecutor path (`execute_foreground`).
+        // W6: TaskRuntime now supports sandbox wrap (sandbox params
+        // threaded into `BackgroundShellRequest`).
+        if ctx.task_handle.is_some() {
+            return execute_via_task_runtime(
+                command,
+                &resolved_description,
+                timeout_ms,
+                run_in_background,
+                ctx,
+                sandbox_state.clone(),
+                sandbox_bypass,
+            )
+            .await;
         }
 
-        // Foreground execution. The sandbox state is resolved here (not
-        // inside execute_foreground) so all input parsing lives in one
-        // place.
-        //
-        // R6-T19: on foreground timeout, if a TaskHandle is available
-        // and auto-background is enabled, spawn a background task with
-        // the same command and return the task_id as `backgroundTaskId`.
-        // This matches the TS `BashTool.tsx:610, 965-969` output shape
-        // (`backgroundTaskId` set when the fg command was moved to bg),
-        // while acknowledging that coco-rs re-runs the command rather
-        // than transferring the process handle — a true handle-transfer
-        // requires a ShellExecutor API change that's out of scope here.
-        // The re-run is only triggered for commands that explicitly
-        // opt in via resolved runtime config so
-        // side-effectful commands aren't duplicated unexpectedly.
-        match execute_foreground(
-            command,
-            timeout_ms,
-            ctx,
-            sandbox_state.clone(),
-            sandbox_bypass,
-        )
+        // Fallback: no TaskRuntime in this context.
+        if run_in_background {
+            return Err(ToolError::ExecutionFailed {
+                message:
+                    "Background task execution is not available in this context (no TaskRuntime)."
+                        .into(),
+                source: None,
+            });
+        }
+        execute_foreground(command, timeout_ms, ctx, sandbox_state, sandbox_bypass).await
+    }
+}
+
+/// W3: unified fg/bg execution path via TaskRuntime.
+///
+/// Always spawns through `spawn_shell_task` (the same primitive bg
+/// used). The fg/bg distinction is purely about which `tool.execute`
+/// arm wins the `select!`:
+///
+/// - `run_in_background: true` → return `{task_id, status: "background"}`
+///   immediately. No await.
+/// - `run_in_background: false` → race four signals:
+///   1. `ctx.cancel.cancelled()` (Ctrl+C / explicit kill) → return
+///      `ToolError::Cancelled`.
+///   2. `terminal_signal.await_terminal()` → read disk via
+///      `read_terminal_outputs` and return fg-shape result.
+///   3. `detach.notified()` → external `signal_detach` (TUI Ctrl+B or
+///      another co-routine) → return bg-shape result; task keeps
+///      running.
+///   4. Auto-detach timer (when `auto_background_on_timeout` config
+///      is set; mirrors TS `ASSISTANT_BLOCKING_BUDGET_MS = 15_000`) →
+///      same as (3) but the timer itself fires `signal_detach`. The
+///      detach arm in (3) observes the notification.
+///
+/// This replaces both the old `execute_background` and the D5 re-run
+/// path on foreground timeout — the previous code re-spawned the
+/// command after timeout, duplicating side effects of `npm publish` /
+/// `git push` / etc. The unified path **never** re-spawns: the same
+/// child keeps running, the fg awaiter just stops blocking. Matches
+/// TS `shellCommand.background(taskId)` flag-flip semantics
+/// (`utils/ShellCommand.ts:349-366`).
+#[allow(clippy::too_many_arguments)]
+async fn execute_via_task_runtime(
+    command: &str,
+    description: &str,
+    timeout_ms: u64,
+    run_in_background: bool,
+    ctx: &ToolUseContext,
+    sandbox_state: Option<std::sync::Arc<SandboxState>>,
+    sandbox_bypass: SandboxBypass,
+) -> Result<ToolResult<Value>, ToolError> {
+    let task_handle = ctx.task_handle.as_ref().ok_or_else(|| {
+        // Caller (`execute`) guards with `task_handle.is_some()`.
+        // Reaching here is a programmer error, not user input.
+        ToolError::ExecutionFailed {
+            message: "execute_via_task_runtime invoked without task_handle".into(),
+            source: None,
+        }
+    })?;
+
+    let tool_use_id = ctx.tool_use_id.clone();
+    let agent_id = ctx.agent_id.as_ref().map(|a| a.as_str().to_string());
+
+    // Auto-detach budget: only meaningful in fg mode for main-thread
+    // sessions where the config flag opts in. Subagents and bg-spawned
+    // commands don't auto-detach (no fg awaiter to release).
+    let auto_detach_ms = if !run_in_background
+        && ctx.agent_id.is_none()
+        && ctx.tool_config.bash.auto_background_on_timeout
+    {
+        Some(ASSISTANT_BLOCKING_BUDGET_MS)
+    } else {
+        None
+    };
+
+    // Progress emission: fg mode only. Bg-spawned commands return
+    // immediately so the model has no live receiver — TS doesn't
+    // emit bg progress to the parent either (bg progress flows
+    // through `<task-notification>` envelopes later).
+    let progress_tx = if run_in_background {
+        None
+    } else {
+        ctx.progress_tx.clone()
+    };
+
+    let req = BackgroundShellRequest {
+        command: command.to_string(),
+        description: description.to_string(),
+        timeout_ms: Some(timeout_ms as i64),
+        tool_use_id,
+        agent_id,
+        progress_tx,
+        progress_throttle_ms: 1000,
+        auto_detach_ms,
+        // W6: sandbox params from `execute` (single resolution site
+        // for `dangerouslyDisableSandbox` parsing). Both fg and bg
+        // paths now apply the same wrap as the legacy ShellExecutor
+        // foreground path did.
+        sandbox_state,
+        sandbox_bypass,
+    };
+
+    let task_id =
+        task_handle
+            .spawn_shell_task(req)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
+                message: format!("Failed to spawn shell task: {e}"),
+                source: None,
+            })?;
+
+    // Bg path: return now. The task runs detached, will push a
+    // `<task-notification>` envelope on terminal.
+    if run_in_background {
+        return Ok(ToolResult {
+            data: serde_json::json!({
+                "task_id": task_id,
+                "status": "background",
+                "message": format!(
+                    "Command is running in the background. Task ID: {task_id}. \
+                     You will be notified when it completes."
+                ),
+            }),
+            new_messages: vec![],
+            app_state_patch: None,
+            permission_updates: Vec::new(),
+        });
+    }
+
+    // Fg path: subscribe to terminal + detach handles, race.
+    let terminal = task_handle
+        .subscribe_terminal(&task_id)
         .await
-        {
-            Ok(result) => Ok(result),
-            Err(ToolError::ExecutionFailed { message, .. }) if message.contains("timed out") => {
-                if ctx.tool_config.bash.auto_background_on_timeout && ctx.task_handle.is_some() {
-                    // Spawn a fresh bg task. The fg child was already
-                    // killed by the watchdog, so this is a re-run — TS
-                    // transfers the handle instead, but we document the
-                    // divergence rather than fake it.
-                    let bg = execute_background(command, timeout_ms, ctx).await?;
-                    let task_id = bg.data["task_id"].as_str().unwrap_or("").to_string();
-                    return Ok(ToolResult {
-                        data: serde_json::json!({
-                            "stdout": "",
-                            "stderr": format!("Command timed out after {timeout_ms}ms; re-running in background."),
-                            "exitCode": -1,
-                            "interrupted": true,
-                            "backgroundTaskId": task_id,
-                            "assistantAutoBackgrounded": true,
-                        }),
-                        new_messages: vec![],
-                        app_state_patch: None,
-                        permission_updates: Vec::new(),
-                    });
-                }
-                Err(ToolError::ExecutionFailed {
-                    message,
+        .ok_or_else(|| ToolError::ExecutionFailed {
+            message: "task vanished after spawn (no terminal handle)".into(),
+            source: None,
+        })?;
+    let detach =
+        task_handle
+            .detach_handle(&task_id)
+            .await
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                message: "task vanished after spawn (no detach handle)".into(),
+                source: None,
+            })?;
+
+    let kill_arm = ctx.cancel.clone();
+
+    let outcome: BashOutcome = tokio::select! {
+        biased;
+        () = kill_arm.cancelled() => {
+            // Cancel propagates into the task driver via its own cancel
+            // token (BashTool ctx.cancel is shared with the driver). The
+            // driver will fire `apply_shell_terminal_state(Killed)` and
+            // push the notification — we don't need to do anything
+            // beyond returning the cancellation error.
+            BashOutcome::Cancelled
+        }
+        _ = terminal.await_terminal() => {
+            BashOutcome::Terminal
+        }
+        () = detach.notified() => {
+            BashOutcome::Detached { by_user: true }
+        }
+    };
+
+    match outcome {
+        BashOutcome::Cancelled => Err(ToolError::ExecutionFailed {
+            message: "Bash command was interrupted by the user.".into(),
+            source: None,
+        }),
+        BashOutcome::Terminal => {
+            // Compose fg-shape result from disk + persisted exit_code.
+            let outputs = task_handle
+                .read_terminal_outputs(&task_id)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed {
+                    message: format!("Failed to read terminal outputs: {e}"),
                     source: None,
-                })
+                })?;
+            let max_bytes = max_output_bytes(&ctx.tool_config);
+            let stdout = truncate_output(outputs.stdout.as_bytes(), max_bytes);
+            let stderr = truncate_output(outputs.stderr.as_bytes(), max_bytes);
+            let mut result_obj = serde_json::json!({
+                "stdout": stdout,
+                "stderr": stderr,
+                "exitCode": outputs.exit_code,
+                "interrupted": outputs.interrupted,
+            });
+            // Image detection on bytes from disk. The unified path
+            // reads the file via `read_terminal_outputs` which returns
+            // a `String` (UTF-8 lossy) — magic-byte detection still
+            // works since the leading bytes survive lossy conversion
+            // for raster formats.
+            let raw_bytes = stdout.as_bytes();
+            if is_likely_image_bytes(raw_bytes) {
+                result_obj["isImage"] = serde_json::Value::Bool(true);
+                if let Some(content) = Some(build_image_block(raw_bytes)) {
+                    result_obj["structuredContent"] = content;
+                }
             }
-            Err(other) => Err(other),
+            Ok(ToolResult {
+                data: result_obj,
+                new_messages: vec![],
+                app_state_patch: None,
+                permission_updates: Vec::new(),
+            })
+        }
+        BashOutcome::Detached { by_user } => {
+            // Auto-detach timer or external `signal_detach` fired.
+            // Differentiate the two with `by_user`: when the
+            // auto-detach timer is the originator, the task's own
+            // `LocalAgentExtra.is_backgrounded` flip is observable —
+            // but for now we just stamp the differentiator in the
+            // result shape so the model sees TS-aligned signals
+            // (`backgroundedByUser` vs `assistantAutoBackgrounded`).
+            //
+            // `by_user` is `true` whenever the detach arm wins; we
+            // can't distinguish auto-detach-timer from external-TUI
+            // sources here without an extra atomic. Default to
+            // `backgroundedByUser=true` matching the most-common
+            // interactive case; auto-detach will surface a follow-up
+            // path in a later refactor.
+            let _ = by_user;
+            Ok(ToolResult {
+                data: serde_json::json!({
+                    "task_id": task_id,
+                    "status": "background",
+                    "backgroundedByUser": true,
+                    "message": format!(
+                        "Command moved to background. Task ID: {task_id}. \
+                         You will be notified when it completes."
+                    ),
+                }),
+                new_messages: vec![],
+                app_state_patch: None,
+                permission_updates: Vec::new(),
+            })
         }
     }
 }
 
-/// Execute a command in the background via TaskHandle.
-///
-/// TS: `spawnShellTask()` -- creates a background task, returns task ID immediately.
-/// Model receives `<task-notification>` XML when the task completes.
-async fn execute_background(
-    command: &str,
-    timeout_ms: u64,
-    ctx: &ToolUseContext,
-) -> Result<ToolResult<Value>, ToolError> {
-    let task_handle = ctx
-        .task_handle
-        .as_ref()
-        .ok_or_else(|| ToolError::ExecutionFailed {
-            message: "Background task execution is not available in this context.".into(),
-            source: None,
-        })?;
-
-    let description = ctx.tool_use_id.as_deref().unwrap_or("bash").to_string();
-
-    let task_id = task_handle
-        .spawn_shell_task(BackgroundShellRequest {
-            command: command.to_string(),
-            timeout_ms: Some(timeout_ms as i64),
-            description: Some(description),
-        })
-        .await
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("Failed to spawn background task: {e}"),
-            source: None,
-        })?;
-
-    Ok(ToolResult {
-        data: serde_json::json!({
-            "task_id": task_id,
-            "status": "background",
-            "message": format!("Command is running in the background. Task ID: {task_id}. You will be notified when it completes.")
-        }),
-        new_messages: vec![],
-        app_state_patch: None,
-        permission_updates: Vec::new(),
-    })
+/// Outcome of the W3 fg `tokio::select!` race.
+enum BashOutcome {
+    Cancelled,
+    Terminal,
+    Detached { by_user: bool },
 }
 
 /// Execute a command in the foreground with continuous progress reporting.
@@ -1017,23 +1242,11 @@ fn build_image_block(bytes: &[u8]) -> Value {
 /// `newContent` fields. Missing/wrong-type fields surface as
 /// `InvalidInput` errors.
 async fn apply_sed_edit(
-    sed_input: &Value,
+    sed_input: &SimulatedSedEdit,
     ctx: &ToolUseContext,
 ) -> Result<ToolResult<Value>, ToolError> {
-    let file_path = sed_input
-        .get("filePath")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidInput {
-            message: "_simulatedSedEdit.filePath is required".into(),
-            error_code: None,
-        })?;
-    let new_content = sed_input
-        .get("newContent")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidInput {
-            message: "_simulatedSedEdit.newContent is required".into(),
-            error_code: None,
-        })?;
+    let file_path = sed_input.file_path.as_str();
+    let new_content = sed_input.new_content.as_str();
 
     let path = std::path::Path::new(file_path);
 

@@ -2,7 +2,7 @@
 
 use super::NotebookEditTool;
 use super::generate_cell_id;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
@@ -84,18 +84,18 @@ async fn test_notebook_replace_by_index() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "replace",
-                "new_source": "print('goodbye')"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "replace",
+            "new_source": "print('goodbye')"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["edit_mode"], "replace");
     assert_eq!(result.data["cell_index"], 0);
@@ -121,18 +121,18 @@ async fn test_notebook_replace_by_cell_prefix() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "cell-1",
-                "edit_mode": "replace",
-                "new_source": "# Updated"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "cell-1",
+            "edit_mode": "replace",
+            "new_source": "# Updated"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["cell_index"], 1);
     let updated: serde_json::Value =
@@ -149,18 +149,18 @@ async fn test_notebook_replace_by_uuid() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "abc123xyz",
-                "edit_mode": "replace",
-                "new_source": "# by uuid"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "abc123xyz",
+            "edit_mode": "replace",
+            "new_source": "# by uuid"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["cell_index"], 0);
 }
@@ -177,19 +177,19 @@ async fn test_notebook_insert_auto_generates_id_on_45() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "insert",
-                "cell_type": "code",
-                "new_source": "x = 42"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "insert",
+            "cell_type": "code",
+            "new_source": "x = 42"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let updated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
@@ -209,19 +209,19 @@ async fn test_notebook_insert_no_id_on_pre_45() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "insert",
-                "cell_type": "markdown",
-                "new_source": "# Title"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "insert",
+            "cell_type": "markdown",
+            "new_source": "# Title"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let updated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
@@ -239,19 +239,19 @@ async fn test_notebook_insert_markdown_has_no_execution_state() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "insert",
-                "cell_type": "markdown",
-                "new_source": "# heading"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "insert",
+            "cell_type": "markdown",
+            "new_source": "# heading"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let updated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
@@ -271,17 +271,17 @@ async fn test_notebook_delete_by_index() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "1",
-                "edit_mode": "delete"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "1",
+            "edit_mode": "delete"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let updated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
@@ -298,9 +298,9 @@ async fn test_notebook_delete_by_index() {
 #[tokio::test]
 async fn test_notebook_missing_path() {
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(json!({"cell_id": "0"}), &ctx)
-        .await;
+    let result =
+        <NotebookEditTool as DynTool>::execute(&NotebookEditTool, json!({"cell_id": "0"}), &ctx)
+            .await;
     assert!(result.is_err());
 }
 
@@ -310,16 +310,16 @@ async fn test_notebook_invalid_edit_mode() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "reorder"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "reorder"
+        }),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("edit_mode") || err.contains("reorder"));
@@ -331,17 +331,17 @@ async fn test_notebook_cell_index_out_of_range() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "99",
-                "edit_mode": "replace",
-                "new_source": "x"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "99",
+            "edit_mode": "replace",
+            "new_source": "x"
+        }),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err());
 }
 
@@ -354,17 +354,17 @@ async fn test_notebook_malformed_file() {
     std::fs::write(file.path(), "{ not valid json").unwrap();
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "replace",
-                "new_source": "x"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "replace",
+            "new_source": "x"
+        }),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err());
 }
 
@@ -390,17 +390,17 @@ async fn test_notebook_rejects_edit_without_prior_read() {
     let mut ctx = ToolUseContext::test_default();
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
 
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "replace",
-                "new_source": "print('blocked')"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "replace",
+            "new_source": "print('blocked')"
+        }),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err(), "edit without prior read must fail");
     let err = result.unwrap_err().to_string();
@@ -443,18 +443,18 @@ async fn test_notebook_allows_edit_after_read() {
         );
     }
 
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "replace",
-                "new_source": "print('allowed')"
-            }),
-            &ctx,
-        )
-        .await
-        .expect("edit with prior read must succeed");
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "replace",
+            "new_source": "print('allowed')"
+        }),
+        &ctx,
+    )
+    .await
+    .expect("edit with prior read must succeed");
     assert_eq!(result.data["cell_index"], 0);
 }
 
@@ -470,19 +470,19 @@ async fn test_notebook_insert_returns_new_cell_id() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "insert",
-                "cell_type": "code",
-                "new_source": "x = 1"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "insert",
+            "cell_type": "code",
+            "new_source": "x = 1"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let new_id = result.data["new_cell_id"].as_str().unwrap();
     assert_eq!(new_id.len(), 13, "TS cell IDs are 13 chars: got {new_id}");
@@ -502,19 +502,19 @@ async fn test_notebook_insert_pre_45_emits_null_new_cell_id() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "insert",
-                "cell_type": "markdown",
-                "new_source": "# header"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "insert",
+            "cell_type": "markdown",
+            "new_source": "# header"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert!(result.data["new_cell_id"].is_null());
 }
@@ -529,18 +529,18 @@ async fn test_notebook_replace_returns_cell_id() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "abc123xyz",
-                "edit_mode": "replace",
-                "new_source": "# updated"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "abc123xyz",
+            "edit_mode": "replace",
+            "new_source": "# updated"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["cell_id"], "abc123xyz");
     // And the index is still returned for debuggability.
@@ -555,17 +555,17 @@ async fn test_notebook_delete_returns_cell_id() {
     let file = write_notebook(&notebook);
 
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "target-cell-id",
-                "edit_mode": "delete"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "target-cell-id",
+            "edit_mode": "delete"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.data["cell_id"], "target-cell-id");
 }
@@ -596,17 +596,17 @@ async fn test_notebook_rejects_edit_on_mtime_drift() {
         );
     }
 
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "replace",
-                "new_source": "print('should fail')"
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "replace",
+            "new_source": "print('should fail')"
+        }),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err(), "stale mtime must block edit");
     assert!(
@@ -633,18 +633,18 @@ async fn test_notebook_replace_message_uses_cell_id() {
     }]);
     let file = write_notebook(&notebook);
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "abc-123",
-                "edit_mode": "replace",
-                "new_source": "new code"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "abc-123",
+            "edit_mode": "replace",
+            "new_source": "new code"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let msg = result.data["message"].as_str().unwrap();
     assert_eq!(msg, "Updated cell abc-123 with new code");
 }
@@ -665,18 +665,18 @@ async fn test_notebook_replace_message_emits_undefined_on_pre_45() {
     }]);
     let file = write_notebook(&notebook);
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "replace",
-                "new_source": "new"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "replace",
+            "new_source": "new"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let msg = result.data["message"].as_str().unwrap();
     assert_eq!(msg, "Updated cell undefined with new");
 }
@@ -689,19 +689,19 @@ async fn test_notebook_insert_message_uses_generated_id() {
     let notebook = minimal_notebook(5);
     let file = write_notebook(&notebook);
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "0",
-                "edit_mode": "insert",
-                "cell_type": "code",
-                "new_source": "x = 1"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "insert",
+            "cell_type": "code",
+            "new_source": "x = 1"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let msg = result.data["message"].as_str().unwrap();
     let new_id = result.data["new_cell_id"].as_str().unwrap();
     assert_eq!(msg, format!("Inserted cell {new_id} with x = 1"));
@@ -722,17 +722,17 @@ async fn test_notebook_delete_message_uses_cell_id() {
     }]);
     let file = write_notebook(&notebook);
     let ctx = ToolUseContext::test_default();
-    let result = NotebookEditTool
-        .execute(
-            json!({
-                "notebook_path": file.path().to_str().unwrap(),
-                "cell_id": "doomed-cell",
-                "edit_mode": "delete"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "doomed-cell",
+            "edit_mode": "delete"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let msg = result.data["message"].as_str().unwrap();
     assert_eq!(msg, "Deleted cell doomed-cell");
 }

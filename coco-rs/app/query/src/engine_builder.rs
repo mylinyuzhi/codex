@@ -76,6 +76,7 @@ impl QueryEngine {
             auto_mode_rules: coco_permissions::AutoModeRules::default(),
             app_state: None,
             mailbox: None,
+            pending_messages: None,
             mcp_handle: None,
             lsp_handle: None,
             agent_handle: None,
@@ -449,7 +450,8 @@ impl QueryEngine {
     /// Snapshot running async-agent tasks for post-compact attachment
     /// emission. Filters per TS `compact.ts:1577-1582`: skip the agent
     /// that owns this engine's `agent_id`, drop pending tasks (not yet
-    /// meaningful), drop terminal tasks the model already saw notified.
+    /// meaningful), drop terminal tasks the `TaskOutput` tool already
+    /// consumed (`LocalAgentExtra.retrieved`).
     pub(crate) async fn snapshot_async_agents_for_post_compact(
         &self,
     ) -> Vec<coco_compact::AsyncAgentSnapshot> {
@@ -458,31 +460,38 @@ impl QueryEngine {
         };
         let listed = tasks.list().await;
         let self_agent = self.config.agent_id.as_deref();
-        listed
-            .into_iter()
-            .filter(|t| matches!(t.task_type, coco_types::TaskType::LocalAgent))
-            .filter(|t| !matches!(t.status, coco_types::TaskStatus::Pending))
+        let mut out = Vec::with_capacity(listed.len());
+        for t in listed {
+            if !matches!(t.task_type, coco_types::TaskType::LocalAgent) {
+                continue;
+            }
+            if matches!(t.status, coco_types::TaskStatus::Pending) {
+                continue;
+            }
             // Skip the engine's own agent — it's already part of the
             // visible conversation, not a peer that the model could
             // duplicate.
-            .filter(|t| match self_agent {
-                Some(a) => t.id.as_str() != a,
-                None => true,
-            })
-            // TS additionally filters `agent.retrieved == true`. coco-rs
-            // task taxonomy doesn't carry an explicit "retrieved" bit;
-            // the closest analog is `notified` (the SDK has emitted the
-            // completion event). Using `notified` keeps duplicate-spawn
-            // protection without re-listing already-acknowledged work.
-            .filter(|t| !(t.status.is_terminal() && t.notified))
-            .map(|t| coco_compact::AsyncAgentSnapshot {
-                task_id: t.id,
+            if let Some(a) = self_agent
+                && t.id.as_str() == a
+            {
+                continue;
+            }
+            // TS `compact.ts:1578` — once the `TaskOutput` tool serves
+            // a terminal agent's output, the compact reminder stops
+            // re-announcing it. coco-rs stores this in the sparse
+            // `LocalAgentExtra` sidecar.
+            if t.status.is_terminal() && tasks.local_agent_extra(&t.id).await.retrieved {
+                continue;
+            }
+            out.push(coco_compact::AsyncAgentSnapshot {
+                task_id: t.id.clone(),
                 status: task_status_to_ts_string(t.status),
                 description: t.description,
                 delta_summary: None,
                 output_file_path: t.output_file,
-            })
-            .collect()
+            });
+        }
+        out
     }
 
     /// Stamp the most recent assistant timestamp (called from the stream
@@ -563,6 +572,23 @@ impl QueryEngine {
         self
     }
 
+    /// Install the pending-message store so `SendMessage` to a running
+    /// teammate queues the message and the recipient sees it via the
+    /// `agent_pending_messages` system-reminder. Production wires the
+    /// SAME `Arc<InMemoryPendingMessageStore>` here AND on the
+    /// `SwarmAdapter`. Default is a no-op store.
+    ///
+    /// TS parity: `LocalAgentTask.tsx:162-167 queuePendingMessage`
+    /// (push) + `attachments.ts:1085-1101 getAgentPendingMessageAttachments`
+    /// (drain).
+    pub fn with_pending_messages(
+        mut self,
+        store: coco_tool_runtime::PendingMessageStoreRef,
+    ) -> Self {
+        self.pending_messages = Some(store);
+        self
+    }
+
     /// Install the MCP handle so prompt-rendering can read the
     /// connected-server set and pre-filter agents whose
     /// `required_mcp_servers` aren't ready. `None` (the default)
@@ -630,7 +656,7 @@ impl QueryEngine {
     /// side). When absent, the engine threads `None` into
     /// `ToolUseContext.task_handle`, where the task tools surface a
     /// "no task runtime configured" error.
-    pub fn with_task_handle(mut self, handle: coco_tool_runtime::TaskHandleRef) -> Self {
+    pub fn with_task_handle(mut self, handle: coco_tool_runtime::BackgroundTaskHandleRef) -> Self {
         self.task_handle = Some(handle);
         self
     }
@@ -887,7 +913,8 @@ impl QueryEngine {
 }
 
 /// Render a Rust `TaskStatus` to the TS `LocalAgentTaskState.status` string
-/// shape — `'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'cancelled'`.
+/// shape — `'pending' | 'running' | 'completed' | 'failed' | 'killed'`
+/// (TS only has 5 statuses; see `Task.ts:15-21`).
 fn task_status_to_ts_string(status: coco_types::TaskStatus) -> String {
     match status {
         coco_types::TaskStatus::Pending => "pending",
@@ -895,7 +922,6 @@ fn task_status_to_ts_string(status: coco_types::TaskStatus) -> String {
         coco_types::TaskStatus::Completed => "completed",
         coco_types::TaskStatus::Failed => "failed",
         coco_types::TaskStatus::Killed => "killed",
-        coco_types::TaskStatus::Cancelled => "cancelled",
     }
     .to_string()
 }

@@ -61,3 +61,97 @@ TS source: `utils/toolResultStorage.ts`, `constants/toolLimits.ts`,
 
 `Tool::max_result_size_chars()` uses `i64::MAX` as the Rust sentinel for TS
 `Infinity` opt-out.
+
+## Deferred refactors (no TS-parity impact, pure code-quality)
+
+Tracked here for future contributors — none of these changes behavior;
+they're all structural cleanups identified in the May 2026 audit.
+
+### Split `AgentSpawnRequest` into 4 sub-structs
+
+`AgentSpawnRequest` carries 27 fields covering four distinct concerns:
+model-visible input (prompt / description / subagent_type / model /
+run_in_background / isolation / cwd / effort / name / team_name / mode /
+auto_background_ms), permission policy (mcp_servers / disallowed_tools /
+max_turns / can_use_tool / require_can_use_tool / features /
+tool_overrides / parent_tool_filter), routing (tool_use_id /
+invoking_agent_id / session_id / fork_label), and spawn-mode discriminant
+(spawn_mode / definition / constraints / fork_context_messages /
+skip_transcript / use_exact_tools / initial_prompt / model_role /
+enable_summarization / is_non_interactive).
+
+Mechanical split:
+
+```rust
+pub struct AgentSpawnRequest {
+    pub input: AgentSpawnInput,
+    pub policy: AgentSpawnPolicy,
+    pub routing: AgentSpawnRouting,
+    pub spawn_mode: SpawnMode,
+    pub definition: Option<Arc<AgentDefinition>>,
+    pub constraints: Option<AgentSpawnConstraints>,
+    pub fork_context_messages: Vec<Arc<Message>>,
+}
+```
+
+Touches 5 callers (`AgentTool`, `memory::{extract, dream, session}`,
+`coordinator::resume`). Pure refactor, no semantics change.
+
+### `TaskExtras` enum on `TaskStateBase`
+
+`TaskStateBase` currently carries 5 LocalAgent-specific Option fields
+(`progress` / `retrieved` / `retain` / `evict_after` / `is_backgrounded`)
+that default to None / false for shell / dream / teammate tasks. Pollutes
+the type with always-None fields and the per-task-type match logic ends
+up scattered across `running.rs` / `reminder_source.rs` / TUI panels.
+
+```rust
+pub enum TaskExtras {
+    LocalAgent(LocalAgentExtras),
+    LocalShell(LocalShellExtras),
+    Dream,
+    None,
+}
+
+pub struct TaskStateBase {
+    // core fields only ...
+    pub extras: TaskExtras,
+}
+```
+
+Eliminates the `LocalAgentExtra` shim entirely; per-task-type accessors
+return concrete types via match. Touches 20+ files (every consumer of
+`progress` / `retrieved` / `retain` / `evict_after` / `is_backgrounded`).
+
+### Schemars-derived `ToolInputSchema`
+
+`ToolInputSchema` is currently a hand-built `HashMap<String, Value>` +
+`Vec<String>` `required` list. Every tool implements `input_schema()`
+with 40-200 lines of `serde_json::json!` macro construction. Workspace
+upgraded `schemars` to 1.2 (commit `ba50b1364`) — the infrastructure is
+in place to switch each tool to a `#[derive(JsonSchema, Deserialize)]`
+input struct.
+
+Migration pattern (per tool):
+
+```rust
+#[derive(Deserialize, JsonSchema)]
+pub struct AgentToolInput {
+    /// The task for the agent to perform
+    pub prompt: String,
+    /// A short (3-5 word) description of the task
+    pub description: String,
+    pub subagent_type: Option<String>,
+    // ...
+}
+
+impl Tool for AgentTool {
+    fn input_schema(&self) -> ToolInputSchema {
+        schema_from::<AgentToolInput>()
+    }
+}
+```
+
+Required fields fall out of `Option<T>` automatically. Hand-built
+schemas become validators-for-free. Touches all 43 built-in tools but
+each conversion is mechanical.

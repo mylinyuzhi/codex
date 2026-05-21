@@ -113,7 +113,7 @@ pub struct TeammateSpawnConfig {
     pub permissions: Vec<String>,
     pub allow_permission_prompts: bool,
     /// Reasoning-effort override (TS `AgentTool.tsx` `effort` input).
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
     /// Cache-identical tool schema reuse flag (TS `runAgent.ts:624`).
     pub use_exact_tools: bool,
     /// Per-agent MCP server allow-list (TS `AgentTool.tsx:206`).

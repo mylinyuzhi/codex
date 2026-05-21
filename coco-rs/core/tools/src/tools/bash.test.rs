@@ -1,6 +1,6 @@
 use crate::tools::bash::BashTool;
 use coco_tool_runtime::DescriptionOptions;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
@@ -13,7 +13,8 @@ use serde_json::json;
 
 #[test]
 fn test_bash_description_includes_avoid_native_commands_list() {
-    let desc = BashTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
+    let desc =
+        <BashTool as DynTool>::description(&BashTool, &json!({}), &DescriptionOptions::default());
     // Every native command the model is told to avoid.
     for forbidden in &["find", "grep", "cat", "head", "tail", "sed", "awk", "echo"] {
         assert!(
@@ -25,7 +26,8 @@ fn test_bash_description_includes_avoid_native_commands_list() {
 
 #[test]
 fn test_bash_description_includes_tool_preferences() {
-    let desc = BashTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
+    let desc =
+        <BashTool as DynTool>::description(&BashTool, &json!({}), &DescriptionOptions::default());
     for tool in &["Glob", "Grep", "Read", "Edit", "Write"] {
         assert!(
             desc.contains(tool),
@@ -36,7 +38,8 @@ fn test_bash_description_includes_tool_preferences() {
 
 #[test]
 fn test_bash_description_includes_git_safety_protocol() {
-    let desc = BashTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
+    let desc =
+        <BashTool as DynTool>::description(&BashTool, &json!({}), &DescriptionOptions::default());
     assert!(desc.contains("Git Safety Protocol"));
     assert!(desc.contains("force push to main/master"));
     assert!(desc.contains("destructive git commands"));
@@ -45,7 +48,8 @@ fn test_bash_description_includes_git_safety_protocol() {
 
 #[test]
 fn test_bash_description_includes_pr_creation_guidance() {
-    let desc = BashTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
+    let desc =
+        <BashTool as DynTool>::description(&BashTool, &json!({}), &DescriptionOptions::default());
     assert!(desc.contains("Creating pull requests"));
     assert!(desc.contains("gh pr create"));
 }
@@ -73,13 +77,16 @@ fn test_bash_read_only_fast_path() {
     ];
     for cmd in cases {
         let input = json!({"command": cmd});
-        assert!(BashTool.is_read_only(&input), "`{cmd}` should be read-only");
         assert!(
-            BashTool.is_concurrency_safe(&input),
+            <BashTool as DynTool>::is_read_only(&BashTool, &input),
+            "`{cmd}` should be read-only"
+        );
+        assert!(
+            <BashTool as DynTool>::is_concurrency_safe(&BashTool, &input),
             "`{cmd}` should be concurrency-safe"
         );
         assert!(
-            !BashTool.is_destructive(&input),
+            !<BashTool as DynTool>::is_destructive(&BashTool, &input),
             "`{cmd}` should not be destructive"
         );
     }
@@ -108,11 +115,11 @@ fn test_bash_destructive_commands() {
     for cmd in cases {
         let input = json!({"command": cmd});
         assert!(
-            !BashTool.is_read_only(&input),
+            !<BashTool as DynTool>::is_read_only(&BashTool, &input),
             "`{cmd}` should not be read-only"
         );
         assert!(
-            BashTool.is_destructive(&input),
+            <BashTool as DynTool>::is_destructive(&BashTool, &input),
             "`{cmd}` should be destructive"
         );
     }
@@ -122,9 +129,11 @@ fn test_bash_destructive_commands() {
 #[test]
 fn test_bash_missing_command_conservative() {
     let input = json!({});
-    assert!(!BashTool.is_read_only(&input));
-    assert!(!BashTool.is_concurrency_safe(&input));
-    assert!(BashTool.is_destructive(&input));
+    assert!(!<BashTool as DynTool>::is_read_only(&BashTool, &input));
+    assert!(!<BashTool as DynTool>::is_concurrency_safe(
+        &BashTool, &input
+    ));
+    assert!(<BashTool as DynTool>::is_destructive(&BashTool, &input));
 }
 
 /// Deny-severity security risks (eval, IFS injection, backtick substitution)
@@ -133,9 +142,9 @@ fn test_bash_missing_command_conservative() {
 #[tokio::test]
 async fn test_bash_security_deny_phase_eval() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "eval 'echo pwned'"}), &ctx)
-        .await;
+    let result =
+        <BashTool as DynTool>::execute(&BashTool, json!({"command": "eval 'echo pwned'"}), &ctx)
+            .await;
     assert!(result.is_err(), "eval must be blocked by Deny phase");
     let err = result.unwrap_err().to_string();
     assert!(
@@ -147,9 +156,8 @@ async fn test_bash_security_deny_phase_eval() {
 #[tokio::test]
 async fn test_bash_security_deny_phase_ifs_injection() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "IFS=$'\\n' ls"}), &ctx)
-        .await;
+    let result =
+        <BashTool as DynTool>::execute(&BashTool, json!({"command": "IFS=$'\\n' ls"}), &ctx).await;
     assert!(result.is_err(), "IFS manipulation must be blocked");
 }
 
@@ -161,9 +169,8 @@ async fn test_bash_read_only_skips_security_checks() {
     let ctx = ToolUseContext::test_default();
     // This grep command has a backtick inside the pattern; security check
     // would Ask on it, but read-only fast path should skip that check.
-    let result = BashTool
-        .execute(json!({"command": "echo hello"}), &ctx)
-        .await;
+    let result =
+        <BashTool as DynTool>::execute(&BashTool, json!({"command": "echo hello"}), &ctx).await;
     assert!(result.is_ok(), "echo should run without security check");
 }
 
@@ -205,36 +212,18 @@ fn test_bash_max_timeout_from_runtime_config() {
 }
 
 // ---------------------------------------------------------------------------
-// B4.2: auto-background-on-timeout error suggestion
+// B4.2: timeout behaviour
 // ---------------------------------------------------------------------------
-
-/// On foreground timeout, the error message must mention "timed out"
-/// (for legacy string matchers) AND also surface the
-/// `run_in_background` suggestion when a TaskHandle is available in
-/// the context — so the model can retry without trial-and-error.
-#[tokio::test]
-async fn test_bash_timeout_error_suggests_background_when_handle_available() {
-    use std::sync::Arc;
-    // Provide a real TaskHandle (NoOpTaskHandle) so the suggestion
-    // path fires. The no-op handle is semantically "I exist", which
-    // is what the suggestion logic probes for.
-    let mut ctx = ToolUseContext::test_default();
-    ctx.task_handle = Some(Arc::new(coco_tool_runtime::NoOpTaskHandle));
-
-    let result = BashTool
-        .execute(json!({"command": "sleep 10", "timeout": 100}), &ctx)
-        .await;
-    assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("timed out"),
-        "must include timeout wording: {err}"
-    );
-    assert!(
-        err.contains("run_in_background") && err.contains("true"),
-        "must suggest run_in_background retry: {err}"
-    );
-}
+//
+// The "auto-background-on-timeout suggestion" path that lived here is
+// gone — the W3 unified TaskRuntime path (`execute_via_task_runtime`)
+// catches timeouts inside `task_runtime::run_shell_to_completion` via
+// `WaitOutcome::TimedOut`, flips `interrupted: true`, and returns
+// `Ok(ToolResult)` instead of `Err`. Auto-detach (`auto_detach_ms`)
+// supersedes the old "hint the model to retry" mechanism. The
+// remaining test below covers the legacy no-TaskHandle fallback in
+// `execute_foreground`, which is the only surviving Err-with-timeout-wording
+// code path.
 
 /// Without a TaskHandle, the tool should NOT suggest background
 /// retry (it's not available) — just a plain timeout error.
@@ -242,9 +231,12 @@ async fn test_bash_timeout_error_suggests_background_when_handle_available() {
 async fn test_bash_timeout_error_no_suggestion_without_handle() {
     let ctx = ToolUseContext::test_default();
     // test_default has task_handle = None.
-    let result = BashTool
-        .execute(json!({"command": "sleep 10", "timeout": 100}), &ctx)
-        .await;
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        json!({"command": "sleep 10", "timeout": 100}),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("timed out"));
@@ -257,10 +249,10 @@ async fn test_bash_timeout_error_no_suggestion_without_handle() {
 #[tokio::test]
 async fn test_bash_echo() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "echo hello world"}), &ctx)
-        .await
-        .unwrap();
+    let result =
+        <BashTool as DynTool>::execute(&BashTool, json!({"command": "echo hello world"}), &ctx)
+            .await
+            .unwrap();
 
     // R5-T14: structured output — read stdout directly.
     assert!(
@@ -276,8 +268,7 @@ async fn test_bash_echo() {
 #[tokio::test]
 async fn test_bash_exit_code() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "exit 42"}), &ctx)
+    let result = <BashTool as DynTool>::execute(&BashTool, json!({"command": "exit 42"}), &ctx)
         .await
         .unwrap();
 
@@ -288,10 +279,10 @@ async fn test_bash_exit_code() {
 #[tokio::test]
 async fn test_bash_stderr() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "echo err >&2"}), &ctx)
-        .await
-        .unwrap();
+    let result =
+        <BashTool as DynTool>::execute(&BashTool, json!({"command": "echo err >&2"}), &ctx)
+            .await
+            .unwrap();
 
     // R5-T14: stderr has its own field.
     assert!(result.data["stderr"].as_str().unwrap().contains("err"));
@@ -301,9 +292,12 @@ async fn test_bash_stderr() {
 #[tokio::test]
 async fn test_bash_timeout() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "sleep 10", "timeout": 100}), &ctx)
-        .await;
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        json!({"command": "sleep 10", "timeout": 100}),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -313,8 +307,7 @@ async fn test_bash_timeout() {
 #[tokio::test]
 async fn test_bash_pwd() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "pwd"}), &ctx)
+    let result = <BashTool as DynTool>::execute(&BashTool, json!({"command": "pwd"}), &ctx)
         .await
         .unwrap();
 
@@ -327,7 +320,7 @@ async fn test_bash_pwd() {
 #[test]
 fn test_bash_max_result_size_bound_matches_ts() {
     assert_eq!(
-        BashTool.max_result_size_bound(),
+        <BashTool as DynTool>::max_result_size_bound(&BashTool,),
         coco_tool_runtime::ResultSizeBound::Chars(30_000),
     );
 }
@@ -361,8 +354,7 @@ async fn test_bash_respects_cwd_override() {
     let mut ctx = ToolUseContext::test_default();
     ctx.cwd_override = Some(canon.clone());
 
-    let result = BashTool
-        .execute(json!({"command": "pwd"}), &ctx)
+    let result = <BashTool as DynTool>::execute(&BashTool, json!({"command": "pwd"}), &ctx)
         .await
         .unwrap();
 
@@ -377,10 +369,13 @@ async fn test_bash_respects_cwd_override() {
 #[tokio::test]
 async fn test_bash_piped_command() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "echo -e 'a\\nb\\nc' | wc -l"}), &ctx)
-        .await
-        .unwrap();
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        json!({"command": "echo -e 'a\\nb\\nc' | wc -l"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert!(result.data["stdout"].as_str().unwrap().contains('3'));
 }
@@ -391,8 +386,7 @@ async fn test_bash_piped_command() {
 #[tokio::test]
 async fn test_bash_no_output() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "true"}), &ctx)
+    let result = <BashTool as DynTool>::execute(&BashTool, json!({"command": "true"}), &ctx)
         .await
         .unwrap();
 
@@ -408,8 +402,7 @@ async fn test_bash_with_progress_channel() {
     let mut ctx = ToolUseContext::test_default();
     ctx.progress_tx = Some(tx);
 
-    let result = BashTool
-        .execute(json!({"command": "echo hello"}), &ctx)
+    let result = <BashTool as DynTool>::execute(&BashTool, json!({"command": "echo hello"}), &ctx)
         .await
         .unwrap();
 
@@ -520,9 +513,12 @@ fn test_auto_background_on_timeout_default_disabled() {
 #[tokio::test]
 async fn test_bash_timeout_without_auto_background_errors() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "sleep 10", "timeout": 100}), &ctx)
-        .await;
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        json!({"command": "sleep 10", "timeout": 100}),
+        &ctx,
+    )
+    .await;
     assert!(
         result.is_err(),
         "timeout should error when auto-bg disabled"
@@ -548,10 +544,13 @@ async fn test_bash_cancel_kills_child_and_sets_interrupted() {
     });
 
     let start = std::time::Instant::now();
-    let result = BashTool
-        .execute(json!({"command": "sleep 10 && echo done"}), &ctx)
-        .await
-        .unwrap();
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        json!({"command": "sleep 10 && echo done"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     let elapsed = start.elapsed();
     // Should return well before 10s — ideally ~200ms plus shell startup.
@@ -570,10 +569,13 @@ async fn test_bash_cancel_kills_child_and_sets_interrupted() {
 #[tokio::test]
 async fn test_bash_structured_output_schema() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(json!({"command": "echo out; echo err >&2; exit 2"}), &ctx)
-        .await
-        .unwrap();
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        json!({"command": "echo out; echo err >&2; exit 2"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     assert!(result.data["stdout"].is_string());
     assert!(result.data["stderr"].is_string());
@@ -588,12 +590,12 @@ async fn test_bash_structured_output_schema() {
 #[tokio::test]
 async fn test_bash_background_without_task_handle() {
     let ctx = ToolUseContext::test_default();
-    let result = BashTool
-        .execute(
-            json!({"command": "echo test", "run_in_background": true}),
-            &ctx,
-        )
-        .await;
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        json!({"command": "echo test", "run_in_background": true}),
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -604,49 +606,47 @@ async fn test_bash_background_without_task_handle() {
 
 #[test]
 fn test_stall_prompt_yes_no() {
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Do you want to continue? (y/n)"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "output\nmore output\nContinue? [y/n]"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Are you sure? (yes/no)"
     ));
 }
 
 #[test]
 fn test_stall_prompt_password() {
-    assert!(coco_tool_runtime::matches_interactive_prompt(
-        "Enter password:"
-    ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt("Enter password:"));
+    assert!(coco_tasks::matches_interactive_prompt(
         "[sudo] password for user:"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Enter passphrase for key:"
     ));
 }
 
 #[test]
 fn test_stall_prompt_question_pattern() {
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Do you want to proceed?"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Would you like to overwrite?"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Are you sure you want to delete?"
     ));
 }
 
 #[test]
 fn test_stall_prompt_press_key() {
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Press any key to continue"
     ));
-    assert!(coco_tool_runtime::matches_interactive_prompt(
+    assert!(coco_tasks::matches_interactive_prompt(
         "Press Enter to continue"
     ));
 }
@@ -654,65 +654,72 @@ fn test_stall_prompt_press_key() {
 #[test]
 fn test_stall_no_false_positive_normal_output() {
     // Normal command output should NOT match
-    assert!(!coco_tool_runtime::matches_interactive_prompt(
+    assert!(!coco_tasks::matches_interactive_prompt(
         "Compiling project..."
     ));
-    assert!(!coco_tool_runtime::matches_interactive_prompt(
-        "Build succeeded"
-    ));
-    assert!(!coco_tool_runtime::matches_interactive_prompt(
+    assert!(!coco_tasks::matches_interactive_prompt("Build succeeded"));
+    assert!(!coco_tasks::matches_interactive_prompt(
         "Downloaded 42 packages"
     ));
-    assert!(!coco_tool_runtime::matches_interactive_prompt("")); // empty
+    assert!(!coco_tasks::matches_interactive_prompt("")); // empty
 }
 
 #[test]
 fn test_stall_only_checks_last_line() {
     // "password:" in earlier output should not trigger
     let tail = "checking password: ok\nall tests passed\nDone.";
-    assert!(!coco_tool_runtime::matches_interactive_prompt(tail));
+    assert!(!coco_tasks::matches_interactive_prompt(tail));
 
     // But if last line has prompt, it should match
     let tail2 = "checking things\nEnter password:";
-    assert!(coco_tool_runtime::matches_interactive_prompt(tail2));
+    assert!(coco_tasks::matches_interactive_prompt(tail2));
 }
 
 // -- Notification format tests --
+//
+// The XML builder lives in `coco_tasks::notification` and has its own
+// unit tests in that crate. These crate-local tests serve as smoke
+// checks that the integration path (BashTool spawn → TaskRuntime →
+// CommandQueueNotificationSink → render_notification) still produces
+// the TS-aligned shape.
 
 #[test]
 fn test_task_notification_format() {
-    let info = coco_tool_runtime::BackgroundTaskInfo {
+    use coco_tasks::{NotificationKind, TaskNotification, TerminalStatus, render_notification};
+    let n = TaskNotification {
         task_id: "task-1".into(),
-        status: coco_tool_runtime::BackgroundTaskStatus::Completed,
-        summary: Some("Command finished successfully".into()),
-        output_file: Some("/tmp/task-1.out".into()),
         tool_use_id: Some("tu-123".into()),
-        elapsed_seconds: 5.0,
-        notified: false,
+        agent_id: None,
+        output_file: "/tmp/task-1.out".into(),
+        description: "ls".into(),
+        kind: NotificationKind::ShellTerminal {
+            status: TerminalStatus::Completed,
+            exit_code: Some(0),
+        },
     };
-
-    let xml = coco_tool_runtime::format_task_notification(&info);
+    let xml = render_notification(&n);
     assert!(xml.contains("<task-id>task-1</task-id>"));
     assert!(xml.contains("<status>completed</status>"));
     assert!(xml.contains("<tool-use-id>tu-123</tool-use-id>"));
     assert!(xml.contains("<output-file>/tmp/task-1.out</output-file>"));
-    assert!(xml.contains("<summary>Command finished successfully</summary>"));
 }
 
 #[test]
 fn test_stall_notification_omits_status() {
-    let stall = coco_tool_runtime::StallInfo {
+    use coco_tasks::{NotificationKind, TaskNotification, render_notification};
+    let n = TaskNotification {
         task_id: "task-2".into(),
-        output_tail: "Enter password:".into(),
-        frozen_seconds: 45.0,
+        tool_use_id: None,
+        agent_id: None,
+        output_file: "/tmp/task-2.out".into(),
+        description: "sleep".into(),
+        kind: NotificationKind::Stall {
+            output_tail: "Enter password:".into(),
+        },
     };
-
-    let xml = coco_tool_runtime::format_stall_notification(&stall, Some("/tmp/task-2.out"));
-    // Stall notifications must NOT have <status> tag (TS requirement)
+    let xml = render_notification(&n);
     assert!(!xml.contains("<status>"));
     assert!(xml.contains("<task-id>task-2</task-id>"));
-    assert!(xml.contains("output frozen for 45s"));
-    // Raw output tail appears after XML
     assert!(xml.contains("Enter password:"));
 }
 
@@ -735,18 +742,18 @@ async fn test_bash_simulated_sed_edit_writes_new_content() {
     std::fs::write(&file, "before\n").unwrap();
 
     let ctx = coco_tool_runtime::ToolUseContext::test_default();
-    let result = BashTool
-        .execute(
-            serde_json::json!({
-                "_simulatedSedEdit": {
-                    "filePath": file.to_str().unwrap(),
-                    "newContent": "after\n",
-                }
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        serde_json::json!({
+            "_simulatedSedEdit": {
+                "filePath": file.to_str().unwrap(),
+                "newContent": "after\n",
+            }
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // sed-shaped success envelope
     assert_eq!(result.data["stdout"], "");
@@ -764,18 +771,18 @@ async fn test_bash_simulated_sed_edit_enoent_returns_sed_error() {
     use crate::tools::bash::BashTool;
 
     let ctx = coco_tool_runtime::ToolUseContext::test_default();
-    let result = BashTool
-        .execute(
-            serde_json::json!({
-                "_simulatedSedEdit": {
-                    "filePath": "/this/path/does/not/exist.txt",
-                    "newContent": "irrelevant",
-                }
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        serde_json::json!({
+            "_simulatedSedEdit": {
+                "filePath": "/this/path/does/not/exist.txt",
+                "newContent": "irrelevant",
+            }
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // ENOENT must come back as a sed-shaped error envelope, NOT a tool error.
     assert_eq!(result.data["stdout"], "");
@@ -800,18 +807,18 @@ async fn test_bash_simulated_sed_edit_preserves_crlf_line_endings() {
     std::fs::write(&file, "alpha\r\nbeta\r\n").unwrap();
 
     let ctx = coco_tool_runtime::ToolUseContext::test_default();
-    let _result = BashTool
-        .execute(
-            serde_json::json!({
-                "_simulatedSedEdit": {
-                    "filePath": file.to_str().unwrap(),
-                    "newContent": "gamma\ndelta\n",
-                }
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let _result = <BashTool as DynTool>::execute(
+        &BashTool,
+        serde_json::json!({
+            "_simulatedSedEdit": {
+                "filePath": file.to_str().unwrap(),
+                "newContent": "gamma\ndelta\n",
+            }
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Sed-edit must preserve CRLF — TS `applySedEdit` reuses the
     // detected line ending. coco-rs FileWriteTool always normalizes
@@ -828,16 +835,16 @@ async fn test_bash_simulated_sed_edit_missing_file_path_errors() {
     use crate::tools::bash::BashTool;
 
     let ctx = coco_tool_runtime::ToolUseContext::test_default();
-    let result = BashTool
-        .execute(
-            serde_json::json!({
-                "_simulatedSedEdit": {
-                    "newContent": "no path provided"
-                }
-            }),
-            &ctx,
-        )
-        .await;
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        serde_json::json!({
+            "_simulatedSedEdit": {
+                "newContent": "no path provided"
+            }
+        }),
+        &ctx,
+    )
+    .await;
 
     let err = result.unwrap_err();
     assert!(err.to_string().contains("filePath"), "got: {err}");
@@ -902,15 +909,15 @@ async fn test_bash_output_includes_image_fields_when_stdout_is_image() {
     // 89 50 4E 47 0D 0A 1A 0A — emitted via printf so the test stays
     // portable across bash versions. The trailing zero bytes are
     // padding to make the magic detector's 8-byte check pass.
-    let result = BashTool
-        .execute(
-            serde_json::json!({
-                "command": "printf '\\x89PNG\\x0d\\x0a\\x1a\\x0a\\x00\\x00\\x00\\x00'"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        serde_json::json!({
+            "command": "printf '\\x89PNG\\x0d\\x0a\\x1a\\x0a\\x00\\x00\\x00\\x00'"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         result.data["isImage"], true,
         "expected isImage=true for PNG-magic stdout, got: {:?}",
@@ -932,15 +939,15 @@ async fn test_bash_output_does_not_use_temp_persistence_when_oversized() {
     // yes(1) emits 'y\n' indefinitely; cap with head -c to land just
     // above the 30K persistence threshold. Some platforms ship bash 3.x
     // without `head -c`, so use `printf` repeats as a portable fallback.
-    let result = BashTool
-        .execute(
-            serde_json::json!({
-                "command": "printf 'x%.0s' $(seq 1 35000)"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        serde_json::json!({
+            "command": "printf 'x%.0s' $(seq 1 35000)"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert!(
         result.data.get("persistedOutputPath").is_none(),
         "Bash should not write model-visible temp persisted output: {:?}",
@@ -965,19 +972,19 @@ async fn test_bash_simulated_sed_edit_does_not_run_command() {
     std::fs::write(&file, "before\n").unwrap();
 
     let ctx = coco_tool_runtime::ToolUseContext::test_default();
-    let result = BashTool
-        .execute(
-            serde_json::json!({
-                "command": "eval 'rm -rf /'",
-                "_simulatedSedEdit": {
-                    "filePath": file.to_str().unwrap(),
-                    "newContent": "after\n",
-                }
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        serde_json::json!({
+            "command": "eval 'rm -rf /'",
+            "_simulatedSedEdit": {
+                "filePath": file.to_str().unwrap(),
+                "newContent": "after\n",
+            }
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Sed-shaped success: bash command was never executed.
     assert_eq!(result.data["exitCode"], 0);
@@ -990,6 +997,7 @@ async fn test_bash_simulated_sed_edit_does_not_run_command() {
 
 mod render_for_model_tests {
     use super::*;
+    use coco_tool_runtime::DynTool;
     use coco_tool_runtime::ToolResultContentPart;
     use serde_json::json;
 
@@ -1004,7 +1012,7 @@ mod render_for_model_tests {
             "status": "background",
             "message": "Command is running in the background. Task ID: task-42.",
         });
-        let parts = BashTool.render_for_model(&data);
+        let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         assert_eq!(parts.len(), 1);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part, got {:?}", parts[0]);
@@ -1040,7 +1048,7 @@ mod render_for_model_tests {
                 }
             }],
         });
-        let parts = BashTool.render_for_model(&data);
+        let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         assert_eq!(parts.len(), 1);
         match &parts[0] {
             ToolResultContentPart::FileData {
@@ -1065,7 +1073,7 @@ mod render_for_model_tests {
             "exitCode": 0,
             "interrupted": false,
         });
-        let parts = BashTool.render_for_model(&data);
+        let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1081,7 +1089,7 @@ mod render_for_model_tests {
             "exitCode": 0,
             "interrupted": false,
         });
-        let parts = BashTool.render_for_model(&data);
+        let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1096,7 +1104,7 @@ mod render_for_model_tests {
             "exitCode": -1,
             "interrupted": true,
         });
-        let parts = BashTool.render_for_model(&data);
+        let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1121,7 +1129,7 @@ mod render_for_model_tests {
             "persistedOutputPath": "/tmp/coco-bash-output/bash-1-2.out",
             "persistedOutputSize": 50_000,
         });
-        let parts = BashTool.render_for_model(&data);
+        let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1143,7 +1151,7 @@ mod render_for_model_tests {
             "backgroundTaskId": "task-99",
             "assistantAutoBackgrounded": true,
         });
-        let parts = BashTool.render_for_model(&data);
+        let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1170,7 +1178,7 @@ mod render_for_model_tests {
             "backgroundTaskId": "task-7",
             "backgroundedByUser": true,
         });
-        let parts = BashTool.render_for_model(&data);
+        let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
@@ -1191,7 +1199,7 @@ mod render_for_model_tests {
             "interrupted": false,
             "backgroundTaskId": "task-3",
         });
-        let parts = BashTool.render_for_model(&data);
+        let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };

@@ -386,14 +386,17 @@ pub struct GeneratorContext<'a> {
     /// Engine-set flag: turn budget exhausted this iteration. Drives
     /// [`MaxTurnsReachedGenerator`](crate::generators::audit_add::MaxTurnsReachedGenerator).
     pub max_turns_reached_signal: bool,
-    /// Pre-formatted session-memory summary from `coco-memory`.
+    /// Pre-formatted session-memory summary from `coco-memory`. `None`
+    /// until upstream lands the producer (TS:
+    /// `services/SessionMemory/sessionMemoryCheck.ts`).
     pub current_session_memory: Option<String>,
     /// Pre-formatted permission-rule snapshot from `coco-permissions`.
     pub command_permissions: Option<String>,
     /// Pre-formatted dynamic-skill listing from `coco-skills`.
     pub dynamic_skill: Option<String>,
     /// Pre-formatted skill-discovery suggestion from `coco-skills`
-    /// (UserPrompt tier).
+    /// (UserPrompt tier). `None` until upstream lands the producer
+    /// (TS: `services/skillSearch/prefetch.ts`).
     pub skill_discovery: Option<String>,
     /// Pre-formatted tool structured-output blob from `coco-tool-runtime`.
     pub structured_output: Option<String>,

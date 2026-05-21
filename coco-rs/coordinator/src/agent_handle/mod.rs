@@ -160,7 +160,26 @@ pub struct SwarmAgentHandle {
     /// (string-ref entries point at parent-shared connections that
     /// must NOT be torn down — TS `newlyCreatedClients` guard).
     dynamic_mcp_servers: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Vec<String>>>>,
+    /// Builder closure invoked at spawn time when the target subagent
+    /// is `coco-guide` to populate the dynamic context block (custom
+    /// skills / agents / MCP servers / plugin commands / settings.json).
+    /// Mirrors TS `claudeCodeGuideAgent.ts:121-200`'s `getSystemPrompt`
+    /// callback which reads runtime context off `toolUseContext.options`.
+    ///
+    /// `None` ⇒ no dynamic block is appended (static base prompt only).
+    /// The CLI bootstrap wires this from `CommandRegistry` +
+    /// `AgentCatalogSnapshot` + `McpHandle::connected_servers` +
+    /// settings.json. Kept as a builder closure rather than 4
+    /// separate Arc fields so future additions to the block don't
+    /// proliferate SwarmAgentHandle fields.
+    coco_guide_context_builder: Option<CocoGuideContextBuilder>,
 }
+
+/// Closure type for [`SwarmAgentHandle::coco_guide_context_builder`].
+/// Returns an owned snapshot — callers can read short-lived registry
+/// state inside without lifetime entanglement at the use site.
+pub type CocoGuideContextBuilder =
+    Arc<dyn Fn() -> coco_subagent::CocoGuideDynamicContext + Send + Sync>;
 
 impl SwarmAgentHandle {
     pub fn new(
@@ -197,7 +216,24 @@ impl SwarmAgentHandle {
             dynamic_mcp_servers: Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            coco_guide_context_builder: None,
         }
+    }
+
+    /// Install the coco-guide dynamic context builder. TS source:
+    /// `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`.
+    /// Without this hook, spawned `coco-guide` agents see only the
+    /// static base prompt — losing visibility into the user's custom
+    /// skills / agents / MCP servers / settings, matching the
+    /// pre-Phase-1 coco-rs behavior. CLI bootstrap typically wires
+    /// this from the CommandRegistry + active AgentCatalogSnapshot +
+    /// the McpHandle's connected-servers list + settings.json.
+    pub fn set_coco_guide_context_builder(&mut self, builder: CocoGuideContextBuilder) {
+        self.coco_guide_context_builder = Some(builder);
+    }
+
+    pub(crate) fn coco_guide_context_builder(&self) -> Option<&CocoGuideContextBuilder> {
+        self.coco_guide_context_builder.as_ref()
     }
 
     pub fn set_backend_registry(&mut self, registry: Arc<crate::pane::BackendRegistry>) {
@@ -399,8 +435,13 @@ impl SwarmAgentHandle {
             .ok_or("team_name required for teammate")?;
 
         let main_model_id = self.current_main_model_id();
+        // Per-request `model` slot is gone — read from definition only.
+        // `resolve_teammate_model` accepts `Option<&str>`; passing `None`
+        // makes it use the team config's default model or the
+        // role-resolved spec instead.
+        let definition_model = request.definition.as_ref().and_then(|d| d.model.as_deref());
         let resolved_model = resolve_teammate_model(
-            request.model.as_deref(),
+            definition_model,
             &main_model_id,
             &self.runtime_config.agent_teams,
             request.subagent_type.as_deref(),
@@ -419,10 +460,16 @@ impl SwarmAgentHandle {
         // Pre-fix: teammates ran with ONLY the addendum (the leader's
         // system prompt was discarded), which is a TS parity gap with
         // `inProcessRunner.ts`.
-        let teammate_system_prompt = if request.initial_prompt.is_some() {
-            request.initial_prompt.clone()
-        } else {
-            self.teammate_base_system_prompt.read().await.clone()
+        // `initial_prompt` flows from `AgentDefinition.initial_prompt`
+        // (frontmatter). Top-level `request.initial_prompt` was a dead
+        // slot and is gone.
+        let teammate_system_prompt = match request
+            .definition
+            .as_ref()
+            .and_then(|d| d.initial_prompt.clone())
+        {
+            Some(p) => Some(p),
+            None => self.teammate_base_system_prompt.read().await.clone(),
         };
 
         // Persistent round-robin assignment so the same teammate gets
@@ -470,13 +517,42 @@ impl SwarmAgentHandle {
             system_prompt: teammate_system_prompt,
             allowed_tools: Vec::new(),
             allow_permission_prompts: true,
-            effort: request.effort.clone(),
-            use_exact_tools: request.use_exact_tools,
+            // Static effort lives on `AgentDefinition.effort`. Read it
+            // through here (was: blank pass-through of unset
+            // `request.effort`). See `agent_handle.rs` comment on
+            // `AgentSpawnRequest` for why per-spawn override slot was
+            // removed.
+            // All static knobs read through `request.definition` — the
+            // previously-dead top-level slots are gone. See
+            // `agent_handle.rs` `AgentSpawnRequest` field comment.
+            effort: request.definition.as_ref().and_then(|d| d.effort),
+            use_exact_tools: request
+                .definition
+                .as_ref()
+                .map(|d| d.use_exact_tools)
+                .unwrap_or(false),
             isolation: coco_types::AgentIsolation::None,
             memory_scope: None,
-            mcp_servers: request.mcp_servers.clone(),
-            disallowed_tools: request.disallowed_tools.clone(),
-            max_turns: request.max_turns,
+            mcp_servers: request
+                .definition
+                .as_ref()
+                .map(|d| {
+                    d.mcp_servers
+                        .iter()
+                        .filter_map(|spec| spec.name().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            disallowed_tools: request
+                .definition
+                .as_ref()
+                .map(|d| d.disallowed_tools.clone())
+                .unwrap_or_default(),
+            max_turns: request
+                .constraints
+                .as_ref()
+                .and_then(|c| c.max_turns)
+                .or_else(|| request.definition.as_ref().and_then(|d| d.max_turns)),
         };
 
         let mut launched_executor: Option<Arc<dyn crate::pane::TeammateExecutor>> = None;
@@ -507,11 +583,35 @@ impl SwarmAgentHandle {
                     parent_session_id: request.session_id.clone(),
                     permissions: config.allowed_tools.clone(),
                     allow_permission_prompts: config.allow_permission_prompts,
-                    effort: request.effort.clone(),
-                    use_exact_tools: request.use_exact_tools,
-                    mcp_servers: request.mcp_servers.clone(),
-                    disallowed_tools: request.disallowed_tools.clone(),
-                    max_turns: request.max_turns,
+                    // All static knobs read from `request.definition` —
+                    // see `agent_handle.rs` `AgentSpawnRequest` field
+                    // comment for why the top-level slots are gone.
+                    effort: request.definition.as_ref().and_then(|d| d.effort),
+                    use_exact_tools: request
+                        .definition
+                        .as_ref()
+                        .map(|d| d.use_exact_tools)
+                        .unwrap_or(false),
+                    mcp_servers: request
+                        .definition
+                        .as_ref()
+                        .map(|d| {
+                            d.mcp_servers
+                                .iter()
+                                .filter_map(|spec| spec.name().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    disallowed_tools: request
+                        .definition
+                        .as_ref()
+                        .map(|d| d.disallowed_tools.clone())
+                        .unwrap_or_default(),
+                    max_turns: request
+                        .constraints
+                        .as_ref()
+                        .and_then(|c| c.max_turns)
+                        .or_else(|| request.definition.as_ref().and_then(|d| d.max_turns)),
                 })
                 .await;
             (executor.backend_type(), spawn)
@@ -690,10 +790,30 @@ impl SwarmAgentHandle {
                 features: request.features.clone(),
                 tool_overrides: request.tool_overrides.clone(),
                 parent_tool_filter: request.parent_tool_filter.clone(),
-                effort: request.effort.clone(),
-                use_exact_tools: request.use_exact_tools,
-                mcp_servers: request.mcp_servers.clone(),
-                disallowed_tools: request.disallowed_tools.clone(),
+                // All static knobs read from `request.definition` —
+                // see `agent_handle.rs` `AgentSpawnRequest` field
+                // comment for why the top-level slots are gone.
+                effort: request.definition.as_ref().and_then(|d| d.effort),
+                use_exact_tools: request
+                    .definition
+                    .as_ref()
+                    .map(|d| d.use_exact_tools)
+                    .unwrap_or(false),
+                mcp_servers: request
+                    .definition
+                    .as_ref()
+                    .map(|d| {
+                        d.mcp_servers
+                            .iter()
+                            .filter_map(|spec| spec.name().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                disallowed_tools: request
+                    .definition
+                    .as_ref()
+                    .map(|d| d.disallowed_tools.clone())
+                    .unwrap_or_default(),
                 model_role: resolved_model.model_role,
                 model_selection: resolved_model.model_selection.clone(),
                 task_list: self.task_list.clone(),
@@ -886,17 +1006,6 @@ impl AgentHandle for SwarmAgentHandle {
             .last_message
             .clone()
             .ok_or_else(|| format!("Agent '{agent_id}' has no output yet"))
-    }
-
-    async fn background_agent(&self, agent_id: &str) -> Result<(), String> {
-        let mut agents = self.agents.write().await;
-        let agent = agents
-            .iter_mut()
-            .find(|a| a.agent_id == agent_id)
-            .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
-
-        agent.status = SubAgentStatus::Backgrounded;
-        Ok(())
     }
 
     async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {

@@ -18,8 +18,10 @@
 
 mod error;
 pub mod handle_impls;
+pub mod notification;
 pub mod reminder_source;
 pub mod running;
+pub mod stall;
 pub mod task_list;
 pub mod todos;
 
@@ -28,8 +30,16 @@ pub use error::TasksError;
 
 // Re-export the canonical surface so callers don't have to pierce the
 // module tree for every type.
+pub use notification::{
+    NoOpNotificationSink, NotificationKind, NotificationSink, NotificationSinkRef,
+    TaskNotification, TaskUsage, TerminalStatus, Worktree, render as render_notification,
+};
+pub use running::LocalAgentExtra;
+pub use running::PANEL_GRACE_MS;
 pub use running::TaskManager;
-pub use running::TaskOutput;
+pub use stall::{
+    STALL_CHECK_INTERVAL_MS, STALL_TAIL_BYTES, STALL_THRESHOLD_MS, matches_interactive_prompt,
+};
 pub use task_list::ClaimResult;
 pub use task_list::Task;
 pub use task_list::TaskListStore;

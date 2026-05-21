@@ -446,11 +446,148 @@ Use the literal string `VERDICT: ` followed by exactly one of `PASS`, `FAIL`, `P
 /// runs.
 pub const VERIFICATION_CRITICAL_SYSTEM_REMINDER: &str = "CRITICAL: This is a VERIFICATION-ONLY task. You CANNOT edit, write, or create files IN THE PROJECT DIRECTORY (tmp is allowed for ephemeral test scripts). You MUST end with VERDICT: PASS, VERDICT: FAIL, or VERDICT: PARTIAL.";
 
+/// One entry of the "Available custom skills" / "Available plugin
+/// skills" sections of the coco-guide dynamic context block. TS source:
+/// the `commandList` / `pluginList` `.map(cmd => '- /${cmd.name}: ${cmd.description}')`
+/// shape at `claudeCodeGuideAgent.ts:131-132, 167-168`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GuideCommandEntry {
+    /// Slash name (without the leading `/`).
+    pub name: String,
+    /// One-line description shown after the colon in the bullet list.
+    pub description: String,
+}
+
+/// One entry of the "Available custom agents configured" section of the
+/// coco-guide dynamic context block. TS source: the `agentList`
+/// `.map(a => '- ${a.agentType}: ${a.whenToUse}')` shape at
+/// `claudeCodeGuideAgent.ts:144-146`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GuideAgentEntry {
+    /// Agent type identifier (TS `a.agentType`).
+    pub agent_type: String,
+    /// `whenToUse` blurb from the agent's frontmatter / definition.
+    pub when_to_use: String,
+}
+
+/// Owned snapshot of the runtime data the coco-guide dynamic block
+/// renders. Populated by the spawn-time prompt assembler from the
+/// CLI's CommandRegistry, AgentCatalogSnapshot, McpHandle, and
+/// settings.json. TS source: the `getSystemPrompt({toolUseContext})`
+/// closure at `claudeCodeGuideAgent.ts:121-203` reads the equivalent
+/// fields off `toolUseContext.options.{commands, agentDefinitions,
+/// mcpClients}` plus `getSettings_DEPRECATED()`.
+///
+/// Empty fields → that section is omitted from the rendered block
+/// (matches TS's `if (length > 0)` gates on each section).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CocoGuideDynamicContext {
+    /// Custom (non-plugin, non-built-in) slash commands. TS filter:
+    /// `commands.filter(cmd => cmd.type === 'prompt')`.
+    pub custom_commands: Vec<GuideCommandEntry>,
+    /// Plugin-sourced slash commands. TS filter:
+    /// `commands.filter(cmd => cmd.type === 'prompt' && cmd.source === 'plugin')`.
+    pub plugin_commands: Vec<GuideCommandEntry>,
+    /// Non-built-in agent definitions. TS filter:
+    /// `activeAgents.filter(a => a.source !== 'built-in')`.
+    pub custom_agents: Vec<GuideAgentEntry>,
+    /// Configured MCP server names. TS: `mcpClients.map(c => c.name)`.
+    pub mcp_servers: Vec<String>,
+    /// Pretty-printed settings.json content. Empty string → omit
+    /// the section. TS uses `jsonStringify(settings, null, 2)` over
+    /// the whole settings object.
+    pub settings_json: String,
+}
+
+impl CocoGuideDynamicContext {
+    /// True when every section is empty — caller can skip the
+    /// dynamic block entirely (matches TS's
+    /// `if (contextSections.length > 0)` gate at line 188).
+    pub fn is_empty(&self) -> bool {
+        self.custom_commands.is_empty()
+            && self.plugin_commands.is_empty()
+            && self.custom_agents.is_empty()
+            && self.mcp_servers.is_empty()
+            && self.settings_json.is_empty()
+    }
+}
+
+/// Render the dynamic "User's Current Configuration" block appended
+/// to the static coco-guide prompt. TS source:
+/// `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`.
+///
+/// Section ordering and bullet shape are byte-faithful to TS:
+/// 1. **Available custom skills in this project** (custom_commands)
+/// 2. **Available custom agents configured** (custom_agents)
+/// 3. **Configured MCP servers** (mcp_servers)
+/// 4. **Available plugin skills** (plugin_commands)
+/// 5. **User's settings.json** (settings_json, fenced ```json block)
+///
+/// Returns `None` when every section is empty — caller appends
+/// nothing and the static prompt stands alone (TS lines 200-202).
+pub fn coco_guide_dynamic_block(ctx: &CocoGuideDynamicContext) -> Option<String> {
+    if ctx.is_empty() {
+        return None;
+    }
+    let mut sections: Vec<String> = Vec::new();
+
+    if !ctx.custom_commands.is_empty() {
+        let lines: Vec<String> = ctx
+            .custom_commands
+            .iter()
+            .map(|c| format!("- /{}: {}", c.name, c.description))
+            .collect();
+        sections.push(format!(
+            "**Available custom skills in this project:**\n{}",
+            lines.join("\n")
+        ));
+    }
+    if !ctx.custom_agents.is_empty() {
+        let lines: Vec<String> = ctx
+            .custom_agents
+            .iter()
+            .map(|a| format!("- {}: {}", a.agent_type, a.when_to_use))
+            .collect();
+        sections.push(format!(
+            "**Available custom agents configured:**\n{}",
+            lines.join("\n")
+        ));
+    }
+    if !ctx.mcp_servers.is_empty() {
+        let lines: Vec<String> = ctx.mcp_servers.iter().map(|n| format!("- {n}")).collect();
+        sections.push(format!("**Configured MCP servers:**\n{}", lines.join("\n")));
+    }
+    if !ctx.plugin_commands.is_empty() {
+        let lines: Vec<String> = ctx
+            .plugin_commands
+            .iter()
+            .map(|c| format!("- /{}: {}", c.name, c.description))
+            .collect();
+        sections.push(format!(
+            "**Available plugin skills:**\n{}",
+            lines.join("\n")
+        ));
+    }
+    if !ctx.settings_json.is_empty() {
+        sections.push(format!(
+            "**User's settings.json:**\n```json\n{}\n```",
+            ctx.settings_json
+        ));
+    }
+    // TS template at `claudeCodeGuideAgent.ts:189-199`: `---` rule,
+    // a section header, an intro line, the joined sections, and a
+    // closing instruction. Byte-faithful.
+    Some(format!(
+        "\n\n---\n\n# User's Current Configuration\n\nThe user has the following custom setup in their environment:\n\n{}\n\nWhen answering questions, consider these configured features and proactively suggest them when relevant.",
+        sections.join("\n\n")
+    ))
+}
+
 /// `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:23-87` base prompt.
-/// Dynamic context sections (custom skills / agents / MCP servers /
-/// plugin commands / settings.json) are deferred to a later phase —
-/// the runtime currently passes this static body verbatim. See
-/// `coco-subagent/CLAUDE.md` "Known Phase-1 Gaps" for tracking.
+/// Static body only — runtime context sections (custom skills /
+/// agents / MCP servers / plugin commands / settings.json) flow
+/// through [`coco_guide_dynamic_block`] and are appended at spawn
+/// time by the coordinator's prompt assembler.
 ///
 /// **Coco-rs rename**: TS names the agent `claude-code-guide`; coco-rs
 /// uses `coco-guide`. The prompt body still references the Claude Code

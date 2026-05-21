@@ -18,8 +18,39 @@ use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// Typed input for [`AskUserQuestionTool`].
+///
+/// All four fields stay as opaque `Value` because:
+///   - `questions` is a heterogeneous union (`multiSelect` toggles
+///     option shape) that the model freely populates; the rich
+///     constraints are encoded in [`AskUserQuestionTool::input_schema`].
+///   - `answers` / `annotations` are TUI-spliced via
+///     `PermissionOutcome::Allow.updated_input` *after* the model emits
+///     the call — keeping them as `Value` matches that pipeline.
+///   - `metadata` is an analytics passthrough, intentionally lax.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct AskUserQuestionInput {
+    /// Questions array — model-supplied. See `input_schema()` for the
+    /// full constraint set (1-4 questions, each with 2-4 options,
+    /// optional `multiSelect`, optional `preview` per option).
+    #[serde(default)]
+    pub questions: Value,
+    /// (Internal) User answers, spliced into the input by the
+    /// TUI/CLI host before `tool_call_preparer` re-validates.
+    #[serde(default)]
+    pub answers: Option<Value>,
+    /// (Internal) Per-question annotations (preview / notes).
+    #[serde(default)]
+    pub annotations: Option<Value>,
+    /// Optional analytics metadata.
+    #[serde(default)]
+    pub metadata: Option<Value>,
+}
 
 /// Short description shown in tool-catalog listings / `tools.ts`.
 ///
@@ -68,13 +99,20 @@ pub struct AskUserQuestionTool;
 
 #[async_trait::async_trait]
 impl Tool for AskUserQuestionTool {
+    type Input = AskUserQuestionInput;
+    /// Output stays on `Value`: `render_for_model` walks the
+    /// `answers` / `annotations` maps generically, and the
+    /// envelope is downstream-consumed (TUI overlay) so a typed
+    /// envelope would just force redundant round-trips.
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::AskUserQuestion)
     }
     fn name(&self) -> &str {
         ToolName::AskUserQuestion.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &AskUserQuestionInput, _options: &DescriptionOptions) -> String {
         ASK_USER_QUESTION_DESCRIPTION.into()
     }
     async fn prompt(&self, _options: &PromptOptions) -> String {
@@ -174,7 +212,10 @@ impl Tool for AskUserQuestionTool {
                 }
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     fn requires_user_interaction(&self) -> bool {
@@ -185,7 +226,7 @@ impl Tool for AskUserQuestionTool {
     /// Multiple questions issued in the same turn are presented together by
     /// the TUI, so the executor can batch them concurrently rather than
     /// serializing.
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &AskUserQuestionInput) -> bool {
         true
     }
 
@@ -236,13 +277,14 @@ impl Tool for AskUserQuestionTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: AskUserQuestionInput,
         _ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let questions = input
-            .get("questions")
-            .cloned()
-            .unwrap_or(Value::Array(vec![]));
+        let questions = if input.questions.is_null() {
+            Value::Array(vec![])
+        } else {
+            input.questions
+        };
 
         // Propagate `answers` and `annotations` through to the result
         // when the host (TUI/CLI/test harness) has already spliced
@@ -252,10 +294,10 @@ impl Tool for AskUserQuestionTool {
         // would be invisible to the renderer.
         let mut data = serde_json::Map::new();
         data.insert("questions".into(), questions);
-        if let Some(answers) = input.get("answers").cloned() {
+        if let Some(answers) = input.answers {
             data.insert("answers".into(), answers);
         }
-        if let Some(annotations) = input.get("annotations").cloned() {
+        if let Some(annotations) = input.annotations {
             data.insert("annotations".into(), annotations);
         }
         Ok(ToolResult {

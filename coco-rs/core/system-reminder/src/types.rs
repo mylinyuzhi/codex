@@ -290,7 +290,10 @@ pub enum AttachmentType {
     MaxTurnsReached,
     /// TS `current_session_memory` (`attachments.ts:662-666`). Injects a
     /// pre-formatted summary of the current session's memory snapshot.
-    /// Core tier.
+    /// Core tier. Generator returns `None` until `coco-memory` ports
+    /// the snapshot producer (`services/SessionMemory/sessionMemoryCheck.ts`);
+    /// retained in the catalog because TS *has* this variant and the
+    /// reminder must light up the day upstream lands.
     CurrentSessionMemory,
     /// TS `command_permissions` (`attachments.ts:605-608`). Surfaces a
     /// snapshot of currently-allowed/denied permission rules so the
@@ -300,7 +303,10 @@ pub enum AttachmentType {
     /// loaded skill directories made available this turn. Core tier.
     DynamicSkill,
     /// TS `skill_discovery` (`attachments.ts:538-542`). Heuristic skill
-    /// suggestions for the current prompt. UserPrompt tier.
+    /// suggestions for the current prompt. UserPrompt tier. Generator
+    /// returns `None` until `coco-skills` ports the prefetcher
+    /// (`services/skillSearch/prefetch.ts`); retained because TS *has*
+    /// this variant.
     SkillDiscovery,
     /// TS `structured_output` (`attachments.ts:639-641`). Tool-emitted
     /// structured output rendered as a reminder for the next turn.

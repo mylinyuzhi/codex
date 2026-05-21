@@ -200,7 +200,7 @@ pub struct AgentQueryConfig {
     /// thinking-level configuration. `None` falls back to the
     /// model-role default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
     /// When true, bypass agent-definition tool rendering and use the
     /// parent's exact tool schemas verbatim (TS `runAgent.ts:624`,
     /// `useExactTools`). Required for prompt-cache prefix sharing in

@@ -453,21 +453,40 @@ impl QueryEngine {
             ant_build,
         };
 
+        // Session context for `Tool::input_schema_for_session`. Lets
+        // AgentTool drop `run_in_background` from its model-facing
+        // schema when the runtime would silently veto it. TS parity:
+        // `AgentTool.tsx:110-125 lazySchema().omit({...})`.
+        let schema_ctx = coco_tool_runtime::SchemaContext {
+            background_tasks_disabled,
+            fork_mode_active: fork_enabled,
+            features: Some(self.config.features.clone()),
+        };
+
         let mut out = Vec::with_capacity(model_tools.len());
         for tool in model_tools {
-            // `Tool::input_json_schema` returns a fully-formed JSON Schema
-            // when the tool ships one. Otherwise we synthesize one from
-            // `Tool::input_schema`'s loose `properties` map and wrap it
-            // as `{"type":"object","properties":{...}}` — strict
-            // providers (DeepSeek, OpenAI Responses on some models)
-            // reject schemas missing a top-level `type`. Without the
-            // wrap they fail the request with HTTP 400.
-            let json_schema = tool.input_json_schema().unwrap_or_else(|| {
-                let schema = tool.input_schema();
-                let props = serde_json::to_value(&schema.properties)
-                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-                serde_json::json!({ "type": "object", "properties": props })
-            });
+            // Prefer the session-aware JSON Schema so AgentTool's
+            // `omit({run_in_background})` reaches the model under
+            // `background_tasks_disabled || fork_mode_active` (TS
+            // `AgentTool.tsx:110-125 lazySchema().omit(...)`). The
+            // default `Tool::input_json_schema_for_session` returns
+            // the static derived schema, so tools that don't need
+            // dynamic omits pay no cost.
+            //
+            // Fallback path (no `input_json_schema_for_session`):
+            // synthesize from the legacy `input_schema_for_session`
+            // `properties` map and wrap as `{"type":"object",
+            // "properties":{...}}` — strict providers (DeepSeek,
+            // OpenAI Responses on some models) reject schemas
+            // missing a top-level `type` with HTTP 400.
+            let json_schema = tool
+                .input_json_schema_for_session(&schema_ctx)
+                .unwrap_or_else(|| {
+                    let schema = tool.input_schema_for_session(&schema_ctx);
+                    let props = serde_json::to_value(&schema.properties)
+                        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+                    serde_json::json!({ "type": "object", "properties": props })
+                });
             let description = tool.prompt(&prompt_options).await;
             // Attach `deferLoading: true` to tools the model has not
             // yet discovered via `ToolSearch`. Anthropic adapter reads
@@ -543,6 +562,7 @@ impl QueryEngine {
             tools: self.tools.clone(),
             cancel: self.cancel.clone(),
             mailbox: self.mailbox.clone(),
+            pending_messages: self.pending_messages.clone(),
             task_list: self.task_list.clone(),
             team_task_list_router: self.team_task_list_router.clone(),
             todo_list: self.todo_list.clone(),

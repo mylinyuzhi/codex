@@ -25,6 +25,9 @@ pub mod summary;
 pub mod transcript;
 pub mod validation;
 
+pub use builtin_prompts::{
+    CocoGuideDynamicContext, GuideAgentEntry, GuideCommandEntry, coco_guide_dynamic_block,
+};
 pub use builtins::{BuiltinAgentCatalog, builtin_definition, builtin_definitions};
 pub use coordinator_mode::{
     ParsedTaskNotification, SessionMode, SessionModeSwitch, TaskNotification,

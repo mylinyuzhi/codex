@@ -66,7 +66,4 @@ impl AgentHandle for RecordingHandle {
     async fn get_agent_output(&self, _agent_id: &str) -> Result<String, String> {
         Err("unused".into())
     }
-    async fn background_agent(&self, _agent_id: &str) -> Result<(), String> {
-        Err("unused".into())
-    }
 }

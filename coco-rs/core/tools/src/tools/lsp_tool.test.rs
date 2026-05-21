@@ -5,6 +5,7 @@
 //! + handle-gate slices that are independent of the JSON-RPC wire.
 
 use super::*;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::Feature;
 use serde_json::json;
@@ -133,7 +134,7 @@ fn parse_locations_handles_location_link_array() {
 async fn is_enabled_requires_both_feature_and_connected_handle() {
     let mut ctx = ToolUseContext::test_default();
     // Feature off + NoOp handle (the default).
-    assert!(!LspTool.is_enabled(&ctx));
+    assert!(!<LspTool as DynTool>::is_enabled(&LspTool, &ctx));
 
     // Feature on, but handle still reports disconnected — still off.
     // `ctx.features` is shared via Arc; build a fresh one with the gate
@@ -141,7 +142,7 @@ async fn is_enabled_requires_both_feature_and_connected_handle() {
     let mut features = (*ctx.features).clone();
     features.enable(Feature::Lsp);
     ctx.features = std::sync::Arc::new(features);
-    assert!(!LspTool.is_enabled(&ctx));
+    assert!(!<LspTool as DynTool>::is_enabled(&LspTool, &ctx));
 }
 
 #[tokio::test]
@@ -152,7 +153,7 @@ async fn execute_rejects_missing_position_for_position_based_op() {
         "filePath": "/tmp/__lsp_tool_test_no_pos__.rs"
         // no line / character
     });
-    let result = LspTool.execute(input, &ctx).await;
+    let result = <LspTool as DynTool>::execute(&LspTool, input, &ctx).await;
     let Err(err) = result else {
         panic!("expected rejection, got: {result:?}");
     };

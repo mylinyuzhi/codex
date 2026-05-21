@@ -26,7 +26,7 @@ use crate::permission_bridge::ToolPermissionBridgeRef;
 use crate::registry::ToolRegistry;
 use crate::schedule_store::ScheduleStoreRef;
 use crate::side_query::SideQueryHandle;
-use crate::task_handle::TaskHandleRef;
+use crate::task_handle::BackgroundTaskHandleRef;
 use crate::task_list_handle::TaskListHandleRef;
 use crate::task_list_handle::TeamTaskListRouterRef;
 use crate::task_list_handle::TodoListHandleRef;
@@ -402,6 +402,15 @@ pub struct ToolUseContext {
     /// rather than silently dropping the message.
     pub mailbox: crate::MailboxHandleRef,
 
+    // ── Pending-Message Queue ──
+    /// In-memory FIFO of pending messages per recipient agent. Mirrors
+    /// TS `LocalAgentTaskState.pendingMessages` — when a running agent
+    /// receives a `SendMessage` from a peer, the message is queued here
+    /// and surfaced via the `agent_pending_messages` system-reminder on
+    /// the recipient's next turn. `NoOpPendingMessageStore` in non-swarm
+    /// contexts so tool calls become no-ops.
+    pub pending_messages: crate::PendingMessageStoreRef,
+
     // ── Working Directory Override ──
     /// CWD override for worktree-isolated agents.
     /// TS: cwdOverridePath in AgentTool.tsx
@@ -450,7 +459,7 @@ pub struct ToolUseContext {
     // ── Background Task Management ──
     /// Handle for background task operations (shell tasks, agent tasks).
     /// TS: `spawnShellTask()`, `TaskOutput`, stall watchdog.
-    pub task_handle: Option<TaskHandleRef>,
+    pub task_handle: Option<BackgroundTaskHandleRef>,
 
     // ── Persistent Task List (V2) ──
     /// Shared disk-backed plan-item store used by `TaskCreate`/`TaskGet`/
@@ -648,6 +657,7 @@ impl ToolUseContext {
             skill: self.skill.clone(),
             tool_schema_validator: self.tool_schema_validator.clone(),
             mailbox: self.mailbox.clone(),
+            pending_messages: self.pending_messages.clone(),
             cwd_override: self.cwd_override.clone(),
             allowed_write_roots: self.allowed_write_roots.clone(),
             permission_bridge: self.permission_bridge.clone(),
@@ -832,6 +842,7 @@ impl ToolUseContext {
             skill: Arc::new(crate::skill_handle::NoOpSkillHandle),
             tool_schema_validator: None,
             mailbox: Arc::new(crate::NoOpMailboxHandle),
+            pending_messages: Arc::new(crate::NoOpPendingMessageStore),
             cwd_override: None,
             allowed_write_roots: Vec::new(),
             permission_bridge: None,

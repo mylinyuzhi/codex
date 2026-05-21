@@ -9,6 +9,7 @@ use coco_llm_types::ToolResultContent;
 use coco_messages::ToolResult as CocoToolResult;
 use coco_messages::ToolResultContentPart;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
@@ -25,6 +26,10 @@ struct RenderOnlyTool {
 
 #[async_trait::async_trait]
 impl Tool for RenderOnlyTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom("RenderOnly".into())
     }
@@ -115,7 +120,7 @@ async fn text_only_multipart_output_uses_level1_persistence() {
     let tmp = tempfile::TempDir::new().unwrap();
     let first = "a".repeat(30_000);
     let second = "b".repeat(30_000);
-    let tool = Arc::new(RenderOnlyTool {
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part(first.clone()), text_part(second.clone())],
         is_mcp: false,
         max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
@@ -148,7 +153,7 @@ async fn text_only_multipart_output_uses_level1_persistence() {
 
 #[tokio::test]
 async fn mcp_error_envelope_creates_error_tool_result() {
-    let tool = Arc::new(RenderOnlyTool {
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part("server failed")],
         is_mcp: true,
         max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),

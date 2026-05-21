@@ -3,6 +3,7 @@ use coco_messages::ToolResultContentPart;
 use coco_types::ToolCheckResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -10,6 +11,30 @@ use serde_json::Value;
 use crate::context::ToolUseContext;
 use crate::error::ToolError;
 use crate::validation::ValidationResult;
+
+/// Session context for [`Tool::input_schema_for_session`]. Carries
+/// the per-session knobs that drive TS-parity dynamic schema omits
+/// (e.g. `AgentTool.tsx:110-125 lazySchema`'s
+/// `isBackgroundTasksDisabled || isForkSubagentEnabled()` gate).
+///
+/// Constructed at the model-facing schema seam
+/// (`engine_prompt::build_language_model_tools`) once per turn from
+/// runtime config + features; tools read the fields they care about.
+#[derive(Debug, Clone, Default)]
+pub struct SchemaContext {
+    /// True when `COCO_BACKGROUND_TASKS_DISABLE` env truthy. TS:
+    /// `isBackgroundTasksDisabled`. AgentTool drops `run_in_background`
+    /// from its schema when this is set.
+    pub background_tasks_disabled: bool,
+    /// True when fork-subagent mode is active for this session. TS:
+    /// `isForkSubagentEnabled()`. AgentTool drops `run_in_background`
+    /// when set — fork spawns always go through the bg path.
+    pub fork_mode_active: bool,
+    /// Snapshot of parent session features; tools that schema-gate
+    /// on capability flags consult this. `None` when the seam can't
+    /// resolve features (test / minimal SDK embedding).
+    pub features: Option<std::sync::Arc<coco_types::Features>>,
+}
 
 /// Info about whether a tool use is a search or read operation for UI collapse.
 ///
@@ -211,16 +236,167 @@ pub type ProgressSender = tokio::sync::mpsc::UnboundedSender<ToolProgress>;
 /// Receiver for tool progress updates.
 pub type ProgressReceiver = tokio::sync::mpsc::UnboundedReceiver<ToolProgress>;
 
-/// The core Tool trait. All built-in tools implement this.
+// =========================================================================
+// `DynTool` — dyn-safe erased view used by registry / executor / hooks.
+// =========================================================================
+//
+// Every implementation of [`Tool`] (the typed contract) automatically
+// gets `DynTool` via the blanket `impl<T: Tool> DynTool for T` below,
+// so tools don't write this trait by hand. The blanket handles the
+// `serde_json::Value` ↔ `T::Input` / `T::Output` conversion at the
+// boundary; tool bodies see only typed structs.
+//
+// Tools whose schema is dynamic (e.g. `McpTool` — the schema comes
+// from the wire at runtime) use `type Input = Value; type Output =
+// Value;` on the typed `Tool` trait and override `input_schema` /
+// `output_schema` manually. The blanket then degrades to a no-op
+// round-trip at the boundary.
+//
+// ## Why two traits
+//
+// TS `Tool<Input, Output>` is generic but TypeScript structural
+// typing makes it free. Rust can't have `dyn DynTool` with associated
+// types, so we split the surface in two: typed (what tools
+// implement) and erased (what the registry stores).
+
+/// The dyn-safe erased view of [`Tool`]. Stored in `ToolRegistry` as
+/// `Arc<dyn DynTool>` and consumed by every executor / hook / schema
+/// path that needs heterogeneous tool dispatch.
 ///
-/// Maps to TS Tool interface. Execution follows:
-/// validate_input -> check_permissions -> execute.
-///
-/// Progress reporting: Tools send progress via `ctx.progress_tx` channel
-/// during execute(). The StreamingToolExecutor yields these immediately
-/// to the TUI for real-time display.
+/// **Do not implement this trait directly** — implement [`Tool`]
+/// instead. The blanket `impl<T: Tool> DynTool for T` produces the
+/// erased view automatically.
 #[async_trait::async_trait]
-pub trait Tool: Send + Sync {
+pub trait DynTool: Send + Sync + 'static {
+    // -- Identity --
+
+    fn id(&self) -> ToolId;
+    fn name(&self) -> &str;
+    fn aliases(&self) -> &[&str];
+    fn search_hint(&self) -> Option<&str>;
+    fn user_facing_name(&self) -> &str;
+
+    // -- Schema --
+
+    fn input_schema(&self) -> ToolInputSchema;
+    fn input_schema_for_session(&self, ctx: &SchemaContext) -> ToolInputSchema;
+    fn input_json_schema(&self) -> Option<Value>;
+    fn input_json_schema_for_session(&self, ctx: &SchemaContext) -> Option<Value>;
+    fn output_schema(&self) -> Option<Value>;
+    fn strict(&self) -> bool;
+
+    // -- Description --
+
+    fn description(&self, input: &Value, options: &DescriptionOptions) -> String;
+    async fn prompt(&self, options: &PromptOptions) -> String;
+
+    // -- Capability flags --
+
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool;
+    fn is_read_only(&self, input: &Value) -> bool;
+    fn is_always_read_only(&self) -> bool;
+    fn is_concurrency_safe(&self, input: &Value) -> bool;
+    fn is_destructive(&self, input: &Value) -> bool;
+    fn should_defer(&self) -> bool;
+    fn always_load(&self) -> bool;
+    fn is_lsp(&self) -> bool;
+    fn interrupt_behavior(&self) -> InterruptBehavior;
+    fn max_result_size_bound(&self) -> crate::tool_result_storage::ResultSizeBound;
+    fn mcp_info(&self) -> Option<&McpToolInfo>;
+    fn requires_user_interaction(&self) -> bool;
+    fn is_open_world(&self, input: &Value) -> bool;
+    fn is_mcp(&self) -> bool;
+    fn is_search_or_read_command(&self, input: &Value) -> Option<SearchReadInfo>;
+    fn get_tool_use_summary(&self, input: &Value) -> Option<String>;
+    fn get_activity_description(&self, input: &Value) -> Option<String>;
+    fn is_transparent_wrapper(&self) -> bool;
+    fn extract_search_text(&self, output: &Value) -> Option<String>;
+    fn is_result_truncated(&self, output: &Value) -> bool;
+
+    // -- Validation --
+
+    fn validate_input(&self, input: &Value, ctx: &ToolUseContext) -> ValidationResult;
+    fn inputs_equivalent(&self, a: &Value, b: &Value) -> bool;
+    fn backfill_observable_input(&self, input: &mut Value);
+
+    // -- Permissions --
+
+    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult;
+    fn prepare_permission_matcher(&self, input: &Value) -> String;
+    fn to_auto_classifier_input(&self, input: &Value) -> String;
+
+    // -- Execution --
+
+    async fn execute(
+        &self,
+        input: Value,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<Value>, ToolError>;
+    fn get_path(&self, input: &Value) -> Option<String>;
+
+    // -- Rendering --
+
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart>;
+}
+
+// =========================================================================
+// `Tool` — the typed contract every built-in implements (TS-mirror).
+// =========================================================================
+//
+// TS: `Tool<Input extends AnyObject, Output, P extends ToolProgressData>`.
+// The Rust mirror replaces TS's structural generics with associated
+// types `Input` / `Output`. Method bodies see typed structs instead of
+// `serde_json::Value`; field renames are caught at `cargo check`, the
+// schema is auto-derived from `Self::Input` via the `JsonSchema`
+// impl, and `render_for_model(&Self::Output)` stops digging fields out
+// of a `Value`.
+//
+// Adding a new tool:
+//
+// ```ignore
+// #[derive(Deserialize, JsonSchema)]
+// pub struct MyInput {
+//     /// Doc comments become the schema's `description` for the field.
+//     pub pattern: String,
+//     #[serde(default)]
+//     pub limit: Option<i32>,
+// }
+//
+// #[derive(Serialize, Deserialize, JsonSchema)]
+// pub struct MyOutput { ... }
+//
+// #[async_trait]
+// impl Tool for MyTool {
+//     type Input  = MyInput;
+//     type Output = MyOutput;
+//     fn id(&self) -> ToolId { ... }
+//     fn name(&self) -> &str { ... }
+//     async fn execute(&self, input: MyInput, ctx: &ToolUseContext)
+//         -> Result<ToolResult<MyOutput>, ToolError> { ... }
+//     fn render_for_model(&self, out: &MyOutput) -> Vec<ToolResultContentPart> { ... }
+// }
+// ```
+//
+// `DynTool` comes free via the blanket impl below.
+#[async_trait::async_trait]
+pub trait Tool: Send + Sync + 'static {
+    /// Typed input — deserialised once at the executor boundary.
+    /// Renaming a field is a compile-error; the model-visible schema
+    /// (derived from `JsonSchema`) is the same artifact as the
+    /// parser (driven by `Deserialize`), eliminating drift.
+    ///
+    /// Tools whose schema is dynamic (e.g. MCP) set this to `Value`
+    /// and override [`Tool::input_schema`] manually.
+    type Input: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static;
+    /// Typed output — `render_for_model(&Self::Output)` reads fields
+    /// directly. Output also derives `JsonSchema` so the tool's
+    /// `output_schema()` flows from the same struct definition.
+    ///
+    /// Tools without a structured output (free-form text) set this to
+    /// `String`; tools with rich shapes use `#[serde(tag = "...")]`
+    /// tagged enums (the `AgentSpawnRenderResult` pattern).
+    type Output: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static;
+
     // -- Identity --
 
     /// Tool identity (ToolId::Builtin or Mcp or Custom).
@@ -239,19 +415,85 @@ pub trait Tool: Send + Sync {
         None
     }
 
-    // -- Schema --
-
-    /// JSON schema for tool input parameters.
-    fn input_schema(&self) -> ToolInputSchema;
-
-    /// Optional JSON schema override (for tools with complex schemas).
-    fn input_json_schema(&self) -> Option<Value> {
-        None
+    /// User-facing display name (defaults to name()).
+    fn user_facing_name(&self) -> &str {
+        self.name()
     }
 
-    /// Optional output schema for structured output validation.
+    // -- Schema --
+
+    /// JSON schema for tool input parameters. Default impl derives
+    /// from `Self::Input`'s `JsonSchema` impl with subschemas inlined
+    /// (TS-parity: zod schemas never produce `$ref`).
+    ///
+    /// Tools whose Input is `Value` (dynamic schema — MCP) MUST
+    /// override this to return the schema received from the wire.
+    fn input_schema(&self) -> ToolInputSchema {
+        crate::derive::derive_input_schema::<Self::Input>()
+    }
+
+    /// Session-aware variant. Default impl just returns the static
+    /// [`Self::input_schema`]; tools whose schema depends on
+    /// per-session flags (env var killswitches, fork-mode gates,
+    /// feature toggles) override this to emit a variant.
+    ///
+    /// TS parity: `AgentTool.tsx:110-125 lazySchema` rebuilds the
+    /// zod schema per-call and conditionally `.omit({...})`s
+    /// fields when `isBackgroundTasksDisabled` or
+    /// `isForkSubagentEnabled()` flips. Without a session-aware
+    /// schema the model is told a field exists (e.g.
+    /// `run_in_background`) when the runtime would silently
+    /// override it — a schema-honesty gap.
+    ///
+    /// `engine_prompt::build_language_model_tools` calls this
+    /// instead of [`Self::input_schema`] so the model-facing
+    /// schema matches the actual runtime contract for the session.
+    fn input_schema_for_session(&self, _ctx: &SchemaContext) -> ToolInputSchema {
+        self.input_schema()
+    }
+
+    /// Full JSON Schema document override. Default derives the entire
+    /// document from `Self::Input`. The validator
+    /// ([`crate::schema::effective_tool_schema`]) consumes this when
+    /// present, otherwise wraps `input_schema()` in an `{type: object,
+    /// properties: …}` envelope.
+    ///
+    /// **Note**: this is the *static* schema — same for every session.
+    /// The model-facing schema seam in `app/query::engine_prompt`
+    /// reads [`Self::input_json_schema_for_session`] instead so
+    /// session-aware overrides (e.g. AgentTool dropping
+    /// `run_in_background` under `background_tasks_disabled`) reach
+    /// the LLM. Validator consumes this static schema because input
+    /// shape doesn't change per session — fields omitted from the
+    /// LLM-facing schema are still legal at the wire (TS parity:
+    /// `lazySchema().omit()` only narrows the model's view, the
+    /// runtime still accepts the field).
+    fn input_json_schema(&self) -> Option<Value> {
+        Some(crate::derive::derive_input_schema_value::<Self::Input>())
+    }
+
+    /// Session-aware JSON Schema for the model-facing tool listing.
+    ///
+    /// TS parity: `AgentTool.tsx:110-125 lazySchema()` rebuilds the
+    /// zod schema per-call and `.omit({...})`s fields the runtime
+    /// would silently veto. Schema-honesty gate: the LLM should not
+    /// see a field it can't actually set.
+    ///
+    /// Default delegates to [`Self::input_json_schema`] (static
+    /// derive). Override to mutate the derived schema based on
+    /// [`SchemaContext`] — e.g. `AgentTool` removes
+    /// `run_in_background` when `ctx.background_tasks_disabled ||
+    /// ctx.fork_mode_active`.
+    fn input_json_schema_for_session(&self, _ctx: &SchemaContext) -> Option<Value> {
+        self.input_json_schema()
+    }
+
+    /// Output schema. Default derives from `Self::Output`. Tools with
+    /// free-form text output (`type Output = String`) can override to
+    /// return `None` since string output doesn't benefit from structured
+    /// validation.
     fn output_schema(&self) -> Option<Value> {
-        None
+        Some(crate::derive::derive_output_schema::<Self::Output>())
     }
 
     /// Whether to enforce strict schema validation.
@@ -264,20 +506,18 @@ pub trait Tool: Send + Sync {
     /// Dynamic description that may vary based on input and context.
     ///
     /// TS: `description(input, options)` — options provide session/tool context.
-    fn description(&self, input: &Value, options: &DescriptionOptions) -> String;
+    /// Called at tool-call render time when input is fully streamed.
+    /// For schema-listing time (no input yet), use [`Tool::prompt`].
+    fn description(&self, input: &Self::Input, options: &DescriptionOptions) -> String;
 
-    /// User-facing prompt description.
+    /// User-facing prompt description (called at schema-listing time
+    /// when no input exists yet).
     ///
     /// TS: `prompt(options)` is async — tools may need permission context
-    /// or other async data to generate their prompt. The default implementation
-    /// delegates to the sync `description()` method.
-    async fn prompt(&self, options: &PromptOptions) -> String {
-        self.description(&Value::Null, &options.as_description_options())
-    }
-
-    /// User-facing display name (defaults to name()).
-    fn user_facing_name(&self) -> &str {
-        self.name()
+    /// or other async data to generate their prompt. Default returns an
+    /// empty string; tools should override (most do).
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        String::new()
     }
 
     // -- Capability Flags --
@@ -295,7 +535,7 @@ pub trait Tool: Send + Sync {
     }
 
     /// Whether this tool only reads (no side effects).
-    fn is_read_only(&self, _input: &Value) -> bool {
+    fn is_read_only(&self, _input: &Self::Input) -> bool {
         false
     }
 
@@ -308,13 +548,24 @@ pub trait Tool: Send + Sync {
     /// read/write nature genuinely varies with input (e.g. `Bash`)
     /// **must** leave the default — Plan mode then hides them.
     ///
-    /// Default delegates to `is_read_only(&Value::Null)` so the common
-    /// case — tools whose `is_read_only` impl ignores input and returns
-    /// a constant — gets the correct answer for free without an extra
-    /// override. Tools whose `is_read_only` *consults* the input must
-    /// override `is_always_read_only` to return `false` explicitly.
+    /// Default: try to synthesize an `Input` from `Value::Null` and
+    /// delegate to [`Tool::is_read_only`]. Tools whose `Self::Input`
+    /// is `Value` (e.g. `McpTool`) or only has optional fields get
+    /// the legacy behaviour for free — their `is_read_only` impl
+    /// typically ignores input and returns a constant. Tools whose
+    /// typed `Self::Input` requires fields fall through to `false`
+    /// (the conservative answer Plan mode wants).
+    ///
+    /// Override explicitly when:
+    /// - You want `true` but your `Input` has required fields (e.g.
+    ///   `Read` / `WebFetch` / `WebSearch`).
+    /// - You want `false` even though `is_read_only` returns `true`
+    ///   for null input (rare — see the `Bash` contract above).
     fn is_always_read_only(&self) -> bool {
-        self.is_read_only(&Value::Null)
+        serde_json::from_value::<Self::Input>(Value::Null)
+            .ok()
+            .map(|input| Tool::is_read_only(self, &input))
+            .unwrap_or(false)
     }
 
     /// Whether multiple instances can safely run concurrently.
@@ -331,12 +582,12 @@ pub trait Tool: Send + Sync {
     /// this comment is the contract. Serial unsafe tools
     /// (`is_concurrency_safe == false`) are the only code path that
     /// writes `ctx.app_state`.
-    fn is_concurrency_safe(&self, _input: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &Self::Input) -> bool {
         false
     }
 
     /// Whether this tool performs destructive operations.
-    fn is_destructive(&self, _input: &Value) -> bool {
+    fn is_destructive(&self, _input: &Self::Input) -> bool {
         false
     }
 
@@ -410,24 +661,16 @@ pub trait Tool: Send + Sync {
     /// Default is `false` — tools are closed-world unless they opt in.
     /// Dynamic MCP wrappers (`core/tools/src/tools/mcp_tools.rs`) can
     /// override this to forward the annotation from the MCP server.
-    fn is_open_world(&self, _input: &Value) -> bool {
+    fn is_open_world(&self, _input: &Self::Input) -> bool {
         false
     }
 
     /// Whether this tool is sourced from an MCP (Model Context Protocol)
     /// server rather than being a native built-in.
     ///
-    /// TS: `Tool.ts:436` `isMcp?: boolean`. TS uses this field to
-    /// distinguish MCP-wrapped tools from built-ins for UI labeling,
-    /// permission filtering, and the MCP list/detail views. The
-    /// `isLsp?: boolean` sibling at `Tool.ts:437` serves the same role
-    /// for LSP-backed tools — coco-rs has `is_lsp()` already; T3 adds
-    /// the MCP counterpart.
-    ///
-    /// Default derives from `mcp_info()`: any tool that advertises
-    /// `McpToolInfo` is an MCP tool. Concrete MCP wrapper
-    /// implementations may still override this if they distinguish
-    /// between pseudo-tools (e.g. MCP auth) and real MCP tools.
+    /// TS: `Tool.ts:436` `isMcp?: boolean`. Default derives from
+    /// `mcp_info()`: any tool that advertises `McpToolInfo` is an MCP
+    /// tool.
     fn is_mcp(&self) -> bool {
         self.mcp_info().is_some()
     }
@@ -436,14 +679,14 @@ pub trait Tool: Send + Sync {
     /// operation that should be collapsed into a condensed display in the UI.
     ///
     /// TS: `isSearchOrReadCommand?(input)` — returns `{ isSearch, isRead, isList? }`.
-    fn is_search_or_read_command(&self, _input: &Value) -> Option<SearchReadInfo> {
+    fn is_search_or_read_command(&self, _input: &Self::Input) -> Option<SearchReadInfo> {
         None
     }
 
     /// Returns a short string summary of this tool use for compact views.
     ///
     /// TS: `getToolUseSummary?(input)` — used by background agent progress display.
-    fn get_tool_use_summary(&self, _input: &Value) -> Option<String> {
+    fn get_tool_use_summary(&self, _input: &Self::Input) -> Option<String> {
         None
     }
 
@@ -451,7 +694,7 @@ pub trait Tool: Send + Sync {
     /// display (e.g., "Reading src/foo.ts", "Running bun test").
     ///
     /// TS: `getActivityDescription?(input)` — falls back to tool name if None.
-    fn get_activity_description(&self, _input: &Value) -> Option<String> {
+    fn get_activity_description(&self, _input: &Self::Input) -> Option<String> {
         None
     }
 
@@ -467,7 +710,7 @@ pub trait Tool: Send + Sync {
     /// search indexing.
     ///
     /// TS: `extractSearchText?(output)` — optional, falls back to heuristic.
-    fn extract_search_text(&self, _output: &Value) -> Option<String> {
+    fn extract_search_text(&self, _output: &Self::Output) -> Option<String> {
         None
     }
 
@@ -475,7 +718,7 @@ pub trait Tool: Send + Sync {
     /// (i.e., expanding would reveal more content).
     ///
     /// TS: `isResultTruncated?(output)` — gates click-to-expand in fullscreen.
-    fn is_result_truncated(&self, _output: &Value) -> bool {
+    fn is_result_truncated(&self, _output: &Self::Output) -> bool {
         false
     }
 
@@ -483,14 +726,19 @@ pub trait Tool: Send + Sync {
 
     /// Validate input before execution. Called before check_permissions.
     ///
-    /// TS: `validateInput(input, context)` — context needed for stateful
-    /// validation like read-before-write enforcement.
-    fn validate_input(&self, _input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
+    /// Schema-level validation (required fields, types) already passed
+    /// before this method runs — the `Self::Input` you receive is the
+    /// successfully-deserialised value. Use this hook for **semantic**
+    /// validation: cross-field constraints, stateful checks like
+    /// read-before-write enforcement, runtime feature gating.
+    ///
+    /// TS: `validateInput(input, context)`.
+    fn validate_input(&self, _input: &Self::Input, _ctx: &ToolUseContext) -> ValidationResult {
         ValidationResult::Valid
     }
 
     /// Check if two inputs are equivalent (for idempotency detection).
-    fn inputs_equivalent(&self, _a: &Value, _b: &Value) -> bool {
+    fn inputs_equivalent(&self, _a: &Self::Input, _b: &Self::Input) -> bool {
         false
     }
 
@@ -499,6 +747,11 @@ pub trait Tool: Send + Sync {
     /// TS: `backfillObservableInput(input)` — normalizes input before
     /// hooks see it (e.g., adds default field values, expands aliases).
     /// Called on a shallow clone; the original input is unchanged.
+    ///
+    /// **Stays `Value`-typed deliberately** — it operates on the wire
+    /// shape (adding legacy field aliases that the typed struct may
+    /// not even know about). Tools that need typed access should
+    /// `serde_json::from_value` inside this method.
     fn backfill_observable_input(&self, _input: &mut Value) {}
 
     // -- Permissions --
@@ -519,19 +772,21 @@ pub trait Tool: Send + Sync {
     /// inside `app/query::tool_call_preparer::resolve_permission_decision`.
     /// Returning `Allow { updated_input }` here propagates the
     /// normalized input onto the resulting `PermissionDecision::Allow`.
-    async fn check_permissions(&self, _input: &Value, _ctx: &ToolUseContext) -> ToolCheckResult {
+    async fn check_permissions(
+        &self,
+        _input: &Self::Input,
+        _ctx: &ToolUseContext,
+    ) -> ToolCheckResult {
         ToolCheckResult::Passthrough
     }
 
     /// Prepare a permission matcher string for hook matching.
-    fn prepare_permission_matcher(&self, input: &Value) -> String {
-        let _ = input;
+    fn prepare_permission_matcher(&self, _input: &Self::Input) -> String {
         self.name().to_string()
     }
 
     /// Generate representation for auto-mode security classifier.
-    fn to_auto_classifier_input(&self, input: &Value) -> String {
-        let _ = input;
+    fn to_auto_classifier_input(&self, _input: &Self::Input) -> String {
         self.name().to_string()
     }
 
@@ -551,14 +806,14 @@ pub trait Tool: Send + Sync {
     /// ```
     async fn execute(
         &self,
-        input: Value,
+        input: Self::Input,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError>;
+    ) -> Result<ToolResult<Self::Output>, ToolError>;
 
     // -- File Path --
 
     /// Get the file path associated with this tool call (for file-based tools).
-    fn get_path(&self, _input: &Value) -> Option<String> {
+    fn get_path(&self, _input: &Self::Input) -> Option<String> {
         None
     }
 
@@ -571,17 +826,17 @@ pub trait Tool: Send + Sync {
     /// TS parity: `mapToolResultToToolResultBlockParam(data, toolUseId)`
     /// in every TS Tool. The Rust signature drops `tool_use_id`
     /// because the executor wraps the parts at message-creation time,
-    /// not the tool.
+    /// not the tool. **The argument is `&Self::Output` (typed)** —
+    /// no more `data.get("xxx").and_then(...)` field-mining at the
+    /// call site.
     ///
     /// # Default behaviour
     ///
     /// The default impl emits a single [`ToolResultContentPart::Text`]
-    /// with `serde_json::to_string(&data)` — byte-identical to the
-    /// pre-`render_for_model` codepath that did
-    /// `serde_json::to_string(&output_data)` in
-    /// `app/query/src/tool_outcome_builder.rs`. Tools opt into custom
-    /// rendering (token efficiency, multimodal images, etc.) by
-    /// overriding.
+    /// with `serde_json::to_string(&data)` — the right thing for
+    /// structured outputs (the model gets to see the JSON). Tools
+    /// with free-form text output (`type Output = String`) override
+    /// to emit the bare string without the surrounding quotes.
     ///
     /// # Path 1 only
     ///
@@ -607,18 +862,239 @@ pub trait Tool: Send + Sync {
     /// state). If a tool needs async work to format its output, do
     /// the work in [`Tool::execute`] and stash the rendered form in
     /// `data`.
-    ///
-    /// # Common pattern
-    ///
-    /// Tools whose `data` is already the human-readable string (e.g.
-    /// Glob, Grep, ListMcpResources) call [`render_text_or_json`]
-    /// instead of duplicating the bare-string-or-JSON unwrap
-    /// boilerplate.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+    fn render_for_model(&self, data: &Self::Output) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
             text: serde_json::to_string(data).unwrap_or_default(),
             provider_options: None,
         }]
+    }
+}
+
+// =========================================================================
+// Blanket: every `Tool` is automatically a `DynTool`.
+// =========================================================================
+//
+// At the boundary between erased and typed:
+// - input  Value → T::Input  via `serde_json::from_value`
+// - output T::Output → Value via `serde_json::to_value`
+//
+// Tools whose Input/Output is already `Value` (e.g. McpTool) round-trip
+// at zero structural cost (just clones).
+#[async_trait::async_trait]
+impl<T: Tool> DynTool for T {
+    fn id(&self) -> ToolId {
+        Tool::id(self)
+    }
+    fn name(&self) -> &str {
+        Tool::name(self)
+    }
+    fn aliases(&self) -> &[&str] {
+        Tool::aliases(self)
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Tool::search_hint(self)
+    }
+    fn user_facing_name(&self) -> &str {
+        Tool::user_facing_name(self)
+    }
+
+    fn input_schema(&self) -> ToolInputSchema {
+        Tool::input_schema(self)
+    }
+    fn input_schema_for_session(&self, ctx: &SchemaContext) -> ToolInputSchema {
+        Tool::input_schema_for_session(self, ctx)
+    }
+    fn input_json_schema(&self) -> Option<Value> {
+        Tool::input_json_schema(self)
+    }
+    fn input_json_schema_for_session(&self, ctx: &SchemaContext) -> Option<Value> {
+        Tool::input_json_schema_for_session(self, ctx)
+    }
+    fn output_schema(&self) -> Option<Value> {
+        Tool::output_schema(self)
+    }
+    fn strict(&self) -> bool {
+        Tool::strict(self)
+    }
+
+    fn description(&self, input: &Value, options: &DescriptionOptions) -> String {
+        // At schema-listing time the caller passes Value::Null and the
+        // typed parse fails for any non-Default Input. That path is
+        // expected to use `prompt()` instead — but to stay tolerant we
+        // return an empty string rather than panicking.
+        match serde_json::from_value::<T::Input>(input.clone()) {
+            Ok(typed) => Tool::description(self, &typed, options),
+            Err(_) => String::new(),
+        }
+    }
+    async fn prompt(&self, options: &PromptOptions) -> String {
+        Tool::prompt(self, options).await
+    }
+
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        Tool::is_enabled(self, ctx)
+    }
+    fn is_read_only(&self, input: &Value) -> bool {
+        // When the typed `Self::Input` can't be synthesised from the
+        // raw Value (typically because required fields are absent —
+        // tests passing `Value::Null`, partial streamed input), fall
+        // back to the static `is_always_read_only()` answer. This
+        // preserves the pre-typed convention where tools whose
+        // `is_read_only` ignored input returned a constant.
+        //
+        // For input-conditional tools (e.g. Bash), `is_always_read_only`
+        // returns the default `false`, matching the conservative
+        // "unknown → not safe" fallback.
+        serde_json::from_value::<T::Input>(input.clone())
+            .map(|t| Tool::is_read_only(self, &t))
+            .unwrap_or_else(|_| Tool::is_always_read_only(self))
+    }
+    fn is_always_read_only(&self) -> bool {
+        Tool::is_always_read_only(self)
+    }
+    fn is_concurrency_safe(&self, input: &Value) -> bool {
+        serde_json::from_value::<T::Input>(input.clone())
+            .map(|t| Tool::is_concurrency_safe(self, &t))
+            .unwrap_or(false)
+    }
+    fn is_destructive(&self, input: &Value) -> bool {
+        serde_json::from_value::<T::Input>(input.clone())
+            .map(|t| Tool::is_destructive(self, &t))
+            .unwrap_or(false)
+    }
+    fn should_defer(&self) -> bool {
+        Tool::should_defer(self)
+    }
+    fn always_load(&self) -> bool {
+        Tool::always_load(self)
+    }
+    fn is_lsp(&self) -> bool {
+        Tool::is_lsp(self)
+    }
+    fn interrupt_behavior(&self) -> InterruptBehavior {
+        Tool::interrupt_behavior(self)
+    }
+    fn max_result_size_bound(&self) -> crate::tool_result_storage::ResultSizeBound {
+        Tool::max_result_size_bound(self)
+    }
+    fn mcp_info(&self) -> Option<&McpToolInfo> {
+        Tool::mcp_info(self)
+    }
+    fn requires_user_interaction(&self) -> bool {
+        Tool::requires_user_interaction(self)
+    }
+    fn is_open_world(&self, input: &Value) -> bool {
+        serde_json::from_value::<T::Input>(input.clone())
+            .map(|t| Tool::is_open_world(self, &t))
+            .unwrap_or(false)
+    }
+    fn is_mcp(&self) -> bool {
+        Tool::is_mcp(self)
+    }
+    fn is_search_or_read_command(&self, input: &Value) -> Option<SearchReadInfo> {
+        serde_json::from_value::<T::Input>(input.clone())
+            .ok()
+            .and_then(|t| Tool::is_search_or_read_command(self, &t))
+    }
+    fn get_tool_use_summary(&self, input: &Value) -> Option<String> {
+        serde_json::from_value::<T::Input>(input.clone())
+            .ok()
+            .and_then(|t| Tool::get_tool_use_summary(self, &t))
+    }
+    fn get_activity_description(&self, input: &Value) -> Option<String> {
+        serde_json::from_value::<T::Input>(input.clone())
+            .ok()
+            .and_then(|t| Tool::get_activity_description(self, &t))
+    }
+    fn is_transparent_wrapper(&self) -> bool {
+        Tool::is_transparent_wrapper(self)
+    }
+    fn extract_search_text(&self, output: &Value) -> Option<String> {
+        serde_json::from_value::<T::Output>(output.clone())
+            .ok()
+            .and_then(|o| Tool::extract_search_text(self, &o))
+    }
+    fn is_result_truncated(&self, output: &Value) -> bool {
+        serde_json::from_value::<T::Output>(output.clone())
+            .map(|o| Tool::is_result_truncated(self, &o))
+            .unwrap_or(false)
+    }
+
+    fn validate_input(&self, input: &Value, ctx: &ToolUseContext) -> ValidationResult {
+        match serde_json::from_value::<T::Input>(input.clone()) {
+            Ok(typed) => Tool::validate_input(self, &typed, ctx),
+            Err(e) => ValidationResult::invalid(format!("input does not match schema: {e}")),
+        }
+    }
+    fn inputs_equivalent(&self, a: &Value, b: &Value) -> bool {
+        match (
+            serde_json::from_value::<T::Input>(a.clone()),
+            serde_json::from_value::<T::Input>(b.clone()),
+        ) {
+            (Ok(ta), Ok(tb)) => Tool::inputs_equivalent(self, &ta, &tb),
+            _ => false,
+        }
+    }
+    fn backfill_observable_input(&self, input: &mut Value) {
+        Tool::backfill_observable_input(self, input)
+    }
+
+    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
+        match serde_json::from_value::<T::Input>(input.clone()) {
+            Ok(typed) => Tool::check_permissions(self, &typed, ctx).await,
+            // Parse failure ⇒ defer to rule pipeline; the executor will
+            // surface the parse error elsewhere (validate_input branch).
+            Err(_) => ToolCheckResult::Passthrough,
+        }
+    }
+    fn prepare_permission_matcher(&self, input: &Value) -> String {
+        serde_json::from_value::<T::Input>(input.clone())
+            .map(|t| Tool::prepare_permission_matcher(self, &t))
+            .unwrap_or_else(|_| self.name().to_string())
+    }
+    fn to_auto_classifier_input(&self, input: &Value) -> String {
+        serde_json::from_value::<T::Input>(input.clone())
+            .map(|t| Tool::to_auto_classifier_input(self, &t))
+            .unwrap_or_else(|_| self.name().to_string())
+    }
+
+    async fn execute(
+        &self,
+        input: Value,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<Value>, ToolError> {
+        let typed: T::Input =
+            serde_json::from_value(input).map_err(|e| ToolError::InvalidInput {
+                message: format!("invalid tool input: {e}"),
+                error_code: None,
+            })?;
+        let r = Tool::execute(self, typed, ctx).await?;
+        Ok(ToolResult {
+            data: serde_json::to_value(&r.data).unwrap_or(Value::Null),
+            new_messages: r.new_messages,
+            app_state_patch: r.app_state_patch,
+            permission_updates: r.permission_updates,
+        })
+    }
+    fn get_path(&self, input: &Value) -> Option<String> {
+        serde_json::from_value::<T::Input>(input.clone())
+            .ok()
+            .and_then(|t| Tool::get_path(self, &t))
+    }
+
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        // `data` was produced by `DynTool::execute` (above) via
+        // `to_value(&T::Output)`. Round-tripping it back should always
+        // succeed; if it doesn't, something has rewritten the Value
+        // shape (e.g. transcript replay across schema changes) — fall
+        // back to a JSON dump rather than panicking.
+        match serde_json::from_value::<T::Output>(data.clone()) {
+            Ok(typed) => Tool::render_for_model(self, &typed),
+            Err(_) => vec![ToolResultContentPart::Text {
+                text: serde_json::to_string(data).unwrap_or_default(),
+                provider_options: None,
+            }],
+        }
     }
 }
 
@@ -629,13 +1105,11 @@ pub trait Tool: Send + Sync {
 ///
 /// This is what TS tools whose `mapToolResultToToolResultBlockParam`
 /// returns plain text do — the model sees the underlying message
-/// without a `"…"` JSON-quote wrapper. Tools that already build their
-/// confirmation string in `execute()` (Glob, Grep, MCP*, AskUserQuestion,
-/// SendMessage, …) use this so they don't each carry the same
-/// 6-line `data.as_str().map(...).unwrap_or_else(...)` boilerplate.
+/// without a `"…"` JSON-quote wrapper.
 ///
-/// Tools needing custom branches (Bash, Read, Edit, plan-mode, agent,
-/// scheduling, brief, …) override `Tool::render_for_model` directly.
+/// Most typed-output tools won't need this; it stays available for
+/// `Output = Value` cases (MCP, dynamic schema) and migrations in
+/// progress.
 pub fn render_text_or_json(data: &Value) -> Vec<ToolResultContentPart> {
     let text = data
         .as_str()

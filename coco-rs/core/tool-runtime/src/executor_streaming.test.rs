@@ -36,6 +36,10 @@ struct ConfigurableTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for ConfigurableTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom(self.name.clone())
     }
@@ -48,6 +52,7 @@ impl crate::traits::Tool for ConfigurableTool {
     fn input_schema(&self) -> coco_types::ToolInputSchema {
         coco_types::ToolInputSchema {
             properties: Default::default(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
@@ -78,7 +83,7 @@ fn prepared(
     started: Arc<AtomicI32>,
     sleep_ms: u64,
 ) -> PreparedToolCall {
-    let tool: Arc<dyn crate::traits::Tool> = Arc::new(ConfigurableTool {
+    let tool: Arc<dyn crate::traits::DynTool> = Arc::new(ConfigurableTool {
         name: name.into(),
         safe,
         started_counter: started,

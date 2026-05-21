@@ -70,10 +70,15 @@ pub(crate) struct ToolContextFactory {
     pub(crate) tools: Arc<ToolRegistry>,
     pub(crate) cancel: CancellationToken,
     pub(crate) mailbox: Option<MailboxHandleRef>,
+    /// In-memory FIFO of per-recipient pending messages. Production
+    /// wires the same `Arc<InMemoryPendingMessageStore>` here AND on the
+    /// `SwarmAdapter` reminder source so SendMessage push → reminder
+    /// drain stays a closed loop. `None` falls back to a no-op store.
+    pub(crate) pending_messages: Option<coco_tool_runtime::PendingMessageStoreRef>,
     pub(crate) task_list: Option<TaskListHandleRef>,
     pub(crate) team_task_list_router: Option<TeamTaskListRouterRef>,
     pub(crate) todo_list: Option<TodoListHandleRef>,
-    pub(crate) task_handle: Option<coco_tool_runtime::TaskHandleRef>,
+    pub(crate) task_handle: Option<coco_tool_runtime::BackgroundTaskHandleRef>,
     pub(crate) permission_bridge: Option<ToolPermissionBridgeRef>,
     pub(crate) app_state: Option<Arc<RwLock<ToolAppState>>>,
     pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
@@ -482,6 +487,10 @@ impl ToolContextFactory {
                 .mailbox
                 .clone()
                 .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpMailboxHandle)),
+            pending_messages: self
+                .pending_messages
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpPendingMessageStore)),
             // Phase 6 Workstream C hook: worktree-isolated subagents
             // receive `cwd_override` via their child engine config so
             // relative-path-resolving tools (Glob/Grep/Bash) operate

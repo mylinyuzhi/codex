@@ -187,7 +187,7 @@ async fn test_adapter_parses_effort_string_into_thinking_level() {
         system_prompt: "s".into(),
         model: "m".into(),
         max_turns: Some(1),
-        effort: Some("high".into()),
+        effort: Some(coco_types::ReasoningEffort::High),
         ..Default::default()
     };
 
@@ -196,52 +196,26 @@ async fn test_adapter_parses_effort_string_into_thinking_level() {
     let captured = observed.lock().unwrap().clone();
     assert!(
         captured.is_some(),
-        "effort=high must produce a ThinkingLevel"
+        "effort=High must produce a ThinkingLevel"
     );
     assert_eq!(
         captured.unwrap().effort,
         coco_types::ReasoningEffort::High,
-        "high must map to High",
+        "High propagates through",
     );
 }
 
-#[tokio::test]
-async fn test_adapter_unknown_effort_degrades_to_none() {
-    use super::QueryEngineAdapter;
-    use super::QueryEngineFactory;
-
-    let observed: Arc<std::sync::Mutex<Option<coco_types::ThinkingLevel>>> = Arc::new(
-        std::sync::Mutex::new(Some(coco_types::ThinkingLevel::high())),
-    );
-    let observed_c = observed.clone();
-
-    let factory: QueryEngineFactory = Arc::new(move |cfg, _role, _cancel| {
-        let observed_c = observed_c.clone();
-        Box::pin(async move {
-            *observed_c.lock().unwrap() = cfg.thinking_level;
-            std::panic::resume_unwind(Box::new("observed"));
-        })
-    });
-    let adapter = QueryEngineAdapter::new(factory);
-
-    let cfg = AgentQueryConfig {
-        system_prompt: "s".into(),
-        model: "m".into(),
-        max_turns: Some(1),
-        effort: Some("nonsense".into()),
-        ..Default::default()
-    };
-
-    let handle = tokio::task::spawn(async move { adapter.execute_query("hello", cfg).await });
-    let _ = handle.await.expect_err("factory panic must bubble up");
-    assert!(
-        observed.lock().unwrap().is_none(),
-        "unknown effort string must degrade to None, not panic",
-    );
-}
+// Note: the previous `test_adapter_unknown_effort_degrades_to_none` and
+// `test_adapter_max_effort_alias_maps_to_xhigh` tests exercised the
+// adapter's STRING parsing path (config.effort: Option<String> →
+// ThinkingLevel via str::parse). That path is gone — the type system
+// now enforces a valid `ReasoningEffort` at the AgentQueryConfig
+// boundary, so "unknown" and "max" string aliases are no longer the
+// adapter's concern. Alias handling (`max` → `XHigh`) is covered by
+// `common/types/src/thinking.test.rs::test_reasoning_effort_aliases`.
 
 #[tokio::test]
-async fn test_adapter_max_effort_alias_maps_to_xhigh() {
+async fn test_adapter_xhigh_effort_propagates() {
     use super::QueryEngineAdapter;
     use super::QueryEngineFactory;
 
@@ -262,9 +236,7 @@ async fn test_adapter_max_effort_alias_maps_to_xhigh() {
         system_prompt: "s".into(),
         model: "m".into(),
         max_turns: Some(1),
-        // TS `parseEffortValue` accepts the `max` alias for the
-        // top tier.
-        effort: Some("max".into()),
+        effort: Some(coco_types::ReasoningEffort::XHigh),
         ..Default::default()
     };
 

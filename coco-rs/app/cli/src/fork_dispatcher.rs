@@ -130,10 +130,11 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             // we skip them. `forked_agent::build_query_config` already
             // honors `options.effort` when the caller wants it; we
             // forward that through the engine config below.
-            thinking_level: agent_config
-                .effort
-                .as_deref()
-                .and_then(|s| s.parse::<coco_types::ThinkingLevel>().ok()),
+            thinking_level: agent_config.effort.map(|effort| coco_types::ThinkingLevel {
+                effort,
+                budget_tokens: None,
+                options: std::collections::HashMap::new(),
+            }),
             // Per-fork plumbing — thread the canUseTool callback,
             // fork_label, query_source override, and (cache-bust-risky)
             // max_output_tokens override onto the child engine config

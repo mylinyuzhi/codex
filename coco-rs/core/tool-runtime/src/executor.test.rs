@@ -18,6 +18,10 @@ struct SafeTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for SafeTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom(self.name.clone())
     }
@@ -30,6 +34,7 @@ impl crate::traits::Tool for SafeTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
@@ -56,6 +61,10 @@ struct UnsafeTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for UnsafeTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom(self.name.clone())
     }
@@ -68,6 +77,7 @@ impl crate::traits::Tool for UnsafeTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
@@ -88,7 +98,7 @@ impl crate::traits::Tool for UnsafeTool {
 }
 
 fn make_call(name: &str, safe: bool) -> PendingToolCall {
-    let tool: Arc<dyn crate::traits::Tool> = if safe {
+    let tool: Arc<dyn crate::traits::DynTool> = if safe {
         Arc::new(SafeTool { name: name.into() })
     } else {
         Arc::new(UnsafeTool { name: name.into() })
@@ -175,6 +185,10 @@ struct SlowSafeTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for SlowSafeTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom(self.name.clone())
     }
@@ -187,6 +201,7 @@ impl crate::traits::Tool for SlowSafeTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
@@ -222,6 +237,10 @@ struct PatchSafeTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for PatchSafeTool {
+    // Migration scaffold: assoc types pinned to `Value`.
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
     fn id(&self) -> ToolId {
         ToolId::Custom(self.name.clone())
     }
@@ -234,6 +253,7 @@ impl crate::traits::Tool for PatchSafeTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
@@ -441,7 +461,7 @@ async fn test_semaphore_limits_concurrency() {
 #[test]
 fn test_streaming_add_tool() {
     let mut executor = StreamingToolExecutor::new();
-    let tool: Arc<dyn crate::traits::Tool> = Arc::new(SafeTool {
+    let tool: Arc<dyn crate::traits::DynTool> = Arc::new(SafeTool {
         name: "test".into(),
     });
     executor.add_tool("t1".into(), tool.clone(), json!({}));
@@ -453,7 +473,7 @@ fn test_streaming_add_tool() {
 #[test]
 fn test_streaming_discard() {
     let mut executor = StreamingToolExecutor::new();
-    let tool: Arc<dyn crate::traits::Tool> = Arc::new(SafeTool {
+    let tool: Arc<dyn crate::traits::DynTool> = Arc::new(SafeTool {
         name: "test".into(),
     });
     executor.add_tool("t1".into(), tool, json!({}));
@@ -584,7 +604,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 fn prepared_from(
-    tool: Arc<dyn crate::traits::Tool>,
+    tool: Arc<dyn crate::traits::DynTool>,
     tool_use_id: &str,
     model_index: usize,
 ) -> PreparedToolCall {

@@ -1,7 +1,7 @@
 use super::CronCreateTool;
 use super::CronListTool;
 use super::is_valid_cron_expression;
-use coco_tool_runtime::Tool;
+use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use serde_json::json;
@@ -42,8 +42,11 @@ fn test_cron_validator_rejects_invalid_atoms() {
 #[test]
 fn test_cron_create_validate_input_rejects_invalid_cron() {
     let ctx = ToolUseContext::test_default();
-    let result =
-        CronCreateTool.validate_input(&json!({"cron": "not a cron", "prompt": "do thing"}), &ctx);
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "not a cron", "prompt": "do thing"}),
+        &ctx,
+    );
     match result {
         ValidationResult::Invalid { message, .. } => {
             assert!(
@@ -59,18 +62,29 @@ fn test_cron_create_validate_input_rejects_invalid_cron() {
 fn test_cron_create_validate_input_requires_cron_and_prompt() {
     let ctx = ToolUseContext::test_default();
     // Empty cron.
-    let result = CronCreateTool.validate_input(&json!({"prompt": "do thing"}), &ctx);
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"prompt": "do thing"}),
+        &ctx,
+    );
     assert!(matches!(result, ValidationResult::Invalid { .. }));
     // Empty prompt.
-    let result = CronCreateTool.validate_input(&json!({"cron": "* * * * *"}), &ctx);
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "* * * * *"}),
+        &ctx,
+    );
     assert!(matches!(result, ValidationResult::Invalid { .. }));
 }
 
 #[test]
 fn test_cron_create_validate_input_accepts_valid() {
     let ctx = ToolUseContext::test_default();
-    let result =
-        CronCreateTool.validate_input(&json!({"cron": "*/15 * * * *", "prompt": "ping"}), &ctx);
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "*/15 * * * *", "prompt": "ping"}),
+        &ctx,
+    );
     assert!(matches!(result, ValidationResult::Valid));
 }
 
@@ -80,7 +94,9 @@ fn test_cron_create_validate_input_accepts_valid() {
 async fn test_cron_list_returns_jobs_wrapper_when_empty() {
     let ctx = ToolUseContext::test_default();
     // The default test context's NoOpScheduleStore returns an empty list.
-    let result = CronListTool.execute(json!({}), &ctx).await.unwrap();
+    let result = <CronListTool as DynTool>::execute(&CronListTool, json!({}), &ctx)
+        .await
+        .unwrap();
     // TS shape: `{ jobs: [] }`. Not a bare array, not a string.
     assert!(
         result.data["jobs"].is_array(),
@@ -102,7 +118,7 @@ fn cron_create_render_recurring_durable() {
         "durable": true,
         "status": "created",
     });
-    let parts = CronCreateTool.render_for_model(&data);
+    let parts = <CronCreateTool as DynTool>::render_for_model(&CronCreateTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -131,7 +147,7 @@ fn cron_create_render_one_shot_in_memory() {
         "durable": false,
         "status": "created",
     });
-    let parts = CronCreateTool.render_for_model(&data);
+    let parts = <CronCreateTool as DynTool>::render_for_model(&CronCreateTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -150,7 +166,7 @@ fn cron_delete_render_uses_cancelled_verb() {
     use coco_tool_runtime::ToolResultContentPart;
     // TS `CronDeleteTool.ts:90`: `Cancelled job ${id}.`.
     let data = json!({"id": "job-42"});
-    let parts = CronDeleteTool.render_for_model(&data);
+    let parts = <CronDeleteTool as DynTool>::render_for_model(&CronDeleteTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -161,7 +177,7 @@ fn cron_delete_render_uses_cancelled_verb() {
 fn cron_list_render_empty_branch() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!({"jobs": []});
-    let parts = CronListTool.render_for_model(&data);
+    let parts = <CronListTool as DynTool>::render_for_model(&CronListTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
@@ -177,7 +193,7 @@ fn cron_list_render_summarizes_jobs() {
             {"id": "job-2", "humanSchedule": "Monday 9am", "prompt": "weekly review"},
         ]
     });
-    let parts = CronListTool.render_for_model(&data);
+    let parts = <CronListTool as DynTool>::render_for_model(&CronListTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };

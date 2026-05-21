@@ -12,10 +12,11 @@ use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Maximum simultaneous cron jobs allowed by `CronCreate`. TS
 /// `ScheduleCronTool/CronCreateTool.ts:25` `MAX_JOBS = 50`. Enforced
@@ -99,50 +100,62 @@ fn range_is_valid(atom: &str) -> bool {
     start <= end
 }
 
+/// Typed input for [`CronCreateTool`].
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct CronCreateInput {
+    /// Standard 5-field cron expression in local time: "M H DoM Mon
+    /// DoW" (e.g. "*/5 * * * *" = every 5 minutes, "30 14 28 2 *" =
+    /// Feb 28 at 2:30pm local once).
+    #[serde(default)]
+    pub cron: String,
+    /// The prompt to enqueue at each fire time.
+    #[serde(default)]
+    pub prompt: String,
+    /// true (default) = fire on every cron match until deleted or
+    /// auto-expired. false = fire once at the next match, then
+    /// auto-delete. Use false for "remind me at X" one-shot requests.
+    #[serde(default = "default_true")]
+    pub recurring: bool,
+    /// true = persist to `.claude/scheduled_tasks.json` and survive
+    /// restarts. false (default) = in-memory only, dies when this
+    /// Claude session ends.
+    #[serde(default)]
+    pub durable: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Typed output for [`CronCreateTool`].
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CronCreateOutput {
+    pub id: String,
+    /// Human-readable cron schedule (currently echoes back the cron
+    /// expression). Field name preserved as `humanSchedule` for
+    /// TS-parity (`CronCreateTool.ts`).
+    #[serde(rename = "humanSchedule")]
+    pub human_schedule: String,
+    pub recurring: bool,
+    pub durable: bool,
+    pub status: String,
+}
+
 pub struct CronCreateTool;
 
 #[async_trait::async_trait]
 impl Tool for CronCreateTool {
+    type Input = CronCreateInput;
+    type Output = CronCreateOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::CronCreate)
     }
     fn name(&self) -> &str {
         ToolName::CronCreate.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &CronCreateInput, _options: &DescriptionOptions) -> String {
         "Create a scheduled task that runs on a cron schedule.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "cron".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Standard 5-field cron expression in local time: \"M H DoM Mon DoW\" (e.g. \"*/5 * * * *\" = every 5 minutes, \"30 14 28 2 *\" = Feb 28 at 2:30pm local once)."
-            }),
-        );
-        p.insert(
-            "prompt".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The prompt to enqueue at each fire time."
-            }),
-        );
-        p.insert(
-            "recurring".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "true (default) = fire on every cron match until deleted or auto-expired. false = fire once at the next match, then auto-delete. Use false for \"remind me at X\" one-shot requests."
-            }),
-        );
-        p.insert(
-            "durable".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "true = persist to .claude/scheduled_tasks.json and survive restarts. false (default) = in-memory only, dies when this Claude session ends."
-            }),
-        );
-        ToolInputSchema { properties: p }
     }
     fn should_defer(&self) -> bool {
         true
@@ -153,26 +166,15 @@ impl Tool for CronCreateTool {
 
     /// Render the create envelope as a single-line confirmation. TS
     /// parity: `CronCreateTool.ts:143-154 mapToolResultToToolResultBlockParam`.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let id = data.get("id").and_then(Value::as_str).unwrap_or("?");
-        let schedule = data
-            .get("humanSchedule")
-            .and_then(Value::as_str)
-            .unwrap_or("?");
-        let recurring = data
-            .get("recurring")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        let durable = data
-            .get("durable")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let where_str = if durable {
+    fn render_for_model(&self, out: &CronCreateOutput) -> Vec<ToolResultContentPart> {
+        let id = &out.id;
+        let schedule = &out.human_schedule;
+        let where_str = if out.durable {
             "Persisted to .claude/scheduled_tasks.json"
         } else {
             "Session-only (not written to disk, dies when Claude exits)"
         };
-        let text = if recurring {
+        let text = if out.recurring {
             format!(
                 "Scheduled recurring job {id} ({schedule}). {where_str}. Auto-expires after {DEFAULT_MAX_AGE_DAYS} days. Use CronDelete to cancel sooner."
             )
@@ -197,19 +199,17 @@ impl Tool for CronCreateTool {
     /// computes occurrences — expressions like `30 14 30 2 *` (Feb 30,
     /// invalid) will be rejected when `ctx.schedules.create_schedule`
     /// fails server-side. R7-T22.
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
-        let cron_expr = input.get("cron").and_then(|v| v.as_str()).unwrap_or("");
-        let prompt = input.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-
-        if cron_expr.is_empty() {
+    fn validate_input(&self, input: &CronCreateInput, _ctx: &ToolUseContext) -> ValidationResult {
+        if input.cron.is_empty() {
             return ValidationResult::invalid("cron parameter is required");
         }
-        if prompt.is_empty() {
+        if input.prompt.is_empty() {
             return ValidationResult::invalid("prompt parameter is required");
         }
-        if !is_valid_cron_expression(cron_expr) {
+        if !is_valid_cron_expression(&input.cron) {
             return ValidationResult::invalid(format!(
-                "Invalid cron expression '{cron_expr}'. Expected 5 fields: M H DoM Mon DoW."
+                "Invalid cron expression '{cron}'. Expected 5 fields: M H DoM Mon DoW.",
+                cron = input.cron
             ));
         }
         ValidationResult::Valid
@@ -217,26 +217,9 @@ impl Tool for CronCreateTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: CronCreateInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let cron_expr = input
-            .get("cron")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let prompt = input
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let recurring = input
-            .get("recurring")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true);
-        let durable = input
-            .get("durable")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-
+    ) -> Result<ToolResult<CronCreateOutput>, ToolError> {
         // R7-T22: enforce the global cron-job cap. TS
         // `CronCreateTool.ts:97-103` rejects when there are >= 50
         // active jobs; coco-rs queries the schedule store for the
@@ -255,7 +238,7 @@ impl Tool for CronCreateTool {
             });
         }
 
-        if cron_expr.is_empty() || prompt.is_empty() {
+        if input.cron.is_empty() || input.prompt.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "cron and prompt are required".into(),
                 error_code: None,
@@ -263,16 +246,24 @@ impl Tool for CronCreateTool {
         }
 
         // Use cron expression as the schedule, prompt as the command
-        let name = if recurring { "recurring" } else { "one-shot" };
-        match ctx.schedules.create_schedule(name, cron_expr, prompt).await {
+        let name = if input.recurring {
+            "recurring"
+        } else {
+            "one-shot"
+        };
+        match ctx
+            .schedules
+            .create_schedule(name, &input.cron, &input.prompt)
+            .await
+        {
             Ok(entry) => Ok(ToolResult {
-                data: serde_json::json!({
-                    "id": entry.id,
-                    "humanSchedule": entry.schedule,
-                    "recurring": recurring,
-                    "durable": durable,
-                    "status": "created",
-                }),
+                data: CronCreateOutput {
+                    id: entry.id,
+                    human_schedule: entry.schedule,
+                    recurring: input.recurring,
+                    durable: input.durable,
+                    status: "created".into(),
+                },
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
@@ -285,26 +276,43 @@ impl Tool for CronCreateTool {
     }
 }
 
+/// Typed input for [`CronDeleteTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct CronDeleteInput {
+    /// ID of the schedule to delete
+    #[serde(default)]
+    pub schedule_id: String,
+}
+
+/// Typed output for [`CronDeleteTool`].
+///
+/// All fields marked `#[serde(default)]` so test fixtures and
+/// transcript replay that provide partial envelopes (e.g.
+/// `{"id": "x"}`) still deserialize into a valid struct for
+/// `render_for_model`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CronDeleteOutput {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub status: String,
+}
+
 pub struct CronDeleteTool;
 
 #[async_trait::async_trait]
 impl Tool for CronDeleteTool {
+    type Input = CronDeleteInput;
+    type Output = CronDeleteOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::CronDelete)
     }
     fn name(&self) -> &str {
         ToolName::CronDelete.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &CronDeleteInput, _options: &DescriptionOptions) -> String {
         "Delete a scheduled task by ID.".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "schedule_id".into(),
-            serde_json::json!({"type": "string", "description": "ID of the schedule to delete"}),
-        );
-        ToolInputSchema { properties: p }
     }
     fn should_defer(&self) -> bool {
         true
@@ -314,69 +322,110 @@ impl Tool for CronDeleteTool {
     }
 
     /// TS `CronDeleteTool.ts:86-92 mapToolResultToToolResultBlockParam`.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let id = data.get("id").and_then(Value::as_str).unwrap_or("?");
+    fn render_for_model(&self, out: &CronDeleteOutput) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
-            text: format!("Cancelled job {id}."),
+            text: format!("Cancelled job {id}.", id = out.id),
             provider_options: None,
         }]
     }
 
     async fn execute(
         &self,
-        input: Value,
+        input: CronDeleteInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let id = input
-            .get("schedule_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        if id.is_empty() {
+    ) -> Result<ToolResult<CronDeleteOutput>, ToolError> {
+        if input.schedule_id.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "schedule_id is required".into(),
                 error_code: None,
             });
         }
-        match ctx.schedules.delete_schedule(id).await {
+        match ctx.schedules.delete_schedule(&input.schedule_id).await {
             Ok(()) => Ok(ToolResult {
-                data: serde_json::json!({"id": id, "status": "deleted"}),
+                data: CronDeleteOutput {
+                    id: input.schedule_id,
+                    status: "deleted".into(),
+                },
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
             }),
             Err(e) => Err(ToolError::ExecutionFailed {
-                message: format!("Failed to delete schedule {id}: {e}"),
+                message: format!(
+                    "Failed to delete schedule {id}: {e}",
+                    id = input.schedule_id
+                ),
                 source: None,
             }),
         }
     }
 }
 
+/// Typed input for [`CronListTool`] — no parameters.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct CronListInput {}
+
+/// One scheduled job entry in [`CronListOutput`].
+///
+/// TS `CronListTool.ts:20-33` outputSchema:
+///   `{ id, cron, humanSchedule, prompt, recurring?, durable? }`
+///
+/// All fields marked `#[serde(default)]` so partial test fixtures /
+/// transcript replay deserializes successfully into a struct the
+/// renderer can iterate.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CronListJob {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub cron: String,
+    /// Field-renamed to `humanSchedule` for TS parity
+    /// (`CronListTool.ts`).
+    #[serde(default, rename = "humanSchedule")]
+    pub human_schedule: String,
+    #[serde(default)]
+    pub prompt: String,
+    /// TS uses spread-conditional `(t.recurring ? { recurring: true }
+    /// : {})` — omit when not set. `Option<bool>` lets us distinguish
+    /// "explicitly false" from "absent" on the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recurring: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durable: Option<bool>,
+}
+
+/// Typed output for [`CronListTool`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CronListOutput {
+    pub jobs: Vec<CronListJob>,
+}
+
 pub struct CronListTool;
 
 #[async_trait::async_trait]
 impl Tool for CronListTool {
+    type Input = CronListInput;
+    type Output = CronListOutput;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::CronList)
     }
     fn name(&self) -> &str {
         ToolName::CronList.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &CronListInput, _options: &DescriptionOptions) -> String {
         "List all scheduled tasks.".into()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-        }
+    fn is_read_only(&self, _input: &CronListInput) -> bool {
+        true
     }
-    fn is_read_only(&self, _: &Value) -> bool {
+    fn is_always_read_only(&self) -> bool {
         true
     }
     /// TS `CronListTool.ts`: `isConcurrencySafe() { return true }`. Listing
     /// schedules is a pure read of the schedule store. CronCreate/Delete
     /// stay non-safe because they mutate the store.
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &CronListInput) -> bool {
         true
     }
     fn should_defer(&self) -> bool {
@@ -389,27 +438,26 @@ impl Tool for CronListTool {
     /// Render `{jobs: [...]}` as a human-readable summary list.
     /// Empty list → "No scheduled tasks." Otherwise: count + bulleted
     /// `- {id}: {humanSchedule} → {prompt}` per job.
-    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let jobs = data.get("jobs").and_then(Value::as_array);
-        let text = match jobs {
-            Some(arr) if arr.is_empty() => "No scheduled tasks.".to_string(),
-            Some(arr) => {
-                let n = arr.len();
-                let plural = if n == 1 { "task" } else { "tasks" };
-                let mut buf = format!("{n} scheduled {plural}:");
-                for job in arr {
-                    let id = job.get("id").and_then(Value::as_str).unwrap_or("?");
-                    let schedule = job
-                        .get("humanSchedule")
-                        .and_then(Value::as_str)
-                        .or_else(|| job.get("cron").and_then(Value::as_str))
-                        .unwrap_or("?");
-                    let prompt = job.get("prompt").and_then(Value::as_str).unwrap_or("");
-                    buf.push_str(&format!("\n- {id}: {schedule} → {prompt}"));
-                }
-                buf
+    fn render_for_model(&self, out: &CronListOutput) -> Vec<ToolResultContentPart> {
+        let text = if out.jobs.is_empty() {
+            "No scheduled tasks.".to_string()
+        } else {
+            let n = out.jobs.len();
+            let plural = if n == 1 { "task" } else { "tasks" };
+            let mut buf = format!("{n} scheduled {plural}:");
+            for job in &out.jobs {
+                let schedule = if job.human_schedule.is_empty() {
+                    job.cron.as_str()
+                } else {
+                    job.human_schedule.as_str()
+                };
+                buf.push_str(&format!(
+                    "\n- {id}: {schedule} → {prompt}",
+                    id = job.id,
+                    prompt = job.prompt
+                ));
             }
-            None => serde_json::to_string(data).unwrap_or_default(),
+            buf
         };
         vec![ToolResultContentPart::Text {
             text,
@@ -419,42 +467,24 @@ impl Tool for CronListTool {
 
     async fn execute(
         &self,
-        _input: Value,
+        _input: CronListInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        // TS `CronListTool.ts:20-33` outputSchema:
-        //   { jobs: Array<{ id, cron, humanSchedule, prompt,
-        //                   recurring?, durable? }> }
-        //
-        // Differences from the prior coco-rs shape:
-        //  - Top-level wrapper `{ jobs: [...] }` (not a bare array).
-        //  - Field names match TS: `cron` (was `schedule`), `prompt`
-        //    (was `command`), `humanSchedule` (was missing).
-        //  - Empty case still wraps in `{ jobs: [] }` instead of a
-        //    free-form text string so the model gets a consistent
-        //    discriminator.
-        //  - `recurring` and `durable` are only included when truthy/
-        //    explicitly false, matching TS spread-conditional shape
-        //    `(t.recurring ? { recurring: true } : {})`.
+    ) -> Result<ToolResult<CronListOutput>, ToolError> {
         match ctx.schedules.list_schedules().await {
             Ok(entries) => {
-                let jobs: Vec<Value> = entries
+                let jobs: Vec<CronListJob> = entries
                     .iter()
-                    .map(|e| {
-                        let mut obj = serde_json::json!({
-                            "id": e.id,
-                            "cron": e.schedule,
-                            "humanSchedule": e.schedule,
-                            "prompt": e.command,
-                        });
-                        if e.enabled {
-                            obj["recurring"] = serde_json::Value::Bool(true);
-                        }
-                        obj
+                    .map(|e| CronListJob {
+                        id: e.id.clone(),
+                        cron: e.schedule.clone(),
+                        human_schedule: e.schedule.clone(),
+                        prompt: e.command.clone(),
+                        recurring: if e.enabled { Some(true) } else { None },
+                        durable: None,
                     })
                     .collect();
                 Ok(ToolResult {
-                    data: serde_json::json!({ "jobs": jobs }),
+                    data: CronListOutput { jobs },
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
@@ -468,17 +498,63 @@ impl Tool for CronListTool {
     }
 }
 
+/// Action for [`RemoteTriggerTool`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteTriggerAction {
+    /// Default — list all configured triggers.
+    #[default]
+    List,
+    /// Look up a single trigger by id.
+    Get,
+    /// Create a new trigger from `body`.
+    Create,
+    /// Update an existing trigger; merges `body` into the stored trigger.
+    Update,
+    /// Fire the trigger now and return its run result.
+    Run,
+}
+
+impl RemoteTriggerAction {
+    fn requires_trigger_id(self) -> bool {
+        matches!(self, Self::Get | Self::Update | Self::Run)
+    }
+}
+
+/// Typed input for [`RemoteTriggerTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct RemoteTriggerInput {
+    /// The action to perform on triggers
+    #[serde(default)]
+    pub action: RemoteTriggerAction,
+    /// Trigger ID (required for get, update, and run)
+    #[serde(default)]
+    pub trigger_id: Option<String>,
+    /// JSON body for create and update actions. Free-form Value
+    /// because the schema of each backend's trigger config is
+    /// backend-defined and not modeled here.
+    #[serde(default)]
+    pub body: Option<Value>,
+}
+
 pub struct RemoteTriggerTool;
 
 #[async_trait::async_trait]
 impl Tool for RemoteTriggerTool {
+    type Input = RemoteTriggerInput;
+    /// Output is `Value` — per-action shape (`list` returns array,
+    /// `get`/`update` return a trigger object, `create` returns
+    /// `{id, name, status}`, `run` returns `{trigger_id, status, result}`).
+    /// Tagged-enum modeling deferred until backend types crystallize.
+    type Output = Value;
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::RemoteTrigger)
     }
     fn name(&self) -> &str {
         ToolName::RemoteTrigger.as_str()
     }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+    fn description(&self, _input: &RemoteTriggerInput, _options: &DescriptionOptions) -> String {
         "Manage remote trigger endpoints that can invoke agents.".into()
     }
     fn search_hint(&self) -> Option<&str> {
@@ -487,39 +563,13 @@ impl Tool for RemoteTriggerTool {
     fn should_defer(&self) -> bool {
         true
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "action".into(),
-            serde_json::json!({
-                "type": "string",
-                "enum": ["list", "get", "create", "update", "run"],
-                "description": "The action to perform on triggers"
-            }),
-        );
-        p.insert(
-            "trigger_id".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Trigger ID (required for get, update, and run)"
-            }),
-        );
-        p.insert(
-            "body".into(),
-            serde_json::json!({
-                "type": "object",
-                "description": "JSON body for create and update actions"
-            }),
-        );
-        ToolInputSchema { properties: p }
-    }
-    fn is_read_only(&self, input: &Value) -> bool {
+    fn is_read_only(&self, input: &RemoteTriggerInput) -> bool {
         matches!(
-            input.get("action").and_then(|v| v.as_str()),
-            Some("list" | "get")
+            input.action,
+            RemoteTriggerAction::List | RemoteTriggerAction::Get
         )
     }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
+    fn is_concurrency_safe(&self, _input: &RemoteTriggerInput) -> bool {
         true
     }
 
@@ -553,25 +603,14 @@ impl Tool for RemoteTriggerTool {
 
     fn validate_input(
         &self,
-        input: &Value,
+        input: &RemoteTriggerInput,
         _ctx: &ToolUseContext,
     ) -> coco_tool_runtime::ValidationResult {
-        let action = input.get("action").and_then(|v| v.as_str()).unwrap_or("");
-        if action.is_empty() {
-            return coco_tool_runtime::ValidationResult::invalid("action is required");
-        }
-        if !["list", "get", "create", "update", "run"].contains(&action) {
-            return coco_tool_runtime::ValidationResult::invalid(
-                "action must be one of: list, get, create, update, run",
-            );
-        }
-        // get, update, run require trigger_id
-        if matches!(action, "get" | "update" | "run")
-            && input
-                .get("trigger_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .is_empty()
+        // `action` is now typed; unknown wire values fail at deserialize
+        // time (one layer up). Only the "trigger_id required" gate
+        // remains as a semantic check.
+        if input.action.requires_trigger_id()
+            && input.trigger_id.as_deref().unwrap_or("").is_empty()
         {
             return coco_tool_runtime::ValidationResult::invalid(
                 "trigger_id is required for get, update, and run actions",
@@ -582,18 +621,14 @@ impl Tool for RemoteTriggerTool {
 
     async fn execute(
         &self,
-        input: Value,
+        input: RemoteTriggerInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let action = input
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("list");
-        let trigger_id = input.get("trigger_id").and_then(|v| v.as_str());
-        let body = input.get("body");
+        let trigger_id = input.trigger_id.as_deref();
+        let body = input.body.as_ref();
 
-        match action {
-            "list" => match ctx.schedules.list_triggers().await {
+        match input.action {
+            RemoteTriggerAction::List => match ctx.schedules.list_triggers().await {
                 Ok(triggers) => Ok(ToolResult {
                     data: serde_json::to_value(&triggers).unwrap_or_default(),
                     new_messages: vec![],
@@ -605,7 +640,7 @@ impl Tool for RemoteTriggerTool {
                     source: None,
                 }),
             },
-            "get" => {
+            RemoteTriggerAction::Get => {
                 let id = trigger_id.unwrap_or_default();
                 match ctx.schedules.get_trigger(id).await {
                     Ok(trigger) => Ok(ToolResult {
@@ -620,7 +655,7 @@ impl Tool for RemoteTriggerTool {
                     }),
                 }
             }
-            "create" => {
+            RemoteTriggerAction::Create => {
                 let name = body
                     .and_then(|b| b.get("name"))
                     .and_then(|v| v.as_str())
@@ -645,7 +680,7 @@ impl Tool for RemoteTriggerTool {
                     }),
                 }
             }
-            "update" => {
+            RemoteTriggerAction::Update => {
                 let id = trigger_id.unwrap_or_default();
                 match ctx
                     .schedules
@@ -664,7 +699,7 @@ impl Tool for RemoteTriggerTool {
                     }),
                 }
             }
-            "run" => {
+            RemoteTriggerAction::Run => {
                 let id = trigger_id.unwrap_or_default();
                 match ctx.schedules.run_trigger(id).await {
                     Ok(result) => Ok(ToolResult {
@@ -683,10 +718,6 @@ impl Tool for RemoteTriggerTool {
                     }),
                 }
             }
-            _ => Err(ToolError::InvalidInput {
-                message: format!("Unknown action: {action}"),
-                error_code: None,
-            }),
         }
     }
 }

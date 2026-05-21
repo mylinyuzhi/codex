@@ -290,6 +290,15 @@ impl SwarmAgentHandle {
 
     /// Symmetrical cleanup: drop the per-agent hook bucket.
     /// TS parity: `clearSessionHooks(setAppState, agentId)`.
+    ///
+    /// **W6.2 full**: kept (rather than deleted as "dead code")
+    /// because the bg path's `tokio::spawn` closure uses
+    /// `registry.clear_agent_scope` directly via a cloned Arc, and
+    /// the sync path now does the same in its detached engine task.
+    /// Both bypass this `&self` wrapper. Marking `#[allow(dead_code)]`
+    /// keeps the helper available for future callers (e.g. error
+    /// paths that abandon a spawn before the engine task runs).
+    #[allow(dead_code)]
     pub(super) fn clear_frontmatter_hooks(&self, agent_id: &str) {
         if let Some(registry) = self.hook_registry() {
             registry.clear_agent_scope(agent_id);
@@ -374,6 +383,11 @@ impl SwarmAgentHandle {
     /// Tear down dynamically-added MCP servers registered for this
     /// `agent_id`. Mirror of [`Self::initialize_per_agent_mcp`]. No-op
     /// when nothing was tracked.
+    ///
+    /// **W6.2 full**: see `clear_frontmatter_hooks` — both detached
+    /// spawn paths now do this inline via cloned Arcs. Wrapper kept
+    /// for future error-path callers.
+    #[allow(dead_code)]
     pub(super) async fn cleanup_per_agent_mcp(&self, agent_id: &str) {
         let entry = self.dynamic_mcp_servers().write().await.remove(agent_id);
         let Some(names) = entry else { return };
@@ -441,6 +455,11 @@ impl SwarmAgentHandle {
     /// Fire SubagentStop hooks. Errors are logged and swallowed — a
     /// failed stop hook must not gate the spawn's response. TS parity:
     /// stop hooks run for completion / failure / cancel.
+    ///
+    /// **W6.2 full**: see `clear_frontmatter_hooks` — both detached
+    /// spawn paths now invoke `fire_subagent_stop_for_task` directly.
+    /// Wrapper kept for early-failure paths that have `&self` in scope.
+    #[allow(dead_code)]
     pub(super) async fn fire_subagent_stop_hook(
         &self,
         agent_id: &str,
@@ -471,6 +490,87 @@ impl SwarmAgentHandle {
                 None
             }
         }
+    }
+}
+
+/// Typed outcome carried on the engine-driver → inline-caller oneshot.
+///
+/// Replaces the previous "drop the channel when handing off to the bg
+/// path" mechanism — that approach made `Err(RecvError)` ambiguous
+/// (true panic vs orderly bg-handoff). With a typed sum the channel
+/// is always sent on; `Err(RecvError)` is now exclusively a panic
+/// signal.
+///
+/// TS source-of-truth: `tools/AgentTool/AgentTool.tsx:886-892` uses
+/// `Promise.race([iterator.next(), backgroundSignal])` where both
+/// Promises remain observable after the race. The tagged enum is the
+/// Rust equivalent — Tokio's oneshot semantics force us to model the
+/// "engine completed but caller already moved on" case explicitly
+/// rather than relying on Promise object lifetime.
+#[derive(Debug)]
+enum EngineOutcome {
+    /// Engine ran inline; the awaiter wins the race and returns this
+    /// response directly. `complete_silent` has already transitioned
+    /// the task to its terminal state without pushing a notification
+    /// envelope (the model gets the result via the tool result).
+    ///
+    /// `AgentSpawnResponse` is ~300 bytes (`Vec<PathBuf>`,
+    /// `HashMap<ToolName, i32>`, multiple `Option<String>`); boxing
+    /// keeps both variants the same shallow size so the small
+    /// `CompletedAfterDetach` arm doesn't pay the worst-case stack
+    /// cost. Per `clippy::large_enum_variant`.
+    CompletedSync(Box<AgentSpawnResponse>),
+    /// External `signal_detach` fired before the engine finished.
+    /// The engine continued to completion in the bg, and the
+    /// `<task-notification>` envelope has been pushed via
+    /// `mark_completed`/`mark_failed`. The awaiter returns
+    /// `AsyncLaunched` — the model already received the bg-shaped
+    /// reply via the notification envelope.
+    CompletedAfterDetach {
+        agent_id: String,
+        task_id: Option<String>,
+        duration_ms: i64,
+    },
+}
+
+/// Translate the engine-driver oneshot outcome into the awaiter's
+/// `AgentSpawnResponse`. Recv-error (the truly degenerate path) maps
+/// to a `Failed` response with the panic marker so the model isn't
+/// left hanging if the engine task aborts mid-run.
+fn resolve_engine_outcome(
+    res: Result<EngineOutcome, tokio::sync::oneshot::error::RecvError>,
+    agent_id: &str,
+    task_id_for_async_response: Option<String>,
+    start: Instant,
+) -> AgentSpawnResponse {
+    match res {
+        Ok(EngineOutcome::CompletedSync(response)) => *response,
+        Ok(EngineOutcome::CompletedAfterDetach {
+            agent_id: detached_agent_id,
+            task_id,
+            duration_ms,
+        }) => AgentSpawnResponse {
+            status: AgentSpawnStatus::AsyncLaunched,
+            agent_id: Some(task_id.unwrap_or(detached_agent_id)),
+            result: None,
+            error: None,
+            total_tool_use_count: 0,
+            total_tokens: 0,
+            duration_ms,
+            worktree_path: None,
+            worktree_branch: None,
+            output_file: None,
+            prompt: None,
+            ..Default::default()
+        },
+        Err(_) => AgentSpawnResponse {
+            status: AgentSpawnStatus::Failed,
+            agent_id: Some(task_id_for_async_response.unwrap_or_else(|| agent_id.to_string())),
+            result: None,
+            error: Some("engine task panicked".into()),
+            duration_ms: start.elapsed().as_millis() as i64,
+            ..Default::default()
+        },
     }
 }
 
@@ -543,7 +643,13 @@ impl SwarmAgentHandle {
                 SubAgentStatus::Running
             },
             turns: 0,
-            model: request.model.clone(),
+            // `SubAgentState.model` shows the *configured* model
+            // identifier in UI panels. Read from `AgentDefinition` —
+            // the per-request `model` slot is gone (catalog-only
+            // principle). For catalog-less spawns (definition: None,
+            // e.g. fork mode), this stays None and the UI displays
+            // "default".
+            model: request.definition.as_ref().and_then(|d| d.model.clone()),
             working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
             last_message: None,
         };
@@ -627,29 +733,39 @@ impl SwarmAgentHandle {
             .map(|s| s.path.clone())
             .or_else(|| request.cwd.clone());
 
-        // Spawn-time identity resolution (T3 + T7). Centralizes model +
-        // role precedence in `coco_subagent`:
-        //   model:  request.model > definition.model > role-resolved
-        //   role:   request.model_role > definition.model_role
-        //         > subagent_type → role > Subagent
+        // Spawn-time identity resolution (T3 + T7). Single source of
+        // truth for model routing: `AgentDefinition`. No per-request
+        // override slots — model + role flow exclusively from the
+        // definition (whether loaded from .md/built-in catalog or
+        // synthesized in-process by code-driven forks like the
+        // memory crate's extract/dream/session services).
         //
-        // Memory-crate forks (extract / dream / session-memory) set
-        // `request.model_role = Some(ModelRole::Memory)` so an operator
-        // configuring `settings.models.memory` actually steers them
-        // instead of falling through to `general-purpose →
-        // ModelRole::Subagent`.
+        //   model:  definition.model > role-resolved (via ModelSpec)
+        //   role:   definition.model_role > subagent_type → role
+        //         > ModelRole::Subagent
+        //
+        // The model-facing AgentTool schema does NOT expose `model`
+        // or `model_role` — multi-LLM design rules out LLM-driven
+        // model selection (LLM has no awareness of operator's
+        // provider/model_id mappings).
         //
         // The definition flows through `AgentSpawnRequest.definition`,
-        // populated by AgentTool from `ctx.agent_catalog`. When the catalog
-        // isn't installed, `definition` is `None` and the resolver
+        // populated either by AgentTool from `ctx.agent_catalog` (LLM
+        // path) or by internal callers constructing a synthetic def
+        // at spawn time (memory crate forks).
+        //
+        // When `definition` is `None` (test contexts), the resolver
         // degrades cleanly to subagent_type→role mapping.
         let agent_type_id: Option<coco_types::AgentTypeId> = request
             .subagent_type
             .as_deref()
             .map(|t| t.parse().expect("AgentTypeId::from_str is Infallible"));
         let selection = coco_subagent::resolve_subagent_selection(
-            request.model.as_deref(),
-            request.model_role,
+            // No per-request `model` / `model_role` — both flow
+            // through `request.definition` only. See the field-level
+            // comment on `AgentSpawnRequest` for the rationale.
+            None,
+            None,
             request.definition.as_deref(),
             agent_type_id.as_ref(),
         );
@@ -764,12 +880,40 @@ impl SwarmAgentHandle {
         //     position)
         // TS parity: `AgentTool.tsx:534`
         // `enhanceSystemPromptWithEnvDetails([agentPrompt], model, …)`.
+        //
+        // For `coco-guide` specifically: the agent's static identity is
+        // augmented with a per-spawn dynamic context block listing the
+        // user's custom skills / agents / MCP servers / plugin commands /
+        // settings.json snapshot. TS source:
+        // `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`'s
+        // `getSystemPrompt({toolUseContext})` callback. The builder
+        // closure is installed by the CLI bootstrap; absent installation
+        // the spawn falls back to the static base only.
+        let coco_guide_context_builder = self.coco_guide_context_builder().cloned();
         let build_fresh_prompt = || -> String {
             let def = request.definition.as_deref();
-            let identity = def
+            let static_identity = def
                 .and_then(|d| d.system_prompt.as_deref())
                 .filter(|s| !s.is_empty())
                 .unwrap_or(coco_context::prompt::DEFAULT_AGENT_IDENTITY);
+            // Append the coco-guide dynamic block when this spawn is
+            // for the `coco-guide` agent AND a context builder is
+            // installed. Owned `String` so the assembler below can
+            // borrow with `&str` like the static path. Empty result
+            // (every section omitted) is treated identically to
+            // "no builder installed" — TS parity for the
+            // `if (contextSections.length > 0)` gate.
+            let identity_owned: Option<String> =
+                if agent_type == coco_types::SubagentType::CocoGuide.as_str() {
+                    coco_guide_context_builder.as_ref().and_then(|build| {
+                        let ctx = build();
+                        coco_subagent::coco_guide_dynamic_block(&ctx)
+                            .map(|block| format!("{static_identity}{block}"))
+                    })
+                } else {
+                    None
+                };
+            let identity: &str = identity_owned.as_deref().unwrap_or(static_identity);
             let claude_md_files: Vec<coco_context::MemoryFile> =
                 if def.map(|d| d.omit_claude_md).unwrap_or(false) {
                     Vec::new()
@@ -885,11 +1029,14 @@ impl SwarmAgentHandle {
             } else {
                 selection.model_selection.clone()
             },
+            // `max_turns` precedence: constraints (memory forks tighten
+            // via `AgentSpawnConstraints.max_turns`) > definition. Top-
+            // level `request.max_turns` was a dead slot and is gone.
             max_turns: request
                 .constraints
                 .as_ref()
                 .and_then(|c| c.max_turns)
-                .or(request.max_turns),
+                .or_else(|| request.definition.as_ref().and_then(|d| d.max_turns)),
             context_window: None,
             prompt_cache: None,
             max_output_tokens: None,
@@ -911,7 +1058,13 @@ impl SwarmAgentHandle {
             } else {
                 Vec::new()
             },
-            disallowed_tools: request.disallowed_tools.clone(),
+            // `disallowed_tools` flows from `AgentDefinition.disallowed_tools`
+            // (frontmatter). Top-level request slot was dead and removed.
+            disallowed_tools: request
+                .definition
+                .as_ref()
+                .map(|d| d.disallowed_tools.clone())
+                .unwrap_or_default(),
             // Coordinator / AgentTool spawns don't carry skill-style
             // auto-allow rules — those flow only through
             // `SkillRuntime` Fork path. Leave empty.
@@ -958,10 +1111,36 @@ impl SwarmAgentHandle {
                     selection.model_role
                 },
             ),
-            effort: request.effort.clone(),
-            use_exact_tools: request.use_exact_tools,
-            mcp_servers: request.mcp_servers.clone(),
-            initial_prompt: request.initial_prompt.clone(),
+            // `AgentDefinition.effort` is the single source of truth
+            // for static effort overrides. Read it here (was: blank
+            // pass-through of the never-set `request.effort`). The
+            // resolved string passes through to RunnerConfig and is
+            // looked up against the active model's
+            // `supported_thinking_levels` by
+            // `session_runtime::thinking_level_for_effort_from`.
+            effort: request.definition.as_ref().and_then(|d| d.effort),
+            // The four fields below all read from `AgentDefinition` —
+            // the previously-dead `request.<field>` pass-through slots
+            // are gone.
+            use_exact_tools: request
+                .definition
+                .as_ref()
+                .map(|d| d.use_exact_tools)
+                .unwrap_or(false),
+            mcp_servers: request
+                .definition
+                .as_ref()
+                .map(|d| {
+                    d.mcp_servers
+                        .iter()
+                        .filter_map(|spec| spec.name().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            initial_prompt: request
+                .definition
+                .as_ref()
+                .and_then(|d| d.initial_prompt.clone()),
             definition: request.definition.clone(),
             // In-process AgentTool spawns inherit the leader's
             // `ToolPermissionBridge` via `wire_engine`. Setting an override
@@ -1051,127 +1230,431 @@ impl SwarmAgentHandle {
             decorated_prompt
         };
 
-        // Sync path.
-        let query_result = engine.execute_query(&effective_prompt, query_config).await;
-        let duration_ms = start.elapsed().as_millis() as i64;
+        // W4 (B1 fix): register the sync agent in TaskRuntime when
+        // a registry is wired. TS parity: sync agents go through
+        // `registerAgentForeground` which populates `appState.tasks`
+        // so the UI panel + TaskList tool see them as Running.
+        // Without this, sync agents were invisible — only background
+        // agents were tracked.
+        //
+        // W6 (Dream registration): when the spawn carries the
+        // `AutoDream` fork label, register as `TaskType::Dream`
+        // instead of `LocalAgent` so the TUI panel + `TaskList` tool
+        // can differentiate auto-memory consolidation from
+        // user-spawned subagents. TS parity:
+        // `tasks/DreamTask/DreamTask.ts:72` `registerTask({type:
+        // 'dream'})`. Other framework-spawned forks (extract /
+        // session-memory / prompt-suggestion / side-question /
+        // compact / agent-summary / speculation) are
+        // service-internal and don't surface as user-visible
+        // tasks — TS doesn't register them either.
+        //
+        // The cancel token from `register_*_task` lets `kill_task`
+        // propagate into the engine via the `tokio::select!` race
+        // below — same mechanism the bg path uses.
+        let task_registry = self.task_registry().cloned();
+        let is_dream = matches!(request.fork_label, Some(coco_types::ForkLabel::AutoDream));
+        let is_skip_registration = matches!(
+            request.fork_label,
+            Some(coco_types::ForkLabel::ExtractMemories)
+                | Some(coco_types::ForkLabel::SessionMemoryAuto)
+                | Some(coco_types::ForkLabel::SessionMemoryManual)
+                | Some(coco_types::ForkLabel::PromptSuggestion)
+                | Some(coco_types::ForkLabel::SideQuestion)
+                | Some(coco_types::ForkLabel::Compact)
+                | Some(coco_types::ForkLabel::AgentSummary)
+                | Some(coco_types::ForkLabel::Speculation)
+        );
+        let sync_task = if let Some(reg) = task_registry.as_ref() {
+            if is_skip_registration {
+                None
+            } else {
+                let task_cancel = tokio_util::sync::CancellationToken::new();
+                let description = request
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| agent_type.to_string());
+                let tid = if is_dream {
+                    reg.register_dream_task(&description, task_cancel.clone())
+                        .await
+                } else {
+                    // TS parity (`AgentTool.tsx:826`): foreground spawns
+                    // (run_in_background=false) optionally arm the
+                    // auto-detach timer. Background spawns ignore the
+                    // field — they detach immediately by definition.
+                    let registration = match request
+                        .auto_background_ms
+                        .filter(|_| !request.run_in_background)
+                    {
+                        Some(ms) => {
+                            coco_tool_runtime::AgentRegistration::ForegroundWithAutoDetach { ms }
+                        }
+                        None => coco_tool_runtime::AgentRegistration::Foreground,
+                    };
+                    reg.register_agent_task(
+                        &description,
+                        request.tool_use_id.as_deref(),
+                        request.invoking_agent_id.as_deref(),
+                        task_cancel.clone(),
+                        registration,
+                    )
+                    .await
+                };
+                Some((tid, task_cancel))
+            }
+        } else {
+            None
+        };
 
-        // SubagentStop fires whether the run succeeded, failed, or
-        // was cancelled — TS parity. Transcript path is `None` for
-        // sync spawns (no per-agent JSONL persistence on the sync
-        // path; bg spawns expose it via the transcript_store).
-        let _stop_result = self
-            .fire_subagent_stop_hook(&agent_id, agent_type, /*transcript*/ None)
+        // W6.2 (full): the entire sync execution path — engine call,
+        // cleanup chain, response build — now lives inside a detached
+        // `tokio::spawn` body. The inline caller races a oneshot
+        // receiver against the detach signal and external cancel:
+        //
+        // - **Oneshot delivery**: engine task finishes, sends the
+        //   built `AgentSpawnResponse`. Inline caller returns it.
+        //   `complete_silent` runs (state only, no notification —
+        //   response goes inline).
+        // - **Detach signal**: external `signal_detach(tid)` (TUI
+        //   Ctrl+B). Inline caller sets the detached flag and
+        //   returns `AsyncLaunched` immediately. Engine task keeps
+        //   running, eventually calls `mark_completed`/`mark_failed`
+        //   on its own (pushes `<task-notification>` envelope).
+        //   This is the TS-parity "detach but keep running" behavior.
+        // - **External cancel** (`kill_task(tid)`): engine task's
+        //   inner select observes the cancel and exits with an Err
+        //   QueryResult. Cleanup still runs in the engine task; the
+        //   final response is `AgentSpawnResponse::Failed`. Inline
+        //   caller receives it via oneshot.
+        //
+        // Pre-clone every Arc the engine task needs (so the closure
+        // doesn't borrow `&self`). Matches the pattern used by
+        // `spawn_background` below.
+        let hook_registry_for_engine = self.hook_registry().cloned();
+        let mcp_handle_for_engine = self.mcp_handle().cloned();
+        let dynamic_mcp_servers_for_engine = self.dynamic_mcp_servers().clone();
+        let worktree_manager_for_engine = self.worktree_manager().cloned();
+        let agents_for_engine = self.agents().clone();
+        let side_query_for_engine = self.side_query().cloned();
+        let cwd_for_engine = self.cwd.clone();
+        let task_registry_for_engine = task_registry.clone();
+        let agent_id_for_engine = agent_id.clone();
+        let agent_type_for_engine = agent_type.to_string();
+        let task_id_for_engine = sync_task.as_ref().map(|(id, _)| id.clone());
+        let task_cancel_for_engine = sync_task.as_ref().map(|(_, c)| c.clone());
+        let worktree_session_for_engine = worktree_session.clone();
+        let registered_frontmatter_hooks_for_engine = registered_frontmatter_hooks;
+
+        // Detach handle for the inline caller's race. `None` for memory
+        // forks / no registry; degrades to a 2-arm select (resp + cancel).
+        let detach_handle_for_inline: Option<std::sync::Arc<tokio::sync::Notify>> =
+            match (task_registry.as_ref(), sync_task.as_ref()) {
+                (Some(reg), Some((tid, _))) => reg.detach_handle(tid).await,
+                _ => None,
+            };
+
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel::<EngineOutcome>();
+        let detached_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let detached_flag_for_engine = detached_flag.clone();
+        let sync_start = start;
+        let engine_for_task = engine.clone();
+
+        tokio::spawn(async move {
+            // ── Engine query (race against task cancel) ──────────
+            let query_result = if let Some(c) = task_cancel_for_engine.as_ref() {
+                tokio::select! {
+                    biased;
+                    () = c.cancelled() => {
+                        Err(Box::new(coco_error::PlainError::new(
+                            "task cancelled by leader",
+                            coco_error::StatusCode::Cancelled,
+                        )) as coco_error::BoxedError)
+                    }
+                    r = engine_for_task.execute_query(&effective_prompt, query_config) => r,
+                }
+            } else {
+                engine_for_task
+                    .execute_query(&effective_prompt, query_config)
+                    .await
+            };
+            let duration_ms = sync_start.elapsed().as_millis() as i64;
+
+            // ── Cleanup chain (no `&self` — uses cloned Arcs) ─────
+            fire_subagent_stop_for_task(
+                hook_registry_for_engine.clone(),
+                &cwd_for_engine,
+                &agent_id_for_engine,
+                &agent_type_for_engine,
+                /*transcript*/ None,
+            )
             .await;
 
-        // Drop per-agent frontmatter hooks now that the spawn is
-        // terminal. TS parity: `clearSessionHooks(setAppState, agentId)`
-        // in `runAgent.ts` finally block.
-        if registered_frontmatter_hooks {
-            self.clear_frontmatter_hooks(&agent_id);
-        }
+            if registered_frontmatter_hooks_for_engine
+                && let Some(reg) = hook_registry_for_engine.as_ref()
+            {
+                reg.clear_agent_scope(&agent_id_for_engine);
+            }
 
-        // Tear down dynamically-added MCP servers (no-op when none
-        // were created). TS parity: `runAgent.ts:197-210 mcpCleanup`.
-        self.cleanup_per_agent_mcp(&agent_id).await;
-
-        let (worktree_path, worktree_branch) = match (self.worktree_manager(), worktree_session) {
-            (Some(m), Some(session)) => {
-                let session_path = session.path.display().to_string();
-                match m.cleanup_if_unchanged(session) {
-                    crate::worktree::WorktreeCleanupOutcome::Removed => {
-                        // TS `executeWorktreeRemoveHook(worktreePath)`
-                        // (`worktree.ts:827`) fires only when the
-                        // worktree was actually removed. Kept paths
-                        // mean the user's work is preserved → no
-                        // remove notification.
-                        fire_worktree_remove_hook(
-                            self.hook_registry().cloned(),
-                            &self.cwd,
-                            &session_path,
-                        )
-                        .await;
-                        (None, None)
-                    }
-                    crate::worktree::WorktreeCleanupOutcome::Kept { path, branch, .. } => {
-                        (Some(path), Some(branch))
+            let dynamic_names = dynamic_mcp_servers_for_engine
+                .write()
+                .await
+                .remove(&agent_id_for_engine);
+            if let (Some(names), Some(handle)) = (dynamic_names, mcp_handle_for_engine.as_ref()) {
+                for name in names {
+                    if let Err(e) = handle.remove_dynamic_server(&name).await {
+                        tracing::debug!(
+                            error = %e,
+                            agent_id = %agent_id_for_engine,
+                            server = %name,
+                            "sync cleanup: failed to remove dynamic agent MCP server"
+                        );
                     }
                 }
             }
-            _ => (None, None),
-        };
 
-        {
-            let mut agents = self.agents().write().await;
-            if let Some(agent) = agents.iter_mut().find(|a| a.agent_id == agent_id) {
-                agent.status = match &query_result {
-                    Ok(_) => SubAgentStatus::Completed,
-                    Err(_) => SubAgentStatus::Failed,
-                };
+            let (worktree_path, worktree_branch) = match (
+                worktree_manager_for_engine.as_ref(),
+                worktree_session_for_engine,
+            ) {
+                (Some(m), Some(session)) => {
+                    let session_path = session.path.display().to_string();
+                    match m.cleanup_if_unchanged(session) {
+                        crate::worktree::WorktreeCleanupOutcome::Removed => {
+                            fire_worktree_remove_hook(
+                                hook_registry_for_engine.clone(),
+                                &cwd_for_engine,
+                                &session_path,
+                            )
+                            .await;
+                            (None, None)
+                        }
+                        crate::worktree::WorktreeCleanupOutcome::Kept { path, branch, .. } => {
+                            (Some(path), Some(branch))
+                        }
+                    }
+                }
+                _ => (None, None),
+            };
+
+            {
+                let mut agents = agents_for_engine.write().await;
+                if let Some(agent) = agents
+                    .iter_mut()
+                    .find(|a| a.agent_id == agent_id_for_engine)
+                {
+                    agent.status = match &query_result {
+                        Ok(_) => SubAgentStatus::Completed,
+                        Err(_) => SubAgentStatus::Failed,
+                    };
+                }
             }
-        }
 
-        match query_result {
-            Ok(qr) => {
-                tracing::info!(
-                    agent_id = %agent_id,
-                    agent_type = %agent_type,
-                    tool_use_count = qr.tool_use_count,
-                    tokens_in = qr.input_tokens,
-                    tokens_out = qr.output_tokens,
-                    duration_ms,
-                    "subagent spawn ok"
-                );
-                let response_text = self.classify_handoff_if_needed(agent_type, &qr).await;
-                self.summarize_handoff_if_needed(agent_type, &qr, &agent_id)
+            // ── Build AgentSpawnResponse ──────────────────────────
+            let response = match query_result {
+                Ok(qr) => {
+                    tracing::info!(
+                        agent_id = %agent_id_for_engine,
+                        agent_type = %agent_type_for_engine,
+                        tool_use_count = qr.tool_use_count,
+                        tokens_in = qr.input_tokens,
+                        tokens_out = qr.output_tokens,
+                        duration_ms,
+                        "subagent spawn ok"
+                    );
+                    let response_text = super::handoff::classify_handoff_inline(
+                        &agent_type_for_engine,
+                        &qr,
+                        side_query_for_engine.as_ref(),
+                    )
                     .await;
-                Ok(AgentSpawnResponse {
-                    status: AgentSpawnStatus::Completed,
-                    agent_id: Some(agent_id),
-                    result: response_text,
-                    error: None,
-                    total_tool_use_count: qr.tool_use_count,
-                    total_tokens: qr.input_tokens + qr.output_tokens,
-                    input_tokens: qr.input_tokens,
-                    output_tokens: qr.output_tokens,
-                    tool_use_counts: count_tool_uses_in_messages(&qr.messages),
-                    // Cache stats + per-call paths_written are
-                    // populated by the engine's QueryResult once the
-                    // wiring lands; until then default to zero/empty
-                    // so memory's hit-rate dashboards stay flat
-                    // rather than spiking on garbage.
-                    cache_read_tokens: 0,
-                    cache_creation_tokens: 0,
-                    paths_written: Vec::new(),
+                    super::handoff::summarize_handoff_inline(
+                        &agent_type_for_engine,
+                        &qr,
+                        &agent_id_for_engine,
+                        side_query_for_engine.as_ref(),
+                        &agents_for_engine,
+                    )
+                    .await;
+                    AgentSpawnResponse {
+                        status: AgentSpawnStatus::Completed,
+                        agent_id: Some(agent_id_for_engine.clone()),
+                        result: response_text,
+                        error: None,
+                        total_tool_use_count: qr.tool_use_count,
+                        total_tokens: qr.input_tokens + qr.output_tokens,
+                        input_tokens: qr.input_tokens,
+                        output_tokens: qr.output_tokens,
+                        tool_use_counts: count_tool_uses_in_messages(&qr.messages),
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
+                        paths_written: Vec::new(),
+                        duration_ms,
+                        worktree_path: worktree_path.clone(),
+                        worktree_branch: worktree_branch.clone(),
+                        output_file: None,
+                        prompt: None,
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        agent_id = %agent_id_for_engine,
+                        agent_type = %agent_type_for_engine,
+                        duration_ms,
+                        error = %e,
+                        "subagent spawn failed"
+                    );
+                    AgentSpawnResponse {
+                        status: AgentSpawnStatus::Failed,
+                        agent_id: Some(agent_id_for_engine.clone()),
+                        result: None,
+                        error: Some(e.to_string()),
+                        total_tool_use_count: 0,
+                        total_tokens: 0,
+                        duration_ms,
+                        worktree_path: worktree_path.clone(),
+                        worktree_branch: worktree_branch.clone(),
+                        output_file: None,
+                        prompt: None,
+                        ..Default::default()
+                    }
+                }
+            };
+
+            // ── Route based on detached flag ─────────────────────
+            //
+            // Two paths, always typed: build an `EngineOutcome` and
+            // send via the oneshot. The channel is **never dropped
+            // without sending**, so the inline awaiter's `Err(RecvError)`
+            // path now only fires on a true panic — not on a
+            // bg-handoff-after-engine-completion race. TS parity:
+            // `Promise.race([engine.next(), backgroundSignal])` keeps
+            // both Promises observable; we model that with a typed
+            // outcome on a single channel.
+            let was_detached = detached_flag_for_engine.load(std::sync::atomic::Ordering::SeqCst);
+            let outcome = if was_detached {
+                // Inline awaiter has likely already returned AsyncLaunched
+                // via `detach.notified()`. Push the `<task-notification>`
+                // envelope so the model rediscovers the result through the
+                // bg path (same envelope `register_background_agent_task`
+                // spawns produce). TS parity: `AgentTool.tsx:978-1029` —
+                // when `wasBackgrounded` is true, the iterator continuation
+                // calls `enqueueAgentNotification`.
+                if let (Some(reg), Some(tid)) = (
+                    task_registry_for_engine.as_ref(),
+                    task_id_for_engine.as_deref(),
+                ) {
+                    match response.status {
+                        AgentSpawnStatus::Completed => {
+                            let payload = coco_tool_runtime::AgentCompletionPayload {
+                                result: response.result.clone(),
+                                usage: Some(coco_tool_runtime::AgentUsage {
+                                    total_tokens: response.total_tokens,
+                                    tool_uses: response.total_tool_use_count as i32,
+                                    duration_ms,
+                                }),
+                                worktree: response.worktree_path.clone().map(|path| {
+                                    coco_tool_runtime::AgentWorktree {
+                                        path: path.display().to_string(),
+                                        branch: response.worktree_branch.clone(),
+                                    }
+                                }),
+                            };
+                            reg.mark_completed(tid, payload).await;
+                        }
+                        AgentSpawnStatus::Failed => {
+                            reg.mark_failed(
+                                tid,
+                                response.error.as_deref().unwrap_or("agent failed"),
+                            )
+                            .await;
+                        }
+                        _ => {}
+                    }
+                }
+                EngineOutcome::CompletedAfterDetach {
+                    agent_id: response
+                        .agent_id
+                        .clone()
+                        .unwrap_or(agent_id_for_engine.clone()),
+                    task_id: task_id_for_engine.clone(),
                     duration_ms,
-                    worktree_path,
-                    worktree_branch,
-                    output_file: None,
-                    prompt: None,
-                })
+                }
+            } else {
+                // Inline caller is still alive. Silent terminal — the
+                // response carries the outcome inline; no notification
+                // envelope (would be redundant with the tool result the
+                // model sees). TS parity: `AgentTool.tsx:957
+                // completeAgentTask` writes state but doesn't call
+                // `enqueueAgentNotification` for the sync return path.
+                if let (Some(reg), Some(tid)) = (
+                    task_registry_for_engine.as_ref(),
+                    task_id_for_engine.as_deref(),
+                ) {
+                    reg.complete_silent(
+                        tid,
+                        matches!(response.status, AgentSpawnStatus::Completed),
+                    )
+                    .await;
+                }
+                EngineOutcome::CompletedSync(Box::new(response))
+            };
+            let _ = resp_tx.send(outcome);
+        });
+
+        // ── Inline caller: race resp_rx vs detach ────────────────
+        //
+        // Three observable inputs map to three branches:
+        //
+        // | Wire                                | Path                                    |
+        // |-------------------------------------|-----------------------------------------|
+        // | `Ok(EngineOutcome::CompletedSync)`  | engine ran inline → return its response |
+        // | `Ok(EngineOutcome::CompletedAfterDetach)` | engine raced detach → AsyncLaunched (bg path pushed notification) |
+        // | `Err(RecvError)`                    | true panic in engine task               |
+        // | `detach.notified()` wins            | external Ctrl+B → AsyncLaunched         |
+        //
+        // The `Err` arm now only fires on a real panic — TS-parity with
+        // `Promise.race` where neither Promise is "dropped"; both stay
+        // observable.
+        let task_id_for_async_response = sync_task.as_ref().map(|(id, _)| id.clone());
+
+        if let Some(detach) = detach_handle_for_inline {
+            tokio::select! {
+                biased;
+                res = resp_rx => Ok(resolve_engine_outcome(
+                    res, &agent_id, task_id_for_async_response, start,
+                )),
+                () = detach.notified() => {
+                    detached_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    tracing::info!(
+                        target: "coco::agent_handle::sync",
+                        agent_id = %agent_id,
+                        "sync agent detached via signal_detach; engine continues in bg"
+                    );
+                    Ok(AgentSpawnResponse {
+                        status: AgentSpawnStatus::AsyncLaunched,
+                        agent_id: Some(task_id_for_async_response.unwrap_or(agent_id)),
+                        result: None,
+                        error: None,
+                        total_tool_use_count: 0,
+                        total_tokens: 0,
+                        duration_ms: start.elapsed().as_millis() as i64,
+                        worktree_path: None,
+                        worktree_branch: None,
+                        output_file: None,
+                        prompt: None,
+                        ..Default::default()
+                    })
+                }
             }
-            Err(e) => {
-                tracing::warn!(
-                    agent_id = %agent_id,
-                    agent_type = %agent_type,
-                    duration_ms,
-                    error = %e,
-                    "subagent spawn failed"
-                );
-                Ok(AgentSpawnResponse {
-                    status: AgentSpawnStatus::Failed,
-                    agent_id: Some(agent_id),
-                    result: None,
-                    error: Some(e.to_string()),
-                    total_tool_use_count: 0,
-                    total_tokens: 0,
-                    duration_ms,
-                    worktree_path,
-                    worktree_branch,
-                    output_file: None,
-                    prompt: None,
-                    ..Default::default()
-                })
-            }
+        } else {
+            // No detach handle (memory forks / no registry). Just
+            // await the engine task's response.
+            Ok(resolve_engine_outcome(
+                resp_rx.await,
+                &agent_id,
+                task_id_for_async_response,
+                start,
+            ))
         }
     }
 
@@ -1205,9 +1688,26 @@ impl SwarmAgentHandle {
                 .description
                 .clone()
                 .unwrap_or_else(|| agent_type.to_string());
+            // D3 / D4 (PR-1 W1): forward both the originating
+            // `Agent(...)` tool_use_id and the *invoker* agent_id
+            // (the agent that called AgentTool, not the new
+            // subagent's id) so completion notifications route
+            // correctly. TS parity: `AgentTool.tsx` passes both into
+            // `registerAsyncAgent`.
+            //
+            // PR 1 / W1: bg path uses `AgentRegistration::Background` so
+            // the task entry's `is_backgrounded` flag initializes to
+            // `true` from creation — matches TS `registerAsyncAgent`'s
+            // `isBackgrounded: true` literal (`LocalAgentTask.tsx:499`).
             Some(
-                reg.register_agent_task(&description, /*tool_use_id*/ None, cancel.clone())
-                    .await,
+                reg.register_agent_task(
+                    &description,
+                    request.tool_use_id.as_deref(),
+                    request.invoking_agent_id.as_deref(),
+                    cancel.clone(),
+                    coco_tool_runtime::AgentRegistration::Background,
+                )
+                .await,
             )
         } else {
             None
@@ -1254,12 +1754,34 @@ impl SwarmAgentHandle {
             (task_registry.clone(), task_id.clone(), event_rx)
         {
             tokio::spawn(async move {
+                // D2: per-tool ProgressTracker. TS parity:
+                // `tools/AgentTool/agentToolUtils.ts:createProgressTracker`
+                // + `tools/AgentTool/AgentTool.tsx:947-948` —
+                // increments on every ToolUseStarted and emits the
+                // tracker snapshot through `emitTaskProgress` so SDK
+                // consumers (VS Code subagent panel, JSONL transcript)
+                // observe per-tool progress.
+                //
+                // Token counts are NOT updated here — they come from
+                // the engine's final usage report after the stream
+                // finishes. The tracker carries `tool_use_count` +
+                // `last_tool_name` (matching TS's `lastToolName`).
+                let mut tracker = coco_types::TaskProgress::default();
                 while let Some(event) = rx.recv().await {
-                    if let coco_types::CoreEvent::Stream(
-                        coco_types::AgentStreamEvent::TextDelta { delta, .. },
-                    ) = event
-                    {
-                        reg.append_output(&tid, &delta).await;
+                    match event {
+                        coco_types::CoreEvent::Stream(
+                            coco_types::AgentStreamEvent::TextDelta { delta, .. },
+                        ) => {
+                            reg.append_output(&tid, &delta).await;
+                        }
+                        coco_types::CoreEvent::Stream(
+                            coco_types::AgentStreamEvent::ToolUseStarted { name, .. },
+                        ) => {
+                            tracker.tool_use_count = tracker.tool_use_count.saturating_add(1);
+                            tracker.last_tool_name = Some(name);
+                            reg.set_progress(&tid, tracker.clone()).await;
+                        }
+                        _ => {}
                     }
                 }
             });
@@ -1369,6 +1891,15 @@ impl SwarmAgentHandle {
                     };
                     if let Some(clean) = coco_subagent::sanitize_summary(&summary_text) {
                         previous = Some(clean.clone());
+                        // Write the summary to the canonical task state.
+                        // The registry impl emits a `TaskProgress` SDK
+                        // event when the value actually changes (D1 +
+                        // D7 + D14 stack). TS parity:
+                        // `LocalAgentTask.tsx:387-406 updateAgentSummary`.
+                        reg.set_progress_summary(&tid, clean.clone()).await;
+                        // Keep the swarm-side mirror for the TUI panel
+                        // during the dual-store migration window —
+                        // remove once the TUI reads via TaskManager.
                         let mut agents = agents_for_summary.write().await;
                         if let Some(state) = agents
                             .iter_mut()
@@ -1412,6 +1943,7 @@ impl SwarmAgentHandle {
         let dynamic_mcp_servers_for_task = self.dynamic_mcp_servers().clone();
         let worktree_manager_for_task = self.worktree_manager().cloned();
         let worktree_session_for_task = worktree_session.clone();
+        let bg_start = std::time::Instant::now();
         tokio::spawn(async move {
             // Fire SubagentStart hooks before kicking off execution and
             // prepend any returned context blocks to the prompt. TS
@@ -1504,9 +2036,13 @@ impl SwarmAgentHandle {
                     }
                 }
             }
+            // Clone the session so the borrow at notification-build
+            // time (below) still has access. `cleanup_if_unchanged`
+            // takes ownership of one copy; the original survives for
+            // the worktree info on the `<task-notification>` envelope.
             if let (Some(manager), Some(session)) = (
                 worktree_manager_for_task.as_ref(),
-                worktree_session_for_task,
+                worktree_session_for_task.clone(),
             ) {
                 let session_path = session.path.display().to_string();
                 if matches!(
@@ -1539,10 +2075,36 @@ impl SwarmAgentHandle {
             }
             if let (Some(reg), Some(tid)) = (registry_for_task, task_id_for_task) {
                 match outcome {
-                    // `None` because text deltas already streamed into the
-                    // buffer during execution — passing `response_text`
-                    // would double-append.
-                    Ok(_) => reg.mark_completed(&tid, /*response_text*/ None).await,
+                    Ok(qr) => {
+                        // TS `LocalAgentTask.tsx:249-251` — the
+                        // completion notification carries the
+                        // final assistant text, usage stats, and
+                        // worktree info so the model sees a rich
+                        // `<result>` / `<usage>` / `<worktree>`
+                        // envelope on the next turn.
+                        let duration_ms = bg_start.elapsed().as_millis() as i64;
+                        let result = last_assistant_text(&qr.messages);
+                        let usage = Some(coco_tool_runtime::AgentUsage {
+                            total_tokens: qr.input_tokens + qr.output_tokens,
+                            tool_uses: qr.tool_use_count as i32,
+                            duration_ms,
+                        });
+                        let worktree = worktree_session_for_task.as_ref().map(|s| {
+                            coco_tool_runtime::AgentWorktree {
+                                path: s.path.display().to_string(),
+                                branch: Some(s.branch.clone()),
+                            }
+                        });
+                        reg.mark_completed(
+                            &tid,
+                            coco_tool_runtime::AgentCompletionPayload {
+                                result,
+                                usage,
+                                worktree,
+                            },
+                        )
+                        .await;
+                    }
                     Err(e) => reg.mark_failed(&tid, &e.to_string()).await,
                 }
             }
@@ -1598,4 +2160,35 @@ fn count_tool_uses_in_messages(
         }
     }
     counts
+}
+
+/// Concatenate every assistant text part in the most recent
+/// assistant message. Used for the `<result>` section of the
+/// background-agent completion notification. TS:
+/// `LocalAgentTask.tsx:249` `finalMessage`. Returns `None` when the
+/// log has no assistant message or the last one is text-empty
+/// (tool-only turn).
+fn last_assistant_text(messages: &[std::sync::Arc<coco_messages::Message>]) -> Option<String> {
+    for arc in messages.iter().rev() {
+        let coco_messages::Message::Assistant(a) = arc.as_ref() else {
+            continue;
+        };
+        let coco_messages::LlmMessage::Assistant { content, .. } = &a.message else {
+            continue;
+        };
+        let mut chunks: Vec<String> = Vec::new();
+        for part in content {
+            if let coco_messages::AssistantContent::Text(t) = part
+                && !t.text.is_empty()
+            {
+                chunks.push(t.text.clone());
+            }
+        }
+        return if chunks.is_empty() {
+            None
+        } else {
+            Some(chunks.join("\n"))
+        };
+    }
+    None
 }

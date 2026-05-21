@@ -113,7 +113,7 @@ pub struct ForkedAgentOptions {
     /// Optional reasoning-effort override. **Setting this busts cache
     /// parity** for older models that don't have adaptive thinking.
     /// Default `None` preserves the parent's cache key.
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
     /// Hard cap on output tokens. **WARNING**: setting this clamps
     /// `budget_tokens`, breaking parent prompt-cache parity. PR #18143
     /// incident: 92.7% → 61% hit-rate. Only set when cache parity is
@@ -215,7 +215,7 @@ pub fn build_query_config(
         allowed_tools: Vec::new(),
         disallowed_tools: Vec::new(),
         extra_permission_rules: Vec::new(),
-        effort: options.effort.clone(),
+        effort: options.effort,
         // Per-fork policy: thread can_use_tool / fork_label /
         // max_output_tokens onto the child engine config so the
         // engine builder reflects them on QueryEngineConfig and
