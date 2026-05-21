@@ -55,8 +55,6 @@ use super::output::Output;
 use super::response_message::build_tool_result_message;
 use super::step_result::StepResult;
 use super::stop_condition::StopCondition;
-use super::tool_call_repair::ToolCallRepairFunction;
-use super::tool_call_repair::validate_tool_call_for_repair;
 use super::tool_error::ToolError;
 
 /// Options for `stream_text`.
@@ -94,8 +92,6 @@ pub struct StreamTextOptions {
     pub runtime_context: Option<RuntimeContext>,
     /// Tool-specific runtime contexts keyed by tool name.
     pub tools_context: ToolContextMap,
-    /// Tool call repair function for malformed tool calls.
-    pub repair_tool_call: Option<Arc<dyn ToolCallRepairFunction>>,
     /// Tool approval collector.
     pub tool_call_approval: Option<Arc<dyn ToolApprovalCollector>>,
     /// Telemetry configuration.
@@ -214,12 +210,6 @@ impl StreamTextOptions {
         context: RuntimeContext,
     ) -> Self {
         self.tools_context.insert(tool_name.into(), context);
-        self
-    }
-
-    /// Set the tool call repair function.
-    pub fn with_repair_tool_call(mut self, repair: Arc<dyn ToolCallRepairFunction>) -> Self {
-        self.repair_tool_call = Some(repair);
         self
     }
 
@@ -1163,24 +1153,6 @@ async fn stream_text_inner(
         if !tool_calls.is_empty()
             && let Some(tools_reg) = tools
         {
-            // Attempt tool call repair if configured
-            if let Some(ref repair_fn) = options.repair_tool_call {
-                let mut repaired = Vec::new();
-                for tc in &tool_calls {
-                    match validate_tool_call_for_repair(tc, tools_reg) {
-                        Ok(()) => repaired.push(tc.clone()),
-                        Err(error) => {
-                            if let Some(fixed) = repair_fn.repair(tc, &error).await {
-                                repaired.push(fixed);
-                            } else {
-                                repaired.push(tc.clone());
-                            }
-                        }
-                    }
-                }
-                tool_calls = repaired;
-            }
-
             // Collect tool approvals if configured
             if let Some(ref approval_collector) = options.tool_call_approval {
                 let requests: Vec<ToolApprovalRequest> = tool_calls

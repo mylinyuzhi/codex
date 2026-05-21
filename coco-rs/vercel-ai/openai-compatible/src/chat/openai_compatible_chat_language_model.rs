@@ -299,14 +299,13 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
             )));
         }
 
-        // Tool calls — route raw arguments through the
-        // caller-supplied parse callback (with `llm_json` repair
-        // wired by `coco-inference`). Failure → `invalid: true`.
+        // Tool calls — route raw arguments through `llm_json`-backed
+        // repair; fall back to `Value::Object({})` on failure so
+        // Layer 2 schema validation reports missing fields.
         if let Some(ref tool_calls) = choice.message.tool_calls {
             for tc in tool_calls {
-                let parsed = vercel_ai_provider_utils::parse_tool_call_arguments(
+                let input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
                     &tc.function.arguments,
-                    options.tool_input_parse_fn.as_ref(),
                     &tc.function.name,
                 );
 
@@ -337,9 +336,9 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
                         .clone()
                         .unwrap_or_else(|| vercel_ai_provider_utils::generate_id("call")),
                     tool_name: tc.function.name.clone(),
-                    input: parsed.value,
+                    input,
                     provider_executed: None,
-                    invalid: parsed.invalid,
+                    invalid: false,
                     invalid_reason: None,
                     provider_metadata: tc_provider_metadata,
                 }));

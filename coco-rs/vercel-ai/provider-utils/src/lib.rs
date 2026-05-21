@@ -57,7 +57,6 @@ pub mod load_setting;
 pub mod map_reasoning_to_provider;
 pub mod media_type;
 pub mod parse_provider_options;
-pub mod parse_tool_input;
 pub mod resolve_full_media_type;
 pub mod resolve_provider_reference;
 pub mod response_handler;
@@ -172,6 +171,7 @@ pub use inject_json_instruction::inject_json_instruction;
 pub use inject_json_instruction::inject_json_instruction_with_description;
 
 pub use json_repair::RepairOutcome;
+pub use json_repair::parse_tool_arguments_or_empty;
 pub use json_repair::parse_with_repair;
 pub use json_schema_derive::GeneratedSchema;
 pub use json_schema_derive::add_required_fields;
@@ -190,8 +190,6 @@ pub use types::ToolRegistry;
 // Streaming tool call tracking
 pub use parse_provider_options::parse_provider_options;
 pub use parse_provider_options::parse_provider_options_with_fallback;
-pub use parse_tool_input::ParsedToolInput;
-pub use parse_tool_input::parse_tool_call_arguments;
 pub use resolve_provider_reference::resolve_provider_reference;
 pub use streaming_tool_call_tracker::StreamingToolCallDelta;
 pub use streaming_tool_call_tracker::StreamingToolCallTracker;

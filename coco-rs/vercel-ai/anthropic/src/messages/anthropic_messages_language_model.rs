@@ -2318,18 +2318,20 @@ impl AnthropicStreamState {
                                     }
                                     // Intermediate parse is only needed to inject
                                     // `type` field for code_execution variants.
-                                    // On parse failure, **forward the raw
-                                    // `input_json` to the engine instead of
-                                    // re-serialising `Value::Null`** — the engine's
-                                    // `parse_tool_input` shim then runs `llm_json`
-                                    // repair on the original bytes. The previous
-                                    // `unwrap_or(Value::Null)` discarded the model's
-                                    // emission and prevented downstream repair.
+                                    // Run through `llm_json`-backed repair so the
+                                    // type-injection happy path also covers buffers
+                                    // that need trailing-comma / unquoted-key fixups.
+                                    // When repair still fails, forward the raw
+                                    // `input_json` — downstream engine consumers run
+                                    // the same repair + `{}` fallback so the model's
+                                    // emission is never silently discarded.
                                     let input_str: String = if input_json.is_empty() {
                                         "{}".to_string()
                                     } else {
-                                        match serde_json::from_str::<Value>(input_json) {
-                                            Ok(mut input) => {
+                                        match vercel_ai_provider_utils::parse_with_repair(
+                                            input_json,
+                                        ) {
+                                            Ok((mut input, _)) => {
                                                 if let Some(ptn) = provider_tool_name {
                                                     match ptn.as_str() {
                                                         "text_editor_code_execution"

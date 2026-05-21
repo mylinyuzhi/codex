@@ -158,8 +158,6 @@ pub use generate_text::{
     TextStreamPart,
     ToolCall,
     ToolCallOutcome,
-    // Tool call repair
-    ToolCallRepairFunction,
     ToolCallsPruneMode,
     // Tool error/output types
     ToolError,

@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use super::prompt::LanguageModelV4Prompt;
 use super::tool::LanguageModelV4Tool;
 use super::tool_choice::LanguageModelV4ToolChoice;
-use super::tool_input_parse::ToolInputParseHandle;
 use crate::json_schema::JSONSchema;
 use crate::shared::ProviderOptions;
 
@@ -163,23 +162,6 @@ pub struct LanguageModelV4CallOptions {
     pub include_raw_chunks: Option<bool>,
     /// Headers to include in the request.
     pub headers: Option<HashMap<String, String>>,
-    /// Caller-supplied parser for the raw stringified-JSON `arguments`
-    /// the model emits on each tool call. When set, adapters route the
-    /// raw bytes through this function before constructing
-    /// [`crate::ToolCallPart`]; failures propagate via
-    /// `ToolCallPart.invalid = true` (not silent `Value::Null`), and
-    /// repair-assisted parses emit a `warn!` log so dashboards can
-    /// monitor repair frequency.
-    ///
-    /// When unset, adapters fall back to strict [`serde_json::from_str`]
-    /// and **still** mark failed parses `invalid: true` so the caller
-    /// layer can emit a synthetic tool_result back to the LLM (TS
-    /// parity with `to-response-messages.ts:81-89`).
-    ///
-    /// See module docs on
-    /// [`super::tool_input_parse`] for the relationship with the
-    /// SDK-level `ToolCallRepairFunction` post-parse seam.
-    pub tool_input_parse_fn: Option<ToolInputParseHandle>,
 }
 
 impl LanguageModelV4CallOptions {
@@ -261,14 +243,6 @@ impl LanguageModelV4CallOptions {
     /// Set the reasoning level.
     pub fn with_reasoning(mut self, reasoning: ReasoningLevel) -> Self {
         self.reasoning = Some(reasoning);
-        self
-    }
-
-    /// Set the caller-supplied tool-input parser. Adapters route raw
-    /// tool-call `arguments` strings through it before constructing
-    /// [`crate::ToolCallPart`]. See [`Self::tool_input_parse_fn`].
-    pub fn with_tool_input_parse_fn(mut self, parse_fn: ToolInputParseHandle) -> Self {
-        self.tool_input_parse_fn = Some(parse_fn);
         self
     }
 }

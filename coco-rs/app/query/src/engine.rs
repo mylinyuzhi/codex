@@ -1466,57 +1466,26 @@ impl QueryEngine {
                             && let Some(buf) = tool_buffers.get(&id)
                             && buf.complete
                         {
-                            // Strict parse → repair fallback (trailing
-                            // commas, unquoted keys, unclosed strings /
-                            // brackets). Models occasionally emit these;
-                            // the repair pass turns "drop the call" into
-                            // "run with the obvious intent".
-                            // Parse with repair (workspace's
-                            // `coco_utils_json_repair` via the
-                            // `parse_tool_input` shim). On failure
-                            // **do not drop the call** — Anthropic's
-                            // API requires every `tool_use` to have a
-                            // matching `tool_result`, and silently
-                            // dropping the call would leave history
-                            // in a state that fails validation on the
-                            // next request. Instead build a
-                            // `ToolCallPart` with `invalid: true` so
-                            // `prepare_one_pending_tool_call` can
-                            // synthesise an error `tool_result`
-                            // telling the LLM the arguments were
-                            // malformed. TS parity with
-                            // `parse-tool-call.ts:97-117`.
-                            let (input, input_invalid): (serde_json::Value, bool) =
-                                match coco_tool_runtime::parse_tool_input(&buf.input_json) {
-                                    Ok((v, outcome)) => {
-                                        if matches!(
-                                            outcome,
-                                            coco_tool_runtime::ParseOutcome::Repaired
-                                        ) {
-                                            tracing::info!(
-                                                tool_call_id = %id,
-                                                tool_name = %buf.tool_name,
-                                                "streaming tool input JSON repaired before execution",
-                                            );
-                                        }
-                                        (v, false)
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            tool_call_id = %id,
-                                            tool_name = %buf.tool_name,
-                                            error = %e,
-                                            raw_input = %buf.input_json,
-                                            "streaming tool input JSON parse failed; \
-                                             marking invalid so prep emits an error tool_result"
-                                        );
-                                        (serde_json::Value::Null, true)
-                                    }
-                                };
+                            // Parse the accumulated `input_json` buffer
+                            // through the shared `llm_json` repair
+                            // helper, falling back to `Value::Object({})`
+                            // on failure. Mirrors TS Claude Code's
+                            // `parsed ?? {}` in `utils/messages.ts:2694`
+                            // — let Layer 2 schema validation in
+                            // `tool_call_preparer` report specific
+                            // missing fields instead of a generic
+                            // "JSON broken". `invalid` stays `false`
+                            // here; Layer 2 sets it on schema
+                            // violation.
+                            let parsed_input =
+                                crate::tool_input_parse::parse_tool_arguments_or_empty(
+                                    &buf.input_json,
+                                    &buf.tool_name,
+                                );
                             let input =
                                 crate::tool_input_normalizer::normalize_observable_tool_input(
                                     &buf.tool_name,
-                                    input,
+                                    parsed_input,
                                     crate::tool_input_normalizer::ToolInputNormalizationContext {
                                         session_id: Some(&self.config.session_id),
                                         plans_dir: plans_dir.as_deref(),
@@ -1531,7 +1500,7 @@ impl QueryEngine {
                                 tool_name: buf.tool_name.clone(),
                                 input,
                                 provider_executed: None,
-                                invalid: input_invalid,
+                                invalid: false,
                                 invalid_reason: None,
                                 provider_metadata: None,
                             };
@@ -2600,38 +2569,19 @@ fn assistant_content_from_snapshot(
                     warn!(tool_call_id = %tc.id, "tool call did not complete");
                     continue;
                 }
-                // Parse with repair — see streaming-path commentary
-                // above. Failure marks `invalid: true` so the
-                // preparer can emit a synthetic error `tool_result`;
-                // dropping the call would leave Anthropic's
-                // tool_use/tool_result pairing invariant violated.
-                let (input, input_invalid): (serde_json::Value, bool) =
-                    match coco_tool_runtime::parse_tool_input(&tc.input_json) {
-                        Ok((v, outcome)) => {
-                            if matches!(outcome, coco_tool_runtime::ParseOutcome::Repaired) {
-                                tracing::info!(
-                                    tool_call_id = %tc.id,
-                                    tool_name = %tc.tool_name,
-                                    "tool input JSON repaired before execution",
-                                );
-                            }
-                            (v, false)
-                        }
-                        Err(e) => {
-                            warn!(
-                                tool_call_id = %tc.id,
-                                tool_name = %tc.tool_name,
-                                error = %e,
-                                raw_input = %tc.input_json,
-                                "tool input JSON parse failed; \
-                                 marking invalid so prep emits an error tool_result"
-                            );
-                            (serde_json::Value::Null, true)
-                        }
-                    };
+                // Parse with repair, falling back to `Value::Object({})`
+                // on failure. See streaming-path commentary above —
+                // Layer 2 schema validation reports specific missing
+                // fields rather than a generic "JSON broken", and the
+                // tool_use/tool_result pairing invariant is preserved
+                // because we never drop the call.
+                let parsed_input = crate::tool_input_parse::parse_tool_arguments_or_empty(
+                    &tc.input_json,
+                    &tc.tool_name,
+                );
                 let input = crate::tool_input_normalizer::normalize_observable_tool_input(
                     &tc.tool_name,
-                    input,
+                    parsed_input,
                     normalizer_ctx,
                 );
                 let tcp = ToolCallPart {
@@ -2639,7 +2589,7 @@ fn assistant_content_from_snapshot(
                     tool_name: tc.tool_name.clone(),
                     input,
                     provider_executed: tc.provider_executed,
-                    invalid: input_invalid,
+                    invalid: false,
                     invalid_reason: None,
                     provider_metadata: tc.provider_metadata.clone(),
                 };

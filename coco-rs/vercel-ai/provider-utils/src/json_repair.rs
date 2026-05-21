@@ -63,6 +63,40 @@ pub fn parse_with_repair(raw: &str) -> Result<(Value, RepairOutcome), String> {
     Ok((value, RepairOutcome::Repaired))
 }
 
+/// Adapter convenience: parse raw tool-call `arguments` and fall back
+/// to `Value::Object({})` on failure (instead of `Err`). Emits a
+/// `warn!` on both repair-assisted parses and total failures so ops
+/// can monitor real-world repair frequency without sampling code.
+///
+/// Mirrors TS Claude Code's `parsed ?? {}` in
+/// `utils/messages.ts:2694` — pushing the failure signal to Layer 2
+/// schema validation lets the agent loop report specific missing
+/// fields back to the model, rather than an opaque "JSON broken".
+pub fn parse_tool_arguments_or_empty(raw: &str, tool_name: &str) -> Value {
+    match parse_with_repair(raw) {
+        Ok((v, RepairOutcome::Clean)) => v,
+        Ok((v, RepairOutcome::Repaired)) => {
+            tracing::warn!(
+                target: "vercel_ai::tool_call",
+                tool_name,
+                args_bytes = raw.len(),
+                "tool-call arguments JSON required repair before parse"
+            );
+            v
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "vercel_ai::tool_call",
+                tool_name,
+                args_bytes = raw.len(),
+                error = %err,
+                "tool-call arguments parse failed; falling back to empty object"
+            );
+            Value::Object(Default::default())
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "json_repair.test.rs"]
 mod tests;

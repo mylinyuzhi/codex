@@ -407,17 +407,16 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
             }));
         }
 
-        // Tool calls — route raw `arguments` through the
-        // caller-supplied `tool_input_parse_fn` (when wired by
-        // `coco-inference::build_call_options`, defaults to the
-        // workspace's `llm_json` repair). Failures surface as
-        // `ToolCallPart.invalid = true` so the agent loop can push
-        // a synthetic tool_result back to the model.
+        // Tool calls — route raw `arguments` through `llm_json`-backed
+        // repair. On parse failure, fall back to `Value::Object({})`
+        // (not `invalid = true`) so Layer 2 schema validation in
+        // `app/query` reports the specific missing fields instead of
+        // just "JSON broken". Mirrors TS Claude Code's `parsed ?? {}`
+        // in `utils/messages.ts:2694`.
         if let Some(ref tool_calls) = choice.message.tool_calls {
             for tc in tool_calls {
-                let parsed = vercel_ai_provider_utils::parse_tool_call_arguments(
+                let input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
                     &tc.function.arguments,
-                    options.tool_input_parse_fn.as_ref(),
                     &tc.function.name,
                 );
                 let tool_call_id = tc
@@ -427,9 +426,9 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
                 content.push(AssistantContentPart::ToolCall(ToolCallPart {
                     tool_call_id,
                     tool_name: tc.function.name.clone(),
-                    input: parsed.value,
+                    input,
                     provider_executed: None,
-                    invalid: parsed.invalid,
+                    invalid: false,
                     invalid_reason: None,
                     provider_metadata: None,
                 }));

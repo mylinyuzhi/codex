@@ -553,9 +553,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                 } => {
                     has_function_call = true;
                     let tool_name = name.clone().unwrap_or_default();
-                    let parsed = vercel_ai_provider_utils::parse_tool_call_arguments(
+                    let parsed_input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
                         arguments.as_deref().unwrap_or(""),
-                        options.tool_input_parse_fn.as_ref(),
                         &tool_name,
                     );
                     // TS upstream #14789: surface the function_call's
@@ -580,10 +579,10 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: call_id.clone().unwrap_or_default(),
                         tool_name,
-                        input: parsed.value,
+                        input: parsed_input,
                         provider_executed: None,
                         provider_metadata,
-                        invalid: parsed.invalid,
+                        invalid: false,
                         invalid_reason: None,
                     }));
                 }
@@ -592,17 +591,16 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                 } => {
                     has_function_call = true;
                     let tool_name = name.clone().unwrap_or_default();
-                    let parsed = vercel_ai_provider_utils::parse_tool_call_arguments(
+                    let parsed_input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
                         input.as_deref().unwrap_or(""),
-                        options.tool_input_parse_fn.as_ref(),
                         &tool_name,
                     );
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: id.clone().unwrap_or_default(),
                         tool_name,
-                        input: parsed.value,
+                        input: parsed_input,
                         provider_executed: Some(true),
-                        invalid: parsed.invalid,
+                        invalid: false,
                         invalid_reason: None,
                         provider_metadata: None,
                     }));

@@ -1680,6 +1680,7 @@ dependencies = [
  "coco-tool-runtime",
  "coco-tools",
  "coco-types",
+ "coco-utils-json-repair",
  "lru 0.16.4",
  "once_cell",
  "pretty_assertions",
