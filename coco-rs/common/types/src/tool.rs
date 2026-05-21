@@ -352,9 +352,18 @@ impl ToolId {
 }
 
 /// JSON Schema properties for tool input. Type is always "object" (not stored).
+///
+/// `required` lists property names that the model MUST supply. Mirrors the
+/// JSON Schema `required: [...]` array (TS zod derives this automatically from
+/// `.optional()`; Rust has no auto-derive yet — tools populate it manually).
+/// Empty `required` (the default) means every field is optional — that was the
+/// pre-`required` behaviour and stays compatible for tools that haven't
+/// adopted the field yet.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolInputSchema {
     pub properties: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required: Vec<String>,
 }
 
 // `ToolResult<T>` (which carries `Vec<Message>`) lives in `coco-messages`;

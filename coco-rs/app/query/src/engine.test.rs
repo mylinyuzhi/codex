@@ -2586,6 +2586,7 @@ impl coco_tool_runtime::Tool for AskingTool {
     fn input_schema(&self) -> coco_types::ToolInputSchema {
         coco_types::ToolInputSchema {
             properties: std::collections::HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn description(

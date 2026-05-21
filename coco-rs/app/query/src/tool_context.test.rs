@@ -35,6 +35,7 @@ fn factory_with_live_rules(
         tools: Arc::new(ToolRegistry::new()),
         cancel: CancellationToken::new(),
         mailbox: None,
+        pending_messages: None,
         task_list: None,
         team_task_list_router: None,
         todo_list: None,

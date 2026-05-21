@@ -665,6 +665,21 @@ pub struct SessionRuntime {
     /// the inner Arc at wire time). `Arc<AgentCatalogSnapshot>` is
     /// cheap to clone.
     agent_catalog: Arc<RwLock<Arc<coco_subagent::AgentCatalogSnapshot>>>,
+    /// SDK-supplied agent definitions to inject into every fresh
+    /// `AgentDefinitionStore` build (initial load + every reload).
+    /// Populated by the SDK `initialize` handler via
+    /// [`Self::set_sdk_supplied_agents`] when the client pushes an
+    /// `initialize.agents` JSON map. Stays alive across `session/start`
+    /// → `session/archive` cycles so a single SDK connection's
+    /// `initialize` payload survives multiple session boundaries.
+    ///
+    /// TS parity: `cli/print.ts:4382` calls
+    /// `parseAgentsFromJson(_, 'flagSettings')` once and threads the
+    /// result into the agent catalog for every subsequent reload.
+    /// `loadAgentsDir.ts:296-393 getAgentDefinitionsWithOverrides`
+    /// re-applies SDK agents on every reload (they're a regular
+    /// `flagSettings` source).
+    sdk_supplied_agents: Arc<RwLock<Vec<coco_types::AgentDefinition>>>,
     /// Session-scoped sandbox state. Built once at startup via
     /// [`build_sandbox_state`] and inherited by every per-turn engine
     /// (TUI), every SDK control message handler, and every fork
@@ -1255,12 +1270,22 @@ impl SessionRuntime {
         let auto_memory_enabled = runtime_config
             .features
             .enabled(coco_types::Feature::AutoMemory);
+        // Initial agent-catalog load. SDK-supplied agents from
+        // `initialize.agents` get injected here on session start —
+        // they live on `SessionRuntime.sdk_supplied_agents` until
+        // [`Self::set_sdk_supplied_agents`] is called by the SDK
+        // `initialize` handler, which fires BEFORE `session/start`.
+        // For pure TUI / SDK-less paths the Vec is empty.
         let initial_agent_snapshot = {
             let catalog = builtin_agent_catalog;
             let paths = agent_search_paths.clone();
             let cwd_for_inspector = cwd.clone();
             let home_for_inspector =
                 dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+            // SDK-supplied agents are an empty Vec at this point — the
+            // SessionRuntime is being constructed for the FIRST time;
+            // `set_sdk_supplied_agents` hasn't been called yet. The
+            // reload path picks them up once they're stashed.
             tokio::task::spawn_blocking(move || {
                 let mut store = coco_subagent::AgentDefinitionStore::new(catalog, paths);
                 store.set_snapshot_inspector(Some(
@@ -1354,6 +1379,7 @@ impl SessionRuntime {
             agent_search_paths,
             builtin_agent_catalog,
             agent_catalog,
+            sdk_supplied_agents: Arc::new(RwLock::new(Vec::new())),
             reminder_mailbox,
             transcript_store,
             transcript_dedup,
@@ -1380,6 +1406,13 @@ impl SessionRuntime {
             .runtime_config
             .features
             .enabled(coco_types::Feature::AutoMemory);
+        // Clone the SDK-supplied agents Vec into the worker. After
+        // `set_sdk_supplied_agents` populates the slot, every reload
+        // picks up the same set as additional FlagSettings entries.
+        // The Vec lives across `session/start` → `session/archive`
+        // cycles so a single SDK connection's `initialize` payload
+        // survives the whole connection lifetime.
+        let sdk_agents = self.sdk_supplied_agents.read().await.clone();
         let snapshot = tokio::task::spawn_blocking(move || {
             let mut store = coco_subagent::AgentDefinitionStore::new(catalog, paths);
             store.set_snapshot_inspector(Some(
@@ -1387,6 +1420,15 @@ impl SessionRuntime {
             ));
             store.set_auto_memory_enabled(auto_memory_enabled);
             store.load();
+            // Inject SDK-pushed agents AFTER on-disk load so they
+            // participate in source-precedence resolution (FlagSettings
+            // > ProjectSettings > UserSettings > Plugin > BuiltIn).
+            // The store re-applies precedence on each `insert_definition`,
+            // so an SDK agent with the same `agent_type` as a built-in
+            // overrides the built-in — same as TS.
+            for def in sdk_agents {
+                store.insert_definition(def);
+            }
             store.snapshot()
         })
         .await
@@ -1394,6 +1436,31 @@ impl SessionRuntime {
         if let Some(snapshot) = snapshot {
             *self.agent_catalog.write().await = snapshot;
         }
+    }
+
+    /// Replace the set of SDK-supplied agent definitions used by every
+    /// future catalog (re)load. Called by the SDK `initialize` handler
+    /// when the client pushes `initialize.agents`.
+    ///
+    /// Triggers an immediate `reload_agent_catalog()` so the new agents
+    /// land in the active snapshot before the next `turn/start` (the
+    /// engine snapshots the catalog when wiring per-turn).
+    ///
+    /// TS parity: `cli/print.ts:4382` parses + injects, then the
+    /// reload pipeline picks them up — coco-rs combines those into
+    /// one call.
+    pub async fn set_sdk_supplied_agents(&self, agents: Vec<coco_types::AgentDefinition>) {
+        let count = agents.len();
+        {
+            let mut slot = self.sdk_supplied_agents.write().await;
+            *slot = agents;
+        }
+        self.reload_agent_catalog().await;
+        tracing::info!(
+            target: "coco::session_runtime",
+            count,
+            "SDK-supplied agents applied; agent catalog reloaded"
+        );
     }
 
     /// Cheap pointer-clone of the active catalog snapshot. The returned

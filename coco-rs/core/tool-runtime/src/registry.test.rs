@@ -37,6 +37,7 @@ impl Tool for StubTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn mcp_info(&self) -> Option<&McpToolInfo> {
@@ -206,6 +207,7 @@ impl Tool for GatedTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_enabled(&self, ctx: &crate::context::ToolUseContext) -> bool {

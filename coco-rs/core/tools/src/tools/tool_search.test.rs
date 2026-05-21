@@ -249,6 +249,7 @@ mod execute_tests {
         fn input_schema(&self) -> ToolInputSchema {
             ToolInputSchema {
                 properties: Default::default(),
+                required: Vec::new(),
             }
         }
         fn search_hint(&self) -> Option<&str> {

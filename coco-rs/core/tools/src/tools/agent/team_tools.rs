@@ -57,7 +57,10 @@ impl Tool for TeamCreateTool {
                 "description": "Lead agent type (e.g. 'team-lead', 'researcher')"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn should_defer(&self) -> bool {
         true
@@ -156,6 +159,7 @@ impl Tool for TeamDeleteTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn should_defer(&self) -> bool {

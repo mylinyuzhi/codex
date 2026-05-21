@@ -44,8 +44,8 @@ use coco_tasks::{
     TaskNotification, TaskUsage as NotifTaskUsage, TerminalStatus, Worktree as NotifWorktree,
 };
 use coco_tool_runtime::{
-    AgentCompletionPayload, AgentTaskRegistry, BackgroundShellRequest, ShellTaskSpawner,
-    TaskController, TaskOutputDelta, TaskReader, TerminalOutputs, TerminalSignal,
+    AgentCompletionPayload, AgentTaskRegistry, BackgroundShellRequest, DetachOutcome,
+    ShellTaskSpawner, TaskController, TaskOutputDelta, TaskReader, TerminalOutputs, TerminalSignal,
 };
 use coco_types::{TaskStateBase, TaskStatus, TaskType};
 use tokio::sync::{Notify, watch};
@@ -170,6 +170,33 @@ impl TaskRuntime {
         invoking_agent_id: Option<&str>,
         cancel: CancellationToken,
     ) -> String {
+        self.register_agent_task_with_auto_background(
+            description,
+            tool_use_id,
+            invoking_agent_id,
+            cancel,
+            None,
+        )
+        .await
+    }
+
+    /// Variant of [`Self::register_agent_task`] that arms an auto-detach
+    /// timer for the registered task. `auto_background_ms = Some(ms)`
+    /// spawns a background `tokio::time::sleep(ms)` future that fires
+    /// `signal_detach` if the task is still running at the deadline
+    /// — TS parity with the `setTimeout` inside
+    /// `LocalAgentTask.tsx:582-608 registerAgentForeground`.
+    ///
+    /// `auto_background_ms = None` is equivalent to the no-op variant
+    /// (no timer spawned).
+    pub async fn register_agent_task_with_auto_background(
+        &self,
+        description: &str,
+        tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
+        cancel: CancellationToken,
+        auto_background_ms: Option<u64>,
+    ) -> String {
         let task_id = coco_types::generate_task_id(TaskType::LocalAgent);
         let dto = self.disk.get_or_create(&task_id).await;
         let output_path = dto.path().display().to_string();
@@ -220,13 +247,28 @@ impl TaskRuntime {
             output_path.clone(),
             dto.clone(),
             self.notification_sink.clone(),
-            cancel,
+            cancel.clone(),
         ));
+        // TS parity (`LocalAgentTask.tsx:582-608`): when `autoBackgroundMs`
+        // is set, the foreground sub-agent auto-detaches after that
+        // many ms of execution. The fg awaiter (`tool.execute`'s
+        // `select!` arm) gets the detach signal and unblocks with
+        // `AsyncLaunched`; the engine keeps running detached.
+        if let Some(ms) = auto_background_ms.filter(|v| *v > 0) {
+            spawn_agent_auto_background_timer(
+                task_id.clone(),
+                ms,
+                self.entries.clone(),
+                self.manager.clone(),
+                cancel,
+            );
+        }
         info!(
             target: "coco::task_runtime",
             task_id = %task_id,
             task_type = "local_agent",
             output_file = %output_path,
+            auto_background_ms = ?auto_background_ms,
             "agent task registered (Running, stall watchdog spawned)"
         );
         task_id
@@ -239,15 +281,15 @@ impl TaskRuntime {
     ///
     /// Mechanics:
     /// 1. CAS the per-task `detached: AtomicBool` to true. If already
-    ///    set, return `false` immediately.
+    ///    set, return [`DetachOutcome::AlreadyDetached`] immediately.
     /// 2. Mark `LocalAgentExtra.is_backgrounded = true` so the TUI
     ///    panel filter can hide the task from the fg list.
     /// 3. Call `detach.notify_one()` — wakes the fg `tool.execute`
     ///    `select!` arm awaiting `.notified()`.
     ///
-    /// Returns `false` (no signal fired) for unknown task ids.
+    /// Returns [`DetachOutcome::Unknown`] for unknown task ids.
     #[instrument(level = "info", skip(self), fields(task_id = %task_id))]
-    pub async fn signal_detach(&self, task_id: &str) -> bool {
+    pub async fn signal_detach(&self, task_id: &str) -> DetachOutcome {
         let snapshot = {
             let entries = self.entries.read().await;
             entries
@@ -260,14 +302,14 @@ impl TaskRuntime {
                 task_id,
                 "signal_detach: unknown task id"
             );
-            return false;
+            return DetachOutcome::Unknown;
         };
         // CAS gate. `swap` returns the *previous* value: if it was
         // already true, this is a no-op (TS parity:
         // `tasks/LocalAgentTask/LocalAgentTask.tsx:620-622`).
         if detached.swap(true, Ordering::SeqCst) {
             debug!(target: "coco::task_runtime", task_id, "signal_detach: already detached");
-            return false;
+            return DetachOutcome::AlreadyDetached;
         }
         // Flip the sidecar flag. Only `LocalAgent` tasks have an
         // entry in the sparse map; for `LocalBash`, `set_backgrounded`
@@ -279,7 +321,7 @@ impl TaskRuntime {
             task_id,
             "signal_detach fired; fg awaiter will receive detach notification"
         );
-        true
+        DetachOutcome::Detached
     }
 
     /// Append text to a task's on-disk output file. Returns
@@ -413,6 +455,24 @@ impl AgentTaskRegistry for TaskRuntime {
     ) -> String {
         TaskRuntime::register_agent_task(self, description, tool_use_id, invoking_agent_id, cancel)
             .await
+    }
+    async fn register_agent_task_with_auto_background(
+        &self,
+        description: &str,
+        tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
+        cancel: CancellationToken,
+        auto_background_ms: Option<u64>,
+    ) -> String {
+        TaskRuntime::register_agent_task_with_auto_background(
+            self,
+            description,
+            tool_use_id,
+            invoking_agent_id,
+            cancel,
+            auto_background_ms,
+        )
+        .await
     }
     async fn append_output(&self, task_id: &str, chunk: &str) {
         TaskRuntime::append_output(self, task_id, chunk).await
@@ -665,7 +725,7 @@ impl TaskController for TaskRuntime {
         Ok(())
     }
 
-    async fn signal_detach(&self, task_id: &str) -> bool {
+    async fn signal_detach(&self, task_id: &str) -> DetachOutcome {
         TaskRuntime::signal_detach(self, task_id).await
     }
 }
@@ -916,6 +976,59 @@ fn spawn_auto_detach_timer(
             task_id = %task_id,
             auto_detach_ms,
             "auto-detach timer fired; fg awaiter (if any) will receive detach"
+        );
+    });
+}
+
+/// TS-parity auto-background timer for foreground AgentTool spawns.
+/// Fires `signal_detach`'s inline equivalent after `auto_background_ms`
+/// of execution. Bails when the task has already terminated
+/// (the cancel token fires first) or is in a terminal state at
+/// fire time. Idempotent via the shared `detached: AtomicBool`.
+///
+/// TS source: the `setTimeout` block in `LocalAgentTask.tsx:582-608
+/// registerAgentForeground` resolves `backgroundSignalResolvers.get(agentId)`
+/// after the configured ms; coco-rs maps that to firing the per-task
+/// `Notify` so the fg `select!` arm wakes.
+fn spawn_agent_auto_background_timer(
+    task_id: String,
+    auto_background_ms: u64,
+    entries: Arc<tokio::sync::RwLock<HashMap<String, TaskEntry>>>,
+    manager: Arc<TaskManager>,
+    cancel: CancellationToken,
+) {
+    tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => return,
+            () = tokio::time::sleep(Duration::from_millis(auto_background_ms)) => {}
+        }
+        if manager
+            .get(&task_id)
+            .await
+            .is_none_or(|s| s.status.is_terminal())
+        {
+            return;
+        }
+        let snapshot = {
+            let guard = entries.read().await;
+            guard
+                .get(&task_id)
+                .map(|e| (e.detach.clone(), e.detached.clone()))
+        };
+        let Some((detach, detached)) = snapshot else {
+            return;
+        };
+        if detached.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        manager.set_backgrounded(&task_id, true).await;
+        detach.notify_one();
+        info!(
+            target: "coco::task_runtime::agent",
+            task_id = %task_id,
+            auto_background_ms,
+            "auto-background timer fired; fg awaiter (if any) will detach"
         );
     });
 }

@@ -111,12 +111,33 @@ impl TaskStatusSource for TaskManager {
             // (Pending/Running both map to TaskRunStatus::Running).
             // `delta_summary` mirrors TS `agent.progress?.summary`
             // (`compact.ts:1591-1594`).
+            // Build the `delta_summary` from the richer `TaskProgress`
+            // struct. TS source: `compact.ts:1591-1594` reads
+            // `agent.progress?.summary`. coco-rs falls back to a
+            // "$tool_use_count tool uses, $token_count tokens" sentence
+            // when the periodic summary text hasn't fired yet so the
+            // model gets *some* delta signal instead of nothing.
+            let delta_summary = extra.progress.as_ref().map(|p| {
+                p.summary.clone().unwrap_or_else(|| {
+                    let mut parts = Vec::new();
+                    if let Some(last) = p.last_tool_name.as_deref() {
+                        parts.push(format!("last action: {last}"));
+                    }
+                    if p.tool_use_count > 0 {
+                        parts.push(format!("tool uses: {}", p.tool_use_count));
+                    }
+                    if p.total_tokens > 0 {
+                        parts.push(format!("tokens: {}", p.total_tokens));
+                    }
+                    parts.join(", ")
+                })
+            });
             snapshots.push(TaskStatusSnapshot {
                 task_id: t.id,
                 description: t.description,
                 status: TaskRunStatus::Running,
                 task_type: task_type_wire_name(t.task_type).to_string(),
-                delta_summary: extra.progress_summary,
+                delta_summary,
                 output_file_path: Some(t.output_file).filter(|s| !s.is_empty()),
             });
         }

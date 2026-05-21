@@ -7,6 +7,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::ModelRole;
+use crate::ReasoningEffort;
 
 /// TS-parity built-in subagent types.
 ///
@@ -601,9 +602,24 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
 
-    /// Thinking/effort level override for this agent.
+    /// Thinking / effort selector for this agent. Typed
+    /// [`ReasoningEffort`] — the **only** legal values are enum
+    /// variants. Used as the discriminator in
+    /// `ModelInfo.supported_thinking_levels.find(|l| l.effort == effort)`
+    /// at session-runtime resolution time
+    /// (`app/cli/src/session_runtime.rs::thinking_level_for_effort_from`).
+    /// The lookup is model-relative — the same `ReasoningEffort::High`
+    /// resolves to a different `ThinkingLevel` (budget / options) on
+    /// each model, but the key itself is enum-typed.
+    ///
+    /// **Why not String + numeric form**: TS `parseEffortValue` over-
+    /// loaded the field with numeric budget values. Rust's downstream
+    /// (`thinking_level_for_effort_from`) takes `ReasoningEffort`
+    /// directly — there is no consumer for numeric input, so accepting
+    /// it produced silently-dropped values. Rejected at the frontmatter
+    /// parser with a warning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
+    pub effort: Option<ReasoningEffort>,
 
     /// Cache-identical tool schema prefixes for stable cache keys.
     #[serde(default)]

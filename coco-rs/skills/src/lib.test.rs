@@ -455,7 +455,7 @@ Run the deployment pipeline for the specified environment.
     // TS strips trailing `/**` because the `ignore` library treats a bare
     // path as matching both the path itself and its descendants.
     assert_eq!(skill.paths, vec!["src/**/*.rs", "deploy"]);
-    assert_eq!(skill.effort.as_deref(), Some("high"));
+    assert_eq!(skill.effort, Some(coco_types::ReasoningEffort::High));
     assert_eq!(skill.context, SkillContext::Fork);
     assert_eq!(skill.agent.as_deref(), Some("general-purpose"));
     assert_eq!(skill.version.as_deref(), Some("1.2.0"));

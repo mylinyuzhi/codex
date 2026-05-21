@@ -1,6 +1,52 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Progress snapshot for a running LocalAgent task. TS:
+/// `tools/AgentTool/agentToolUtils.ts` ProgressTracker + `tasks/LocalAgentTask/
+/// LocalAgentTask.tsx:127` AgentProgress.
+///
+/// Token counts come from the engine's UsageAccumulator; `last_tool_name` and
+/// `recent_activities` are recorded as the assistant emits tool_use blocks.
+/// `summary` is the periodic AgentSummary 1-2 sentence text (separate path).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskProgress {
+    /// Input tokens used so far (prompt + context). TS: `latestInputTokens`.
+    #[serde(default)]
+    pub input_tokens: i64,
+    /// Cumulative output tokens generated. TS: `cumulativeOutputTokens`.
+    #[serde(default)]
+    pub output_tokens: i64,
+    /// `total_tokens = input + output` cached for convenience. TS:
+    /// `getTokenCountFromTracker`.
+    #[serde(default)]
+    pub total_tokens: i64,
+    /// Number of tool invocations observed. TS: `toolUseCount`.
+    #[serde(default)]
+    pub tool_use_count: i32,
+    /// Most-recent tool name (for the `task_status` reminder's "last action"
+    /// field). TS: `tracker.recentActivities[length-1].tool_name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool_name: Option<String>,
+    /// Up to 5 most-recent activities (`{tool_name, summary}`), FIFO. TS:
+    /// `recentActivities` queue clamped to length 5.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_activities: Vec<TaskActivity>,
+    /// 1-2 sentence summary from the periodic AgentSummary timer. Independent
+    /// of token deltas — `updateAgentSummary` writes this; `updateAgentProgress`
+    /// preserves it (TS `LocalAgentTask.tsx:339-353`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+/// One entry in [`TaskProgress::recent_activities`]. TS:
+/// `agentToolUtils.ts:Activity { tool_name, summary }`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskActivity {
+    pub tool_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskType {
@@ -67,12 +113,18 @@ pub struct TaskStateBase {
     pub output_offset: i64,
 
     // ── LocalAgent / Dream sidecar fields (W6 / A5) ────────────────
-    /// Most recent agent-summary text. `None` until the first
-    /// periodic summary fires. Surfaced in the compact reminder so
-    /// the model sees "Progress: ..." text. TS:
-    /// `LocalAgentTask.tsx:240-241` `progress.summary`.
+    /// Live progress snapshot for the LocalAgent task. `None` until
+    /// the first message arrives / summary fires. Surfaced in the
+    /// compact reminder so the model sees "Progress: ..." text.
+    ///
+    /// TS parity: TaskStateBase.progress is an `AgentProgress` struct
+    /// carrying input/output/cumulative token counts plus a 5-deep
+    /// `recentActivities` FIFO and `lastToolName` — `LocalAgentTask.tsx:127,
+    /// 240-241, 339-353`. The legacy `progress_summary: Option<String>`
+    /// shape collapsed all of that into one freeform string, losing
+    /// granularity the `task_status` reminder needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub progress_summary: Option<String>,
+    pub progress: Option<TaskProgress>,
     /// True once `TaskOutputTool` reads the terminal output. Stops
     /// the compact reminder from announcing the same agent
     /// repeatedly. TS: `compact.ts:1578` `agent.retrieved`.

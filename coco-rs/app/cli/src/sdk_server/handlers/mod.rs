@@ -339,6 +339,18 @@ pub struct SdkServerState {
     /// cache-break detector baseline. `None` only in tests that don't
     /// wire a runtime.
     pub session_runtime: RwLock<Option<Arc<crate::session_runtime::SessionRuntime>>>,
+
+    /// Agent definitions pushed via `initialize.agents` (TS
+    /// `controlSchemas.ts:68 z.record(z.string(),
+    /// AgentDefinitionSchema)`). Stashed here at `initialize` time and
+    /// drained when the per-session `AgentDefinitionStore` is built so
+    /// SDK-supplied agents land in the catalog as `AgentSource::FlagSettings`
+    /// entries (TS parity: `parseAgentsFromJson(_, 'flagSettings')` at
+    /// `cli/print.ts:4382`).
+    ///
+    /// `RwLock` (not `Mutex`) because `agents()` in `CliInitializeBootstrap`
+    /// reads concurrently with other initialize-time accessors.
+    pub pending_sdk_agents: RwLock<Vec<coco_types::AgentDefinition>>,
 }
 
 impl Default for SdkServerState {
@@ -365,6 +377,7 @@ impl Default for SdkServerState {
             agent_progress_summaries_enabled: std::sync::atomic::AtomicBool::new(false),
             bypass_permissions_available: std::sync::atomic::AtomicBool::new(false),
             session_runtime: RwLock::new(None),
+            pending_sdk_agents: RwLock::new(Vec::new()),
         }
     }
 }

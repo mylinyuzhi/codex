@@ -745,7 +745,7 @@ impl coco_tool_runtime::TaskReader for StoppedTaskHandle {
             total_paused_ms: None,
             output_file: String::new(),
             output_offset: 0,
-            progress_summary: None,
+            progress: None,
             retrieved: false,
             retain: false,
             evict_after: None,
@@ -787,8 +787,8 @@ impl coco_tool_runtime::TaskController for StoppedTaskHandle {
     async fn kill_task(&self, _: &str) -> Result<(), coco_error::BoxedError> {
         Ok(())
     }
-    async fn signal_detach(&self, _: &str) -> bool {
-        false
+    async fn signal_detach(&self, _: &str) -> coco_tool_runtime::DetachOutcome {
+        coco_tool_runtime::DetachOutcome::Unknown
     }
 }
 

@@ -402,6 +402,15 @@ pub struct ToolUseContext {
     /// rather than silently dropping the message.
     pub mailbox: crate::MailboxHandleRef,
 
+    // ── Pending-Message Queue ──
+    /// In-memory FIFO of pending messages per recipient agent. Mirrors
+    /// TS `LocalAgentTaskState.pendingMessages` — when a running agent
+    /// receives a `SendMessage` from a peer, the message is queued here
+    /// and surfaced via the `agent_pending_messages` system-reminder on
+    /// the recipient's next turn. `NoOpPendingMessageStore` in non-swarm
+    /// contexts so tool calls become no-ops.
+    pub pending_messages: crate::PendingMessageStoreRef,
+
     // ── Working Directory Override ──
     /// CWD override for worktree-isolated agents.
     /// TS: cwdOverridePath in AgentTool.tsx
@@ -648,6 +657,7 @@ impl ToolUseContext {
             skill: self.skill.clone(),
             tool_schema_validator: self.tool_schema_validator.clone(),
             mailbox: self.mailbox.clone(),
+            pending_messages: self.pending_messages.clone(),
             cwd_override: self.cwd_override.clone(),
             allowed_write_roots: self.allowed_write_roots.clone(),
             permission_bridge: self.permission_bridge.clone(),
@@ -832,6 +842,7 @@ impl ToolUseContext {
             skill: Arc::new(crate::skill_handle::NoOpSkillHandle),
             tool_schema_validator: None,
             mailbox: Arc::new(crate::NoOpMailboxHandle),
+            pending_messages: Arc::new(crate::NoOpPendingMessageStore),
             cwd_override: None,
             allowed_write_roots: Vec::new(),
             permission_bridge: None,

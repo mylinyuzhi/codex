@@ -160,25 +160,40 @@ pub struct AgentSpawnRequest {
     /// Agent type to use (e.g., "Explore", "Plan", "general-purpose").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_type: Option<String>,
-    /// Model override (e.g., "sonnet", "opus", "haiku").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// Pin the spawn to a specific [`coco_types::ModelRole`], regardless
-    /// of what `subagent_type` would otherwise resolve to.
-    ///
-    /// Spawn-resolution precedence: `model_role > definition.model_role >
-    /// role_for_builtin(subagent_type)`. Memory forks (extract / dream /
-    /// session-memory) set this to `ModelRole::Memory` so an operator who
-    /// configured `settings.models.memory` actually steers the forks —
-    /// otherwise the `general-purpose` subagent type falls through to
-    /// `ModelRole::Subagent` and `models.memory` is decorative.
-    ///
-    /// `None` falls back to the standard precedence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_role: Option<coco_types::ModelRole>,
+    // `model` and `model_role` deliberately ABSENT from this struct.
+    // Both are operator-only static configuration:
+    //   - Per-agent: `.md` frontmatter `model:` / `model_role:` on
+    //     `AgentDefinition` — resolved at spawn time by
+    //     `coco_subagent::resolve_subagent_selection` reading from
+    //     `request.definition`.
+    //   - Internal-fork override: `AgentSpawnConstraints.forced_model_role`
+    //     (memory crate uses this to pin `ModelRole::Memory` on
+    //     extract / dream / session-memory forks).
+    //
+    // The LLM cannot pick either of these — AgentTool's
+    // `input_schema()` doesn't expose them. Catalog-only principle:
+    // static configuration is the source of truth for model routing.
+    // See the root CLAUDE.md "Multi-Provider Boundaries" rule.
     /// Run in background (fire-and-forget).
     #[serde(default)]
     pub run_in_background: bool,
+    /// Auto-detach a foreground spawn after N milliseconds. When set
+    /// to `Some(d)` and `run_in_background == false`, the runtime
+    /// fires [`crate::TaskController::signal_detach`] after `d` ms of
+    /// foreground execution; the parent's awaiter unblocks with
+    /// `AsyncLaunched` and the engine keeps running detached.
+    ///
+    /// TS parity: `AgentTool.tsx:826` passes `autoBackgroundMs:
+    /// getAutoBackgroundMs() || undefined` into
+    /// `registerAgentForeground`. `getAutoBackgroundMs` returns
+    /// `120_000` ms when `CLAUDE_AUTO_BACKGROUND_TASKS` env or the
+    /// `tengu_auto_background_agents` GrowthBook flag is on, else `0`
+    /// (disabled).
+    ///
+    /// `None` = no auto-detach (the default; only explicit user-initiated
+    /// `signal_detach` will background the task).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_background_ms: Option<u64>,
     /// Whether the spawn should run periodic AgentSummary timers
     /// (TS parity: `AgentTool.tsx:750`'s `enableSummarization`).
     /// Computed at the AgentTool boundary as `is_coordinator_mode
@@ -211,34 +226,22 @@ pub struct AgentSpawnRequest {
     /// Working directory override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
-    /// Reasoning effort override (TS `AgentTool.tsx` `effort` input).
-    /// Maps to the engine's thinking-level configuration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
-    /// Use exact (cache-identical) parent tool definitions instead of
-    /// re-rendering the agent's own pool. TS `runAgent.ts:624` —
-    /// preserves prompt-cache prefix.
-    #[serde(default)]
-    pub use_exact_tools: bool,
-    /// Per-agent MCP server allow-list. TS `runAgent.ts:50+`,
-    /// `AgentTool.tsx:206` — when non-empty, only these MCP servers'
-    /// tools are exposed to the child.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_servers: Vec<String>,
-    /// Per-agent tool deny-list. TS `agentToolUtils.ts:122-160`. Layer
-    /// 4 of the filter pipeline; intersected with `parent_tool_filter`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub disallowed_tools: Vec<String>,
-    /// Hard cap on agent turns. TS `runAgent.ts:624`. `None` = engine
-    /// default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_turns: Option<i32>,
-    /// Inline initial-message text override. TS `loadAgentsDir.ts`
-    /// `initial_prompt` field — when set, replaces the default
-    /// agent-definition prompt body. Useful for one-off subagent
-    /// spawns that don't match a registered agent type.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_prompt: Option<String>,
+    // Note: the following fields are NOT on `AgentSpawnRequest`. They
+    // were dead pass-through slots — TS doesn't expose them in the
+    // AgentTool input schema, and no Rust caller ever set them; the
+    // coordinator now reads them directly from `AgentDefinition` via
+    // `request.definition` when building RunnerConfig / QueryConfig.
+    // Single source of truth, no shadowing.
+    //
+    // - `effort` → `AgentDefinition.effort`
+    // - `use_exact_tools` → `AgentDefinition.use_exact_tools`
+    // - `mcp_servers` → `AgentDefinition.mcp_servers` (mapped via
+    //   `AgentMcpServerSpec::name()`)
+    // - `disallowed_tools` → `AgentDefinition.disallowed_tools`
+    // - `max_turns` → `AgentDefinition.max_turns` (or
+    //   `AgentSpawnConstraints.max_turns` when the constraints layer
+    //   provides a tighter cap — memory forks set this)
+    // - `initial_prompt` → `AgentDefinition.initial_prompt`
     /// Parent's resolved feature gates, threaded through so the
     /// subagent runs with the same Layer 1 set. Skipped at the JSON
     /// boundary; the parent fills it in-process before handing off.

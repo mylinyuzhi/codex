@@ -543,6 +543,7 @@ impl QueryEngine {
             tools: self.tools.clone(),
             cancel: self.cancel.clone(),
             mailbox: self.mailbox.clone(),
+            pending_messages: self.pending_messages.clone(),
             task_list: self.task_list.clone(),
             team_task_list_router: self.team_task_list_router.clone(),
             todo_list: self.todo_list.clone(),

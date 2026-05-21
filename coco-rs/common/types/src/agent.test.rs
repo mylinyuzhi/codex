@@ -268,7 +268,7 @@ fn test_agent_definition_serde_roundtrip() {
         filename: Some("researcher.md".into()),
         base_dir: Some(".coco/agents".into()),
         system_prompt: Some("You are a code researcher.".into()),
-        effort: Some("high".into()),
+        effort: Some(crate::ReasoningEffort::High),
         use_exact_tools: true,
         model: Some("anthropic/claude-opus-4-7".into()),
         isolation: AgentIsolation::Worktree,
@@ -298,7 +298,7 @@ fn test_agent_definition_serde_roundtrip() {
         parsed.system_prompt.as_deref(),
         Some("You are a code researcher.")
     );
-    assert_eq!(parsed.effort.as_deref(), Some("high"));
+    assert_eq!(parsed.effort, Some(crate::ReasoningEffort::High));
     assert!(parsed.use_exact_tools);
     assert_eq!(parsed.model.as_deref(), Some("anthropic/claude-opus-4-7"));
     assert_eq!(parsed.isolation, AgentIsolation::Worktree);

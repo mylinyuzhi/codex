@@ -57,7 +57,7 @@ pub struct AgentContext {
     /// Whether unlisted tools can show permission prompts.
     pub allow_permission_prompts: bool,
     /// Thinking/effort level override.
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
     /// Cache-identical tool schema prefixes.
     pub use_exact_tools: bool,
     /// Isolation mode for the execution environment.
@@ -113,7 +113,7 @@ pub struct SpawnConfig {
     /// Whether unlisted tools can trigger permission prompts.
     pub allow_permission_prompts: bool,
     /// Thinking/effort level override.
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
     /// Cache-identical tool schema prefixes.
     pub use_exact_tools: bool,
     /// Isolation mode for the execution environment.

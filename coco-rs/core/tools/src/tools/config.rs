@@ -58,7 +58,10 @@ impl Tool for ConfigTool {
             "value".into(),
             serde_json::json!({"description": "Configuration value (for set)"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     /// TS `ConfigTool.ts`: `isConcurrencySafe() { return true }`. Read paths

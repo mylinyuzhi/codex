@@ -354,7 +354,10 @@ impl Tool for GrepTool {
                 "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."
             }),
         );
-        ToolInputSchema { properties: props }
+        ToolInputSchema {
+            properties: props,
+            required: Vec::new(),
+        }
     }
 
     /// Grep never modifies state (TS: `isReadOnly() = true`).

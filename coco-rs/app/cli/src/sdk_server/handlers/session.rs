@@ -59,6 +59,63 @@ pub(super) async fn handle_initialize(
         info!("SdkServer: agentProgressSummaries enabled by client");
     }
 
+    // TS parity (`cli/print.ts:4382`): when the SDK client pushes
+    // `initialize.agents`, parse the JSON map into `AgentDefinition`
+    // entries (tagged `AgentSource::FlagSettings`) and stash them on
+    // `SdkServerState` so:
+    //   - the `agents()` listing below merges them into the response;
+    //   - `session/start` drains the stash into the new session's
+    //     `AgentDefinitionStore` (Phase 2 wiring).
+    //
+    // Parse failures don't fail the initialize handshake — TS logs
+    // and continues with the accepted subset (`logForDebugging` +
+    // `logError`). Match here.
+    if let Some(agents_map) = params.agents.as_ref() {
+        let (accepted, errors) =
+            crate::sdk_server::cli_bootstrap::parse_sdk_agent_definitions(agents_map);
+        if !errors.is_empty() {
+            for err in &errors {
+                tracing::warn!(target: "coco::sdk_server::initialize", "SDK agent parse error: {err}");
+            }
+        }
+        let accepted_count = accepted.len();
+        if accepted_count > 0 {
+            // Stash on SdkServerState first (so the agents()
+            // listing below sees them in this initialize response,
+            // even when the SessionRuntime isn't wired yet — e.g.
+            // in tests).
+            {
+                let mut stash = ctx.state.pending_sdk_agents.write().await;
+                // Replace (not extend) — `initialize` is a fresh handshake;
+                // a prior connection's stash should not bleed into this one.
+                *stash = accepted.clone();
+            }
+            // Inject into the live SessionRuntime so subsequent
+            // `turn/start` spawns can actually use the SDK-supplied
+            // agents (Phase 2 wiring: TS parity with
+            // `cli/print.ts:4382` calling `parseAgentsFromJson` +
+            // immediate reload).
+            //
+            // The SessionRuntime is None in tests; the stash-only
+            // branch above still gives the wire response correct
+            // contents.
+            if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
+                runtime.set_sdk_supplied_agents(accepted).await;
+                info!(
+                    target: "coco::sdk_server::initialize",
+                    count = accepted_count,
+                    "SDK-supplied agents injected into SessionRuntime catalog"
+                );
+            } else {
+                info!(
+                    target: "coco::sdk_server::initialize",
+                    count = accepted_count,
+                    "SDK-supplied agents stashed (no SessionRuntime yet)"
+                );
+            }
+        }
+    }
+
     // Pull the bootstrap provider out of state, drop the read guard, then
     // call its async accessors. Holding the guard across awaits would
     // block any concurrent mutation (e.g. a hot-swap via builder).
@@ -67,7 +124,7 @@ pub(super) async fn handle_initialize(
         slot.as_ref().map(Arc::clone)
     };
 
-    let (commands, agents, account, output_style, available_output_styles, fast_mode_state) =
+    let (commands, mut agents, account, output_style, available_output_styles, fast_mode_state) =
         if let Some(b) = bootstrap {
             (
                 b.commands().await,
@@ -87,6 +144,26 @@ pub(super) async fn handle_initialize(
                 None,
             )
         };
+
+    // Merge SDK-supplied agents into the response listing so the client
+    // immediately sees what it pushed (TS parity: `cli/print.ts:4382`
+    // injects parsed agents into the catalog before the initialize
+    // response is built). Stashed entries always win — they're the
+    // freshest user intent.
+    {
+        let stash = ctx.state.pending_sdk_agents.read().await;
+        if !stash.is_empty() {
+            let stash_names: std::collections::HashSet<String> =
+                stash.iter().map(|d| d.agent_type.to_string()).collect();
+            agents.retain(|a| !stash_names.contains(&a.name));
+            agents.extend(stash.iter().cloned().map(|d| coco_types::SdkAgentInfo {
+                name: d.name,
+                description: d.description.unwrap_or_default(),
+                model: d.model,
+            }));
+            agents.sort_by(|a, b| a.name.cmp(&b.name));
+        }
+    }
 
     let result = InitializeResult {
         commands,

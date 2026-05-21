@@ -17,6 +17,7 @@ use coco_types::CoreEvent;
 use coco_types::ServerNotification;
 use coco_types::TaskCompletedParams;
 use coco_types::TaskCompletionStatus;
+use coco_types::TaskProgress;
 use coco_types::TaskProgressParams;
 use coco_types::TaskStartedParams;
 use coco_types::TaskStateBase;
@@ -45,7 +46,7 @@ pub const PANEL_GRACE_MS: i64 = 30_000;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LocalAgentExtra {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub progress_summary: Option<String>,
+    pub progress: Option<TaskProgress>,
     #[serde(default)]
     pub retrieved: bool,
     #[serde(default)]
@@ -59,7 +60,7 @@ pub struct LocalAgentExtra {
 impl From<&TaskStateBase> for LocalAgentExtra {
     fn from(t: &TaskStateBase) -> Self {
         Self {
-            progress_summary: t.progress_summary.clone(),
+            progress: t.progress.clone(),
             retrieved: t.retrieved,
             retain: t.retain,
             evict_after: t.evict_after,
@@ -120,10 +121,34 @@ impl TaskManager {
             .unwrap_or_default()
     }
 
-    /// Update a LocalAgent task's progress summary. Idempotent.
+    /// Update a LocalAgent task's progress summary text. Preserves
+    /// existing token / activity counters — TS parity with
+    /// `updateAgentSummary` (`LocalAgentTask.tsx:359-407`) which writes
+    /// only the `summary` field on the AgentProgress struct.
     pub async fn set_progress_summary(&self, id: &str, summary: String) {
         if let Some(t) = self.tasks.write().await.get_mut(id) {
-            t.progress_summary = Some(summary);
+            let mut progress = t.progress.clone().unwrap_or_default();
+            progress.summary = Some(summary);
+            t.progress = Some(progress);
+        }
+    }
+
+    /// Replace a LocalAgent task's full progress snapshot. Used by the
+    /// engine's per-message updater to refresh token counts +
+    /// `recent_activities`. TS: `updateAgentProgress`
+    /// (`LocalAgentTask.tsx:339-353`) — preserves an existing `summary`
+    /// across overlapping writes.
+    pub async fn set_progress(&self, id: &str, mut progress: TaskProgress) {
+        if let Some(t) = self.tasks.write().await.get_mut(id) {
+            // Preserve any existing summary; otherwise an interleaved
+            // `updateAgentProgress` from the stream would clobber the
+            // periodic AgentSummary text.
+            if progress.summary.is_none()
+                && let Some(existing) = t.progress.as_ref().and_then(|p| p.summary.clone())
+            {
+                progress.summary = Some(existing);
+            }
+            t.progress = Some(progress);
         }
     }
 
@@ -231,7 +256,7 @@ impl TaskManager {
             output_file: output_file.to_string(),
             output_offset: 0,
             // W6 (A5): merged sidecar fields default to "not set".
-            progress_summary: None,
+            progress: None,
             retrieved: false,
             retain: false,
             evict_after: None,

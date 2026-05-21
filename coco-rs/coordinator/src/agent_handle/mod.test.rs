@@ -901,15 +901,27 @@ async fn test_spawn_teammate_forwards_runner_query_options() {
     }));
     create_team(&handle, &team_name).await;
 
+    // Static effort lives on `AgentDefinition.effort`; the coordinator
+    // All static knobs (effort / use_exact_tools / mcp_servers /
+    // disallowed_tools / max_turns / initial_prompt) live on
+    // `AgentDefinition` and are read via `request.definition` at
+    // RunnerConfig assembly time. Per-spawn override slots on the
+    // request struct are gone (audit pass: dead-field cleanup).
+    let def = std::sync::Arc::new(coco_types::AgentDefinition {
+        agent_type: coco_types::AgentTypeId::Custom("worker".into()),
+        name: "worker".into(),
+        effort: Some(coco_types::ReasoningEffort::High),
+        use_exact_tools: true,
+        mcp_servers: vec![coco_types::AgentMcpServerSpec::Name("github".into())],
+        disallowed_tools: vec!["Bash".into()],
+        ..Default::default()
+    });
     handle
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
             name: Some("worker".into()),
             team_name: Some(team_name.clone()),
-            effort: Some("high".into()),
-            use_exact_tools: true,
-            mcp_servers: vec!["github".into()],
-            disallowed_tools: vec!["Bash".into()],
+            definition: Some(def),
             ..Default::default()
         })
         .await
@@ -922,7 +934,7 @@ async fn test_spawn_teammate_forwards_runner_query_options() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     let observed = captured.lock().await.clone().expect("engine ran");
-    assert_eq!(observed.effort.as_deref(), Some("high"));
+    assert_eq!(observed.effort, Some(coco_types::ReasoningEffort::High));
     assert!(observed.use_exact_tools);
     assert_eq!(observed.mcp_servers, vec!["github"]);
     assert_eq!(observed.disallowed_tools, vec!["Bash"]);

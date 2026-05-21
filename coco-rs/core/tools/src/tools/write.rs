@@ -63,7 +63,10 @@ impl Tool for WriteTool {
                 "description": "The content to write to the file"
             }),
         );
-        ToolInputSchema { properties: props }
+        ToolInputSchema {
+            properties: props,
+            required: Vec::new(),
+        }
     }
 
     fn is_destructive(&self, _input: &Value) -> bool {

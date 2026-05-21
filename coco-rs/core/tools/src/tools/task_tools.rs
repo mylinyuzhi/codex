@@ -254,7 +254,10 @@ impl Tool for TaskCreateTool {
             "metadata".into(),
             serde_json::json!({"type": "object", "description": "Arbitrary metadata to attach to the task"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
@@ -380,7 +383,10 @@ impl Tool for TaskGetTool {
             "taskId".into(),
             serde_json::json!({"type": "string", "description": "The task ID to look up"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::TaskV2)
@@ -498,6 +504,7 @@ impl Tool for TaskListTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
@@ -662,7 +669,10 @@ impl Tool for TaskUpdateTool {
                 "description": "Metadata keys to merge (set key to null to delete)"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
@@ -1083,7 +1093,10 @@ impl Tool for TaskStopTool {
                 "description": "Legacy camelCase alias for task_id."
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     fn is_concurrency_safe(&self, _: &Value) -> bool {
@@ -1213,7 +1226,10 @@ impl Tool for TaskOutputTool {
                 "description": "Blocking timeout in milliseconds (default 30000). Polls every 100ms."
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         true
@@ -1438,7 +1454,10 @@ impl Tool for TodoWriteTool {
                 }
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn should_defer(&self) -> bool {
         true

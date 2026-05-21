@@ -142,7 +142,10 @@ impl Tool for CronCreateTool {
                 "description": "true = persist to .claude/scheduled_tasks.json and survive restarts. false (default) = in-memory only, dies when this Claude session ends."
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn should_defer(&self) -> bool {
         true
@@ -304,7 +307,10 @@ impl Tool for CronDeleteTool {
             "schedule_id".into(),
             serde_json::json!({"type": "string", "description": "ID of the schedule to delete"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn should_defer(&self) -> bool {
         true
@@ -368,6 +374,7 @@ impl Tool for CronListTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_read_only(&self, _: &Value) -> bool {
@@ -511,7 +518,10 @@ impl Tool for RemoteTriggerTool {
                 "description": "JSON body for create and update actions"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, input: &Value) -> bool {
         matches!(

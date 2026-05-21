@@ -40,7 +40,10 @@ impl Tool for McpAuthTool {
                 "description": "Name of the MCP server to authenticate with"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     async fn check_permissions(
@@ -126,7 +129,10 @@ impl Tool for ListMcpResourcesTool {
                 "description": "Optional MCP server name to filter resources"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         true
@@ -235,7 +241,10 @@ impl Tool for ReadMcpResourceTool {
                 "description": "URI of the resource to read"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         true
@@ -362,7 +371,10 @@ impl McpTool {
                 tool_name,
             },
             tool_description: description,
-            schema: ToolInputSchema { properties },
+            schema: ToolInputSchema {
+                properties,
+                required: Vec::new(),
+            },
             annotations,
         }
     }

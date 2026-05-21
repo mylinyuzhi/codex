@@ -30,6 +30,7 @@ impl crate::traits::Tool for SafeTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
@@ -68,6 +69,7 @@ impl crate::traits::Tool for UnsafeTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
@@ -187,6 +189,7 @@ impl crate::traits::Tool for SlowSafeTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
@@ -234,6 +237,7 @@ impl crate::traits::Tool for PatchSafeTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {

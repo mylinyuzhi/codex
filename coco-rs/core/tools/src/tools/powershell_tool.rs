@@ -95,7 +95,10 @@ impl Tool for PowerShellTool {
                 "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     /// Mirror Bash's read-only fast path. TS

@@ -230,6 +230,7 @@ impl Tool for EnterPlanModeTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
     fn is_read_only(&self, _: &Value) -> bool {
@@ -423,7 +424,10 @@ impl Tool for ExitPlanModeTool {
                 }
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         false

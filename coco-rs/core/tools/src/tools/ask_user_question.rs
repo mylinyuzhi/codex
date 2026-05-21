@@ -174,7 +174,10 @@ impl Tool for AskUserQuestionTool {
                 }
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     fn requires_user_interaction(&self) -> bool {

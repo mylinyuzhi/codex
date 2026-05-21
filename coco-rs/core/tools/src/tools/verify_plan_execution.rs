@@ -70,7 +70,10 @@ impl Tool for VerifyPlanExecutionTool {
                 "description": "Any remaining issues or gaps found during verification. Leave empty when none."
             }),
         );
-        ToolInputSchema { properties }
+        ToolInputSchema {
+            properties,
+            required: Vec::new(),
+        }
     }
 
     fn is_read_only(&self, _: &Value) -> bool {

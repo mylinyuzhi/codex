@@ -15,7 +15,86 @@ use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Default `auto_background_ms` when `COCO_AUTO_BACKGROUND_TASKS` is
+/// truthy but doesn't carry a numeric value. Matches TS
+/// `getAutoBackgroundMs() = 120_000` (`AgentTool.tsx:74`).
+pub const DEFAULT_AUTO_BACKGROUND_MS: u64 = 120_000;
+
+/// Typed envelope returned by [`AgentTool::execute`] and consumed by
+/// [`AgentTool::render_for_model`]. Replaces the previous untyped
+/// `serde_json::Value` round-trip — both producer and consumer live in
+/// this crate, so a discriminated union is strictly type-safer and
+/// matches TS's tagged union (`AgentToolToolResultParam`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AgentSpawnRenderResult {
+    /// Synchronous spawn returned a final result.
+    Completed {
+        /// Final assistant text (after `EMPTY_AGENT_OUTPUT_MARKER`
+        /// fallback for silent agents).
+        content: String,
+        /// Echo of the original prompt the model supplied.
+        prompt: String,
+        /// Spawned agent id. Stripped from the model-visible trailer
+        /// for one-shot built-ins when no worktree info is present.
+        #[serde(rename = "agentId")]
+        agent_id: Option<String>,
+        /// Aggregate tool-use count.
+        #[serde(rename = "totalToolUseCount")]
+        total_tool_use_count: i64,
+        /// Combined input + output tokens.
+        #[serde(rename = "totalTokens")]
+        total_tokens: i64,
+        /// Wall-clock duration of the spawn.
+        #[serde(rename = "durationMs")]
+        duration_ms: i64,
+        /// True iff `subagent_type` is in `ONE_SHOT_BUILTIN_AGENT_TYPES`.
+        /// Drives the "drop agentId trailer" rendering branch.
+        #[serde(rename = "oneShot")]
+        one_shot: bool,
+        /// Set when isolation was `"worktree"`.
+        #[serde(rename = "worktreePath", skip_serializing_if = "Option::is_none")]
+        worktree_path: Option<String>,
+        #[serde(rename = "worktreeBranch", skip_serializing_if = "Option::is_none")]
+        worktree_branch: Option<String>,
+    },
+    /// Background spawn started; the model receives an immediate ack
+    /// and the result will arrive via a `<task-notification>`.
+    AsyncLaunched {
+        #[serde(rename = "agentId")]
+        agent_id: Option<String>,
+        prompt: String,
+        description: Option<String>,
+        #[serde(rename = "outputFile", skip_serializing_if = "Option::is_none")]
+        output_file: Option<String>,
+        #[serde(rename = "canReadOutputFile", skip_serializing_if = "Option::is_none")]
+        can_read_output_file: Option<bool>,
+    },
+    /// Teammate spawned into the active team via `name` / `team_name`.
+    TeammateSpawned {
+        #[serde(rename = "agentId")]
+        agent_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(rename = "team_name", skip_serializing_if = "Option::is_none")]
+        team_name: Option<String>,
+    },
+    /// Spawn failed before the engine could produce a response.
+    Failed { error: String },
+}
+
+impl AgentSpawnRenderResult {
+    /// Convenience: `serde_json::to_value` for callers that still
+    /// stage the data inside the legacy `ToolResult.data: Value`
+    /// field. Internal consumers should prefer the typed variant
+    /// directly via `match`.
+    pub fn into_value(&self) -> Value {
+        serde_json::to_value(self).unwrap_or(Value::Null)
+    }
+}
 
 pub struct AgentTool;
 
@@ -87,6 +166,34 @@ impl Tool for AgentTool {
         true
     }
 
+    /// TS-mirror schema (`AgentTool.tsx:82-101`).
+    ///
+    /// Fields exposed (11):
+    /// - `description`, `prompt`, `subagent_type`, `model`, `run_in_background`
+    ///   from TS `baseInputSchema`.
+    /// - `name`, `team_name`, `mode` from TS `multiAgentInputSchema`.
+    /// - `isolation`, `cwd` from TS `fullInputSchema` (TS gates `cwd` behind
+    ///   `feature('KAIROS')`; coco-rs exposes it unconditionally — operators
+    ///   wanting to hide it can use `disallowed_tool_params` once that gate
+    ///   lands).
+    /// - `model_role` is coco-rs-specific (multi-LLM addition, no TS
+    ///   equivalent — TS is Anthropic-only and uses `model` aliases
+    ///   directly).
+    ///
+    /// Fields NOT exposed (TS internal-only knobs that coco-rs callers set
+    /// on `AgentSpawnRequest` directly): `effort`, `use_exact_tools`,
+    /// `mcp_servers`, `disallowed_tools`, `max_turns`, `initial_prompt`.
+    /// Memory crate / coordinator resume populate these from frontmatter
+    /// or service-internal logic — exposing them to the LLM was a
+    /// coco-rs-only extension that diverged from TS.
+    ///
+    /// **Schema-honesty gap (tracked)**: TS dynamically `.omit({
+    /// run_in_background: true })` when `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`
+    /// is set or fork mode is enabled. coco-rs's `Tool::input_schema(&self)`
+    /// trait method has no options parameter, so this gating happens at
+    /// runtime in `execute()` instead (the value is silently overridden when
+    /// `COCO_BACKGROUND_TASKS_DISABLE` is set). A typed `input_schema(opts)`
+    /// migration would close this gap.
     fn input_schema(&self) -> ToolInputSchema {
         let mut p = HashMap::new();
         p.insert(
@@ -107,62 +214,66 @@ impl Tool for AgentTool {
             "subagent_type".into(),
             serde_json::json!({
                 "type": "string",
-                "description": "The type of specialized agent to use (e.g., 'Explore', 'Plan', 'general-purpose')"
+                "description": "The type of specialized agent to use for this task"
             }),
         );
-        p.insert(
-            "model".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Optional concrete model override in provider/model_id format"
-            }),
-        );
+        // Note: NEITHER `model` NOR `model_role` is in the model-facing
+        // schema. Both are operator-only knobs:
+        //   - `model` (e.g. `openai/gpt-4o`) — set in `.md` frontmatter
+        //     `model:` field by the author who knows the target provider.
+        //   - `model_role` (e.g. `Fast`, `Explore`) — set in `.md`
+        //     frontmatter `model_role:` field or derived from the
+        //     `subagent_type → ModelRole` built-in mapping.
+        //
+        // Why neither is LLM-pickable:
+        //   - `model` requires knowledge of operator's `provider/model_id`
+        //     configuration; coco-rs is multi-LLM so there is no closed
+        //     enum the LLM can choose from.
+        //   - `model_role` requires knowing operator's role mappings
+        //     in `settings.models.<role>`; even if the LLM picks a role,
+        //     it's pretending to make an informed choice it can't make.
+        //
+        // The catalog-only principle (matching TS) says: static
+        // configuration is the source of truth, the LLM picks an agent
+        // by `subagent_type` (semantic identity), and the operator
+        // owns model selection. See the root CLAUDE.md "Multi-Provider
+        // Boundaries" rule.
         p.insert(
             "run_in_background".into(),
             serde_json::json!({
                 "type": "boolean",
-                "description": "Set to true to run this agent in the background"
+                "description": "Set to true to run this agent in the background. You will be notified when it completes."
             }),
         );
         p.insert(
             "isolation".into(),
             serde_json::json!({
                 "type": "string",
-                // TS `AgentTool.tsx:99`: ant builds expose `["worktree", "remote"]`,
-                // 3p builds expose `["worktree"]` only. coco-rs accepts both values
-                // for schema compatibility — the remote path delegates to CCR via
-                // the AgentHandle implementation, which can return an error if the
-                // current build doesn't support remote isolation. `none` is the
-                // explicit "no isolation" value (same behavior as omitting the
-                // field) — included so models that pass an explicit value can
-                // select it without falling outside the enum.
-                "description": "Isolation mode. 'worktree' creates a temporary git worktree so the agent works on an isolated copy of the repo. 'remote' launches the agent in a remote CCR environment (always runs in background). 'none' (or omit) runs in the parent's working directory.",
-                "enum": ["none", "worktree", "remote"]
+                "enum": ["worktree"],
+                "description": "Isolation mode. \"worktree\" creates a temporary git worktree so the agent works on an isolated copy of the repo."
             }),
         );
         p.insert(
             "name".into(),
             serde_json::json!({
                 "type": "string",
-                "description": "Agent name for multi-agent teams (used with team_name)"
+                "description": "Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running."
             }),
         );
         p.insert(
             "team_name".into(),
             serde_json::json!({
                 "type": "string",
-                "description": "Team name for spawning a teammate"
+                "description": "Team name for spawning. Uses current team context if omitted."
             }),
         );
         p.insert(
             "mode".into(),
             serde_json::json!({
                 "type": "string",
-                "description": "Permission mode override applied to the spawned subagent (subject to TS parent→child inheritance rule: trust modes on parent override agent's declared mode).",
-                // Mirrors `coco_types::PermissionMode` wire form (camelCase).
-                // Listing the enum lets the model know which values
-                // round-trip through `serde_json::from_value::<PermissionMode>`
-                // — anything outside the set is silently dropped at parse.
+                // PermissionMode wire form (camelCase). Listing the
+                // enum lets the model know which values round-trip
+                // through `serde_json::from_value::<PermissionMode>`.
                 "enum": [
                     "default",
                     "plan",
@@ -173,154 +284,121 @@ impl Tool for AgentTool {
                     "auto",
                     "ask",
                     "deny"
-                ]
+                ],
+                "description": "Permission mode for spawned teammate (e.g., \"plan\" to require plan approval)."
             }),
         );
         p.insert(
             "cwd".into(),
             serde_json::json!({
                 "type": "string",
-                "description": "Working directory override for the agent"
+                "description": "Absolute path to run the agent in. Overrides the working directory for all filesystem and shell operations within this agent. Mutually exclusive with isolation: \"worktree\"."
             }),
         );
-        p.insert(
-            "effort".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Reasoning effort override for the spawned agent. Mapped to a `ThinkingLevel` and threaded into `PerCallOverrides.thinking_level` at the engine boundary. `max` is an alias for the highest tier.",
-                // Mirrors the canonical set accepted by
-                // `coco_types::ReasoningEffort::from_str` (and the
-                // frontmatter parser's `validate_effort`). Keep this
-                // list aligned with the enum's `FromStr` impl.
-                "enum": ["none", "minimal", "low", "medium", "high", "max"]
-            }),
-        );
-        p.insert(
-            "use_exact_tools".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Reuse the parent's exact tool definitions for prompt-cache parity"
-            }),
-        );
-        p.insert(
-            "mcp_servers".into(),
-            serde_json::json!({
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "Allow only these MCP servers' tools for this agent"
-            }),
-        );
-        p.insert(
-            "disallowed_tools".into(),
-            serde_json::json!({
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "Per-agent tool deny list (intersected with parent filter)"
-            }),
-        );
-        p.insert(
-            "max_turns".into(),
-            serde_json::json!({
-                "type": "integer",
-                "minimum": 1,
-                "description": "Hard cap on turns the agent will run before stopping"
-            }),
-        );
-        p.insert(
-            "initial_prompt".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Override the agent definition's initial prompt body"
-            }),
-        );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            // TS zod requires `description` and `prompt`
+            // (`AgentTool.tsx:82-88`): `z.string()` without `.optional()`.
+            // All other fields are `.optional()`.
+            required: vec!["description".into(), "prompt".into()],
+        }
     }
 
-    /// Render the spawn-result envelope into model-visible text per
-    /// `data["status"]`. TS parity: `AgentTool.tsx::mapToolResultToToolResultBlockParam`
-    /// (4 branches: teammate_spawned / async_launched / completed / failed).
-    /// `remote_launched` is CCR-specific and has no coco-rs producer.
+    /// Render the spawn-result envelope into model-visible text. TS
+    /// parity: `AgentTool.tsx::mapToolResultToToolResultBlockParam`
+    /// (4 branches: teammate_spawned / async_launched / completed /
+    /// failed). `remote_launched` is CCR-specific with no coco-rs
+    /// producer.
+    ///
+    /// Consumes the typed [`AgentSpawnRenderResult`] envelope that
+    /// [`AgentTool::execute`] stages on `ToolResult.data`. The legacy
+    /// `serde_json::Value` field-poking path is gone — both producer
+    /// and consumer live in this crate, so a `match` on the typed
+    /// envelope is strictly safer.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        let status = data.get("status").and_then(Value::as_str).unwrap_or("");
-        let text = match status {
-            "teammate_spawned" => {
+        // Producer guarantee: `data` is always the wire form of
+        // `AgentSpawnRenderResult`. Tolerate the case where it doesn't
+        // deserialise (e.g. a third-party caller staged a different
+        // shape) by falling back to a serialised dump rather than
+        // panicking.
+        let envelope: AgentSpawnRenderResult = match serde_json::from_value(data.clone()) {
+            Ok(v) => v,
+            Err(_) => {
+                return vec![ToolResultContentPart::Text {
+                    text: serde_json::to_string(data).unwrap_or_default(),
+                    provider_options: None,
+                }];
+            }
+        };
+        let text = match envelope {
+            AgentSpawnRenderResult::TeammateSpawned {
+                agent_id,
+                name,
+                team_name,
+            } => {
                 // TS `AgentTool.tsx:1308-1312`. `name` and `team_name`
                 // come from the spawn input (not from the response) and
                 // are emitted as separate lines so the parent can grep
                 // by either.
-                let agent_id = data.get("agentId").and_then(Value::as_str).unwrap_or("");
-                let name = data.get("name").and_then(Value::as_str).unwrap_or("");
-                let team_name = data.get("team_name").and_then(Value::as_str).unwrap_or("");
                 format!(
-                    "Spawned successfully.\nagent_id: {agent_id}\nname: {name}\nteam_name: {team_name}\nThe agent is now running and will receive instructions via mailbox."
+                    "Spawned successfully.\nagent_id: {}\nname: {}\nteam_name: {}\nThe agent is now running and will receive instructions via mailbox.",
+                    agent_id.as_deref().unwrap_or(""),
+                    name.as_deref().unwrap_or(""),
+                    team_name.as_deref().unwrap_or(""),
                 )
             }
-            "async_launched" => {
-                let agent_id = data.get("agentId").and_then(Value::as_str).unwrap_or("");
-                let output_file = data
-                    .get("outputFile")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+            AgentSpawnRenderResult::AsyncLaunched {
+                agent_id,
+                output_file,
+                ..
+            } => {
+                let agent_id = agent_id.unwrap_or_default();
                 let prefix = format!(
                     "Async agent launched successfully.\nagentId: {agent_id} (internal ID - do not mention to user. Use SendMessage with to: '{agent_id}' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes."
                 );
-                let instructions = if output_file.is_empty() {
-                    "Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.".to_string()
-                } else {
-                    format!(
+                let instructions = match output_file.as_deref() {
+                    None | Some("") => "Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.".to_string(),
+                    Some(output_file) => format!(
                         "Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\noutput_file: {output_file}\nIf asked, you can check progress before completion by using FileRead or Bash tail on the output file."
-                    )
+                    ),
                 };
                 format!("{prefix}\n{instructions}")
             }
-            "completed" => {
-                let content = data.get("content").and_then(Value::as_str).unwrap_or("");
-                let one_shot = data
-                    .get("oneShot")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let worktree_path = data.get("worktreePath").and_then(Value::as_str);
-                let worktree_branch = data.get("worktreeBranch").and_then(Value::as_str);
+            AgentSpawnRenderResult::Completed {
+                content,
+                agent_id,
+                total_tool_use_count,
+                total_tokens,
+                duration_ms,
+                one_shot,
+                worktree_path,
+                worktree_branch,
+                ..
+            } => {
                 let has_worktree = worktree_path.is_some();
-
                 // One-shot built-ins (Explore, Plan): drop the agentId
                 // trailer + <usage> block when there's no worktree info,
                 // since they cannot be re-addressed via SendMessage. TS
                 // `AgentTool.tsx:1355-1361`.
                 if one_shot && !has_worktree {
                     return vec![ToolResultContentPart::Text {
-                        text: content.to_string(),
+                        text: content,
                         provider_options: None,
                     }];
                 }
-
-                let agent_id = data.get("agentId").and_then(Value::as_str).unwrap_or("");
-                let total_tokens = data.get("totalTokens").and_then(Value::as_u64).unwrap_or(0);
-                let total_tool_uses = data
-                    .get("totalToolUseCount")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let duration_ms = data.get("durationMs").and_then(Value::as_u64).unwrap_or(0);
-
+                let agent_id = agent_id.unwrap_or_default();
                 let mut worktree_info = String::new();
-                if let Some(wt) = worktree_path {
+                if let Some(wt) = &worktree_path {
                     worktree_info.push_str(&format!("\nworktreePath: {wt}"));
-                    if let Some(wb) = worktree_branch {
+                    if let Some(wb) = &worktree_branch {
                         worktree_info.push_str(&format!("\nworktreeBranch: {wb}"));
                     }
                 }
                 format!(
-                    "{content}\nagentId: {agent_id} (use SendMessage with to: '{agent_id}' to continue this agent){worktree_info}\n<usage>total_tokens: {total_tokens}\ntool_uses: {total_tool_uses}\nduration_ms: {duration_ms}</usage>"
+                    "{content}\nagentId: {agent_id} (use SendMessage with to: '{agent_id}' to continue this agent){worktree_info}\n<usage>total_tokens: {total_tokens}\ntool_uses: {total_tool_use_count}\nduration_ms: {duration_ms}</usage>"
                 )
             }
-            "failed" => {
-                let error = data
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Unknown error");
-                format!("Agent failed: {error}")
-            }
-            _ => serde_json::to_string(data).unwrap_or_default(),
+            AgentSpawnRenderResult::Failed { error } => format!("Agent failed: {error}"),
         };
         vec![ToolResultContentPart::Text {
             text,
@@ -524,6 +602,44 @@ impl Tool for AgentTool {
             .zip(definition_lookup_type)
             .and_then(|(cat, name)| cat.find_active(name).cloned())
             .map(std::sync::Arc::new);
+
+        // Latent-bug fix: an explicit `subagent_type` that doesn't resolve
+        // to a catalog entry would silently degrade — no system prompt,
+        // no tool filter, no model_role, no `required_mcp_servers` check.
+        // Reject upfront with the catalog list so the model corrects
+        // itself rather than producing a half-configured spawn.
+        //
+        // Three legitimate "no definition" paths skip this guard:
+        // - Fork mode (`subagent_type` omitted + fork gate on) — child
+        //   inherits parent's prompt, no AgentDefinition needed.
+        // - Team spawn without type (`name + team_name + no subagent_type`)
+        //   — TS allows generic teammates.
+        // - Test context (`ctx.agent_catalog` is `None`) — can't validate
+        //   without a catalog handle.
+        if let (Some(catalog), Some(explicit_name)) = (
+            ctx.agent_catalog.as_deref(),
+            explicit_subagent_type.as_deref(),
+        ) && resolved_definition.is_none()
+        {
+            let mut available: Vec<String> =
+                catalog.active().map(|d| d.agent_type.to_string()).collect();
+            available.sort();
+            available.dedup();
+            return Err(ToolError::InvalidInput {
+                message: format!(
+                    "Unknown subagent_type '{explicit_name}'. Available types: {}. \
+                     Add a `.md` file under `~/.coco/agents/` or `<project>/.coco/agents/` \
+                     to define a new agent type, then retry.",
+                    if available.is_empty() {
+                        "none (catalog empty — built-ins didn't load?)".to_string()
+                    } else {
+                        available.join(", ")
+                    }
+                ),
+                error_code: None,
+            });
+        }
+
         if let Some(def) = resolved_definition.as_ref() {
             let servers_with_tools = mcp_servers_with_tools(ctx).await;
             if !coco_subagent::has_required_mcp_servers(def, &servers_with_tools) {
@@ -541,6 +657,25 @@ impl Tool for AgentTool {
                     source: None,
                 });
             }
+        }
+
+        // TS `AgentTool.tsx:100`: `cwd` is "Mutually exclusive with
+        // isolation: 'worktree'". Reject the conflict upfront — the
+        // worktree's CWD is the worktree dir, can't override.
+        let requested_cwd = input
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from);
+        let requested_isolation = input.get("isolation").and_then(|v| v.as_str());
+        if requested_cwd.is_some() && requested_isolation == Some("worktree") {
+            return Err(ToolError::InvalidInput {
+                message: "`cwd` and `isolation: \"worktree\"` are mutually exclusive — \
+                          a worktree-isolated agent runs in the worktree's path; \
+                          drop one of the two."
+                    .into(),
+                error_code: None,
+            });
         }
 
         // D5 / P1' parity with TS `AgentTool.tsx:567 shouldRunAsync`:
@@ -566,6 +701,21 @@ impl Tool for AgentTool {
                 || definition_forces_background
                 || coordinator_forces_background
                 || matches!(spawn_mode, coco_tool_runtime::SpawnMode::Fork { .. }));
+
+        // TS `AgentTool.tsx:826` passes `autoBackgroundMs:
+        // getAutoBackgroundMs() || undefined` into
+        // `registerAgentForeground`. coco-rs reads the env var directly
+        // (no GrowthBook shim). Two accepted forms:
+        //   - bare truthy (`1` / `true` / `yes`) → DEFAULT_AUTO_BACKGROUND_MS
+        //   - numeric (`90000`) → that many ms
+        // Falsy / unset → `None` (no auto-detach).
+        // Only applies when the spawn is foreground; background spawns
+        // detach immediately via `run_in_background`.
+        let auto_background_ms = if run_in_background {
+            None
+        } else {
+            resolve_auto_background_ms()
+        };
 
         // TS `AgentTool.tsx:278,361`: in-process teammates can't spawn
         // background sub-agents — their lifecycle is parent-bound and
@@ -598,16 +748,13 @@ impl Tool for AgentTool {
             )
             || summaries_via_app_state;
 
-        // P0-1 fix — TS parity (`AgentTool.tsx:610`):
-        //   `model: isForkPath ? undefined : model`
-        // Fork mode pins to the parent's main-loop model for prompt-cache
-        // parity. Honoring a caller-supplied `model` in fork mode silently
-        // busts the cache (different cache key → full re-tokenize), which
-        // defeats the entire reason fork exists. Strip it here.
-        let caller_model = input
-            .get("model")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        // `model` is intentionally NOT a model-facing tool input (see
+        // schema comment for the multi-LLM rationale). The model that
+        // the spawned subagent runs on is resolved entirely from the
+        // catalog: `AgentDefinition.model` (.md frontmatter, set by
+        // the author who knows the target provider) +
+        // `AgentDefinition.model_role` + LLM-supplied `model_role`
+        // override. `resolve_subagent_selection` does the precedence.
         let request_subagent_type = if is_team_spawn {
             explicit_subagent_type.clone()
         } else if is_fork && explicit_subagent_type.is_none() {
@@ -622,12 +769,14 @@ impl Tool for AgentTool {
                 .and_then(|v| v.as_str())
                 .map(String::from),
             subagent_type: request_subagent_type,
-            model: if is_fork { None } else { caller_model },
-            // AgentTool spawns inherit role from definition / subagent_type;
-            // memory-crate forks (extract/dream/session-memory) are the
-            // only callers that pin an explicit `ModelRole::Memory`.
-            model_role: None,
+            // `model` / `model_role` are NOT on `AgentSpawnRequest` —
+            // model routing flows from `AgentDefinition` only. See the
+            // field-comment block on `AgentSpawnRequest` for the
+            // rationale. Memory forks use
+            // `AgentSpawnConstraints.forced_model_role` as the
+            // internal-only escape hatch.
             run_in_background,
+            auto_background_ms,
             enable_summarization,
             session_id: ctx.session_id_for_history.clone().unwrap_or_default(),
             isolation: input
@@ -637,44 +786,16 @@ impl Tool for AgentTool {
             name: requested_name,
             team_name: resolved_team_name.clone(),
             mode: effective_mode_str,
-            cwd: input
-                .get("cwd")
-                .and_then(|v| v.as_str())
-                .map(std::path::PathBuf::from),
-            effort: input
-                .get("effort")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            use_exact_tools: input
-                .get("use_exact_tools")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
-            mcp_servers: input
-                .get("mcp_servers")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            disallowed_tools: input
-                .get("disallowed_tools")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            max_turns: input
-                .get("max_turns")
-                .and_then(serde_json::Value::as_i64)
-                .map(|v| v as i32),
-            initial_prompt: input
-                .get("initial_prompt")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            // `cwd` is read from the tool input (TS `AgentTool.tsx:100`).
+            // Mutually-exclusive-with-worktree validation runs above.
+            //
+            // The previous five "internal-only knobs" (`effort`,
+            // `use_exact_tools`, `mcp_servers`, `disallowed_tools`,
+            // `max_turns`, `initial_prompt`) have been removed from
+            // `AgentSpawnRequest` — they were dead pass-through slots.
+            // The coordinator now reads them directly from
+            // `request.definition` (the resolved AgentDefinition).
+            cwd: requested_cwd,
             // Subagent inheritance (Layers 1 + 2 + 4). Forward the
             // parent context's resolved values so the child can't see
             // tools gated off at the top level.
@@ -737,7 +858,7 @@ impl Tool for AgentTool {
                     source: None,
                 })?;
 
-        let data = match response.status {
+        let envelope = match response.status {
             AgentSpawnStatus::Completed => {
                 // TS `AgentTool.tsx:1347-1350` — when the subagent
                 // produced no text, surface the canonical empty marker
@@ -754,78 +875,90 @@ impl Tool for AgentTool {
                 // — `Explore` and `Plan` can't be re-addressed via
                 // `SendMessage`. Forward the flag so consumers can
                 // suppress the "follow up via SendMessage" trailer.
-                let is_one_shot = subagent_type_for_render
+                let one_shot = subagent_type_for_render
                     .as_deref()
                     .is_some_and(|t| coco_subagent::ONE_SHOT_BUILTIN_AGENT_TYPES.contains(&t));
 
-                let mut result = serde_json::json!({
-                    "status": "completed",
-                    "content": content,
-                    "prompt": response.prompt.as_deref().unwrap_or(prompt),
-                    "agentId": response.agent_id,
-                    "totalToolUseCount": response.total_tool_use_count,
-                    "totalTokens": response.total_tokens,
-                    "durationMs": response.duration_ms,
-                    "oneShot": is_one_shot,
-                });
-                if let Some(wt) = &response.worktree_path {
-                    result["worktreePath"] = serde_json::json!(wt);
+                AgentSpawnRenderResult::Completed {
+                    content,
+                    prompt: response.prompt.as_deref().unwrap_or(prompt).to_string(),
+                    agent_id: response.agent_id,
+                    total_tool_use_count: response.total_tool_use_count,
+                    total_tokens: response.total_tokens,
+                    duration_ms: response.duration_ms,
+                    one_shot,
+                    worktree_path: response
+                        .worktree_path
+                        .as_ref()
+                        .map(|p| p.display().to_string()),
+                    worktree_branch: response.worktree_branch,
                 }
-                if let Some(wb) = &response.worktree_branch {
-                    result["worktreeBranch"] = serde_json::json!(wb);
-                }
-                result
             }
             AgentSpawnStatus::AsyncLaunched => {
-                let mut result = serde_json::json!({
-                    "status": "async_launched",
-                    "agentId": response.agent_id,
-                    "prompt": response.prompt.as_deref().unwrap_or(prompt),
-                    "description": request_description,
+                let output_file = response
+                    .output_file
+                    .as_ref()
+                    .map(|p| p.display().to_string());
+                let can_read_output_file = output_file.as_ref().map(|_| {
+                    ctx.tool_filter
+                        .allows_name(coco_types::ToolName::Read.as_str())
+                        || ctx
+                            .tool_filter
+                            .allows_name(coco_types::ToolName::Bash.as_str())
                 });
-                if let Some(of) = &response.output_file {
-                    result["outputFile"] = serde_json::json!(of);
-                    result["canReadOutputFile"] = serde_json::json!(
-                        ctx.tool_filter
-                            .allows_name(coco_types::ToolName::Read.as_str())
-                            || ctx
-                                .tool_filter
-                                .allows_name(coco_types::ToolName::Bash.as_str())
-                    );
+                AgentSpawnRenderResult::AsyncLaunched {
+                    agent_id: response.agent_id,
+                    prompt: response.prompt.as_deref().unwrap_or(prompt).to_string(),
+                    description: request_description,
+                    output_file,
+                    can_read_output_file,
                 }
-                result
             }
-            AgentSpawnStatus::TeammateSpawned => {
-                // TS `AgentTool.tsx:1308-1312` exposes `name` and
-                // `team_name` (not `prompt`) so the parent agent can
-                // address the teammate by stable identifiers in
-                // SendMessage payloads.
-                let mut spawn = serde_json::json!({
-                    "status": "teammate_spawned",
-                    "agentId": response.agent_id,
-                });
-                if let Some(name) = request_name_for_render.as_deref() {
-                    spawn["name"] = serde_json::json!(name);
-                }
-                if let Some(team_name) = request_team_for_render.as_deref() {
-                    spawn["team_name"] = serde_json::json!(team_name);
-                }
-                spawn
-            }
-            AgentSpawnStatus::Failed => {
-                serde_json::json!({
-                    "status": "failed",
-                    "error": response.error.unwrap_or_else(|| "Unknown error".into()),
-                })
-            }
+            AgentSpawnStatus::TeammateSpawned => AgentSpawnRenderResult::TeammateSpawned {
+                agent_id: response.agent_id,
+                name: request_name_for_render,
+                team_name: request_team_for_render,
+            },
+            AgentSpawnStatus::Failed => AgentSpawnRenderResult::Failed {
+                error: response.error.unwrap_or_else(|| "Unknown error".into()),
+            },
         };
 
         Ok(ToolResult {
-            data,
+            data: envelope.into_value(),
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
         })
+    }
+}
+
+/// Resolve the `COCO_AUTO_BACKGROUND_TASKS` env var into the
+/// `auto_background_ms` value to thread onto `AgentSpawnRequest`. TS:
+/// `AgentTool.tsx:72-77 getAutoBackgroundMs`.
+///
+/// Acceptance rules:
+/// - Unset / empty → `None`.
+/// - Numeric (`"90000"`) → `Some(parsed_u64)` — caller-specified ms.
+/// - Truthy non-numeric (`"1"`, `"true"`, `"yes"`, `"on"`) →
+///   `Some(DEFAULT_AUTO_BACKGROUND_MS)` (TS default of 120 000 ms).
+/// - Falsy (`"0"`, `"false"`, `"no"`, `"off"`) → `None`.
+fn resolve_auto_background_ms() -> Option<u64> {
+    let raw = match std::env::var(coco_config::EnvKey::CocoAutoBackgroundTasks.as_str()) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(n) = trimmed.parse::<u64>() {
+        return if n == 0 { None } else { Some(n) };
+    }
+    if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoAutoBackgroundTasks) {
+        Some(DEFAULT_AUTO_BACKGROUND_MS)
+    } else {
+        None
     }
 }
 

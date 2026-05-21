@@ -579,7 +579,10 @@ Usage notes:
             "prompt".into(),
             serde_json::json!({"type": "string", "description": "The prompt to run on the fetched content"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         true
@@ -1376,7 +1379,10 @@ IMPORTANT - Use the correct year in search queries:
                 "description": "Never include search results from these domains (post-filtered client-side)"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         true

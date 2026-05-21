@@ -82,7 +82,10 @@ impl Tool for EditTool {
                 "default": false
             }),
         );
-        ToolInputSchema { properties: props }
+        ToolInputSchema {
+            properties: props,
+            required: Vec::new(),
+        }
     }
 
     fn is_destructive(&self, _input: &Value) -> bool {

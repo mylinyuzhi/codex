@@ -176,7 +176,10 @@ impl Tool for ReadTool {
                 "description": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files."
             }),
         );
-        ToolInputSchema { properties: props }
+        ToolInputSchema {
+            properties: props,
+            required: Vec::new(),
+        }
     }
 
     fn is_read_only(&self, _input: &Value) -> bool {

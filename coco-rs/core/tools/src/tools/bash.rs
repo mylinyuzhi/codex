@@ -241,7 +241,10 @@ impl Tool for BashTool {
                 "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
             }),
         );
-        ToolInputSchema { properties: props }
+        ToolInputSchema {
+            properties: props,
+            required: Vec::new(),
+        }
     }
 
     /// Read-only fast path. Mirrors TS `BashTool.isReadOnly` → `checkReadOnlyConstraints`

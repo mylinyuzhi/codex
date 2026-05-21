@@ -253,6 +253,30 @@ impl TerminalSignal {
     }
 }
 
+/// Outcome of a [`TaskController::signal_detach`] call. Self-documents at
+/// the callsite vs an opaque `bool`. Per CLAUDE.md: "Avoid bool/ambiguous
+/// params that produce opaque callsites".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetachOutcome {
+    /// First call — the per-task `detached` CAS flipped true and the
+    /// fg awaiter `Notify` was woken. The task is now backgrounded.
+    Detached,
+    /// Second-or-later call — the task was already in the detached
+    /// state. No-op, matches TS `if (task.isBackgrounded) return false`
+    /// at `tasks/LocalAgentTask/LocalAgentTask.tsx:620-622`.
+    AlreadyDetached,
+    /// Task id unknown to the runtime — no per-task entry exists.
+    Unknown,
+}
+
+impl DetachOutcome {
+    /// True only on the first successful detach. Convenient when the
+    /// caller wants to log "we detached this task" once.
+    pub fn is_first(self) -> bool {
+        matches!(self, Self::Detached)
+    }
+}
+
 /// Lifecycle control surface. Used by `TaskStop`.
 #[async_trait::async_trait]
 pub trait TaskController: Send + Sync {
@@ -263,13 +287,11 @@ pub trait TaskController: Send + Sync {
     async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError>;
 
     /// Signal that a task should detach from its foreground awaiter
-    /// and continue running in the background. Returns `true` on the
-    /// first call (CAS-guarded); `false` on subsequent calls (already
-    /// detached) and when the id is unknown.
+    /// and continue running in the background.
     ///
     /// Mechanics:
     /// 1. Atomically flip the per-task "detached" flag. If already
-    ///    detached, return `false`.
+    ///    detached, return [`DetachOutcome::AlreadyDetached`].
     /// 2. Update `LocalAgentExtra.is_backgrounded` (for the TUI panel
     ///    filter to differentiate fg vs detached tasks).
     /// 3. Notify the per-task [`tokio::sync::Notify`] returned by
@@ -284,7 +306,7 @@ pub trait TaskController: Send + Sync {
     ///   → `shellCommand.background(taskId)` (`utils/ShellCommand.ts:349-366`).
     /// - Agent: `backgroundAgentTask` (`tasks/LocalAgentTask/LocalAgentTask.tsx:617-650`)
     ///   → resolves the per-agent `backgroundSignal` resolver.
-    async fn signal_detach(&self, task_id: &str) -> bool;
+    async fn signal_detach(&self, task_id: &str) -> DetachOutcome;
 }
 
 pub type TaskControllerRef = Arc<dyn TaskController>;
@@ -345,6 +367,27 @@ pub trait AgentTaskRegistry: Send + Sync {
         invoking_agent_id: Option<&str>,
         cancel: tokio_util::sync::CancellationToken,
     ) -> String;
+
+    /// TS-parity variant that arms an auto-background timer for a
+    /// foreground spawn. When `auto_background_ms = Some(ms)`, the
+    /// runtime fires `signal_detach(tid)` after `ms` of execution if
+    /// the task is still running. Default impl delegates to
+    /// [`Self::register_agent_task`] (ignoring the timer) so existing
+    /// implementations stay compatible.
+    ///
+    /// TS source: `LocalAgentTask.tsx:582-608 registerAgentForeground`
+    /// `setTimeout(... autoBackgroundMs)`.
+    async fn register_agent_task_with_auto_background(
+        &self,
+        description: &str,
+        tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
+        cancel: tokio_util::sync::CancellationToken,
+        _auto_background_ms: Option<u64>,
+    ) -> String {
+        self.register_agent_task(description, tool_use_id, invoking_agent_id, cancel)
+            .await
+    }
 
     /// Append text to a task's output buffer (typically a single
     /// content chunk from the streaming engine).
@@ -545,8 +588,8 @@ impl TaskController for NoOpBackgroundTaskHandle {
     async fn kill_task(&self, _: &str) -> Result<(), coco_error::BoxedError> {
         Err(unavail())
     }
-    async fn signal_detach(&self, _: &str) -> bool {
-        false
+    async fn signal_detach(&self, _: &str) -> DetachOutcome {
+        DetachOutcome::Unknown
     }
 }
 

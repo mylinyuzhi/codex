@@ -640,19 +640,32 @@ impl ExtractService {
             "spawning extraction subagent"
         );
 
+        // Memory forks need to route to `ModelRole::Memory` so an
+        // operator configuring `settings.models.memory` actually
+        // steers them. Catalog `general-purpose` has no `model_role`
+        // declared → would fall through to `Subagent`. Construct a
+        // synthetic `AgentDefinition` carrying the desired role and
+        // thread it through `definition` — the coordinator's
+        // `resolve_subagent_selection` reads `definition.model_role`
+        // as the role source of truth.
+        //
+        // Single-source-of-truth design: model routing flows through
+        // `AgentDefinition` only, never through a per-request override
+        // slot. The synthetic def lives in-process at spawn time, not
+        // in the persistent catalog.
+        let memory_def = std::sync::Arc::new(coco_types::AgentDefinition {
+            agent_type: coco_types::AgentTypeId::Custom("memory-internal".into()),
+            name: "memory-internal".into(),
+            model_role: Some(ModelRole::Memory),
+            ..Default::default()
+        });
         let request = AgentSpawnRequest {
             prompt,
             description: Some("memory extraction".into()),
             subagent_type: Some("general-purpose".into()),
-            // Pin the forked agent to `ModelRole::Memory`. Without this
-            // the spawn resolution falls back to `subagent_type`
-            // -> `ModelRole::Subagent`, so an operator who configured
-            // `settings.models.memory` would see no effect on extracts.
-            // TS hardcodes Sonnet here; coco-rs threads through the
-            // Memory role so the operator can swap provider+model
-            // without touching this crate.
-            model_role: Some(ModelRole::Memory),
+            definition: Some(memory_def),
             run_in_background: false,
+            auto_background_ms: None,
             // Fork mode so the child sees the parent's message slice
             // prepended to its first turn (TS `forkContextMessages`).
             isolation: if fork_context.is_empty() {

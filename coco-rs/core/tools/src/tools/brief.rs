@@ -43,7 +43,10 @@ impl Tool for BriefTool {
             "status".into(),
             serde_json::json!({"type": "string", "enum": ["normal", "proactive"], "description": "Message intent: 'normal' for direct replies, 'proactive' for unsolicited updates"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         true

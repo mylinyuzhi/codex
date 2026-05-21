@@ -57,7 +57,10 @@ impl Tool for ApplyPatchTool {
                 "description": "Patch body wrapped in `*** Begin Patch` / `*** End Patch`."
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     fn is_read_only(&self, _: &Value) -> bool {

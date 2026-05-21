@@ -114,7 +114,7 @@ pub struct Cli {
 
     /// Reasoning effort level: low, medium, high, max.
     #[arg(long)]
-    pub effort: Option<String>,
+    pub effort: Option<coco_types::ReasoningEffort>,
 
     /// Allow specific tools (repeatable).
     #[arg(long, num_args = 1..)]

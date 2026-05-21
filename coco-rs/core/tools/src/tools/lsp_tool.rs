@@ -150,7 +150,10 @@ Note: LSP servers must be configured for the file type. If no server is availabl
                 "description": "1-based character column (required for position-based operations)"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     fn is_read_only(&self, _: &Value) -> bool {

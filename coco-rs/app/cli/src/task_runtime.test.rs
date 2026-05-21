@@ -286,28 +286,37 @@ async fn unknown_task_id_errors() {
             .await
             .is_none()
     );
-    assert!(!rt.signal_detach("ghost").await);
+    assert_eq!(
+        rt.signal_detach("ghost").await,
+        coco_tool_runtime::DetachOutcome::Unknown
+    );
     assert!(rt.read_terminal_outputs("ghost").await.is_err());
 }
 
 // ── W2: detach signal contract tests ────────────────────────────────
 
-/// First `signal_detach` returns true (and notifies); subsequent calls
-/// return false (CAS-guarded). Mirrors TS `backgroundAgentTask`'s
-/// `if (task.isBackgrounded) return false`.
+/// First `signal_detach` returns `Detached` (and notifies); subsequent
+/// calls return `AlreadyDetached` (CAS-guarded). Mirrors TS
+/// `backgroundAgentTask`'s `if (task.isBackgrounded) return false`.
 #[tokio::test]
 async fn signal_detach_is_idempotent() {
     let rt = rt();
     let task_id = rt
         .register_agent_task("work", None, None, CancellationToken::new())
         .await;
-    assert!(rt.signal_detach(&task_id).await, "first signal must fire");
-    assert!(
-        !rt.signal_detach(&task_id).await,
+    assert_eq!(
+        rt.signal_detach(&task_id).await,
+        coco_tool_runtime::DetachOutcome::Detached,
+        "first signal must fire"
+    );
+    assert_eq!(
+        rt.signal_detach(&task_id).await,
+        coco_tool_runtime::DetachOutcome::AlreadyDetached,
         "second signal must be no-op"
     );
-    assert!(
-        !rt.signal_detach(&task_id).await,
+    assert_eq!(
+        rt.signal_detach(&task_id).await,
+        coco_tool_runtime::DetachOutcome::AlreadyDetached,
         "third signal must be no-op"
     );
 }
@@ -759,8 +768,9 @@ async fn shell_spawn_auto_detach_timer_fires() {
 
     // Subsequent explicit signal_detach is a no-op (already detached
     // by the timer).
-    assert!(
-        !rt.signal_detach(&task_id).await,
+    assert_eq!(
+        rt.signal_detach(&task_id).await,
+        coco_tool_runtime::DetachOutcome::AlreadyDetached,
         "second signal must be CAS no-op"
     );
     // Cleanup so the test doesn't leak a sleeping subprocess.

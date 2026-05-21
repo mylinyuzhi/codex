@@ -46,7 +46,10 @@ impl Tool for SkillTool {
                 "description": "Optional arguments for the skill"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     /// Render the skill envelope. TS parity:

@@ -67,7 +67,14 @@ impl Tool for SendMessageTool {
                 ]
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            // TS `SendMessageTool.ts`: `to` and `message` are required;
+            // `summary` is required at runtime when `message` is a plain
+            // string (enforced in `execute()` because JSON Schema can't
+            // express conditional-required).
+            required: vec!["to".into(), "message".into()],
+        }
     }
     fn should_defer(&self) -> bool {
         true
@@ -145,16 +152,24 @@ impl Tool for SendMessageTool {
             }
         }
 
+        // Probe the task handle for the target's current state — drives
+        // both the auto-resume branch (terminal target) and the
+        // pending-message-queue branch (running target).
+        let task_status = if is_string_message {
+            match ctx.task_handle.as_ref() {
+                Some(h) => h.get_task_status(to).await.ok(),
+                None => None,
+            }
+        } else {
+            None
+        };
+
         // TS `SendMessageTool.ts:822-872`: when the target is a known
         // background task in a terminal state (Completed / Failed /
         // Killed), auto-resume instead of routing through the team
         // mailbox. The model thinks it's just sending a message; the
         // resume is transparent.
-        if is_string_message
-            && let Some(handle) = ctx.task_handle.as_ref()
-            && let Ok(info) = handle.get_task_status(to).await
-            && info.status.is_terminal()
-        {
+        if let Some(info) = task_status.as_ref().filter(|i| i.status.is_terminal()) {
             // Resume needs the parent session id to find the persisted
             // transcript on disk. An empty session id makes the lookup
             // path malformed and surfaces a confusing inner error; reject
@@ -175,9 +190,31 @@ impl Tool for SendMessageTool {
                     source: None,
                 });
             };
+            // TS `framework.ts:82-95`: on `resumeAgentBackground` task
+            // re-register, the existing task's `pendingMessages` are
+            // carried forward. coco-rs drains the queue here and
+            // prepends them to the resume prompt so the resumed engine
+            // sees every queued peer message that landed while the
+            // task was in its terminal grace period. Missing this
+            // drained the queue silently — Finding B in the audit.
+            let drained = ctx.pending_messages.drain(to).await;
+            let composed_prompt = if drained.is_empty() {
+                content.clone()
+            } else {
+                let mut buf = String::with_capacity(content.len() + drained.len() * 64);
+                for msg in &drained {
+                    buf.push_str(&format!(
+                        "[{from}]: {text}\n",
+                        from = msg.from,
+                        text = msg.text
+                    ));
+                }
+                buf.push_str(&content);
+                buf
+            };
             let resume = ctx
                 .agent
-                .resume_agent(to, &content, session_id)
+                .resume_agent(to, &composed_prompt, session_id)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: format!(
@@ -192,16 +229,50 @@ impl Tool for SendMessageTool {
                     "auto_resumed": true,
                     "original_agent_id": to,
                     "resumed_as": new_id,
+                    "queued_messages_replayed": drained.len(),
                     "message": format!(
                         "Agent '{to}' was stopped ({status:?}); resumed it in the background \
-                         with your message. New task id: {new_id}. You'll be notified when it finishes.",
+                         with your message{queued_extra}. New task id: {new_id}. You'll be notified when it finishes.",
                         status = info.status,
+                        queued_extra = if drained.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" (and {} queued peer message{} replayed)", drained.len(), if drained.len() == 1 { "" } else { "s" })
+                        },
                     ),
                 }),
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
             });
+        }
+
+        // TS `SendMessageTool.ts` running-agent path: queue the message
+        // onto the recipient's per-task `pendingMessages` FIFO so the
+        // recipient's next turn sees it as an `agent_pending_messages`
+        // system-reminder (TS `attachments.ts:1085-1101`
+        // `getAgentPendingMessageAttachments` drains and maps to
+        // `queued_command` attachments). Routing falls through to the
+        // mailbox handle as well so multi-process teammates still see
+        // the message via their inbox.
+        if let Some(info) = task_status.as_ref()
+            && info.status == coco_types::TaskStatus::Running
+            && info.task_type == coco_types::TaskType::LocalAgent
+        {
+            let sender = ctx
+                .agent_id
+                .as_ref()
+                .map(|a| a.as_str().to_string())
+                .unwrap_or_else(|| "main".into());
+            ctx.pending_messages
+                .push(
+                    to,
+                    coco_tool_runtime::PendingMessage {
+                        from: sender,
+                        text: content.clone(),
+                    },
+                )
+                .await;
         }
 
         let result =

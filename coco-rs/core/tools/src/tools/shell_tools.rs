@@ -31,7 +31,10 @@ impl Tool for SleepTool {
             "seconds".into(),
             serde_json::json!({"type": "number", "description": "Number of seconds to sleep"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         true
@@ -124,7 +127,10 @@ impl Tool for ReplTool {
             "command".into(),
             serde_json::json!({"type": "string", "description": "Command to execute in the REPL"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
 
     fn is_transparent_wrapper(&self) -> bool {
@@ -168,7 +174,10 @@ impl Tool for SyntheticOutputTool {
             "output".into(),
             serde_json::json!({"type": "string", "description": "Output text to emit"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         true

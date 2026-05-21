@@ -562,7 +562,13 @@ impl SwarmAgentHandle {
                 SubAgentStatus::Running
             },
             turns: 0,
-            model: request.model.clone(),
+            // `SubAgentState.model` shows the *configured* model
+            // identifier in UI panels. Read from `AgentDefinition` —
+            // the per-request `model` slot is gone (catalog-only
+            // principle). For catalog-less spawns (definition: None,
+            // e.g. fork mode), this stays None and the UI displays
+            // "default".
+            model: request.definition.as_ref().and_then(|d| d.model.clone()),
             working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
             last_message: None,
         };
@@ -646,29 +652,39 @@ impl SwarmAgentHandle {
             .map(|s| s.path.clone())
             .or_else(|| request.cwd.clone());
 
-        // Spawn-time identity resolution (T3 + T7). Centralizes model +
-        // role precedence in `coco_subagent`:
-        //   model:  request.model > definition.model > role-resolved
-        //   role:   request.model_role > definition.model_role
-        //         > subagent_type → role > Subagent
+        // Spawn-time identity resolution (T3 + T7). Single source of
+        // truth for model routing: `AgentDefinition`. No per-request
+        // override slots — model + role flow exclusively from the
+        // definition (whether loaded from .md/built-in catalog or
+        // synthesized in-process by code-driven forks like the
+        // memory crate's extract/dream/session services).
         //
-        // Memory-crate forks (extract / dream / session-memory) set
-        // `request.model_role = Some(ModelRole::Memory)` so an operator
-        // configuring `settings.models.memory` actually steers them
-        // instead of falling through to `general-purpose →
-        // ModelRole::Subagent`.
+        //   model:  definition.model > role-resolved (via ModelSpec)
+        //   role:   definition.model_role > subagent_type → role
+        //         > ModelRole::Subagent
+        //
+        // The model-facing AgentTool schema does NOT expose `model`
+        // or `model_role` — multi-LLM design rules out LLM-driven
+        // model selection (LLM has no awareness of operator's
+        // provider/model_id mappings).
         //
         // The definition flows through `AgentSpawnRequest.definition`,
-        // populated by AgentTool from `ctx.agent_catalog`. When the catalog
-        // isn't installed, `definition` is `None` and the resolver
+        // populated either by AgentTool from `ctx.agent_catalog` (LLM
+        // path) or by internal callers constructing a synthetic def
+        // at spawn time (memory crate forks).
+        //
+        // When `definition` is `None` (test contexts), the resolver
         // degrades cleanly to subagent_type→role mapping.
         let agent_type_id: Option<coco_types::AgentTypeId> = request
             .subagent_type
             .as_deref()
             .map(|t| t.parse().expect("AgentTypeId::from_str is Infallible"));
         let selection = coco_subagent::resolve_subagent_selection(
-            request.model.as_deref(),
-            request.model_role,
+            // No per-request `model` / `model_role` — both flow
+            // through `request.definition` only. See the field-level
+            // comment on `AgentSpawnRequest` for the rationale.
+            None,
+            None,
             request.definition.as_deref(),
             agent_type_id.as_ref(),
         );
@@ -904,11 +920,14 @@ impl SwarmAgentHandle {
             } else {
                 selection.model_selection.clone()
             },
+            // `max_turns` precedence: constraints (memory forks tighten
+            // via `AgentSpawnConstraints.max_turns`) > definition. Top-
+            // level `request.max_turns` was a dead slot and is gone.
             max_turns: request
                 .constraints
                 .as_ref()
                 .and_then(|c| c.max_turns)
-                .or(request.max_turns),
+                .or_else(|| request.definition.as_ref().and_then(|d| d.max_turns)),
             context_window: None,
             prompt_cache: None,
             max_output_tokens: None,
@@ -930,7 +949,13 @@ impl SwarmAgentHandle {
             } else {
                 Vec::new()
             },
-            disallowed_tools: request.disallowed_tools.clone(),
+            // `disallowed_tools` flows from `AgentDefinition.disallowed_tools`
+            // (frontmatter). Top-level request slot was dead and removed.
+            disallowed_tools: request
+                .definition
+                .as_ref()
+                .map(|d| d.disallowed_tools.clone())
+                .unwrap_or_default(),
             // Coordinator / AgentTool spawns don't carry skill-style
             // auto-allow rules — those flow only through
             // `SkillRuntime` Fork path. Leave empty.
@@ -977,10 +1002,36 @@ impl SwarmAgentHandle {
                     selection.model_role
                 },
             ),
-            effort: request.effort.clone(),
-            use_exact_tools: request.use_exact_tools,
-            mcp_servers: request.mcp_servers.clone(),
-            initial_prompt: request.initial_prompt.clone(),
+            // `AgentDefinition.effort` is the single source of truth
+            // for static effort overrides. Read it here (was: blank
+            // pass-through of the never-set `request.effort`). The
+            // resolved string passes through to RunnerConfig and is
+            // looked up against the active model's
+            // `supported_thinking_levels` by
+            // `session_runtime::thinking_level_for_effort_from`.
+            effort: request.definition.as_ref().and_then(|d| d.effort),
+            // The four fields below all read from `AgentDefinition` —
+            // the previously-dead `request.<field>` pass-through slots
+            // are gone.
+            use_exact_tools: request
+                .definition
+                .as_ref()
+                .map(|d| d.use_exact_tools)
+                .unwrap_or(false),
+            mcp_servers: request
+                .definition
+                .as_ref()
+                .map(|d| {
+                    d.mcp_servers
+                        .iter()
+                        .filter_map(|spec| spec.name().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            initial_prompt: request
+                .definition
+                .as_ref()
+                .and_then(|d| d.initial_prompt.clone()),
             definition: request.definition.clone(),
             // In-process AgentTool spawns inherit the leader's
             // `ToolPermissionBridge` via `wire_engine`. Setting an override
@@ -1118,11 +1169,18 @@ impl SwarmAgentHandle {
                     reg.register_dream_task(&description, task_cancel.clone())
                         .await
                 } else {
-                    reg.register_agent_task(
+                    // TS parity (`AgentTool.tsx:826`): foreground spawns
+                    // (run_in_background=false) optionally arm the
+                    // auto-detach timer. Background spawns ignore the
+                    // field — they detach immediately by definition.
+                    reg.register_agent_task_with_auto_background(
                         &description,
                         request.tool_use_id.as_deref(),
                         request.invoking_agent_id.as_deref(),
                         task_cancel.clone(),
+                        request
+                            .auto_background_ms
+                            .filter(|_| !request.run_in_background),
                     )
                     .await
                 };

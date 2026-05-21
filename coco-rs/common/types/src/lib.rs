@@ -376,6 +376,8 @@ pub use stream::StreamingToolUse;
 pub use stream::TaskBudget;
 
 // Task types
+pub use task::TaskActivity;
+pub use task::TaskProgress;
 pub use task::TaskStateBase;
 pub use task::TaskStatus;
 pub use task::TaskType;

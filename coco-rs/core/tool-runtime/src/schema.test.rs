@@ -47,6 +47,7 @@ impl crate::traits::Tool for TestTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: self.properties.clone(),
+            required: Vec::new(),
         }
     }
     fn input_json_schema(&self) -> Option<Value> {

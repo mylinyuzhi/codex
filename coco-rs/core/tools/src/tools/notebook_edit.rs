@@ -76,7 +76,10 @@ impl Tool for NotebookEditTool {
             "edit_mode".into(),
             serde_json::json!({"type": "string", "enum": ["replace", "insert", "delete"], "description": "Edit operation: replace (default), insert (new cell), or delete"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn should_defer(&self) -> bool {
         true

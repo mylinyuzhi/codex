@@ -197,6 +197,7 @@ fn test_runnable_plan_carries_prepared_call() {
         fn input_schema(&self) -> coco_types::ToolInputSchema {
             coco_types::ToolInputSchema {
                 properties: Default::default(),
+                required: Vec::new(),
             }
         }
         async fn execute(

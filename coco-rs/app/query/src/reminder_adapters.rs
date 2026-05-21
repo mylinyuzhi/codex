@@ -227,21 +227,57 @@ impl IdeBridgeSource for IdeBridgeAdapter {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Swarm adapter (stub — app/state swarm surface is per-session
-// spread across swarm_{runner_loop, mailbox, teammate, agent_handle})
+// Swarm adapter — wires the in-memory `PendingMessageStore` to the
+// `agent_pending_messages` system-reminder. `teammate_mailbox` and
+// `team_context` remain stubs (app/state swarm surface is per-session
+// spread across swarm_{runner_loop, mailbox, teammate, agent_handle}
+// and not yet bridged into this adapter).
 // ────────────────────────────────────────────────────────────────
 
-/// Placeholder swarm source. Real impl bundles refs to the swarm's
-/// `TeamMailbox`, `TeamStore`, and per-agent inbox; populates the
-/// three swarm reminders accordingly. Current stub returns `None` /
-/// empty, so the reminders silently skip — matches the pre-swarm-wire
-/// state.
-#[derive(Clone, Debug, Default)]
-pub struct SwarmAdapter;
+/// Bridges the per-session [`coco_tool_runtime::PendingMessageStore`]
+/// to the `agent_pending_messages` reminder source. On each turn for
+/// the recipient agent, drains the queue and maps it into TS-parity
+/// `AgentPendingMessage` entries; the orchestrator then wraps each one
+/// as a `queued_command` attachment.
+///
+/// TS source: `attachments.ts:1085-1101 getAgentPendingMessageAttachments`.
+#[derive(Clone)]
+pub struct SwarmAdapter {
+    pending: coco_tool_runtime::PendingMessageStoreRef,
+}
+
+impl std::fmt::Debug for SwarmAdapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SwarmAdapter").finish_non_exhaustive()
+    }
+}
+
+impl Default for SwarmAdapter {
+    fn default() -> Self {
+        Self {
+            pending: Arc::new(coco_tool_runtime::NoOpPendingMessageStore),
+        }
+    }
+}
 
 impl SwarmAdapter {
+    /// Construct a stub adapter. The `agent_pending_messages` reminder
+    /// will be empty until [`Self::with_pending_messages`] threads in
+    /// the real store.
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Wire the pending-message store. Production callers (session
+    /// bootstrap in `app/cli`) build it alongside the `TaskRuntime`
+    /// and hand the same `Arc<...>` to both the tool layer
+    /// (`ToolUseContext.pending_messages`) and this adapter.
+    pub fn with_pending_messages(
+        mut self,
+        store: coco_tool_runtime::PendingMessageStoreRef,
+    ) -> Self {
+        self.pending = store;
+        self
     }
 }
 
@@ -253,8 +289,21 @@ impl SwarmSource for SwarmAdapter {
     async fn team_context(&self, _agent_id: Option<&str>) -> Option<TeamContextSnapshot> {
         None
     }
-    async fn agent_pending_messages(&self, _agent_id: Option<&str>) -> Vec<AgentPendingMessage> {
-        Vec::new()
+    async fn agent_pending_messages(&self, agent_id: Option<&str>) -> Vec<AgentPendingMessage> {
+        let Some(id) = agent_id else {
+            // TS `attachments.ts:1088`: `if (!agentId) return []` — main
+            // thread has no inbox of pending peer messages.
+            return Vec::new();
+        };
+        self.pending
+            .drain(id)
+            .await
+            .into_iter()
+            .map(|m| AgentPendingMessage {
+                from: m.from,
+                text: m.text,
+            })
+            .collect()
     }
 }
 

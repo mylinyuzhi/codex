@@ -50,7 +50,10 @@ impl Tool for EnterWorktreeTool {
             "path".into(),
             serde_json::json!({"type": "string", "description": "Path for the worktree directory (optional, defaults to ../worktrees/<branch>)"}),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn should_defer(&self) -> bool {
         true
@@ -201,7 +204,10 @@ impl Tool for ExitWorktreeTool {
                                directory of the worktree."
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn should_defer(&self) -> bool {
         true

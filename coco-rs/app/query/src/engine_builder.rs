@@ -76,6 +76,7 @@ impl QueryEngine {
             auto_mode_rules: coco_permissions::AutoModeRules::default(),
             app_state: None,
             mailbox: None,
+            pending_messages: None,
             mcp_handle: None,
             lsp_handle: None,
             agent_handle: None,
@@ -568,6 +569,23 @@ impl QueryEngine {
     /// Install a mailbox handle for swarm teammate messaging.
     pub fn with_mailbox(mut self, mailbox: coco_tool_runtime::MailboxHandleRef) -> Self {
         self.mailbox = Some(mailbox);
+        self
+    }
+
+    /// Install the pending-message store so `SendMessage` to a running
+    /// teammate queues the message and the recipient sees it via the
+    /// `agent_pending_messages` system-reminder. Production wires the
+    /// SAME `Arc<InMemoryPendingMessageStore>` here AND on the
+    /// `SwarmAdapter`. Default is a no-op store.
+    ///
+    /// TS parity: `LocalAgentTask.tsx:162-167 queuePendingMessage`
+    /// (push) + `attachments.ts:1085-1101 getAgentPendingMessageAttachments`
+    /// (drain).
+    pub fn with_pending_messages(
+        mut self,
+        store: coco_tool_runtime::PendingMessageStoreRef,
+    ) -> Self {
+        self.pending_messages = Some(store);
         self
     }
 

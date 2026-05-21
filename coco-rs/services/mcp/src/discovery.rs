@@ -421,7 +421,10 @@ pub fn convert_mcp_tool_to_tool_def(
         })
         .unwrap_or_default();
 
-    let schema = coco_types::ToolInputSchema { properties };
+    let schema = coco_types::ToolInputSchema {
+        properties,
+        required: Vec::new(),
+    };
     (fq_name, schema)
 }
 

@@ -461,7 +461,10 @@ impl Tool for ToolSearchTool {
                 "description": "Maximum number of results to return (default: 5)"
             }),
         );
-        ToolInputSchema { properties: p }
+        ToolInputSchema {
+            properties: p,
+            required: Vec::new(),
+        }
     }
     fn is_read_only(&self, _: &Value) -> bool {
         true

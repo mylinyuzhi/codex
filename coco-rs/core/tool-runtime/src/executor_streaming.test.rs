@@ -48,6 +48,7 @@ impl crate::traits::Tool for ConfigurableTool {
     fn input_schema(&self) -> coco_types::ToolInputSchema {
         coco_types::ToolInputSchema {
             properties: Default::default(),
+            required: Vec::new(),
         }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {

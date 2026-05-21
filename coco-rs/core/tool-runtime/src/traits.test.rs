@@ -28,6 +28,7 @@ impl Tool for EchoTool {
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema {
             properties: HashMap::new(),
+            required: Vec::new(),
         }
     }
 
@@ -103,6 +104,7 @@ fn test_is_mcp_derives_from_mcp_info() {
         fn input_schema(&self) -> coco_types::ToolInputSchema {
             coco_types::ToolInputSchema {
                 properties: std::collections::HashMap::new(),
+                required: Vec::new(),
             }
         }
         fn mcp_info(&self) -> Option<&super::super::McpToolInfo> {

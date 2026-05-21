@@ -399,8 +399,13 @@ impl SwarmAgentHandle {
             .ok_or("team_name required for teammate")?;
 
         let main_model_id = self.current_main_model_id();
+        // Per-request `model` slot is gone — read from definition only.
+        // `resolve_teammate_model` accepts `Option<&str>`; passing `None`
+        // makes it use the team config's default model or the
+        // role-resolved spec instead.
+        let definition_model = request.definition.as_ref().and_then(|d| d.model.as_deref());
         let resolved_model = resolve_teammate_model(
-            request.model.as_deref(),
+            definition_model,
             &main_model_id,
             &self.runtime_config.agent_teams,
             request.subagent_type.as_deref(),
@@ -419,10 +424,16 @@ impl SwarmAgentHandle {
         // Pre-fix: teammates ran with ONLY the addendum (the leader's
         // system prompt was discarded), which is a TS parity gap with
         // `inProcessRunner.ts`.
-        let teammate_system_prompt = if request.initial_prompt.is_some() {
-            request.initial_prompt.clone()
-        } else {
-            self.teammate_base_system_prompt.read().await.clone()
+        // `initial_prompt` flows from `AgentDefinition.initial_prompt`
+        // (frontmatter). Top-level `request.initial_prompt` was a dead
+        // slot and is gone.
+        let teammate_system_prompt = match request
+            .definition
+            .as_ref()
+            .and_then(|d| d.initial_prompt.clone())
+        {
+            Some(p) => Some(p),
+            None => self.teammate_base_system_prompt.read().await.clone(),
         };
 
         // Persistent round-robin assignment so the same teammate gets
@@ -470,13 +481,42 @@ impl SwarmAgentHandle {
             system_prompt: teammate_system_prompt,
             allowed_tools: Vec::new(),
             allow_permission_prompts: true,
-            effort: request.effort.clone(),
-            use_exact_tools: request.use_exact_tools,
+            // Static effort lives on `AgentDefinition.effort`. Read it
+            // through here (was: blank pass-through of unset
+            // `request.effort`). See `agent_handle.rs` comment on
+            // `AgentSpawnRequest` for why per-spawn override slot was
+            // removed.
+            // All static knobs read through `request.definition` — the
+            // previously-dead top-level slots are gone. See
+            // `agent_handle.rs` `AgentSpawnRequest` field comment.
+            effort: request.definition.as_ref().and_then(|d| d.effort),
+            use_exact_tools: request
+                .definition
+                .as_ref()
+                .map(|d| d.use_exact_tools)
+                .unwrap_or(false),
             isolation: coco_types::AgentIsolation::None,
             memory_scope: None,
-            mcp_servers: request.mcp_servers.clone(),
-            disallowed_tools: request.disallowed_tools.clone(),
-            max_turns: request.max_turns,
+            mcp_servers: request
+                .definition
+                .as_ref()
+                .map(|d| {
+                    d.mcp_servers
+                        .iter()
+                        .filter_map(|spec| spec.name().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            disallowed_tools: request
+                .definition
+                .as_ref()
+                .map(|d| d.disallowed_tools.clone())
+                .unwrap_or_default(),
+            max_turns: request
+                .constraints
+                .as_ref()
+                .and_then(|c| c.max_turns)
+                .or_else(|| request.definition.as_ref().and_then(|d| d.max_turns)),
         };
 
         let mut launched_executor: Option<Arc<dyn crate::pane::TeammateExecutor>> = None;
@@ -507,11 +547,35 @@ impl SwarmAgentHandle {
                     parent_session_id: request.session_id.clone(),
                     permissions: config.allowed_tools.clone(),
                     allow_permission_prompts: config.allow_permission_prompts,
-                    effort: request.effort.clone(),
-                    use_exact_tools: request.use_exact_tools,
-                    mcp_servers: request.mcp_servers.clone(),
-                    disallowed_tools: request.disallowed_tools.clone(),
-                    max_turns: request.max_turns,
+                    // All static knobs read from `request.definition` —
+                    // see `agent_handle.rs` `AgentSpawnRequest` field
+                    // comment for why the top-level slots are gone.
+                    effort: request.definition.as_ref().and_then(|d| d.effort),
+                    use_exact_tools: request
+                        .definition
+                        .as_ref()
+                        .map(|d| d.use_exact_tools)
+                        .unwrap_or(false),
+                    mcp_servers: request
+                        .definition
+                        .as_ref()
+                        .map(|d| {
+                            d.mcp_servers
+                                .iter()
+                                .filter_map(|spec| spec.name().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    disallowed_tools: request
+                        .definition
+                        .as_ref()
+                        .map(|d| d.disallowed_tools.clone())
+                        .unwrap_or_default(),
+                    max_turns: request
+                        .constraints
+                        .as_ref()
+                        .and_then(|c| c.max_turns)
+                        .or_else(|| request.definition.as_ref().and_then(|d| d.max_turns)),
                 })
                 .await;
             (executor.backend_type(), spawn)
@@ -690,10 +754,30 @@ impl SwarmAgentHandle {
                 features: request.features.clone(),
                 tool_overrides: request.tool_overrides.clone(),
                 parent_tool_filter: request.parent_tool_filter.clone(),
-                effort: request.effort.clone(),
-                use_exact_tools: request.use_exact_tools,
-                mcp_servers: request.mcp_servers.clone(),
-                disallowed_tools: request.disallowed_tools.clone(),
+                // All static knobs read from `request.definition` —
+                // see `agent_handle.rs` `AgentSpawnRequest` field
+                // comment for why the top-level slots are gone.
+                effort: request.definition.as_ref().and_then(|d| d.effort),
+                use_exact_tools: request
+                    .definition
+                    .as_ref()
+                    .map(|d| d.use_exact_tools)
+                    .unwrap_or(false),
+                mcp_servers: request
+                    .definition
+                    .as_ref()
+                    .map(|d| {
+                        d.mcp_servers
+                            .iter()
+                            .filter_map(|spec| spec.name().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                disallowed_tools: request
+                    .definition
+                    .as_ref()
+                    .map(|d| d.disallowed_tools.clone())
+                    .unwrap_or_default(),
                 model_role: resolved_model.model_role,
                 model_selection: resolved_model.model_selection.clone(),
                 task_list: self.task_list.clone(),
