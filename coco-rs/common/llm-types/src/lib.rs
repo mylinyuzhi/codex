@@ -39,6 +39,7 @@ pub use vercel_ai_provider::ReasoningPart;
 pub use vercel_ai_provider::SharedV4FileData;
 pub use vercel_ai_provider::TextPart;
 pub use vercel_ai_provider::ToolCallPart;
+pub use vercel_ai_provider::ToolInputInvalidReason;
 pub use vercel_ai_provider::ToolResultContent;
 pub use vercel_ai_provider::ToolResultContentPart;
 pub use vercel_ai_provider::ToolResultPart;

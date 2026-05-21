@@ -1493,6 +1493,7 @@ impl QueryEngine {
                                             .agent_id
                                             .as_ref()
                                             .map(coco_types::AgentId::as_str),
+                                        cwd: None,
                                     },
                                 );
                             let tcp = ToolCallPart {
@@ -1773,6 +1774,7 @@ impl QueryEngine {
                                 session_id: Some(&self.config.session_id),
                                 plans_dir: plans_dir.as_deref(),
                                 agent_id: self.config.agent_id.as_deref(),
+                                cwd: None,
                             },
                         );
                         if !content_parts.is_empty() {
@@ -1978,6 +1980,7 @@ impl QueryEngine {
                     session_id: Some(&self.config.session_id),
                     plans_dir: plans_dir.as_deref(),
                     agent_id: self.config.agent_id.as_deref(),
+                    cwd: None,
                 },
             );
 

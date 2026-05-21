@@ -53,6 +53,7 @@ mod tool_call_runner;
 mod tool_context;
 mod tool_input_normalizer;
 mod tool_input_parse;
+mod tool_input_validate;
 mod tool_message;
 mod tool_outcome_builder;
 mod tool_runner;

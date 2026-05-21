@@ -7,6 +7,7 @@ use coco_hooks::orchestration::OrchestrationContext;
 use coco_inference::ApiClient;
 use coco_inference::QueryParams;
 use coco_llm_types::ToolCallPart;
+use coco_llm_types::ToolInputInvalidReason;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
@@ -129,39 +130,70 @@ pub(crate) async fn prepare_one_pending_tool_call(
     let tool_id = prepared.tool_id;
     let tool = prepared.tool;
 
-    // Invalid-arguments short-circuit. The adapter (non-streaming
-    // path) or `parse_tool_input` (streaming path) sets
-    // `ToolCallPart.invalid = true` when the raw `arguments` JSON
-    // failed strict parsing AND the `tool_input_parse_fn` repair
-    // callback also failed. Emit a synthetic error `tool_result`
-    // explaining the parse failure so:
+    // Layer 2 schema validation on the raw `tc.input` — runs before
+    // PreToolUse hooks so the model sees a precise `<tool_use_error>
+    // InputValidationError: ...>` reply when its emission is
+    // schema-invalid. Hook-rewritten input has a second pass in
+    // `validate_effective_input_or_complete_error` below.
     //
-    //   1. The Anthropic API's `tool_use`↔`tool_result` pairing
-    //      invariant is satisfied on the next request.
-    //   2. The model sees an explicit error message and can
-    //      self-correct on the next turn instead of looping with the
-    //      same bad JSON.
+    // We clone `tc` because the signature is `&ToolCallPart`;
+    // `validate_tool_call` mutates the local copy to populate
+    // `invalid` + `invalid_reason`.
+    let mut validated_tc = tc.clone();
+    if let Some(validator) = args.ctx.tool_schema_validator.as_ref() {
+        crate::tool_input_validate::validate_tool_call(&mut validated_tc, Some(&tool), validator)
+            .await;
+    }
+
+    // Invalid-call short-circuit. Three sources contribute, all
+    // funneled through `ToolCallPart.invalid_reason` so the wrap
+    // prefix picks itself without string matching:
     //
-    // TS parity: `parse-tool-call.ts:97-117` keeps `invalid: true`
-    // tool calls in history; SDK consumers emit error results
-    // before continuing. Returning `None` from this function tells
-    // the caller (engine, streaming or batch path) to skip
-    // execution — same control-flow as a permission deny.
-    if tc.invalid {
+    //   1. Provider adapter — set when even repair can't recover
+    //      the raw `arguments` bytes into a usable shape.
+    //   2. Layer 2 above (`validate_tool_call`) — set on schema
+    //      violation or NoSuchTool detection.
+    //   3. Empty `invalid_reason` (legacy `invalid: true` with no
+    //      reason) — fall back to a generic JSON-parse message.
+    //
+    // Returning `None` skips PreToolUse hook + permission + execute;
+    // the caller (engine, streaming or batch path) treats this the
+    // same as a permission deny. The synthetic `tool_result` keeps
+    // Anthropic's tool_use ↔ tool_result pairing invariant intact.
+    if validated_tc.invalid {
+        let message = match &validated_tc.invalid_reason {
+            Some(ToolInputInvalidReason::SchemaViolation { message }) => {
+                format!("<tool_use_error>InputValidationError: {message}</tool_use_error>")
+            }
+            Some(ToolInputInvalidReason::NoSuchTool { tool_name }) => {
+                format!("<tool_use_error>No such tool available: {tool_name}</tool_use_error>")
+            }
+            Some(ToolInputInvalidReason::JsonParseFailed { error, .. }) => {
+                format!(
+                    "<tool_use_error>The tool call arguments could not be parsed as JSON: {error}. \
+                     Please retry with valid JSON.</tool_use_error>"
+                )
+            }
+            None => {
+                // Legacy path: invalid=true with no structured reason.
+                "<tool_use_error>The tool call arguments could not be parsed as JSON, \
+                 even after repair. Please retry with valid JSON arguments.</tool_use_error>"
+                    .to_string()
+            }
+        };
         crate::helpers::complete_tool_call_with_error_mode(
             args.event_tx,
             args.history,
-            &tc.tool_call_id,
-            &tc.tool_name,
+            &validated_tc.tool_call_id,
+            &validated_tc.tool_name,
             &tool_id,
-            "Tool call could not be executed: the `arguments` JSON emitted by the model \
-             failed to parse, even after repair. Please retry the tool call with valid \
-             JSON arguments.",
+            &message,
             args.completion_event_mode,
         )
         .await;
         return None;
     }
+    let tc = &validated_tc;
     // `tc.input` is already the observable input — both engine paths run
     // `normalize_observable_tool_input` when building this `ToolCallPart`.
 

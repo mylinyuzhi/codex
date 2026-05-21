@@ -126,6 +126,7 @@ pub use registry::ToolRegistry;
 pub use schedule_store::NoOpScheduleStore;
 pub use schedule_store::ScheduleStore;
 pub use schedule_store::ScheduleStoreRef;
+pub use schema::SchemaIssue;
 pub use schema::SchemaValidationError;
 pub use schema::ToolSchemaValidator;
 pub use schema::effective_tool_schema;
