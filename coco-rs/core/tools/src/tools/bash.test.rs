@@ -212,39 +212,18 @@ fn test_bash_max_timeout_from_runtime_config() {
 }
 
 // ---------------------------------------------------------------------------
-// B4.2: auto-background-on-timeout error suggestion
+// B4.2: timeout behaviour
 // ---------------------------------------------------------------------------
-
-/// On foreground timeout, the error message must mention "timed out"
-/// (for legacy string matchers) AND also surface the
-/// `run_in_background` suggestion when a TaskHandle is available in
-/// the context — so the model can retry without trial-and-error.
-#[tokio::test]
-async fn test_bash_timeout_error_suggests_background_when_handle_available() {
-    use std::sync::Arc;
-    // Provide a real TaskHandle (NoOpTaskHandle) so the suggestion
-    // path fires. The no-op handle is semantically "I exist", which
-    // is what the suggestion logic probes for.
-    let mut ctx = ToolUseContext::test_default();
-    ctx.task_handle = Some(Arc::new(coco_tool_runtime::NoOpBackgroundTaskHandle));
-
-    let result = <BashTool as DynTool>::execute(
-        &BashTool,
-        json!({"command": "sleep 10", "timeout": 100}),
-        &ctx,
-    )
-    .await;
-    assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("timed out"),
-        "must include timeout wording: {err}"
-    );
-    assert!(
-        err.contains("run_in_background") && err.contains("true"),
-        "must suggest run_in_background retry: {err}"
-    );
-}
+//
+// The "auto-background-on-timeout suggestion" path that lived here is
+// gone — the W3 unified TaskRuntime path (`execute_via_task_runtime`)
+// catches timeouts inside `task_runtime::run_shell_to_completion` via
+// `WaitOutcome::TimedOut`, flips `interrupted: true`, and returns
+// `Ok(ToolResult)` instead of `Err`. Auto-detach (`auto_detach_ms`)
+// supersedes the old "hint the model to retry" mechanism. The
+// remaining test below covers the legacy no-TaskHandle fallback in
+// `execute_foreground`, which is the only surviving Err-with-timeout-wording
+// code path.
 
 /// Without a TaskHandle, the tool should NOT suggest background
 /// retry (it's not available) — just a plain timeout error.
