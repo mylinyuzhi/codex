@@ -1547,8 +1547,14 @@ impl SwarmAgentHandle {
             // subagent's id) so completion notifications route
             // correctly. TS parity: `AgentTool.tsx` passes both into
             // `registerAsyncAgent`.
+            //
+            // PR 1 / W1: bg path uses the dedicated
+            // `register_background_agent_task` so the task entry's
+            // `is_backgrounded` flag initializes to `true` from
+            // creation — matches TS `registerAsyncAgent`'s
+            // `isBackgrounded: true` literal (`LocalAgentTask.tsx:499`).
             Some(
-                reg.register_agent_task(
+                reg.register_background_agent_task(
                     &description,
                     request.tool_use_id.as_deref(),
                     request.invoking_agent_id.as_deref(),

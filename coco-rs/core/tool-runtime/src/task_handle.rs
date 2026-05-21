@@ -345,7 +345,12 @@ pub type BackgroundTaskHandleRef = Arc<dyn BackgroundTaskHandle>;
 /// Production impl: `coco_cli::task_runtime::TaskRuntime`.
 #[async_trait::async_trait]
 pub trait AgentTaskRegistry: Send + Sync {
-    /// Register a freshly-spawned background AgentTool task.
+    /// Register a freshly-spawned AgentTool task that the parent will
+    /// **synchronously await** (foreground). The task entry starts with
+    /// `is_backgrounded = false`; an optional auto-detach timer can flip
+    /// it to `true` later. TS parity: `registerAgentForeground`
+    /// (`LocalAgentTask.tsx:526-614`).
+    ///
     /// Returns the `task_id` the read/control trait accepts.
     ///
     /// - `tool_use_id`: the `Agent(...)` invocation's tool_use id from
@@ -368,6 +373,29 @@ pub trait AgentTaskRegistry: Send + Sync {
         cancel: tokio_util::sync::CancellationToken,
     ) -> String;
 
+    /// Register a fire-and-forget background AgentTool task. The task
+    /// entry starts with `is_backgrounded = true` — the UI panel
+    /// fg/bg filter and any post-compact reminder source see it as
+    /// already-backgrounded. TS parity: `registerAsyncAgent`
+    /// (`LocalAgentTask.tsx:466-515`) sets `isBackgrounded: true` at
+    /// task creation.
+    ///
+    /// Default impl delegates to [`Self::register_agent_task`] so
+    /// existing in-memory test implementations stay compatible (they
+    /// don't differentiate fg/bg state); the production
+    /// `coco_cli::task_runtime::TaskRuntime` overrides this to set
+    /// `is_backgrounded: true` on the underlying `TaskStateBase`.
+    async fn register_background_agent_task(
+        &self,
+        description: &str,
+        tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> String {
+        self.register_agent_task(description, tool_use_id, invoking_agent_id, cancel)
+            .await
+    }
+
     /// TS-parity variant that arms an auto-background timer for a
     /// foreground spawn. When `auto_background_ms = Some(ms)`, the
     /// runtime fires `signal_detach(tid)` after `ms` of execution if
@@ -376,7 +404,8 @@ pub trait AgentTaskRegistry: Send + Sync {
     /// implementations stay compatible.
     ///
     /// TS source: `LocalAgentTask.tsx:582-608 registerAgentForeground`
-    /// `setTimeout(... autoBackgroundMs)`.
+    /// `setTimeout(... autoBackgroundMs)`. Always foreground init
+    /// (`is_backgrounded = false`); the timer flips it later.
     async fn register_agent_task_with_auto_background(
         &self,
         description: &str,

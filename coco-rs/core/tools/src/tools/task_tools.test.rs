@@ -51,11 +51,7 @@ fn canned_state(task_id: &str) -> TaskStateBase {
         total_paused_ms: None,
         output_file: String::new(),
         output_offset: 0,
-        progress: None,
-        retrieved: false,
-        retain: false,
-        evict_after: None,
-        is_backgrounded: false,
+        extras: coco_types::TaskExtras::None,
     }
 }
 

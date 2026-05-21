@@ -453,17 +453,27 @@ impl QueryEngine {
             ant_build,
         };
 
+        // Session context for `Tool::input_schema_for_session`. Lets
+        // AgentTool drop `run_in_background` from its model-facing
+        // schema when the runtime would silently veto it. TS parity:
+        // `AgentTool.tsx:110-125 lazySchema().omit({...})`.
+        let schema_ctx = coco_tool_runtime::SchemaContext {
+            background_tasks_disabled,
+            fork_mode_active: fork_enabled,
+            features: Some(self.config.features.clone()),
+        };
+
         let mut out = Vec::with_capacity(model_tools.len());
         for tool in model_tools {
             // `Tool::input_json_schema` returns a fully-formed JSON Schema
             // when the tool ships one. Otherwise we synthesize one from
-            // `Tool::input_schema`'s loose `properties` map and wrap it
-            // as `{"type":"object","properties":{...}}` — strict
-            // providers (DeepSeek, OpenAI Responses on some models)
-            // reject schemas missing a top-level `type`. Without the
-            // wrap they fail the request with HTTP 400.
+            // `Tool::input_schema_for_session`'s loose `properties` map
+            // and wrap it as `{"type":"object","properties":{...}}` —
+            // strict providers (DeepSeek, OpenAI Responses on some
+            // models) reject schemas missing a top-level `type`. Without
+            // the wrap they fail the request with HTTP 400.
             let json_schema = tool.input_json_schema().unwrap_or_else(|| {
-                let schema = tool.input_schema();
+                let schema = tool.input_schema_for_session(&schema_ctx);
                 let props = serde_json::to_value(&schema.properties)
                     .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
                 serde_json::json!({ "type": "object", "properties": props })

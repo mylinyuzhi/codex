@@ -11,6 +11,30 @@ use crate::context::ToolUseContext;
 use crate::error::ToolError;
 use crate::validation::ValidationResult;
 
+/// Session context for [`Tool::input_schema_for_session`]. Carries
+/// the per-session knobs that drive TS-parity dynamic schema omits
+/// (e.g. `AgentTool.tsx:110-125 lazySchema`'s
+/// `isBackgroundTasksDisabled || isForkSubagentEnabled()` gate).
+///
+/// Constructed at the model-facing schema seam
+/// (`engine_prompt::build_language_model_tools`) once per turn from
+/// runtime config + features; tools read the fields they care about.
+#[derive(Debug, Clone, Default)]
+pub struct SchemaContext {
+    /// True when `COCO_BACKGROUND_TASKS_DISABLE` env truthy. TS:
+    /// `isBackgroundTasksDisabled`. AgentTool drops `run_in_background`
+    /// from its schema when this is set.
+    pub background_tasks_disabled: bool,
+    /// True when fork-subagent mode is active for this session. TS:
+    /// `isForkSubagentEnabled()`. AgentTool drops `run_in_background`
+    /// when set — fork spawns always go through the bg path.
+    pub fork_mode_active: bool,
+    /// Snapshot of parent session features; tools that schema-gate
+    /// on capability flags consult this. `None` when the seam can't
+    /// resolve features (test / minimal SDK embedding).
+    pub features: Option<std::sync::Arc<coco_types::Features>>,
+}
+
 /// Info about whether a tool use is a search or read operation for UI collapse.
 ///
 /// TS: `isSearchOrReadCommand?(input)` return type.
@@ -243,6 +267,26 @@ pub trait Tool: Send + Sync {
 
     /// JSON schema for tool input parameters.
     fn input_schema(&self) -> ToolInputSchema;
+
+    /// Session-aware variant. Default impl just returns the static
+    /// [`Self::input_schema`]; tools whose schema depends on
+    /// per-session flags (env var killswitches, fork-mode gates,
+    /// feature toggles) override this to emit a variant.
+    ///
+    /// TS parity: `AgentTool.tsx:110-125 lazySchema` rebuilds the
+    /// zod schema per-call and conditionally `.omit({...})`s
+    /// fields when `isBackgroundTasksDisabled` or
+    /// `isForkSubagentEnabled()` flips. Without a session-aware
+    /// schema the model is told a field exists (e.g.
+    /// `run_in_background`) when the runtime would silently
+    /// override it — a schema-honesty gap.
+    ///
+    /// `engine_prompt::build_language_model_tools` calls this
+    /// instead of [`Self::input_schema`] so the model-facing
+    /// schema matches the actual runtime contract for the session.
+    fn input_schema_for_session(&self, _ctx: &SchemaContext) -> ToolInputSchema {
+        self.input_schema()
+    }
 
     /// Optional JSON schema override (for tools with complex schemas).
     fn input_json_schema(&self) -> Option<Value> {

@@ -150,6 +150,19 @@ pub enum SpawnMode {
 /// Request to spawn a subagent.
 ///
 /// TS: AgentToolInput in AgentTool.tsx
+///
+/// **Deferred refactor — split into 4 sub-structs**: the type
+/// currently carries 27 fields covering four distinct concerns
+/// (model-visible input, spawn-mode identity, policy/inheritance,
+/// routing/telemetry). The plan is to nest these under
+/// `AgentSpawnInput`/`AgentSpawnIdentity`/`AgentSpawnPolicy`/
+/// `AgentSpawnRouting` so each construction site doesn't navigate a
+/// 27-field flat literal. Deferred because the cascade touches
+/// every `request.X` read across `coordinator/agent_handle/*` and
+/// `memory/service/{extract,dream,session}.rs` (≥ 50 sites), and the
+/// refactor is pure code-quality with no TS-behavior delta — best
+/// landed as its own focused PR. Tracked in
+/// `core/tool-runtime/CLAUDE.md` "Deferred refactors".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentSpawnRequest {
     /// The task/instruction for the agent.

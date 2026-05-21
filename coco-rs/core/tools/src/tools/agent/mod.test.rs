@@ -745,11 +745,7 @@ impl coco_tool_runtime::TaskReader for StoppedTaskHandle {
             total_paused_ms: None,
             output_file: String::new(),
             output_offset: 0,
-            progress: None,
-            retrieved: false,
-            retain: false,
-            evict_after: None,
-            is_backgrounded: false,
+            extras: coco_types::TaskExtras::local_agent(false),
         })
     }
     async fn get_task_output_delta(

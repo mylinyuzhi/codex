@@ -164,11 +164,18 @@ impl Tool for SendMessageTool {
             None
         };
 
-        // TS `SendMessageTool.ts:822-872`: when the target is a known
+        // TS `SendMessageTool.ts:823-844`: when the target is a known
         // background task in a terminal state (Completed / Failed /
         // Killed), auto-resume instead of routing through the team
         // mailbox. The model thinks it's just sending a message; the
         // resume is transparent.
+        //
+        // TS does NOT touch `pendingMessages` on this path — it passes
+        // the new prompt verbatim to `resumeAgentBackground`. Any prior
+        // pending messages stay on the (resumed) task and surface via
+        // the `agent_pending_messages` reminder on the next turn
+        // (TS `attachments.ts:1085-1101`). Mirror that here: no drain,
+        // no prompt-prepend.
         if let Some(info) = task_status.as_ref().filter(|i| i.status.is_terminal()) {
             // Resume needs the parent session id to find the persisted
             // transcript on disk. An empty session id makes the lookup
@@ -190,31 +197,9 @@ impl Tool for SendMessageTool {
                     source: None,
                 });
             };
-            // TS `framework.ts:82-95`: on `resumeAgentBackground` task
-            // re-register, the existing task's `pendingMessages` are
-            // carried forward. coco-rs drains the queue here and
-            // prepends them to the resume prompt so the resumed engine
-            // sees every queued peer message that landed while the
-            // task was in its terminal grace period. Missing this
-            // drained the queue silently — Finding B in the audit.
-            let drained = ctx.pending_messages.drain(to).await;
-            let composed_prompt = if drained.is_empty() {
-                content.clone()
-            } else {
-                let mut buf = String::with_capacity(content.len() + drained.len() * 64);
-                for msg in &drained {
-                    buf.push_str(&format!(
-                        "[{from}]: {text}\n",
-                        from = msg.from,
-                        text = msg.text
-                    ));
-                }
-                buf.push_str(&content);
-                buf
-            };
             let resume = ctx
                 .agent
-                .resume_agent(to, &composed_prompt, session_id)
+                .resume_agent(to, &content, session_id)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: format!(
@@ -229,16 +214,10 @@ impl Tool for SendMessageTool {
                     "auto_resumed": true,
                     "original_agent_id": to,
                     "resumed_as": new_id,
-                    "queued_messages_replayed": drained.len(),
                     "message": format!(
                         "Agent '{to}' was stopped ({status:?}); resumed it in the background \
-                         with your message{queued_extra}. New task id: {new_id}. You'll be notified when it finishes.",
+                         with your message. New task id: {new_id}. You'll be notified when it finishes.",
                         status = info.status,
-                        queued_extra = if drained.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" (and {} queued peer message{} replayed)", drained.len(), if drained.len() == 1 { "" } else { "s" })
-                        },
                     ),
                 }),
                 new_messages: vec![],

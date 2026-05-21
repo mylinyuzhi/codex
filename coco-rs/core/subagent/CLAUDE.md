@@ -66,14 +66,22 @@ removing tokio from the graph requires splitting `AppStateReadHandle` out of
 
 ## Known limitations
 
-- **Built-in `whenToUse` and `system_prompt` strings are paraphrases**, not
-  byte-verbatim TS source from `built-in/*.ts`. The model-facing prompt list
-  reads slightly differently from TS. Tracked in
-  `docs/coco-rs/subagent-parity-fix-plan.md` PR 5.1 (planned `include_str!`
-  port).
 - **`extra_allow_list`** on `ToolFilterContext` is a coco-rs extension (no
   TS equivalent), reserved for slash-command tool intersection. Pass `None`
   for TS-parity behavior.
+- **`coco-guide` agent — dynamic context sections deferred**. TS
+  `claudeCodeGuideAgent.ts:121-203` appends a session-specific block (custom
+  skills / agents / MCP servers / plugin commands / settings.json snapshot)
+  to the static base prompt at spawn time. coco-rs currently emits only the
+  static base — see `builtin_prompts::coco_guide_system_prompt` doc comment.
+  Wiring the dynamic block belongs on the spawn-time prompt assembler in
+  `coordinator::agent_handle`, not the catalog entry.
+- **Built-in `whenToUse` and `system_prompt` strings are byte-faithful to
+  TS** (confirmed 2026-05-21 line-by-line vs `tools/AgentTool/built-in/*.ts`).
+  Tool-name placeholders (`${BASH_TOOL_NAME}` etc.) are resolved via
+  [`coco_types::ToolName`] so a future rename in coco-types flows through —
+  the resulting output is the same string TS produces. Snapshot tests in
+  `builtin_prompts.test.rs` enforce this.
 
 ### Resolved gaps (history)
 

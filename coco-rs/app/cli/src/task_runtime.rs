@@ -154,10 +154,16 @@ impl TaskRuntime {
         &self.manager
     }
 
-    /// Register a background AgentTool spawn. Mints the id, resolves
-    /// the disk path, inserts as `Running` with one lifecycle event,
-    /// and stores per-task control state (cancel token + watch +
-    /// invoking agent id).
+    /// Register a foreground AgentTool spawn. The task entry starts
+    /// with `is_backgrounded = false`; the optional auto-detach timer
+    /// (via [`Self::register_agent_task_with_auto_background`]) may
+    /// flip it to `true` later. TS parity: `registerAgentForeground`
+    /// (`LocalAgentTask.tsx:526-614` — `isBackgrounded: false` at task
+    /// creation, line 564).
+    ///
+    /// Mints the id, resolves the disk path, inserts as `Running` with
+    /// one lifecycle event, and stores per-task control state (cancel
+    /// token + watch + invoking agent id).
     #[instrument(
         level = "info",
         skip(self, cancel),
@@ -170,25 +176,62 @@ impl TaskRuntime {
         invoking_agent_id: Option<&str>,
         cancel: CancellationToken,
     ) -> String {
-        self.register_agent_task_with_auto_background(
+        self.register_agent_task_inner(
             description,
             tool_use_id,
             invoking_agent_id,
             cancel,
             None,
+            /* is_backgrounded */ false,
+        )
+        .await
+    }
+
+    /// Register a fire-and-forget background AgentTool spawn. The task
+    /// entry starts with `is_backgrounded = true` so the UI panel
+    /// filter, `compact.ts` post-compaction reminder, and any other
+    /// fg/bg-discriminating consumer treat it as already-backgrounded
+    /// from creation time. TS parity: `registerAsyncAgent`
+    /// (`LocalAgentTask.tsx:466-515` — `isBackgrounded: true` at task
+    /// creation, line 499).
+    ///
+    /// No auto-detach timer — a background spawn is detached by
+    /// definition; the `auto_background_ms` field on `AgentSpawnRequest`
+    /// is only meaningful for foreground spawns.
+    #[instrument(
+        level = "info",
+        skip(self, cancel),
+        fields(description = %description, tool_use_id = ?tool_use_id, invoking_agent_id = ?invoking_agent_id)
+    )]
+    pub async fn register_background_agent_task(
+        &self,
+        description: &str,
+        tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
+        cancel: CancellationToken,
+    ) -> String {
+        self.register_agent_task_inner(
+            description,
+            tool_use_id,
+            invoking_agent_id,
+            cancel,
+            None,
+            /* is_backgrounded */ true,
         )
         .await
     }
 
     /// Variant of [`Self::register_agent_task`] that arms an auto-detach
-    /// timer for the registered task. `auto_background_ms = Some(ms)`
-    /// spawns a background `tokio::time::sleep(ms)` future that fires
-    /// `signal_detach` if the task is still running at the deadline
-    /// — TS parity with the `setTimeout` inside
+    /// timer for the registered foreground task. `auto_background_ms =
+    /// Some(ms)` spawns a background `tokio::time::sleep(ms)` future
+    /// that fires `signal_detach` if the task is still running at the
+    /// deadline — TS parity with the `setTimeout` inside
     /// `LocalAgentTask.tsx:582-608 registerAgentForeground`.
     ///
-    /// `auto_background_ms = None` is equivalent to the no-op variant
-    /// (no timer spawned).
+    /// `auto_background_ms = None` is equivalent to
+    /// [`Self::register_agent_task`] (no timer spawned). Foreground
+    /// init only — background spawns use
+    /// [`Self::register_background_agent_task`] which has no timer.
     pub async fn register_agent_task_with_auto_background(
         &self,
         description: &str,
@@ -196,6 +239,31 @@ impl TaskRuntime {
         invoking_agent_id: Option<&str>,
         cancel: CancellationToken,
         auto_background_ms: Option<u64>,
+    ) -> String {
+        self.register_agent_task_inner(
+            description,
+            tool_use_id,
+            invoking_agent_id,
+            cancel,
+            auto_background_ms,
+            /* is_backgrounded */ false,
+        )
+        .await
+    }
+
+    /// Internal helper used by the foreground / background /
+    /// foreground-with-auto-detach entry points. The split surface
+    /// mirrors TS's `registerAgentForeground` / `registerAsyncAgent`
+    /// distinction (initial `isBackgrounded` value differs) while the
+    /// downstream wiring is identical.
+    async fn register_agent_task_inner(
+        &self,
+        description: &str,
+        tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
+        cancel: CancellationToken,
+        auto_background_ms: Option<u64>,
+        is_backgrounded: bool,
     ) -> String {
         let task_id = coco_types::generate_task_id(TaskType::LocalAgent);
         let dto = self.disk.get_or_create(&task_id).await;
@@ -207,6 +275,7 @@ impl TaskRuntime {
                 TaskType::LocalAgent,
                 description,
                 &output_path,
+                is_backgrounded,
             )
             .await;
         debug_assert_eq!(assigned, task_id);
@@ -456,6 +525,22 @@ impl AgentTaskRegistry for TaskRuntime {
         TaskRuntime::register_agent_task(self, description, tool_use_id, invoking_agent_id, cancel)
             .await
     }
+    async fn register_background_agent_task(
+        &self,
+        description: &str,
+        tool_use_id: Option<&str>,
+        invoking_agent_id: Option<&str>,
+        cancel: CancellationToken,
+    ) -> String {
+        TaskRuntime::register_background_agent_task(
+            self,
+            description,
+            tool_use_id,
+            invoking_agent_id,
+            cancel,
+        )
+        .await
+    }
     async fn register_agent_task_with_auto_background(
         &self,
         description: &str,
@@ -511,9 +596,19 @@ impl AgentTaskRegistry for TaskRuntime {
         let task_id = coco_types::generate_task_id(TaskType::Dream);
         let dto = self.disk.get_or_create(&task_id).await;
         let output_path = dto.path().display().to_string();
+        // Dream tasks run as internal services (no user-visible
+        // foreground awaiter) — initialize as backgrounded so the TUI
+        // panel filter and fg/bg-discriminating consumers treat them
+        // consistently with `registerAsyncAgent`.
         let assigned = self
             .manager
-            .create_running_with_id(task_id.clone(), TaskType::Dream, description, &output_path)
+            .create_running_with_id(
+                task_id.clone(),
+                TaskType::Dream,
+                description,
+                &output_path,
+                /* is_backgrounded */ true,
+            )
             .await;
         debug_assert_eq!(assigned, task_id);
         let (status_tx, _) = watch::channel(TaskStatus::Running);
@@ -748,6 +843,8 @@ impl ShellTaskSpawner for TaskRuntime {
         let task_id = coco_types::generate_task_id(TaskType::LocalBash);
         let dto = self.disk.get_or_create(&task_id).await;
         let output_path = dto.path().display().to_string();
+        // Shell tasks reach this path only via `BashTool` with
+        // `run_in_background=true` — by definition backgrounded.
         let assigned = self
             .manager
             .create_running_with_id(
@@ -755,6 +852,7 @@ impl ShellTaskSpawner for TaskRuntime {
                 TaskType::LocalBash,
                 &request.description,
                 &output_path,
+                /* is_backgrounded */ true,
             )
             .await;
         debug_assert_eq!(assigned, task_id);

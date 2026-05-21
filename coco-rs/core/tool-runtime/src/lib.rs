@@ -189,6 +189,7 @@ pub use traits::McpToolInfo;
 pub use traits::ProgressReceiver;
 pub use traits::ProgressSender;
 pub use traits::PromptOptions;
+pub use traits::SchemaContext;
 pub use traits::SearchReadInfo;
 pub use traits::Tool;
 pub use traits::ToolProgress;

@@ -78,51 +78,31 @@ impl TaskStatus {
     }
 }
 
-/// Base state shared by all task types.
+/// LocalAgent-specific sidecar fields. TS source:
+/// `tasks/LocalAgentTask/LocalAgentTask.tsx:128-148` (the
+/// `LocalAgentTaskState` extras beyond `TaskStateBase`).
 ///
-/// **W6 (A5 merge)**: the five `LocalAgentExtra` sidecar fields
-/// (`progress_summary`, `retrieved`, `retain`, `evict_after`,
-/// `is_backgrounded`) now live directly on `TaskStateBase`. The
-/// previous sparse-map design (`local_agent_extras: HashMap<id,
-/// LocalAgentExtra>`) created a two-lock window during
-/// `update_status` where a UI `set_retain(true)` could race the
-/// `evict_after` stamp, silently evicting a panel-pinned task. The
-/// merged layout reads + writes under a single `tasks` RwLock so the
-/// entire transition is atomic.
+/// Carried inside [`TaskExtras::LocalAgent`] so non-LocalAgent task
+/// variants don't pay storage cost for fields that have no meaning
+/// for them (TS uses a union type to express this; the Rust analog
+/// is the [`TaskExtras`] enum).
 ///
-/// These fields are meaningful only for `TaskType::LocalAgent` (and
-/// `TaskType::Dream` — same model). They serialize with
-/// `skip_serializing_if` so transcripts for shell tasks stay
-/// equally compact as before.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskStateBase {
-    /// prefix + 8 random base36 chars
-    pub id: String,
-    pub task_type: TaskType,
-    pub status: TaskStatus,
-    pub description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-    pub start_time: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub end_time: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_paused_ms: Option<i64>,
-    pub output_file: String,
-    #[serde(default)]
-    pub output_offset: i64,
-
-    // ── LocalAgent / Dream sidecar fields (W6 / A5) ────────────────
+/// **W6 (A5 merge)**: these fields used to live in a sparse
+/// `HashMap<id, LocalAgentExtra>` separate from `TaskStateBase`,
+/// which created a two-lock window during `update_status` where a UI
+/// `set_retain(true)` could race the `evict_after` stamp, silently
+/// evicting a panel-pinned task. They are now stored on the same
+/// `TaskStateBase` instance so the entire transition happens under
+/// the same lock.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalAgentExtras {
     /// Live progress snapshot for the LocalAgent task. `None` until
     /// the first message arrives / summary fires. Surfaced in the
     /// compact reminder so the model sees "Progress: ..." text.
     ///
-    /// TS parity: TaskStateBase.progress is an `AgentProgress` struct
-    /// carrying input/output/cumulative token counts plus a 5-deep
-    /// `recentActivities` FIFO and `lastToolName` — `LocalAgentTask.tsx:127,
-    /// 240-241, 339-353`. The legacy `progress_summary: Option<String>`
-    /// shape collapsed all of that into one freeform string, losing
-    /// granularity the `task_status` reminder needs.
+    /// TS parity: `AgentProgress` carrying input/output/cumulative
+    /// token counts plus a 5-deep `recentActivities` FIFO and
+    /// `lastToolName` — `LocalAgentTask.tsx:127, 240-241, 339-353`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<TaskProgress>,
     /// True once `TaskOutputTool` reads the terminal output. Stops
@@ -141,9 +121,137 @@ pub struct TaskStateBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evict_after: Option<i64>,
     /// Session-backgrounded flag for Ctrl+B fg/bg switching. Used
-    /// by the TUI panel filter. TS: `LocalAgentTask.tsx:134`.
+    /// by the TUI panel filter. TS: `LocalAgentTask.tsx:134` /
+    /// `:499` (async init = true) / `:564` (fg init = false).
     #[serde(default)]
     pub is_backgrounded: bool,
+}
+
+/// Per-`TaskType` sidecar extras. The Rust analog of TS's union
+/// `LocalShellTaskState | LocalAgentTaskState | DreamTaskState | …`
+/// where each variant carries variant-specific fields. Non-agent
+/// task types currently carry no extras; the enum leaves room for
+/// shell-specific (e.g. `exit_code` once promoted out of disk) and
+/// dream-specific (e.g. consolidation stats) state.
+///
+/// Default: [`Self::None`] so existing constructors that don't set
+/// extras don't carry LocalAgent-specific dead fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TaskExtras {
+    /// LocalAgent extras — meaningful for `TaskType::LocalAgent` and
+    /// (with the same shape) `TaskType::Dream`.
+    LocalAgent(LocalAgentExtras),
+    /// Shell / workflow / teammate / monitor / etc. — no
+    /// variant-specific fields today. Kept as a distinct variant
+    /// (vs. folding into [`Self::None`]) so a future extension for
+    /// e.g. `LocalBash(LocalShellExtras)` doesn't require a wire-format
+    /// migration.
+    #[default]
+    None,
+}
+
+impl TaskExtras {
+    /// Pre-populate a LocalAgent variant with the supplied initial
+    /// backgrounded flag. Used by [`TaskStateBase::new_running`] so
+    /// the caller doesn't have to construct `LocalAgentExtras` by
+    /// hand for the common bootstrap case.
+    pub fn local_agent(is_backgrounded: bool) -> Self {
+        Self::LocalAgent(LocalAgentExtras {
+            is_backgrounded,
+            ..LocalAgentExtras::default()
+        })
+    }
+
+    /// Borrow the LocalAgent extras if this variant carries them.
+    pub fn local_agent_ref(&self) -> Option<&LocalAgentExtras> {
+        match self {
+            Self::LocalAgent(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// Mutably borrow the LocalAgent extras if this variant carries them.
+    pub fn local_agent_mut(&mut self) -> Option<&mut LocalAgentExtras> {
+        match self {
+            Self::LocalAgent(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+/// Base state shared by all task types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskStateBase {
+    /// prefix + 8 random base36 chars
+    pub id: String,
+    pub task_type: TaskType,
+    pub status: TaskStatus,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    pub start_time: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_time: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_paused_ms: Option<i64>,
+    pub output_file: String,
+    #[serde(default)]
+    pub output_offset: i64,
+    /// Per-variant sidecar fields. `TaskExtras::LocalAgent` carries
+    /// the 5 LocalAgent-only fields (progress / retrieved / retain /
+    /// evict_after / is_backgrounded); other task types use
+    /// `TaskExtras::None` (Default). TS uses a union type for the
+    /// same separation — Rust expresses it as an enum.
+    #[serde(default)]
+    pub extras: TaskExtras,
+}
+
+impl TaskStateBase {
+    /// Borrow the LocalAgent extras if this task carries them. Returns
+    /// `None` for shell / dream / teammate / monitor task types.
+    /// Shorthand for `self.extras.local_agent_ref()`.
+    pub fn local_agent_extras(&self) -> Option<&LocalAgentExtras> {
+        self.extras.local_agent_ref()
+    }
+
+    /// Mutably borrow the LocalAgent extras if this task carries them.
+    pub fn local_agent_extras_mut(&mut self) -> Option<&mut LocalAgentExtras> {
+        self.extras.local_agent_mut()
+    }
+
+    /// `true` when the task is a LocalAgent (or Dream) AND has been
+    /// marked backgrounded (either at registration via
+    /// `registerAsyncAgent` or post-creation via `signal_detach`).
+    /// Returns `false` for non-LocalAgent types — they have no
+    /// `is_backgrounded` semantic.
+    pub fn is_backgrounded(&self) -> bool {
+        self.local_agent_extras()
+            .map(|e| e.is_backgrounded)
+            .unwrap_or(false)
+    }
+
+    /// `true` when the panel viewer has pinned this task open.
+    pub fn retain(&self) -> bool {
+        self.local_agent_extras().map(|e| e.retain).unwrap_or(false)
+    }
+
+    /// `true` when `TaskOutputTool` has consumed the terminal output.
+    pub fn retrieved(&self) -> bool {
+        self.local_agent_extras()
+            .map(|e| e.retrieved)
+            .unwrap_or(false)
+    }
+
+    /// The panel-grace deadline if set.
+    pub fn evict_after(&self) -> Option<i64> {
+        self.local_agent_extras().and_then(|e| e.evict_after)
+    }
+
+    /// The live progress snapshot if set.
+    pub fn progress(&self) -> Option<&TaskProgress> {
+        self.local_agent_extras().and_then(|e| e.progress.as_ref())
+    }
 }
 
 /// Generate a task ID with type prefix + 8 random base36 chars.

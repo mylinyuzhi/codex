@@ -14,9 +14,11 @@
 //! [`crate::todos`].
 
 use coco_types::CoreEvent;
+use coco_types::LocalAgentExtras;
 use coco_types::ServerNotification;
 use coco_types::TaskCompletedParams;
 use coco_types::TaskCompletionStatus;
+use coco_types::TaskExtras;
 use coco_types::TaskProgress;
 use coco_types::TaskProgressParams;
 use coco_types::TaskStartedParams;
@@ -25,8 +27,6 @@ use coco_types::TaskStatus;
 use coco_types::TaskType;
 use coco_types::TaskUsage;
 use coco_types::generate_task_id;
-use serde::Deserialize;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -36,38 +36,12 @@ use tokio::sync::mpsc;
 /// task. TS: `utils/task/framework.ts:28` `PANEL_GRACE_MS = 30_000`.
 pub const PANEL_GRACE_MS: i64 = 30_000;
 
-/// Backward-compat view of the (now-merged) per-task agent-sidecar
-/// fields. After W6 / A5 these live directly on `TaskStateBase`;
-/// `LocalAgentExtra` is kept as a read-only projection so existing
-/// callers (`MemoryRuntime`, tests) can keep their snapshot-and-read
-/// pattern without rewriting every call site.
-///
-/// TS source: `tasks/LocalAgentTask/LocalAgentTask.tsx:128-148`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LocalAgentExtra {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub progress: Option<TaskProgress>,
-    #[serde(default)]
-    pub retrieved: bool,
-    #[serde(default)]
-    pub retain: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub evict_after: Option<i64>,
-    #[serde(default)]
-    pub is_backgrounded: bool,
-}
-
-impl From<&TaskStateBase> for LocalAgentExtra {
-    fn from(t: &TaskStateBase) -> Self {
-        Self {
-            progress: t.progress.clone(),
-            retrieved: t.retrieved,
-            retain: t.retain,
-            evict_after: t.evict_after,
-            is_backgrounded: t.is_backgrounded,
-        }
-    }
-}
+/// Backward-compat type alias for the (now-canonical)
+/// [`coco_types::LocalAgentExtras`] struct. Older `MemoryRuntime`
+/// / test code referenced `LocalAgentExtra` (singular); the canonical
+/// type lives in `coco-types` with the grammatically-correct plural
+/// name. The alias keeps existing imports working without churn.
+pub type LocalAgentExtra = LocalAgentExtras;
 
 /// Running task manager — tracks background-task lifecycle state.
 ///
@@ -105,19 +79,22 @@ impl TaskManager {
         }
     }
 
-    // ── LocalAgent sidecar accessors (W6 / A5 merged) ────────────
+    // ── LocalAgent sidecar accessors ─────────────────────────────
     //
-    // Fields live on `TaskStateBase`. Setters take the single `tasks`
-    // RwLock once. Reads can take a shared lock.
+    // Fields live inside `TaskStateBase.extras::LocalAgent(...)`.
+    // Setters take the single `tasks` RwLock once and write through
+    // the enum variant (initializing it on first write for tasks
+    // whose initial `task_type` was `LocalAgent`).
 
     /// Snapshot the extras for a LocalAgent task; returns default
-    /// when the task doesn't exist.
-    pub async fn local_agent_extra(&self, id: &str) -> LocalAgentExtra {
+    /// when the task doesn't exist OR isn't a LocalAgent task.
+    pub async fn local_agent_extra(&self, id: &str) -> LocalAgentExtras {
         self.tasks
             .read()
             .await
             .get(id)
-            .map(LocalAgentExtra::from)
+            .and_then(|t| t.local_agent_extras())
+            .cloned()
             .unwrap_or_default()
     }
 
@@ -126,10 +103,16 @@ impl TaskManager {
     /// `updateAgentSummary` (`LocalAgentTask.tsx:359-407`) which writes
     /// only the `summary` field on the AgentProgress struct.
     pub async fn set_progress_summary(&self, id: &str, summary: String) {
-        if let Some(t) = self.tasks.write().await.get_mut(id) {
-            let mut progress = t.progress.clone().unwrap_or_default();
+        if let Some(extras) = self
+            .tasks
+            .write()
+            .await
+            .get_mut(id)
+            .and_then(|t| t.local_agent_extras_mut())
+        {
+            let mut progress = extras.progress.clone().unwrap_or_default();
             progress.summary = Some(summary);
-            t.progress = Some(progress);
+            extras.progress = Some(progress);
         }
     }
 
@@ -139,44 +122,74 @@ impl TaskManager {
     /// (`LocalAgentTask.tsx:339-353`) — preserves an existing `summary`
     /// across overlapping writes.
     pub async fn set_progress(&self, id: &str, mut progress: TaskProgress) {
-        if let Some(t) = self.tasks.write().await.get_mut(id) {
+        if let Some(extras) = self
+            .tasks
+            .write()
+            .await
+            .get_mut(id)
+            .and_then(|t| t.local_agent_extras_mut())
+        {
             // Preserve any existing summary; otherwise an interleaved
             // `updateAgentProgress` from the stream would clobber the
             // periodic AgentSummary text.
             if progress.summary.is_none()
-                && let Some(existing) = t.progress.as_ref().and_then(|p| p.summary.clone())
+                && let Some(existing) = extras.progress.as_ref().and_then(|p| p.summary.clone())
             {
                 progress.summary = Some(existing);
             }
-            t.progress = Some(progress);
+            extras.progress = Some(progress);
         }
     }
 
     /// Flip the `retrieved` flag — TS: `compact.ts:1578`.
     pub async fn mark_retrieved(&self, id: &str) {
-        if let Some(t) = self.tasks.write().await.get_mut(id) {
-            t.retrieved = true;
+        if let Some(extras) = self
+            .tasks
+            .write()
+            .await
+            .get_mut(id)
+            .and_then(|t| t.local_agent_extras_mut())
+        {
+            extras.retrieved = true;
         }
     }
 
     /// UI flips this when the user pins a task panel open.
     pub async fn set_retain(&self, id: &str, retain: bool) {
-        if let Some(t) = self.tasks.write().await.get_mut(id) {
-            t.retain = retain;
+        if let Some(extras) = self
+            .tasks
+            .write()
+            .await
+            .get_mut(id)
+            .and_then(|t| t.local_agent_extras_mut())
+        {
+            extras.retain = retain;
         }
     }
 
     /// Stamp the panel grace-period deadline.
     pub async fn set_evict_after(&self, id: &str, evict_after_ms: Option<i64>) {
-        if let Some(t) = self.tasks.write().await.get_mut(id) {
-            t.evict_after = evict_after_ms;
+        if let Some(extras) = self
+            .tasks
+            .write()
+            .await
+            .get_mut(id)
+            .and_then(|t| t.local_agent_extras_mut())
+        {
+            extras.evict_after = evict_after_ms;
         }
     }
 
     /// Toggle the Ctrl+B session-backgrounded flag.
     pub async fn set_backgrounded(&self, id: &str, backgrounded: bool) {
-        if let Some(t) = self.tasks.write().await.get_mut(id) {
-            t.is_backgrounded = backgrounded;
+        if let Some(extras) = self
+            .tasks
+            .write()
+            .await
+            .get_mut(id)
+            .and_then(|t| t.local_agent_extras_mut())
+        {
+            extras.is_backgrounded = backgrounded;
         }
     }
 
@@ -199,8 +212,15 @@ impl TaskManager {
         output_file: &str,
     ) -> String {
         let id = generate_task_id(task_type);
-        self.insert_and_emit(id, task_type, description, output_file, TaskStatus::Pending)
-            .await
+        self.insert_and_emit(
+            id,
+            task_type,
+            description,
+            output_file,
+            TaskStatus::Pending,
+            false,
+        )
+        .await
     }
 
     /// Create + insert a task already in [`TaskStatus::Running`].
@@ -210,6 +230,11 @@ impl TaskManager {
     /// only ONE lifecycle event fires: a single
     /// `TaskStarted(Running)` instead of TS-noisy
     /// `TaskStarted(Pending)` → `TaskProgress(Running)` pair.
+    ///
+    /// `is_backgrounded` defaults to `false` (foreground init); the
+    /// id-providing variant ([`Self::create_running_with_id`]) lets
+    /// agent-task callers pass `true` for fire-and-forget spawns to
+    /// match TS `registerAsyncAgent`'s immediate-background init.
     pub async fn create_running(
         &self,
         task_type: TaskType,
@@ -217,23 +242,43 @@ impl TaskManager {
         output_file: &str,
     ) -> String {
         let id = generate_task_id(task_type);
-        self.insert_and_emit(id, task_type, description, output_file, TaskStatus::Running)
-            .await
+        self.insert_and_emit(
+            id,
+            task_type,
+            description,
+            output_file,
+            TaskStatus::Running,
+            false,
+        )
+        .await
     }
 
     /// Insert a task with a caller-provided id (minted upstream so
     /// the caller can resolve per-id state like the disk-output
     /// path *before* the lifecycle event fires) already in
     /// [`TaskStatus::Running`]. Returns the id unchanged.
+    ///
+    /// `is_backgrounded` selects between TS `registerAgentForeground`
+    /// (`false`, default; flips to `true` later if the auto-background
+    /// timer fires) and `registerAsyncAgent` (`true`, fire-and-forget).
+    /// TS parity: `LocalAgentTask.tsx:499` (async) vs `:564` (fg).
     pub async fn create_running_with_id(
         &self,
         id: String,
         task_type: TaskType,
         description: &str,
         output_file: &str,
+        is_backgrounded: bool,
     ) -> String {
-        self.insert_and_emit(id, task_type, description, output_file, TaskStatus::Running)
-            .await
+        self.insert_and_emit(
+            id,
+            task_type,
+            description,
+            output_file,
+            TaskStatus::Running,
+            is_backgrounded,
+        )
+        .await
     }
 
     async fn insert_and_emit(
@@ -243,7 +288,16 @@ impl TaskManager {
         description: &str,
         output_file: &str,
         status: TaskStatus,
+        is_backgrounded: bool,
     ) -> String {
+        // LocalAgent + Dream tasks carry the LocalAgent sidecar
+        // (TS uses the same shape for both task types). Other task
+        // types use the `None` variant — no dead Option fields on
+        // the wire.
+        let extras = match task_type {
+            TaskType::LocalAgent | TaskType::Dream => TaskExtras::local_agent(is_backgrounded),
+            _ => TaskExtras::None,
+        };
         let state = TaskStateBase {
             id: id.clone(),
             task_type,
@@ -255,12 +309,7 @@ impl TaskManager {
             total_paused_ms: None,
             output_file: output_file.to_string(),
             output_offset: 0,
-            // W6 (A5): merged sidecar fields default to "not set".
-            progress: None,
-            retrieved: false,
-            retain: false,
-            evict_after: None,
-            is_backgrounded: false,
+            extras,
         };
         self.tasks.write().await.insert(id.clone(), state);
         self.emit_task_started(&id, task_type, description, output_file)
@@ -273,8 +322,8 @@ impl TaskManager {
     }
 
     pub async fn update_status(&self, id: &str, status: TaskStatus) {
-        // W6 (A5): status flip + evict_after stamp now happen under
-        // a single write lock. Previously the evict_after stamp went
+        // W6 (A5): status flip + evict_after stamp happen under a
+        // single write lock. Previously the evict_after stamp went
         // through `set_evict_after` (the sidecar map's separate
         // lock), creating a window where a UI `set_retain(true)`
         // could land between us reading `retain=false` and writing
@@ -289,8 +338,11 @@ impl TaskManager {
                     // flip. TS parity:
                     // `LocalAgentTask.tsx:294, 424, 448` —
                     // `evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS`.
-                    if task.task_type == TaskType::LocalAgent && !task.retain {
-                        task.evict_after = Some(current_time_ms() + PANEL_GRACE_MS);
+                    if task.task_type == TaskType::LocalAgent
+                        && let Some(extras) = task.local_agent_extras_mut()
+                        && !extras.retain
+                    {
+                        extras.evict_after = Some(current_time_ms() + PANEL_GRACE_MS);
                     }
                 }
                 Some((task.clone(), task.output_file.clone()))
@@ -345,11 +397,13 @@ impl TaskManager {
                     return false;
                 }
                 // Panel-grace gate for LocalAgent tasks (TS parity).
-                if t.task_type == TaskType::LocalAgent {
-                    if t.retain {
+                if t.task_type == TaskType::LocalAgent
+                    && let Some(extras) = t.local_agent_extras()
+                {
+                    if extras.retain {
                         return false;
                     }
-                    if let Some(deadline) = t.evict_after
+                    if let Some(deadline) = extras.evict_after
                         && deadline > now
                     {
                         return false;

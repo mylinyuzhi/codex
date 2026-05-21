@@ -8,6 +8,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::SchemaContext;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -187,13 +188,10 @@ impl Tool for AgentTool {
     /// or service-internal logic — exposing them to the LLM was a
     /// coco-rs-only extension that diverged from TS.
     ///
-    /// **Schema-honesty gap (tracked)**: TS dynamically `.omit({
-    /// run_in_background: true })` when `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`
-    /// is set or fork mode is enabled. coco-rs's `Tool::input_schema(&self)`
-    /// trait method has no options parameter, so this gating happens at
-    /// runtime in `execute()` instead (the value is silently overridden when
-    /// `COCO_BACKGROUND_TASKS_DISABLE` is set). A typed `input_schema(opts)`
-    /// migration would close this gap.
+    /// The static schema below exposes every field by default — the
+    /// dynamic [`Self::input_schema_for_session`] override removes
+    /// `run_in_background` when the runtime would silently veto it,
+    /// matching TS `AgentTool.tsx:110-125 lazySchema().omit(...)`.
     fn input_schema(&self) -> ToolInputSchema {
         let mut p = HashMap::new();
         p.insert(
@@ -304,6 +302,19 @@ impl Tool for AgentTool {
         }
     }
 
+    /// Session-aware schema. Drops `run_in_background` from
+    /// `properties` when the runtime would silently veto it — TS
+    /// parity with `AgentTool.tsx:110-125 lazySchema()` which calls
+    /// `.omit({ run_in_background: true })` under either
+    /// `isBackgroundTasksDisabled` or `isForkSubagentEnabled()`.
+    fn input_schema_for_session(&self, ctx: &SchemaContext) -> ToolInputSchema {
+        let mut schema = self.input_schema();
+        if ctx.background_tasks_disabled || ctx.fork_mode_active {
+            schema.properties.remove("run_in_background");
+        }
+        schema
+    }
+
     /// Render the spawn-result envelope into model-visible text. TS
     /// parity: `AgentTool.tsx::mapToolResultToToolResultBlockParam`
     /// (4 branches: teammate_spawned / async_launched / completed /
@@ -411,6 +422,15 @@ impl Tool for AgentTool {
         input: Value,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
+        // Snapshot every `ctx.app_state` field we'll need into locals at
+        // entry so subsequent awaits can't observe a torn read.
+        // TS runs single-threaded; Rust must capture once.
+        let summaries_via_app_state = if let Some(handle) = ctx.app_state.as_ref() {
+            handle.read().await.agent_progress_summaries_enabled
+        } else {
+            false
+        };
+
         let prompt = input
             .get("prompt")
             .and_then(|v| v.as_str())
@@ -736,11 +756,8 @@ impl Tool for AgentTool {
 
         // TS parity: `AgentTool.tsx:750` `enableSummarization` =
         // `isCoordinator || isForkSubagentEnabled || getSdkAgentProgressSummariesEnabled`.
-        let summaries_via_app_state = if let Some(handle) = ctx.app_state.as_ref() {
-            handle.read().await.agent_progress_summaries_enabled
-        } else {
-            false
-        };
+        // `summaries_via_app_state` was snapshotted at function entry to avoid
+        // mid-execute torn reads against `ctx.app_state`.
         let enable_summarization = coordinator_forces_background
             || coco_subagent::is_fork_subagent_active(
                 ctx.features.as_ref(),
