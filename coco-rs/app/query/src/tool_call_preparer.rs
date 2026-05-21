@@ -130,38 +130,17 @@ pub(crate) async fn prepare_one_pending_tool_call(
     let tool_id = prepared.tool_id;
     let tool = prepared.tool;
 
-    // Layer 2 schema validation on the raw `tc.input` — runs before
-    // PreToolUse hooks so the model sees a precise `<tool_use_error>
-    // InputValidationError: ...>` reply when its emission is
-    // schema-invalid. Hook-rewritten input has a second pass in
-    // `validate_effective_input_or_complete_error` below.
-    //
-    // We clone `tc` because the signature is `&ToolCallPart`;
-    // `validate_tool_call` mutates the local copy to populate
-    // `invalid` + `invalid_reason`.
-    let mut validated_tc = tc.clone();
-    if let Some(validator) = args.ctx.tool_schema_validator.as_ref() {
-        crate::tool_input_validate::validate_tool_call(&mut validated_tc, Some(&tool), validator)
-            .await;
-    }
-
-    // Invalid-call short-circuit. Three sources contribute, all
-    // funneled through `ToolCallPart.invalid_reason` so the wrap
-    // prefix picks itself without string matching:
-    //
-    //   1. Provider adapter — set when even repair can't recover
-    //      the raw `arguments` bytes into a usable shape.
-    //   2. Layer 2 above (`validate_tool_call`) — set on schema
-    //      violation or NoSuchTool detection.
-    //   3. Empty `invalid_reason` (legacy `invalid: true` with no
-    //      reason) — fall back to a generic JSON-parse message.
-    //
-    // Returning `None` skips PreToolUse hook + permission + execute;
-    // the caller (engine, streaming or batch path) treats this the
-    // same as a permission deny. The synthetic `tool_result` keeps
-    // Anthropic's tool_use ↔ tool_result pairing invariant intact.
-    if validated_tc.invalid {
-        let message = match &validated_tc.invalid_reason {
+    // Layer 2 schema validation already ran inside
+    // `prepare_committed_tool_call` (tool_runner.rs:82-123) — it
+    // returns `None` on `invalid=true` after emitting the synthetic
+    // `<tool_use_error>...>` tool_result, so by reaching this point
+    // we know the call is structurally valid. No duplicate validation
+    // here; the remaining short-circuit handles the rare case where
+    // Layer 1 set `invalid=true` AFTER `prepare_committed_tool_call`
+    // returned (cannot happen in current code paths, but keeps the
+    // invariant local).
+    if tc.invalid {
+        let message = match &tc.invalid_reason {
             Some(ToolInputInvalidReason::SchemaViolation { message }) => {
                 format!("<tool_use_error>InputValidationError: {message}</tool_use_error>")
             }
@@ -184,8 +163,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
         crate::helpers::complete_tool_call_with_error_mode(
             args.event_tx,
             args.history,
-            &validated_tc.tool_call_id,
-            &validated_tc.tool_name,
+            &tc.tool_call_id,
+            &tc.tool_name,
             &tool_id,
             &message,
             args.completion_event_mode,
@@ -193,7 +172,6 @@ pub(crate) async fn prepare_one_pending_tool_call(
         .await;
         return None;
     }
-    let tc = &validated_tc;
     // `tc.input` is already the observable input — both engine paths run
     // `normalize_observable_tool_input` when building this `ToolCallPart`.
 
