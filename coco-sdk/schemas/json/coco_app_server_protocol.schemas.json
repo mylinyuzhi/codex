@@ -8245,10 +8245,25 @@
       "type": "object"
     },
     "ToolCallPart": {
-      "description": "A tool call content part.",
+      "description": "A tool call content part.\n\n`input` always carries the model's best-known emission — even when the\ncall is `invalid`. Adapters that fail JSON parsing fall back to\n`JSONValue::Object({})` (so schema validation can report\nspecific missing fields; mirrors TS `parsed ?? {}` in\n`utils/messages.ts:2694`). Adapters that detect a truly unrecoverable\n`Value::String` payload preserve the raw bytes inside `input` so the\nagent loop can surface the original emission in diagnostics.",
       "properties": {
         "input": {
-          "description": "The tool arguments as JSON."
+          "description": "The tool arguments as JSON. **Always populated** — see struct doc."
+        },
+        "invalid": {
+          "description": "`true` when the tool call cannot be executed as emitted: the\nraw `arguments` could not be recovered into a parseable shape,\nthe schema validator rejected the input, or the model named a\ntool that does not exist. Pair with [`Self::invalid_reason`]\nfor the precise cause.\n\nCaller layers (`app/query` preparer, side queries) read this\nflag and emit a synthetic `tool_result(is_error: true)` so the\nagent loop's next turn carries a structured error back to the\nmain LLM for self-correction.\n\n**TS parity**: mirrors `invalid: boolean` on the SDK-level\n`TypedToolCall` in `@ai-sdk/ai`\n(`packages/ai/src/generate-text/parse-tool-call.ts`).",
+          "type": "boolean"
+        },
+        "invalidReason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolInputInvalidReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Structured reason accompanying [`Self::invalid`]. Set by\nwhichever layer first detected the failure (provider adapter\nfor unrecoverable JSON parse, `app/query::tool_input_validate`\nfor schema or NoSuchTool failures). `None` when `invalid` is\n`false`; required to be `Some(_)` when `invalid` is `true`\n(invariant maintained by the constructors below)."
         },
         "providerExecuted": {
           "description": "Whether the tool call will be executed by the provider.\nIf this flag is not set or is false, the tool call will be executed by the client.",
@@ -8312,6 +8327,70 @@
           },
           "required": [
             "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ToolInputInvalidReason": {
+      "description": "Structured cause for an invalid tool call. Drives the wrap prefix\nchosen by `app/query`'s tool result synthesizer:\n- [`Self::JsonParseFailed`] → `<tool_use_error>JSON parse failed: …</tool_use_error>`\n- [`Self::SchemaViolation`] → `<tool_use_error>InputValidationError: …</tool_use_error>`\n- [`Self::NoSuchTool`] → `<tool_use_error>No such tool available: …</tool_use_error>`\n\nMirrors the three failure modes that TS Claude Code distinguishes\nin `services/tools/toolExecution.ts:337-411,614-680`.",
+      "oneOf": [
+        {
+          "description": "Raw `arguments` bytes could not be parsed into JSON, even after\nrepair. Reserved for the unrecoverable case (e.g. a streaming\nbuffer that finished with truly malformed content). The common\nrecoverable failure mode lands in [`Self::SchemaViolation`]\ninstead because adapters fall back to `{}` on parse failure\nand let the schema validator report specific missing fields.",
+          "properties": {
+            "error": {
+              "description": "Parser error string (already redacted to a single line).",
+              "type": "string"
+            },
+            "kind": {
+              "const": "json_parse_failed",
+              "type": "string"
+            },
+            "raw": {
+              "description": "Original raw string preserved for diagnostics.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "raw",
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Schema validator rejected the input. `message` carries the\nLLM-friendly multi-line error already formatted via\n`format_schema_error` — error wrap wraps it verbatim inside the\n`<tool_use_error>InputValidationError: …</tool_use_error>`\nenvelope without re-formatting.",
+          "properties": {
+            "kind": {
+              "const": "schema_violation",
+              "type": "string"
+            },
+            "message": {
+              "description": "Pre-formatted, LLM-readable error body.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Model emitted a tool name not present in the request's tools\nlist. Recovery is the agent loop: the next turn's prompt\nreminds the model which tools are available.",
+          "properties": {
+            "kind": {
+              "const": "no_such_tool",
+              "type": "string"
+            },
+            "tool_name": {
+              "description": "The unknown name the model emitted.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tool_name"
           ],
           "type": "object"
         }
