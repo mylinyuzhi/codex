@@ -8659,6 +8659,7 @@ dependencies = [
  "tracing",
  "vercel-ai-provider",
  "vercel-ai-provider-utils",
+ "wiremock",
 ]
 
 [[package]]
@@ -8695,6 +8696,7 @@ dependencies = [
  "tracing",
  "vercel-ai-provider",
  "vercel-ai-provider-utils",
+ "wiremock",
 ]
 
 [[package]]
@@ -8743,6 +8745,7 @@ dependencies = [
  "tracing",
  "vercel-ai-provider",
  "vercel-ai-provider-utils",
+ "wiremock",
 ]
 
 [[package]]
