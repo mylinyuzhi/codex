@@ -1464,6 +1464,175 @@ fn test_maybe_apply_sh_prefix_non_windows_passthrough() {
     );
 }
 
+// ── Function hooks ──────────────────────────────────────────────────
+
+#[derive(Debug)]
+struct AlwaysPasses;
+
+impl crate::FunctionHookPredicate for AlwaysPasses {
+    fn evaluate(&self, _messages: &[std::sync::Arc<coco_messages::Message>]) -> bool {
+        true
+    }
+    fn name(&self) -> &str {
+        "AlwaysPasses"
+    }
+}
+
+#[derive(Debug)]
+struct AlwaysFails;
+
+impl crate::FunctionHookPredicate for AlwaysFails {
+    fn evaluate(&self, _messages: &[std::sync::Arc<coco_messages::Message>]) -> bool {
+        false
+    }
+    fn name(&self) -> &str {
+        "AlwaysFails"
+    }
+}
+
+#[test]
+fn function_hook_register_then_find_returns_match() {
+    let registry = HookRegistry::new();
+    let id = registry
+        .register_function_hook(
+            "h-1",
+            HookEventType::Stop,
+            None,
+            std::time::Duration::from_secs(1),
+            std::sync::Arc::new(AlwaysPasses),
+            "must call X",
+        )
+        .expect("Stop is in FUNCTION_HOOK_SUPPORTED_EVENTS");
+    assert_eq!(id, "h-1");
+    assert_eq!(registry.function_hook_count(), 1);
+    let matches = registry.find_matching_function_hooks(HookEventType::Stop, None);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].id, "h-1");
+    assert_eq!(matches[0].predicate.name(), "AlwaysPasses");
+}
+
+#[test]
+fn function_hook_register_rejects_unsupported_event() {
+    let registry = HookRegistry::new();
+    // SubagentStop is NOT in FUNCTION_HOOK_SUPPORTED_EVENTS — register
+    // must refuse so the hook doesn't persist as a silent no-op.
+    let err = registry
+        .register_function_hook(
+            "h-bad",
+            HookEventType::SubagentStop,
+            None,
+            std::time::Duration::from_secs(1),
+            std::sync::Arc::new(AlwaysPasses),
+            "msg",
+        )
+        .expect_err("non-Stop registration must error");
+    assert_eq!(
+        err,
+        crate::RegisterFunctionHookError::UnsupportedEvent(HookEventType::SubagentStop)
+    );
+    assert_eq!(
+        registry.function_hook_count(),
+        0,
+        "rejected registration must not leak a hook into storage"
+    );
+}
+
+#[test]
+fn function_hook_register_rejects_duplicate_id() {
+    let registry = HookRegistry::new();
+    registry
+        .register_function_hook(
+            "dup",
+            HookEventType::Stop,
+            None,
+            std::time::Duration::from_secs(1),
+            std::sync::Arc::new(AlwaysPasses),
+            "first",
+        )
+        .unwrap();
+    let err = registry
+        .register_function_hook(
+            "dup",
+            HookEventType::Stop,
+            None,
+            std::time::Duration::from_secs(1),
+            std::sync::Arc::new(AlwaysFails),
+            "second",
+        )
+        .expect_err("duplicate id must error");
+    assert_eq!(
+        err,
+        crate::RegisterFunctionHookError::DuplicateId("dup".to_string())
+    );
+    assert_eq!(registry.function_hook_count(), 1);
+    // First registration's predicate is preserved.
+    let matches = registry.find_matching_function_hooks(HookEventType::Stop, None);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].predicate.name(), "AlwaysPasses");
+}
+
+#[test]
+fn function_hook_remove_by_id_drops_only_that_hook() {
+    let registry = HookRegistry::new();
+    registry
+        .register_function_hook(
+            "h-keep",
+            HookEventType::Stop,
+            None,
+            std::time::Duration::from_secs(1),
+            std::sync::Arc::new(AlwaysPasses),
+            "keep",
+        )
+        .unwrap();
+    registry
+        .register_function_hook(
+            "h-drop",
+            HookEventType::Stop,
+            None,
+            std::time::Duration::from_secs(1),
+            std::sync::Arc::new(AlwaysFails),
+            "drop",
+        )
+        .unwrap();
+    assert_eq!(registry.function_hook_count(), 2);
+    assert!(registry.remove_function_hook("h-drop"));
+    assert_eq!(registry.function_hook_count(), 1);
+    let matches = registry.find_matching_function_hooks(HookEventType::Stop, None);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].id, "h-keep");
+    // Removing an unknown id is a no-op (returns false).
+    assert!(!registry.remove_function_hook("h-nonexistent"));
+    assert_eq!(registry.function_hook_count(), 1);
+}
+
+#[test]
+fn function_hook_matcher_none_matches_any_value() {
+    let registry = HookRegistry::new();
+    registry
+        .register_function_hook(
+            "h-any",
+            HookEventType::Stop,
+            None, // wildcard
+            std::time::Duration::from_secs(1),
+            std::sync::Arc::new(AlwaysPasses),
+            "msg",
+        )
+        .unwrap();
+    // Should match any concrete match_value, including None.
+    assert_eq!(
+        registry
+            .find_matching_function_hooks(HookEventType::Stop, None)
+            .len(),
+        1
+    );
+    assert_eq!(
+        registry
+            .find_matching_function_hooks(HookEventType::Stop, Some("any-tool"))
+            .len(),
+        1
+    );
+}
+
 #[tokio::test]
 async fn test_powershell_hook_returns_helpful_error_when_pwsh_missing() {
     // On a Linux test runner without pwsh installed, a PowerShell hook

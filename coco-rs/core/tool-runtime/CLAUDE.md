@@ -119,7 +119,7 @@ pub struct TaskStateBase {
 }
 ```
 
-Eliminates the `LocalAgentExtra` shim entirely; per-task-type accessors
+Eliminates sparse LocalAgent sidecar shims entirely; per-task-type accessors
 return concrete types via match. Touches 20+ files (every consumer of
 `progress` / `retrieved` / `retain` / `evict_after` / `is_backgrounded`).
 

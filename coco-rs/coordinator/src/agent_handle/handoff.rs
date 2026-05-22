@@ -1,18 +1,12 @@
-//! Post-spawn handoff classifier and AgentSummary.
+//! Post-spawn handoff classifier.
 //!
-//! TS: `agentToolUtils.ts:classifyHandoffIfNeeded` and
-//! `services/AgentSummary/agentSummary.ts`. Both fail-open when the
-//! `SideQueryHandle` isn't installed.
+//! TS: `agentToolUtils.ts:classifyHandoffIfNeeded`. It fail-opens when
+//! the `SideQueryHandle` isn't installed.
 //!
 //! **W6.2 full**: the underlying logic now lives in free async
 //! functions taking pre-cloned `Arc`s, so the detached engine task
 //! in [`super::spawn::spawn_subagent`]'s sync path can call them
 //! without holding a `&self` borrow across an `await` point.
-
-use std::sync::Arc;
-use tokio::sync::RwLock;
-
-use coco_types::SubAgentState;
 
 use super::SwarmAgentHandle;
 
@@ -69,43 +63,6 @@ pub(crate) async fn classify_handoff_inline(
     match coco_subagent::render_block_message(&final_verdict) {
         Some(blocked) => Some(blocked),
         None => qr.response_text.clone(),
-    }
-}
-
-/// Free-fn implementation of [`SwarmAgentHandle::summarize_handoff_if_needed`].
-/// Updates `agents[agent_id].last_message` with a 3-5-word summary
-/// when the classifier admits the agent_type/tool_count combo. Used
-/// by the detached engine task in sync detach race.
-pub(crate) async fn summarize_handoff_inline(
-    agent_type: &str,
-    qr: &coco_tool_runtime::AgentQueryResult,
-    agent_id: &str,
-    side_query: Option<&coco_tool_runtime::SideQueryHandle>,
-    agents: &Arc<RwLock<Vec<SubAgentState>>>,
-) {
-    if !coco_subagent::should_summarize(agent_type, qr.tool_use_count) {
-        return;
-    }
-    let Some(side_query) = side_query else {
-        return;
-    };
-    let (sys, user) = coco_subagent::build_summary_prompts(agent_type, /*previous*/ None);
-    let summary_text = match side_query
-        .query(coco_tool_runtime::SideQueryRequest::simple(
-            &sys,
-            &user,
-            "subagent-summary",
-        ))
-        .await
-    {
-        Ok(resp) => resp.text.unwrap_or_default(),
-        Err(_) => return,
-    };
-    if let Some(clean) = coco_subagent::sanitize_summary(&summary_text) {
-        let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<SubAgentState>> = agents.write().await;
-        if let Some(agent) = guard.iter_mut().find(|a| a.agent_id == agent_id) {
-            agent.last_message = Some(clean);
-        }
     }
 }
 

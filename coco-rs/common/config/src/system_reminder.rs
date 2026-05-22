@@ -183,34 +183,9 @@ pub struct AttachmentSettings {
     /// Silent — image diffs aren't text; UI surfaces the path. On by default.
     pub edited_image_file: bool,
 
-    // ── Audit-add (May 2026) — TS-parity reminders not previously ported.
-    // Defaults: on for those whose engine inputs already exist
-    // (`max_turns_reached` reads engine state); off for those still
-    // awaiting upstream snapshot wiring (the rest).
-    /// Turn-budget-exhausted reminder (TS `max_turns_reached`).
-    pub max_turns_reached: bool,
-    /// Session-memory summary reminder (TS `current_session_memory`).
-    /// Off by default — depends on `coco-memory` snapshot wiring.
-    pub current_session_memory: bool,
-    /// Permission-rule snapshot reminder (TS `command_permissions`).
-    /// Off by default — depends on `coco-permissions` snapshot wiring.
-    pub command_permissions: bool,
-    /// Dynamic skill listing reminder (TS `dynamic_skill`). Off by
-    /// default — depends on `coco-skills` dynamic loading wiring.
-    pub dynamic_skill: bool,
-    /// Heuristic skill discovery reminder (TS `skill_discovery`). Off
-    /// by default.
+    // ── Audit-add (May 2026) — model-visible TS attachment.
+    /// Heuristic skill discovery reminder (TS `skill_discovery`). Off by default.
     pub skill_discovery: bool,
-    /// Tool structured-output reminder (TS `structured_output`). Off by
-    /// default — depends on `coco-tool-runtime` structured-output
-    /// snapshot.
-    pub structured_output: bool,
-    /// Swarm teammate shutdown batch reminder
-    /// (TS `teammate_shutdown_batch`). Off by default — swarm-only.
-    pub teammate_shutdown_batch: bool,
-    /// Context-efficiency nudge (TS `context_efficiency`). Off by
-    /// default until thresholds are configurable.
-    pub context_efficiency: bool,
 }
 
 impl Default for AttachmentSettings {
@@ -268,15 +243,7 @@ impl Default for AttachmentSettings {
             // API; UI/transcript only. Safe to leave on by default.
             already_read_file: true,
             edited_image_file: true,
-            // Audit-add — see field-level docs for defaults rationale.
-            max_turns_reached: true,
-            current_session_memory: false,
-            command_permissions: false,
-            dynamic_skill: false,
             skill_discovery: false,
-            structured_output: false,
-            teammate_shutdown_batch: false,
-            context_efficiency: false,
         }
     }
 }

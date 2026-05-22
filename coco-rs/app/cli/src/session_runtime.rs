@@ -574,15 +574,9 @@ pub struct SessionRuntime {
     /// configured provider instead of silently reusing Main's client.
     role_client_cache: Arc<coco_inference::RoleClientCache>,
     /// Agent-spawn handle used by `AgentTool` / coordinator-mode
-    /// workers. `Some(SwarmAgentHandle)` when `Feature::AgentTeams`
-    /// is enabled at session bootstrap; `None` falls back to
-    /// `NoOpAgentHandle` on every per-turn engine. The handle owns
-    /// the in-process runner + team manager + worktree manager;
-    /// it's late-bound (set after `build()` returns the `Arc`)
-    /// because the underlying [`coco_query::QueryEngineAdapter`]
-    /// factory captures `Arc<Self>` and would otherwise create a
-    /// chicken-and-egg cycle. P1 (production wiring of subagent
-    /// execution).
+    /// workers. Late-bound after `TaskRuntime` is attached because
+    /// `SwarmAgentHandle` requires the canonical TaskManager-backed
+    /// registry at construction.
     agent_handle: Arc<RwLock<Option<AgentHandleRef>>>,
     /// Post-turn fork dispatcher (D1/D2). Same late-bind pattern as
     /// `agent_handle`: built after `build()` returns the `Arc<Self>`
@@ -687,12 +681,17 @@ pub struct SessionRuntime {
     /// hot-reloads via `update_config` are seen everywhere.
     /// `None` when sandbox is disabled.
     sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
-    /// Inter-turn reminder mailbox shared with the engine. Producers
-    /// outside the tool path (slash commands, swarm coordinator, skill
-    /// loader) push event-driven reminder snapshots through
-    /// [`Self::reminder_mailbox_handle`]; the engine drains via
-    /// [`coco_system_reminder::ReminderMailbox::drain`].
-    reminder_mailbox: Arc<coco_system_reminder::ReminderMailbox>,
+    /// Session-scoped attachment channel. Producers outside the per-turn
+    /// engine (slash commands via the TUI, future swarm / skill / hook
+    /// forwarders) emit typed silent `AttachmentMessage`s through
+    /// [`Self::attachment_emitter`]; the engine drains the receiver at the
+    /// head of every outer-loop turn via
+    /// [`coco_query::QueryEngine::drain_attachment_inbox`]. Lives across
+    /// engine rebuilds so cross-turn producers see a stable handle.
+    session_attachment_tx: tokio::sync::mpsc::UnboundedSender<coco_messages::AttachmentMessage>,
+    session_attachment_rx: Arc<
+        tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<coco_messages::AttachmentMessage>>,
+    >,
     /// Session-scoped mid-turn command queue. The Rust analog of TS
     /// `utils/messageQueueManager.ts` module-level singleton: producers
     /// (the TUI-while-busy bridge in `tui_runner`, future task /
@@ -897,51 +896,12 @@ impl SessionRuntime {
             None
         };
 
-        // ── Swarm agent handle ──
-        //
-        // Production sessions used to silently fall back to
-        // `NoOpAgentHandle` for *every* `AgentTool` / forked
-        // subagent call. We now construct a real `SwarmAgentHandle`
-        // wired with an `InProcessAgentRunner` so:
-        //   - `send_message` reaches teammates,
-        //   - team create/delete operations work,
-        //   - the memory crate's forked extraction / dream agents
-        //     spawn against the same runtime that user-facing
-        //     `Agent` tool spawns use.
-        //
-        // The execution engine (`AgentQueryEngine`) is installed
-        // separately by the engine-factory wiring — until that lands
-        // sync subagent spawns return a clean "no execution engine"
-        // error rather than the stub "agent spawning not available"
-        // we used to emit.
-        let swarm_agent_handle = {
-            // In-process subagents inherit the leader's
-            // `ToolPermissionBridge` (installed on `SessionRuntime` and
-            // propagated by `wire_engine`); no extra channel needed
-            // here. The runner only needs cwd + max-agents.
-            let runner = Arc::new(coco_coordinator::runner::InProcessAgentRunner::new(
-                cwd.display().to_string(),
-                /*max_agents*/ 8,
-            ));
-            let team_manager = Arc::new(RwLock::new(None));
-            let mut handle = coco_coordinator::agent_handle::SwarmAgentHandle::new(
-                runner,
-                team_manager,
-                cwd.display().to_string(),
-                runtime_config.clone(),
-            );
-            // Worktree manager — required for `isolation: "worktree"`
-            // subagents. Resolved against the canonical git root so
-            // worktrees of one repo share one worktree pool.
-            if let Some(repo_root) = coco_git::find_canonical_git_root(&cwd) {
-                let manager = Arc::new(coco_coordinator::worktree::AgentWorktreeManager::new(
-                    repo_root,
-                ));
-                handle.set_worktree_manager(manager);
-            }
-            let arc_handle: coco_tool_runtime::AgentHandleRef = Arc::new(handle);
-            arc_handle
-        };
+        // The production swarm handle is late-bound after TaskRuntime is
+        // attached, because LocalAgent task registration is a required
+        // constructor dependency. Until then engines carry the explicit
+        // no-op handle and `attach_agent_handle` replaces it everywhere.
+        let swarm_agent_handle: coco_tool_runtime::AgentHandleRef =
+            Arc::new(coco_tool_runtime::NoOpAgentHandle);
 
         // Now that the real `AgentHandle` exists, install it on the
         // memory runtime so forked extraction / dream agents reach
@@ -1081,13 +1041,15 @@ impl SessionRuntime {
         // an error and we exit before the REPL starts.
         let sandbox_state = build_sandbox_state(&runtime_config, &cwd)?;
 
-        // Single inter-turn reminder mailbox for the session. Engine
-        // owns the concrete type (drains it per turn);
-        // `ToolUseContext.reminder_mailbox` gets the type-erased handle
-        // for producer subsystems (slash commands, tools, skill loader,
-        // swarm coordinator). Closes the producer-wiring deferral
-        // documented in `audit-gaps.md` Round 13.
-        let reminder_mailbox = coco_system_reminder::ReminderMailbox::new();
+        // Session-scoped attachment channel. The engine drains the rx at
+        // the head of each turn (drain_attachment_inbox), while producers
+        // outside the per-turn engine (TUI slash commands, future swarm /
+        // skill forwarders) push via the cloned tx — see
+        // `Self::attachment_emitter`. One channel per session, threaded
+        // into each per-turn engine via `wire_engine`.
+        let (session_attachment_tx, session_attachment_rx) =
+            tokio::sync::mpsc::unbounded_channel::<coco_messages::AttachmentMessage>();
+        let session_attachment_rx = Arc::new(tokio::sync::Mutex::new(session_attachment_rx));
 
         // Bootstrap the per-source permission rule maps. Mirrors TS
         // `loadPermissionRules()`: parses every settings.json layer
@@ -1213,7 +1175,6 @@ impl SessionRuntime {
             features: Arc::new(runtime_config.features.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             include_hook_events: cli.include_hook_events,
-            reminder_mailbox: reminder_mailbox.clone(),
             ..Default::default()
         };
 
@@ -1380,7 +1341,8 @@ impl SessionRuntime {
             builtin_agent_catalog,
             agent_catalog,
             sdk_supplied_agents: Arc::new(RwLock::new(Vec::new())),
-            reminder_mailbox,
+            session_attachment_tx,
+            session_attachment_rx,
             transcript_store,
             transcript_dedup,
             tool_result_replacement_state,
@@ -1471,15 +1433,16 @@ impl SessionRuntime {
         self.agent_catalog.read().await.clone()
     }
 
-    /// Producer-only handle to the inter-turn reminder mailbox.
+    /// Session-scoped attachment emitter for producers outside the
+    /// per-turn engine (TUI slash commands, swarm forwarders, …).
     ///
-    /// Subsystems outside the per-tool-call code path (e.g. slash
-    /// command handlers, the swarm coordinator) push event-driven
-    /// reminder snapshots through this. The trait object hides
-    /// [`coco_system_reminder::ReminderMailbox::drain`], which is
-    /// engine-only.
-    pub fn reminder_mailbox_handle(&self) -> Arc<dyn coco_system_reminder::ReminderMailboxRef> {
-        self.reminder_mailbox.clone().handle()
+    /// Each `emit()` enqueues a typed `AttachmentMessage` (typically
+    /// silent-* variants) onto the session channel. The engine drains
+    /// at the head of each outer-loop turn via
+    /// [`coco_query::QueryEngine::drain_attachment_inbox`] so producers
+    /// don't need access to `MessageHistory`.
+    pub fn attachment_emitter(&self) -> coco_messages::AttachmentEmitter {
+        coco_messages::AttachmentEmitter::new(self.session_attachment_tx.clone())
     }
 
     /// The tool registry shared by every engine instance.
@@ -2001,6 +1964,15 @@ impl SessionRuntime {
         // `runtime.command_queue()` would land on an instance the
         // running engine cannot see.
         engine = engine.with_command_queue(self.command_queue.clone());
+        // Same lifetime argument as `with_command_queue`: the attachment
+        // channel must live across engine rebuilds so cross-turn
+        // producers (TUI slash commands, future swarm forwarders) see a
+        // stable handle. The engine's own per-instance attachment
+        // channel is replaced by the session-scoped one.
+        engine = engine.with_attachment_channel(
+            self.session_attachment_tx.clone(),
+            self.session_attachment_rx.clone(),
+        );
         if let Some(svc) = &self.session_memory_service {
             let sm_text_now = svc.current_text().await;
             engine = engine.with_session_memory_text(sm_text_now);
@@ -2120,11 +2092,9 @@ impl SessionRuntime {
         engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
         engine =
             engine.with_tool_result_replacement_state(self.tool_result_replacement_state.clone());
-        // Agent handle (P1): only installed when `attach_agent_handle`
-        // ran at bootstrap (i.e. `Feature::AgentTeams` is on). Without
-        // it, the engine factory's default `NoOpAgentHandle` answers
-        // `AgentTool` / `SendMessage` / `TeamCreate` calls with a
-        // model-visible "not available in this context" error.
+        // Agent handle: installed by bootstrap after TaskRuntime exists.
+        // Until then the engine carries the explicit no-op handle from
+        // `swarm_agent_handle`.
         if let Some(handle) = self.agent_handle.read().await.clone() {
             engine = engine.with_agent_handle(handle);
         }
@@ -2156,21 +2126,27 @@ impl SessionRuntime {
     }
 
     /// Install the agent-spawn handle on this runtime. Called once
-    /// after `build()` returns the `Arc<Self>`, by the bootstrap path
-    /// in `app/cli/main.rs` when `Feature::AgentTeams` is enabled. The
-    /// handle is late-bound because the adapter inside it needs to
-    /// capture `Arc<Self>` to drive per-spawn engine builds — calling
-    /// this from inside `build()` would create a cycle.
+    /// after `build()` returns the `Arc<Self>`. The handle is
+    /// late-bound because the adapter inside it needs to capture
+    /// `Arc<Self>` to drive per-spawn engine builds — calling this
+    /// from inside `build()` would create a cycle.
     pub async fn attach_agent_handle(&self, handle: AgentHandleRef) {
-        *self.agent_handle.write().await = Some(handle);
+        *self.agent_handle.write().await = Some(handle.clone());
+        if let Some(runtime) = &self.memory_runtime {
+            runtime.install_agent(handle);
+        }
     }
 
     /// Interrupt an in-process teammate's current turn without
     /// cancelling the teammate lifecycle.
     pub async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {
-        self.swarm_agent_handle
-            .interrupt_agent_current_work(agent_id)
+        let handle = self
+            .agent_handle
+            .read()
             .await
+            .clone()
+            .unwrap_or_else(|| self.swarm_agent_handle.clone());
+        handle.interrupt_agent_current_work(agent_id).await
     }
 
     /// Install the post-turn fork dispatcher (D1/D2). Late-bound for

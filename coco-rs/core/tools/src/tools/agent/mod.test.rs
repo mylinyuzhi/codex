@@ -816,23 +816,23 @@ struct StoppedTaskHandle {
 }
 
 #[async_trait::async_trait]
-impl coco_tool_runtime::TaskReader for StoppedTaskHandle {
+impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
     async fn get_task_status(
         &self,
         task_id: &str,
     ) -> Result<coco_types::TaskStateBase, coco_error::BoxedError> {
         Ok(coco_types::TaskStateBase {
             id: task_id.into(),
-            task_type: coco_types::TaskType::LocalAgent,
             status: self.status,
+            notified: false,
             description: String::new(),
             tool_use_id: None,
             start_time: 0,
             end_time: None,
             total_paused_ms: None,
-            output_file: String::new(),
+            output_file: None,
             output_offset: 0,
-            extras: coco_types::TaskExtras::local_agent(false),
+            extras: coco_types::TaskExtras::bg_agent_default(),
         })
     }
     async fn get_task_output_delta(
@@ -863,20 +863,21 @@ impl coco_tool_runtime::TaskReader for StoppedTaskHandle {
             coco_error::StatusCode::Internal,
         )))
     }
-}
-
-#[async_trait::async_trait]
-impl coco_tool_runtime::TaskController for StoppedTaskHandle {
+    async fn read_output(&self, _: &str) -> String {
+        String::new()
+    }
+    async fn task_state(&self, _: &str) -> Option<coco_types::TaskStateBase> {
+        None
+    }
+    async fn is_terminal(&self, _: &str) -> bool {
+        false
+    }
     async fn kill_task(&self, _: &str) -> Result<(), coco_error::BoxedError> {
         Ok(())
     }
     async fn signal_detach(&self, _: &str) -> coco_tool_runtime::DetachOutcome {
         coco_tool_runtime::DetachOutcome::Unknown
     }
-}
-
-#[async_trait::async_trait]
-impl coco_tool_runtime::ShellTaskSpawner for StoppedTaskHandle {
     async fn spawn_shell_task(
         &self,
         _: coco_tool_runtime::BackgroundShellRequest,
@@ -886,6 +887,36 @@ impl coco_tool_runtime::ShellTaskSpawner for StoppedTaskHandle {
             coco_error::StatusCode::Internal,
         )))
     }
+    async fn register_agent_task(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+        _: tokio_util::sync::CancellationToken,
+        _: coco_tool_runtime::AgentRegistration,
+    ) -> String {
+        String::new()
+    }
+    async fn register_agent_task_with_id(
+        &self,
+        task_id: String,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+        _: tokio_util::sync::CancellationToken,
+        _: coco_tool_runtime::AgentRegistration,
+    ) -> String {
+        task_id
+    }
+    async fn register_dream_task(&self, _: &str, _: tokio_util::sync::CancellationToken) -> String {
+        String::new()
+    }
+    async fn append_output(&self, _: &str, _: &str) {}
+    async fn set_progress_summary(&self, _: &str, _: String) {}
+    async fn set_progress(&self, _: &str, _: coco_types::TaskProgress) {}
+    async fn mark_completed(&self, _: &str, _: coco_tool_runtime::AgentCompletionPayload) {}
+    async fn mark_failed(&self, _: &str, _: &str) {}
+    async fn complete_silent(&self, _: &str, _: bool) {}
 }
 
 /// Mock AgentHandle that records the most recent `resume_agent` call

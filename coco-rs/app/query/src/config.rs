@@ -282,19 +282,6 @@ pub struct QueryEngineConfig {
     /// `SDKHookStarted`/etc. messages. Defaults to `false` to match
     /// TS opt-in behaviour.
     pub include_hook_events: bool,
-    /// Inter-turn reminder mailbox. Subsystems (slash commands, skill
-    /// loader, tool runtime, swarm coordinator) push event-driven
-    /// reminder snapshots into this — exposed to producers via
-    /// [`Arc<dyn coco_system_reminder::ReminderMailboxRef>`] threaded
-    /// onto [`coco_tool_runtime::ToolUseContext`]. The engine drains
-    /// the **concrete** type (which exposes [`coco_system_reminder::ReminderMailbox::drain`])
-    /// at the top of every turn so the next
-    /// [`coco_system_reminder::TurnReminderInput`] picks up
-    /// `command_permissions` / `dynamic_skill` / `structured_output` /
-    /// `teammate_shutdown_batch` bodies. The trait split prevents
-    /// producers from accidentally consuming the queue.
-    pub reminder_mailbox: Arc<coco_system_reminder::ReminderMailbox>,
-
     /// Per-fork tool-execution gate. When `Some`, the engine threads
     /// the handle onto every `ToolUseContext` it builds, so the
     /// tool-call preparer runs the callback before the static
@@ -405,7 +392,6 @@ impl Default for QueryEngineConfig {
             tool_filter: ToolFilter::unrestricted(),
             allowed_write_roots: Vec::new(),
             include_hook_events: false,
-            reminder_mailbox: coco_system_reminder::ReminderMailbox::new(),
             can_use_tool: None,
             query_source_override: None,
             fork_label: None,
@@ -490,4 +476,8 @@ pub struct QueryResult {
     /// re-Arc allocation across the engine→runtime seam (plan §11
     /// F8 follow-up).
     pub final_messages: Vec<std::sync::Arc<Message>>,
+    /// Structured output captured from a TS `structured_output` attachment.
+    pub structured_output: Option<serde_json::Value>,
+    /// Max-turn terminal signal captured from this engine invocation.
+    pub max_turns_reached: Option<coco_types::MaxTurnsReachedPayload>,
 }

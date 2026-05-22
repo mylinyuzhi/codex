@@ -10,6 +10,7 @@
 use std::sync::RwLock;
 
 use coco_config::env;
+use coco_types::TaskStateBase;
 use coco_types::TeamContext;
 
 use crate::constants::AGENT_ID_ENV_VAR;
@@ -213,37 +214,35 @@ pub fn is_team_lead(team_context: Option<&TeamContext>) -> bool {
 /// Check if there are any active in-process teammates.
 ///
 /// TS: `hasActiveInProcessTeammates(appState)`
-pub fn has_active_in_process_teammates(
-    tasks: &std::collections::HashMap<String, crate::task::InProcessTeammateTaskState>,
-) -> bool {
-    tasks.values().any(|t| !t.is_idle && !t.shutdown_requested)
+pub fn has_active_in_process_teammates(tasks: &[TaskStateBase]) -> bool {
+    tasks.iter().any(|t| {
+        t.teammate_extras()
+            .is_some_and(|e| !e.is_idle && !e.shutdown_requested)
+    })
 }
 
 /// Check if there are any working (non-idle) in-process teammates.
 ///
 /// TS: `hasWorkingInProcessTeammates(appState)`
-pub fn has_working_in_process_teammates(
-    tasks: &std::collections::HashMap<String, crate::task::InProcessTeammateTaskState>,
-) -> bool {
-    tasks.values().any(|t| !t.is_idle)
+pub fn has_working_in_process_teammates(tasks: &[TaskStateBase]) -> bool {
+    tasks
+        .iter()
+        .any(|t| t.teammate_extras().is_some_and(|e| !e.is_idle))
 }
 
-/// Wait for all in-process teammates to become idle.
+/// Wait for all in-process teammates to become idle. Polls the
+/// supplied snapshot fn every 500ms until idle.
 ///
 /// TS: `waitForTeammatesToBecomeIdle(setAppState, appState)`
-///
-/// Polls every 500ms until all teammates are idle or all tasks complete.
-pub async fn wait_for_teammates_to_become_idle(
-    tasks: &tokio::sync::RwLock<
-        std::collections::HashMap<String, crate::task::InProcessTeammateTaskState>,
-    >,
-) {
+pub async fn wait_for_teammates_to_become_idle<F, Fut>(snapshot: F)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Vec<TaskStateBase>>,
+{
     loop {
-        {
-            let guard = tasks.read().await;
-            if !has_working_in_process_teammates(&guard) {
-                return;
-            }
+        let tasks = snapshot().await;
+        if !has_working_in_process_teammates(&tasks) {
+            return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }

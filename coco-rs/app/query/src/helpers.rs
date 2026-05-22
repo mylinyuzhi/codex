@@ -321,6 +321,7 @@ pub(crate) fn build_streaming_early_outcome(
         error_kind: Some(coco_tool_runtime::ToolCallErrorKind::ValidationFailed),
         permission_denial: None,
         prevent_continuation: None,
+        structured_output: None,
         effects: coco_tool_runtime::ToolSideEffects::none(),
     }
 }

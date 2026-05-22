@@ -33,6 +33,7 @@ pub use aliases::tool_reference_content_part;
 
 pub use attachment_body::AlreadyReadFilePayload;
 pub use attachment_body::AttachmentBody;
+pub use attachment_body::AttachmentExtras;
 pub use attachment_body::CommandPermissionsPayload;
 pub use attachment_body::DynamicSkillPayload;
 pub use attachment_body::EditedImageFilePayload;
@@ -42,7 +43,11 @@ pub use attachment_body::HookNonBlockingErrorPayload;
 pub use attachment_body::HookPermissionDecision;
 pub use attachment_body::HookPermissionDecisionPayload;
 pub use attachment_body::HookSystemMessagePayload;
+pub use attachment_body::MaxTurnsReachedPayload;
 pub use attachment_body::SilentPayload;
+pub use attachment_body::SkillDiscoveryPayload;
+pub use attachment_body::SkillDiscoverySkill;
+pub use attachment_body::SkillDiscoverySource;
 pub use attachment_body::StructuredOutputPayload;
 
 pub use attachment_emitter::AttachmentEmitter;
@@ -52,6 +57,7 @@ pub use hook_result::HookResult;
 pub use message::ApiError;
 pub use message::AssistantMessage;
 pub use message::AttachmentMessage;
+pub use message::MAX_SKILL_DISCOVERY_RENDERED_CHARS;
 pub use message::Message;
 pub use message::MessageKind;
 pub use message::MessageOrigin;
@@ -80,6 +86,7 @@ pub use message::TombstoneMessage;
 pub use message::ToolResultMessage;
 pub use message::UserMessage;
 pub use message::Visibility;
+pub use message::render_skill_discovery_prompt;
 
 pub use serialized_message::SerializedMessage;
 

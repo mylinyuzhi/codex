@@ -28,7 +28,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use coco_messages::Message;
+use coco_tool_runtime::AgentTaskRegistryRef;
 use coco_tool_runtime::TaskListHandleRef;
+use coco_tool_runtime::TeammateTaskUpdate;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -38,8 +40,6 @@ use crate::pane::SystemPromptMode;
 use crate::prompt;
 use crate::roster_store::SetMemberActiveRequest;
 use crate::roster_store::TeamRosterStore;
-use crate::task::InProcessTeammateTaskState;
-use crate::task::TaskMessage;
 use crate::teammate;
 use crate::types::TeammateIdentity;
 
@@ -208,6 +208,7 @@ pub struct InProcessRunnerConfig {
     pub model_role: Option<coco_types::ModelRole>,
     pub model_selection: coco_types::LlmModelSelection,
     pub task_list: Option<TaskListHandleRef>,
+    pub task_registry: Option<AgentTaskRegistryRef>,
     pub roster_store: Option<TeamRosterStore>,
     /// Whether the leader must approve the teammate's plan before any
     /// implementation turn runs. When `true`, after the first turn (the
@@ -288,7 +289,6 @@ pub enum WaitResult {
 pub async fn run_in_process_teammate(
     config: InProcessRunnerConfig,
     engine: &dyn AgentExecutionEngine,
-    task_state: &tokio::sync::RwLock<InProcessTeammateTaskState>,
 ) -> InProcessRunnerResult {
     // Build system prompt
     let system_prompt = prompt::build_teammate_system_prompt(
@@ -317,18 +317,22 @@ pub async fn run_in_process_teammate(
         permission_mode: live_permission_mode.clone(),
         team_permission_rules: live_permission_rules.clone(),
     });
-    {
-        let mut state = task_state.write().await;
-        state.permission_mode = initial_permission_mode;
-        state.append_message(TaskMessage {
-            role: "user".to_string(),
-            content: current_prompt.clone(),
-            tool_name: None,
-        });
-    }
+    update_teammate_task(
+        &config,
+        TeammateTaskUpdate {
+            append_message: Some(coco_types::TeammateTaskMessage {
+                role: coco_types::MessageRole::User,
+                content: current_prompt.clone(),
+                tool_name: None,
+            }),
+            ..TeammateTaskUpdate::default()
+        },
+    )
+    .await;
     let mut total_turns = 0i32;
     let mut total_input_tokens = 0i64;
     let mut total_output_tokens = 0i64;
+    let mut total_tool_use_count: i32 = 0;
     let mut was_idle = false;
     // `Some(msg)` once a query failure has been observed — the unified
     // cleanup path at the bottom uses this to flip the
@@ -361,11 +365,15 @@ pub async fn run_in_process_teammate(
         }
 
         // Update task: mark as running
-        {
-            let mut state = task_state.write().await;
-            state.is_idle = false;
-            state.spinner_verb = Some("Working".to_string());
-        }
+        update_teammate_task(
+            &config,
+            TeammateTaskUpdate {
+                is_idle: coco_types::FieldUpdate::Set(false),
+                spinner_verb: coco_types::FieldUpdate::Set("Working".to_string()),
+                ..TeammateTaskUpdate::default()
+            },
+        )
+        .await;
 
         let mut last_turn_interrupted = false;
         let current_turn_cancel = CancellationToken::new();
@@ -377,10 +385,7 @@ pub async fn run_in_process_teammate(
                 state.team_permission_rules.clone(),
             )
         };
-        {
-            let mut state = task_state.write().await;
-            state.set_current_work_cancel(current_turn_cancel.clone());
-        }
+        set_teammate_current_work_cancel(&config, Some(current_turn_cancel.clone())).await;
         // Build query config
         let query_config = AgentQueryConfig {
             system_prompt: system_prompt.clone(),
@@ -417,7 +422,7 @@ pub async fn run_in_process_teammate(
                 tokio::select! {
                     result = &mut query_future => break result,
                     _ = control_poll_interval.tick() => {
-                        drain_control_messages(&config.identity, task_state, &control_state).await;
+                        drain_control_messages(&config.identity, &control_state).await;
                     }
                 }
             }
@@ -425,66 +430,78 @@ pub async fn run_in_process_teammate(
         let query_result = match query_result_result {
             Ok(result) => result,
             Err(e) => {
-                {
-                    let mut state = task_state.write().await;
-                    state.clear_current_work_cancel();
-                }
-                // Stash the error and break out so the unified cleanup at
-                // the bottom of the function runs `on_teammate_stop` AND
-                // the coordinator-mode `<task-notification>` send. Earlier
-                // code returned directly here, skipping the
-                // task-notification — coordinators wouldn't see workers
-                // that errored on their first turn.
+                set_teammate_current_work_cancel(&config, None).await;
                 let error_msg = format!("{e}");
-                {
-                    let mut state = task_state.write().await;
-                    state.error = Some(error_msg.clone());
-                }
+                update_teammate_task(
+                    &config,
+                    TeammateTaskUpdate {
+                        error: coco_types::FieldUpdate::Set(error_msg.clone()),
+                        ..TeammateTaskUpdate::default()
+                    },
+                )
+                .await;
                 run_error = Some(error_msg);
                 break;
             }
         };
-        {
-            let mut state = task_state.write().await;
-            state.clear_current_work_cancel();
-        }
+        set_teammate_current_work_cancel(&config, None).await;
 
         // Accumulate results
         total_turns += query_result.turns;
         total_input_tokens += query_result.input_tokens;
         total_output_tokens += query_result.output_tokens;
+        total_tool_use_count = total_tool_use_count.saturating_add(query_result.tool_use_count);
         all_messages.extend(query_result.messages.iter().cloned());
 
-        // Update task progress
-        {
-            let mut state = task_state.write().await;
-            state.turn_count = total_turns;
-            state.input_tokens = total_input_tokens;
-            state.output_tokens = total_output_tokens;
-            state.tool_use_count += query_result.tool_use_count;
-
-            // Append messages (capped)
-            if let Some(text) = &query_result.response_text {
-                state.append_message(TaskMessage {
-                    role: "assistant".to_string(),
-                    content: text.clone(),
-                    tool_name: None,
-                });
-            }
-
-            state.spinner_verb = None;
-            state.past_tense_verb = Some("Completed".to_string());
+        // Push the assistant message into the teammate's UI mirror and
+        // update progress counters via the unified registry path.
+        if let Some(text) = &query_result.response_text {
+            update_teammate_task(
+                &config,
+                TeammateTaskUpdate {
+                    append_message: Some(coco_types::TeammateTaskMessage {
+                        role: coco_types::MessageRole::Assistant,
+                        content: text.clone(),
+                        tool_name: None,
+                    }),
+                    ..TeammateTaskUpdate::default()
+                },
+            )
+            .await;
         }
+        update_teammate_task(
+            &config,
+            TeammateTaskUpdate {
+                spinner_verb: coco_types::FieldUpdate::Clear,
+                past_tense_verb: coco_types::FieldUpdate::Set("Completed".to_string()),
+                ..TeammateTaskUpdate::default()
+            },
+        )
+        .await;
+        push_teammate_progress(
+            &config,
+            total_input_tokens,
+            total_output_tokens,
+            total_tool_use_count,
+            total_turns,
+        )
+        .await;
 
         // Check cancellation after query
         if query_result.cancelled && !config.cancelled.load(Ordering::Relaxed) {
             last_turn_interrupted = true;
-            let mut state = task_state.write().await;
-            state.append_message(TaskMessage {
-                role: "assistant".to_string(),
-                content: "Interrupted by user.".to_string(),
-                tool_name: None,
-            });
+            update_teammate_task(
+                &config,
+                TeammateTaskUpdate {
+                    append_message: Some(coco_types::TeammateTaskMessage {
+                        role: coco_types::MessageRole::Assistant,
+                        content: "Interrupted by user.".to_string(),
+                        tool_name: None,
+                    }),
+                    ..TeammateTaskUpdate::default()
+                },
+            )
+            .await;
         }
 
         if config.cancelled.load(Ordering::Relaxed) {
@@ -656,10 +673,14 @@ pub async fn run_in_process_teammate(
             let _ = mailbox::write_to_mailbox(TEAM_LEAD_NAME, message, &config.identity.team_name);
         }
 
-        {
-            let mut state = task_state.write().await;
-            state.is_idle = true;
-        }
+        update_teammate_task(
+            &config,
+            TeammateTaskUpdate {
+                is_idle: coco_types::FieldUpdate::Set(true),
+                ..TeammateTaskUpdate::default()
+            },
+        )
+        .await;
         // Mark as idle to suppress duplicate notifications on next iteration
         was_idle = true;
 
@@ -672,7 +693,6 @@ pub async fn run_in_process_teammate(
             &config.identity,
             &config.cancelled,
             config.task_list.as_ref(),
-            task_state,
             &control_state,
         )
         .await;
@@ -681,10 +701,6 @@ pub async fn run_in_process_teammate(
             WaitResult::Aborted => break,
 
             WaitResult::ShutdownRequest { original_text } => {
-                // Pass shutdown request to model as input. The model
-                // decides whether to approve or reject; the next-iteration
-                // post-query check (`handling_shutdown`) will then exit
-                // the loop so the cleanup path runs.
                 let wrapped = teammate::format_as_teammate_message(
                     TEAM_LEAD_NAME,
                     &original_text,
@@ -695,15 +711,20 @@ pub async fn run_in_process_teammate(
                 was_idle = false;
                 handling_shutdown = true;
 
-                {
-                    let mut state = task_state.write().await;
-                    state.shutdown_requested = true;
-                    state.append_message(TaskMessage {
-                        role: "user".to_string(),
-                        content: "Shutdown requested".to_string(),
-                        tool_name: None,
-                    });
-                }
+                update_teammate_task(
+                    &config,
+                    TeammateTaskUpdate {
+                        is_idle: coco_types::FieldUpdate::Set(false),
+                        shutdown_requested: coco_types::FieldUpdate::Set(true),
+                        append_message: Some(coco_types::TeammateTaskMessage {
+                            role: coco_types::MessageRole::User,
+                            content: "Shutdown requested".to_string(),
+                            tool_name: None,
+                        }),
+                        ..TeammateTaskUpdate::default()
+                    },
+                )
+                .await;
             }
 
             WaitResult::NewMessage {
@@ -712,7 +733,6 @@ pub async fn run_in_process_teammate(
                 color,
                 summary,
             } => {
-                // Wrap peer/leader messages in XML format
                 let wrapped = if from == "user" {
                     message
                 } else {
@@ -726,15 +746,19 @@ pub async fn run_in_process_teammate(
                 current_prompt = wrapped;
                 was_idle = false;
 
-                {
-                    let mut state = task_state.write().await;
-                    state.is_idle = false;
-                    state.append_message(TaskMessage {
-                        role: "user".to_string(),
-                        content: format!("Message from {from}"),
-                        tool_name: None,
-                    });
-                }
+                update_teammate_task(
+                    &config,
+                    TeammateTaskUpdate {
+                        is_idle: coco_types::FieldUpdate::Set(false),
+                        append_message: Some(coco_types::TeammateTaskMessage {
+                            role: coco_types::MessageRole::User,
+                            content: format!("Message from {from}"),
+                            tool_name: None,
+                        }),
+                        ..TeammateTaskUpdate::default()
+                    },
+                )
+                .await;
             }
         }
 
@@ -809,11 +833,15 @@ pub async fn run_in_process_teammate(
         );
     }
 
-    {
-        let mut state = task_state.write().await;
-        state.is_idle = true;
-        state.spinner_verb = None;
-    }
+    update_teammate_task(
+        &config,
+        TeammateTaskUpdate {
+            is_idle: coco_types::FieldUpdate::Set(true),
+            spinner_verb: coco_types::FieldUpdate::Clear,
+            ..TeammateTaskUpdate::default()
+        },
+    )
+    .await;
 
     let success = run_error.is_none();
     InProcessRunnerResult {
@@ -823,6 +851,60 @@ pub async fn run_in_process_teammate(
         turns: total_turns,
         total_input_tokens,
         total_output_tokens,
+    }
+}
+
+async fn update_teammate_task(config: &InProcessRunnerConfig, update: TeammateTaskUpdate) {
+    if let Some(registry) = &config.task_registry {
+        registry
+            .update_teammate_task(&config.identity.agent_id, update)
+            .await;
+    }
+}
+
+async fn push_teammate_progress(
+    config: &InProcessRunnerConfig,
+    input_tokens: i64,
+    output_tokens: i64,
+    tool_use_count: i32,
+    turn_count: i32,
+) {
+    let Some(registry) = &config.task_registry else {
+        return;
+    };
+    // Look up the task_id for this teammate so we can call set_progress.
+    let Some(state) = registry
+        .teammate_task_state(&config.identity.agent_id)
+        .await
+    else {
+        return;
+    };
+    let total_tokens = input_tokens.saturating_add(output_tokens);
+    registry
+        .set_progress(
+            &state.id,
+            coco_types::TaskProgress {
+                input_tokens,
+                output_tokens,
+                total_tokens,
+                tool_use_count,
+                turn_count,
+                last_tool_name: None,
+                recent_activities: Vec::new(),
+                summary: None,
+            },
+        )
+        .await;
+}
+
+async fn set_teammate_current_work_cancel(
+    config: &InProcessRunnerConfig,
+    cancel: Option<CancellationToken>,
+) {
+    if let Some(registry) = &config.task_registry {
+        let _ = registry
+            .set_teammate_current_work_cancel(&config.identity.agent_id, cancel)
+            .await;
     }
 }
 
@@ -857,7 +939,6 @@ pub(crate) async fn wait_for_next_prompt_or_shutdown(
     identity: &TeammateIdentity,
     cancelled: &AtomicBool,
     task_list: Option<&TaskListHandleRef>,
-    task_state: &RwLock<InProcessTeammateTaskState>,
     control_state: &RwLock<TeammateControlState>,
 ) -> WaitResult {
     let mut poll_count = 0u64;
@@ -880,7 +961,7 @@ pub(crate) async fn wait_for_next_prompt_or_shutdown(
 
         // 2a: Control messages that update local teammate state and
         // should not become model prompts.
-        drain_control_messages(identity, task_state, control_state).await;
+        drain_control_messages(identity, control_state).await;
 
         // 2b: Shutdown requests (highest prompt-bearing mailbox priority)
         for (i, msg) in messages.iter().enumerate() {
@@ -960,7 +1041,6 @@ pub(crate) async fn wait_for_next_prompt_or_shutdown(
 
 async fn drain_control_messages(
     identity: &TeammateIdentity,
-    task_state: &RwLock<InProcessTeammateTaskState>,
     control_state: &RwLock<TeammateControlState>,
 ) {
     let messages =
@@ -982,10 +1062,6 @@ async fn drain_control_messages(
                     state.permission_mode.clone()
                 };
                 *mode_store.write().await = mode;
-                {
-                    let mut state = task_state.write().await;
-                    state.permission_mode = mode;
-                }
                 let _ = mailbox::mark_message_as_read_by_index(
                     &identity.agent_name,
                     &identity.team_name,
@@ -1141,9 +1217,8 @@ fn permission_rule(
 pub fn start_in_process_teammate(
     config: InProcessRunnerConfig,
     engine: std::sync::Arc<dyn AgentExecutionEngine>,
-    task_state: std::sync::Arc<tokio::sync::RwLock<InProcessTeammateTaskState>>,
 ) -> tokio::task::JoinHandle<InProcessRunnerResult> {
-    tokio::spawn(async move { run_in_process_teammate(config, engine.as_ref(), &task_state).await })
+    tokio::spawn(async move { run_in_process_teammate(config, engine.as_ref()).await })
 }
 
 #[cfg(test)]

@@ -452,12 +452,11 @@ impl QueryEngine {
                 Vec::new()
             };
 
-        // Drain event-driven reminders accumulated since the last turn.
-        // Subsystems push to the mailbox out-of-band (slash commands,
-        // skill loader, tool runtime, swarm) — this is the single point
-        // of consumption per turn. "Latest snapshot wins" so a producer
-        // racing the drain just lands in the next turn.
-        let mailbox_state = self.config.reminder_mailbox.drain();
+        // Cross-turn typed silent attachments (command_permissions,
+        // structured_output, hook events, …) come in via the session
+        // `AttachmentEmitter` and are drained from the inbox at the
+        // head of `inject_reminders_into_history` below — there is no
+        // separate mailbox state to thread into `TurnReminderInput`.
 
         let reminder_input = TurnReminderInput {
             config: reminder_orchestrator.config(),
@@ -583,35 +582,7 @@ impl QueryEngine {
             // drift detection would need a parallel cache.
             already_read_file_paths: reminder_already_read_file_paths,
             edited_image_file_paths: Vec::new(),
-            // Audit-add silent reminders (TS-parity, May 2026).
-            //
-            // `max_turns_reached_signal`: TS query.ts:1508 fires when
-            // `turnCount + 1 > maxTurns`. coco-rs has not yet incremented
-            // for this turn at this point, so the equivalent gate is
-            // `turn_number + 1 > max_turns` with `max_turns > 0` to
-            // preserve the unbounded default.
-            max_turns_reached_signal: self.config.max_turns > 0
-                && reminder_human_turn_number.saturating_add(1) > self.config.max_turns,
-            // `context_efficiency` is gated behind TS `feature('HISTORY_SNIP')`;
-            // coco-rs does not port HISTORY_SNIP (see root CLAUDE.md
-            // "Compaction — three generic strategies only"), so the signal
-            // stays `false`.
-            context_efficiency_signal: false,
-            // Event-time reminders flow through `ReminderMailbox`: subsystems
-            // (slash commands, skill loader, tool runtime, swarm
-            // coordinator) push snapshots when their event fires; the
-            // engine drains the mailbox once per turn to populate the
-            // `TurnReminderInput` slots. `current_session_memory` and
-            // `skill_discovery` have no upstream producer yet — kept as
-            // `None` until `coco-memory` / `coco-skills` wire them.
-            // Variants retained because TS has them
-            // (`attachments.ts:662-666` / `:538-542`).
-            current_session_memory: None,
-            command_permissions: mailbox_state.command_permissions,
-            dynamic_skill: mailbox_state.dynamic_skill,
-            skill_discovery: None,
-            structured_output: mailbox_state.structured_output,
-            teammate_shutdown_batch: mailbox_state.teammate_shutdown_batch,
+            skill_discovery: materialized.skill_discovery,
         };
         let reminders = run_turn_reminders(reminder_orchestrator, reminder_input).await;
 
@@ -699,7 +670,7 @@ impl QueryEngine {
             }
         }
 
-        // Phase 5. Inject reminder messages into history. Model-visible
+        // Phase 5. Inject typed attachment events and reminder messages into history. Model-visible
         // reminders append to `history`; silent reminders
         // (`Coverage::SilentReminder` + `ReminderOutput::Silent*`)
         // come back as `display_only` so they never leak into the

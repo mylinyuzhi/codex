@@ -59,6 +59,16 @@ use crate::tool_outcome_builder::build_outcome_from_execution;
 pub(crate) struct ToolCallRunOutcome {
     pub continue_after_tools: bool,
     pub stop_reason_override: Option<String>,
+    /// Captured `ToolResult::with_structured_output(...)` from the last
+    /// success-path outcome that produced one. Threaded back to
+    /// `run_session_loop`'s `RunArtifacts` so the SDK result picks it up
+    /// without scanning history (which is unsound under compaction).
+    pub structured_output: Option<serde_json::Value>,
+    /// Number of `StructuredOutput` tool invocations seen this batch
+    /// (successful + failed). The engine accumulates these across
+    /// turns into `RunArtifacts.structured_output_attempts` for the
+    /// retry-cap check.
+    pub structured_output_attempts: u32,
 }
 
 pub(crate) struct ToolCallRunner<'a> {
@@ -265,6 +275,16 @@ impl<'a> ToolCallRunner<'a> {
                     // has already flattened per MCP / non-MCP / path
                     // rules.
                     let parts = outcome.into_parts();
+                    if matches!(
+                        parts.tool_id,
+                        coco_types::ToolId::Builtin(coco_types::ToolName::StructuredOutput)
+                    ) {
+                        control.structured_output_attempts =
+                            control.structured_output_attempts.saturating_add(1);
+                    }
+                    if let Some(data) = parts.structured_output.clone() {
+                        control.structured_output = Some(data);
+                    }
                     for msg in parts.ordered_messages {
                         history_ref.push(msg);
                     }
@@ -335,6 +355,8 @@ struct PendingCompletedEvent {
 struct Control {
     continue_after_tools: bool,
     stop_reason_override: Option<String>,
+    structured_output: Option<serde_json::Value>,
+    structured_output_attempts: u32,
 }
 
 impl Default for Control {
@@ -342,6 +364,8 @@ impl Default for Control {
         Self {
             continue_after_tools: true,
             stop_reason_override: None,
+            structured_output: None,
+            structured_output_attempts: 0,
         }
     }
 }
@@ -351,6 +375,8 @@ impl Control {
         ToolCallRunOutcome {
             continue_after_tools: self.continue_after_tools,
             stop_reason_override: self.stop_reason_override,
+            structured_output: self.structured_output,
+            structured_output_attempts: self.structured_output_attempts,
         }
     }
 }

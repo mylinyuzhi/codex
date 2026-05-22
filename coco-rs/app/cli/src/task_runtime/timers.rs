@@ -16,16 +16,13 @@
 //! - `tasks/LocalAgentTask/LocalAgentTask.tsx:582-608` —
 //!   `setTimeout(autoBackgroundMs)` block in `registerAgentForeground`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use coco_tasks::TaskManager;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::TaskEntry;
 use crate::disk_task_output::DiskTaskOutput;
 
 /// W3: per-task progress emitter. Polls `dto.size()` every
@@ -87,43 +84,24 @@ enum DetachReason {
 
 /// Shared body for both auto-detach timers — fires the per-task
 /// detach signal exactly once. Bails when:
-///   - the task is unknown to the entries map (e.g. removed before
+///   - the task is unknown to the task manager (e.g. removed before
 ///     the timer fired)
 ///   - the task has reached a terminal state
 ///   - the `detached` CAS already flipped (idempotent — another caller
 ///     of `signal_detach` won the race)
 ///
-/// On success: flips `LocalAgentExtras.is_backgrounded = true`,
+/// On success: flips `BgAgentExtras.is_backgrounded() = true`,
 /// notifies the per-task `Notify`, and emits a per-reason info log.
 /// Returns immediately on every bail-out path.
 async fn fire_detach(
     task_id: &str,
-    entries: &Arc<tokio::sync::RwLock<HashMap<String, TaskEntry>>>,
     manager: &Arc<TaskManager>,
     reason: DetachReason,
     timeout_ms: u64,
 ) {
-    if manager
-        .get(task_id)
-        .await
-        .is_none_or(|s| s.status.is_terminal())
-    {
+    if !manager.signal_detach(task_id).await.is_first() {
         return;
     }
-    let snapshot = {
-        let guard = entries.read().await;
-        guard
-            .get(task_id)
-            .map(|e| (e.detach.clone(), e.detached.clone()))
-    };
-    let Some((detach, detached)) = snapshot else {
-        return;
-    };
-    if detached.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    manager.set_backgrounded(task_id, true).await;
-    detach.notify_one();
     // `target:` must be a const string per tracing's macro; dispatch
     // on the reason variant so each path keeps its own grep-able
     // target. The `kind` field labels the reason in the structured
@@ -157,7 +135,6 @@ async fn fire_detach(
 pub(super) fn spawn_auto_detach_timer(
     task_id: String,
     auto_detach_ms: u64,
-    entries: Arc<tokio::sync::RwLock<HashMap<String, TaskEntry>>>,
     manager: Arc<TaskManager>,
     drain_done: CancellationToken,
 ) {
@@ -169,7 +146,6 @@ pub(super) fn spawn_auto_detach_timer(
         }
         fire_detach(
             &task_id,
-            &entries,
             &manager,
             DetachReason::ShellAutoDetach,
             auto_detach_ms,
@@ -189,7 +165,6 @@ pub(super) fn spawn_auto_detach_timer(
 pub(super) fn spawn_agent_auto_background_timer(
     task_id: String,
     auto_background_ms: u64,
-    entries: Arc<tokio::sync::RwLock<HashMap<String, TaskEntry>>>,
     manager: Arc<TaskManager>,
     cancel: CancellationToken,
 ) {
@@ -201,7 +176,6 @@ pub(super) fn spawn_agent_auto_background_timer(
         }
         fire_detach(
             &task_id,
-            &entries,
             &manager,
             DetachReason::AgentAutoBackground,
             auto_background_ms,

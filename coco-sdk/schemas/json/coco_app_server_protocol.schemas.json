@@ -655,6 +655,24 @@
         }
       ]
     },
+    "AttachmentExtras": {
+      "description": "Typed structured extras carried alongside an [`AttachmentBody::Api`] body.\n\nUsed for kinds that surface both a rendered model-visible prompt\n**and** a structured payload that downstream consumers (transcript\npersistence, SDK observers, telemetry) want preserved verbatim.\n`body` carries the rendered prompt; `extras` carries the\nderived-from-structure original data.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SkillDiscoveryPayload",
+          "properties": {
+            "type": {
+              "const": "skill_discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "AttachmentKind": {
       "description": "Every TS `Attachment.type` discriminator. 60 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match TS `Attachment.type` exactly, so transcripts round-trip.",
       "oneOf": [
@@ -713,8 +731,8 @@
             "hook_system_message",
             "structured_output",
             "dynamic_skill",
-            "context_efficiency",
             "skill_discovery",
+            "context_efficiency",
             "max_turns_reached",
             "current_session_memory",
             "teammate_shutdown_batch",
@@ -734,6 +752,17 @@
       "properties": {
         "body": {
           "$ref": "#/$defs/AttachmentBody"
+        },
+        "extras": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttachmentExtras"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Typed structured side data carried alongside an API-visible body.\n`None` for the overwhelming majority of attachments; populated by\nkinds whose model-visible prompt is derived from richer structured\ndata the transcript / SDK / telemetry layers want to keep\n(currently only `skill_discovery`)."
         },
         "kind": {
           "$ref": "#/$defs/AttachmentKind"
@@ -1369,7 +1398,7 @@
     "CommandPermissionsPayload": {
       "description": "TS parity: `command_permissions` (`utils/attachments.ts:605-608`).",
       "properties": {
-        "allowed_tools": {
+        "allowedTools": {
           "items": {
             "type": "string"
           },
@@ -1383,7 +1412,7 @@
         }
       },
       "required": [
-        "allowed_tools"
+        "allowedTools"
       ],
       "type": "object"
     },
@@ -1644,16 +1673,23 @@
     "DynamicSkillPayload": {
       "description": "TS parity: `dynamic_skill` (`utils/attachments.ts:525+`).",
       "properties": {
-        "path": {
+        "displayPath": {
           "type": "string"
         },
-        "skill_name": {
+        "skillDir": {
           "type": "string"
+        },
+        "skillNames": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
-        "skill_name",
-        "path"
+        "skillDir",
+        "skillNames",
+        "displayPath"
       ],
       "type": "object"
     },
@@ -2861,6 +2897,24 @@
       "required": [
         "started",
         "root"
+      ],
+      "type": "object"
+    },
+    "MaxTurnsReachedPayload": {
+      "description": "TS parity: `max_turns_reached` (`query.ts:1508`, `query.ts:1707`).",
+      "properties": {
+        "maxTurns": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "turnCount": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxTurns",
+        "turnCount"
       ],
       "type": "object"
     },
@@ -6601,6 +6655,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/MaxTurnsReachedPayload",
+          "properties": {
+            "type": {
+              "const": "max_turns_reached",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/AlreadyReadFilePayload",
           "properties": {
             "type": {
@@ -6627,6 +6694,58 @@
           "type": "object"
         }
       ]
+    },
+    "SkillDiscoveryPayload": {
+      "description": "TS parity: `skill_discovery` (`utils/attachments.ts:538-542`).",
+      "properties": {
+        "signal": {
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/SkillDiscoverySkill"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/SkillDiscoverySource"
+        }
+      },
+      "required": [
+        "skills",
+        "signal",
+        "source"
+      ],
+      "type": "object"
+    },
+    "SkillDiscoverySkill": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "shortId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "type": "object"
+    },
+    "SkillDiscoverySource": {
+      "enum": [
+        "native",
+        "aki",
+        "both"
+      ],
+      "type": "string"
     },
     "SlashCommandInfo": {
       "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of\nthese at startup (and again after `/reload-plugins`) so the\nautocomplete popup and command palette can render and rank without\nreaching into [`CommandBase`] every time.\n\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a\n[`crate::TuiOnlyEvent`] variant — events are the only path between\nthe agent driver and the TUI, and event payload types must be\nfoundation-layer.",
@@ -6840,17 +6959,9 @@
     "StructuredOutputPayload": {
       "description": "TS parity: `structured_output` (`utils/attachments.ts:639+`,\n`services/tools/toolExecution.ts:1276`).",
       "properties": {
-        "data": true,
-        "tool_name": {
-          "type": "string"
-        },
-        "tool_use_id": {
-          "type": "string"
-        }
+        "data": true
       },
       "required": [
-        "tool_name",
-        "tool_use_id",
         "data"
       ],
       "type": "object"

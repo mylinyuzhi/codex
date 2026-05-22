@@ -212,7 +212,7 @@ impl Tool for SendMessageTool {
         // the message via their inbox.
         if let Some(info) = task_status.as_ref()
             && info.status == coco_types::TaskStatus::Running
-            && info.task_type == coco_types::TaskType::LocalAgent
+            && info.task_type() == coco_types::TaskType::BgAgent
         {
             let sender = ctx
                 .agent_id

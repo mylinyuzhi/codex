@@ -49,12 +49,26 @@ async fn submit_prefixed(
     state.ui.input.add_to_history(text.to_string());
 
     let user_message_id = uuid::Uuid::new_v4().to_string();
-    let _ = command_tx
+    tracing::info!(
+        target: "coco_tui::submit",
+        user_message_id = %user_message_id,
+        kind = "bash",
+        chars = payload.len(),
+        "user submitted bash command",
+    );
+    if let Err(e) = command_tx
         .send(UserCommand::SubmitBash {
             user_message_id,
             command: payload,
         })
-        .await;
+        .await
+    {
+        tracing::warn!(
+            target: "coco_tui::submit",
+            error = %e,
+            "failed to dispatch SubmitBash (command channel closed)",
+        );
+    }
 
     state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;
@@ -83,10 +97,24 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
 
     let trimmed = text.trim();
     if let Some((name, args)) = parse_slash_input(trimmed) {
+        tracing::info!(
+            target: "coco_tui::submit",
+            kind = "slash",
+            command = %name.as_str(),
+            args_chars = args.len(),
+            "user submitted slash command",
+        );
         state.ui.input.add_to_history(text);
-        let _ = command_tx
+        if let Err(e) = command_tx
             .send(UserCommand::ExecuteSlashCommand { name, args })
-            .await;
+            .await
+        {
+            tracing::warn!(
+                target: "coco_tui::submit",
+                error = %e,
+                "failed to dispatch ExecuteSlashCommand (command channel closed)",
+            );
+        }
         return true;
     }
 
@@ -99,15 +127,31 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     // `history_push_and_emit` emits `MessageAppended` carrying this
     // uuid, which the `TranscriptView` then renders.
     let user_message_id = uuid::Uuid::new_v4().to_string();
+    tracing::info!(
+        target: "coco_tui::submit",
+        user_message_id = %user_message_id,
+        kind = "prompt",
+        chars = resolved.text.len(),
+        images = resolved.images.len(),
+        display_chars = text.len(),
+        "user submitted prompt",
+    );
 
-    let _ = command_tx
+    if let Err(e) = command_tx
         .send(UserCommand::SubmitInput {
             user_message_id,
             content: resolved.text,
             display_text: Some(text),
             images: resolved.images,
         })
-        .await;
+        .await
+    {
+        tracing::warn!(
+            target: "coco_tui::submit",
+            error = %e,
+            "failed to dispatch SubmitInput (command channel closed)",
+        );
+    }
     state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;
     state.ui.user_scrolled = false;

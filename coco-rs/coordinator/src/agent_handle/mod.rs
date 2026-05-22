@@ -27,14 +27,16 @@ pub use teammate_engine::into_execution_engine;
 
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use coco_tool_runtime::AgentHandle;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
 use coco_tool_runtime::AgentSpawnStatus;
+use coco_tool_runtime::TeammateTaskRegistration;
 use tokio::sync::RwLock;
 
-use coco_types::SubAgentState;
-use coco_types::SubAgentStatus;
+use coco_types::TaskStatus;
+use coco_types::TaskType;
 
 use crate::constants::TEAM_LEAD_NAME;
 use crate::identity::get_agent_name;
@@ -60,7 +62,6 @@ pub struct SwarmAgentHandle {
     backend_registry: Option<Arc<crate::pane::BackendRegistry>>,
     team_manager: Arc<RwLock<Option<TeamManager>>>,
     roster_store: TeamRosterStore,
-    agents: Arc<RwLock<Vec<SubAgentState>>>,
     /// Drives the LLM loop for sync subagents. `None` ⇒ sync spawn fails
     /// fast with a "no engine configured" error rather than silently
     /// succeeding with placeholder output. Install via
@@ -74,11 +75,11 @@ pub struct SwarmAgentHandle {
     /// Drives the 2-stage handoff safety classifier. `None` ⇒ classifier
     /// is a no-op (fail-open, matches TS).
     side_query: Option<coco_tool_runtime::SideQueryHandle>,
-    /// Background-task registry (`AgentTaskRegistry`). Same `Arc` as the
-    /// engine's `TaskHandle` slot so a bg AgentTool spawn registered here
-    /// is addressable through `Task*` tools the model invokes later.
-    /// `None` ⇒ bg spawns still run but aren't model-addressable.
-    task_registry: Option<coco_tool_runtime::AgentTaskRegistryRef>,
+    /// Required running-task registry (`AgentTaskRegistry`). Same `Arc`
+    /// as the engine's `TaskHandle` slot so AgentTool spawns registered
+    /// here are addressable through `Task*` tools the model invokes later.
+    /// There is no Swarm-side LocalAgent fallback store.
+    task_registry: coco_tool_runtime::AgentTaskRegistryRef,
     /// Durable task-list handle shared with the leader engine. In-process
     /// teammates poll this after mailbox messages so unclaimed team tasks
     /// become work prompts without going through a separate mirror.
@@ -91,13 +92,12 @@ pub struct SwarmAgentHandle {
     /// unsupported in this session.
     transcript_store: Option<coco_tool_runtime::AgentTranscriptStoreRef>,
     cwd: String,
-    /// Atomic snapshot of resolved providers + role mappings. Reading the
-    /// Main role through `runtime_config` means a parent that hot-reloaded
-    /// into a new model picks up the updated value on the next subagent
-    /// spawn. Each turn-boundary publishes a fresh `Arc<RuntimeConfig>`
-    /// (`coco_config::SettingsWatcher`); callers update via
-    /// [`Self::set_runtime_config`].
-    runtime_config: Arc<coco_config::RuntimeConfig>,
+    /// Atomic snapshot of resolved providers + role mappings. Wrapped
+    /// in [`ArcSwap`] so [`Self::set_runtime_config`] can hot-swap
+    /// without `&mut self` — production holds `Arc<SwarmAgentHandle>`,
+    /// so `Arc::get_mut` is unreachable and the prior `&mut self`
+    /// setter was silently broken in the SettingsWatcher path.
+    runtime_config: Arc<ArcSwap<coco_config::RuntimeConfig>>,
     /// Drives the in-process teammate runner-loop after `spawn_teammate`
     /// registers a teammate. `None` ⇒ teammate spawns succeed at
     /// registration but never execute LLM turns (the prior behaviour
@@ -109,18 +109,6 @@ pub struct SwarmAgentHandle {
     /// [`Self::set_teammate_auto_compact_threshold`] so the leader's
     /// resolved `CompactConfig` flows through to teammates.
     teammate_auto_compact_threshold: i64,
-    /// In-process teammate task-state mirrors. One per registered
-    /// teammate keyed by `agent_id`. The runner-loop writes its
-    /// progress here; UI / panel widgets read snapshots through
-    /// [`Self::teammate_task_state`].
-    teammate_task_states: Arc<
-        tokio::sync::RwLock<
-            std::collections::HashMap<
-                String,
-                Arc<tokio::sync::RwLock<crate::task::InProcessTeammateTaskState>>,
-            >,
-        >,
-    >,
     /// Base system prompt (the main agent's full system prompt) used
     /// as the teammate's base in `build_teammate_system_prompt`. The
     /// runner-loop appends `TEAMMATE_PROMPT_ADDENDUM` to whatever this
@@ -187,6 +175,7 @@ impl SwarmAgentHandle {
         team_manager: Arc<RwLock<Option<TeamManager>>>,
         cwd: String,
         runtime_config: Arc<coco_config::RuntimeConfig>,
+        task_registry: coco_tool_runtime::AgentTaskRegistryRef,
     ) -> Self {
         let roster_store = TeamRosterStore::new(team_manager.clone());
         Self {
@@ -194,21 +183,17 @@ impl SwarmAgentHandle {
             backend_registry: None,
             team_manager,
             roster_store,
-            agents: Arc::new(RwLock::new(Vec::new())),
             execution_engine: None,
             worktree_manager: None,
             side_query: None,
-            task_registry: None,
+            task_registry,
             task_list: None,
             task_list_router: None,
             transcript_store: None,
             cwd,
-            runtime_config,
+            runtime_config: Arc::new(ArcSwap::from(runtime_config)),
             teammate_engine: None,
             teammate_auto_compact_threshold: 100_000,
-            teammate_task_states: Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
             teammate_base_system_prompt: Arc::new(tokio::sync::RwLock::new(None)),
             hook_registry: None,
             skill_handle: None,
@@ -316,54 +301,39 @@ impl SwarmAgentHandle {
         self.teammate_auto_compact_threshold = threshold;
     }
 
-    /// Snapshot a teammate's task-state. UI panels use this to render
-    /// per-teammate spinner verbs / message log without taking a write
-    /// lock on the runner-loop's task_state.
-    pub async fn teammate_task_state(
-        &self,
-        agent_id: &str,
-    ) -> Option<Arc<tokio::sync::RwLock<crate::task::InProcessTeammateTaskState>>> {
-        self.teammate_task_states
-            .read()
-            .await
-            .get(agent_id)
-            .cloned()
-    }
-
     /// Interrupt an in-process teammate's active turn without killing
     /// the teammate lifecycle. Mirrors TS `currentWorkAbortController`:
     /// Escape in a teammate transcript aborts the current runAgent()
     /// iteration, then the teammate returns to idle and can receive more
     /// prompts.
     pub async fn interrupt_teammate_current_work(&self, agent_id: &str) -> Result<bool, String> {
-        let state = self
-            .teammate_task_states
-            .read()
+        self.task_registry
+            .interrupt_teammate_current_work(agent_id)
             .await
-            .get(agent_id)
-            .cloned()
-            .ok_or_else(|| format!("Teammate '{agent_id}' not found"))?;
-        Ok(state.read().await.interrupt_current_work())
     }
 
-    pub fn set_runtime_config(&mut self, runtime_config: Arc<coco_config::RuntimeConfig>) {
-        self.runtime_config = runtime_config;
+    /// Hot-swap the resolved `RuntimeConfig`. Atomic via `ArcSwap` —
+    /// no `&mut self` required, so the SettingsWatcher can update the
+    /// snapshot even when the handle is shared via `Arc`.
+    pub fn set_runtime_config(&self, runtime_config: Arc<coco_config::RuntimeConfig>) {
+        self.runtime_config.store(runtime_config);
     }
 
-    /// Resolve the Main role's `model_id` through the current
-    /// `RuntimeConfig`. Empty string when the runtime has no Main —
-    /// `RuntimeConfig::resolve_model_roles` shouldn't allow that, but
-    /// defending the boundary is cheap.
-    pub(crate) fn current_main_model_id(&self) -> String {
-        self.runtime_config
+    /// Snapshot the current `RuntimeConfig` for read-only consumers.
+    pub(crate) fn runtime_config(&self) -> Arc<coco_config::RuntimeConfig> {
+        self.runtime_config.load_full()
+    }
+
+    /// Resolve the Main role's `model_id`. Returns `Err` when no
+    /// Main role is configured — the previous silent-empty-string
+    /// fallback hid the misconfiguration from the caller and surfaced
+    /// it later as a confusing provider error.
+    pub(crate) fn current_main_model_id(&self) -> Result<String, &'static str> {
+        self.runtime_config()
             .model_roles
             .get(coco_types::ModelRole::Main)
             .map(|spec| spec.model_id.clone())
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn agents(&self) -> &Arc<RwLock<Vec<SubAgentState>>> {
-        &self.agents
+            .ok_or("Main role not configured in RuntimeConfig.model_roles")
     }
 
     pub(crate) fn execution_engine(&self) -> Option<coco_tool_runtime::AgentQueryEngineRef> {
@@ -378,16 +348,8 @@ impl SwarmAgentHandle {
         self.side_query.as_ref()
     }
 
-    pub(crate) fn task_registry(&self) -> Option<&coco_tool_runtime::AgentTaskRegistryRef> {
-        self.task_registry.as_ref()
-    }
-
-    /// Install the AgentTaskRegistry that the bg AgentTool path uses to
-    /// register spawns. Wire the same Arc that the engine's `TaskHandle`
-    /// slot reads so model `Task*` calls and AgentTool spawns share one
-    /// store.
-    pub fn set_task_registry(&mut self, registry: coco_tool_runtime::AgentTaskRegistryRef) {
-        self.task_registry = Some(registry);
+    pub(crate) fn task_registry(&self) -> &coco_tool_runtime::AgentTaskRegistryRef {
+        &self.task_registry
     }
 
     /// Required for `resume_agent`; optional for fresh spawns (the bg path
@@ -434,7 +396,10 @@ impl SwarmAgentHandle {
             .as_deref()
             .ok_or("team_name required for teammate")?;
 
-        let main_model_id = self.current_main_model_id();
+        let runtime_config = self.runtime_config();
+        let main_model_id = self
+            .current_main_model_id()
+            .map_err(|e| format!("teammate spawn: {e}"))?;
         // Per-request `model` slot is gone — read from definition only.
         // `resolve_teammate_model` accepts `Option<&str>`; passing `None`
         // makes it use the team config's default model or the
@@ -443,10 +408,10 @@ impl SwarmAgentHandle {
         let resolved_model = resolve_teammate_model(
             definition_model,
             &main_model_id,
-            &self.runtime_config.agent_teams,
+            &runtime_config.agent_teams,
             request.subagent_type.as_deref(),
             |role| {
-                self.runtime_config
+                runtime_config
                     .model_roles
                     .get(role)
                     .map(|spec| spec.model_id.clone())
@@ -559,7 +524,7 @@ impl SwarmAgentHandle {
         let selected_backend = if let Some(registry) = self.backend_registry.as_ref() {
             let executor = registry
                 .select_teammate_executor(
-                    self.runtime_config.agent_teams.teammate_mode,
+                    runtime_config.agent_teams.teammate_mode,
                     request.is_non_interactive,
                 )
                 .await?;
@@ -651,16 +616,18 @@ impl SwarmAgentHandle {
             });
         }
 
-        let state = SubAgentState {
-            agent_id: spawn_result.agent_id.clone(),
-            name: name.to_string(),
-            status: SubAgentStatus::Running,
-            turns: 0,
-            model: Some(resolved_model.model.clone()),
-            working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
-            last_message: None,
-        };
-        self.agents.write().await.push(state);
+        let task_cancel = tokio_util::sync::CancellationToken::new();
+        let teammate_task_id = self
+            .task_registry
+            .register_teammate_task(TeammateTaskRegistration::new(
+                name.to_string(),
+                team_name.to_string(),
+                spawn_backend_type,
+                spawn_result.pane_id.clone(),
+                request.prompt.clone(),
+                task_cancel.clone(),
+            ))
+            .await;
         let _team_member = match self
             .roster_store
             .commit_member(CommitMemberRequest {
@@ -681,6 +648,14 @@ impl SwarmAgentHandle {
                 } else {
                     let _ = self.runner.cancel_agent(&spawn_result.agent_id).await;
                 }
+                self.task_registry
+                    .complete_teammate_task(
+                        &spawn_result.agent_id,
+                        TaskStatus::Failed,
+                        None,
+                        Some(e.clone()),
+                    )
+                    .await;
                 let _ = self
                     .roster_store
                     .rollback_member(team_name, &reservation.agent_id)
@@ -701,22 +676,6 @@ impl SwarmAgentHandle {
                 });
             }
         };
-        {
-            let tm = self.team_manager.read().await;
-            if let Some(manager) = tm.as_ref() {
-                manager
-                    .register_agent(SubAgentState {
-                        agent_id: spawn_result.agent_id.clone(),
-                        name: name.to_string(),
-                        status: SubAgentStatus::Running,
-                        turns: 0,
-                        model: Some(resolved_model.model.clone()),
-                        working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
-                        last_message: None,
-                    })
-                    .await;
-            }
-        }
 
         // ── Gap C fix — actually start the teammate's LLM loop ──
         //
@@ -739,6 +698,22 @@ impl SwarmAgentHandle {
                 .await
                 .map(|ctx| ctx.cancelled)
                 .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
+            let cancel_flag = cancelled.clone();
+            let task_cancel_for_flag = task_cancel.clone();
+            let registry_for_cancel = self.task_registry.clone();
+            let agent_id_for_cancel = spawn_result.agent_id.clone();
+            tokio::spawn(async move {
+                task_cancel_for_flag.cancelled().await;
+                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                registry_for_cancel
+                    .complete_teammate_task(
+                        &agent_id_for_cancel,
+                        TaskStatus::Killed,
+                        None,
+                        Some("killed".to_string()),
+                    )
+                    .await;
+            });
 
             let identity = crate::types::TeammateIdentity {
                 agent_id: spawn_result.agent_id.clone(),
@@ -750,18 +725,6 @@ impl SwarmAgentHandle {
                     .and_then(|c| c.parse::<coco_types::AgentColorName>().ok()),
                 plan_mode_required: config.plan_mode_required,
             };
-
-            let task_state = Arc::new(tokio::sync::RwLock::new(
-                crate::task::InProcessTeammateTaskState::new(
-                    format!("task-{}", spawn_result.agent_id),
-                    identity.clone(),
-                    request.prompt.clone(),
-                ),
-            ));
-            self.teammate_task_states
-                .write()
-                .await
-                .insert(spawn_result.agent_id.clone(), task_state.clone());
 
             // Wire TeammateIdle hook context. SwarmAgentHandle owns
             // the registry; we synthesize the orchestration context
@@ -776,7 +739,7 @@ impl SwarmAgentHandle {
             });
             let runner_config = crate::runner_loop::InProcessRunnerConfig {
                 identity,
-                task_id: format!("task-{}", spawn_result.agent_id),
+                task_id: teammate_task_id.clone(),
                 prompt: request.prompt.clone(),
                 model: config.model.clone(),
                 system_prompt: config.system_prompt.clone(),
@@ -817,14 +780,33 @@ impl SwarmAgentHandle {
                 model_role: resolved_model.model_role,
                 model_selection: resolved_model.model_selection.clone(),
                 task_list: self.task_list.clone(),
+                task_registry: Some(self.task_registry.clone()),
                 roster_store: Some(self.roster_store.clone()),
                 plan_mode_required: config.plan_mode_required,
                 hooks: self.hook_registry().cloned(),
                 orchestration_ctx: teammate_orchestration_ctx,
             };
 
-            let join =
-                crate::runner_loop::start_in_process_teammate(runner_config, engine, task_state);
+            let registry = self.task_registry.clone();
+            let agent_id = spawn_result.agent_id.clone();
+            let join = tokio::spawn(async move {
+                let result =
+                    crate::runner_loop::run_in_process_teammate(runner_config, engine.as_ref())
+                        .await;
+                registry
+                    .complete_teammate_task(
+                        &agent_id,
+                        if result.success {
+                            TaskStatus::Completed
+                        } else {
+                            TaskStatus::Failed
+                        },
+                        result.output.clone(),
+                        result.error.clone(),
+                    )
+                    .await;
+                result
+            });
             self.runner.start_agent(&spawn_result.agent_id, join).await;
         } else if spawn_backend_type == crate::types::BackendType::InProcess {
             tracing::warn!(
@@ -832,6 +814,22 @@ impl SwarmAgentHandle {
                 "teammate registered without execution engine — no LLM turns will run; \
                  install via SwarmAgentHandle::set_teammate_execution_engine at session bootstrap"
             );
+        } else if let Some(executor) = launched_executor {
+            let registry = self.task_registry.clone();
+            let agent_id = spawn_result.agent_id.clone();
+            let task_cancel_for_pane = task_cancel.clone();
+            tokio::spawn(async move {
+                task_cancel_for_pane.cancelled().await;
+                let _ = executor.kill(&agent_id).await;
+                registry
+                    .complete_teammate_task(
+                        &agent_id,
+                        TaskStatus::Killed,
+                        None,
+                        Some("killed".to_string()),
+                    )
+                    .await;
+            });
         }
 
         Ok(AgentSpawnResponse {
@@ -965,24 +963,82 @@ impl AgentHandle for SwarmAgentHandle {
     }
 
     async fn query_agent_status(&self, agent_id: &str) -> Result<AgentSpawnResponse, String> {
-        let agents = self.agents.read().await;
-        let agent = agents
-            .iter()
-            .find(|a| a.agent_id == agent_id)
-            .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
+        match AgentIdentity::classify(agent_id) {
+            AgentIdentity::LocalAgent => self.query_local_agent_status(agent_id).await,
+            AgentIdentity::TeamAgent => self.query_team_agent_status(agent_id).await,
+        }
+    }
 
-        let status = match agent.status {
-            SubAgentStatus::Pending | SubAgentStatus::Running => AgentSpawnStatus::AsyncLaunched,
-            SubAgentStatus::Completed => AgentSpawnStatus::Completed,
-            SubAgentStatus::Failed => AgentSpawnStatus::Failed,
-            SubAgentStatus::Backgrounded => AgentSpawnStatus::AsyncLaunched,
-            SubAgentStatus::Interrupted => AgentSpawnStatus::Failed,
+    async fn get_agent_output(&self, agent_id: &str) -> Result<String, String> {
+        match AgentIdentity::classify(agent_id) {
+            AgentIdentity::LocalAgent => self.get_local_agent_output(agent_id).await,
+            AgentIdentity::TeamAgent => self.get_team_agent_output(agent_id).await,
+        }
+    }
+
+    async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {
+        self.interrupt_teammate_current_work(agent_id).await
+    }
+}
+
+impl SwarmAgentHandle {
+    async fn query_local_agent_status(&self, agent_id: &str) -> Result<AgentSpawnResponse, String> {
+        let task = self
+            .task_registry
+            .task_state(agent_id)
+            .await
+            .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
+        if task.task_type() != TaskType::BgAgent {
+            return Err(format!("Agent '{agent_id}' not found"));
+        }
+        let status = match task.status {
+            TaskStatus::Pending | TaskStatus::Running => AgentSpawnStatus::AsyncLaunched,
+            TaskStatus::Completed => AgentSpawnStatus::Completed,
+            TaskStatus::Failed | TaskStatus::Killed => AgentSpawnStatus::Failed,
+        };
+        Ok(AgentSpawnResponse {
+            status,
+            agent_id: Some(agent_id.to_string()),
+            result: if task.status.is_terminal() {
+                Some(self.task_registry.read_output(agent_id).await)
+            } else {
+                None
+            },
+            error: None,
+            duration_ms: task
+                .end_time
+                .map(|end| end.saturating_sub(task.start_time))
+                .unwrap_or_default(),
+            output_file: task.output_file.map(std::path::PathBuf::from),
+            ..Default::default()
+        })
+    }
+
+    async fn query_team_agent_status(&self, agent_id: &str) -> Result<AgentSpawnResponse, String> {
+        let member = self
+            .team_member(agent_id)
+            .await?
+            .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
+        let task = self
+            .task_registry
+            .teammate_task_state(&member.agent_id)
+            .await
+            .ok_or_else(|| {
+                format!("Agent '{agent_id}' is not locally controllable in this process")
+            })?;
+
+        let status = match task.status {
+            TaskStatus::Pending | TaskStatus::Running => AgentSpawnStatus::AsyncLaunched,
+            TaskStatus::Completed => AgentSpawnStatus::Completed,
+            TaskStatus::Failed | TaskStatus::Killed => AgentSpawnStatus::Failed,
         };
 
         Ok(AgentSpawnResponse {
             status,
             agent_id: Some(agent_id.to_string()),
-            result: agent.last_message.clone(),
+            result: task
+                .teammate_extras()
+                .and_then(|extras| extras.result.clone().or_else(|| extras.error.clone())),
             error: None,
             total_tool_use_count: 0,
             total_tokens: 0,
@@ -995,21 +1051,66 @@ impl AgentHandle for SwarmAgentHandle {
         })
     }
 
-    async fn get_agent_output(&self, agent_id: &str) -> Result<String, String> {
-        let agents = self.agents.read().await;
-        let agent = agents
-            .iter()
-            .find(|a| a.agent_id == agent_id)
+    async fn get_local_agent_output(&self, agent_id: &str) -> Result<String, String> {
+        let task = self
+            .task_registry
+            .task_state(agent_id)
+            .await
             .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
-
-        agent
-            .last_message
-            .clone()
-            .ok_or_else(|| format!("Agent '{agent_id}' has no output yet"))
+        if task.task_type() != TaskType::BgAgent {
+            return Err(format!("Agent '{agent_id}' not found"));
+        }
+        Ok(self.task_registry.read_output(agent_id).await)
     }
 
-    async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {
-        self.interrupt_teammate_current_work(agent_id).await
+    async fn get_team_agent_output(&self, agent_id: &str) -> Result<String, String> {
+        let member = self
+            .team_member(agent_id)
+            .await?
+            .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
+        let task = self
+            .task_registry
+            .teammate_task_state(&member.agent_id)
+            .await
+            .ok_or_else(|| {
+                format!("Agent '{agent_id}' is not locally controllable in this process")
+            })?;
+        let output = self.task_registry.read_output(&task.id).await;
+        if output.is_empty() {
+            return Err(format!("Agent '{agent_id}' has no output yet"));
+        }
+        Ok(output)
+    }
+
+    async fn team_member(
+        &self,
+        agent_id: &str,
+    ) -> Result<Option<crate::types::TeamMember>, String> {
+        let Some((name, team_name)) = agent_id.split_once('@') else {
+            return Ok(None);
+        };
+        let team_file = crate::team_file::read_team_file(team_name)
+            .map_err(|e| format!("Failed to read team '{team_name}': {e}"))?;
+        Ok(team_file.and_then(|team| {
+            team.members
+                .into_iter()
+                .find(|member| member.agent_id == agent_id || member.name == name)
+        }))
+    }
+}
+
+enum AgentIdentity {
+    LocalAgent,
+    TeamAgent,
+}
+
+impl AgentIdentity {
+    fn classify(id: &str) -> Self {
+        if id.contains('@') {
+            Self::TeamAgent
+        } else {
+            Self::LocalAgent
+        }
     }
 }
 

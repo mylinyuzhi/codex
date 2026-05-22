@@ -327,17 +327,15 @@ async fn with_default_generators_registers_all_builtins() {
         SystemReminderOrchestrator::new(SystemReminderConfig::default()).with_default_generators();
     assert_eq!(
         o.generator_count(),
-        50,
-        "Phase A/B/C (11) + Phase-1 (5) + Phase-2 (3) + Phase-3 (14) + Phase-4 user-input (3) + Memory (2) + Main IDE (2) + Silent native (2) + Audit-add (8)"
+        43,
+        "Phase A/B/C (11) + Phase-1 (5) + Phase-2 (3) + Phase-3 (14) + Phase-4 user-input (3) + Memory (2) + Main IDE (2) + Silent native (2) + Audit-add model-visible (1)"
     );
 }
 
-/// TS parity guard: every TS-sourced `AttachmentType` variant (per
-/// `AttachmentType::all()`) must have a default generator registered,
-/// and no generator emits a variant outside the catalog. Prevents
-/// silent drift if a new variant is added to the enum without a
-/// corresponding generator + `orchestrator::register_default_generators`
-/// call.
+/// TS parity guard: every system-reminder-owned `AttachmentType` variant
+/// must have a default generator registered, and no generator emits a
+/// variant outside the catalog. Typed API-hidden attachment events live in
+/// `coco_types::AttachmentKind`, not this reminder registry.
 #[tokio::test]
 async fn all_attachment_type_variants_have_default_generator() {
     use crate::types::AttachmentType;
@@ -402,10 +400,6 @@ async fn default_registry_order_matches_ts_attachment_batches() {
             AgentPendingMessages,
             CriticalSystemReminder,
             CompactionReminder,
-            // Audit-add Core tier
-            CurrentSessionMemory,
-            DynamicSkill,
-            TeammateShutdownBatch,
             // mainThreadAttachments plus hook/invoked-skill renderers
             IdeSelection,
             IdeOpenedFile,
@@ -422,11 +416,6 @@ async fn default_registry_order_matches_ts_attachment_batches() {
             OutputTokenUsage,
             VerifyPlanReminder,
             InvokedSkills,
-            // Audit-add MainAgentOnly tier
-            MaxTurnsReached,
-            CommandPermissions,
-            StructuredOutput,
-            ContextEfficiency,
             // silent reminder-native attachments
             AlreadyReadFile,
             EditedImageFile,

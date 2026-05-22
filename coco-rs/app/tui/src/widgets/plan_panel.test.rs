@@ -40,8 +40,8 @@ fn running(id: &str, name: &str, status: TaskDisplayStatus) -> TaskEntry {
         name: name.into(),
         status,
         task_type: TaskDisplayType::Shell,
-        progress: None,
         elapsed_ms: 1500,
+        progress: None,
     }
 }
 

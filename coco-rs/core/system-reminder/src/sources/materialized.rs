@@ -67,6 +67,7 @@ pub struct MaterializedSources {
     pub diagnostics: Vec<DiagnosticFileSummary>,
     pub task_statuses: Vec<TaskStatusSnapshot>,
     pub skill_listing: Option<String>,
+    pub skill_discovery: Option<coco_types::SkillDiscoveryPayload>,
     pub invoked_skills: Vec<InvokedSkillEntry>,
     pub mcp_instructions_current: HashMap<String, String>,
     pub mcp_resources: Vec<McpResourceEntry>,

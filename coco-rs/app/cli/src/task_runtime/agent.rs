@@ -13,23 +13,36 @@
 //!   (sync spawn with optional autoBackgroundMs timer).
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use async_trait::async_trait;
 use coco_tasks::{
-    NotificationKind, TaskNotification, TaskUsage as NotifTaskUsage, TerminalStatus,
+    NotificationKind, TaskCreateRequest, TaskNotification, TaskUsage as NotifTaskUsage,
+    TeammateTaskCreateRequest, TeammateTaskUpdate as RuntimeTeammateTaskUpdate, TerminalStatus,
     Worktree as NotifWorktree,
 };
-use coco_tool_runtime::{AgentCompletionPayload, AgentRegistration, AgentTaskRegistry};
+use coco_tool_runtime::{
+    AgentCompletionPayload, AgentRegistration, TaskHandle, TeammateTaskRegistration,
+    TeammateTaskUpdate,
+};
 use coco_types::{TaskStatus, TaskType};
-use tokio::sync::{Notify, watch};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument, trace, warn};
 
+use super::TaskRuntime;
 use super::stall;
 use super::timers::spawn_agent_auto_background_timer;
-use super::{TaskEntry, TaskRuntime};
 use crate::disk_task_output::DEFAULT_MAX_READ_BYTES;
+
+struct AgentTaskRegistrationRequest<'a> {
+    task_id: String,
+    description: &'a str,
+    tool_use_id: Option<&'a str>,
+    invoking_agent: Option<&'a str>,
+    cancel: CancellationToken,
+    auto_background_ms: Option<u64>,
+    is_backgrounded: bool,
+}
 
 impl TaskRuntime {
     /// Register a freshly-spawned AgentTool task. The `registration`
@@ -46,25 +59,47 @@ impl TaskRuntime {
     #[instrument(
         level = "info",
         skip(self, cancel),
-        fields(description = %description, tool_use_id = ?tool_use_id, invoking_agent_id = ?invoking_agent_id, ?registration)
+        fields(description = %description, tool_use_id = ?tool_use_id, invoking_agent = ?invoking_agent, ?registration)
     )]
     pub async fn register_agent_task(
         &self,
         description: &str,
         tool_use_id: Option<&str>,
-        invoking_agent_id: Option<&str>,
+        invoking_agent: Option<&str>,
+        cancel: CancellationToken,
+        registration: AgentRegistration,
+    ) -> String {
+        let task_id = coco_types::generate_task_id(TaskType::BgAgent);
+        self.register_agent_task_with_id(
+            task_id,
+            description,
+            tool_use_id,
+            invoking_agent,
+            cancel,
+            registration,
+        )
+        .await
+    }
+
+    pub async fn register_agent_task_with_id(
+        &self,
+        task_id: String,
+        description: &str,
+        tool_use_id: Option<&str>,
+        invoking_agent: Option<&str>,
         cancel: CancellationToken,
         registration: AgentRegistration,
     ) -> String {
         let (is_backgrounded, auto_background_ms) = registration.decompose();
-        self.register_agent_task_inner(
+        self.register_agent_task_inner(AgentTaskRegistrationRequest {
+            task_id,
             description,
             tool_use_id,
-            invoking_agent_id,
+            invoking_agent,
             cancel,
             auto_background_ms,
             is_backgrounded,
-        )
+        })
         .await
     }
 
@@ -72,50 +107,34 @@ impl TaskRuntime {
     /// public entry point [`Self::register_agent_task`] decomposes
     /// the `AgentRegistration` enum into the two underlying axes
     /// before calling this.
-    async fn register_agent_task_inner(
-        &self,
-        description: &str,
-        tool_use_id: Option<&str>,
-        invoking_agent_id: Option<&str>,
-        cancel: CancellationToken,
-        auto_background_ms: Option<u64>,
-        is_backgrounded: bool,
-    ) -> String {
-        let task_id = coco_types::generate_task_id(TaskType::LocalAgent);
+    async fn register_agent_task_inner(&self, request: AgentTaskRegistrationRequest<'_>) -> String {
+        let AgentTaskRegistrationRequest {
+            task_id,
+            description,
+            tool_use_id,
+            invoking_agent,
+            cancel,
+            auto_background_ms,
+            is_backgrounded,
+        } = request;
         let dto = self.disk.get_or_create(&task_id).await;
         let output_path = dto.path().display().to_string();
         let assigned = self
             .manager
-            .create_running_with_id(
-                task_id.clone(),
-                TaskType::LocalAgent,
-                description,
-                &output_path,
+            .create_task(TaskCreateRequest {
+                task_id: task_id.clone(),
+                task_type: TaskType::BgAgent,
+                description: description.to_string(),
+                output_file: Some(output_path.clone()),
+                tool_use_id: tool_use_id.map(String::from),
                 is_backgrounded,
-            )
+                status: TaskStatus::Running,
+                cancel: cancel.clone(),
+                invoking_agent: invoking_agent.map(String::from),
+                shell_extras: None,
+            })
             .await;
         debug_assert_eq!(assigned, task_id);
-        if let Some(tu_id) = tool_use_id {
-            self.manager
-                .set_tool_use_id(&task_id, tu_id.to_string())
-                .await;
-        }
-        // `watch::channel` returns (Sender, Receiver). We drop the
-        // initial receiver — `subscribe_terminal` creates fresh ones
-        // on demand, and `send_replace` doesn't require receivers
-        // (`tokio::sync::watch::Sender::send_replace`).
-        let (status_tx, _) = watch::channel(TaskStatus::Running);
-        self.entries.write().await.insert(
-            task_id.clone(),
-            TaskEntry {
-                cancel: cancel.clone(),
-                status_tx,
-                invoking_agent_id: invoking_agent_id.map(String::from),
-                detach: Arc::new(Notify::new()),
-                detached: Arc::new(AtomicBool::new(false)),
-                exit_code: Arc::new(std::sync::OnceLock::new()),
-            },
-        );
         // W6 (Item 3 / A4): spawn the agent stall watchdog. Fires a
         // notification if the agent's disk output is silent for
         // `AGENT_STALL_THRESHOLD_MS`. The bg agent driver in
@@ -128,7 +147,7 @@ impl TaskRuntime {
             task_id.clone(),
             description.to_string(),
             tool_use_id.map(String::from),
-            invoking_agent_id.map(String::from),
+            invoking_agent.map(String::from),
             output_path.clone(),
             dto.clone(),
             self.notification_sink.clone(),
@@ -140,13 +159,7 @@ impl TaskRuntime {
         // `select!` arm) gets the detach signal and unblocks with
         // `AsyncLaunched`; the engine keeps running detached.
         if let Some(ms) = auto_background_ms.filter(|v| *v > 0) {
-            spawn_agent_auto_background_timer(
-                task_id.clone(),
-                ms,
-                self.entries.clone(),
-                self.manager.clone(),
-                cancel,
-            );
+            spawn_agent_auto_background_timer(task_id.clone(), ms, self.manager.clone(), cancel);
         }
         info!(
             target: "coco::task_runtime",
@@ -229,21 +242,12 @@ impl TaskRuntime {
 
     pub(super) async fn transition_terminal(&self, task_id: &str, status: TaskStatus) {
         debug_assert!(status.is_terminal());
-        self.manager.update_status(task_id, status).await;
-        if let Some(entry) = self.entries.read().await.get(task_id) {
-            entry.cancel.cancel();
-            // `send_replace` works even when no receivers exist —
-            // `send` returns Err in that case and the terminal
-            // signal is lost. Watch always retains the last value
-            // so a subsequent `subscribe()` sees it.
-            entry.status_tx.send_replace(status);
-        }
+        let _ = self.manager.transition_terminal(task_id, status).await;
     }
 
-    /// Pull the description + tool_use_id + output_file from
-    /// canonical state (TaskManager) and the routing `invoking_agent_id`
-    /// from the per-task entry; then push the agent-shaped
-    /// notification.
+    /// Pull description, tool_use_id, output_file, and routing
+    /// `invoking_agent` from the canonical TaskManager row; then
+    /// push the agent-shaped notification.
     async fn push_agent_notification(
         &self,
         task_id: &str,
@@ -254,17 +258,15 @@ impl TaskRuntime {
         let Some(state) = self.manager.get(task_id).await else {
             return;
         };
-        let invoking_agent_id = self
-            .entries
-            .read()
-            .await
-            .get(task_id)
-            .and_then(|e| e.invoking_agent_id.clone());
+        if !self.manager.mark_notified_once(task_id).await {
+            return;
+        }
+        let invoking_agent = self.manager.invoking_agent(task_id).await;
         let n = TaskNotification {
             task_id: state.id,
             tool_use_id: state.tool_use_id,
-            agent_id: invoking_agent_id,
-            output_file: state.output_file,
+            agent_id: invoking_agent,
+            output_file: state.output_file.unwrap_or_default(),
             description: state.description,
             kind: NotificationKind::AgentTerminal {
                 status,
@@ -286,12 +288,81 @@ impl TaskRuntime {
 }
 
 #[async_trait]
-impl AgentTaskRegistry for TaskRuntime {
+impl TaskHandle for TaskRuntime {
+    // ── Reader (was TaskReader) ──
+    async fn get_task_status(
+        &self,
+        task_id: &str,
+    ) -> Result<coco_types::TaskStateBase, coco_error::BoxedError> {
+        self.get_task_status_impl(task_id).await
+    }
+    async fn get_task_output_delta(
+        &self,
+        task_id: &str,
+        from_offset: i64,
+    ) -> Result<coco_tool_runtime::TaskOutputDelta, coco_error::BoxedError> {
+        self.get_task_output_delta_impl(task_id, from_offset).await
+    }
+    async fn list_tasks(&self) -> Vec<coco_types::TaskStateBase> {
+        self.list_tasks_impl().await
+    }
+    async fn subscribe_terminal(&self, task_id: &str) -> Option<coco_tool_runtime::TerminalSignal> {
+        self.subscribe_terminal_impl(task_id).await
+    }
+    async fn detach_handle(&self, task_id: &str) -> Option<Arc<Notify>> {
+        self.detach_handle_impl(task_id).await
+    }
+    async fn read_terminal_outputs(
+        &self,
+        task_id: &str,
+    ) -> Result<coco_tool_runtime::TerminalOutputs, coco_error::BoxedError> {
+        self.read_terminal_outputs_impl(task_id).await
+    }
+    async fn read_output(&self, task_id: &str) -> String {
+        let Some(dto) = self.disk.get(task_id).await else {
+            return String::new();
+        };
+        let _ = dto.flush().await;
+        dto.read_tail(DEFAULT_MAX_READ_BYTES)
+            .await
+            .unwrap_or_default()
+    }
+    async fn task_state(&self, task_id: &str) -> Option<coco_types::TaskStateBase> {
+        self.manager.get(task_id).await
+    }
+    async fn output_file_path(&self, task_id: &str) -> Option<std::path::PathBuf> {
+        Some(self.disk.output_path(task_id))
+    }
+    async fn is_terminal(&self, task_id: &str) -> bool {
+        self.manager
+            .get(task_id)
+            .await
+            .map(|s| s.status.is_terminal())
+            .unwrap_or(false)
+    }
+
+    // ── Controller (was TaskController) ──
+    async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
+        self.kill_task_impl(task_id).await
+    }
+    async fn signal_detach(&self, task_id: &str) -> coco_tool_runtime::DetachOutcome {
+        TaskRuntime::signal_detach(self, task_id).await
+    }
+
+    // ── Shell spawn (was ShellTaskSpawner) ──
+    async fn spawn_shell_task(
+        &self,
+        request: coco_tool_runtime::BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError> {
+        self.spawn_shell_task_impl(request).await
+    }
+
+    // ── Agent task registration (was AgentTaskRegistry) ──
     async fn register_agent_task(
         &self,
         description: &str,
         tool_use_id: Option<&str>,
-        invoking_agent_id: Option<&str>,
+        invoking_agent: Option<&str>,
         cancel: CancellationToken,
         registration: AgentRegistration,
     ) -> String {
@@ -299,7 +370,28 @@ impl AgentTaskRegistry for TaskRuntime {
             self,
             description,
             tool_use_id,
-            invoking_agent_id,
+            invoking_agent,
+            cancel,
+            registration,
+        )
+        .await
+    }
+
+    async fn register_agent_task_with_id(
+        &self,
+        task_id: String,
+        description: &str,
+        tool_use_id: Option<&str>,
+        invoking_agent: Option<&str>,
+        cancel: CancellationToken,
+        registration: AgentRegistration,
+    ) -> String {
+        TaskRuntime::register_agent_task_with_id(
+            self,
+            task_id,
+            description,
+            tool_use_id,
+            invoking_agent,
             cancel,
             registration,
         )
@@ -309,13 +401,9 @@ impl AgentTaskRegistry for TaskRuntime {
         TaskRuntime::append_output(self, task_id, chunk).await
     }
     async fn set_progress_summary(&self, task_id: &str, summary: String) {
-        // Delegate to the inner manager — it owns the change-detect
-        // logic (D7) and the per-emit SDK gate (D14).
         self.manager.set_progress_summary(task_id, summary).await;
     }
     async fn set_progress(&self, task_id: &str, progress: coco_types::TaskProgress) {
-        // Delegate to TaskManager which preserves any existing summary
-        // across overlapping writes (`updateAgentProgress` TS parity).
         self.manager.set_progress(task_id, progress).await;
     }
     async fn mark_completed(&self, task_id: &str, payload: AgentCompletionPayload) {
@@ -330,7 +418,12 @@ impl AgentTaskRegistry for TaskRuntime {
         } else {
             TaskStatus::Failed
         };
-        self.transition_terminal(task_id, status).await;
+        // TS parity: sync agent path writes terminal state but does
+        // NOT delete the row — the panel-grace eviction sweep
+        // (`framework.ts:evictTerminalTask`) decides when the row
+        // goes away. Coco-rs's previous behavior was to eagerly remove
+        // here, which dropped the row before the 30s panel grace.
+        let _ = self.manager.transition_terminal(task_id, status).await;
         info!(
             target: "coco::task_runtime",
             task_id,
@@ -339,49 +432,26 @@ impl AgentTaskRegistry for TaskRuntime {
         );
     }
 
-    async fn detach_handle(&self, task_id: &str) -> Option<Arc<Notify>> {
-        // W6.2 full: same data as TaskReader's impl; expose via
-        // AgentTaskRegistry so the coordinator can race detach
-        // without holding a separate TaskReader handle.
-        coco_tool_runtime::TaskReader::detach_handle(self, task_id).await
-    }
-
     async fn register_dream_task(&self, description: &str, cancel: CancellationToken) -> String {
-        // Mint a Dream-prefixed task_id so `TaskList` / TUI can
-        // identify auto-dream entries at a glance.
         let task_id = coco_types::generate_task_id(TaskType::Dream);
         let dto = self.disk.get_or_create(&task_id).await;
         let output_path = dto.path().display().to_string();
-        // Dream tasks run as internal services (no user-visible
-        // foreground awaiter) — initialize as backgrounded so the TUI
-        // panel filter and fg/bg-discriminating consumers treat them
-        // consistently with `registerAsyncAgent`.
         let assigned = self
             .manager
-            .create_running_with_id(
-                task_id.clone(),
-                TaskType::Dream,
-                description,
-                &output_path,
-                /* is_backgrounded */ true,
-            )
+            .create_task(TaskCreateRequest {
+                task_id: task_id.clone(),
+                task_type: TaskType::Dream,
+                description: description.to_string(),
+                output_file: Some(output_path.clone()),
+                tool_use_id: None,
+                is_backgrounded: true,
+                status: TaskStatus::Running,
+                cancel,
+                invoking_agent: None,
+                shell_extras: None,
+            })
             .await;
         debug_assert_eq!(assigned, task_id);
-        let (status_tx, _) = watch::channel(TaskStatus::Running);
-        self.entries.write().await.insert(
-            task_id.clone(),
-            TaskEntry {
-                cancel,
-                status_tx,
-                // Dream is internal — no invoker agent, no detach
-                // mechanism (it's not user-cancellable mid-run via
-                // Ctrl+B; `kill_task` is the only stop path).
-                invoking_agent_id: None,
-                detach: Arc::new(Notify::new()),
-                detached: Arc::new(AtomicBool::new(false)),
-                exit_code: Arc::new(std::sync::OnceLock::new()),
-            },
-        );
         info!(
             target: "coco::task_runtime",
             task_id = %task_id,
@@ -391,23 +461,101 @@ impl AgentTaskRegistry for TaskRuntime {
         );
         task_id
     }
-    async fn read_output(&self, task_id: &str) -> String {
-        let Some(dto) = self.disk.get(task_id).await else {
-            return String::new();
-        };
-        let _ = dto.flush().await;
-        dto.read_tail(DEFAULT_MAX_READ_BYTES)
-            .await
-            .unwrap_or_default()
+    async fn register_teammate_task(&self, request: TeammateTaskRegistration) -> String {
+        let task_id = coco_types::generate_task_id(TaskType::Teammate);
+        let dto = self.disk.get_or_create(&task_id).await;
+        let output_path = dto.path().display().to_string();
+        let assigned = self
+            .manager
+            .create_teammate_task(TeammateTaskCreateRequest {
+                task_id: task_id.clone(),
+                agent_ref: request.agent_ref,
+                backend_type: request.backend_type,
+                pane_id: request.pane_id,
+                prompt: request.prompt,
+                output_file: Some(output_path.clone()),
+                cancel: request.cancel,
+            })
+            .await;
+        debug_assert_eq!(assigned, task_id);
+        info!(
+            target: "coco::task_runtime",
+            task_id = %task_id,
+            task_type = "in_process_teammate",
+            output_file = %output_path,
+            "teammate task registered (Running)"
+        );
+        task_id
     }
-    async fn output_file_path(&self, task_id: &str) -> Option<std::path::PathBuf> {
-        Some(self.disk.output_path(task_id))
+    async fn teammate_task_state(&self, agent_id: &str) -> Option<coco_types::TaskStateBase> {
+        self.manager.find_teammate(agent_id).await
     }
-    async fn is_terminal(&self, task_id: &str) -> bool {
+    async fn update_teammate_task(&self, agent_id: &str, update: TeammateTaskUpdate) {
         self.manager
-            .get(task_id)
+            .update_teammate_task(
+                agent_id,
+                RuntimeTeammateTaskUpdate {
+                    is_idle: update.is_idle,
+                    shutdown_requested: update.shutdown_requested,
+                    result: update.result,
+                    error: update.error,
+                    spinner_verb: update.spinner_verb,
+                    past_tense_verb: update.past_tense_verb,
+                    append_message: update.append_message,
+                },
+            )
+            .await;
+    }
+    async fn set_teammate_current_work_cancel(
+        &self,
+        agent_id: &str,
+        cancel: Option<CancellationToken>,
+    ) -> bool {
+        self.manager
+            .set_teammate_current_work_cancel(agent_id, cancel)
             .await
-            .map(|s| s.status.is_terminal())
-            .unwrap_or(false)
+    }
+    async fn interrupt_teammate_current_work(&self, agent_id: &str) -> Result<bool, String> {
+        self.manager.interrupt_teammate_current_work(agent_id).await
+    }
+    async fn complete_teammate_task(
+        &self,
+        agent_id: &str,
+        status: TaskStatus,
+        result: Option<String>,
+        error: Option<String>,
+    ) {
+        debug_assert!(status.is_terminal());
+        let Some(state) = self.manager.find_teammate(agent_id).await else {
+            return;
+        };
+        if let Some(text) = result.as_deref().filter(|s| !s.is_empty()) {
+            self.append_output(&state.id, text).await;
+        }
+        if let Some(text) = error.as_deref().filter(|s| !s.is_empty()) {
+            self.append_output(&state.id, text).await;
+        }
+        let result_update = match result {
+            Some(text) => coco_types::FieldUpdate::Set(text),
+            None => coco_types::FieldUpdate::Keep,
+        };
+        let error_update = match error {
+            Some(text) => coco_types::FieldUpdate::Set(text),
+            None => coco_types::FieldUpdate::Keep,
+        };
+        self.manager
+            .update_teammate_task(
+                agent_id,
+                RuntimeTeammateTaskUpdate {
+                    is_idle: coco_types::FieldUpdate::Set(true),
+                    result: result_update,
+                    error: error_update,
+                    spinner_verb: coco_types::FieldUpdate::Clear,
+                    ..RuntimeTeammateTaskUpdate::default()
+                },
+            )
+            .await;
+        let _ = self.manager.transition_terminal(&state.id, status).await;
+        let _ = self.manager.mark_notified_once(&state.id).await;
     }
 }

@@ -12,24 +12,14 @@
 //!
 //! Skip conditions, applied in order:
 //!
-//! 1. **Not a LocalAgent** — TS only generates `task_status`
-//!    reminders for `local_agent` tasks. Shell / dream / teammate
+//! 1. **Not a BgAgent** — TS only generates `task_status` reminders for
+//!    backgrounded agent tasks. Shell / dream / teammate / remote
 //!    tasks don't carry the "don't spawn a duplicate" affordance.
 //! 2. **`status == Pending`** — never started; nothing to report.
-//!    TS: `compact.ts:1579` `agent.status === 'pending'`.
 //! 3. **`retrieved`** — `TaskOutputTool` already served this task's
-//!    output (terminal or partial); model knows what happened. TS:
-//!    `compact.ts:1578` `agent.retrieved`.
-//! 4. **Same `agent_id` as the caller** — fork mode + nested
-//!    spawns. The agent doesn't warn itself about itself. TS:
-//!    `compact.ts:1580` `agent.agentId === context.agentId`.
-//!    coco-rs threads `agent_id` through `collect`; `None` means
-//!    the main thread.
-//!
-//! Terminal tasks (Completed / Failed / Killed) flow through the
-//! generator's status-dispatched render at
-//! `coco_system_reminder::generators::task_status::render_one` —
-//! TS counterpart `messages.ts:3954-4024`.
+//!    output; the model knows what happened.
+//! 4. **Same `task_id` as the caller** — fork mode + nested spawns;
+//!    an agent doesn't warn itself about itself.
 
 use async_trait::async_trait;
 use coco_system_reminder::TaskRunStatus;
@@ -49,14 +39,10 @@ impl TaskStatusSource for TaskManager {
         agent_id: Option<&str>,
         just_compacted: bool,
     ) -> Vec<TaskStatusSnapshot> {
-        // TS only emits `task_status` reminders post-compaction.
         if !just_compacted {
             return Vec::new();
         }
         let states = self.list().await;
-        // Track filter outcomes for ops debugging — when an agent
-        // wonders "why no task_status reminder?", the log answers
-        // exactly which rule fired.
         let total = states.len();
         let mut kept = 0usize;
         let mut skipped_type = 0usize;
@@ -65,62 +51,39 @@ impl TaskStatusSource for TaskManager {
         let mut skipped_self = 0usize;
         let mut snapshots = Vec::with_capacity(states.len());
         for t in states {
-            // Rule 1: LocalAgent only.
-            if t.task_type != TaskType::LocalAgent {
+            if t.task_type() != TaskType::BgAgent {
                 skipped_type += 1;
                 continue;
             }
-            // Rule 2: skip Pending — never started, nothing to report.
-            // TS: `compact.ts:1579` `agent.status === 'pending'`.
             if t.status == TaskStatus::Pending {
                 skipped_pending += 1;
                 continue;
             }
-            let extra = self.local_agent_extra(&t.id).await;
-            // Rule 3: skip if `TaskOutputTool` already retrieved
-            // partial output and the model has shown awareness.
-            if extra.retrieved {
+            let extras = t.bg_agent_extras().cloned().unwrap_or_default();
+            if extras.retrieved {
                 skipped_retrieved += 1;
                 continue;
             }
-            // Rule 4: skip when the caller IS the task (fork-mode
-            // recursion guard — an agent shouldn't be reminded about
-            // its own running state). For LocalAgent tasks the
-            // `task_id` IS the agent's identifier: `register_agent_task_inner`
-            // mints both from `coco_types::generate_task_id(LocalAgent)`
-            // and threads the same id everywhere downstream.
-            //
-            // TS parity: `compact.ts:1580` `agent.agentId === context.agentId`.
-            //
-            // (The previous comparison used `tool_use_id` as a "proxy" —
-            // it isn't one. `tool_use_id` is the Anthropic-style
-            // `toolu_...` ID of the spawning tool call, in a different
-            // namespace from agent_id; the proxy never matched and the
-            // self-filter never fired.)
+            // BgAgent's task id IS its agent id (`a<16hex>`); the caller
+            // self-filter compares against the row id directly.
             if let Some(caller_id) = agent_id
-                && t.id == caller_id
+                && t.id.as_str() == caller_id
             {
                 skipped_self += 1;
                 continue;
             }
             kept += 1;
-            // Build the `delta_summary`. TS source:
-            // `compact.ts:1591-1594` reads `agent.progress?.summary`
-            // for running tasks and `agent.error` for terminal tasks.
-            //
-            // For terminal-error tasks, prefer the recorded `error`
-            // text (set by `mark_failed` on the failure path) so the
-            // model sees `"Delta: <error>"` in the post-compact
-            // reminder — TS-parity. Fall through to the progress
-            // summary / synthetic counter sentence when no error is
-            // recorded (Completed / Killed without recorded error).
+            // Build the `delta_summary`. For terminal-error tasks the
+            // recorded `error` text takes precedence; fall through to
+            // the progress summary or synthetic counter sentence
+            // otherwise.
             let delta_summary = if t.status.is_terminal()
-                && let Some(err) = extra.error.as_deref()
+                && let Some(err) = extras.error.as_deref()
                 && !err.is_empty()
             {
                 Some(err.to_string())
             } else {
-                extra.progress.as_ref().map(|p| {
+                extras.progress.as_ref().map(|p| {
                     p.summary.clone().unwrap_or_else(|| {
                         let mut parts = Vec::new();
                         if let Some(last) = p.last_tool_name.as_deref() {
@@ -136,13 +99,15 @@ impl TaskStatusSource for TaskManager {
                     })
                 })
             };
+            let task_type = t.task_type();
+            let output_file_path = t.output_file.clone();
             snapshots.push(TaskStatusSnapshot {
                 task_id: t.id,
                 description: t.description,
                 status: map_status(t.status),
-                task_type: task_type_wire_name(t.task_type).to_string(),
+                task_type: task_type_wire_name(task_type).to_string(),
                 delta_summary,
-                output_file_path: Some(t.output_file).filter(|s| !s.is_empty()),
+                output_file_path,
             });
         }
         debug!(

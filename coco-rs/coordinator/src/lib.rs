@@ -79,7 +79,6 @@ pub mod prompt;
 pub mod reconnect;
 pub mod roster_store;
 pub mod spawn;
-pub mod task;
 pub mod teammate;
 
 // ── Crate-root re-exports for the stable surface. ──

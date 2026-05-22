@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use std::borrow::Borrow;
 use std::fmt;
 
 /// Branded session identifier.
@@ -15,11 +16,33 @@ impl SessionId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
 }
 
 impl fmt::Display for SessionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl Borrow<str> for SessionId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for SessionId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for SessionId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
     }
 }
 
@@ -36,6 +59,10 @@ impl AgentId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
     }
 
     /// Generate a new agent ID with optional label.
@@ -59,6 +86,24 @@ impl fmt::Display for AgentId {
     }
 }
 
+impl Borrow<str> for AgentId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for AgentId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for AgentId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 /// Branded task identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -72,10 +117,47 @@ impl TaskId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
 }
 
 impl fmt::Display for TaskId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl Borrow<str> for TaskId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TaskId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for TaskId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+/// Cross-newtype conversion: a BgAgent task's id IS its agent identity.
+/// Use this when a `TaskId` known to belong to a BgAgent variant needs
+/// to be reinterpreted as an `AgentId` for routing.
+impl From<TaskId> for AgentId {
+    fn from(t: TaskId) -> Self {
+        Self(t.0)
+    }
+}
+
+impl From<AgentId> for TaskId {
+    fn from(a: AgentId) -> Self {
+        Self(a.0)
     }
 }

@@ -143,6 +143,14 @@ pub struct UnstampedToolCallOutcome {
     /// `toolExecution.ts:1572`). Always `None` on Failure / EarlyReturn
     /// — the flatten template already rejects prevent attachments there.
     pub prevent_continuation: Option<String>,
+    /// SDK-facing structured output, set when the tool returned
+    /// `ToolResult::with_structured_output(...)`. Carries the typed
+    /// payload back to `run_session_loop` so the SDK result branch in
+    /// `make_query_result` can pick it up without scanning history
+    /// (which is unsound under mid-query compaction).
+    /// TS parity: the `result.structured_output` side-channel surfaced
+    /// in `services/tools/toolExecution.ts:1272-1280`.
+    pub structured_output: Option<serde_json::Value>,
     /// Scheduler-facing side-effects. Separated from the history-facing
     /// outcome body because `AppStatePatch` is a single owned `FnOnce`
     /// that cannot simultaneously ride with the outcome into
@@ -216,6 +224,7 @@ impl UnstampedToolCallOutcome {
             error_kind,
             permission_denial,
             prevent_continuation,
+            structured_output,
             effects,
         } = self;
         let outcome = ToolCallOutcome {
@@ -227,6 +236,7 @@ impl UnstampedToolCallOutcome {
             error_kind,
             permission_denial,
             prevent_continuation,
+            structured_output,
             completion_seq,
         };
         (outcome, effects)
@@ -255,6 +265,7 @@ pub struct ToolCallOutcome {
     error_kind: Option<ToolCallErrorKind>,
     permission_denial: Option<PermissionDenialInfo>,
     prevent_continuation: Option<String>,
+    structured_output: Option<serde_json::Value>,
     completion_seq: usize,
 }
 
@@ -289,6 +300,11 @@ impl ToolCallOutcome {
     pub fn prevent_continuation(&self) -> Option<&str> {
         self.prevent_continuation.as_deref()
     }
+    /// SDK-facing structured output, propagated from the success-path
+    /// runner. `None` for failure / early-return paths.
+    pub fn structured_output(&self) -> Option<&serde_json::Value> {
+        self.structured_output.as_ref()
+    }
     /// Destructure into owned parts (history-append consumes
     /// `ordered_messages`). Does NOT expose any `AppStatePatch` —
     /// patches live in [`ToolSideEffects`], not here.
@@ -302,6 +318,7 @@ impl ToolCallOutcome {
             error_kind,
             permission_denial,
             prevent_continuation,
+            structured_output,
             completion_seq,
         } = self;
         ToolCallOutcomeParts {
@@ -313,6 +330,7 @@ impl ToolCallOutcome {
             error_kind,
             permission_denial,
             prevent_continuation,
+            structured_output,
             completion_seq,
         }
     }
@@ -329,6 +347,7 @@ pub struct ToolCallOutcomeParts {
     pub error_kind: Option<ToolCallErrorKind>,
     pub permission_denial: Option<PermissionDenialInfo>,
     pub prevent_continuation: Option<String>,
+    pub structured_output: Option<serde_json::Value>,
     pub completion_seq: usize,
 }
 

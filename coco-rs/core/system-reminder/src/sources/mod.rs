@@ -131,6 +131,33 @@ impl ReminderSources {
                 async move { s.invoked(a).await }
             },
         );
+        let skill_discovery_fut = {
+            let s = self
+                .skills
+                .as_ref()
+                .filter(|_| config.attachments.skill_discovery)
+                .filter(|_| user_input.is_some());
+            let input_owned = user_input.unwrap_or("").to_string();
+            async move {
+                match s {
+                    Some(s) => {
+                        let s = s.clone();
+                        match timeout(t, async move { s.skill_discovery(&input_owned).await }).await
+                        {
+                            Ok(v) => v,
+                            Err(_) => {
+                                tracing::warn!(
+                                    timeout_ms = t.as_millis() as u64,
+                                    "skills.skill_discovery timed out"
+                                );
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            }
+        };
 
         let mcp_instructions_fut = gate(
             self.mcp.as_ref(),
@@ -289,6 +316,7 @@ impl ReminderSources {
             task_statuses,
             skill_listing,
             invoked_skills,
+            skill_discovery,
             mcp_instructions_current,
             mcp_resources,
             teammate_mailbox,
@@ -304,6 +332,7 @@ impl ReminderSources {
             task_status_fut,
             skill_listing_fut,
             invoked_skills_fut,
+            skill_discovery_fut,
             mcp_instructions_fut,
             mcp_resources_fut,
             teammate_mailbox_fut,
@@ -320,6 +349,7 @@ impl ReminderSources {
             diagnostics,
             task_statuses,
             skill_listing,
+            skill_discovery,
             invoked_skills,
             mcp_instructions_current,
             mcp_resources,

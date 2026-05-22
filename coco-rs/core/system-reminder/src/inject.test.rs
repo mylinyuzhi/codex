@@ -188,27 +188,12 @@ fn inject_multiple_reminders_appends_in_order() {
     assert!(matches!(batch.model_visible[1], Message::Attachment(_)));
 }
 
-/// Regression guard for the audit-add silent-reminder shape.
-///
-/// All eight audit-add reminders (`MaxTurnsReached`, `CurrentSessionMemory`,
-/// `CommandPermissions`, `DynamicSkill`, `SkillDiscovery`,
-/// `StructuredOutput`, `TeammateShutdownBatch`, `ContextEfficiency`) have
-/// `AttachmentKind::is_api_visible() == false`. They MUST be emitted via
-/// `SystemReminder::silent_text(...)` so the inject pipeline routes
-/// them to `NormalizedMessages::display_only` and never calls
-/// `AttachmentMessage::api(...)` — which has a `debug_assert` on
-/// `kind.is_api_visible()` that would panic.
+/// Regression guard for reminder-native silent attachments.
 #[test]
-fn audit_add_silent_reminders_route_to_display_only_not_history() {
+fn silent_native_reminders_route_to_display_only_not_history() {
     let kinds = [
-        AttachmentType::MaxTurnsReached,
-        AttachmentType::CurrentSessionMemory,
-        AttachmentType::CommandPermissions,
-        AttachmentType::DynamicSkill,
-        AttachmentType::SkillDiscovery,
-        AttachmentType::StructuredOutput,
-        AttachmentType::TeammateShutdownBatch,
-        AttachmentType::ContextEfficiency,
+        AttachmentType::AlreadyReadFile,
+        AttachmentType::EditedImageFile,
     ];
     for at in kinds {
         let r = SystemReminder::silent_text(at, "body");

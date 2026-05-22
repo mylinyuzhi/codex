@@ -627,6 +627,7 @@ fn empty_unstamped(tool_use_id: &str, model_index: usize) -> UnstampedToolCallOu
         error_kind: None,
         permission_denial: None,
         prevent_continuation: None,
+        structured_output: None,
         effects: ToolSideEffects::none(),
     }
 }
@@ -848,6 +849,7 @@ async fn test_execute_with_early_outcome_is_barrier_between_safe_batches() {
             error_kind: Some(crate::call_plan::ToolCallErrorKind::UnknownTool),
             permission_denial: None,
             prevent_continuation: None,
+            structured_output: None,
             effects: ToolSideEffects::none(),
         }),
         ToolCallPlan::Runnable(prepared_from(c, "C", 2)),

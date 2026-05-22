@@ -580,6 +580,11 @@ impl QueryEngine {
         for arc in turn_messages {
             history.push_arc(arc);
         }
+        // Run-local artifacts captured at emission sites. Avoids scanning
+        // `history` at finalize time — that scan is unsound under mid-run
+        // compaction (full/micro compact replaces the history Vec, so any
+        // index captured before then becomes stale).
+        let mut run_artifacts = RunArtifacts::default();
 
         // NOTE: `SessionStarted` + `SessionStateChanged(Running)` + the
         // hook → CoreEvent forwarder are set up by the outer
@@ -746,6 +751,7 @@ impl QueryEngine {
                     Some("cancelled".into()),
                     permission_denials,
                     history.to_vec(),
+                    run_artifacts.clone(),
                 ));
             }
 
@@ -761,6 +767,21 @@ impl QueryEngine {
             match budget.check(turn) {
                 BudgetDecision::Stop { reason } => {
                     warn!(%reason, "budget stop");
+                    if self.config.max_turns > 0 && turn >= self.config.max_turns {
+                        let payload = coco_messages::MaxTurnsReachedPayload {
+                            max_turns: self.config.max_turns,
+                            turn_count: turn,
+                        };
+                        run_artifacts.max_turns_reached = Some(payload.clone());
+                        crate::history_sync::history_push_and_emit(
+                            history,
+                            Message::Attachment(
+                                coco_messages::AttachmentMessage::silent_max_turns_reached(payload),
+                            ),
+                            &event_tx,
+                        )
+                        .await;
+                    }
                     let last_text = extract_last_assistant_text(history);
                     return Ok(make_query_result(
                         last_text,
@@ -772,9 +793,17 @@ impl QueryEngine {
                         last_continue_reason,
                         start_time,
                         api_time_ms,
-                        Some("budget_exhausted".into()),
+                        Some(
+                            if self.config.max_turns > 0 && turn >= self.config.max_turns {
+                                "max_turns"
+                            } else {
+                                "budget_exhausted"
+                            }
+                            .into(),
+                        ),
                         permission_denials,
                         history.to_vec(),
+                        run_artifacts.clone(),
                     ));
                 }
                 BudgetDecision::Nudge { message } => {
@@ -2223,6 +2252,8 @@ impl QueryEngine {
                 let history_ref = &mut *history;
                 let prevent_slot = &mut streaming_control_prevent;
                 let events_ref = &mut streaming_completed_events;
+                let structured_slot = &mut run_artifacts.structured_output;
+                let attempts_slot = &mut run_artifacts.structured_output_attempts;
                 handle
                     .commit_flush(0, |outcome| {
                         let call_id = outcome.tool_use_id().to_string();
@@ -2236,6 +2267,15 @@ impl QueryEngine {
                             *prevent_slot = Some(reason.to_string());
                         }
                         let parts = outcome.into_parts();
+                        if matches!(
+                            parts.tool_id,
+                            coco_types::ToolId::Builtin(coco_types::ToolName::StructuredOutput)
+                        ) {
+                            *attempts_slot = attempts_slot.saturating_add(1);
+                        }
+                        if let Some(data) = parts.structured_output.clone() {
+                            *structured_slot = Some(data);
+                        }
                         for msg in parts.ordered_messages {
                             history_ref.push(msg);
                         }
@@ -2259,6 +2299,54 @@ impl QueryEngine {
             // is enabled and we're well under budget: inject a nudge and loop.
             // TS: `query.ts:1308-1340` `feature('TOKEN_BUDGET')` path.
             if tool_calls.is_empty() {
+                // Structured-output retry-cap terminal. Mirrors TS
+                // `QueryEngine.ts:1005-1047`: when the agent has
+                // already attempted `MAX_STRUCTURED_OUTPUT_RETRIES`
+                // (default 5) StructuredOutput calls without producing
+                // a schema-conforming payload, terminate with the
+                // `error_max_structured_output_retries` subtype rather
+                // than letting the Stop function hook block forever.
+                //
+                // The matching "you MUST call StructuredOutput now"
+                // re-prompt lives in the registered
+                // `StructuredOutputEnforcement` function hook (see
+                // `coco_cli::headless::inject_structured_output_tool_if_requested`).
+                // That hook runs in the Stop block below; if it blocks,
+                // the engine injects its `error_message` and re-loops
+                // via the existing `StopHookBlocking` path. So the
+                // engine here only has to enforce the *terminal* cap.
+                if self.tools.get_by_name("StructuredOutput").is_some()
+                    && run_artifacts.structured_output.is_none()
+                {
+                    let max_retries = std::env::var("COCO_MAX_STRUCTURED_OUTPUT_RETRIES")
+                        .ok()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(5);
+                    if run_artifacts.structured_output_attempts >= max_retries {
+                        warn!(
+                            attempts = run_artifacts.structured_output_attempts,
+                            max_retries, "structured output retry cap exceeded"
+                        );
+                        self.emit_turn_completed(&event_tx, turn_id, usage, history.len())
+                            .await;
+                        return Ok(make_query_result(
+                            response_text,
+                            turn,
+                            total_usage,
+                            cost_tracker,
+                            /*cancelled*/ false,
+                            /*budget_exhausted*/ false,
+                            last_continue_reason,
+                            start_time,
+                            api_time_ms,
+                            Some("error_max_structured_output_retries".into()),
+                            permission_denials,
+                            history.to_vec(),
+                            run_artifacts.clone(),
+                        ));
+                    }
+                }
+
                 // TS `handleStopHooks` saves cache-safe params and
                 // starts promptSuggestion before executing Stop hooks.
                 // Keep transcript flush in the same helper so any
@@ -2279,11 +2367,13 @@ impl QueryEngine {
                     } else {
                         Some(response_text.as_str())
                     };
+                    let history_snapshot = history.to_vec();
                     match orchestration::execute_stop(
                         hooks,
                         &hook_ctx,
                         stop_hook_active,
                         last_assistant_message,
+                        &history_snapshot,
                         hook_tx_opt.as_ref(),
                     )
                     .await
@@ -2306,6 +2396,7 @@ impl QueryEngine {
                                 Some("stop_hook_prevented".into()),
                                 permission_denials,
                                 history.to_vec(),
+                                run_artifacts.clone(),
                             ));
                         }
                         Ok(agg) if agg.is_blocked() => {
@@ -2373,6 +2464,7 @@ impl QueryEngine {
                     Some("end_turn".into()),
                     permission_denials,
                     history.to_vec(),
+                    run_artifacts.clone(),
                 ));
             }
 
@@ -2410,6 +2502,10 @@ impl QueryEngine {
                 }
                 self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage)
                     .await;
+                if let Some(ref c) = streaming_ctx {
+                    self.drain_dynamic_skill_triggers(c, &mut *history, &event_tx)
+                        .await;
+                }
                 if let Some(stop_reason) = streaming_control_prevent {
                     return Ok(make_query_result(
                         response_text,
@@ -2424,6 +2520,7 @@ impl QueryEngine {
                         Some(stop_reason),
                         permission_denials,
                         history.to_vec(),
+                        run_artifacts.clone(),
                     ));
                 }
                 last_continue_reason = Some(ContinueReason::NextTurn);
@@ -2491,7 +2588,15 @@ impl QueryEngine {
             // `getNestedMemoryAttachments` runs between batch + next
             // API call.
             self.drain_nested_memory_triggers(&ctx).await;
+            if let Some(data) = tool_run_outcome.structured_output.clone() {
+                run_artifacts.structured_output = Some(data);
+            }
+            run_artifacts.structured_output_attempts = run_artifacts
+                .structured_output_attempts
+                .saturating_add(tool_run_outcome.structured_output_attempts);
             self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage)
+                .await;
+            self.drain_dynamic_skill_triggers(&ctx, &mut *history, &event_tx)
                 .await;
             if !tool_run_outcome.continue_after_tools {
                 return Ok(make_query_result(
@@ -2507,6 +2612,7 @@ impl QueryEngine {
                     tool_run_outcome.stop_reason_override,
                     permission_denials,
                     history.to_vec(),
+                    run_artifacts.clone(),
                 ));
             }
             last_continue_reason = Some(ContinueReason::NextTurn);
@@ -2621,6 +2727,28 @@ fn assistant_content_from_snapshot(
     (content_parts, tool_calls)
 }
 
+/// Per-run side-channel collectors filled at emission sites so finalize
+/// doesn't need to scan history.
+///
+/// `structured_output` is set when a tool returns `with_structured_output(...)`
+/// (via `UnstampedToolCallOutcome.structured_output`). `max_turns_reached` is
+/// set when the engine hits the configured `max_turns` cap. Both feed
+/// `QueryResult` — and from there `SessionResultParams` — without re-deriving
+/// state from `history`, which mid-run compaction can replace.
+#[derive(Default, Clone)]
+pub(crate) struct RunArtifacts {
+    pub structured_output: Option<serde_json::Value>,
+    pub max_turns_reached: Option<coco_messages::MaxTurnsReachedPayload>,
+    /// Count of `StructuredOutput` tool invocations made by the model
+    /// during this query (successful + failed). Used to enforce
+    /// `COCO_MAX_STRUCTURED_OUTPUT_RETRIES` and to decide whether to
+    /// re-inject the "you MUST call this tool" nudge when the model
+    /// tries to end the turn without a successful structured response.
+    /// TS parity: `countToolCalls(messages, SYNTHETIC_OUTPUT_TOOL_NAME) - initialStructuredOutputCalls`
+    /// in `QueryEngine.ts:1004-1014`.
+    pub structured_output_attempts: u32,
+}
+
 /// Pure constructor for [`QueryResult`], factored out of `run_session_loop`.
 /// All inputs flow through parameters — there is no captured state — so the
 /// loop's five exit branches build the same shape with one call.
@@ -2638,6 +2766,7 @@ fn make_query_result(
     stop_reason: Option<String>,
     permission_denials: Vec<coco_types::PermissionDenialInfo>,
     final_messages: Vec<std::sync::Arc<Message>>,
+    artifacts: RunArtifacts,
 ) -> QueryResult {
     QueryResult {
         response_text,
@@ -2652,6 +2781,8 @@ fn make_query_result(
         stop_reason,
         permission_denials,
         final_messages,
+        structured_output: artifacts.structured_output,
+        max_turns_reached: artifacts.max_turns_reached,
     }
 }
 

@@ -685,6 +685,7 @@ pub struct SessionStats {
     pub permission_denials: Vec<coco_types::PermissionDenialInfo>,
     pub last_result_text: Option<String>,
     pub last_stop_reason: Option<String>,
+    pub structured_output: Option<serde_json::Value>,
     pub had_error: bool,
     pub errors: Vec<String>,
     pub num_api_calls: i32,

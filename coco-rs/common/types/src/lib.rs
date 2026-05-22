@@ -64,7 +64,9 @@ pub use rate_limit::RateLimitEntry;
 pub use attachment_kind::AttachmentEvent;
 pub use attachment_kind::AttachmentKind;
 pub use attachment_kind::Coverage;
+pub use attachment_kind::SdkConsumption;
 pub use attachment_kind::coverage_of;
+pub use attachment_kind::sdk_consumption_of;
 
 // Prompt-cache shared types (consumed by services/inference + app/query;
 // adapter mirrors live in vercel-ai-anthropic — see prompt-cache-design.md §7)
@@ -377,13 +379,24 @@ pub use stream::StreamingToolUse;
 pub use stream::TaskBudget;
 
 // Task types
-pub use task::LocalAgentExtras;
+pub use task::BackendType;
+pub use task::BgAgentExtras;
+pub use task::DreamExtras;
+pub use task::FieldUpdate;
+pub use task::MessageRole;
+pub use task::RemoteTeammateExtras;
+pub use task::ShellExtras;
 pub use task::TaskActivity;
 pub use task::TaskExtras;
+pub use task::TaskIdentity;
 pub use task::TaskProgress;
 pub use task::TaskStateBase;
 pub use task::TaskStatus;
 pub use task::TaskType;
+pub use task::TeammateExtras;
+pub use task::TeammateRef;
+pub use task::TeammateTaskMessage;
+pub use task::generate_bg_agent_id;
 pub use task::generate_task_id;
 pub use task_list::ExpandedView;
 pub use task_list::TaskClaimOutcome;

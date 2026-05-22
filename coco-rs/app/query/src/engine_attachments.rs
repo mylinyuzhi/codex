@@ -28,6 +28,8 @@
 
 use std::path::PathBuf;
 
+use coco_messages::AttachmentMessage;
+use coco_messages::Message;
 use coco_system_reminder::generators::memory::NestedMemoryInfo;
 use coco_tool_runtime::ToolUseContext;
 
@@ -133,6 +135,46 @@ impl QueryEngine {
         }
         let mut pending = self.pending_nested_memory.lock().await;
         pending.extend(new_entries);
+    }
+
+    pub(crate) async fn drain_dynamic_skill_triggers(
+        &self,
+        ctx: &ToolUseContext,
+        history: &mut coco_messages::MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    ) {
+        // Check source FIRST. Without it we can't produce attachments —
+        // draining the trigger set unconditionally would lose paths
+        // (HashSet de-dupes future tool calls to the same SKILL.md
+        // ancestry, so they'd never be re-tracked).
+        let Some(source) = self.reminder_sources.skills.as_ref().cloned() else {
+            return;
+        };
+
+        let triggered_dirs: Vec<PathBuf> = {
+            let mut triggers = ctx.dynamic_skill_dir_triggers.write().await;
+            if triggers.is_empty() {
+                return;
+            }
+            triggers.drain().map(PathBuf::from).collect()
+        };
+
+        let cwd = ctx
+            .cwd_override
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        for dir in triggered_dirs {
+            if let Some(payload) = source.load_dynamic_skill_dir(&dir, &cwd).await {
+                crate::history_sync::history_push_and_emit(
+                    history,
+                    Message::Attachment(AttachmentMessage::silent_dynamic_skill(payload)),
+                    event_tx,
+                )
+                .await;
+            }
+        }
     }
 
     /// Take and clear the engine-side pending nested-memory slot.

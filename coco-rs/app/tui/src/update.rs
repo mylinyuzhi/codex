@@ -44,6 +44,24 @@ pub async fn handle_command(
     cmd: TuiCommand,
     command_tx: &mpsc::Sender<UserCommand>,
 ) -> bool {
+    // Breadcrumb every dispatch so user-bug repros include which TuiCommand
+    // ran. InsertChar / SurfaceFilter fire per-keystroke and would flood
+    // debug at typing rate — drop them to trace.
+    match &cmd {
+        TuiCommand::InsertChar(_) | TuiCommand::SurfaceFilter(_) => {
+            tracing::trace!(target: "coco_tui::command", cmd = ?cmd, "TuiCommand dispatch");
+        }
+        _ => {
+            tracing::debug!(
+                target: "coco_tui::command",
+                cmd = ?cmd,
+                is_streaming = state.is_streaming(),
+                has_modal = state.ui.modal.is_some(),
+                has_prompt = state.ui.interaction.active_prompt.is_some(),
+                "TuiCommand dispatch",
+            );
+        }
+    }
     // Snapshot input before the command so we can reactively refresh the
     // autocomplete popup whenever input text or cursor moves, without
     // threading a refresh call through every editing arm.

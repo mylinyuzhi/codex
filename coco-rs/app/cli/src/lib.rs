@@ -190,10 +190,16 @@ pub struct Cli {
     #[arg(long)]
     pub input_format: Option<String>,
 
-    /// Path to a JSON schema file that validates structured output.
+    /// Inline JSON Schema (NOT a file path) that validates the
+    /// structured output of the run. Only honored in non-interactive
+    /// sessions (`-p` print mode / SDK NDJSON); ignored in TUI.
     ///
-    /// TS: `--json-schema <file>` — applied to the final response when
-    /// `output_format == stream-json`.
+    /// TS parity: `--json-schema <schema>` in `main.tsx:976` — argParser
+    /// is `String`, the value is `JSON.parse(...)`-ed at bootstrap and
+    /// passed into a `SYNTHETIC_OUTPUT_TOOL_NAME` (`StructuredOutput`)
+    /// tool which the model is forced to call before ending.
+    ///
+    /// Example: `--json-schema '{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}'`
     #[arg(long)]
     pub json_schema: Option<String>,
 

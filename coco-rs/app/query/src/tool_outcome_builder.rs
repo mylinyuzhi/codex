@@ -102,6 +102,10 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
 
     match execute_result {
         Ok(tool_result) => {
+            // Pull the SDK structured_output before destructuring — the
+            // accessor scans `new_messages` for the silent attachment we
+            // forward via `ToolResult::with_structured_output`.
+            let structured_output = tool_result.structured_output();
             let ToolResult {
                 data,
                 new_messages,
@@ -250,6 +254,8 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 None
             };
 
+            // `with_structured_output` already pushed the silent
+            // attachment onto `new_messages`; no re-push here.
             let buckets = ToolMessageBuckets {
                 pre_hook: Vec::new(),
                 tool_result: Some(tool_result_msg),
@@ -275,6 +281,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 error_kind: None,
                 permission_denial: None,
                 prevent_continuation: prevent_reason,
+                structured_output,
                 effects: ToolSideEffects {
                     app_state_patch,
                     permission_updates,
@@ -343,6 +350,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 error_kind: Some(error_kind),
                 permission_denial: None,
                 prevent_continuation: None,
+                structured_output: None,
                 effects: ToolSideEffects::none(),
             }
         }
@@ -384,6 +392,7 @@ pub(crate) fn build_early_outcome(
         error_kind: Some(error_kind),
         permission_denial,
         prevent_continuation: None,
+        structured_output: None,
         effects: ToolSideEffects::none(),
     }
 }

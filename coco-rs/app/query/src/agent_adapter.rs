@@ -236,11 +236,6 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // so background subagent runs don't flood the parent's
             // SDK stream with hook events.
             include_hook_events: false,
-            // Subagents get their own mailbox: nothing the parent has
-            // queued is relevant to the child's first turn, and a
-            // shared mailbox would let the child observe reminders
-            // intended for the parent. Cheap: an empty `Mutex<State>`.
-            reminder_mailbox: coco_system_reminder::ReminderMailbox::new(),
             // Per-fork canUseTool plumbing — inherits from
             // AgentQueryConfig so fork-spawned subagents (memory /
             // dream / session services) honour their per-policy

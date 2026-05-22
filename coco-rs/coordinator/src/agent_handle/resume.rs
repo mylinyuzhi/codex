@@ -20,8 +20,8 @@ impl SwarmAgentHandle {
     /// Resume a previously-completed background AgentTool spawn.
     ///
     /// Required wiring: `set_transcript_store` must have been called at
-    /// session bootstrap (the CLI does this when `Feature::AgentTeams` is
-    /// on). Without it, returns `Err("transcript store not configured")`.
+    /// session bootstrap. Without it, returns
+    /// `Err("transcript store not configured")`.
     ///
     /// Returns `Err` when no metadata exists for `original_agent_id`
     /// (never spawned). Missing transcript is non-fatal — a completed

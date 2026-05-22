@@ -451,7 +451,7 @@ impl QueryEngine {
     /// emission. Filters per TS `compact.ts:1577-1582`: skip the agent
     /// that owns this engine's `agent_id`, drop pending tasks (not yet
     /// meaningful), drop terminal tasks the `TaskOutput` tool already
-    /// consumed (`LocalAgentExtra.retrieved`).
+    /// consumed (`BgAgentExtras.retrieved`).
     pub(crate) async fn snapshot_async_agents_for_post_compact(
         &self,
     ) -> Vec<coco_compact::AsyncAgentSnapshot> {
@@ -462,7 +462,7 @@ impl QueryEngine {
         let self_agent = self.config.agent_id.as_deref();
         let mut out = Vec::with_capacity(listed.len());
         for t in listed {
-            if !matches!(t.task_type, coco_types::TaskType::LocalAgent) {
+            if !matches!(t.task_type(), coco_types::TaskType::BgAgent) {
                 continue;
             }
             if matches!(t.status, coco_types::TaskStatus::Pending) {
@@ -478,9 +478,9 @@ impl QueryEngine {
             }
             // TS `compact.ts:1578` — once the `TaskOutput` tool serves
             // a terminal agent's output, the compact reminder stops
-            // re-announcing it. coco-rs stores this in the sparse
-            // `LocalAgentExtra` sidecar.
-            if t.status.is_terminal() && tasks.local_agent_extra(&t.id).await.retrieved {
+            // re-announcing it. coco-rs reads it through the typed
+            // `BgAgentExtras` variant on `TaskExtras`.
+            if t.status.is_terminal() && t.bg_agent_extras().map(|e| e.retrieved).unwrap_or(false) {
                 continue;
             }
             out.push(coco_compact::AsyncAgentSnapshot {
@@ -488,7 +488,7 @@ impl QueryEngine {
                 status: task_status_to_ts_string(t.status),
                 description: t.description,
                 delta_summary: None,
-                output_file_path: t.output_file,
+                output_file_path: t.output_file.unwrap_or_default(),
             });
         }
         out
@@ -524,6 +524,29 @@ impl QueryEngine {
     /// direct access to the engine. Drained once per outer-loop turn.
     pub fn attachment_emitter(&self) -> coco_messages::AttachmentEmitter {
         coco_messages::AttachmentEmitter::new(self.attachment_tx.clone())
+    }
+
+    /// Replace the engine's per-instance attachment channel with a
+    /// session-scoped one supplied by the caller (typically `SessionRuntime`).
+    ///
+    /// Required for producers that live across engine rebuilds — the
+    /// TUI's slash-command handler holds an
+    /// [`coco_messages::AttachmentEmitter`] from before the turn started,
+    /// and the engine must drain from the same channel that emitter wrote
+    /// to. Without this, a slash-command-emitted attachment would land in
+    /// a stale `attachment_rx` that no engine ever drains.
+    pub fn with_attachment_channel(
+        mut self,
+        tx: tokio::sync::mpsc::UnboundedSender<coco_messages::AttachmentMessage>,
+        rx: Arc<
+            tokio::sync::Mutex<
+                tokio::sync::mpsc::UnboundedReceiver<coco_messages::AttachmentMessage>,
+            >,
+        >,
+    ) -> Self {
+        self.attachment_tx = tx;
+        self.attachment_rx = rx;
+        self
     }
 
     /// Drain any silent attachments emitted since the last turn into

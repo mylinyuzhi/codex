@@ -475,6 +475,18 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     )
     .await?;
 
+    // SDK NDJSON is a non-interactive session (TS parity:
+    // `isNonInteractiveSession === true`). Inject the `StructuredOutput`
+    // tool + register its Stop function hook when `--json-schema` is
+    // set. Done post-SessionRuntime so the hook lands in the same
+    // `HookRegistry` the engine will dispatch from. TUI never reaches
+    // this branch (different code path in `tui_runner`).
+    coco_cli::headless::inject_structured_output_tool_if_requested(
+        cli,
+        session_runtime.tools(),
+        &session_runtime.hook_registry(),
+    )?;
+
     // Late-binds shared with TUI: task runtime, agent transcript
     // persistence, MCP handle (SDK-only today), agent-team wiring,
     // fork dispatcher. Wraps the SDK-bootstrapped `McpConnectionManager`

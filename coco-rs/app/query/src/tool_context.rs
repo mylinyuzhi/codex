@@ -345,9 +345,6 @@ impl ToolContextFactory {
             tool_config: self.config.tool_config.clone(),
             sandbox_config: self.config.sandbox_config.clone(),
             sandbox_state: self.config.sandbox_state.clone(),
-            // Type-erase the concrete `Arc<ReminderMailbox>` to the
-            // producer-only trait so tools can `put_*` but not `drain`.
-            reminder_mailbox: self.config.reminder_mailbox.clone().handle(),
             memory_config: self.config.memory_config.clone(),
             shell_config: self.config.shell_config.clone(),
             shell_provider: self.config.shell_provider.clone(),

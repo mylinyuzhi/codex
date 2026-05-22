@@ -16,8 +16,9 @@
 //!
 //! - Lifecycle state — [`coco_tasks::TaskManager`].
 //! - Disk-backed output — [`crate::disk_task_output::DiskOutputs`].
-//! - Per-task cancel + terminal-status broadcast — [`TaskEntry`]
-//!   below, indexed by task id in `entries`.
+//! - Per-task cancel + terminal-status broadcast — runtime-only
+//!   controls owned by [`coco_tasks::TaskManager`] in the same row
+//!   as lifecycle state.
 //! - Notification XML construction + push — done in [`agent`] / [`shell`]
 //!   using [`coco_tasks::notification`] primitives. The sink
 //!   (`Arc<dyn NotificationSink>`) is always wired; tests use
@@ -38,38 +39,6 @@
 //! | [`timers`]       | `LocalAgentTask.tsx:582-608` (autoBackgroundMs setTimeout)      |
 //! | [`stall`]        | `LocalShellTask.tsx:46-104` (startStallWatchdog)                |
 //!
-//! ## D8-narrow (deferred) — collapse the dual-store split
-//!
-//! The current architecture keys per-task state across two locks
-//! that this struct holds independently:
-//!
-//! - `TaskRuntime.entries: HashMap<id, TaskEntry>` — per-task
-//!   control state (cancel token, watch sender, detach Notify,
-//!   detached AtomicBool, exit_code OnceLock).
-//! - `coco_tasks::TaskManager.tasks: HashMap<id, TaskStateBase>` —
-//!   lifecycle state (status, output_file, start/end time, extras).
-//!
-//! Any inconsistency between the two is a latent bug source. The
-//! adversarial review (D8) recommends collapsing into one store
-//! owned by `TaskManager`:
-//!
-//! 1. Add `tokio-util = { features = ["rt"] }` to `coco-tasks` deps
-//!    (needed for `CancellationToken`).
-//! 2. Move [`TaskEntry`] from this file into `coco-tasks::running`
-//!    (rename to `TaskControl` for clarity).
-//! 3. Replace `TaskManager.tasks: HashMap<id, TaskStateBase>` with
-//!    `HashMap<id, TaskRow { base: TaskStateBase, control: TaskControl }>`
-//!    so both halves move atomically under one lock.
-//! 4. Drop `TaskRuntime.entries` and route every read/write through
-//!    `self.manager.with_control(id, |c| ...)`-style accessors on
-//!    `TaskManager`.
-//! 5. Adjust the ~15 callsites in `agent.rs` / `shell.rs` /
-//!    `reader.rs` / `controller.rs` / `timers.rs`.
-//!
-//! Estimated effort: L (multi-PR). Tracked as TS-parity-neutral
-//! architectural cleanup — current behavior is correct, this just
-//! eliminates the cross-lock surface.
-
 mod agent;
 mod controller;
 mod reader;
@@ -77,53 +46,12 @@ mod shell;
 mod stall;
 mod timers;
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use coco_tasks::{NoOpNotificationSink, NotificationSinkRef, TaskManager};
-use coco_types::TaskStatus;
-use tokio::sync::{Notify, watch};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::disk_task_output::DiskOutputs;
-
-/// Per-task control state.
-///
-/// `cancel` fires the kill path. `status_tx` broadcasts terminal
-/// transitions so `TaskOutput` blocking reads (and any future
-/// observer) can `await` instead of polling. `watch` retains the
-/// last value, so a subscriber that arrives after the task ended
-/// still sees the terminal status.
-///
-/// `invoking_agent_id` is the routing filter on `CommandQueue` for
-/// terminal notifications — it's the agent that *called* the tool
-/// that created this task (`ctx.agent_id`), NOT a generated subagent
-/// id. Stored here (rather than re-read from `TaskManager`) because
-/// `TaskStateBase` carries `tool_use_id` but not `agent_id`. TS
-/// parity: `BashTool.tsx:910` / `AgentTool.tsx` thread
-/// `toolUseContext.agentId` through to the notification.
-///
-/// `detach` is the per-task one-shot "move to background" signal
-/// (W2). `tool.execute` in fg mode `select!`s on `.notified()`. The
-/// adjacent `detached` flag is the CAS gate that makes
-/// [`TaskRuntime::signal_detach`](controller) idempotent — mirrors TS
-/// `backgroundAgentTask`'s `if (task.isBackgrounded) return false`
-/// (`tasks/LocalAgentTask/LocalAgentTask.tsx:620-622`).
-pub(in crate::task_runtime) struct TaskEntry {
-    pub(in crate::task_runtime) cancel: CancellationToken,
-    pub(in crate::task_runtime) status_tx: watch::Sender<TaskStatus>,
-    pub(in crate::task_runtime) invoking_agent_id: Option<String>,
-    pub(in crate::task_runtime) detach: Arc<Notify>,
-    pub(in crate::task_runtime) detached: Arc<AtomicBool>,
-    /// Set once by the shell driver in `apply_shell_terminal_state`
-    /// for `Exited` outcomes. `None` for agent tasks and shell
-    /// outcomes lacking a process exit (`Cancelled` / `SpawnFailed` /
-    /// `TimedOut`). Read by [`reader::TaskReader::read_terminal_outputs`]
-    /// to compose the fg `ToolResult.data` `exitCode` field.
-    pub(in crate::task_runtime) exit_code: Arc<std::sync::OnceLock<i32>>,
-}
 
 /// Production task runtime.
 ///
@@ -132,7 +60,6 @@ pub(in crate::task_runtime) struct TaskEntry {
 /// engine (read/control) and into `SwarmAgentHandle` (registration).
 pub struct TaskRuntime {
     pub(in crate::task_runtime) manager: Arc<TaskManager>,
-    pub(in crate::task_runtime) entries: Arc<tokio::sync::RwLock<HashMap<String, TaskEntry>>>,
     pub(in crate::task_runtime) disk: Arc<DiskOutputs>,
     /// Always wired. `NoOpNotificationSink` is the default when no
     /// producer attaches — terminal events are silently dropped,
@@ -165,7 +92,6 @@ impl TaskRuntime {
         );
         Self {
             manager,
-            entries: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             disk: Arc::new(DiskOutputs::new(session_dir)),
             notification_sink: Arc::new(NoOpNotificationSink),
         }
