@@ -8,7 +8,7 @@ description = "Shell binary discovery: PowerShell (cross-platform), Git Bash (Wi
 [dependencies]
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
-which = "7"
+which.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -24,7 +24,7 @@ tokio = { workspace = true, features = ["sync", "process", "io-util", "rt", "net
 tokio-util.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-seccompiler = "0.5"
+seccompiler.workspace = true
 libc.workspace = true
 
 [dev-dependencies]

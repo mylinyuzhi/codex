@@ -52,7 +52,7 @@ coco-model-card.workspace = true
 coco-file-watch.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 base64.workspace = true
-libc = "0.2"
+libc.workspace = true
 
 dirs.workspace = true
 chrono.workspace = true

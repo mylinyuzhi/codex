@@ -31,7 +31,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 # LSP protocol types
-lsp-types = "0.95"
+lsp-types.workspace = true
 
 # Error handling
 coco-error = { workspace = true }
@@ -41,13 +41,13 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Binary detection
-which = "7.0"
+which.workspace = true
 
 # Text diffing for incremental sync
 similar = { workspace = true }
 
 # Date/time formatting
-chrono = "0.4"
+chrono = { workspace = true, features = ["serde"] }
 
 # Internal dependencies
 coco-utils-common = { workspace = true }

@@ -21,44 +21,43 @@ tracing-appender = { workspace = true }
 
 # File watching
 notify = { workspace = true }
-notify-debouncer-mini = "0.7"
+notify-debouncer-mini.workspace = true
 # Storage
-rusqlite = { version = "0.32", features = ["bundled"] }
-sqlite-vec = "0.1"
-zerocopy = { version = "0.7", features = ["derive"] }
+rusqlite = { workspace = true }
+sqlite-vec.workspace = true
+zerocopy = { workspace = true }
 
 # Code chunking - CodeSplitter (tree-sitter based) with TextSplitter fallback
-# tree-sitter 0.25 in text-splitter is compatible with workspace 0.25.10
-text-splitter = { version = "0.28", features = ["code", "tiktoken-rs"] }
+text-splitter = { workspace = true }
 
 # Token counting for chunk validation (must match text-splitter's version for ChunkSizer trait)
-tiktoken-rs = "0.7"
+tiktoken-rs.workspace = true
 
 # Tree-sitter for syntax analysis (using workspace version)
 tree-sitter = { workspace = true }
 
 # Tree-sitter tags extraction
-tree-sitter-tags = "0.25"
+tree-sitter-tags.workspace = true
 
 # Language grammars for tag extraction
-tree-sitter-rust = "0.24"
-tree-sitter-go = "0.25"
-tree-sitter-python = "0.25"
-tree-sitter-java = "0.23"
-tree-sitter-typescript = "0.23"
+tree-sitter-rust.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-typescript.workspace = true
 
 # Query preprocessing
-rust-stemmers = "1.2"
+rust-stemmers.workspace = true
 
 # BM25 full-text search (custom implementation with tunable k1/b parameters)
-bm25 = { version = "2.3", features = ["parallelism"] }
+bm25 = { workspace = true }
 
 # Graph algorithms for PageRank (repo map)
-petgraph = "0.8"
+petgraph.workspace = true
 
 # Async
 tokio = { workspace = true, features = ["full"] }
-tokio-util = "0.7"
+tokio-util.workspace = true
 async-trait = { workspace = true }
 async-stream = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
@@ -70,8 +69,8 @@ reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-hex = "0.4"
-uuid = { version = "1", features = ["v4"] }
+hex.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
@@ -83,7 +82,7 @@ toml = { workspace = true }
 lru = { workspace = true }
 
 # Local neural reranking (optional)
-fastembed = { version = "4", optional = true }
+fastembed = { workspace = true, optional = true }
 
 # Internal
 coco-file-ignore = { workspace = true }

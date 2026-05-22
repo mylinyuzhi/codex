@@ -57,7 +57,7 @@ tracing.workspace = true
 reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
 url.workspace = true
 urlencoding.workspace = true
-pathdiff = "0.2"
+pathdiff.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

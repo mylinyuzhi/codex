@@ -18,7 +18,7 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 coco-error.workspace = true
 coco-keyring-store.workspace = true
-coco-mcp-types = { path = "../mcp-types" }
+coco-mcp-types.workspace = true
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
 oauth2 = { workspace = true }
