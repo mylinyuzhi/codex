@@ -574,15 +574,9 @@ pub struct SessionRuntime {
     /// configured provider instead of silently reusing Main's client.
     role_client_cache: Arc<coco_inference::RoleClientCache>,
     /// Agent-spawn handle used by `AgentTool` / coordinator-mode
-    /// workers. `Some(SwarmAgentHandle)` when `Feature::AgentTeams`
-    /// is enabled at session bootstrap; `None` falls back to
-    /// `NoOpAgentHandle` on every per-turn engine. The handle owns
-    /// the in-process runner + team manager + worktree manager;
-    /// it's late-bound (set after `build()` returns the `Arc`)
-    /// because the underlying [`coco_query::QueryEngineAdapter`]
-    /// factory captures `Arc<Self>` and would otherwise create a
-    /// chicken-and-egg cycle. P1 (production wiring of subagent
-    /// execution).
+    /// workers. Late-bound after `TaskRuntime` is attached because
+    /// `SwarmAgentHandle` requires the canonical TaskManager-backed
+    /// registry at construction.
     agent_handle: Arc<RwLock<Option<AgentHandleRef>>>,
     /// Post-turn fork dispatcher (D1/D2). Same late-bind pattern as
     /// `agent_handle`: built after `build()` returns the `Arc<Self>`
@@ -897,51 +891,12 @@ impl SessionRuntime {
             None
         };
 
-        // ── Swarm agent handle ──
-        //
-        // Production sessions used to silently fall back to
-        // `NoOpAgentHandle` for *every* `AgentTool` / forked
-        // subagent call. We now construct a real `SwarmAgentHandle`
-        // wired with an `InProcessAgentRunner` so:
-        //   - `send_message` reaches teammates,
-        //   - team create/delete operations work,
-        //   - the memory crate's forked extraction / dream agents
-        //     spawn against the same runtime that user-facing
-        //     `Agent` tool spawns use.
-        //
-        // The execution engine (`AgentQueryEngine`) is installed
-        // separately by the engine-factory wiring — until that lands
-        // sync subagent spawns return a clean "no execution engine"
-        // error rather than the stub "agent spawning not available"
-        // we used to emit.
-        let swarm_agent_handle = {
-            // In-process subagents inherit the leader's
-            // `ToolPermissionBridge` (installed on `SessionRuntime` and
-            // propagated by `wire_engine`); no extra channel needed
-            // here. The runner only needs cwd + max-agents.
-            let runner = Arc::new(coco_coordinator::runner::InProcessAgentRunner::new(
-                cwd.display().to_string(),
-                /*max_agents*/ 8,
-            ));
-            let team_manager = Arc::new(RwLock::new(None));
-            let mut handle = coco_coordinator::agent_handle::SwarmAgentHandle::new(
-                runner,
-                team_manager,
-                cwd.display().to_string(),
-                runtime_config.clone(),
-            );
-            // Worktree manager — required for `isolation: "worktree"`
-            // subagents. Resolved against the canonical git root so
-            // worktrees of one repo share one worktree pool.
-            if let Some(repo_root) = coco_git::find_canonical_git_root(&cwd) {
-                let manager = Arc::new(coco_coordinator::worktree::AgentWorktreeManager::new(
-                    repo_root,
-                ));
-                handle.set_worktree_manager(manager);
-            }
-            let arc_handle: coco_tool_runtime::AgentHandleRef = Arc::new(handle);
-            arc_handle
-        };
+        // The production swarm handle is late-bound after TaskRuntime is
+        // attached, because LocalAgent task registration is a required
+        // constructor dependency. Until then engines carry the explicit
+        // no-op handle and `attach_agent_handle` replaces it everywhere.
+        let swarm_agent_handle: coco_tool_runtime::AgentHandleRef =
+            Arc::new(coco_tool_runtime::NoOpAgentHandle);
 
         // Now that the real `AgentHandle` exists, install it on the
         // memory runtime so forked extraction / dream agents reach
@@ -2120,11 +2075,9 @@ impl SessionRuntime {
         engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
         engine =
             engine.with_tool_result_replacement_state(self.tool_result_replacement_state.clone());
-        // Agent handle (P1): only installed when `attach_agent_handle`
-        // ran at bootstrap (i.e. `Feature::AgentTeams` is on). Without
-        // it, the engine factory's default `NoOpAgentHandle` answers
-        // `AgentTool` / `SendMessage` / `TeamCreate` calls with a
-        // model-visible "not available in this context" error.
+        // Agent handle: installed by bootstrap after TaskRuntime exists.
+        // Until then the engine carries the explicit no-op handle from
+        // `swarm_agent_handle`.
         if let Some(handle) = self.agent_handle.read().await.clone() {
             engine = engine.with_agent_handle(handle);
         }
@@ -2156,21 +2109,27 @@ impl SessionRuntime {
     }
 
     /// Install the agent-spawn handle on this runtime. Called once
-    /// after `build()` returns the `Arc<Self>`, by the bootstrap path
-    /// in `app/cli/main.rs` when `Feature::AgentTeams` is enabled. The
-    /// handle is late-bound because the adapter inside it needs to
-    /// capture `Arc<Self>` to drive per-spawn engine builds — calling
-    /// this from inside `build()` would create a cycle.
+    /// after `build()` returns the `Arc<Self>`. The handle is
+    /// late-bound because the adapter inside it needs to capture
+    /// `Arc<Self>` to drive per-spawn engine builds — calling this
+    /// from inside `build()` would create a cycle.
     pub async fn attach_agent_handle(&self, handle: AgentHandleRef) {
-        *self.agent_handle.write().await = Some(handle);
+        *self.agent_handle.write().await = Some(handle.clone());
+        if let Some(runtime) = &self.memory_runtime {
+            runtime.install_agent(handle);
+        }
     }
 
     /// Interrupt an in-process teammate's current turn without
     /// cancelling the teammate lifecycle.
     pub async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {
-        self.swarm_agent_handle
-            .interrupt_agent_current_work(agent_id)
+        let handle = self
+            .agent_handle
+            .read()
             .await
+            .clone()
+            .unwrap_or_else(|| self.swarm_agent_handle.clone());
+        handle.interrupt_agent_current_work(agent_id).await
     }
 
     /// Install the post-turn fork dispatcher (D1/D2). Late-bound for

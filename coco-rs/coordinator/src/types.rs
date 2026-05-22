@@ -202,35 +202,11 @@ impl PermissionSyncBridge {
 
 // ── Team File Types ──
 
-/// Backend type for teammate execution.
-///
-/// TS: `BackendType = 'tmux' | 'iterm2' | 'in-process'`
-///
-/// `#[non_exhaustive]` — future backends (Wezterm, Kitty, Windows
-/// Terminal panes) can land without a major version bump.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum BackendType {
-    Tmux,
-    Iterm2,
-    InProcess,
-}
-
-impl BackendType {
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Tmux => "tmux",
-            Self::Iterm2 => "iterm2",
-            Self::InProcess => "in-process",
-        }
-    }
-
-    /// Whether this backend uses terminal panes.
-    pub const fn is_pane_backend(&self) -> bool {
-        matches!(self, Self::Tmux | Self::Iterm2)
-    }
-}
+/// Re-export of the canonical [`coco_types::BackendType`] enum. The
+/// type was hoisted into `coco-types` so `TeammateExtras` and the
+/// runtime registration plumbing can carry it without forcing every
+/// consumer to depend on `coco-coordinator`.
+pub use coco_types::BackendType;
 
 /// Persistent team member record.
 ///
@@ -349,6 +325,7 @@ impl TeamManager {
     }
 
     /// Register a running agent.
+    #[allow(dead_code)]
     pub(crate) async fn register_agent(&self, agent: SubAgentState) {
         self.agents
             .write()

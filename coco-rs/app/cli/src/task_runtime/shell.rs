@@ -11,76 +11,67 @@
 //!   `runShellCommand`.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use coco_tasks::{
-    NotificationKind, NotificationSink, TaskManager, TaskNotification, TerminalStatus,
+    NotificationKind, NotificationSink, TaskCreateRequest, TaskManager, TaskNotification,
+    TerminalStatus,
 };
-use coco_tool_runtime::{BackgroundShellRequest, ShellTaskSpawner};
+use coco_tool_runtime::BackgroundShellRequest;
 use coco_types::{TaskStatus, TaskType};
-use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument, warn};
 
+use super::TaskRuntime;
 use super::stall;
 use super::timers::{spawn_auto_detach_timer, spawn_progress_timer};
-use super::{TaskEntry, TaskRuntime};
 use crate::disk_task_output::DiskTaskOutput;
 
-#[async_trait]
-impl ShellTaskSpawner for TaskRuntime {
+impl TaskRuntime {
     #[instrument(
         level = "info",
         skip(self, request),
         fields(
             command_preview = %command_preview(&request.command),
             timeout_ms = ?request.timeout_ms,
-            agent_id = ?request.agent_id,
+            agent_id = ?request.issuing_agent,
         )
     )]
-    async fn spawn_shell_task(
+    pub(super) async fn spawn_shell_task_impl(
         &self,
         request: BackgroundShellRequest,
     ) -> Result<String, coco_error::BoxedError> {
-        let task_id = coco_types::generate_task_id(TaskType::LocalBash);
+        let task_id = coco_types::generate_task_id(TaskType::Shell);
         let dto = self.disk.get_or_create(&task_id).await;
         let output_path = dto.path().display().to_string();
+        let cancel = CancellationToken::new();
         // Shell tasks reach this path only via `BashTool` with
-        // `run_in_background=true` — by definition backgrounded.
+        // `run_in_background=true` — by definition backgrounded. Stash
+        // the typed shell extras (kind / command / agent_id) on the
+        // canonical row so introspection has the same shape TS exposes.
+        let shell_extras = coco_types::ShellExtras {
+            kind: None,
+            command: request.command.clone(),
+            issuing_agent: request.issuing_agent.clone(),
+            exit_code: None,
+            is_backgrounded: true,
+        };
         let assigned = self
             .manager
-            .create_running_with_id(
-                task_id.clone(),
-                TaskType::LocalBash,
-                &request.description,
-                &output_path,
-                /* is_backgrounded */ true,
-            )
+            .create_task(TaskCreateRequest {
+                task_id: task_id.clone(),
+                task_type: TaskType::Shell,
+                description: request.description.clone(),
+                output_file: Some(output_path.clone()),
+                tool_use_id: request.tool_use_id.clone(),
+                is_backgrounded: true,
+                status: TaskStatus::Running,
+                cancel: cancel.clone(),
+                invoking_agent: request.issuing_agent.clone(),
+                shell_extras: Some(shell_extras),
+            })
             .await;
         debug_assert_eq!(assigned, task_id);
-        if let Some(tu_id) = request.tool_use_id.as_deref() {
-            self.manager
-                .set_tool_use_id(&task_id, tu_id.to_string())
-                .await;
-        }
-        let cancel = CancellationToken::new();
-        let (status_tx, _) = watch::channel(TaskStatus::Running);
-        let detach = Arc::new(Notify::new());
-        let detached = Arc::new(AtomicBool::new(false));
-        let exit_code = Arc::new(std::sync::OnceLock::new());
-        self.entries.write().await.insert(
-            task_id.clone(),
-            TaskEntry {
-                cancel: cancel.clone(),
-                status_tx: status_tx.clone(),
-                invoking_agent_id: request.agent_id.clone(),
-                detach: detach.clone(),
-                detached: detached.clone(),
-                exit_code: exit_code.clone(),
-            },
-        );
         info!(
             target: "coco::task_runtime::shell",
             task_id = %task_id,
@@ -94,7 +85,7 @@ impl ShellTaskSpawner for TaskRuntime {
         let driver_task_id = task_id.clone();
         let driver_description = request.description.clone();
         let driver_tool_use_id = request.tool_use_id.clone();
-        let driver_agent_id = request.agent_id.clone();
+        let driver_agent_id = request.issuing_agent.clone();
         let driver_output_path = output_path.clone();
         let command_str = request.command.clone();
         let timeout_ms = request.timeout_ms.unwrap_or(120_000);
@@ -110,7 +101,7 @@ impl ShellTaskSpawner for TaskRuntime {
             task_id.clone(),
             request.description.clone(),
             request.tool_use_id.clone(),
-            request.agent_id.clone(),
+            request.issuing_agent.clone(),
             output_path.clone(),
             dto.clone(),
             sink.clone(),
@@ -143,15 +134,12 @@ impl ShellTaskSpawner for TaskRuntime {
             spawn_auto_detach_timer(
                 task_id.clone(),
                 ms,
-                self.entries.clone(),
                 self.manager.clone(),
                 drain_done.clone(),
             );
         }
 
-        let driver_status_tx = status_tx;
         let drain_done_for_driver = drain_done;
-        let exit_code_for_driver = exit_code;
         // W6: thread sandbox state into the driver. `None` = no
         // wrapping (current bg-default behavior). `Some` = apply
         // `SandboxState::try_wrap_command_with_binds` before spawn.
@@ -170,14 +158,12 @@ impl ShellTaskSpawner for TaskRuntime {
             drain_done_for_driver.cancel();
             apply_shell_terminal_state(
                 &manager,
-                &driver_status_tx,
                 &driver_task_id,
                 &driver_description,
                 driver_tool_use_id.as_deref(),
                 driver_agent_id.as_deref(),
                 &driver_output_path,
                 sink.as_ref(),
-                &exit_code_for_driver,
                 outcome,
             )
             .await;
@@ -353,14 +339,12 @@ async fn run_shell_task(
 #[allow(clippy::too_many_arguments)]
 async fn apply_shell_terminal_state(
     manager: &TaskManager,
-    status_tx: &watch::Sender<TaskStatus>,
     task_id: &str,
     description: &str,
     tool_use_id: Option<&str>,
     agent_id: Option<&str>,
     output_path: &str,
     sink: &dyn NotificationSink,
-    exit_code_slot: &Arc<std::sync::OnceLock<i32>>,
     outcome: ShellOutcome,
 ) {
     let (status, terminal, exit_code) = match outcome.wait {
@@ -390,10 +374,14 @@ async fn apply_shell_terminal_state(
     // W3: persist exit_code BEFORE update_status, so any awaiter
     // racing the terminal signal sees a consistent snapshot.
     if let Some(code) = exit_code {
-        let _ = exit_code_slot.set(code);
+        manager.set_exit_code(task_id, code).await;
     }
-    manager.update_status(task_id, status).await;
-    status_tx.send_replace(status);
+    if manager.transition_terminal(task_id, status).await.is_none() {
+        return;
+    }
+    if !manager.mark_notified_once(task_id).await {
+        return;
+    }
 
     let n = TaskNotification {
         task_id: task_id.to_string(),

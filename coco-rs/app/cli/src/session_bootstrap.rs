@@ -334,8 +334,9 @@ pub async fn install_session_late_binds(
         runtime.attach_lsp_handle(handle).await;
     }
 
-    // Agent-team wiring (`SwarmAgentHandle` + `QueryEngineAdapter`
-    // factory). No-op when `Feature::AgentTeams` is off.
+    // Agent wiring (`SwarmAgentHandle` + `QueryEngineAdapter`
+    // factory). LocalAgent requires the TaskRuntime registry installed
+    // above; team-specific tools remain feature-gated at the tool layer.
     crate::agent_handle_factory::install_agent_team(runtime.clone(), cwd.display().to_string())
         .await?;
 

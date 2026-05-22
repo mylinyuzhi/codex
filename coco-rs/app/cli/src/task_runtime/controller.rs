@@ -4,9 +4,7 @@
 //! `tasks/LocalAgentTask/LocalAgentTask.tsx:617-650`
 //! (`backgroundAgentTask`).
 
-use async_trait::async_trait;
-use coco_tool_runtime::{DetachOutcome, TaskController};
-use std::sync::atomic::Ordering;
+use coco_tool_runtime::DetachOutcome;
 use tracing::{debug, info, instrument};
 
 use super::{TaskRuntime, boxed_msg};
@@ -21,7 +19,7 @@ impl TaskRuntime {
     /// Mechanics:
     /// 1. CAS the per-task `detached: AtomicBool` to true. If already
     ///    set, return [`DetachOutcome::AlreadyDetached`] immediately.
-    /// 2. Mark `LocalAgentExtra.is_backgrounded = true` so the TUI
+    /// 2. Mark `BgAgentExtras.is_backgrounded() = true` so the TUI
     ///    panel filter can hide the task from the fg list.
     /// 3. Call `detach.notify_one()` — wakes the fg `tool.execute`
     ///    `select!` arm awaiting `.notified()`.
@@ -29,85 +27,48 @@ impl TaskRuntime {
     /// Returns [`DetachOutcome::Unknown`] for unknown task ids.
     #[instrument(level = "info", skip(self), fields(task_id = %task_id))]
     pub async fn signal_detach(&self, task_id: &str) -> DetachOutcome {
-        let snapshot = {
-            let entries = self.entries.read().await;
-            entries
-                .get(task_id)
-                .map(|e| (e.detach.clone(), e.detached.clone()))
-        };
-        let Some((detach, detached)) = snapshot else {
+        let outcome = self.manager.signal_detach(task_id).await;
+        if matches!(outcome, DetachOutcome::Unknown) {
             debug!(
                 target: "coco::task_runtime",
                 task_id,
                 "signal_detach: unknown task id"
             );
-            return DetachOutcome::Unknown;
-        };
-        // CAS gate. `swap` returns the *previous* value: if it was
-        // already true, this is a no-op (TS parity:
-        // `tasks/LocalAgentTask/LocalAgentTask.tsx:620-622`).
-        if detached.swap(true, Ordering::SeqCst) {
+        } else if matches!(outcome, DetachOutcome::AlreadyDetached) {
             debug!(target: "coco::task_runtime", task_id, "signal_detach: already detached");
-            return DetachOutcome::AlreadyDetached;
+        } else {
+            info!(
+                target: "coco::task_runtime",
+                task_id,
+                "signal_detach fired; fg awaiter will receive detach notification"
+            );
         }
-        // Flip the sidecar flag. Only `LocalAgent` tasks have an
-        // entry in the sparse map; for `LocalBash`, `set_backgrounded`
-        // is a no-op on a missing entry (`LocalAgentExtra::default`).
-        self.manager.set_backgrounded(task_id, true).await;
-        detach.notify_one();
-        info!(
-            target: "coco::task_runtime",
-            task_id,
-            "signal_detach fired; fg awaiter will receive detach notification"
-        );
-        DetachOutcome::Detached
+        outcome
     }
 }
 
-#[async_trait]
-impl TaskController for TaskRuntime {
-    /// Kill a running task by firing its cancel token. **Does not**
-    /// directly update status, broadcast on the watch, or push a
-    /// `<task-notification>` — those are the driver's job, and
-    /// doing them here would double-fire the SDK `TaskCompleted` event
-    /// and the queued notification envelope.
-    ///
-    /// - **Shell tasks**: `cancel.cancel()` propagates into the child
-    ///   process (`kill_on_drop=true`). The driver's `tokio::select!`
-    ///   on `cancel.cancelled()` returns `WaitOutcome::Cancelled`, then
-    ///   `apply_shell_terminal_state` runs the single
-    ///   `update_status(Killed)` + `sink.push(ShellTerminal{Killed})`.
-    /// - **Agent tasks**: the bg-agent closure in
-    ///   `coordinator::spawn_background` races `cancel.cancelled()`
-    ///   against `engine.execute_query`; on cancel it constructs an
-    ///   `Err("task cancelled by leader")` and routes to `mark_failed`,
-    ///   which pushes the single agent notification.
-    ///
-    /// TS parity: `LocalShellTask::killTask` (`tasks/LocalShellTask/LocalShellTask.tsx`)
-    /// also only aborts the shell — the `.result.then(...)` handler is
-    /// the single notification source.
+impl TaskRuntime {
+    /// Kill a running task by firing its cancel token. See trait-level
+    /// docs on [`coco_tool_runtime::TaskHandle::kill_task`] for the
+    /// double-notification rationale.
     #[instrument(level = "info", skip(self), fields(task_id = %task_id))]
-    async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
-        let cancel = {
-            let entries = self.entries.read().await;
-            entries.get(task_id).map(|e| e.cancel.clone())
-        };
-        let Some(cancel) = cancel else {
-            return Err(boxed_msg(
-                format!("No running task found with ID: {task_id}"),
-                coco_error::StatusCode::FileNotFound,
-            ));
-        };
-        cancel.cancel();
+    pub(super) async fn kill_task_impl(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
+        if let Err(e) = self.manager.kill_running(task_id).await {
+            let msg = match e {
+                coco_tasks::KillTaskError::NotFound => {
+                    format!("No running task found with ID: {task_id}")
+                }
+                coco_tasks::KillTaskError::NotRunning => {
+                    format!("Task is not running: {task_id}")
+                }
+            };
+            return Err(boxed_msg(msg, coco_error::StatusCode::FileNotFound));
+        }
         info!(
             target: "coco::task_runtime",
             task_id,
             "kill_task fired cancel token; driver will finalize state + push notification"
         );
         Ok(())
-    }
-
-    async fn signal_detach(&self, task_id: &str) -> DetachOutcome {
-        TaskRuntime::signal_detach(self, task_id).await
     }
 }

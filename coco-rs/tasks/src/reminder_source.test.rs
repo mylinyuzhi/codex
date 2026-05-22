@@ -4,11 +4,65 @@ use coco_system_reminder::TaskStatusSource;
 use coco_types::TaskStatus;
 use coco_types::TaskType;
 
+async fn create_pending(
+    mgr: &TaskManager,
+    task_type: TaskType,
+    description: &str,
+    output_file: &str,
+) -> String {
+    create_with_status(
+        mgr,
+        task_type,
+        description,
+        output_file,
+        TaskStatus::Pending,
+    )
+    .await
+}
+
+async fn create_running(
+    mgr: &TaskManager,
+    task_type: TaskType,
+    description: &str,
+    output_file: &str,
+) -> String {
+    create_with_status(
+        mgr,
+        task_type,
+        description,
+        output_file,
+        TaskStatus::Running,
+    )
+    .await
+}
+
+async fn create_with_status(
+    mgr: &TaskManager,
+    task_type: TaskType,
+    description: &str,
+    output_file: &str,
+    status: TaskStatus,
+) -> String {
+    let id = coco_types::generate_task_id(task_type);
+    mgr.create_task(crate::running::TaskCreateRequest {
+        task_id: id,
+        task_type,
+        description: description.to_string(),
+        output_file: Some(output_file.to_string()),
+        tool_use_id: None,
+        is_backgrounded: false,
+        status,
+        cancel: tokio_util::sync::CancellationToken::new(),
+        invoking_agent: None,
+        shell_extras: None,
+    })
+    .await
+}
+
 #[tokio::test]
 async fn collect_returns_empty_when_not_post_compact() {
     let mgr = TaskManager::new();
-    mgr.create(TaskType::LocalAgent, "foo", "/tmp/foo.log")
-        .await;
+    create_pending(&mgr, TaskType::BgAgent, "foo", "/tmp/foo.log").await;
     let out = mgr.collect(None, /*just_compacted=*/ false).await;
     assert!(out.is_empty());
 }
@@ -16,9 +70,7 @@ async fn collect_returns_empty_when_not_post_compact() {
 #[tokio::test]
 async fn collect_emits_snapshot_post_compact_for_running() {
     let mgr = TaskManager::new();
-    let _id = mgr
-        .create_running(TaskType::LocalAgent, "scan repo", "/tmp/scan.log")
-        .await;
+    let _id = create_running(&mgr, TaskType::BgAgent, "scan repo", "/tmp/scan.log").await;
     let out = mgr.collect(None, true).await;
     assert_eq!(out.len(), 1);
     let s = &out[0];
@@ -40,18 +92,10 @@ async fn collect_emits_snapshot_post_compact_for_running() {
 #[tokio::test]
 async fn collect_includes_terminal_tasks_post_compact() {
     let mgr = TaskManager::new();
-    let id_completed = mgr
-        .create_running(TaskType::LocalAgent, "done", "/tmp/done.log")
-        .await;
-    let id_failed = mgr
-        .create_running(TaskType::LocalAgent, "broke", "/tmp/broke.log")
-        .await;
-    let id_killed = mgr
-        .create_running(TaskType::LocalAgent, "stopped", "/tmp/stopped.log")
-        .await;
-    let id_running = mgr
-        .create_running(TaskType::LocalAgent, "alive", "/tmp/alive.log")
-        .await;
+    let id_completed = create_running(&mgr, TaskType::BgAgent, "done", "/tmp/done.log").await;
+    let id_failed = create_running(&mgr, TaskType::BgAgent, "broke", "/tmp/broke.log").await;
+    let id_killed = create_running(&mgr, TaskType::BgAgent, "stopped", "/tmp/stopped.log").await;
+    let id_running = create_running(&mgr, TaskType::BgAgent, "alive", "/tmp/alive.log").await;
 
     mgr.update_status(&id_completed, TaskStatus::Completed)
         .await;
@@ -93,9 +137,7 @@ async fn collect_includes_terminal_tasks_post_compact() {
 #[tokio::test]
 async fn collect_skips_pending_tasks_post_compact() {
     let mgr = TaskManager::new();
-    let _id = mgr
-        .create(TaskType::LocalAgent, "queued", "/tmp/queued.log")
-        .await;
+    let _id = create_pending(&mgr, TaskType::BgAgent, "queued", "/tmp/queued.log").await;
     let out = mgr.collect(None, true).await;
     assert!(
         out.is_empty(),

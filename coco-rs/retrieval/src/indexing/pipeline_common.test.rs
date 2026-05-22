@@ -19,8 +19,8 @@ fn test_compute_readiness_uninitialized() {
 fn test_compute_readiness_building() {
     let state: PipelineState<TestStats> = PipelineState::Building {
         batch_id: BatchId::new(),
-        progress: 0.5,
         started_at: 12345,
+        progress: 0.5,
     };
     let lag_info = LagInfo::default();
     let strict_config = StrictModeConfig::default();

@@ -354,7 +354,7 @@ async fn execute_background(
             timeout_ms: input.timeout.map(|t| t as i64),
             description,
             tool_use_id: ctx.tool_use_id.clone(),
-            agent_id: ctx.agent_id.as_ref().map(ToString::to_string),
+            issuing_agent: ctx.agent_id.as_ref().map(ToString::to_string),
             // W3: bg-only spawn — no progress emission, no auto-detach.
             // The fg PowerShell path still goes through ShellExecutor;
             // unifying it would mirror the BashTool W3 refactor and is

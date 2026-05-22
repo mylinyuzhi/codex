@@ -6,8 +6,7 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use coco_tool_runtime::{TaskOutputDelta, TaskReader, TerminalOutputs, TerminalSignal};
+use coco_tool_runtime::{TaskOutputDelta, TerminalOutputs, TerminalSignal};
 use coco_types::{TaskStateBase, TaskStatus, TaskType};
 use tokio::sync::Notify;
 use tracing::trace;
@@ -15,9 +14,8 @@ use tracing::trace;
 use super::{TaskRuntime, boxed_msg};
 use crate::disk_task_output::DEFAULT_MAX_READ_BYTES;
 
-#[async_trait]
-impl TaskReader for TaskRuntime {
-    async fn get_task_status(
+impl TaskRuntime {
+    pub(super) async fn get_task_status_impl(
         &self,
         task_id: &str,
     ) -> Result<TaskStateBase, coco_error::BoxedError> {
@@ -29,7 +27,7 @@ impl TaskReader for TaskRuntime {
         })
     }
 
-    async fn get_task_output_delta(
+    pub(super) async fn get_task_output_delta_impl(
         &self,
         task_id: &str,
         from_offset: i64,
@@ -54,7 +52,7 @@ impl TaskReader for TaskRuntime {
             Err(_) => (String::new(), from_offset),
         };
         let is_complete = state.status.is_terminal();
-        if is_complete && state.task_type == TaskType::LocalAgent {
+        if is_complete && state.task_type() == TaskType::BgAgent {
             self.manager.mark_retrieved(task_id).await;
             trace!(
                 target: "coco::task_runtime",
@@ -78,23 +76,22 @@ impl TaskReader for TaskRuntime {
         })
     }
 
-    async fn list_tasks(&self) -> Vec<TaskStateBase> {
+    pub(super) async fn list_tasks_impl(&self) -> Vec<TaskStateBase> {
         self.manager.list().await
     }
 
-    async fn subscribe_terminal(&self, task_id: &str) -> Option<TerminalSignal> {
-        let entries = self.entries.read().await;
-        entries
-            .get(task_id)
-            .map(|e| TerminalSignal::new(e.status_tx.subscribe()))
+    pub(super) async fn subscribe_terminal_impl(&self, task_id: &str) -> Option<TerminalSignal> {
+        self.manager
+            .subscribe_terminal(task_id)
+            .await
+            .map(TerminalSignal::new)
     }
 
-    async fn detach_handle(&self, task_id: &str) -> Option<Arc<Notify>> {
-        let entries = self.entries.read().await;
-        entries.get(task_id).map(|e| e.detach.clone())
+    pub(super) async fn detach_handle_impl(&self, task_id: &str) -> Option<Arc<Notify>> {
+        self.manager.detach_handle(task_id).await
     }
 
-    async fn read_terminal_outputs(
+    pub(super) async fn read_terminal_outputs_impl(
         &self,
         task_id: &str,
     ) -> Result<TerminalOutputs, coco_error::BoxedError> {
@@ -117,12 +114,7 @@ impl TaskReader for TaskRuntime {
         // `OnceLock` from `apply_shell_terminal_state`. Agent tasks
         // and shell `Cancelled` / `TimedOut` / `SpawnFailed` outcomes
         // leave it unset, yielding `None`.
-        let exit_code = self
-            .entries
-            .read()
-            .await
-            .get(task_id)
-            .and_then(|e| e.exit_code.get().copied());
+        let exit_code = self.manager.exit_code(task_id).await;
         Ok(TerminalOutputs {
             stdout,
             stderr: String::new(),

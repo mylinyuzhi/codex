@@ -4,8 +4,8 @@
 //! manager and is the single seam through which `AgentTool` /
 //! `SendMessage` / `TeamCreate` / `TeamDelete` reach the coordinator.
 //! Today the only other implementation is `NoOpAgentHandle` (returns
-//! "not available in this context" for every call), used when
-//! `Feature::AgentTeams` is off or in test fixtures.
+//! "not available in this context" for every call), used only before
+//! bootstrap late-binding or in narrow test fixtures.
 //!
 //! The factory closure inside [`coco_query::QueryEngineAdapter`] is
 //! the trickiest piece — it needs to spawn a fresh `QueryEngine` per
@@ -21,6 +21,8 @@
 
 use std::sync::Arc;
 
+use anyhow::Context as _;
+use anyhow::Result;
 use coco_coordinator::agent_handle::SwarmAgentHandle;
 use coco_coordinator::runner::InProcessAgentRunner;
 use coco_coordinator::types::TeamManager;
@@ -124,9 +126,8 @@ async fn resolve_explicit_client(
 
 /// Assemble the production [`SwarmAgentHandle`] for `runtime`.
 ///
-/// Returns `None` when the runtime's resolved features don't include
-/// `Feature::AgentTeams` — callers should treat this as "no spawn
-/// support installed; AgentTool will degrade to NoOpAgentHandle".
+/// Requires the TaskRuntime-backed registry to already be attached;
+/// absence is not a supported production LocalAgent configuration.
 ///
 /// **Late-bind contract**: this fn must run *after*
 /// `SessionRuntime::build` has returned the `Arc`, because the
@@ -137,15 +138,7 @@ async fn resolve_explicit_client(
 pub async fn build_agent_team_wiring(
     runtime: Arc<SessionRuntime>,
     cwd: String,
-) -> Option<AgentTeamWiring> {
-    if !runtime
-        .runtime_config
-        .features
-        .enabled(coco_types::Feature::AgentTeams)
-    {
-        return None;
-    }
-
+) -> Result<AgentTeamWiring> {
     // In-process subagents inherit the leader's `ToolPermissionBridge`
     // (installed on `SessionRuntime` and propagated by `wire_engine`):
     // SDK leaders forward over `approval/askForApproval`, TUI leaders
@@ -158,11 +151,16 @@ pub async fn build_agent_team_wiring(
     ));
     let team_manager = Arc::new(RwLock::new(None::<TeamManager>));
 
+    let task_rt = runtime
+        .current_task_runtime()
+        .await
+        .context("TaskRuntime must be attached before AgentTeam wiring")?;
     let mut handle = SwarmAgentHandle::new(
         runner.clone(),
         team_manager,
         cwd.clone(),
         runtime.runtime_config.clone(),
+        task_rt as coco_tool_runtime::AgentTaskRegistryRef,
     );
     let backend_registry = Arc::new(coco_coordinator::pane::BackendRegistry::new());
     backend_registry
@@ -195,16 +193,6 @@ pub async fn build_agent_team_wiring(
     }
     handle.set_backend_registry(backend_registry);
 
-    // P2'+: install the AgentTaskRegistry side of the production
-    // task runtime so AgentTool background spawns register through
-    // the same `TaskManager` the engine's `Task*` tools read from.
-    // `runtime.current_task_runtime()` is `Some` only when CLI
-    // bootstrap installed it (via `install` below) — tests that
-    // construct `SessionRuntime` directly skip this and bg spawns
-    // run unregistered.
-    if let Some(task_rt) = runtime.current_task_runtime().await {
-        handle.set_task_registry(task_rt as coco_tool_runtime::AgentTaskRegistryRef);
-    }
     if let Some(task_list) = runtime.current_task_list().await {
         handle.set_task_list(task_list);
     }
@@ -343,7 +331,7 @@ pub async fn build_agent_team_wiring(
     // baselines silently unconsumed.
     sync_agent_memory_snapshots(&runtime, &cwd).await;
 
-    Some(AgentTeamWiring {
+    Ok(AgentTeamWiring {
         agent_handle: Arc::new(handle),
     })
 }
@@ -507,11 +495,9 @@ async fn sync_agent_memory_snapshots(_runtime: &Arc<SessionRuntime>, cwd: &str) 
 }
 
 /// Convenience for one-shot bootstrap: build the wiring and attach it
-/// to the runtime. No-op (returns `Ok`) when `Feature::AgentTeams` is
-/// off.
+/// to the runtime.
 pub async fn install_agent_team(runtime: Arc<SessionRuntime>, cwd: String) -> anyhow::Result<()> {
-    if let Some(wiring) = build_agent_team_wiring(runtime.clone(), cwd).await {
-        runtime.attach_agent_handle(wiring.agent_handle).await;
-    }
+    let wiring = build_agent_team_wiring(runtime.clone(), cwd).await?;
+    runtime.attach_agent_handle(wiring.agent_handle).await;
     Ok(())
 }

@@ -19,6 +19,7 @@ thiserror.workspace = true
 async-trait.workspace = true
 fs2.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 
 [dev-dependencies]

@@ -760,7 +760,7 @@ async fn execute_via_task_runtime(
         description: description.to_string(),
         timeout_ms: Some(timeout_ms as i64),
         tool_use_id,
-        agent_id,
+        issuing_agent: agent_id,
         progress_tx,
         progress_throttle_ms: 1000,
         auto_detach_ms,
@@ -882,7 +882,7 @@ async fn execute_via_task_runtime(
             // Auto-detach timer or external `signal_detach` fired.
             // Differentiate the two with `by_user`: when the
             // auto-detach timer is the originator, the task's own
-            // `LocalAgentExtra.is_backgrounded` flip is observable —
+            // `BgAgentExtras.is_backgrounded()` flip is observable —
             // but for now we just stamp the differentiator in the
             // result shape so the model sees TS-aligned signals
             // (`backgroundedByUser` vs `assistantAutoBackgrounded`).

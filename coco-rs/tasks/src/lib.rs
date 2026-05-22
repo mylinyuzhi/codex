@@ -34,9 +34,12 @@ pub use notification::{
     NoOpNotificationSink, NotificationKind, NotificationSink, NotificationSinkRef,
     TaskNotification, TaskUsage, TerminalStatus, Worktree, render as render_notification,
 };
-pub use running::LocalAgentExtra;
+pub use running::KillTaskError;
 pub use running::PANEL_GRACE_MS;
+pub use running::TaskCreateRequest;
 pub use running::TaskManager;
+pub use running::TeammateTaskCreateRequest;
+pub use running::TeammateTaskUpdate;
 pub use stall::{
     STALL_CHECK_INTERVAL_MS, STALL_TAIL_BYTES, STALL_THRESHOLD_MS, matches_interactive_prompt,
 };

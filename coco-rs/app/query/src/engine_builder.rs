@@ -451,7 +451,7 @@ impl QueryEngine {
     /// emission. Filters per TS `compact.ts:1577-1582`: skip the agent
     /// that owns this engine's `agent_id`, drop pending tasks (not yet
     /// meaningful), drop terminal tasks the `TaskOutput` tool already
-    /// consumed (`LocalAgentExtra.retrieved`).
+    /// consumed (`BgAgentExtras.retrieved`).
     pub(crate) async fn snapshot_async_agents_for_post_compact(
         &self,
     ) -> Vec<coco_compact::AsyncAgentSnapshot> {
@@ -462,7 +462,7 @@ impl QueryEngine {
         let self_agent = self.config.agent_id.as_deref();
         let mut out = Vec::with_capacity(listed.len());
         for t in listed {
-            if !matches!(t.task_type, coco_types::TaskType::LocalAgent) {
+            if !matches!(t.task_type(), coco_types::TaskType::BgAgent) {
                 continue;
             }
             if matches!(t.status, coco_types::TaskStatus::Pending) {
@@ -478,9 +478,9 @@ impl QueryEngine {
             }
             // TS `compact.ts:1578` — once the `TaskOutput` tool serves
             // a terminal agent's output, the compact reminder stops
-            // re-announcing it. coco-rs stores this in the sparse
-            // `LocalAgentExtra` sidecar.
-            if t.status.is_terminal() && tasks.local_agent_extra(&t.id).await.retrieved {
+            // re-announcing it. coco-rs reads it through the typed
+            // `BgAgentExtras` variant on `TaskExtras`.
+            if t.status.is_terminal() && t.bg_agent_extras().map(|e| e.retrieved).unwrap_or(false) {
                 continue;
             }
             out.push(coco_compact::AsyncAgentSnapshot {
@@ -488,7 +488,7 @@ impl QueryEngine {
                 status: task_status_to_ts_string(t.status),
                 description: t.description,
                 delta_summary: None,
-                output_file_path: t.output_file,
+                output_file_path: t.output_file.unwrap_or_default(),
             });
         }
         out

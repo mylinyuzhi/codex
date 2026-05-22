@@ -1162,6 +1162,7 @@ name = "coco-coordinator"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "chrono",
  "coco-compact",
@@ -2051,6 +2052,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -7933,6 +7935,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

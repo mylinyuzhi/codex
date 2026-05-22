@@ -58,6 +58,7 @@ serde_json.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "process", "time", "rt"] }
+arc-swap.workspace = true
 tokio-util = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 dirs.workspace = true

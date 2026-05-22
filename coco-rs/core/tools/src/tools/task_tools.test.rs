@@ -11,10 +11,9 @@ use super::TaskCreateTool;
 use super::TaskStopTool;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::{
-    BackgroundShellRequest, ShellTaskSpawner, TaskController, TaskOutputDelta, TaskReader,
-    TerminalSignal, ToolUseContext,
+    BackgroundShellRequest, TaskHandle, TaskOutputDelta, TerminalSignal, ToolUseContext,
 };
-use coco_types::{TaskStateBase, TaskStatus, TaskType};
+use coco_types::{TaskExtras, TaskStateBase, TaskStatus};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -43,21 +42,21 @@ impl RecordingTaskHandle {
 fn canned_state(task_id: &str) -> TaskStateBase {
     TaskStateBase {
         id: task_id.into(),
-        task_type: TaskType::LocalBash,
         status: TaskStatus::Running,
+        notified: false,
         description: String::new(),
         tool_use_id: None,
         start_time: 0,
         end_time: None,
         total_paused_ms: None,
-        output_file: String::new(),
+        output_file: None,
         output_offset: 0,
-        extras: coco_types::TaskExtras::None,
+        extras: TaskExtras::shell_default(),
     }
 }
 
 #[async_trait::async_trait]
-impl TaskReader for RecordingTaskHandle {
+impl TaskHandle for RecordingTaskHandle {
     async fn get_task_status(
         &self,
         task_id: &str,
@@ -106,10 +105,15 @@ impl TaskReader for RecordingTaskHandle {
             coco_error::StatusCode::Internal,
         )))
     }
-}
-
-#[async_trait::async_trait]
-impl TaskController for RecordingTaskHandle {
+    async fn read_output(&self, _: &str) -> String {
+        String::new()
+    }
+    async fn task_state(&self, _: &str) -> Option<TaskStateBase> {
+        None
+    }
+    async fn is_terminal(&self, _: &str) -> bool {
+        false
+    }
     async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
         if self
             .known_ids
@@ -130,16 +134,42 @@ impl TaskController for RecordingTaskHandle {
     async fn signal_detach(&self, _: &str) -> coco_tool_runtime::DetachOutcome {
         coco_tool_runtime::DetachOutcome::Unknown
     }
-}
-
-#[async_trait::async_trait]
-impl ShellTaskSpawner for RecordingTaskHandle {
     async fn spawn_shell_task(
         &self,
         _request: BackgroundShellRequest,
     ) -> Result<String, coco_error::BoxedError> {
         unimplemented!("not used in these tests")
     }
+    async fn register_agent_task(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+        _: tokio_util::sync::CancellationToken,
+        _: coco_tool_runtime::AgentRegistration,
+    ) -> String {
+        String::new()
+    }
+    async fn register_agent_task_with_id(
+        &self,
+        task_id: String,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+        _: tokio_util::sync::CancellationToken,
+        _: coco_tool_runtime::AgentRegistration,
+    ) -> String {
+        task_id
+    }
+    async fn register_dream_task(&self, _: &str, _: tokio_util::sync::CancellationToken) -> String {
+        String::new()
+    }
+    async fn append_output(&self, _: &str, _: &str) {}
+    async fn set_progress_summary(&self, _: &str, _: String) {}
+    async fn set_progress(&self, _: &str, _: coco_types::TaskProgress) {}
+    async fn mark_completed(&self, _: &str, _: coco_tool_runtime::AgentCompletionPayload) {}
+    async fn mark_failed(&self, _: &str, _: &str) {}
+    async fn complete_silent(&self, _: &str, _: bool) {}
 }
 
 // ---------------------------------------------------------------------------

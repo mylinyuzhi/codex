@@ -5,6 +5,7 @@ use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::CreateTeamRequest;
 use coco_tool_runtime::CreateTeamResult;
+use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::TaskListHandleRef;
 use coco_tool_runtime::TeamTaskListRouter;
 use std::sync::Arc;
@@ -34,6 +35,12 @@ fn build_test_runtime() -> coco_config::RuntimeConfig {
 }
 
 fn create_test_handle() -> SwarmAgentHandle {
+    create_test_handle_with_registry(Arc::new(TestAgentTaskRegistry::default()))
+}
+
+fn create_test_handle_with_registry(
+    task_registry: coco_tool_runtime::AgentTaskRegistryRef,
+) -> SwarmAgentHandle {
     let runner = Arc::new(crate::runner::InProcessAgentRunner::new(
         "/tmp".to_string(),
         /*max_agents*/ 8,
@@ -41,7 +48,332 @@ fn create_test_handle() -> SwarmAgentHandle {
     let team_manager = Arc::new(RwLock::new(None));
     let runtime_config = Arc::new(build_test_runtime());
 
-    SwarmAgentHandle::new(runner, team_manager, "/tmp".to_string(), runtime_config)
+    SwarmAgentHandle::new(
+        runner,
+        team_manager,
+        "/tmp".to_string(),
+        runtime_config,
+        task_registry,
+    )
+}
+
+#[derive(Default)]
+struct TestAgentTaskRegistry {
+    states: std::sync::Mutex<std::collections::HashMap<String, coco_types::TaskStateBase>>,
+    outputs: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    detaches: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>,
+    current_work:
+        std::sync::Mutex<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>,
+}
+
+impl TestAgentTaskRegistry {
+    fn insert_task(
+        &self,
+        task_id: String,
+        task_type: coco_types::TaskType,
+        description: &str,
+        tool_use_id: Option<&str>,
+        registration: coco_tool_runtime::AgentRegistration,
+    ) -> String {
+        let is_backgrounded = matches!(
+            registration,
+            coco_tool_runtime::AgentRegistration::Background
+        );
+        let extras = match task_type {
+            coco_types::TaskType::BgAgent => coco_types::TaskExtras::bg_agent_default(),
+            coco_types::TaskType::Dream => coco_types::TaskExtras::dream(),
+            coco_types::TaskType::Teammate | coco_types::TaskType::RemoteTeammate => {
+                panic!("insert_task: teammate rows must go through insert_teammate_task")
+            }
+            coco_types::TaskType::Shell => coco_types::TaskExtras::shell_default(),
+        };
+        let mut extras = extras;
+        extras.set_backgrounded(is_backgrounded);
+        self.states.lock().expect("states lock").insert(
+            task_id.clone(),
+            coco_types::TaskStateBase {
+                id: task_id.clone(),
+                status: coco_types::TaskStatus::Running,
+                notified: false,
+                description: description.to_string(),
+                tool_use_id: tool_use_id.map(str::to_string),
+                start_time: 0,
+                end_time: None,
+                total_paused_ms: None,
+                output_file: Some(format!("/tmp/{task_id}.out")),
+                output_offset: 0,
+                extras,
+            },
+        );
+        self.detaches
+            .lock()
+            .expect("detaches lock")
+            .insert(task_id.clone(), Arc::new(tokio::sync::Notify::new()));
+        task_id
+    }
+
+    fn mark_terminal(&self, task_id: &str, status: coco_types::TaskStatus) {
+        if let Some(state) = self.states.lock().expect("states lock").get_mut(task_id) {
+            state.status = status;
+            state.end_time = Some(1);
+        }
+    }
+
+    fn teammate_by_agent_id(&self, agent_id: &str) -> Option<coco_types::TaskStateBase> {
+        self.states
+            .lock()
+            .expect("states lock")
+            .values()
+            .find(|state| {
+                state.task_type() == coco_types::TaskType::Teammate
+                    && state
+                        .teammate_extras()
+                        .is_some_and(|extras| extras.agent_ref.to_string() == agent_id)
+            })
+            .cloned()
+    }
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::TaskHandle for TestAgentTaskRegistry {
+    async fn register_agent_task(
+        &self,
+        description: &str,
+        tool_use_id: Option<&str>,
+        _invoking_agent_id: Option<&str>,
+        _cancel: tokio_util::sync::CancellationToken,
+        registration: coco_tool_runtime::AgentRegistration,
+    ) -> String {
+        self.insert_task(
+            coco_types::generate_task_id(coco_types::TaskType::BgAgent),
+            coco_types::TaskType::BgAgent,
+            description,
+            tool_use_id,
+            registration,
+        )
+    }
+
+    async fn register_agent_task_with_id(
+        &self,
+        task_id: String,
+        description: &str,
+        tool_use_id: Option<&str>,
+        _invoking_agent_id: Option<&str>,
+        _cancel: tokio_util::sync::CancellationToken,
+        registration: coco_tool_runtime::AgentRegistration,
+    ) -> String {
+        self.insert_task(
+            task_id,
+            coco_types::TaskType::BgAgent,
+            description,
+            tool_use_id,
+            registration,
+        )
+    }
+
+    async fn append_output(&self, task_id: &str, chunk: &str) {
+        self.outputs
+            .lock()
+            .expect("outputs lock")
+            .entry(task_id.to_string())
+            .or_default()
+            .push_str(chunk);
+    }
+
+    async fn set_progress_summary(&self, _task_id: &str, _summary: String) {}
+
+    async fn set_progress(&self, _task_id: &str, _progress: coco_types::TaskProgress) {}
+
+    async fn mark_completed(
+        &self,
+        task_id: &str,
+        payload: coco_tool_runtime::AgentCompletionPayload,
+    ) {
+        if let Some(result) = payload.result {
+            self.outputs
+                .lock()
+                .expect("outputs lock")
+                .insert(task_id.to_string(), result);
+        }
+        self.mark_terminal(task_id, coco_types::TaskStatus::Completed);
+    }
+
+    async fn mark_failed(&self, task_id: &str, _error: &str) {
+        self.mark_terminal(task_id, coco_types::TaskStatus::Failed);
+    }
+
+    async fn complete_silent(&self, task_id: &str, succeeded: bool) {
+        self.mark_terminal(
+            task_id,
+            if succeeded {
+                coco_types::TaskStatus::Completed
+            } else {
+                coco_types::TaskStatus::Failed
+            },
+        );
+    }
+
+    async fn register_dream_task(
+        &self,
+        description: &str,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> String {
+        self.insert_task(
+            coco_types::generate_task_id(coco_types::TaskType::Dream),
+            coco_types::TaskType::Dream,
+            description,
+            None,
+            coco_tool_runtime::AgentRegistration::Background,
+        )
+    }
+
+    async fn register_teammate_task(
+        &self,
+        request: coco_tool_runtime::TeammateTaskRegistration,
+    ) -> String {
+        let task_id = coco_types::generate_task_id(coco_types::TaskType::Teammate);
+        let mut teammate_extras = coco_types::TeammateExtras::new(
+            request.agent_ref.clone(),
+            request.backend_type,
+            request.prompt,
+        );
+        teammate_extras.pane_id = request.pane_id;
+        self.states.lock().expect("states lock").insert(
+            task_id.clone(),
+            coco_types::TaskStateBase {
+                id: task_id.clone(),
+                status: coco_types::TaskStatus::Running,
+                notified: false,
+                description: request.agent_ref.to_string(),
+                tool_use_id: None,
+                start_time: 0,
+                end_time: None,
+                total_paused_ms: None,
+                output_file: Some(format!("/tmp/{task_id}.out")),
+                output_offset: 0,
+                extras: coco_types::TaskExtras::Teammate(teammate_extras),
+            },
+        );
+        task_id
+    }
+
+    async fn teammate_task_state(&self, agent_id: &str) -> Option<coco_types::TaskStateBase> {
+        self.teammate_by_agent_id(agent_id)
+    }
+
+    async fn update_teammate_task(
+        &self,
+        agent_id: &str,
+        update: coco_tool_runtime::TeammateTaskUpdate,
+    ) {
+        let mut states = self.states.lock().expect("states lock");
+        let Some(state) = states.values_mut().find(|state| {
+            state.task_type() == coco_types::TaskType::Teammate
+                && state
+                    .teammate_extras()
+                    .is_some_and(|extras| extras.agent_ref.to_string() == agent_id)
+        }) else {
+            return;
+        };
+        let Some(extras) = state.teammate_extras_mut() else {
+            return;
+        };
+        update.is_idle.apply_required(&mut extras.is_idle);
+        update.result.apply(&mut extras.result);
+        update.error.apply(&mut extras.error);
+    }
+
+    async fn set_teammate_current_work_cancel(
+        &self,
+        agent_id: &str,
+        cancel: Option<tokio_util::sync::CancellationToken>,
+    ) -> bool {
+        let exists = self.teammate_by_agent_id(agent_id).is_some();
+        if !exists {
+            return false;
+        }
+        let mut current = self.current_work.lock().expect("current work lock");
+        if let Some(cancel) = cancel {
+            current.insert(agent_id.to_string(), cancel);
+        } else {
+            current.remove(agent_id);
+        }
+        true
+    }
+
+    async fn interrupt_teammate_current_work(&self, agent_id: &str) -> Result<bool, String> {
+        if self.teammate_by_agent_id(agent_id).is_none() {
+            return Err(format!("Teammate '{agent_id}' not found"));
+        }
+        let current = self.current_work.lock().expect("current work lock");
+        let Some(cancel) = current.get(agent_id) else {
+            return Ok(false);
+        };
+        cancel.cancel();
+        Ok(true)
+    }
+
+    async fn complete_teammate_task(
+        &self,
+        agent_id: &str,
+        status: coco_types::TaskStatus,
+        result: Option<String>,
+        error: Option<String>,
+    ) {
+        let mut states = self.states.lock().expect("states lock");
+        let Some(state) = states.values_mut().find(|state| {
+            state.task_type() == coco_types::TaskType::Teammate
+                && state
+                    .teammate_extras()
+                    .is_some_and(|extras| extras.agent_ref.to_string() == agent_id)
+        }) else {
+            return;
+        };
+        state.status = status;
+        state.notified = true;
+        if let Some(extras) = state.teammate_extras_mut() {
+            extras.result = result;
+            extras.error = error;
+        }
+    }
+
+    async fn detach_handle(&self, task_id: &str) -> Option<Arc<tokio::sync::Notify>> {
+        self.detaches
+            .lock()
+            .expect("detaches lock")
+            .get(task_id)
+            .cloned()
+    }
+
+    async fn read_output(&self, task_id: &str) -> String {
+        self.outputs
+            .lock()
+            .expect("outputs lock")
+            .get(task_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    async fn task_state(&self, task_id: &str) -> Option<coco_types::TaskStateBase> {
+        self.states
+            .lock()
+            .expect("states lock")
+            .get(task_id)
+            .cloned()
+    }
+
+    async fn output_file_path(&self, task_id: &str) -> Option<std::path::PathBuf> {
+        Some(std::path::PathBuf::from(format!("/tmp/{task_id}.out")))
+    }
+
+    async fn is_terminal(&self, task_id: &str) -> bool {
+        self.states
+            .lock()
+            .expect("states lock")
+            .get(task_id)
+            .map(|state| state.status.is_terminal())
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug)]
@@ -83,27 +415,26 @@ async fn create_team(handle: &SwarmAgentHandle, name: &str) -> CreateTeamResult 
 
 #[tokio::test]
 async fn test_interrupt_teammate_current_work_cancels_task_token_only() {
-    let handle = create_test_handle();
+    let registry = Arc::new(TestAgentTaskRegistry::default());
+    let handle = create_test_handle_with_registry(
+        registry.clone() as coco_tool_runtime::AgentTaskRegistryRef
+    );
     let agent_id = "worker@test";
-    let identity = crate::types::TeammateIdentity {
-        agent_id: agent_id.to_string(),
-        agent_name: "worker".to_string(),
-        team_name: "test".to_string(),
-        color: None,
-        plan_mode_required: false,
-    };
     let cancel = tokio_util::sync::CancellationToken::new();
     let observed = cancel.clone();
-    let mut state = crate::task::InProcessTeammateTaskState::new(
-        "task-worker@test".into(),
-        identity,
-        "p".into(),
-    );
-    state.set_current_work_cancel(cancel);
-    handle.teammate_task_states.write().await.insert(
-        agent_id.to_string(),
-        Arc::new(tokio::sync::RwLock::new(state)),
-    );
+    registry
+        .register_teammate_task(coco_tool_runtime::TeammateTaskRegistration::new(
+            "worker",
+            "test",
+            coco_types::BackendType::InProcess,
+            None,
+            "p".to_string(),
+            tokio_util::sync::CancellationToken::new(),
+        ))
+        .await;
+    registry
+        .set_teammate_current_work_cancel(agent_id, Some(cancel))
+        .await;
 
     assert!(
         handle
@@ -267,7 +598,7 @@ async fn test_set_runtime_config_replaces_main_model_resolver() {
     use coco_types::ModelSpec;
     use coco_types::ProviderApi;
 
-    let mut handle = create_test_handle();
+    let handle = create_test_handle();
 
     // Publish a fresh runtime with Main re-pointed. T6 contract:
     // lookup is live, not frozen at construction. This is the
@@ -289,7 +620,7 @@ async fn test_set_runtime_config_replaces_main_model_resolver() {
         },
     );
     handle.set_runtime_config(Arc::new(runtime));
-    assert_eq!(handle.current_main_model_id(), "claude-opus-4-7");
+    assert_eq!(handle.current_main_model_id().unwrap(), "claude-opus-4-7");
 }
 
 #[tokio::test]
@@ -367,6 +698,83 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
 }
 
 #[tokio::test]
+async fn test_spawn_subagent_sync_drains_stream_events_to_task_registry() {
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+
+    struct StreamingEngine;
+    #[async_trait]
+    impl AgentQueryEngine for StreamingEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            let tx = config.event_tx.expect("foreground task event sink");
+            tx.send(coco_types::CoreEvent::Stream(
+                coco_types::AgentStreamEvent::TextDelta {
+                    turn_id: "turn_1".into(),
+                    delta: "live output".into(),
+                },
+            ))
+            .await
+            .expect("event receiver active");
+            tx.send(coco_types::CoreEvent::Stream(
+                coco_types::AgentStreamEvent::ToolUseStarted {
+                    call_id: "toolu_1".into(),
+                    name: "Read".into(),
+                    batch_id: None,
+                },
+            ))
+            .await
+            .expect("event receiver active");
+            Ok(AgentQueryResult {
+                response_text: Some("child result".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 1,
+                cancelled: false,
+            })
+        }
+    }
+
+    let registry = Arc::new(TestAgentTaskRegistry::default());
+    let mut handle = create_test_handle_with_registry(
+        registry.clone() as coco_tool_runtime::AgentTaskRegistryRef
+    );
+    handle.set_execution_engine(Arc::new(StreamingEngine));
+
+    let response = handle
+        .spawn_agent(AgentSpawnRequest {
+            prompt: "do work".into(),
+            subagent_type: Some("Explore".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(response.status, AgentSpawnStatus::Completed);
+
+    let task_id = response.agent_id.expect("task id");
+    for _ in 0..50 {
+        if registry
+            .outputs
+            .lock()
+            .expect("outputs lock")
+            .get(&task_id)
+            .is_some_and(|text| text.contains("live output"))
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("foreground stream output was not drained into task registry");
+}
+
+#[tokio::test]
 async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
     // `isolation: "worktree"` with no worktree manager must fail
     // with a descriptive error — not silently run without
@@ -409,7 +817,6 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
     use coco_tool_runtime::AgentQueryConfig;
     use coco_tool_runtime::AgentQueryEngine;
     use coco_tool_runtime::AgentQueryResult;
-    use coco_tool_runtime::AgentTaskRegistry;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
 
@@ -424,7 +831,7 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
     }
 
     #[async_trait]
-    impl AgentTaskRegistry for MockRegistry {
+    impl coco_tool_runtime::TaskHandle for MockRegistry {
         async fn register_agent_task(
             &self,
             _description: &str,
@@ -433,9 +840,21 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
             _cancel: tokio_util::sync::CancellationToken,
             _registration: coco_tool_runtime::AgentRegistration,
         ) -> String {
-            let id = "ta_test_dt".to_string();
+            let id = "a0123456789abcdef".to_string();
             *self.task_id.lock().unwrap() = Some(id.clone());
             id
+        }
+        async fn register_agent_task_with_id(
+            &self,
+            task_id: String,
+            _description: &str,
+            _tool_use_id: Option<&str>,
+            _invoking_agent_id: Option<&str>,
+            _cancel: tokio_util::sync::CancellationToken,
+            _registration: coco_tool_runtime::AgentRegistration,
+        ) -> String {
+            *self.task_id.lock().unwrap() = Some(task_id.clone());
+            task_id
         }
         async fn append_output(&self, _: &str, _: &str) {}
         async fn set_progress_summary(&self, _: &str, _: String) {}
@@ -451,6 +870,9 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
         async fn read_output(&self, _: &str) -> String {
             String::new()
         }
+        async fn task_state(&self, _: &str) -> Option<coco_types::TaskStateBase> {
+            None
+        }
         async fn is_terminal(&self, _: &str) -> bool {
             false
         }
@@ -459,7 +881,7 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
             _description: &str,
             _cancel: tokio_util::sync::CancellationToken,
         ) -> String {
-            "td_unused".into()
+            "d_unused".into()
         }
         async fn detach_handle(&self, _: &str) -> Option<Arc<tokio::sync::Notify>> {
             Some(self.detach.clone())
@@ -501,11 +923,12 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
         task_id: std::sync::Mutex::new(None),
     });
 
-    let mut handle = create_test_handle();
+    let mut handle = create_test_handle_with_registry(
+        registry.clone() as coco_tool_runtime::AgentTaskRegistryRef
+    );
     handle.set_execution_engine(Arc::new(GatedEngine {
         release: release.clone(),
     }));
-    handle.set_task_registry(registry.clone() as coco_tool_runtime::AgentTaskRegistryRef);
 
     let request = AgentSpawnRequest {
         prompt: "long work".into(),
@@ -651,7 +1074,7 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
     // This test installs a teammate execution engine and asserts that
     // (a) spawn returns TeammateSpawned, (b) the engine's run_query is
     // invoked at least once via the runner-loop kickoff, (c) the
-    // teammate's task-state mirror exists.
+    // teammate has a TaskManager-backed task projection.
     use crate::runner_loop::{
         AgentExecutionEngine, AgentQueryConfig as RunnerCfg, AgentQueryResult as RunnerResult,
     };
@@ -685,7 +1108,10 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
     let calls = Arc::new(AtomicI32::new(0));
     let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
     let _ = crate::team_file::cleanup_team_directories(&team_name);
-    let mut handle = create_test_handle();
+    let registry = Arc::new(TestAgentTaskRegistry::default());
+    let mut handle = create_test_handle_with_registry(
+        registry.clone() as coco_tool_runtime::AgentTaskRegistryRef
+    );
     handle.set_teammate_execution_engine(Arc::new(CountingTeammateEngine {
         calls: calls.clone(),
     }));
@@ -703,12 +1129,12 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
     assert_eq!(response.status, AgentSpawnStatus::TeammateSpawned);
     let agent_id = response.agent_id.expect("agent_id present");
 
-    // Task-state mirror is created at spawn time even if the runner-loop
-    // hasn't ticked yet. Without Gap C the mirror was never registered.
-    let mirror = handle.teammate_task_state(&agent_id).await;
+    // Task projection is created at spawn time even if the runner-loop
+    // hasn't ticked yet. Without Gap C there was no running-task row.
+    let mirror = registry.teammate_task_state(&agent_id).await;
     assert!(
         mirror.is_some(),
-        "teammate task-state mirror must exist after spawn"
+        "teammate task projection must exist after spawn"
     );
 
     // Wait for the runner-loop to tick at least once. The engine stub
@@ -727,6 +1153,52 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
         calls.load(Ordering::SeqCst),
     );
     let _ = handle.delete_team().await;
+}
+
+#[tokio::test]
+async fn test_query_team_agent_without_local_task_reports_not_controllable() {
+    let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
+    let handle = create_test_handle();
+    create_team(&handle, &team_name).await;
+
+    let reservation = handle
+        .roster_store
+        .reserve_member(SpawnMemberRequest {
+            desired_name: "remote-worker".to_string(),
+            team_name: team_name.clone(),
+            agent_type: None,
+            model: None,
+            prompt: "work".to_string(),
+            color: None,
+            plan_mode_required: false,
+            cwd: "/tmp".to_string(),
+            worktree_path: None,
+            mode: None,
+        })
+        .await
+        .unwrap();
+    handle
+        .roster_store
+        .commit_member(CommitMemberRequest {
+            team_name: team_name.clone(),
+            agent_id: reservation.agent_id.clone(),
+            backend_type: crate::types::BackendType::Tmux,
+            pane_id: Some("%1".to_string()),
+            session_id: Some("other-process".to_string()),
+        })
+        .await
+        .unwrap();
+
+    let err = handle
+        .query_agent_status(&reservation.agent_id)
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("not locally controllable"),
+        "cross-process roster-only teammate must not fabricate status: {err}"
+    );
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
 }
 
 #[tokio::test]
@@ -1133,13 +1605,99 @@ async fn test_query_unknown_agent() {
 }
 
 #[tokio::test]
+async fn test_query_local_agent_status_uses_registry_without_team_fallback() {
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentCompletionPayload;
+
+    struct Registry {
+        state: coco_types::TaskStateBase,
+    }
+
+    #[async_trait]
+    impl coco_tool_runtime::TaskHandle for Registry {
+        async fn register_agent_task(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: tokio_util::sync::CancellationToken,
+            _: coco_tool_runtime::AgentRegistration,
+        ) -> String {
+            self.state.id.clone()
+        }
+        async fn register_agent_task_with_id(
+            &self,
+            task_id: String,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: tokio_util::sync::CancellationToken,
+            _: coco_tool_runtime::AgentRegistration,
+        ) -> String {
+            task_id
+        }
+        async fn append_output(&self, _: &str, _: &str) {}
+        async fn set_progress_summary(&self, _: &str, _: String) {}
+        async fn set_progress(&self, _: &str, _: coco_types::TaskProgress) {}
+        async fn mark_completed(&self, _: &str, _: AgentCompletionPayload) {}
+        async fn mark_failed(&self, _: &str, _: &str) {}
+        async fn complete_silent(&self, _: &str, _: bool) {}
+        async fn register_dream_task(
+            &self,
+            _: &str,
+            _: tokio_util::sync::CancellationToken,
+        ) -> String {
+            "dtest".into()
+        }
+        async fn detach_handle(&self, _: &str) -> Option<Arc<tokio::sync::Notify>> {
+            None
+        }
+        async fn read_output(&self, _: &str) -> String {
+            "registry output".into()
+        }
+        async fn task_state(&self, task_id: &str) -> Option<coco_types::TaskStateBase> {
+            (task_id == self.state.id).then(|| self.state.clone())
+        }
+        async fn is_terminal(&self, _: &str) -> bool {
+            true
+        }
+    }
+
+    let agent_id = "a0123456789abcdef".to_string();
+    let handle = create_test_handle_with_registry(Arc::new(Registry {
+        state: coco_types::TaskStateBase {
+            id: agent_id.clone(),
+            status: coco_types::TaskStatus::Completed,
+            notified: true,
+            description: "registry task".into(),
+            tool_use_id: None,
+            start_time: 10,
+            end_time: Some(25),
+            total_paused_ms: None,
+            output_file: Some("/tmp/agent.out".into()),
+            output_offset: 0,
+            extras: coco_types::TaskExtras::bg_agent_default(),
+        },
+    })
+        as coco_tool_runtime::AgentTaskRegistryRef);
+    let status = handle.query_agent_status(&agent_id).await.unwrap();
+    assert_eq!(status.status, AgentSpawnStatus::Completed);
+    assert_eq!(status.result.as_deref(), Some("registry output"));
+    assert_eq!(status.duration_ms, 15);
+
+    let output = handle.get_agent_output(&agent_id).await.unwrap();
+    assert_eq!(output, "registry output");
+}
+
+#[tokio::test]
 async fn test_spawn_subagent_validation_failure_does_not_leak_state() {
-    // Regression: spawn_subagent used to push a Pending entry to the
-    // agents list BEFORE running validation. A worktree-creation or
-    // missing-engine failure then left a dangling state visible to
-    // SubagentPanel / query_agent_status. The fix only commits state
-    // after both gates pass.
-    let handle = create_test_handle();
+    // Regression: spawn_subagent used SwarmAgentHandle's agent list as
+    // a LocalAgent fallback store. Validation failures must not leave
+    // LocalAgent state in the team-agent container.
+    let registry = Arc::new(TestAgentTaskRegistry::default());
+    let handle = create_test_handle_with_registry(
+        registry.clone() as coco_tool_runtime::AgentTaskRegistryRef
+    );
     let request = AgentSpawnRequest {
         prompt: "isolated work".into(),
         // Worktree without a manager — first gate fails.
@@ -1148,10 +1706,10 @@ async fn test_spawn_subagent_validation_failure_does_not_leak_state() {
     };
     let response = handle.spawn_agent(request).await.unwrap();
     assert_eq!(response.status, AgentSpawnStatus::Failed);
-    let agents = handle.agents().read().await;
+    let agents = registry.states.lock().expect("states lock");
     assert!(
         agents.is_empty(),
-        "validation failure must not leave a dangling agent entry; got {agents:?}",
+        "validation failure must not leave a dangling running-task entry; got {agents:?}",
     );
 }
 

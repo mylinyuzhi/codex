@@ -1318,7 +1318,7 @@ impl Tool for TaskOutputTool {
 /// polling with O(1) await — Rust has primitives JS lacks, no
 /// reason to mirror its busy-wait.
 async fn wait_for_task_completion(
-    handle: &dyn coco_tool_runtime::TaskReader,
+    handle: &dyn coco_tool_runtime::TaskHandle,
     task_id: &str,
     initial: coco_types::TaskStateBase,
     timeout_ms: u64,
