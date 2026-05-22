@@ -94,6 +94,16 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/rust-quality-check.sh\" --light",
+            "timeout": 60,
+            "statusMessage": "Running Rust quality checks (light: seam + fmt)..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/toolname-constants-check.sh\"",
             "timeout": 30,
             "statusMessage": "Checking tool name constants..."
