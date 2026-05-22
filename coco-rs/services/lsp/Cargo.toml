@@ -46,9 +46,6 @@ which = "7.0"
 # Text diffing for incremental sync
 similar = { workspace = true }
 
-# Home directory detection
-dirs = "5.0"
-
 # Date/time formatting
 chrono = "0.4"
 
