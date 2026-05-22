@@ -94,16 +94,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/rust-quality-check.sh\"",
-            "timeout": 600,
-            "statusMessage": "Running Rust quality checks (seam + fmt + clippy)..."
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/toolname-constants-check.sh\"",
             "timeout": 30,
             "statusMessage": "Checking tool name constants..."
@@ -129,8 +119,18 @@
             "statusMessage": "Checking for inline test modules..."
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/workspace-deps-check.sh\"",
+            "timeout": 30,
+            "statusMessage": "Checking workspace dep unification..."
+          }
+        ]
       }
     ]
   },
-  "disableAllHooks": true
+  "disableAllHooks": false
 }
