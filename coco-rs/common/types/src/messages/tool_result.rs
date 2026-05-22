@@ -1,7 +1,12 @@
 use crate::AppStatePatch;
 use crate::PermissionUpdate;
+use serde_json::Value;
 
+use super::AttachmentMessage;
 use super::Message;
+use super::SilentPayload;
+use super::StructuredOutputPayload;
+use crate::AttachmentKind;
 
 /// Result of a tool execution.
 ///
@@ -18,6 +23,14 @@ use super::Message;
 ///   permission-rule handle so subsequent turns see the new rules.
 ///   TS parity: `SkillTool` returns a `contextModifier` that wraps
 ///   `getAppState` to inject `alwaysAllowRules.command`.
+///
+/// **SDK structured output**: tools surface `structured_output` by
+/// pushing an `AttachmentMessage::silent_structured_output(...)`
+/// attachment onto [`Self::new_messages`]. The tool-outcome builder
+/// then forwards the payload data to the SDK result side-channel.
+/// There is no dedicated field — that would force every literal
+/// constructor to repeat `structured_output: None,`. Use
+/// [`Self::with_structured_output`] for ergonomic construction.
 ///
 /// TS parity: `orchestration.ts:queuedContextModifiers` — per-tool
 /// `(ctx) => newCtx` modifiers keyed by `tool_use_id` and applied
@@ -71,11 +84,42 @@ impl<T> ToolResult<T> {
         self
     }
 
+    /// Attach SDK-facing structured output. Materialized as a silent
+    /// `AttachmentMessage` on `new_messages`; the tool-outcome builder
+    /// forwards the payload to the SDK result side-channel.
+    pub fn with_structured_output(mut self, structured_output: Value) -> Self {
+        self.new_messages.push(Message::Attachment(
+            AttachmentMessage::silent_structured_output(StructuredOutputPayload {
+                data: structured_output,
+            }),
+        ));
+        self
+    }
+
     /// Attach permission-rule deltas the executor should fold into
     /// the running session config after this tool returns.
     pub fn with_permission_updates(mut self, updates: Vec<PermissionUpdate>) -> Self {
         self.permission_updates = updates;
         self
+    }
+
+    /// Extract the SDK-facing structured_output payload (if any) emitted
+    /// via [`Self::with_structured_output`] or pushed manually onto
+    /// `new_messages`. Returns the data clone of the most-recent
+    /// matching attachment so multiple writes in one result behave
+    /// last-writer-wins, matching TS `toolExecution.ts:1272`.
+    pub fn structured_output(&self) -> Option<Value> {
+        self.new_messages.iter().rev().find_map(|msg| match msg {
+            Message::Attachment(att) if att.kind == AttachmentKind::StructuredOutput => {
+                match &att.body {
+                    super::AttachmentBody::Silent(SilentPayload::StructuredOutput(payload)) => {
+                        Some(payload.data.clone())
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
     }
 }
 

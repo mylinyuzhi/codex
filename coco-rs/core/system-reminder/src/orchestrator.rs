@@ -102,19 +102,16 @@ impl SystemReminderOrchestrator {
             AgentListingDeltaGenerator, AgentMentionsGenerator, AgentPendingMessagesGenerator,
             AlreadyReadFileGenerator, AsyncHookResponseGenerator, AtMentionedFilesGenerator,
             AutoModeEnterGenerator, AutoModeExitGenerator, BudgetUsdGenerator,
-            CommandPermissionsGenerator, CompactionReminderGenerator, CompanionIntroGenerator,
-            ContextEfficiencyGenerator, CriticalSystemReminderGenerator,
-            CurrentSessionMemoryGenerator, DateChangeGenerator, DeferredToolsDeltaGenerator,
-            DiagnosticsGenerator, DynamicSkillGenerator, EditedImageFileGenerator,
-            HookAdditionalContextGenerator, HookBlockingErrorGenerator,
+            CompactionReminderGenerator, CompanionIntroGenerator, CriticalSystemReminderGenerator,
+            DateChangeGenerator, DeferredToolsDeltaGenerator, DiagnosticsGenerator,
+            EditedImageFileGenerator, HookAdditionalContextGenerator, HookBlockingErrorGenerator,
             HookStoppedContinuationGenerator, HookSuccessGenerator, IdeOpenedFileGenerator,
-            IdeSelectionGenerator, InvokedSkillsGenerator, MaxTurnsReachedGenerator,
-            McpInstructionsDeltaGenerator, McpResourcesGenerator, NestedMemoryGenerator,
-            OutputStyleGenerator, OutputTokenUsageGenerator, PlanModeEnterGenerator,
-            PlanModeExitGenerator, PlanModeReentryGenerator, QueuedCommandGenerator,
-            RelevantMemoriesGenerator, SkillDiscoveryGenerator, SkillListingGenerator,
-            StructuredOutputGenerator, TaskRemindersGenerator, TaskStatusGenerator,
-            TeamContextGenerator, TeammateMailboxGenerator, TeammateShutdownBatchGenerator,
+            IdeSelectionGenerator, InvokedSkillsGenerator, McpInstructionsDeltaGenerator,
+            McpResourcesGenerator, NestedMemoryGenerator, OutputStyleGenerator,
+            OutputTokenUsageGenerator, PlanModeEnterGenerator, PlanModeExitGenerator,
+            PlanModeReentryGenerator, QueuedCommandGenerator, RelevantMemoriesGenerator,
+            SkillDiscoveryGenerator, SkillListingGenerator, TaskRemindersGenerator,
+            TaskStatusGenerator, TeamContextGenerator, TeammateMailboxGenerator,
             TodoRemindersGenerator, TokenUsageGenerator, UltrathinkEffortGenerator,
             VerifyPlanReminderGenerator,
         };
@@ -151,10 +148,6 @@ impl SystemReminderOrchestrator {
         self.add_generator(Arc::new(AgentPendingMessagesGenerator));
         self.add_generator(Arc::new(CriticalSystemReminderGenerator));
         self.add_generator(Arc::new(CompactionReminderGenerator));
-        // Audit-add — Core tier.
-        self.add_generator(Arc::new(CurrentSessionMemoryGenerator));
-        self.add_generator(Arc::new(DynamicSkillGenerator));
-        self.add_generator(Arc::new(TeammateShutdownBatchGenerator));
 
         // TS mainThreadAttachments (`attachments.ts:944-995`) plus hook
         // attachments produced by hook executors and rendered here.
@@ -173,12 +166,6 @@ impl SystemReminderOrchestrator {
         self.add_generator(Arc::new(OutputTokenUsageGenerator));
         self.add_generator(Arc::new(VerifyPlanReminderGenerator));
         self.add_generator(Arc::new(InvokedSkillsGenerator));
-        // Audit-add — MainAgentOnly tier.
-        self.add_generator(Arc::new(MaxTurnsReachedGenerator));
-        self.add_generator(Arc::new(CommandPermissionsGenerator));
-        self.add_generator(Arc::new(StructuredOutputGenerator));
-        self.add_generator(Arc::new(ContextEfficiencyGenerator));
-
         // Silent reminder-native attachments: display/transcript only.
         self.add_generator(Arc::new(AlreadyReadFileGenerator));
         self.add_generator(Arc::new(EditedImageFileGenerator));
@@ -444,6 +431,9 @@ fn reminder_log_text(reminder: &SystemReminder) -> String {
         }
         ReminderOutput::ModelAttachment { payload }
         | ReminderOutput::SilentAttachment { payload } => {
+            serde_json::to_string(payload).unwrap_or_else(|_| "<unserializable>".to_string())
+        }
+        ReminderOutput::SkillDiscovery(payload) => {
             serde_json::to_string(payload).unwrap_or_else(|_| "<unserializable>".to_string())
         }
     }

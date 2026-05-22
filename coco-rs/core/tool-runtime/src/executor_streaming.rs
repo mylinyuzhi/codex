@@ -278,6 +278,7 @@ fn discard_outcome_for(prepared: PreparedToolCall) -> UnstampedToolCallOutcome {
         error_kind: Some(ToolCallErrorKind::StreamingDiscarded),
         permission_denial: None,
         prevent_continuation: None,
+        structured_output: None,
         effects: ToolSideEffects::none(),
     }
 }
@@ -305,6 +306,7 @@ fn join_error_outcome(
         error_kind: Some(ToolCallErrorKind::JoinFailed),
         permission_denial: None,
         prevent_continuation: None,
+        structured_output: None,
         effects: ToolSideEffects::none(),
     }
 }

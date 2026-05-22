@@ -115,6 +115,7 @@ async fn stub_run_one(
         error_kind: None,
         permission_denial: None,
         prevent_continuation: None,
+        structured_output: None,
         effects: ToolSideEffects::none(),
     }
 }
@@ -256,6 +257,7 @@ async fn test_early_outcome_surfaces_first_on_flush() {
         error_kind: Some(crate::call_plan::ToolCallErrorKind::UnknownTool),
         permission_denial: None,
         prevent_continuation: None,
+        structured_output: None,
         effects: ToolSideEffects::none(),
     }));
     // One safe plan after.

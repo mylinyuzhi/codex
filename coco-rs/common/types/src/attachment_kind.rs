@@ -103,9 +103,11 @@ pub enum AttachmentKind {
     StructuredOutput,
     DynamicSkill,
 
+    // ── Model-visible event attachments outside system-reminder ──
+    SkillDiscovery,
+
     // ── Feature-gated (TS feature flag; runtime not ported) ──
     ContextEfficiency,
-    SkillDiscovery,
 
     // ── Runtime bookkeeping (no model-visible API text in TS either) ──
     MaxTurnsReached,
@@ -238,11 +240,11 @@ impl AttachmentKind {
             | PdfReference
             | CompactFileReference
             | PlanFileReference
-            | EditedTextFile => true,
-            // TS `normalizeAttachmentForAPI` returns `[]` for these. coco-rs
-            // ports the audit-add variants as `SilentReminder` generators —
-            // their content can still flow to the UI / transcript, but the
-            // model never sees the body.
+            | EditedTextFile
+            | SkillDiscovery => true,
+            // TS `normalizeAttachmentForAPI` returns `[]` for these. They
+            // flow through typed attachment events or reminder-native silent
+            // metadata, never as model-visible API text.
             AlreadyReadFile
             | EditedImageFile
             | CommandPermissions
@@ -254,12 +256,27 @@ impl AttachmentKind {
             | StructuredOutput
             | DynamicSkill
             | ContextEfficiency
-            | SkillDiscovery
             | MaxTurnsReached
             | CurrentSessionMemory
             | TeammateShutdownBatch
             | BagelConsole => false,
         }
+    }
+
+    /// How the SDK / session-result layer consumes this attachment.
+    ///
+    /// Orthogonal to API visibility and transcript rendering. TS
+    /// `QueryEngine.ts` records all attachment messages into mutable
+    /// history, but only a few discriminators have special SDK effects:
+    /// `structured_output` becomes a result field, `max_turns_reached`
+    /// becomes a terminal result, and `queued_command` may replay as a
+    /// synthetic user message when replay is enabled.
+    pub const fn sdk_consumption(self) -> SdkConsumption {
+        sdk_consumption_of(self)
+    }
+
+    pub const fn is_sdk_consumed(self) -> bool {
+        !matches!(self.sdk_consumption(), SdkConsumption::None)
     }
 
     /// Does this attachment render in the UI transcript?
@@ -310,7 +327,7 @@ impl AttachmentKind {
             // Also treat silent-dedup / runtime-bookkeeping kinds as
             // non-rendering (not in TS NULL_RENDERING because TS doesn't
             // enumerate them there, but coco-rs intentionally hides them).
-            AlreadyReadFile | SkillDiscovery | TeammateShutdownBatch | BagelConsole => false,
+            AlreadyReadFile | BagelConsole => false,
             // Everything else renders.
             AgentListingDelta
             | AsyncHookResponse
@@ -335,7 +352,9 @@ impl AttachmentKind {
             | HookNonBlockingError
             | HookSystemMessage
             | HookPermissionDecision
-            | DynamicSkill => true,
+            | DynamicSkill
+            | SkillDiscovery
+            | TeammateShutdownBatch => true,
         }
     }
 
@@ -436,6 +455,35 @@ impl AttachmentKind {
 impl std::fmt::Display for AttachmentKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// SDK-layer side effect for an attachment kind.
+///
+/// This is not "visible to the model" and not "visible in the TUI"; it is
+/// specifically the TS `QueryEngine` / SDK result special-case surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdkConsumption {
+    /// Recorded to history/transcript only; SDK layer has no special branch.
+    None,
+    /// Copied into a field on the final SDK/session result.
+    ResultField { field: &'static str },
+    /// Converts the running turn into a terminal SDK result subtype.
+    TerminalResult { subtype: &'static str },
+    /// May be replayed as a synthetic SDK user message.
+    ReplayUserMessage,
+}
+
+pub const fn sdk_consumption_of(kind: AttachmentKind) -> SdkConsumption {
+    match kind {
+        AttachmentKind::StructuredOutput => SdkConsumption::ResultField {
+            field: "structured_output",
+        },
+        AttachmentKind::MaxTurnsReached => SdkConsumption::TerminalResult {
+            subtype: "error_max_turns",
+        },
+        AttachmentKind::QueuedCommand => SdkConsumption::ReplayUserMessage,
+        _ => SdkConsumption::None,
     }
 }
 
@@ -646,8 +694,9 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
 
         // ── Silent events (UI / telemetry, owned outside reminder crate) ──
-        CommandPermissions => Coverage::SilentReminder {
-            generator: "CommandPermissionsGenerator",
+        CommandPermissions => Coverage::SilentEvent {
+            owner_crate: "commands / permissions",
+            note: "slash-command or dialog permission mutation; not model-visible",
         },
         HookCancelled => Coverage::SilentEvent {
             owner_crate: "hooks",
@@ -669,34 +718,32 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
             owner_crate: "hooks",
             note: "hook-originated system message for UI only",
         },
-        StructuredOutput => Coverage::SilentReminder {
-            generator: "StructuredOutputGenerator",
+        StructuredOutput => Coverage::SilentEvent {
+            owner_crate: "core/tool-runtime",
+            note: "tool-produced structured output captured for SDK result",
         },
-        DynamicSkill => Coverage::SilentReminder {
-            generator: "DynamicSkillGenerator",
+        DynamicSkill => Coverage::SilentEvent {
+            owner_crate: "skills",
+            note: "dynamic skill directory loaded after file/tool access",
         },
-
-        // ── Audit-add: feature-gated runtime now ported as silent
-        //   reminders (TS-parity: `normalizeAttachmentForAPI` returns `[]`,
-        //   so the body never reaches the model; UI / transcript may
-        //   still consume the metadata). ──
-        ContextEfficiency => Coverage::SilentReminder {
-            generator: "ContextEfficiencyGenerator",
+        // ── Audit-add: feature-gated / model-visible event variants. ──
+        ContextEfficiency => Coverage::FeatureGated {
+            feature: "HISTORY_SNIP",
         },
-        SkillDiscovery => Coverage::SilentReminder {
+        SkillDiscovery => Coverage::Reminder {
             generator: "SkillDiscoveryGenerator",
         },
 
-        // ── Audit-add: previously runtime-only, now ported as silent
-        //   reminders. Same TS-parity rationale as above. ──
-        MaxTurnsReached => Coverage::SilentReminder {
-            generator: "MaxTurnsReachedGenerator",
+        // ── Runtime / UI events, emitted through AttachmentMessage. ──
+        MaxTurnsReached => Coverage::SilentEvent {
+            owner_crate: "app/query",
+            note: "turn cap stop signal; SDK result branch consumes the payload",
         },
-        CurrentSessionMemory => Coverage::SilentReminder {
-            generator: "CurrentSessionMemoryGenerator",
+        CurrentSessionMemory => Coverage::RuntimeBookkeeping {
+            note: "TS defines the type but has no createAttachmentMessage producer; session memory is consumed by compaction",
         },
-        TeammateShutdownBatch => Coverage::SilentReminder {
-            generator: "TeammateShutdownBatchGenerator",
+        TeammateShutdownBatch => Coverage::RuntimeBookkeeping {
+            note: "TS-only render-time collapse synthetic in collapseTeammateShutdowns.ts; coco-rs has no equivalent UI collapse path yet — kept for --resume deserialization",
         },
         BagelConsole => Coverage::RuntimeBookkeeping {
             note: "internal dev console placeholder; no API text",

@@ -700,25 +700,37 @@ async fn test_max_turns_limit() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0), // but we set max_turns=1 so it stops after first
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
-    let cancel = CancellationToken::new();
 
     let config = QueryEngineConfig {
         max_turns: 1,
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
-    let result = engine.run("read file").await.expect("should succeed");
+    let (result, events) = collect_events_from_run(model, tools, config, None, "read file").await;
 
     // Only 1 turn allowed, should stop even though tool call would trigger another
     assert_eq!(result.turns, 1);
+    assert_eq!(result.stop_reason.as_deref(), Some("max_turns"));
+    assert_eq!(
+        result.max_turns_reached,
+        Some(coco_messages::MaxTurnsReachedPayload {
+            max_turns: 1,
+            turn_count: 1,
+        })
+    );
+
+    let session_result = events.iter().find_map(|e| match e {
+        CoreEvent::Protocol(ServerNotification::SessionResult(p)) => Some(p.as_ref()),
+        _ => None,
+    });
+    let p = session_result.expect("SessionResult should be emitted");
+    assert!(p.is_error);
+    assert_eq!(p.total_turns, 1);
+    assert_eq!(p.stop_reason, "max_turns");
+    assert_eq!(p.errors, ["Reached maximum number of turns (1)"]);
 }
 
 #[tokio::test]

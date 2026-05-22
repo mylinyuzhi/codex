@@ -64,7 +64,9 @@ pub use rate_limit::RateLimitEntry;
 pub use attachment_kind::AttachmentEvent;
 pub use attachment_kind::AttachmentKind;
 pub use attachment_kind::Coverage;
+pub use attachment_kind::SdkConsumption;
 pub use attachment_kind::coverage_of;
+pub use attachment_kind::sdk_consumption_of;
 
 // Prompt-cache shared types (consumed by services/inference + app/query;
 // adapter mirrors live in vercel-ai-anthropic — see prompt-cache-design.md §7)

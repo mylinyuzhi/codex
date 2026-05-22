@@ -70,14 +70,7 @@ fn minimal_input<'a>(
         relevant_memories: Vec::new(),
         already_read_file_paths: Vec::new(),
         edited_image_file_paths: Vec::new(),
-        max_turns_reached_signal: false,
-        current_session_memory: None,
-        command_permissions: None,
-        dynamic_skill: None,
         skill_discovery: None,
-        structured_output: None,
-        teammate_shutdown_batch: None,
-        context_efficiency_signal: false,
     }
 }
 
@@ -244,49 +237,31 @@ async fn date_change_wires_new_date_into_reminder() {
 }
 
 #[tokio::test]
-async fn max_turns_reached_signal_threads_to_silent_reminder() {
-    let config = SystemReminderConfig::default();
+async fn skill_discovery_payload_threads_to_model_visible_reminder() {
+    let mut config = SystemReminderConfig::default();
+    config.attachments.skill_discovery = true;
     let app_state = ToolAppState::default();
     let history = MessageHistory::default();
     let orchestrator = SystemReminderOrchestrator::new(config.clone()).with_default_generators();
     let input = TurnReminderInput {
-        max_turns_reached_signal: true,
+        user_input: Some("use rust conventions".to_string()),
+        skill_discovery: Some(coco_types::SkillDiscoveryPayload {
+            skills: vec![coco_types::SkillDiscoverySkill {
+                name: "rust".to_string(),
+                description: "Rust conventions".to_string(),
+                short_id: None,
+            }],
+            signal: "explicit".to_string(),
+            source: coco_types::SkillDiscoverySource::Native,
+        }),
         ..minimal_input(&config, &app_state, &history)
     };
     let out = run_turn_reminders(&orchestrator, input).await;
     let hit = out
         .iter()
-        .find(|r| r.attachment_type == AttachmentType::MaxTurnsReached)
-        .expect("max_turns_reached fires when signal is true");
-    assert!(hit.is_silent, "audit-add reminders are silent");
-}
-
-#[tokio::test]
-async fn audit_add_string_payloads_thread_to_silent_reminder() {
-    // The current_session_memory + command_permissions reminders are
-    // off by default (they depend on snapshot wiring elsewhere); flip
-    // them on for the test so the generators don't gate themselves out.
-    let mut config = SystemReminderConfig::default();
-    config.attachments.current_session_memory = true;
-    config.attachments.command_permissions = true;
-    let app_state = ToolAppState::default();
-    let history = MessageHistory::default();
-    let orchestrator = SystemReminderOrchestrator::new(config.clone()).with_default_generators();
-    let input = TurnReminderInput {
-        current_session_memory: Some("session memory body".to_string()),
-        command_permissions: Some("perm snapshot".to_string()),
-        ..minimal_input(&config, &app_state, &history)
-    };
-    let out = run_turn_reminders(&orchestrator, input).await;
-    let types: std::collections::HashSet<_> = out.iter().map(|r| r.attachment_type).collect();
-    assert!(
-        types.contains(&AttachmentType::CurrentSessionMemory),
-        "current_session_memory fires when body present"
-    );
-    assert!(
-        types.contains(&AttachmentType::CommandPermissions),
-        "command_permissions fires when body present"
-    );
+        .find(|r| r.attachment_type == AttachmentType::SkillDiscovery)
+        .expect("skill_discovery fires when body is present");
+    assert!(!hit.is_silent, "skill_discovery is model-visible");
 }
 
 #[tokio::test]

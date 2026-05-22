@@ -15,12 +15,13 @@ Pre/post event interception with scoped priority: Command / Prompt / Http / Agen
 ## Key Types
 - `HookDefinition` — `event` (`HookEventType`, 27 variants matching TS), `matcher`, `handler`, `priority` (asc), `scope` (Session>Local>Project>User>Builtin), `if_condition`, `once`, `is_async`, `async_rewake`, `status_message`
 - `HookHandler` — `Command{command,timeout_ms,shell}` / `Prompt{prompt,model,timeout_ms}` / `Http{url,headers,timeout_ms,allowed_env_vars}` / `Agent{prompt,model,timeout_ms}` (TS-aligned schema)
+- `FunctionHookPredicate` (trait) — `evaluate(&[Arc<Message>]) -> bool` + `name()`. Implementations are `Send + Sync + Debug` and must be pure. Used by `FunctionHook` (an in-memory hook registered at session bootstrap rather than loaded from settings) to express TS-parity in-process callbacks like `StructuredOutput` Stop enforcement and Swarm teammate init. Stored on `HookRegistry.function_hooks` (separate from settings-loaded `hooks` because closures cannot `Serialize` / `Deserialize`). TS source: `addFunctionHook` in `utils/hooks/sessionHooks.ts`.
 - `HookEvaluationResult` — `Ok` / `Blocking{reason}` / `Cancelled` / `NonBlockingError{error}` for LLM-driven Prompt/Agent paths
 - `HookLlmHandle` (trait) — async `evaluate_prompt` / `evaluate_agent` callbacks installed via `OrchestrationContext.llm_handle`; impl lives in `coco-query` to keep coco-hooks below the inference layer
 - `HookExecutionResult` — `CommandOutput{exit_code,stdout,stderr}` or `PromptText(String)`
 - `HookExecutionMeta`, `HookExecutionEvent` — progress display payloads
 - `HooksSettings` — deserialized config wrapper
-- `HookRegistry` — `register_deduped`, `find_matching[_with_if]`, `execute_hooks`, `mark_once_fired`, `register_for_agent(agent_id, hooks, is_agent)` (Stop→SubagentStop rewrite when `is_agent: true`), `clear_agent_scope`
+- `HookRegistry` — `register_deduped`, `find_matching[_with_if]`, `execute_hooks`, `mark_once_fired`, `register_for_agent(agent_id, hooks, is_agent)` (Stop→SubagentStop rewrite when `is_agent: true`), `clear_agent_scope`, `register_function_hook(id, event, matcher, timeout, predicate, error_message)` / `remove_function_hook(id)` / `find_matching_function_hooks(event, matcher)` / `function_hook_count()` for the in-memory `FunctionHook` overlay
 - `IfConditionContext` — tool name + content for `"Bash(git *)"`-style conditions
 - `PromptRequest` / `PromptResponse` / `PromptOption` — interactive hook prompts via stdout/stdin
 - `OrchestrationContext` — carries: `session_id`, `cwd`, `project_dir`, `permission_mode`, `transcript_path`, `agent_id`, `agent_type`, `cancel`, `disable_all_hooks`, `allow_managed_hooks_only`, `attachment_emitter`, `sync_event_sink`, `http_url_allowlist`, `http_env_var_policy`, `async_registry`, `llm_handle`
@@ -44,7 +45,7 @@ All take `&HookRegistry, &OrchestrationContext, ...` and return `AggregatedHookR
 | SessionStart | `execute_session_start` | `app/cli/session_runtime.rs`, `app/query/engine_compaction.rs` |
 | UserPromptSubmit | `execute_user_prompt_submit` | `app/cli/session_runtime.rs` |
 | SessionEnd | `execute_session_end` | `app/cli/session_runtime.rs` (`/clear`) |
-| Stop | `execute_stop` | `app/query/engine.rs` |
+| Stop | `execute_stop` (takes `history: &[Arc<Message>]` for `FunctionHookPredicate` dispatch) | `app/query/engine.rs` |
 | StopFailure | `execute_stop_failure` | `app/query/engine_session.rs` |
 | SubagentStart | `execute_subagent_start` | `coordinator/agent_handle/spawn.rs` |
 | SubagentStop | `execute_subagent_stop` | same |

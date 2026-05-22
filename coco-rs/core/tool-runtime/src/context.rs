@@ -70,13 +70,6 @@ pub struct ToolUseContext {
     /// command runs sandboxed and to obtain the per-command snapshot used
     /// by the shell executor.
     pub sandbox_state: Option<std::sync::Arc<coco_sandbox::SandboxState>>,
-    /// Producer-side handle to the inter-turn reminder mailbox. Tools
-    /// push event-driven reminder snapshots
-    /// (`structured_output`, `dynamic_skill`, etc.) here; the engine
-    /// drains the concrete [`coco_system_reminder::ReminderMailbox`]
-    /// at turn start. Defaults to a no-op for tests / SDK contexts
-    /// without an orchestrating engine.
-    pub reminder_mailbox: Arc<dyn coco_system_reminder::ReminderMailboxRef>,
     /// Resolved memory runtime configuration.
     pub memory_config: coco_config::MemoryConfig,
     /// Resolved shell runtime configuration. Consumed by Bash tool
@@ -601,7 +594,6 @@ impl ToolUseContext {
             tool_config: self.tool_config.clone(),
             sandbox_config: self.sandbox_config.clone(),
             sandbox_state: self.sandbox_state.clone(),
-            reminder_mailbox: self.reminder_mailbox.clone(),
             memory_config: self.memory_config.clone(),
             shell_config: self.shell_config.clone(),
             shell_provider: self.shell_provider.clone(),
@@ -778,7 +770,6 @@ impl ToolUseContext {
             tool_config: coco_config::ToolConfig::default(),
             sandbox_config: coco_config::SandboxSettings::default(),
             sandbox_state: None,
-            reminder_mailbox: coco_system_reminder::noop_reminder_mailbox(),
             memory_config: coco_config::MemoryConfig::default(),
             shell_config: coco_config::ShellConfig::default(),
             shell_provider: None,

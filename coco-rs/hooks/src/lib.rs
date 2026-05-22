@@ -4,6 +4,7 @@
 
 pub mod async_registry;
 mod error;
+pub mod function_hook;
 pub mod inputs;
 pub mod llm_handle;
 pub mod orchestration;
@@ -13,6 +14,10 @@ pub mod sync_hook_buffer;
 
 pub use error::HooksError;
 pub use error::Result;
+pub use function_hook::FUNCTION_HOOK_SUPPORTED_EVENTS;
+pub use function_hook::FunctionHook;
+pub use function_hook::FunctionHookPredicate;
+pub use function_hook::RegisterFunctionHookError;
 pub use llm_handle::HookEvaluationResult;
 pub use llm_handle::HookLlmHandle;
 pub use sync_hook_buffer::SyncHookEventBuffer;
@@ -179,6 +184,18 @@ pub struct HookRegistry {
     /// TS parity: `registerFrontmatterHooks(setAppState, agentId, ...)`
     /// + `clearSessionHooks(setAppState, agentId)`.
     agent_scoped: std::sync::RwLock<std::collections::HashMap<String, Vec<HookDefinition>>>,
+    /// In-memory function hooks (`type: 'function'` in TS). Registered
+    /// at session bootstrap via [`Self::register_function_hook`] and
+    /// dispatched by [`orchestration::execute_stop`] (and other events
+    /// that thread message history) in parallel with settings hooks.
+    ///
+    /// Stored separately from [`Self::hooks`] because [`FunctionHook`]
+    /// carries an `Arc<dyn FunctionHookPredicate>` which cannot be
+    /// `Serialize` / `Deserialize`'d — keeping them apart preserves
+    /// the settings-hook round-trip invariant.
+    ///
+    /// TS source: `AppState.sessionHooks` (`utils/hooks/sessionHooks.ts`).
+    function_hooks: std::sync::RwLock<Vec<FunctionHook>>,
 }
 
 impl HookRegistry {
@@ -301,6 +318,112 @@ impl HookRegistry {
         if let Ok(mut map) = self.agent_scoped.write() {
             map.remove(agent_id);
         }
+    }
+
+    /// Register an in-memory function hook.
+    ///
+    /// `id` is caller-supplied for stable removal — typically a
+    /// `uuid::Uuid::new_v4().to_string()` for one-shot registrations
+    /// or a stable token when the caller wants to update the hook by
+    /// re-registration. **Duplicate ids are rejected**: re-registering
+    /// the same id is a programmer error (silent duplicate would be
+    /// matched twice by lookup + nuked together by removal).
+    ///
+    /// `event` MUST be one of
+    /// [`FUNCTION_HOOK_SUPPORTED_EVENTS`](crate::FUNCTION_HOOK_SUPPORTED_EVENTS).
+    /// Unsupported events are rejected with
+    /// [`RegisterFunctionHookError::UnsupportedEvent`] because the
+    /// dispatch path for those events doesn't thread message history,
+    /// so the hook would persist but never fire.
+    ///
+    /// Returns the hook's id on success (same as the supplied id —
+    /// the return value exists for chaining and for parity with TS
+    /// `addFunctionHook(...).id`).
+    ///
+    /// TS parity: `addFunctionHook(setAppState, sessionId, event,
+    /// matcher, callback, errorMessage, options)` in
+    /// `utils/hooks/sessionHooks.ts:93`.
+    pub fn register_function_hook(
+        &self,
+        id: impl Into<String>,
+        event: HookEventType,
+        matcher: Option<String>,
+        timeout: std::time::Duration,
+        predicate: std::sync::Arc<dyn FunctionHookPredicate>,
+        error_message: impl Into<String>,
+    ) -> std::result::Result<String, RegisterFunctionHookError> {
+        if !FUNCTION_HOOK_SUPPORTED_EVENTS.contains(&event) {
+            return Err(RegisterFunctionHookError::UnsupportedEvent(event));
+        }
+        let id = id.into();
+        if let Ok(hooks) = self.function_hooks.read()
+            && hooks.iter().any(|h| h.id == id)
+        {
+            return Err(RegisterFunctionHookError::DuplicateId(id));
+        }
+        let hook = FunctionHook {
+            id: id.clone(),
+            event,
+            matcher,
+            timeout,
+            predicate,
+            error_message: error_message.into(),
+        };
+        if let Ok(mut hooks) = self.function_hooks.write() {
+            // Double-check under the write lock to close the
+            // read-then-write TOCTOU window.
+            if hooks.iter().any(|h| h.id == id) {
+                return Err(RegisterFunctionHookError::DuplicateId(id));
+            }
+            hooks.push(hook);
+        }
+        Ok(id)
+    }
+
+    /// Remove a previously-registered function hook by `id`. Returns
+    /// `true` when a hook was found and removed.
+    ///
+    /// TS parity: `removeFunctionHook(setAppState, sessionId, event,
+    /// hookId)` in `utils/hooks/sessionHooks.ts:120`. The TS API
+    /// requires `event` because TS stores hooks in a nested map keyed
+    /// by event; coco-rs flattens them, so the id alone is enough.
+    pub fn remove_function_hook(&self, id: &str) -> bool {
+        if let Ok(mut hooks) = self.function_hooks.write() {
+            let before = hooks.len();
+            hooks.retain(|h| h.id != id);
+            hooks.len() < before
+        } else {
+            false
+        }
+    }
+
+    /// Snapshot every function hook whose `event` matches and whose
+    /// `matcher` (if set) matches the supplied `match_value`. Returns
+    /// owned clones so the caller can drop the read lock immediately.
+    ///
+    /// Matcher semantics mirror [`Self::find_matching`]:
+    ///   - `matcher == None` matches any value
+    ///   - non-empty matcher runs the regex/glob fallback shared with
+    ///     settings hooks (see [`matcher_matches`]).
+    pub fn find_matching_function_hooks(
+        &self,
+        event: HookEventType,
+        match_value: Option<&str>,
+    ) -> Vec<FunctionHook> {
+        let Ok(hooks) = self.function_hooks.read() else {
+            return Vec::new();
+        };
+        hooks
+            .iter()
+            .filter(|h| h.event == event)
+            .filter(|h| matcher_matches(h.matcher.as_deref(), match_value))
+            .cloned()
+            .collect()
+    }
+
+    /// Total registered function hooks. Mainly for telemetry / tests.
+    pub fn function_hook_count(&self) -> usize {
+        self.function_hooks.read().map(|v| v.len()).unwrap_or(0)
     }
 
     /// Find hooks matching an event type and optional match value.

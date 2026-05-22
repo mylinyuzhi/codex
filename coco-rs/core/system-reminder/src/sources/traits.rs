@@ -85,6 +85,19 @@ pub trait TaskStatusSource: Send + Sync + Debug {
 pub trait SkillsSource: Send + Sync + Debug {
     async fn listing(&self, agent_id: Option<&str>) -> Option<String>;
     async fn invoked(&self, agent_id: Option<&str>) -> Vec<InvokedSkillEntry>;
+    async fn skill_discovery(
+        &self,
+        _user_input: &str,
+    ) -> Option<coco_types::SkillDiscoveryPayload> {
+        None
+    }
+    async fn load_dynamic_skill_dir(
+        &self,
+        _skill_dir: &std::path::Path,
+        _cwd: &std::path::Path,
+    ) -> Option<coco_types::DynamicSkillPayload> {
+        None
+    }
 }
 
 /// Source of MCP server state.

@@ -687,12 +687,17 @@ pub struct SessionRuntime {
     /// hot-reloads via `update_config` are seen everywhere.
     /// `None` when sandbox is disabled.
     sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
-    /// Inter-turn reminder mailbox shared with the engine. Producers
-    /// outside the tool path (slash commands, swarm coordinator, skill
-    /// loader) push event-driven reminder snapshots through
-    /// [`Self::reminder_mailbox_handle`]; the engine drains via
-    /// [`coco_system_reminder::ReminderMailbox::drain`].
-    reminder_mailbox: Arc<coco_system_reminder::ReminderMailbox>,
+    /// Session-scoped attachment channel. Producers outside the per-turn
+    /// engine (slash commands via the TUI, future swarm / skill / hook
+    /// forwarders) emit typed silent `AttachmentMessage`s through
+    /// [`Self::attachment_emitter`]; the engine drains the receiver at the
+    /// head of every outer-loop turn via
+    /// [`coco_query::QueryEngine::drain_attachment_inbox`]. Lives across
+    /// engine rebuilds so cross-turn producers see a stable handle.
+    session_attachment_tx: tokio::sync::mpsc::UnboundedSender<coco_messages::AttachmentMessage>,
+    session_attachment_rx: Arc<
+        tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<coco_messages::AttachmentMessage>>,
+    >,
     /// Session-scoped mid-turn command queue. The Rust analog of TS
     /// `utils/messageQueueManager.ts` module-level singleton: producers
     /// (the TUI-while-busy bridge in `tui_runner`, future task /
@@ -1081,13 +1086,15 @@ impl SessionRuntime {
         // an error and we exit before the REPL starts.
         let sandbox_state = build_sandbox_state(&runtime_config, &cwd)?;
 
-        // Single inter-turn reminder mailbox for the session. Engine
-        // owns the concrete type (drains it per turn);
-        // `ToolUseContext.reminder_mailbox` gets the type-erased handle
-        // for producer subsystems (slash commands, tools, skill loader,
-        // swarm coordinator). Closes the producer-wiring deferral
-        // documented in `audit-gaps.md` Round 13.
-        let reminder_mailbox = coco_system_reminder::ReminderMailbox::new();
+        // Session-scoped attachment channel. The engine drains the rx at
+        // the head of each turn (drain_attachment_inbox), while producers
+        // outside the per-turn engine (TUI slash commands, future swarm /
+        // skill forwarders) push via the cloned tx — see
+        // `Self::attachment_emitter`. One channel per session, threaded
+        // into each per-turn engine via `wire_engine`.
+        let (session_attachment_tx, session_attachment_rx) =
+            tokio::sync::mpsc::unbounded_channel::<coco_messages::AttachmentMessage>();
+        let session_attachment_rx = Arc::new(tokio::sync::Mutex::new(session_attachment_rx));
 
         // Bootstrap the per-source permission rule maps. Mirrors TS
         // `loadPermissionRules()`: parses every settings.json layer
@@ -1213,7 +1220,6 @@ impl SessionRuntime {
             features: Arc::new(runtime_config.features.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             include_hook_events: cli.include_hook_events,
-            reminder_mailbox: reminder_mailbox.clone(),
             ..Default::default()
         };
 
@@ -1380,7 +1386,8 @@ impl SessionRuntime {
             builtin_agent_catalog,
             agent_catalog,
             sdk_supplied_agents: Arc::new(RwLock::new(Vec::new())),
-            reminder_mailbox,
+            session_attachment_tx,
+            session_attachment_rx,
             transcript_store,
             transcript_dedup,
             tool_result_replacement_state,
@@ -1471,15 +1478,16 @@ impl SessionRuntime {
         self.agent_catalog.read().await.clone()
     }
 
-    /// Producer-only handle to the inter-turn reminder mailbox.
+    /// Session-scoped attachment emitter for producers outside the
+    /// per-turn engine (TUI slash commands, swarm forwarders, …).
     ///
-    /// Subsystems outside the per-tool-call code path (e.g. slash
-    /// command handlers, the swarm coordinator) push event-driven
-    /// reminder snapshots through this. The trait object hides
-    /// [`coco_system_reminder::ReminderMailbox::drain`], which is
-    /// engine-only.
-    pub fn reminder_mailbox_handle(&self) -> Arc<dyn coco_system_reminder::ReminderMailboxRef> {
-        self.reminder_mailbox.clone().handle()
+    /// Each `emit()` enqueues a typed `AttachmentMessage` (typically
+    /// silent-* variants) onto the session channel. The engine drains
+    /// at the head of each outer-loop turn via
+    /// [`coco_query::QueryEngine::drain_attachment_inbox`] so producers
+    /// don't need access to `MessageHistory`.
+    pub fn attachment_emitter(&self) -> coco_messages::AttachmentEmitter {
+        coco_messages::AttachmentEmitter::new(self.session_attachment_tx.clone())
     }
 
     /// The tool registry shared by every engine instance.
@@ -2001,6 +2009,15 @@ impl SessionRuntime {
         // `runtime.command_queue()` would land on an instance the
         // running engine cannot see.
         engine = engine.with_command_queue(self.command_queue.clone());
+        // Same lifetime argument as `with_command_queue`: the attachment
+        // channel must live across engine rebuilds so cross-turn
+        // producers (TUI slash commands, future swarm forwarders) see a
+        // stable handle. The engine's own per-instance attachment
+        // channel is replaced by the session-scoped one.
+        engine = engine.with_attachment_channel(
+            self.session_attachment_tx.clone(),
+            self.session_attachment_rx.clone(),
+        );
         if let Some(svc) = &self.session_memory_service {
             let sm_text_now = svc.current_text().await;
             engine = engine.with_session_memory_text(sm_text_now);

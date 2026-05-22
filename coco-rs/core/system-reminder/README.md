@@ -245,9 +245,9 @@ snapshot, even when the type is UI-only or not implemented by
 | TS id | Why |
 |---|---|
 | `context_efficiency` (HISTORY_SNIP) | TS snip-compact nudge behind `feature('HISTORY_SNIP')`; port only if coco-rs ships the matching snip runtime/tool. |
-| `skill_discovery` | TS `EXPERIMENTAL_SKILL_SEARCH` feature-gated and rendered outside the `switch`; port when the feature lands. |
+| `skill_discovery` | Ported as the only audit-add model-visible reminder. Controlled by `system_reminder.attachments.skill_discovery`, not a `Feature`, because coco-rs uses config for skills. |
 | `security_guidelines` | Zero matches in TS — cocode-rs Phase-2 invention, not TS-sourced. |
-| `hook_cancelled` / `hook_error_during_execution` / `hook_non_blocking_error` / `hook_permission_decision` / `hook_system_message` / `structured_output` / `dynamic_skill` / `bagel_console` / `command_permissions` | TS `return []` in `normalizeAttachmentForAPI` — silent / UI-only, produce zero API text. |
+| `hook_cancelled` / `hook_error_during_execution` / `hook_non_blocking_error` / `hook_permission_decision` / `hook_system_message` / `structured_output` / `dynamic_skill` / `bagel_console` / `command_permissions` | TS `return []` in `normalizeAttachmentForAPI` — API-hidden typed events, produce zero API text. |
 | `max_turns_reached` / `current_session_memory` / `teammate_shutdown_batch` | TS runtime/UI bookkeeping. They are in the TS `Attachment` union, but `normalizeAttachmentForAPI()` has no API-text case for them in this snapshot. |
 | `image` | Content block subtype, not a reminder attachment. |
 

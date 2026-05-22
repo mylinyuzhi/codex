@@ -65,23 +65,16 @@ fn coverage_distribution_matches_readme_snapshot() {
             Coverage::RuntimeBookkeeping { .. } => runtime += 1,
         }
     }
-    // Snapshot after audit-add (May 2026): 8 kinds previously categorised
-    // as SilentEvent (3) / FeatureGated (2) / RuntimeBookkeeping (3) were
-    // ported as in-crate `SilentReminder` generators (TS-parity: bodies
-    // are `is_api_visible=false`, so the model still doesn't see them,
-    // but the system-reminder crate now owns the UI/transcript path).
-    assert_eq!(reminder, 38, "in-crate reminders");
-    assert_eq!(
-        silent_reminder, 10,
-        "in-crate silent reminders (Part 1=2 + audit-add=8)"
-    );
+    // Snapshot after TS-parity reminder split (May 2026): skill_discovery
+    // is the only audit-add kind owned by the model-visible reminder path;
+    // API-hidden audit-add kinds are typed silent events or inactive runtime
+    // bookkeeping.
+    assert_eq!(reminder, 39, "in-crate reminders");
+    assert_eq!(silent_reminder, 2, "in-crate silent reminders");
     assert_eq!(outside, 6, "owned by sister crates");
-    assert_eq!(silent_event, 5, "UI/telemetry owned elsewhere (post-audit)");
-    assert_eq!(
-        feature_gated, 0,
-        "audit-add ported the two feature-gated kinds"
-    );
-    assert_eq!(runtime, 1, "BagelConsole only");
+    assert_eq!(silent_event, 9, "typed API-hidden events");
+    assert_eq!(feature_gated, 1, "HISTORY_SNIP intentionally unported");
+    assert_eq!(runtime, 3, "inactive runtime bookkeeping");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
         60,
@@ -160,7 +153,7 @@ fn renders_in_transcript_matches_ts_null_rendering_list_exact() {
 /// returns `[]` unconditionally must return `is_api_visible() == false`
 /// in coco-rs. Mirrors `utils/messages.ts:4250-4261` + early-return cases
 /// (`dynamic_skill`) + case-less variants that fall through to the
-/// default `return []` (skill_discovery / max_turns_reached / etc.).
+/// default `return []` (`max_turns_reached` / etc.).
 #[test]
 fn is_api_visible_matches_ts_normalize_attachment_for_api_returns_empty() {
     let ts_api_hidden = [
@@ -179,7 +172,6 @@ fn is_api_visible_matches_ts_normalize_attachment_for_api_returns_empty() {
         // Feature-gated off by default in external builds →
         // `normalizeAttachmentForAPI` returns `[]`.
         AttachmentKind::ContextEfficiency,
-        AttachmentKind::SkillDiscovery,
         // Variants with no `case` — fall through to `logAntError + return []`.
         AttachmentKind::MaxTurnsReached,
         AttachmentKind::CurrentSessionMemory,
@@ -191,6 +183,44 @@ fn is_api_visible_matches_ts_normalize_attachment_for_api_returns_empty() {
             !k.is_api_visible(),
             "TS API-hidden kind {k:?} must return is_api_visible() == false; \
              did TS upstream change or Rust predicate drift?"
+        );
+    }
+}
+
+#[test]
+fn sdk_consumption_matches_ts_query_engine_special_cases() {
+    // TS `QueryEngine.ts` has attachment branches for:
+    // - `structured_output` -> final SDK result `structured_output`
+    // - `max_turns_reached` -> terminal `error_max_turns` result
+    // - `queued_command` -> SDK user replay when replay mode is enabled
+    assert_eq!(
+        AttachmentKind::StructuredOutput.sdk_consumption(),
+        SdkConsumption::ResultField {
+            field: "structured_output"
+        }
+    );
+    assert_eq!(
+        AttachmentKind::MaxTurnsReached.sdk_consumption(),
+        SdkConsumption::TerminalResult {
+            subtype: "error_max_turns"
+        }
+    );
+    assert_eq!(
+        AttachmentKind::QueuedCommand.sdk_consumption(),
+        SdkConsumption::ReplayUserMessage
+    );
+
+    for k in AttachmentKind::all() {
+        let expected = matches!(
+            k,
+            AttachmentKind::StructuredOutput
+                | AttachmentKind::MaxTurnsReached
+                | AttachmentKind::QueuedCommand
+        );
+        assert_eq!(
+            k.is_sdk_consumed(),
+            expected,
+            "SDK consumption drift for {k:?}"
         );
     }
 }

@@ -526,6 +526,29 @@ impl QueryEngine {
         coco_messages::AttachmentEmitter::new(self.attachment_tx.clone())
     }
 
+    /// Replace the engine's per-instance attachment channel with a
+    /// session-scoped one supplied by the caller (typically `SessionRuntime`).
+    ///
+    /// Required for producers that live across engine rebuilds — the
+    /// TUI's slash-command handler holds an
+    /// [`coco_messages::AttachmentEmitter`] from before the turn started,
+    /// and the engine must drain from the same channel that emitter wrote
+    /// to. Without this, a slash-command-emitted attachment would land in
+    /// a stale `attachment_rx` that no engine ever drains.
+    pub fn with_attachment_channel(
+        mut self,
+        tx: tokio::sync::mpsc::UnboundedSender<coco_messages::AttachmentMessage>,
+        rx: Arc<
+            tokio::sync::Mutex<
+                tokio::sync::mpsc::UnboundedReceiver<coco_messages::AttachmentMessage>,
+            >,
+        >,
+    ) -> Self {
+        self.attachment_tx = tx;
+        self.attachment_rx = rx;
+        self
+    }
+
     /// Drain any silent attachments emitted since the last turn into
     /// `history`. Called at the head of each outer-loop iteration.
     /// Returns the number of drained attachments for telemetry.

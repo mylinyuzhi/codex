@@ -24,6 +24,7 @@ pub mod shell_cwd;
 pub mod shell_render;
 pub mod shell_tools;
 pub mod skill_advanced;
+pub mod structured_output;
 pub mod task_tools;
 pub mod tool_search;
 pub mod verify_plan_execution;
@@ -98,7 +99,11 @@ pub use scheduling::RemoteTriggerTool;
 pub use shell_tools::PowerShellTool;
 pub use shell_tools::ReplTool;
 pub use shell_tools::SleepTool;
-pub use shell_tools::SyntheticOutputTool;
+
+// Synthetic (1) — `StructuredOutputTool` is conditionally registered
+// (non-interactive sessions with `--json-schema`); see
+// `crate::register_structured_output_tool`.
+pub use structured_output::StructuredOutputTool;
 
 #[cfg(test)]
 #[path = "mod.test.rs"]

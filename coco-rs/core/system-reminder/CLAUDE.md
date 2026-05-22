@@ -17,7 +17,8 @@ Crate layout mirrors `cocode-rs/core/system-reminder/` (same file names, same pu
 
 ## Key Types
 
-- `AttachmentType` — **42 generator variants** (40 model-visible + 2 silent/display-only), mapped to TS `Attachment.type` discriminators or coco-rs synthetic grouping keys. Grouped by port phase:
+- `AttachmentType` — generator variants mapped to TS `Attachment.type`
+  discriminators or coco-rs synthetic grouping keys. Grouped by port phase:
   - **Phase A/B/C (11)**: plan-mode trio (`plan_mode` / `plan_mode_exit` / `plan_mode_reentry`), auto-mode pair (`auto_mode` / `auto_mode_exit`), todo/task pair (`todo_reminder` / `task_reminder`), `critical_system_reminder`, `compaction_reminder`, `date_change`, `verify_plan_reminder`.
   - **Phase 1 engine-local (5)**: `ultrathink_effort` / `token_usage` / `budget_usd` / `output_token_usage` / `companion_intro`.
   - **Phase 2 history-diff (3)**: `deferred_tools_delta` / `agent_listing_delta` / `mcp_instructions_delta`.
@@ -25,8 +26,13 @@ Crate layout mirrors `cocode-rs/core/system-reminder/` (same file names, same pu
   - **Phase 4 user-input (3, UserPrompt tier)**: `at_mentioned_files` / `mcp_resources` / `agent_mentions`.
   - **Main-thread IDE (2)**: `ide_selection` / `ide_opened_file`.
   - **Silent native (2)**: `already_read_file` / `edited_image_file`.
-  - **Audit-add (8) — TS-parity reminders ported per audit (May 2026)**: `max_turns_reached` / `current_session_memory` / `command_permissions` / `dynamic_skill` / `skill_discovery` / `structured_output` / `teammate_shutdown_batch` / `context_efficiency`. Generators are registered; some return `None` until their upstream snapshot data lands (see per-generator doc comments).
-  - Total: 11 + 5 + 3 + 14 + 3 + 2 + 2 + 8 = **48** variants. The earlier "42" total reflected only the originally-ported set; the parity test `all_attachment_type_variants_have_default_generator` enforces full coverage.
+  - **Audit-add TS parity (May 2026)**: only `skill_discovery` is a
+    model-visible generator. API-hidden TS events (`command_permissions`,
+    `dynamic_skill`, `structured_output`, `max_turns_reached`,
+    `teammate_shutdown_batch`) are emitted by their owning crates through
+    typed `AttachmentMessage` history events. `current_session_memory` is
+    type-only in the scanned TS snapshot; session memory is consumed through
+    the memory/compact provider path, not a reminder generator.
   - `AttachmentType::all()` returns the full catalog.
 - `ReminderTier` — `Core` (all agents / TS all-thread batch), `MainAgentOnly` (main-thread batch), `UserPrompt` (only when user input is present). Maps to TS's three attachment batches in `getAttachments`.
 - `XmlTag` — `SystemReminder` = `<system-reminder>`, `None` = raw.

@@ -87,7 +87,7 @@ impl<'a> HookController<'a> {
             Ok(agg) if agg.is_blocked() => {
                 let output = agg.blocking_error.as_ref().map_or_else(
                     || "PreToolUse hook blocked tool execution".to_string(),
-                    |err| orchestration::format_pre_tool_blocking_message(&err.command, err),
+                    |err| orchestration::format_pre_tool_blocking_message(err.command(), err),
                 );
                 warn!(
                     tool = tool_call.tool_name,

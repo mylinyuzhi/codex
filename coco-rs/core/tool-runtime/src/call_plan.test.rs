@@ -29,6 +29,7 @@ fn test_stamp_assigns_completion_seq_and_copies_fields() {
         error_kind: None,
         permission_denial: None,
         prevent_continuation: None,
+        structured_output: None,
         effects: ToolSideEffects::none(),
     };
     let (stamped, _effects) = unstamped.stamp_and_extract_effects(/*seq*/ 7);
@@ -59,6 +60,7 @@ fn test_stamp_splits_app_state_patch_into_side_effects() {
         error_kind: None,
         permission_denial: None,
         prevent_continuation: None,
+        structured_output: None,
         effects: ToolSideEffects {
             app_state_patch: Some(Box::new(|state| {
                 state.plan_mode_attachment_count = 42;
@@ -90,6 +92,7 @@ fn test_into_parts_consumes_outcome() {
         error_kind: None,
         permission_denial: None,
         prevent_continuation: Some("stop reason".into()),
+        structured_output: None,
         effects: ToolSideEffects::none(),
     };
     let (stamped, _) = unstamped.stamp_and_extract_effects(3);
@@ -163,6 +166,7 @@ fn test_early_outcome_plan_can_wrap_unstamped_outcome() {
         error_kind: Some(ToolCallErrorKind::UnknownTool),
         permission_denial: None,
         prevent_continuation: None,
+        structured_output: None,
         effects: ToolSideEffects::none(),
     });
     match plan {

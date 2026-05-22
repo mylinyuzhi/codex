@@ -169,72 +169,9 @@ impl Tool for ReplTool {
     }
 }
 
-// ── SyntheticOutputTool ──
-
-/// Typed input for [`SyntheticOutputTool`]. The single `output` field
-/// is what the tool echoes back verbatim.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-pub struct SyntheticOutputInput {
-    /// Output text to emit
-    #[serde(default)]
-    pub output: String,
-}
-
-pub struct SyntheticOutputTool;
-
-#[async_trait::async_trait]
-impl Tool for SyntheticOutputTool {
-    type Input = SyntheticOutputInput;
-    /// Output is the raw echo string — `render_for_model` emits it
-    /// unwrapped so SDK consumers see the verbatim text rather than a
-    /// JSON-quoted envelope.
-    type Output = String;
-
-    fn id(&self) -> ToolId {
-        ToolId::Builtin(ToolName::SyntheticOutput)
-    }
-    fn name(&self) -> &str {
-        ToolName::SyntheticOutput.as_str()
-    }
-    fn description(&self, _input: &SyntheticOutputInput, _options: &DescriptionOptions) -> String {
-        "Emit synthetic output for SDK integrations. Returns the provided output text directly."
-            .into()
-    }
-    fn is_read_only(&self, _input: &SyntheticOutputInput) -> bool {
-        true
-    }
-    fn is_always_read_only(&self) -> bool {
-        true
-    }
-    fn is_concurrency_safe(&self, _input: &SyntheticOutputInput) -> bool {
-        true
-    }
-    fn should_defer(&self) -> bool {
-        true
-    }
-    fn search_hint(&self) -> Option<&str> {
-        Some("emit synthetic output for SDK integration scenarios")
-    }
-
-    /// `out` is the verbatim output string — emit unwrapped to avoid
-    /// JSON escaping the raw text.
-    fn render_for_model(&self, out: &String) -> Vec<ToolResultContentPart> {
-        vec![ToolResultContentPart::Text {
-            text: out.clone(),
-            provider_options: None,
-        }]
-    }
-
-    async fn execute(
-        &self,
-        input: SyntheticOutputInput,
-        _ctx: &ToolUseContext,
-    ) -> Result<ToolResult<String>, ToolError> {
-        Ok(ToolResult {
-            data: input.output,
-            new_messages: vec![],
-            app_state_patch: None,
-            permission_updates: Vec::new(),
-        })
-    }
-}
+// `StructuredOutputTool` lives in `tools/structured_output.rs` because
+// it needs a compiled `jsonschema::Validator` at construction time and
+// is conditionally registered (only in non-interactive sessions when
+// `--json-schema` is supplied) — it doesn't ride the same always-on
+// registration path as the rest of this module.
+pub use super::structured_output::StructuredOutputTool;
