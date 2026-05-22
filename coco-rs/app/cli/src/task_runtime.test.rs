@@ -785,14 +785,13 @@ async fn register_dream_task_supports_kill_via_cancel_token() {
 
 // ── W4: complete_silent contract (sync agent path) ──────────────────
 
-/// W4: `complete_silent` removes an undetached foreground task after
-/// broadcasting terminal status, and does NOT push a
-/// `<task-notification>` envelope. Used by the sync
-/// AgentTool path where the result returns to the parent tool call
-/// directly — pushing a queued notification would double-inform the
-/// model. Mirrors TS sync-path behavior (no `enqueueAgentNotification`).
+/// W4: `complete_silent` flips an undetached foreground task to a
+/// terminal status without pushing a `<task-notification>`. The row
+/// stays in the manager so the panel-grace sweep
+/// (TS `framework.ts:evictTerminalTask`) can evict it later; eager
+/// removal would drop the row before the 30s grace window.
 #[tokio::test]
-async fn complete_silent_removes_foreground_task_without_notification() {
+async fn complete_silent_marks_foreground_terminal_without_notification() {
     let sink = CapturingSink::default();
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
@@ -808,9 +807,14 @@ async fn complete_silent_removes_foreground_task_without_notification() {
 
     rt.complete_silent(&task_id, true).await;
 
+    let state = rt
+        .get_task_status(&task_id)
+        .await
+        .expect("row must survive complete_silent; sweep evicts later");
+    assert_eq!(state.status, TaskStatus::Completed);
     assert!(
-        rt.get_task_status(&task_id).await.is_err(),
-        "foreground sync task should be unregistered after silent completion"
+        !state.is_backgrounded(),
+        "complete_silent must not flip foreground tasks into backgrounded state"
     );
     let captured = captured.lock().await;
     assert!(
@@ -821,7 +825,7 @@ async fn complete_silent_removes_foreground_task_without_notification() {
 }
 
 #[tokio::test]
-async fn complete_silent_failed_path() {
+async fn complete_silent_marks_foreground_failed_without_notification() {
     let sink = CapturingSink::default();
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
@@ -837,10 +841,12 @@ async fn complete_silent_failed_path() {
 
     rt.complete_silent(&task_id, false).await;
 
-    assert!(
-        rt.get_task_status(&task_id).await.is_err(),
-        "foreground sync task should be unregistered after silent failure"
-    );
+    let state = rt
+        .get_task_status(&task_id)
+        .await
+        .expect("row must survive complete_silent; sweep evicts later");
+    assert_eq!(state.status, TaskStatus::Failed);
+    assert!(!state.is_backgrounded());
     assert!(captured.lock().await.is_empty());
 }
 
