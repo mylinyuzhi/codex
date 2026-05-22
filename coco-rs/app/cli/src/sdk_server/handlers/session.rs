@@ -441,6 +441,9 @@ async fn accumulate_session_result(
     if params.result.is_some() {
         s.last_result_text = params.result.clone();
     }
+    if params.structured_output.is_some() {
+        s.structured_output = params.structured_output.clone();
+    }
     s.last_stop_reason = Some(params.stop_reason.clone());
     if params.is_error {
         s.had_error = true;
@@ -643,7 +646,11 @@ fn build_aggregated_session_result(session: &SessionHandle) -> coco_types::Sessi
         permission_denials: stats.permission_denials.clone(),
         result: stats.last_result_text.clone(),
         errors: stats.errors.clone(),
-        structured_output: None,
+        structured_output: if stats.had_error {
+            None
+        } else {
+            stats.structured_output.clone()
+        },
         fast_mode_state: None,
         num_api_calls: if stats.num_api_calls > 0 {
             Some(stats.num_api_calls)

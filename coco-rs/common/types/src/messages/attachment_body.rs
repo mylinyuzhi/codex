@@ -37,6 +37,20 @@ pub enum AttachmentBody {
     Unit,
 }
 
+/// Typed structured extras carried alongside an [`AttachmentBody::Api`] body.
+///
+/// Used for kinds that surface both a rendered model-visible prompt
+/// **and** a structured payload that downstream consumers (transcript
+/// persistence, SDK observers, telemetry) want preserved verbatim.
+/// `body` carries the rendered prompt; `extras` carries the
+/// derived-from-structure original data.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AttachmentExtras {
+    SkillDiscovery(SkillDiscoveryPayload),
+}
+
 // ─── Silent payloads (one per silent AttachmentKind) ────────────────────
 
 /// Typed payload for silent attachment kinds.
@@ -50,7 +64,7 @@ pub enum AttachmentBody {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SilentPayload {
-    // ── Silent events (Coverage::SilentEvent — 8 variants) ──
+    // ── Silent events (Coverage::SilentEvent) ──
     HookCancelled(HookCancelledPayload),
     HookErrorDuringExecution(HookErrorDuringExecutionPayload),
     HookNonBlockingError(HookNonBlockingErrorPayload),
@@ -59,6 +73,7 @@ pub enum SilentPayload {
     CommandPermissions(CommandPermissionsPayload),
     StructuredOutput(StructuredOutputPayload),
     DynamicSkill(DynamicSkillPayload),
+    MaxTurnsReached(MaxTurnsReachedPayload),
 
     // ── Silent reminders (Coverage::SilentReminder — in-crate) ──
     AlreadyReadFile(AlreadyReadFilePayload),
@@ -131,6 +146,7 @@ pub enum HookPermissionDecision {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct CommandPermissionsPayload {
+    #[serde(rename = "allowedTools")]
     pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -141,8 +157,6 @@ pub struct CommandPermissionsPayload {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StructuredOutputPayload {
-    pub tool_name: String,
-    pub tool_use_id: String,
     pub data: serde_json::Value,
 }
 
@@ -150,8 +164,50 @@ pub struct StructuredOutputPayload {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DynamicSkillPayload {
-    pub skill_name: String,
-    pub path: String,
+    #[serde(rename = "skillDir")]
+    pub skill_dir: String,
+    #[serde(rename = "skillNames")]
+    pub skill_names: Vec<String>,
+    #[serde(rename = "displayPath")]
+    pub display_path: String,
+}
+
+/// TS parity: `skill_discovery` (`utils/attachments.ts:538-542`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SkillDiscoveryPayload {
+    pub skills: Vec<SkillDiscoverySkill>,
+    pub signal: String,
+    pub source: SkillDiscoverySource,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillDiscoverySource {
+    #[default]
+    Native,
+    Aki,
+    Both,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SkillDiscoverySkill {
+    pub name: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "shortId")]
+    pub short_id: Option<String>,
+}
+
+/// TS parity: `max_turns_reached` (`query.ts:1508`, `query.ts:1707`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MaxTurnsReachedPayload {
+    #[serde(rename = "maxTurns")]
+    pub max_turns: i32,
+    #[serde(rename = "turnCount")]
+    pub turn_count: i32,
 }
 
 /// TS parity: `AlreadyReadFileAttachment` (`utils/attachments.ts:323-333`).

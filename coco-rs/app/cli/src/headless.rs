@@ -375,6 +375,98 @@ pub fn resolve_startup_permission_state(
 }
 
 /// Reject requesting bypass when the host is not a sandbox.
+/// Parse `--json-schema` (if set) and register the synthetic
+/// `StructuredOutput` tool against `registry` + a matching Stop
+/// function hook on `hook_registry`.
+///
+/// TS parity: `main.tsx:1879-1901` plus
+/// `registerStructuredOutputEnforcement` (`hookHelpers.ts:70-83`).
+/// Only the non-interactive bootstrap (headless print mode / SDK
+/// NDJSON) calls this; TUI must not, by design — the tool is excluded
+/// from `register_all_tools` and only installed through this helper.
+///
+/// Returns `Ok(true)` when the flag was set and both the tool and
+/// Stop hook were registered. Returns `Ok(false)` when the flag was
+/// absent (caller proceeds without structured output). Returns
+/// `Err(_)` when:
+///   - `--json-schema` is not valid JSON
+///   - the parsed value fails JSON-Schema meta-validation
+///   - the Stop function hook fails to register (programmer error —
+///     duplicate id, unsupported event)
+///
+/// TS logs `tengu_structured_output_failure` for the first two; coco-rs
+/// surfaces the failure to the operator instead of silently continuing
+/// without schema enforcement.
+pub fn inject_structured_output_tool_if_requested(
+    cli: &Cli,
+    registry: &ToolRegistry,
+    hook_registry: &coco_hooks::HookRegistry,
+) -> Result<bool> {
+    let Some(raw) = cli.json_schema.as_deref() else {
+        return Ok(false);
+    };
+    let schema: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|e| anyhow::anyhow!("--json-schema is not valid JSON: {e}"))?;
+    coco_tools::register_structured_output_tool(registry, schema)
+        .map_err(|e| anyhow::anyhow!("--json-schema rejected: {e}"))?;
+
+    // TS parity: `registerStructuredOutputEnforcement`
+    // (`hookHelpers.ts:70-83`). Block the model from ending its turn
+    // until it has pushed at least one valid `StructuredOutput`
+    // attachment into history. Coco-rs uses the typed AttachmentKind
+    // directly instead of a fragile `hasSuccessfulToolCall(name)` scan.
+    hook_registry
+        .register_function_hook(
+            format!("structured-output-enforcement-{}", uuid::Uuid::new_v4()),
+            coco_types::HookEventType::Stop,
+            None,
+            std::time::Duration::from_millis(5_000),
+            std::sync::Arc::new(StructuredOutputEnforcement),
+            format!(
+                "You MUST call the {} tool to complete this request. Call this tool now.",
+                coco_types::ToolName::StructuredOutput.as_str()
+            ),
+        )
+        .map_err(|e| anyhow::anyhow!("failed to register StructuredOutput Stop hook: {e}"))?;
+
+    tracing::info!(
+        target: "coco_cli::headless",
+        "registered StructuredOutput tool + Stop enforcement hook from --json-schema"
+    );
+    Ok(true)
+}
+
+/// [`coco_hooks::FunctionHookPredicate`] impl for the TS-parity
+/// `StructuredOutput` Stop enforcement. Returns `true` when history
+/// already contains a successful `StructuredOutput` tool call (the
+/// silent attachment is only pushed on schema-conforming input, per
+/// `StructuredOutputTool::execute`).
+#[derive(Debug)]
+struct StructuredOutputEnforcement;
+
+impl coco_hooks::FunctionHookPredicate for StructuredOutputEnforcement {
+    fn evaluate(&self, messages: &[std::sync::Arc<coco_messages::Message>]) -> bool {
+        use coco_messages::AttachmentBody;
+        use coco_messages::Message;
+        use coco_messages::SilentPayload;
+        use coco_types::AttachmentKind;
+        messages.iter().any(|m| match m.as_ref() {
+            Message::Attachment(att) => {
+                att.kind == AttachmentKind::StructuredOutput
+                    && matches!(
+                        &att.body,
+                        AttachmentBody::Silent(SilentPayload::StructuredOutput(_))
+                    )
+            }
+            _ => false,
+        })
+    }
+
+    fn name(&self) -> &str {
+        "StructuredOutputEnforcement"
+    }
+}
+
 fn enforce_dangerous_skip_safety(requesting_bypass: bool) -> Result<()> {
     if !requesting_bypass {
         return Ok(());
@@ -591,6 +683,21 @@ pub async fn run_chat_with_options(
 
     let registry = ToolRegistry::new();
     coco_tools::register_all_tools(&registry);
+
+    // Headless doesn't load settings hooks yet (TS handles those via
+    // `runHeadless`'s settings loader; coco-rs's headless path skips
+    // them for now). We still need an in-memory `HookRegistry` so the
+    // `StructuredOutput` Stop function hook can register against it.
+    // Once headless hook loading lands, swap this for the shared
+    // registry built at session bootstrap.
+    let hook_registry = Arc::new(coco_hooks::HookRegistry::new());
+
+    // Conditional `StructuredOutput` tool injection + Stop hook
+    // registration. TS-parity: `main.tsx:1879-1901` plus
+    // `registerStructuredOutputEnforcement(setAppState, sessionId)`.
+    // TUI never reaches this code path (matches TS
+    // `isNonInteractiveSession` gate).
+    inject_structured_output_tool_if_requested(cli, &registry, &hook_registry)?;
     let tool_count = registry.len();
     let tools = Arc::new(registry);
     let cancel = opts.cancel.unwrap_or_default();
@@ -704,7 +811,7 @@ pub async fn run_chat_with_options(
     let file_read_state = Arc::new(tokio::sync::RwLock::new(coco_context::FileReadState::new()));
 
     let session_id_for_engine = config.session_id.clone();
-    let mut engine = QueryEngine::new(config, client, tools, cancel, /*hooks*/ None)
+    let mut engine = QueryEngine::new(config, client, tools, cancel, Some(hook_registry))
         .with_fallback_clients(fallback_clients)
         .with_file_read_state(file_read_state.clone());
     if let Some(policy) = recovery_policy {

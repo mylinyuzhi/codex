@@ -79,11 +79,43 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(CronListTool));
     registry.register(Arc::new(RemoteTriggerTool));
 
-    // Shell (4)
+    // Shell (3)
     registry.register(Arc::new(PowerShellTool));
     registry.register(Arc::new(ReplTool));
     registry.register(Arc::new(SleepTool));
-    registry.register(Arc::new(SyntheticOutputTool));
+
+    // `StructuredOutputTool` is **intentionally excluded** from the
+    // default base set. Mirrors TS `tools.ts:300-307` where the name is
+    // in `specialTools` and filtered out of `getAllBaseTools()`; the
+    // only entry-point is the explicit injection in non-interactive
+    // bootstrap paths via [`register_structured_output_tool`].
+}
+
+/// Register the `StructuredOutput` synthetic tool with a user-supplied
+/// JSON schema.
+///
+/// Mirrors TS `main.tsx:1879-1901`: only the non-interactive bootstrap
+/// paths (headless print mode, SDK NDJSON) call this after parsing
+/// `--json-schema`. TUI never reaches it — `tui_runner` never invokes
+/// this function, and the tool is absent from
+/// [`register_all_tools`] so interactive sessions never see it.
+///
+/// Returns the parsed/compiled tool's reference so callers can install
+/// matching Stop-hook enforcement (TS
+/// `registerStructuredOutputEnforcement` lives at the same call site).
+///
+/// Errors are propagated as `String` (Ajv-equivalent: invalid schema
+/// shape, unsupported keyword, …). TS `createSyntheticOutputTool`
+/// returns `{error}` in the same shape; coco-rs leaves it to the caller
+/// to log + decide whether to abort the run.
+pub fn register_structured_output_tool(
+    registry: &coco_tool_runtime::ToolRegistry,
+    schema: serde_json::Value,
+) -> Result<std::sync::Arc<StructuredOutputTool>, String> {
+    use std::sync::Arc;
+    let tool = Arc::new(StructuredOutputTool::new(schema)?);
+    registry.register(tool.clone());
+    Ok(tool)
 }
 
 /// Register MCP server tools as dynamic McpTool wrappers.

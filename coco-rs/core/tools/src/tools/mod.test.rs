@@ -8,10 +8,14 @@ use std::collections::HashSet;
 fn test_register_all_tools_count() {
     let registry = ToolRegistry::new();
     crate::register_all_tools(&registry);
-    // 43 = 42 baseline + ApplyPatchTool (gated to gpt-5 family via
+    // 42 = 41 baseline + ApplyPatchTool (gated to gpt-5 family via
     // ToolOverrides; registered universally so the layer-2 filter
     // can surface it when the model declares it as extra).
-    assert_eq!(registry.len(), 43, "expected 43 tools registered");
+    // `StructuredOutputTool` is intentionally **not** in the baseline:
+    // it's conditionally injected via `register_structured_output_tool`
+    // only when the non-interactive bootstrap parses `--json-schema`
+    // (TS parity: `tools.ts` `specialTools` excludes it).
+    assert_eq!(registry.len(), 42, "expected 42 tools registered");
 }
 
 #[test]

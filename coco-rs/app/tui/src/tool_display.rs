@@ -89,7 +89,7 @@ pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
         | ToolName::McpAuth
         | ToolName::Brief
         | ToolName::Sleep
-        | ToolName::SyntheticOutput => ToolNameTone::Utility,
+        | ToolName::StructuredOutput => ToolNameTone::Utility,
     }
 }
 

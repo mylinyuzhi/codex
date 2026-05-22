@@ -37,14 +37,7 @@ pub mod verify_plan;
 
 pub use agent_listing_delta::AgentListingDeltaGenerator;
 pub use already_read_file::AlreadyReadFileGenerator;
-pub use audit_add::CommandPermissionsGenerator;
-pub use audit_add::ContextEfficiencyGenerator;
-pub use audit_add::CurrentSessionMemoryGenerator;
-pub use audit_add::DynamicSkillGenerator;
-pub use audit_add::MaxTurnsReachedGenerator;
 pub use audit_add::SkillDiscoveryGenerator;
-pub use audit_add::StructuredOutputGenerator;
-pub use audit_add::TeammateShutdownBatchGenerator;
 pub use auto_mode::AutoModeExitGenerator;
 pub use auto_mode_enter::AutoModeEnterGenerator;
 pub use budget_usd::BudgetUsdGenerator;

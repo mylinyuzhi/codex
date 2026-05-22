@@ -1386,49 +1386,38 @@ async fn run_agent_driver(
                         }
                     }
 
-                    // Mirror `dispatch_permissions_mutation`
-                    // (`/permissions allow|deny|reset`) and push a
-                    // `command_permissions` system-reminder so the
-                    // next turn's prompt informs the model that the
-                    // permission ruleset changed. Without this, a
-                    // dialog "Always Allow Bash" would silently take
-                    // effect — the slash-command path already does
-                    // this for symmetry.
-                    let mailbox = runtime.reminder_mailbox_handle();
+                    // TS `command_permissions` carries command-scoped
+                    // allowed tools. Do not encode deny/ask/reset events
+                    // as `allowedTools`. TS parity:
+                    // `processSlashCommand.tsx:909` emits one
+                    // `command_permissions` attachment per slash-command
+                    // invocation — event-stream semantics, not a snapshot.
+                    let mut allowed_tools = Vec::new();
                     for update in &permission_updates {
                         if let coco_types::PermissionUpdate::AddRules { rules, destination } =
                             update
                         {
                             for rule in rules {
-                                let scope = match destination {
-                                    coco_types::PermissionUpdateDestination::Session => {
-                                        "session scope"
-                                    }
-                                    coco_types::PermissionUpdateDestination::UserSettings => {
-                                        "user settings"
-                                    }
-                                    coco_types::PermissionUpdateDestination::ProjectSettings => {
-                                        "project settings"
-                                    }
-                                    coco_types::PermissionUpdateDestination::LocalSettings => {
-                                        "local settings"
-                                    }
-                                    coco_types::PermissionUpdateDestination::CliArg => "CLI flag",
-                                    coco_types::PermissionUpdateDestination::Command => {
-                                        "command scope"
-                                    }
-                                };
-                                let behavior = match rule.behavior {
-                                    coco_types::PermissionBehavior::Allow => "allow",
-                                    coco_types::PermissionBehavior::Deny => "deny",
-                                    coco_types::PermissionBehavior::Ask => "ask",
-                                };
-                                mailbox.put_command_permissions(format!(
-                                    "Permission rule added: {behavior} `{tool}` ({scope}).",
-                                    tool = rule.value.tool_pattern,
-                                ));
+                                if matches!(
+                                    destination,
+                                    coco_types::PermissionUpdateDestination::Command
+                                ) && rule.behavior == coco_types::PermissionBehavior::Allow
+                                {
+                                    allowed_tools.push(rule.value.tool_pattern.clone());
+                                }
                             }
                         }
+                    }
+                    if !allowed_tools.is_empty() {
+                        let emitter = runtime.attachment_emitter();
+                        emitter.emit(
+                            coco_messages::AttachmentMessage::silent_command_permissions(
+                                coco_messages::CommandPermissionsPayload {
+                                    allowed_tools,
+                                    model: None,
+                                },
+                            ),
+                        );
                     }
                 }
 
@@ -2671,13 +2660,6 @@ async fn dispatch_permissions_mutation(
 
     let mutation = parse_permissions_mutation(args)?;
 
-    // Push a `command_permissions` reminder body so the next turn's
-    // system-reminder pipeline informs the model that permission rules
-    // changed. TS parity: `processSlashCommand.tsx:909` — the model
-    // sees a brief "permission rule added/removed" hint without
-    // re-rendering the full rule set.
-    let mailbox = runtime.reminder_mailbox_handle();
-
     let confirmation = match &mutation {
         PermissionsMutation::Allow(tool) => {
             let rule = PermissionRule {
@@ -2696,9 +2678,6 @@ async fn dispatch_permissions_mutation(
                         .push(rule);
                 })
                 .await;
-            mailbox.put_command_permissions(format!(
-                "Permission rule added: allow `{tool}` (session scope)."
-            ));
             format!(
                 "Added allow rule for `{tool}`.\n\nSource: Session (highest priority — \
                  active until end of session or `/permissions reset`)."
@@ -2721,9 +2700,6 @@ async fn dispatch_permissions_mutation(
                         .push(rule);
                 })
                 .await;
-            mailbox.put_command_permissions(format!(
-                "Permission rule added: deny `{tool}` (session scope)."
-            ));
             format!(
                 "Added deny rule for `{tool}`.\n\nSource: Session (highest priority — \
                  active until end of session or `/permissions reset`)."
@@ -2736,10 +2712,6 @@ async fn dispatch_permissions_mutation(
                     cfg.deny_rules.remove(&PermissionRuleSource::Session);
                 })
                 .await;
-            mailbox.put_command_permissions(
-                "Session permission rules reset. Built-in read-only allow is mode behavior."
-                    .to_string(),
-            );
             "Session permission rules reset. Custom session allow/deny entries were cleared; \
              built-in read-only tools remain allowed by the active permission mode. File-based rules \
              (.claude/settings.json, ~/.cocode/settings.json) are unchanged — \

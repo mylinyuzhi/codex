@@ -37,7 +37,7 @@ fn test_aggregate_to_pre_outcome_surfaces_blocking_error_reason() {
     let agg = AggregatedHookResult {
         blocking_error: Some(HookBlockingError {
             blocking_error: "rejected by policy".into(),
-            command: "policy.sh".into(),
+            source: coco_hooks::orchestration::HookBlockingSource::Command("policy.sh".into()),
         }),
         hook_permission_decision_reason: Some("policy match".into()),
         ..Default::default()
@@ -83,7 +83,7 @@ fn test_aggregate_to_post_outcome_carries_blocking_reason() {
     let agg = AggregatedHookResult {
         blocking_error: Some(HookBlockingError {
             blocking_error: "output flagged".into(),
-            command: "audit.sh".into(),
+            source: coco_hooks::orchestration::HookBlockingSource::Command("audit.sh".into()),
         }),
         ..Default::default()
     };

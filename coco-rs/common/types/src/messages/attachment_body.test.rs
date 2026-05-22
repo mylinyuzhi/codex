@@ -72,26 +72,16 @@ fn silent_payload_round_trips_with_every_silent_attachment_kind() {
             AttachmentKind::DynamicSkill => {
                 AttachmentMessage::silent_dynamic_skill(DynamicSkillPayload::default())
             }
+            AttachmentKind::MaxTurnsReached => {
+                AttachmentMessage::silent_max_turns_reached(MaxTurnsReachedPayload::default())
+            }
             AttachmentKind::AlreadyReadFile => {
                 AttachmentMessage::silent_already_read_file(AlreadyReadFilePayload::default())
             }
             AttachmentKind::EditedImageFile => {
                 AttachmentMessage::silent_edited_image_file(EditedImageFilePayload::default())
             }
-            // Audit-add (May 2026): these silent reminders are emitted by
-            // generators in `coco-system-reminder` directly, not via
-            // sister-crate `silent_*` constructors. They don't need a typed
-            // payload here; their bodies are formatted strings produced at
-            // generation time. Skip without panicking.
-            // (`CommandPermissions` already has a typed constructor above —
-            // the audit kept it on the typed path so callers can route
-            // structured permission snapshots without going through the
-            // reminder pipeline.)
-            AttachmentKind::MaxTurnsReached
-            | AttachmentKind::CurrentSessionMemory
-            | AttachmentKind::TeammateShutdownBatch
-            | AttachmentKind::ContextEfficiency
-            | AttachmentKind::SkillDiscovery => continue,
+            AttachmentKind::CurrentSessionMemory | AttachmentKind::ContextEfficiency => continue,
             other => panic!("silent kind {other:?} has no constructor"),
         };
         assert_eq!(msg.kind, *kind);
@@ -106,10 +96,38 @@ fn api_constructor_rejects_non_api_visible_in_debug() {
 }
 
 #[test]
+fn skill_discovery_preserves_payload_and_api_prompt() {
+    let payload = SkillDiscoveryPayload {
+        skills: vec![SkillDiscoverySkill {
+            name: "rust".to_string(),
+            description: "Rust conventions".to_string(),
+            short_id: Some("abc".to_string()),
+        }],
+        signal: "explicit".to_string(),
+        source: SkillDiscoverySource::Native,
+    };
+    let msg = AttachmentMessage::skill_discovery(payload.clone());
+    assert_eq!(msg.kind, AttachmentKind::SkillDiscovery);
+    // Body is a regular Api(LlmMessage); structured payload travels in
+    // `extras` so pattern matches on `AttachmentBody::Api(..)` stay
+    // uniform across kinds.
+    let AttachmentBody::Api(message) = &msg.body else {
+        panic!("skill_discovery body must be Api(LlmMessage)");
+    };
+    let Some(AttachmentExtras::SkillDiscovery(stored)) = msg.extras.as_ref() else {
+        panic!("skill_discovery must populate extras with the typed payload");
+    };
+    assert_eq!(stored, &payload);
+    assert_eq!(msg.as_api_message(), Some(message));
+    assert!(
+        msg.as_text_for_display()
+            .contains("Skills relevant to your task")
+    );
+}
+
+#[test]
 fn unit_constructor_works_for_runtime_bookkeeping() {
-    // Audit-add (May 2026) ported MaxTurnsReached / CurrentSessionMemory /
-    // TeammateShutdownBatch as `SilentReminder` generators, leaving
-    // `BagelConsole` as the only remaining `RuntimeBookkeeping` kind.
+    // RuntimeBookkeeping kinds carry no payload.
     let msg = AttachmentMessage::unit(AttachmentKind::BagelConsole);
     assert_eq!(msg.kind, AttachmentKind::BagelConsole);
     assert!(matches!(msg.body, AttachmentBody::Unit));

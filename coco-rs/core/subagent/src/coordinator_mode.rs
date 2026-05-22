@@ -31,7 +31,7 @@ const INTERNAL_WORKER_TOOLS: &[&str] = &[
     ToolName::TeamCreate.as_str(),
     ToolName::TeamDelete.as_str(),
     ToolName::SendMessage.as_str(),
-    ToolName::SyntheticOutput.as_str(),
+    ToolName::StructuredOutput.as_str(),
 ];
 
 /// Whether the env var alone says coordinator mode is requested.

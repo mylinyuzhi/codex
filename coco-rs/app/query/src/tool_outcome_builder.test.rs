@@ -181,3 +181,73 @@ async fn mcp_error_envelope_creates_error_tool_result() {
     assert_eq!(text, "server failed");
     assert!(is_error);
 }
+
+#[tokio::test]
+async fn structured_output_uses_tool_result_side_channel_only() {
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![text_part("visible result")],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+    });
+    let structured = serde_json::json!({"answer": 42});
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-structured".into(),
+        tool_id: tool.id(),
+        tool_name: tool.name().into(),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Ok(CocoToolResult::data(serde_json::json!({
+            "structuredOutput": {"answer": "model-visible-lookalike"}
+        }))
+        .with_structured_output(structured.clone())),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_result_session_dir: None,
+    })
+    .await;
+
+    let Message::Attachment(att) = &outcome.ordered_messages[1] else {
+        panic!("expected structured output attachment");
+    };
+    let coco_messages::AttachmentBody::Silent(coco_messages::SilentPayload::StructuredOutput(
+        payload,
+    )) = &att.body
+    else {
+        panic!("expected structured output payload");
+    };
+    assert_eq!(payload.data, structured);
+}
+
+#[tokio::test]
+async fn structured_output_ignores_model_visible_data_lookalike() {
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![text_part("visible result")],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+    });
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-lookalike".into(),
+        tool_id: tool.id(),
+        tool_name: tool.name().into(),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Ok(CocoToolResult::data(serde_json::json!({
+            "structuredOutput": {"answer": "not-side-channel"}
+        }))),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_result_session_dir: None,
+    })
+    .await;
+
+    assert_eq!(outcome.ordered_messages.len(), 1);
+    let (text, is_error) = tool_result_text(&outcome.ordered_messages[0]);
+    assert_eq!(text, "visible result");
+    assert!(!is_error);
+}

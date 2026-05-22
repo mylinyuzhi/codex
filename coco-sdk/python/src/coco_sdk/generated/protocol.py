@@ -87,8 +87,8 @@ class AttachmentKind(str, Enum):
     hook_system_message = 'hook_system_message'
     structured_output = 'structured_output'
     dynamic_skill = 'dynamic_skill'
-    context_efficiency = 'context_efficiency'
     skill_discovery = 'skill_discovery'
+    context_efficiency = 'context_efficiency'
     max_turns_reached = 'max_turns_reached'
     current_session_memory = 'current_session_memory'
     teammate_shutdown_batch = 'teammate_shutdown_batch'
@@ -420,6 +420,11 @@ class SessionState(str, Enum):
     running = 'running'
     requires_action = 'requires_action'
 
+class SkillDiscoverySource(str, Enum):
+    native = 'native'
+    aki = 'aki'
+    both = 'both'
+
 class SourceType(str, Enum):
     url = 'url'
     document = 'document'
@@ -467,6 +472,9 @@ AssistantContentPart = Union["TextPart", "FilePart", "ReasoningPart", "Reasoning
 # Typed payload for an [`AttachmentMessage`](super::AttachmentMessage).
 AttachmentBody = Union["LanguageModelV4Message", "SilentPayload", "dict[str, Any]"]
 
+# Typed structured extras carried alongside an [`AttachmentBody::Api`] body.
+AttachmentExtras = Union["SkillDiscoveryPayload"]
+
 # Top-level wire message. SDK clients send these over stdin; coco-rs
 JsonRpcMessage = Union["JsonRpcRequest", "JsonRpcResponse", "JsonRpcNotification", "JsonRpcError"]
 
@@ -495,7 +503,7 @@ RequestId = int | str
 SharedV4FileData = dict[str, Any]
 
 # Typed payload for silent attachment kinds.
-SilentPayload = Union["HookCancelledPayload", "HookErrorDuringExecutionPayload", "HookNonBlockingErrorPayload", "HookSystemMessagePayload", "HookPermissionDecisionPayload", "CommandPermissionsPayload", "StructuredOutputPayload", "DynamicSkillPayload", "AlreadyReadFilePayload", "EditedImageFilePayload"]
+SilentPayload = Union["HookCancelledPayload", "HookErrorDuringExecutionPayload", "HookNonBlockingErrorPayload", "HookSystemMessagePayload", "HookPermissionDecisionPayload", "CommandPermissionsPayload", "StructuredOutputPayload", "DynamicSkillPayload", "MaxTurnsReachedPayload", "AlreadyReadFilePayload", "EditedImageFilePayload"]
 
 # Categorization of a `SlashCommandStatus` payload. Each variant maps to
 SlashCommandStatusKind = dict[str, Any]
@@ -2024,9 +2032,10 @@ class AttachmentMessage(BaseModel):
     body: AttachmentBody
     kind: AttachmentKind
     uuid: str
+    extras: AttachmentExtras | None = None
 
 class CommandPermissionsPayload(BaseModel):
-    allowed_tools: list[str]
+    allowedTools: list[str]
     model: str | None = None
 
 class CustomPart(BaseModel):
@@ -2035,8 +2044,9 @@ class CustomPart(BaseModel):
     providerOptions: ProviderOptions | None = None
 
 class DynamicSkillPayload(BaseModel):
-    path: str
-    skill_name: str
+    displayPath: str
+    skillDir: str
+    skillNames: list[str]
 
 class EditedImageFilePayload(BaseModel):
     display_path: str
@@ -2110,6 +2120,10 @@ class JsonRpcRequest(BaseModel):
 class JsonRpcResponse(BaseModel):
     request_id: RequestId
     result: Any = None
+
+class MaxTurnsReachedPayload(BaseModel):
+    maxTurns: int
+    turnCount: int
 
 class McpServerInit(BaseModel):
     name: str
@@ -2198,6 +2212,16 @@ class SessionModelUsage(BaseModel):
     output_tokens: int
     web_search_requests: int
 
+class SkillDiscoveryPayload(BaseModel):
+    signal: str
+    skills: list[SkillDiscoverySkill]
+    source: SkillDiscoverySource
+
+class SkillDiscoverySkill(BaseModel):
+    description: str
+    name: str
+    shortId: str | None = None
+
 class SlashCommandInfo(BaseModel):
     name: str
     aliases: list[str] | None = None
@@ -2215,8 +2239,6 @@ class SourcePart(BaseModel):
 
 class StructuredOutputPayload(BaseModel):
     data: Any
-    tool_name: str
-    tool_use_id: str
 
 class SystemAgentsKilledMessage(BaseModel):
     count: int

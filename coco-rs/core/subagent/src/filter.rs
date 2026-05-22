@@ -50,7 +50,7 @@ pub const ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
     ToolName::Write.as_str(),
     ToolName::NotebookEdit.as_str(),
     ToolName::Skill.as_str(),
-    ToolName::SyntheticOutput.as_str(),
+    ToolName::StructuredOutput.as_str(),
     ToolName::ToolSearch.as_str(),
     ToolName::EnterWorktree.as_str(),
     ToolName::ExitWorktree.as_str(),

@@ -81,7 +81,16 @@ pub enum ToolName {
     Repl,
     // Internal/SDK (2)
     Sleep,
-    SyntheticOutput,
+    /// Synthetic tool that captures the model's structured JSON
+    /// response and forwards it to the SDK result side-channel.
+    ///
+    /// TS parity: `SYNTHETIC_OUTPUT_TOOL_NAME = 'StructuredOutput'`
+    /// (`tools/SyntheticOutputTool/SyntheticOutputTool.ts:20`).
+    /// The wire name is `"StructuredOutput"` — matches what the model
+    /// and TS SDK consumers see — even though the TS source file is
+    /// named `SyntheticOutputTool`. Only injected in non-interactive
+    /// sessions when `--json-schema` is supplied; never visible in TUI.
+    StructuredOutput,
 }
 
 impl ToolName {
@@ -129,7 +138,7 @@ impl ToolName {
             Self::PowerShell => "PowerShell",
             Self::Repl => "REPL",
             Self::Sleep => "Sleep",
-            Self::SyntheticOutput => "SyntheticOutput",
+            Self::StructuredOutput => "StructuredOutput",
         }
     }
 }
@@ -199,7 +208,7 @@ impl FromStr for ToolName {
             "PowerShell" => Ok(Self::PowerShell),
             "REPL" => Ok(Self::Repl),
             "Sleep" => Ok(Self::Sleep),
-            "SyntheticOutput" => Ok(Self::SyntheticOutput),
+            "StructuredOutput" => Ok(Self::StructuredOutput),
             _ => Err(format!("unknown tool name: {s}")),
         }
     }

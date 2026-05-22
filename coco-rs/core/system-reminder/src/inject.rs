@@ -24,6 +24,8 @@ use coco_messages::AssistantMessage;
 use coco_messages::AttachmentMessage;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
+use coco_types::SkillDiscoveryPayload;
+use coco_types::render_skill_discovery_prompt;
 use serde_json::Value;
 use tracing::debug;
 use uuid::Uuid;
@@ -48,6 +50,11 @@ pub enum InjectedMessage {
     UserBlocks {
         kind: coco_types::AttachmentKind,
         blocks: Vec<InjectedBlock>,
+        is_meta: bool,
+    },
+    SkillDiscovery {
+        payload: SkillDiscoveryPayload,
+        content: String,
         is_meta: bool,
     },
     /// Multi-block assistant message (text + `tool_use` blocks).
@@ -218,6 +225,16 @@ pub fn normalize_injected_messages(reminders: Vec<SystemReminder>) -> Normalized
                     is_meta,
                 });
             }
+            ReminderOutput::SkillDiscovery(payload) => {
+                if payload.skills.is_empty() {
+                    continue;
+                }
+                sink.push(InjectedMessage::SkillDiscovery {
+                    content: wrap_with_tag(&render_skill_discovery_prompt(&payload), tag),
+                    payload,
+                    is_meta,
+                });
+            }
         }
     }
     out
@@ -288,6 +305,15 @@ pub fn inject_reminders(reminders: Vec<SystemReminder>) -> InjectedReminderBatch
                 model_visible.push(Message::Attachment(coco_messages::AttachmentMessage::api(
                     kind, llm,
                 )));
+            }
+            InjectedMessage::SkillDiscovery {
+                payload,
+                content,
+                is_meta: _,
+            } => {
+                model_visible.push(Message::Attachment(
+                    AttachmentMessage::skill_discovery_with_content(payload, content),
+                ));
             }
             InjectedMessage::AssistantBlocks {
                 kind: _,

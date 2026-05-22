@@ -490,7 +490,7 @@ pub fn get_default_rules_for_mode(mode: PermissionMode) -> Vec<PermissionRule> {
                 ToolName::Lsp,
                 ToolName::ListMcpResources,
                 ToolName::ReadMcpResource,
-                ToolName::SyntheticOutput,
+                ToolName::StructuredOutput,
             ];
             read_tools
                 .iter()

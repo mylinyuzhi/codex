@@ -295,11 +295,47 @@ pub enum ParsedHookOutput {
 
 /// Blocking error from a hook.
 ///
-/// TS: HookBlockingError
+/// TS: HookBlockingError.
+///
+/// `source` carries the typed provenance — TS implicitly threads this
+/// through `command` (a shell string), but coco-rs has three real
+/// providers (Command / Function / Llm) and consumers (telemetry, error
+/// rendering, log filtering) need to tell them apart without parsing
+/// the command string.
 #[derive(Debug, Clone)]
 pub struct HookBlockingError {
     pub blocking_error: String,
-    pub command: String,
+    pub source: HookBlockingSource,
+}
+
+impl HookBlockingError {
+    /// Convenience: the shell-command string when this error came from
+    /// a `Command` hook, otherwise an empty string. Preserves the
+    /// pre-refactor accessor shape for log/telemetry consumers that
+    /// printed `err.command` verbatim.
+    pub fn command(&self) -> &str {
+        match &self.source {
+            HookBlockingSource::Command(cmd) => cmd.as_str(),
+            _ => "",
+        }
+    }
+}
+
+/// What produced a [`HookBlockingError`]. Lets consumers branch on the
+/// real provider rather than scraping a synthetic command string.
+#[derive(Debug, Clone)]
+pub enum HookBlockingSource {
+    /// Settings-loaded `HookHandler::Command` — the literal shell
+    /// command string that fired the hook.
+    Command(String),
+    /// In-memory [`crate::FunctionHook`] — carries the hook's id so
+    /// log lines and telemetry can correlate to the registration
+    /// site.
+    Function { hook_id: String },
+    /// LLM-driven `HookHandler::Prompt` / `HookHandler::Agent` hook.
+    /// No command/id; the LLM's blocking decision lives in
+    /// `blocking_error`.
+    Llm,
 }
 
 /// Aggregated result from executing all matching hooks for a single event.
@@ -973,7 +1009,7 @@ pub fn aggregate_results_for_event(
         if r.blocked {
             agg.blocking_error = Some(HookBlockingError {
                 blocking_error: r.output.clone(),
-                command: r.command.clone(),
+                source: HookBlockingSource::Command(r.command.clone()),
             });
         }
 
@@ -1011,7 +1047,7 @@ pub fn aggregate_results_for_event(
                                 .reason
                                 .clone()
                                 .unwrap_or_else(|| "Blocked by hook".to_string()),
-                            command: r.command.clone(),
+                            source: HookBlockingSource::Command(r.command.clone()),
                         });
                     }
                     _ => {}
@@ -1173,7 +1209,7 @@ fn apply_hook_specific_output(
                             blocking_error: permission_decision_reason
                                 .clone()
                                 .unwrap_or_else(|| "Blocked by hook".to_string()),
-                            command: command.to_string(),
+                            source: HookBlockingSource::Command(command.to_string()),
                         });
                     }
                     "ask" => {
@@ -1264,7 +1300,7 @@ fn apply_hook_specific_output(
                 if act == "decline" {
                     agg.blocking_error = Some(HookBlockingError {
                         blocking_error: "Elicitation denied by hook".to_string(),
-                        command: command.to_string(),
+                        source: HookBlockingSource::Command(command.to_string()),
                     });
                 }
                 agg.elicitation_response = Some(ElicitationResponse {
@@ -1278,7 +1314,7 @@ fn apply_hook_specific_output(
                 if act == "decline" {
                     agg.blocking_error = Some(HookBlockingError {
                         blocking_error: "Elicitation result blocked by hook".to_string(),
-                        command: command.to_string(),
+                        source: HookBlockingSource::Command(command.to_string()),
                     });
                 }
                 agg.elicitation_result_response = Some(ElicitationResponse {
@@ -2161,6 +2197,7 @@ pub async fn execute_stop(
     ctx: &OrchestrationContext,
     stop_hook_active: bool,
     last_assistant_message: Option<&str>,
+    history: &[std::sync::Arc<coco_messages::Message>],
     event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
 ) -> crate::Result<AggregatedHookResult> {
     if ctx.disable_all_hooks {
@@ -2200,10 +2237,122 @@ pub async fn execute_stop(
     )
     .await;
 
-    Ok(aggregate_results_for_event(
-        &results,
-        Some(HookEventType::Stop),
-    ))
+    let mut agg = aggregate_results_for_event(&results, Some(HookEventType::Stop));
+    apply_function_hook_results(
+        &mut agg,
+        evaluate_function_hooks(registry, HookEventType::Stop, None, history).await,
+    );
+    Ok(agg)
+}
+
+/// Merge function-hook results into the aggregate result of settings
+/// hooks. Iteration is in **registration order** so a function hook
+/// registered before any settings hook fires first; this matches TS
+/// `Promise.all` resolution order where hooks share one stream.
+///
+/// `blocking_error` is **first-blocker-wins**: whichever side (settings
+/// or function) wrote to the slot first keeps it. Settings hooks
+/// always run before function hooks within `execute_stop`, so if both
+/// block, the settings-hook message is the one rendered to the user.
+/// That's a TS-parity divergence noted in
+/// [`coco-hooks/CLAUDE.md`](../../CLAUDE.md) "Function hooks";
+/// settings/function priority becomes observable only when both block
+/// the same event, which no in-tree use case does today.
+fn apply_function_hook_results(
+    agg: &mut AggregatedHookResult,
+    function_results: Vec<FunctionHookEvalResult>,
+) {
+    for r in function_results {
+        if !r.passed && agg.blocking_error.is_none() {
+            agg.blocking_error = Some(HookBlockingError {
+                blocking_error: r.error_message,
+                source: HookBlockingSource::Function { hook_id: r.id },
+            });
+        }
+    }
+}
+
+/// One function-hook predicate's outcome.
+#[derive(Debug, Clone)]
+struct FunctionHookEvalResult {
+    id: String,
+    passed: bool,
+    error_message: String,
+}
+
+/// Evaluate every function hook registered for `event` matching
+/// `matcher` against the supplied history.
+///
+/// Each predicate runs on its own [`tokio::task::spawn_blocking`]
+/// thread (predicates are sync per [`crate::FunctionHookPredicate`]'s
+/// contract) under [`tokio::time::timeout`] of the hook's configured
+/// timeout. Predicates that panic or time out are treated as
+/// `passed = false` so the safe default is "block Stop and re-prompt
+/// the model".
+///
+/// All predicates fan out **in parallel** via
+/// [`futures::future::join_all`] — TS parity with the `Promise.all`
+/// pattern in `executeHooks`. The result `Vec` preserves registration
+/// order so [`apply_function_hook_results`]' first-blocker-wins
+/// reduction is deterministic across runs.
+///
+/// `history` is shared across spawned tasks via a single
+/// [`std::sync::Arc`] — no per-hook `Vec` clone. For an N-hook +
+/// M-message history this is O(N + M) instead of O(N·M).
+async fn evaluate_function_hooks(
+    registry: &HookRegistry,
+    event: HookEventType,
+    matcher: Option<&str>,
+    history: &[std::sync::Arc<coco_messages::Message>],
+) -> Vec<FunctionHookEvalResult> {
+    let hooks = registry.find_matching_function_hooks(event, matcher);
+    if hooks.is_empty() {
+        return Vec::new();
+    }
+    // Single allocation; each spawned task gets an Arc::clone (one
+    // atomic refcount bump) instead of cloning the Vec.
+    let history: std::sync::Arc<Vec<std::sync::Arc<coco_messages::Message>>> =
+        std::sync::Arc::new(history.to_vec());
+
+    let futures = hooks.into_iter().map(|hook| {
+        let history = history.clone();
+        let predicate = hook.predicate.clone();
+        let name_for_log = predicate.name().to_string();
+        let timeout = hook.timeout;
+        let id = hook.id.clone();
+        let error_message = hook.error_message.clone();
+        async move {
+            let join = tokio::task::spawn_blocking(move || predicate.evaluate(&history));
+            let passed = match tokio::time::timeout(timeout, join).await {
+                Ok(Ok(b)) => b,
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        hook_id = %id,
+                        predicate = %name_for_log,
+                        error = %e,
+                        "function hook predicate panicked; treating as failed"
+                    );
+                    false
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        hook_id = %id,
+                        predicate = %name_for_log,
+                        timeout_ms = timeout.as_millis() as u64,
+                        "function hook predicate timed out; treating as failed"
+                    );
+                    false
+                }
+            };
+            FunctionHookEvalResult {
+                id,
+                passed,
+                error_message,
+            }
+        }
+    });
+
+    futures::future::join_all(futures).await
 }
 
 pub async fn execute_stop_failure(

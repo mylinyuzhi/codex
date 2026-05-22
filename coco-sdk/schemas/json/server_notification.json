@@ -1834,6 +1834,24 @@
         }
       ]
     },
+    "AttachmentExtras": {
+      "description": "Typed structured extras carried alongside an [`AttachmentBody::Api`] body.\n\nUsed for kinds that surface both a rendered model-visible prompt\n**and** a structured payload that downstream consumers (transcript\npersistence, SDK observers, telemetry) want preserved verbatim.\n`body` carries the rendered prompt; `extras` carries the\nderived-from-structure original data.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "skill_discovery"
+            }
+          },
+          "$ref": "#/$defs/SkillDiscoveryPayload",
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
     "AttachmentKind": {
       "description": "Every TS `Attachment.type` discriminator. 60 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match TS `Attachment.type` exactly, so transcripts round-trip.",
       "oneOf": [
@@ -1893,8 +1911,8 @@
             "hook_system_message",
             "structured_output",
             "dynamic_skill",
-            "context_efficiency",
             "skill_discovery",
+            "context_efficiency",
             "max_turns_reached",
             "current_session_memory",
             "teammate_shutdown_batch",
@@ -1914,6 +1932,17 @@
       "properties": {
         "body": {
           "$ref": "#/$defs/AttachmentBody"
+        },
+        "extras": {
+          "description": "Typed structured side data carried alongside an API-visible body.\n`None` for the overwhelming majority of attachments; populated by\nkinds whose model-visible prompt is derived from richer structured\ndata the transcript / SDK / telemetry layers want to keep\n(currently only `skill_discovery`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttachmentExtras"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "kind": {
           "$ref": "#/$defs/AttachmentKind"
@@ -1948,7 +1977,7 @@
       "description": "TS parity: `command_permissions` (`utils/attachments.ts:605-608`).",
       "type": "object",
       "properties": {
-        "allowed_tools": {
+        "allowedTools": {
           "type": "array",
           "items": {
             "type": "string"
@@ -1962,7 +1991,7 @@
         }
       },
       "required": [
-        "allowed_tools"
+        "allowedTools"
       ]
     },
     "CompactTrigger": {
@@ -2189,16 +2218,23 @@
       "description": "TS parity: `dynamic_skill` (`utils/attachments.ts:525+`).",
       "type": "object",
       "properties": {
-        "path": {
+        "displayPath": {
           "type": "string"
         },
-        "skill_name": {
+        "skillDir": {
           "type": "string"
+        },
+        "skillNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
-        "skill_name",
-        "path"
+        "skillDir",
+        "skillNames",
+        "displayPath"
       ]
     },
     "EditedImageFilePayload": {
@@ -2939,6 +2975,24 @@
       "required": [
         "started",
         "root"
+      ]
+    },
+    "MaxTurnsReachedPayload": {
+      "description": "TS parity: `max_turns_reached` (`query.ts:1508`, `query.ts:1707`).",
+      "type": "object",
+      "properties": {
+        "maxTurns": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "turnCount": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "maxTurns",
+        "turnCount"
       ]
     },
     "McpConnectionStatus": {
@@ -4131,6 +4185,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "max_turns_reached"
+            }
+          },
+          "$ref": "#/$defs/MaxTurnsReachedPayload",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "already_read_file"
             }
           },
@@ -4152,6 +4219,58 @@
             "type"
           ]
         }
+      ]
+    },
+    "SkillDiscoveryPayload": {
+      "description": "TS parity: `skill_discovery` (`utils/attachments.ts:538-542`).",
+      "type": "object",
+      "properties": {
+        "signal": {
+          "type": "string"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillDiscoverySkill"
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/SkillDiscoverySource"
+        }
+      },
+      "required": [
+        "skills",
+        "signal",
+        "source"
+      ]
+    },
+    "SkillDiscoverySkill": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "shortId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "SkillDiscoverySource": {
+      "type": "string",
+      "enum": [
+        "native",
+        "aki",
+        "both"
       ]
     },
     "SourcePart": {
@@ -4230,17 +4349,9 @@
       "description": "TS parity: `structured_output` (`utils/attachments.ts:639+`,\n`services/tools/toolExecution.ts:1276`).",
       "type": "object",
       "properties": {
-        "data": true,
-        "tool_name": {
-          "type": "string"
-        },
-        "tool_use_id": {
-          "type": "string"
-        }
+        "data": true
       },
       "required": [
-        "tool_name",
-        "tool_use_id",
         "data"
       ]
     },

@@ -384,7 +384,31 @@ impl QueryEngine {
             .stop_reason
             .clone()
             .unwrap_or_else(|| "end_turn".to_string());
-        let is_error = qr.cancelled || qr.budget_exhausted || !error_messages.is_empty();
+        // `error_*` stop_reason subtypes are themselves error terminations,
+        // even with no accumulated error message. Mirrors TS
+        // `subtype: 'error_max_structured_output_retries'` / `'error_max_turns'`
+        // result branches.
+        let stop_reason_is_error = stop_reason.starts_with("error_");
+        let is_error = qr.cancelled
+            || qr.budget_exhausted
+            || stop_reason_is_error
+            || !error_messages.is_empty();
+        let mut errors = error_messages;
+        if let Some(payload) = qr.max_turns_reached.as_ref() {
+            errors.push(format!(
+                "Reached maximum number of turns ({})",
+                payload.max_turns
+            ));
+        }
+        if stop_reason == "error_max_structured_output_retries" {
+            let cap = std::env::var("COCO_MAX_STRUCTURED_OUTPUT_RETRIES")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(5);
+            errors.push(format!(
+                "Failed to provide valid structured output after {cap} attempts"
+            ));
+        }
 
         coco_types::SessionResultParams {
             session_id: self.config.session_id.clone(),
@@ -403,8 +427,12 @@ impl QueryEngine {
             } else {
                 Some(qr.response_text.clone())
             },
-            errors: error_messages,
-            structured_output: None,
+            errors,
+            structured_output: if is_error {
+                None
+            } else {
+                qr.structured_output.clone()
+            },
             fast_mode_state: None,
             num_api_calls: Some(qr.cost_tracker.total_api_calls as i32),
         }

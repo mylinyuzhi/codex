@@ -12,6 +12,7 @@ use super::AttachmentBody;
 use super::SilentPayload;
 use super::aliases::LlmMessage;
 use super::attachment_body::AlreadyReadFilePayload;
+use super::attachment_body::AttachmentExtras;
 use super::attachment_body::CommandPermissionsPayload;
 use super::attachment_body::DynamicSkillPayload;
 use super::attachment_body::EditedImageFilePayload;
@@ -20,6 +21,8 @@ use super::attachment_body::HookErrorDuringExecutionPayload;
 use super::attachment_body::HookNonBlockingErrorPayload;
 use super::attachment_body::HookPermissionDecisionPayload;
 use super::attachment_body::HookSystemMessagePayload;
+use super::attachment_body::MaxTurnsReachedPayload;
+use super::attachment_body::SkillDiscoveryPayload;
 use super::attachment_body::StructuredOutputPayload;
 
 /// Top-level message enum.
@@ -202,6 +205,13 @@ pub struct AttachmentMessage {
     pub uuid: Uuid,
     pub kind: AttachmentKind,
     pub body: AttachmentBody,
+    /// Typed structured side data carried alongside an API-visible body.
+    /// `None` for the overwhelming majority of attachments; populated by
+    /// kinds whose model-visible prompt is derived from richer structured
+    /// data the transcript / SDK / telemetry layers want to keep
+    /// (currently only `skill_discovery`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extras: Option<AttachmentExtras>,
 }
 
 impl AttachmentMessage {
@@ -220,6 +230,7 @@ impl AttachmentMessage {
             uuid: Uuid::new_v4(),
             kind,
             body: AttachmentBody::Api(message),
+            extras: None,
         }
     }
 
@@ -237,6 +248,7 @@ impl AttachmentMessage {
             uuid: Uuid::new_v4(),
             kind,
             body: AttachmentBody::Unit,
+            extras: None,
         }
     }
 
@@ -291,6 +303,27 @@ impl AttachmentMessage {
             SilentPayload::DynamicSkill(payload),
         )
     }
+    pub fn silent_max_turns_reached(payload: MaxTurnsReachedPayload) -> Self {
+        Self::silent(
+            AttachmentKind::MaxTurnsReached,
+            SilentPayload::MaxTurnsReached(payload),
+        )
+    }
+    pub fn skill_discovery(payload: SkillDiscoveryPayload) -> Self {
+        let content = render_skill_discovery_prompt(&payload);
+        Self::skill_discovery_with_content(payload, content)
+    }
+    pub fn skill_discovery_with_content(
+        payload: SkillDiscoveryPayload,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            kind: AttachmentKind::SkillDiscovery,
+            body: AttachmentBody::Api(LlmMessage::user_text(content.into())),
+            extras: Some(AttachmentExtras::SkillDiscovery(payload)),
+        }
+    }
     pub fn silent_already_read_file(payload: AlreadyReadFilePayload) -> Self {
         Self::silent(
             AttachmentKind::AlreadyReadFile,
@@ -310,11 +343,11 @@ impl AttachmentMessage {
             uuid: Uuid::new_v4(),
             kind,
             body: AttachmentBody::Silent(payload),
+            extras: None,
         }
     }
 
     /// API-bound `LlmMessage` if this attachment carries one.
-    /// Returns `Some` only for [`AttachmentBody::Api`] bodies;
     /// `Silent` / `Unit` bodies never reach the API.
     pub fn as_api_message(&self) -> Option<&LlmMessage> {
         match &self.body {
@@ -334,6 +367,44 @@ impl AttachmentMessage {
             AttachmentBody::Silent(_) | AttachmentBody::Unit => String::new(),
         }
     }
+}
+
+/// Maximum chars in the rendered `skill_discovery` user-message prompt.
+///
+/// Per-turn injection budget — bounds the body even when many high-relevance
+/// skills match. Truncation ellipsizes; full payload is still preserved on the
+/// typed `SkillDiscoveryPayload` for any consumer that wants structured data.
+pub const MAX_SKILL_DISCOVERY_RENDERED_CHARS: usize = 4000;
+
+/// Render the user-visible prompt body for a `skill_discovery` attachment.
+///
+/// TS parity: `utils/messages.ts:3509-3515` — same template ("Skills relevant
+/// to your task: …Invoke via Skill(\"<name>\") for complete instructions.").
+/// Single canonical implementation so `AttachmentMessage::skill_discovery`
+/// and `inject_reminders` produce byte-identical bodies.
+pub fn render_skill_discovery_prompt(payload: &SkillDiscoveryPayload) -> String {
+    let lines = payload
+        .skills
+        .iter()
+        .map(|s| format!("- {}: {}", s.name, s.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let rendered = format!(
+        "Skills relevant to your task:\n\n{lines}\n\nThese skills encode project-specific conventions. Invoke via Skill(\"<name>\") for complete instructions."
+    );
+    truncate_rendered_prompt(&rendered)
+}
+
+fn truncate_rendered_prompt(s: &str) -> String {
+    if s.chars().count() <= MAX_SKILL_DISCOVERY_RENDERED_CHARS {
+        return s.to_string();
+    }
+    let mut out = s
+        .chars()
+        .take(MAX_SKILL_DISCOVERY_RENDERED_CHARS.saturating_sub(3))
+        .collect::<String>();
+    out.push_str("...");
+    out
 }
 
 /// Extract text content from an `LlmMessage` (simple concatenation of any
