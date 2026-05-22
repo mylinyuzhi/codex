@@ -1,0 +1,416 @@
+//! Transcript state presentation.
+//!
+//! Consumes `&[RenderedCell]` directly. `TranscriptCell` indices point
+//! into the cells slice; batch detection (tool batches) dispatches on
+//! `CellKind`. Hooks land via `Attachment`, not the transcript, and
+//! task notifications are no longer XML-wrapped — so there are no
+//! hook-batch or task-notification variants here.
+//!
+//! See `engine-tui-phase3d-renderer-migration-plan.md` §6.
+
+use std::collections::VecDeque;
+
+use crate::presentation::streaming::StreamingTailInput;
+use crate::presentation::streaming::StreamingTailView;
+use crate::presentation::streaming::streaming_tail_view;
+use crate::state::AppState;
+use crate::state::session::ToolExecution;
+use crate::state::session::ToolStatus;
+use crate::state::transcript::TranscriptCellId;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
+use crate::state::ui::StreamingState;
+
+pub(crate) const TRANSCRIPT_COLLAPSED_PREVIEW_LINES: usize = 5;
+pub(crate) const TRANSCRIPT_EXPANDED_CELL_LINE_CAP: usize = 2_000;
+pub(crate) const TRANSCRIPT_LINE_CHAR_CAP: usize = 512;
+pub(crate) const TRANSCRIPT_TRUNCATED_HINT: &str = "… output truncated in UI";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ToolOutputPreview<'a> {
+    Empty,
+    Full(Vec<&'a str>),
+    Truncated {
+        head: Vec<&'a str>,
+        omitted: usize,
+        tail: Vec<&'a str>,
+    },
+}
+
+pub(crate) fn tool_output_preview(output: &str, max_rows: usize) -> ToolOutputPreview<'_> {
+    if max_rows == 0 {
+        return ToolOutputPreview::Empty;
+    }
+
+    let visible_rows = max_rows.saturating_sub(1);
+    let head_limit = visible_rows / 2;
+    let tail_limit = visible_rows.saturating_sub(head_limit);
+    let mut short = Vec::with_capacity(max_rows);
+    let mut head = Vec::with_capacity(head_limit);
+    let mut tail = VecDeque::with_capacity(tail_limit);
+    let mut total = 0usize;
+
+    for line in output.lines() {
+        if total < max_rows {
+            short.push(line);
+        }
+        if total < head_limit {
+            head.push(line);
+        } else if tail_limit > 0 {
+            if tail.len() == tail_limit {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+        total += 1;
+    }
+
+    if total == 0 {
+        return ToolOutputPreview::Empty;
+    }
+    if total <= max_rows {
+        return ToolOutputPreview::Full(short);
+    }
+
+    ToolOutputPreview::Truncated {
+        omitted: total.saturating_sub(head.len() + tail.len()),
+        head,
+        tail: tail.into_iter().collect(),
+    }
+}
+
+/// One transcript-presentation cell. Indices point into the
+/// `&[RenderedCell]` slice passed to `transcript_projection`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TranscriptCell {
+    /// Collapsed system-reminder preview row.
+    MetaPreview { index: usize },
+    /// Standalone cell — assistant text, user text, etc.
+    Cell { index: usize },
+    /// Paired tool invocation + result.
+    ToolCall {
+        invocation: Option<usize>,
+        result: Option<usize>,
+        call_id: Option<String>,
+    },
+    /// Multiple adjacent tool invocations without intervening results.
+    ToolBatch {
+        start: usize,
+        end: usize,
+        count: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TranscriptSourceCell<'a> {
+    Committed(TranscriptCell),
+    Active(ActiveTranscriptCell<'a>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ActiveTranscriptCell<'a> {
+    Streaming(StreamingTailView<'a>),
+    BusySpinner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TranscriptProjectionOptions {
+    pub show_system_reminders: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptProjection {
+    pub cells: Vec<TranscriptCell>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TranscriptPresentationInput<'cells, 'state> {
+    /// Engine-derived cells — single source of truth. `'cells` is
+    /// decoupled from `'state` so callers can pass a slice borrowed
+    /// from a temporary (rare; `state.session.transcript.cells()`
+    /// usually borrows from `state` directly).
+    pub cells: &'cells [RenderedCell],
+    pub options: TranscriptProjectionOptions,
+    pub streaming: Option<&'state StreamingState>,
+    pub show_thinking: bool,
+    pub tool_executions: &'state [ToolExecution],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptPresentation<'a> {
+    pub cells: Vec<TranscriptSourceCell<'a>>,
+}
+
+pub(crate) fn transcript_projection(
+    cells: &[RenderedCell],
+    options: TranscriptProjectionOptions,
+) -> TranscriptProjection {
+    let show_system_reminders = options.show_system_reminders;
+    let mut out = Vec::new();
+    let mut consumed = vec![false; cells.len()];
+    let mut i = 0;
+    while i < cells.len() {
+        if consumed[i] {
+            i += 1;
+            continue;
+        }
+        let cell = &cells[i];
+
+        // System reminders collapse to one-line preview unless the
+        // user explicitly opted in via show_system_reminders.
+        if is_meta(cell) && !show_system_reminders {
+            out.push(TranscriptCell::MetaPreview { index: i });
+            i += 1;
+            continue;
+        }
+
+        // Tool-use batch: 2+ adjacent ToolUse cells (no intervening
+        // assistant text or tool result) render as a single batch
+        // header followed by the individual rows.
+        let batch_end = tool_batch_end(cells, i);
+        if batch_end > i + 1 && !tool_batch_has_results(cells, &consumed, i, batch_end) {
+            out.push(TranscriptCell::ToolBatch {
+                start: i,
+                end: batch_end,
+                count: batch_end - i,
+            });
+            i = batch_end;
+            continue;
+        }
+
+        // Tool invocation paired with its result.
+        if let CellKind::ToolUse { call_id, .. } = &cell.kind {
+            let result = find_tool_result(cells, &consumed, i + 1, call_id);
+            if let Some(r) = result {
+                consumed[r] = true;
+            }
+            out.push(TranscriptCell::ToolCall {
+                invocation: Some(i),
+                result,
+                call_id: Some(call_id.clone()),
+            });
+            i += 1;
+            continue;
+        }
+
+        // Orphan tool result (engine emitted ToolResult without a
+        // matching ToolUse in scope — fallback path).
+        if is_tool_result(cell) {
+            let call_id = match &cell.kind {
+                CellKind::ToolResult { call_id } => Some(call_id.clone()),
+                _ => None,
+            };
+            out.push(TranscriptCell::ToolCall {
+                invocation: None,
+                result: Some(i),
+                call_id,
+            });
+            i += 1;
+            continue;
+        }
+
+        out.push(TranscriptCell::Cell { index: i });
+        i += 1;
+    }
+    TranscriptProjection { cells: out }
+}
+
+pub(crate) fn transcript_presentation<'cells, 'state>(
+    input: TranscriptPresentationInput<'cells, 'state>,
+) -> TranscriptPresentation<'state> {
+    let mut cells = transcript_projection(input.cells, input.options)
+        .cells
+        .into_iter()
+        .map(TranscriptSourceCell::Committed)
+        .collect::<Vec<_>>();
+    if let Some(active) =
+        active_transcript_cell(input.streaming, input.show_thinking, input.tool_executions)
+    {
+        cells.push(TranscriptSourceCell::Active(active));
+    }
+    TranscriptPresentation { cells }
+}
+
+pub(crate) fn active_transcript_cell<'a>(
+    streaming: Option<&'a StreamingState>,
+    show_thinking: bool,
+    tool_executions: &[ToolExecution],
+) -> Option<ActiveTranscriptCell<'a>> {
+    if streaming.is_some() {
+        return streaming.map(|streaming| {
+            ActiveTranscriptCell::Streaming(streaming_tail_view(StreamingTailInput {
+                streaming,
+                show_thinking,
+            }))
+        });
+    }
+    if tool_executions
+        .iter()
+        .any(|t| matches!(t.status, ToolStatus::Queued | ToolStatus::Running))
+    {
+        return Some(ActiveTranscriptCell::BusySpinner);
+    }
+    None
+}
+
+fn is_meta(cell: &RenderedCell) -> bool {
+    // System cells are meta. Attachments (e.g. tool-summary) ride
+    // through but render dim; treat them as meta by default.
+    matches!(cell.kind, CellKind::System(_) | CellKind::Attachment)
+}
+
+fn tool_batch_end(cells: &[RenderedCell], start: usize) -> usize {
+    let is_tool_use = |c: &RenderedCell| matches!(c.kind, CellKind::ToolUse { .. });
+    if !is_tool_use(&cells[start]) {
+        return start + 1;
+    }
+    let mut end = start + 1;
+    while end < cells.len() {
+        let next = &cells[end];
+        if is_tool_use(next) || is_meta(next) {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+fn tool_batch_has_results(
+    cells: &[RenderedCell],
+    consumed: &[bool],
+    start: usize,
+    end: usize,
+) -> bool {
+    cells[start..end].iter().any(|cell| {
+        let CellKind::ToolUse { call_id, .. } = &cell.kind else {
+            return false;
+        };
+        find_tool_result(cells, consumed, end, call_id).is_some()
+    })
+}
+
+fn find_tool_result(
+    cells: &[RenderedCell],
+    consumed: &[bool],
+    start: usize,
+    call_id: &str,
+) -> Option<usize> {
+    for i in start..cells.len() {
+        if consumed[i] {
+            continue;
+        }
+        if let CellKind::ToolResult {
+            call_id: result_call_id,
+        } = &cells[i].kind
+            && result_call_id == call_id
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn is_tool_result(cell: &RenderedCell) -> bool {
+    matches!(cell.kind, CellKind::ToolResult { .. })
+}
+
+impl TranscriptCell {
+    pub(crate) fn cell_id(&self, cells: &[RenderedCell]) -> Option<TranscriptCellId> {
+        match self {
+            Self::ToolCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(TranscriptCellId::tool(call_id.clone())),
+            Self::ToolCall {
+                invocation: Some(index),
+                ..
+            }
+            | Self::ToolCall {
+                result: Some(index),
+                ..
+            }
+            | Self::MetaPreview { index }
+            | Self::Cell { index } => Some(TranscriptCellId::message(
+                *index,
+                cells.get(*index)?.message_uuid.to_string(),
+            )),
+            Self::ToolCall { .. } => None,
+            Self::ToolBatch { start, end, .. } => Some(TranscriptCellId::tool_batch(*start, *end)),
+        }
+    }
+}
+
+impl<'a> TranscriptSourceCell<'a> {
+    pub(crate) fn cell_id(&self, cells: &[RenderedCell]) -> Option<TranscriptCellId> {
+        match self {
+            Self::Committed(cell) => cell.cell_id(cells),
+            Self::Active(_) => Some(TranscriptCellId::ActiveTail),
+        }
+    }
+
+    pub(crate) fn is_expandable(&self, cells: &[RenderedCell]) -> bool {
+        match self {
+            Self::Committed(TranscriptCell::ToolCall { .. }) => true,
+            Self::Committed(TranscriptCell::Cell { index }) => {
+                cells.get(*index).is_some_and(cell_is_expandable)
+            }
+            Self::Committed(_) | Self::Active(_) => false,
+        }
+    }
+}
+
+fn cell_is_expandable(cell: &RenderedCell) -> bool {
+    match &cell.kind {
+        CellKind::AssistantThinking { text, .. } => !text.is_empty(),
+        CellKind::ToolResult { .. } => true,
+        CellKind::UserText { .. } | CellKind::AssistantText { .. } => false,
+        _ => false,
+    }
+}
+
+pub(crate) fn transcript_expandable_cell_ids(state: &AppState) -> Vec<TranscriptCellId> {
+    let cells = state.session.transcript.cells();
+    transcript_presentation(TranscriptPresentationInput {
+        cells,
+        options: TranscriptProjectionOptions {
+            show_system_reminders: true,
+        },
+        streaming: state.ui.streaming.as_ref(),
+        show_thinking: true,
+        tool_executions: &state.session.tool_executions,
+    })
+    .cells
+    .into_iter()
+    .filter(|cell| cell.is_expandable(cells))
+    .filter_map(|cell| cell.cell_id(cells))
+    .collect()
+}
+
+pub(crate) fn latest_expandable_cell_id(state: &AppState) -> Option<TranscriptCellId> {
+    transcript_expandable_cell_ids(state)
+        .into_iter()
+        .next_back()
+}
+
+/// Build a `TranscriptPresentation` from a caller-supplied cells slice
+/// — the entry point for everything that wants to render the chat
+/// transcript (typically the Ctrl+O modal).
+pub(crate) fn transcript_presentation_with_cells<'state>(
+    state: &'state AppState,
+    cells: &[RenderedCell],
+) -> TranscriptPresentation<'state> {
+    transcript_presentation(TranscriptPresentationInput {
+        cells,
+        options: TranscriptProjectionOptions {
+            show_system_reminders: true,
+        },
+        streaming: state.ui.streaming.as_ref(),
+        show_thinking: true,
+        tool_executions: &state.session.tool_executions,
+    })
+}
+
+#[cfg(test)]
+#[path = "transcript.test.rs"]
+mod tests;

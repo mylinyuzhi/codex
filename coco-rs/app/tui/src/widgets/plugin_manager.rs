@@ -1,0 +1,225 @@
+//! Plugin management widget — enable/disable/install plugins from TUI.
+//!
+//! TS: src/hooks/useManagePlugins.ts (11KB), src/components/PluginManager/
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
+
+use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
+
+/// Plugin entry for the manager display.
+#[derive(Debug, Clone)]
+pub struct PluginEntry {
+    pub name: String,
+    pub description: Option<String>,
+    pub version: Option<String>,
+    pub enabled: bool,
+    pub source: PluginSource,
+    pub tool_count: i32,
+    pub error: Option<String>,
+}
+
+/// Where the plugin came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginSource {
+    Managed,
+    User,
+    Project,
+    Builtin,
+}
+
+/// Plugin manager tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginTab {
+    Installed,
+    Available,
+}
+
+/// Plugin manager state.
+#[derive(Debug, Clone)]
+pub struct PluginManagerState {
+    pub tab: PluginTab,
+    pub plugins: Vec<PluginEntry>,
+    pub selected: i32,
+    pub filter: String,
+}
+
+impl PluginManagerState {
+    pub fn new(plugins: Vec<PluginEntry>) -> Self {
+        Self {
+            tab: PluginTab::Installed,
+            plugins,
+            selected: 0,
+            filter: String::new(),
+        }
+    }
+
+    /// Get filtered plugins based on current tab and filter.
+    pub fn filtered(&self) -> Vec<&PluginEntry> {
+        let filter_lower = self.filter.to_lowercase();
+        self.plugins
+            .iter()
+            .filter(|p| {
+                if !filter_lower.is_empty() && !p.name.to_lowercase().contains(&filter_lower) {
+                    return false;
+                }
+                true
+            })
+            .collect()
+    }
+
+    pub fn toggle_tab(&mut self) {
+        self.tab = match self.tab {
+            PluginTab::Installed => PluginTab::Available,
+            PluginTab::Available => PluginTab::Installed,
+        };
+        self.selected = 0;
+    }
+}
+
+impl Default for PluginManagerState {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+/// Plugin manager widget.
+pub struct PluginManagerWidget<'a> {
+    state: &'a PluginManagerState,
+    styles: UiStyles<'a>,
+}
+
+impl<'a> PluginManagerWidget<'a> {
+    pub fn new(state: &'a PluginManagerState, styles: UiStyles<'a>) -> Self {
+        Self { state, styles }
+    }
+}
+
+impl Widget for PluginManagerWidget<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let mut lines: Vec<Line> = Vec::new();
+
+        // Tab bar
+        let installed_style = if self.state.tab == PluginTab::Installed {
+            ratatui::style::Style::default()
+                .fg(self.styles.primary())
+                .bold()
+                .underlined()
+        } else {
+            ratatui::style::Style::default().fg(self.styles.dim())
+        };
+        let available_style = if self.state.tab == PluginTab::Available {
+            ratatui::style::Style::default()
+                .fg(self.styles.primary())
+                .bold()
+                .underlined()
+        } else {
+            ratatui::style::Style::default().fg(self.styles.dim())
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(t!("plugin.tab_installed").to_string(), installed_style),
+            Span::raw("│").fg(self.styles.border()),
+            Span::styled(t!("plugin.tab_available").to_string(), available_style),
+        ]));
+
+        // Filter
+        if !self.state.filter.is_empty() {
+            lines.push(Line::from(vec![
+                Span::raw("  🔍 ").fg(self.styles.accent()),
+                Span::raw(&self.state.filter).fg(self.styles.text()),
+            ]));
+        }
+        lines.push(Line::default());
+
+        // Plugin list
+        let filtered = self.state.filtered();
+        if filtered.is_empty() {
+            lines.push(Line::from(
+                Span::raw(format!("  {}", t!("plugin.none_found"))).fg(self.styles.dim()),
+            ));
+        }
+
+        for (i, plugin) in filtered.iter().enumerate().take(15) {
+            let is_selected = i as i32 == self.state.selected;
+            let marker = if is_selected { "▸ " } else { "  " };
+
+            let status_icon = if plugin.error.is_some() {
+                ("✗", self.styles.error())
+            } else if plugin.enabled {
+                ("●", self.styles.success())
+            } else {
+                ("○", self.styles.dim())
+            };
+
+            let source_label = match plugin.source {
+                PluginSource::Managed => t!("plugin.source_managed"),
+                PluginSource::User => t!("plugin.source_user"),
+                PluginSource::Project => t!("plugin.source_project"),
+                PluginSource::Builtin => t!("plugin.source_builtin"),
+            };
+
+            let mut spans = vec![
+                Span::raw(marker),
+                Span::raw(format!("{} ", status_icon.0)).fg(status_icon.1),
+                Span::raw(&plugin.name).fg(self.styles.text()),
+            ];
+
+            if let Some(ref ver) = plugin.version {
+                spans.push(Span::raw(format!(" v{ver}")).fg(self.styles.dim()));
+            }
+
+            spans.push(Span::raw(format!(" [{source_label}]")).fg(self.styles.dim()));
+
+            if plugin.tool_count > 0 {
+                spans.push(
+                    Span::raw(format!(
+                        " {}",
+                        t!("plugin.tools_suffix", count = plugin.tool_count)
+                    ))
+                    .fg(self.styles.dim()),
+                );
+            }
+
+            if let Some(ref err) = plugin.error {
+                spans.push(Span::raw(format!(" ⚠ {err}")).fg(self.styles.error()));
+            }
+
+            lines.push(Line::from(spans));
+
+            if is_selected && let Some(ref desc) = plugin.description {
+                lines.push(Line::from(
+                    Span::raw(format!("    {desc}"))
+                        .fg(self.styles.dim())
+                        .italic(),
+                ));
+            }
+        }
+
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::raw(format!("  {}", t!("plugin.hint_switch_tab"))).fg(self.styles.dim()),
+            Span::raw(t!("plugin.hint_toggle").to_string()).fg(self.styles.dim()),
+            Span::raw(t!("plugin.hint_close").to_string()).fg(self.styles.dim()),
+        ]));
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(t!("plugin.panel_title").to_string())
+            .border_style(ratatui::style::Style::default().fg(self.styles.focused_border()));
+
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
+        paragraph.render(area, buf);
+    }
+}

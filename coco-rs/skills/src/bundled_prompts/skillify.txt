@@ -1,0 +1,19 @@
+Convert a workflow or repeated task into a reusable skill file.
+
+1. Understand the workflow the user wants to capture
+2. Create a skill markdown file with proper frontmatter:
+   ```
+   # skill-name
+
+   ---
+   description: One-line description
+   when-to-use: When this skill should be triggered
+   argument-names: arg1, arg2
+   allowed_tools: Bash, Read, Glob, Grep
+   ---
+
+   Detailed instructions for the skill...
+   ```
+3. Write the file to `.claude/skills/<name>.md`
+4. Verify the skill loads correctly by checking the format
+5. Suggest testing the skill with a sample invocation

@@ -1,0 +1,23 @@
+use super::*;
+use serde_json::json;
+use std::collections::HashMap;
+use vercel_ai_provider::ProviderOptions;
+
+/// `raw` is verbatim — every key (typed-known and unknown) appears
+/// in the returned map. Patching this into the wire body lets the
+/// user's `extra_body` win over typed body writes at the same key.
+#[test]
+fn raw_map_includes_every_key_verbatim() {
+    let mut inner = HashMap::new();
+    inner.insert("reasoningSummary".into(), json!("auto")); // typed-known
+    inner.insert("myCustom".into(), json!(123)); // unknown
+    let mut outer = HashMap::new();
+    outer.insert("openai".into(), inner);
+    let po = Some(ProviderOptions(outer));
+
+    let (typed, raw) = extract_responses_options(&po);
+    assert_eq!(typed.reasoning_summary.as_deref(), Some("auto"));
+    // Both typed-known and unknown keys appear — no filter.
+    assert!(raw.contains_key("reasoningSummary"));
+    assert!(raw.contains_key("myCustom"));
+}

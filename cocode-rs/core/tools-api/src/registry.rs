@@ -1,0 +1,560 @@
+//! Tool registry for managing available tools.
+//!
+//! This module provides [`ToolRegistry`] which manages the collection of
+//! available tools, including both built-in tools and MCP tools.
+//!
+//! ## MCP Tool Naming Convention
+//!
+//! MCP tools are registered with the naming convention `mcp__<server>__<tool>` to avoid
+//! name collisions between different MCP servers and built-in tools.
+
+use crate::ToolDefinition;
+use crate::mcp_tool::McpToolWrapper;
+use crate::tool::Tool;
+use cocode_mcp_types::Tool as McpToolDef;
+use cocode_rmcp_client::RmcpClient;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::debug;
+
+/// Information about an MCP tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpToolInfo {
+    /// Server name.
+    pub server: String,
+    /// Tool name.
+    pub name: String,
+    /// Tool description.
+    pub description: Option<String>,
+    /// Input schema.
+    pub input_schema: serde_json::Value,
+}
+
+impl McpToolInfo {
+    /// Get the fully qualified name (mcp__server__tool).
+    pub fn qualified_name(&self) -> String {
+        format!(
+            "{}{}{}{}",
+            cocode_protocol::MCP_TOOL_PREFIX,
+            self.server,
+            cocode_protocol::MCP_TOOL_SEPARATOR,
+            self.name,
+        )
+    }
+}
+
+/// Registry of available tools.
+///
+/// The registry manages both built-in tools (implementing the [`Tool`] trait)
+/// and MCP tools (remote tools from MCP servers).
+#[derive(Default)]
+pub struct ToolRegistry {
+    /// Built-in tools.
+    tools: HashMap<String, Arc<dyn Tool>>,
+    /// MCP tools, keyed by qualified name.
+    mcp_tools: HashMap<String, McpToolInfo>,
+    /// Tool aliases (alternative names).
+    aliases: HashMap<String, String>,
+    /// Deferred MCP tool implementations, keyed by qualified name.
+    ///
+    /// When auto-search mode is enabled via [`Self::defer_mcp_tool_definitions`],
+    /// executable MCP tool wrappers are moved here from `tools`. They can be
+    /// selectively restored via [`Self::restore_deferred_tools`] when the model
+    /// discovers them through `McpSearchTool`.
+    deferred_tools: HashMap<String, Arc<dyn Tool>>,
+}
+
+impl ToolRegistry {
+    /// Create a new empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a built-in tool.
+    pub fn register(&mut self, tool: impl Tool + 'static) {
+        let name = tool.name().to_string();
+        debug!(tool = %name, "Registering built-in tool");
+        self.tools.insert(name, Arc::new(tool));
+    }
+
+    /// Register a tool with an alias.
+    pub fn register_with_alias(&mut self, tool: impl Tool + 'static, alias: impl Into<String>) {
+        let name = tool.name().to_string();
+        let alias = alias.into();
+        self.tools.insert(name.clone(), Arc::new(tool));
+        self.aliases.insert(alias, name);
+    }
+
+    /// Register a pre-built tool with a specific qualified name.
+    ///
+    /// Unlike [`Self::register`], this takes an `Arc<dyn Tool>` and a custom
+    /// key, allowing SDK-managed tools to use `mcp__server__tool` naming.
+    pub fn register_tool(&mut self, qualified_name: String, tool: Arc<dyn Tool>) {
+        self.tools.insert(qualified_name, tool);
+    }
+
+    /// Register MCP tool metadata (info only, for auto-search/definitions).
+    pub fn register_mcp_tool_info(
+        &mut self,
+        server_name: &str,
+        tool_name: &str,
+        description: Option<&str>,
+        input_schema: &serde_json::Value,
+    ) {
+        let info = McpToolInfo {
+            server: server_name.to_string(),
+            name: tool_name.to_string(),
+            description: description.map(String::from),
+            input_schema: input_schema.clone(),
+        };
+        let qualified = info.qualified_name();
+        self.mcp_tools.insert(qualified, info);
+    }
+
+    /// Register an MCP server's tools (info only, not executable).
+    ///
+    /// This registers the tool metadata but doesn't make them executable.
+    /// For executable MCP tools, use [`Self::register_mcp_tools_executable`].
+    pub fn register_mcp_server(&mut self, server_name: &str, tools: Vec<McpToolInfo>) {
+        for mut tool in tools {
+            tool.server = server_name.to_string();
+            let qualified = tool.qualified_name();
+            self.mcp_tools.insert(qualified, tool);
+        }
+    }
+
+    /// Register MCP tools as executable tools using the Tool trait.
+    ///
+    /// This registers MCP tools with the `mcp__<server>__<tool>` naming convention
+    /// and makes them executable through the standard tool execution pipeline.
+    ///
+    /// # Arguments
+    ///
+    /// * `server_name` - Name of the MCP server
+    /// * `tools` - Tool definitions from the MCP server
+    /// * `client` - Shared MCP client for executing tool calls (uses `Arc<RmcpClient>`
+    ///   not `Arc<Mutex<...>>` because RmcpClient has internal synchronization)
+    /// * `timeout` - Timeout for tool calls
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let client = Arc::new(rmcp_client);
+    /// registry.register_mcp_tools_executable(
+    ///     "filesystem",
+    ///     mcp_tools,
+    ///     client,
+    ///     Duration::from_secs(30),
+    /// );
+    /// ```
+    pub fn register_mcp_tools_executable(
+        &mut self,
+        server_name: &str,
+        tools: Vec<McpToolDef>,
+        client: Arc<RmcpClient>,
+        timeout: Duration,
+    ) {
+        for tool_def in tools {
+            let tool_name = tool_def.name.clone();
+            let tool_description = tool_def.description.clone();
+            let tool_schema = {
+                let mut s = serde_json::json!({"type": "object"});
+                if let Some(props) = &tool_def.input_schema.properties {
+                    s["properties"] = props.clone();
+                }
+                if let Some(required) = &tool_def.input_schema.required {
+                    s["required"] = serde_json::to_value(required).unwrap_or_default();
+                }
+                s
+            };
+
+            let wrapper =
+                McpToolWrapper::new(server_name.to_string(), tool_def, client.clone(), timeout);
+            let qualified_name = wrapper.qualified_name();
+
+            debug!(
+                server = %server_name,
+                tool = %tool_name,
+                qualified = %qualified_name,
+                "Registering MCP tool"
+            );
+
+            // Register as executable tool
+            self.tools.insert(qualified_name.clone(), Arc::new(wrapper));
+
+            // Also keep info in mcp_tools for metadata queries
+            self.mcp_tools.insert(
+                qualified_name,
+                McpToolInfo {
+                    server: server_name.to_string(),
+                    name: tool_name,
+                    description: tool_description,
+                    input_schema: tool_schema,
+                },
+            );
+        }
+    }
+
+    /// Unregister an MCP server's tools.
+    pub fn unregister_mcp_server(&mut self, server_name: &str) {
+        let prefix = format!("mcp__{server_name}__");
+        self.mcp_tools.retain(|name, _| !name.starts_with(&prefix));
+        self.tools.retain(|name, _| !name.starts_with(&prefix));
+    }
+
+    /// Get a tool by name.
+    ///
+    /// Lookup order: exact name → alias → case-insensitive fallback.
+    /// The case-insensitive fallback handles models (e.g. OpenAI) that sometimes
+    /// return wrong-case tool names like `Bash` instead of `bash`.
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        // Check direct name first
+        if let Some(tool) = self.tools.get(name) {
+            return Some(tool.clone());
+        }
+
+        // Check aliases
+        if let Some(real_name) = self.aliases.get(name) {
+            return self.tools.get(real_name).cloned();
+        }
+
+        // Case-insensitive fallback
+        let lower = name.to_ascii_lowercase();
+        for (key, tool) in &self.tools {
+            if key.to_ascii_lowercase() == lower {
+                return Some(tool.clone());
+            }
+        }
+        for (alias, real_name) in &self.aliases {
+            if alias.to_ascii_lowercase() == lower {
+                return self.tools.get(real_name).cloned();
+            }
+        }
+
+        None
+    }
+
+    /// Get an MCP tool by name.
+    pub fn get_mcp(&self, name: &str) -> Option<&McpToolInfo> {
+        self.mcp_tools.get(name)
+    }
+
+    /// Check if a tool exists.
+    pub fn has(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
+            || self.aliases.contains_key(name)
+            || self.mcp_tools.contains_key(name)
+    }
+
+    /// Check if a tool is an MCP tool.
+    pub fn is_mcp_tool(&self, name: &str) -> bool {
+        self.mcp_tools.contains_key(name)
+    }
+
+    /// Get tool definitions filtered by feature flags.
+    ///
+    /// Tools whose `feature_gate()` returns a disabled Feature are excluded.
+    /// MCP tools (no feature gate) are always included.
+    pub fn definitions_filtered(
+        &self,
+        features: &cocode_protocol::Features,
+    ) -> Vec<ToolDefinition> {
+        let mut definitions = Vec::new();
+
+        // When StructuredTasks is enabled, TodoWrite is hidden (mutually exclusive)
+        let hide_todo_write = features.enabled(cocode_protocol::Feature::StructuredTasks);
+
+        // Built-in tools — skip those gated on a disabled feature
+        for tool in self.tools.values() {
+            if let Some(feature) = tool.feature_gate()
+                && !features.enabled(feature)
+            {
+                continue;
+            }
+            // Mutual exclusion: hide TodoWrite when StructuredTasks is active
+            if hide_todo_write && tool.name() == cocode_protocol::ToolName::TodoWrite.as_str() {
+                continue;
+            }
+            definitions.push(tool.to_definition());
+        }
+
+        // MCP tools — only include metadata-only entries (no executable wrapper in self.tools)
+        for (qualified_name, mcp_tool) in &self.mcp_tools {
+            if self.tools.contains_key(qualified_name) {
+                continue;
+            }
+            definitions.push(ToolDefinition::with_description(
+                mcp_tool.qualified_name(),
+                mcp_tool
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| format!("MCP tool from {}", mcp_tool.server)),
+                mcp_tool.input_schema.clone(),
+            ));
+        }
+
+        definitions
+    }
+
+    /// Get all tool definitions for API requests.
+    pub fn all_definitions(&self) -> Vec<ToolDefinition> {
+        let mut definitions = Vec::new();
+
+        // Built-in tools
+        for tool in self.tools.values() {
+            definitions.push(tool.to_definition());
+        }
+
+        // MCP tools — only metadata-only entries (no executable wrapper in self.tools)
+        for (qualified_name, mcp_tool) in &self.mcp_tools {
+            if self.tools.contains_key(qualified_name) {
+                continue;
+            }
+            definitions.push(ToolDefinition::with_description(
+                mcp_tool.qualified_name(),
+                mcp_tool
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| format!("MCP tool from {}", mcp_tool.server)),
+                mcp_tool.input_schema.clone(),
+            ));
+        }
+
+        definitions
+    }
+
+    /// Get definitions for specific tools.
+    pub fn definitions_for(&self, names: &[&str]) -> Vec<ToolDefinition> {
+        names
+            .iter()
+            .filter_map(|name| {
+                if let Some(tool) = self.get(name) {
+                    Some(tool.to_definition())
+                } else {
+                    self.get_mcp(name).map(|mcp| {
+                        ToolDefinition::with_description(
+                            mcp.qualified_name(),
+                            mcp.description.clone().unwrap_or_default(),
+                            mcp.input_schema.clone(),
+                        )
+                    })
+                }
+            })
+            .collect()
+    }
+
+    /// Get the number of registered tools.
+    ///
+    /// MCP tools that have an executable wrapper in `self.tools` are counted once
+    /// (via the tools map), not double-counted from `mcp_tools`.
+    pub fn len(&self) -> usize {
+        let metadata_only = self
+            .mcp_tools
+            .keys()
+            .filter(|name| !self.tools.contains_key(name.as_str()))
+            .count();
+        self.tools.len() + metadata_only
+    }
+
+    /// Check if the registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty() && self.mcp_tools.is_empty()
+    }
+
+    /// Get all tool names.
+    ///
+    /// MCP tools that have an executable wrapper in `self.tools` appear once.
+    pub fn tool_names(&self) -> Vec<String> {
+        let mut names: Vec<_> = self.tools.keys().cloned().collect();
+        for name in self.mcp_tools.keys() {
+            if !self.tools.contains_key(name) {
+                names.push(name.clone());
+            }
+        }
+        names.sort();
+        names
+    }
+
+    /// Get names of built-in tools only.
+    pub fn builtin_names(&self) -> Vec<String> {
+        let mut names: Vec<_> = self.tools.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Get names of MCP tools only.
+    pub fn mcp_names(&self) -> Vec<String> {
+        let mut names: Vec<_> = self.mcp_tools.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Restrict the registry to only the named tools.
+    ///
+    /// Removes all tools whose names are not in the provided list.
+    /// MCP tools and aliases are preserved if their target tool survives.
+    pub fn restrict_to(&mut self, names: &[String]) {
+        let allowed: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+        self.tools.retain(|name, _| allowed.contains(name.as_str()));
+        self.aliases
+            .retain(|_, target| allowed.contains(target.as_str()));
+        self.mcp_tools
+            .retain(|name, _| allowed.contains(name.as_str()));
+        self.deferred_tools
+            .retain(|name, _| allowed.contains(name.as_str()));
+    }
+
+    /// Clear all tools.
+    pub fn clear(&mut self) {
+        self.tools.clear();
+        self.mcp_tools.clear();
+        self.aliases.clear();
+        self.deferred_tools.clear();
+    }
+
+    /// Calculate total chars of MCP tool descriptions.
+    ///
+    /// This accounts for the qualified name, description, and serialized input schema
+    /// of each MCP tool. Used to determine if auto-search mode should be enabled.
+    pub fn mcp_description_chars(&self) -> i32 {
+        self.mcp_tools
+            .values()
+            .map(|t| {
+                let name_len = t.qualified_name().len();
+                let desc_len = t.description.as_deref().map(str::len).unwrap_or(0);
+                let schema_len = serde_json::to_string(&t.input_schema)
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+                (name_len + desc_len + schema_len) as i32
+            })
+            .sum()
+    }
+
+    /// Check if MCP tool definitions should be deferred to auto-search mode.
+    ///
+    /// Returns `true` if the total MCP tool description size exceeds the threshold
+    /// configured in `McpAutoSearchConfig` for the given context window.
+    pub fn should_enable_auto_search(
+        &self,
+        context_window: i32,
+        config: &cocode_protocol::McpAutoSearchConfig,
+    ) -> bool {
+        config.should_use_auto_search(
+            context_window,
+            self.mcp_description_chars(),
+            true, // has_tool_calling
+        )
+    }
+
+    /// Get a snapshot of all MCP tool metadata for use by MCPSearch.
+    ///
+    /// Returns a cloned vector of all MCP tool info entries. This snapshot
+    /// is passed to the `McpSearchTool` for keyword-based discovery.
+    pub fn mcp_tool_snapshot(&self) -> Vec<McpToolInfo> {
+        self.mcp_tools.values().cloned().collect()
+    }
+
+    /// Remove MCP tool definitions from the active set (keep metadata for search).
+    ///
+    /// When auto-search mode is enabled, MCP tools are removed from the
+    /// executable tools map so they are not sent as tool definitions in API
+    /// requests. The metadata is kept in `mcp_tools` for search, and the
+    /// executable wrappers are moved to `deferred_tools` for later restoration
+    /// via [`Self::restore_deferred_tools`].
+    ///
+    /// Returns the qualified names of the removed tools.
+    pub fn defer_mcp_tool_definitions(&mut self) -> Vec<String> {
+        let mcp_tool_names: Vec<String> = self.mcp_tools.keys().cloned().collect();
+
+        // Move from executable tools map to deferred storage
+        for name in &mcp_tool_names {
+            if let Some(tool) = self.tools.remove(name) {
+                self.deferred_tools.insert(name.clone(), tool);
+            }
+        }
+
+        mcp_tool_names
+    }
+
+    /// Defer built-in tools that have `should_defer() == true`.
+    ///
+    /// Moves built-in tools marked as deferrable from the active `tools` map
+    /// into the `deferred_tools` storage. This reduces token usage by not
+    /// sending their schemas in every API request. Deferred tools can be
+    /// restored via `restore_deferred_tools()` when discovered by ToolSearch.
+    ///
+    /// Returns the names of tools that were deferred.
+    pub fn defer_builtin_tool_definitions(&mut self) -> Vec<String> {
+        let deferrable: Vec<String> = self
+            .tools
+            .iter()
+            .filter(|(_, tool)| tool.should_defer())
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for name in &deferrable {
+            if let Some(tool) = self.tools.remove(name) {
+                self.deferred_tools.insert(name.clone(), tool);
+            }
+        }
+
+        deferrable
+    }
+
+    /// Get searchable metadata for all deferred tools (MCP + built-in).
+    ///
+    /// Returns (name, description) pairs for tools in the deferred storage.
+    /// Used by the search tool to find deferred built-in tools by keyword.
+    pub fn deferred_tool_info(&self) -> Vec<(String, Option<String>)> {
+        self.deferred_tools
+            .iter()
+            .map(|(name, tool)| (name.clone(), Some(tool.description().to_string())))
+            .collect()
+    }
+
+    /// Get the names of all currently deferred tools.
+    pub fn deferred_tool_names(&self) -> Vec<String> {
+        self.deferred_tools.keys().cloned().collect()
+    }
+
+    /// Restore deferred tools (MCP or built-in) into the active executable set.
+    ///
+    /// When `McpSearchTool` or ToolSearch discovers tools matching a query, it
+    /// emits a `ContextModifier::RestoreDeferredMcpTools` with the qualified
+    /// names. The driver calls this method to move those tools from the deferred
+    /// storage back into the active `tools` map so they become callable.
+    ///
+    /// Returns the qualified names of the tools that were actually restored.
+    pub fn restore_deferred_tools(&mut self, names: &[String]) -> Vec<String> {
+        let mut restored = Vec::new();
+        for name in names {
+            if let Some(tool) = self.deferred_tools.remove(name) {
+                debug!(tool = %name, "Restoring deferred MCP tool");
+                self.tools.insert(name.clone(), tool);
+                restored.push(name.clone());
+            }
+        }
+        restored
+    }
+}
+
+impl std::fmt::Debug for ToolRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolRegistry")
+            .field("builtin_tools", &self.tools.keys().collect::<Vec<_>>())
+            .field("mcp_tools", &self.mcp_tools.keys().collect::<Vec<_>>())
+            .field("aliases", &self.aliases)
+            .field(
+                "deferred_tools",
+                &self.deferred_tools.keys().collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+#[cfg(test)]
+#[path = "registry.test.rs"]
+mod tests;

@@ -1,0 +1,12 @@
+Run a prompt or operation on multiple files matching a pattern.
+
+Usage: /batch <glob-pattern> <instruction>
+Example: /batch "src/**/*.rs" "Add missing doc comments to public functions"
+
+1. Expand the glob pattern to find matching files
+2. For each matching file:
+   a. Read the file
+   b. Apply the instruction
+   c. Write the changes
+3. Report a summary of what was changed
+4. If the instruction fails on a file, continue with the remaining files and report failures at the end

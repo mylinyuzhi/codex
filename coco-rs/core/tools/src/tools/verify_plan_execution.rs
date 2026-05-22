@@ -1,0 +1,187 @@
+//! VerifyPlanExecutionTool — record a post-plan verification checkpoint.
+//!
+//! TS parity: `tools.ts` conditionally registers `VerifyPlanExecutionTool`
+//! when `CLAUDE_CODE_VERIFY_PLAN === 'true'`; the mirrored source tree only
+//! contains the conditional references, not the tool implementation. coco-rs
+//! ships a small built-in tool so `verify_plan_reminder` always points at a
+//! callable tool instead of a dangling name.
+//!
+//! **Scope.** TS's (unavailable) tool triggers a *background verification*
+//! agent (`state/AppStateStore.ts` carries `verificationStarted` /
+//! `verificationCompleted` sub-flags for that flow). coco-rs deliberately
+//! ships the simpler shape: this tool does **not** verify anything itself —
+//! the model is expected to inspect files and run checks first; calling the
+//! tool only *records the checkpoint* and clears `pending_plan_verification`
+//! so the `verify_plan_reminder` nudge stops firing.
+
+use coco_messages::ToolResult;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::PromptOptions;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
+use coco_tool_runtime::ToolUseContext;
+use coco_types::ToolCheckResult;
+use coco_types::ToolId;
+use coco_types::ToolName;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
+
+/// Typed input for [`VerifyPlanExecutionTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct VerifyPlanExecutionInput {
+    /// Brief summary of what was verified.
+    #[serde(default)]
+    pub summary: String,
+    /// Any remaining issues or gaps found during verification.
+    /// Leave empty when none.
+    #[serde(default)]
+    pub issues: String,
+}
+
+/// Status of the verification checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifyPlanExecutionStatus {
+    /// A pending plan verification was active and we recorded it.
+    Verified,
+    /// No pending verification flag was set — tool call was a no-op.
+    NoPendingVerification,
+}
+
+/// Typed output. Wire fields use snake_case (no TS source to mirror —
+/// coco-rs-only tool); legacy `planFilePath` (camelCase) is dropped
+/// per the "disregard backward compatibility" directive.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct VerifyPlanExecutionOutput {
+    pub status: VerifyPlanExecutionStatus,
+    /// Absolute path to the plan file that backs this verification, if
+    /// the session has one available (session id + plans dir resolved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_file_path: Option<String>,
+    pub summary: String,
+    pub issues: String,
+}
+
+pub struct VerifyPlanExecutionTool;
+
+#[async_trait::async_trait]
+impl Tool for VerifyPlanExecutionTool {
+    type Input = VerifyPlanExecutionInput;
+    type Output = VerifyPlanExecutionOutput;
+
+    fn id(&self) -> ToolId {
+        ToolId::Builtin(ToolName::VerifyPlanExecution)
+    }
+
+    fn name(&self) -> &str {
+        ToolName::VerifyPlanExecution.as_str()
+    }
+
+    fn description(
+        &self,
+        _input: &VerifyPlanExecutionInput,
+        _options: &DescriptionOptions,
+    ) -> String {
+        "Record a checkpoint that you have verified the implementation against the approved plan. \
+         This tool does not run any verification itself — do the verification first, then call it."
+            .into()
+    }
+
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        "Call this only AFTER you have directly verified that the implementation satisfies the \
+         approved plan: inspect the relevant files and run the appropriate checks yourself (do \
+         not delegate to the Agent tool or a subagent). The tool performs no verification of its \
+         own — it just records the checkpoint and clears the pending plan-verification reminder."
+            .into()
+    }
+
+    fn is_read_only(&self, _input: &VerifyPlanExecutionInput) -> bool {
+        true
+    }
+    /// Record-only checkpoint with no input dependency — Plan mode keeps it visible.
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+
+    fn requires_user_interaction(&self) -> bool {
+        false
+    }
+
+    async fn check_permissions(
+        &self,
+        _input: &VerifyPlanExecutionInput,
+        _ctx: &ToolUseContext,
+    ) -> ToolCheckResult {
+        ToolCheckResult::Allow {
+            updated_input: None,
+            feedback: None,
+        }
+    }
+
+    fn render_for_model(&self, out: &VerifyPlanExecutionOutput) -> Vec<ToolResultContentPart> {
+        let mut text = match out.status {
+            VerifyPlanExecutionStatus::NoPendingVerification => {
+                "No pending plan verification was active.".to_string()
+            }
+            VerifyPlanExecutionStatus::Verified => {
+                "Plan execution verification recorded.".to_string()
+            }
+        };
+        if let Some(path) = out.plan_file_path.as_deref()
+            && !path.is_empty()
+        {
+            text.push_str(&format!(" Plan file: {path}."));
+        }
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
+    }
+
+    async fn execute(
+        &self,
+        input: VerifyPlanExecutionInput,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<VerifyPlanExecutionOutput>, ToolError> {
+        let pending = match ctx.app_state.as_ref() {
+            Some(state) => state.read().await.pending_plan_verification,
+            None => false,
+        };
+
+        let session_id = ctx.session_id_for_history.as_deref();
+        let agent_id = ctx.agent_id.as_ref().map(|a| a.as_str().to_string());
+        let plan_file_path = match (session_id, ctx.plans_dir.as_ref()) {
+            (Some(sid), Some(plans_dir)) => Some(
+                coco_context::get_plan_file_path(sid, plans_dir, agent_id.as_deref())
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            _ => None,
+        };
+
+        let status = if pending {
+            VerifyPlanExecutionStatus::Verified
+        } else {
+            VerifyPlanExecutionStatus::NoPendingVerification
+        };
+
+        let patch: coco_types::AppStatePatch = Box::new(|state| {
+            state.pending_plan_verification = false;
+        });
+
+        Ok(ToolResult::data(VerifyPlanExecutionOutput {
+            status,
+            plan_file_path,
+            summary: input.summary.trim().to_string(),
+            issues: input.issues.trim().to_string(),
+        })
+        .with_patch(patch))
+    }
+}
+
+#[cfg(test)]
+#[path = "verify_plan_execution.test.rs"]
+mod tests;

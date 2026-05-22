@@ -1,0 +1,38 @@
+[build]
+rustc-wrapper = "sccache"
+
+[env]
+SCCACHE_CACHE_SIZE = "40G"
+SCCACHE_IDLE_TIMEOUT = "0"
+
+[profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
+
+[profile.ci]
+incremental = false
+
+[profile.ci-test]
+incremental = false
+
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/STACK:8388608"]
+
+[target.'cfg(all(windows, target_env = "gnu"))']
+rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]
+
+# Use mold as the linker on Linux. mold (https://github.com/rui314/mold)
+# is a drop-in replacement for GNU ld, typically 5-10x faster on debug
+# / test binaries (which are the bottleneck of `cargo test --no-run`).
+# GCC 12+ supports `-fuse-ld=mold` natively — no clang required.
+#
+# Install:  apt install mold
+# Verify:   mold --version
+# Rollback: remove these two target sections.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

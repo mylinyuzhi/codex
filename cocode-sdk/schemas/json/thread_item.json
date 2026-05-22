@@ -1,0 +1,449 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ThreadItem",
+  "description": "A discrete operation within a turn.",
+  "type": "object",
+  "oneOf": [
+    {
+      "description": "Assistant text response.",
+      "type": "object",
+      "required": [
+        "text",
+        "type"
+      ],
+      "properties": {
+        "text": {
+          "description": "Accumulated text so far.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "agent_message"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Extended thinking / reasoning output.",
+      "type": "object",
+      "required": [
+        "text",
+        "type"
+      ],
+      "properties": {
+        "text": {
+          "description": "Accumulated reasoning text.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "reasoning"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Shell command execution (Bash tool).",
+      "type": "object",
+      "required": [
+        "aggregated_output",
+        "command",
+        "status",
+        "type"
+      ],
+      "properties": {
+        "aggregated_output": {
+          "description": "Combined stdout + stderr output.",
+          "type": "string"
+        },
+        "command": {
+          "description": "The command string.",
+          "type": "string"
+        },
+        "exit_code": {
+          "description": "Process exit code (None while running).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "status": {
+          "description": "Current status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ItemStatus"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "command_execution"
+          ]
+        }
+      }
+    },
+    {
+      "description": "File changes (Edit / Write / apply-patch tools).",
+      "type": "object",
+      "required": [
+        "changes",
+        "status",
+        "type"
+      ],
+      "properties": {
+        "changes": {
+          "description": "Individual file changes.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FileChange"
+          }
+        },
+        "status": {
+          "description": "Current status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ItemStatus"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "file_change"
+          ]
+        }
+      }
+    },
+    {
+      "description": "MCP tool invocation.",
+      "type": "object",
+      "required": [
+        "server",
+        "status",
+        "tool",
+        "type"
+      ],
+      "properties": {
+        "arguments": {
+          "description": "Tool arguments.",
+          "default": null
+        },
+        "error": {
+          "description": "Error info (if failed).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpToolCallError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "description": "Result content (if completed successfully).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpToolCallResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "server": {
+          "description": "MCP server name.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Current status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ItemStatus"
+            }
+          ]
+        },
+        "tool": {
+          "description": "Tool name.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "mcp_tool_call"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Web search or web fetch.",
+      "type": "object",
+      "required": [
+        "query",
+        "status",
+        "type"
+      ],
+      "properties": {
+        "query": {
+          "description": "Search query or URL.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Current status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ItemStatus"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "web_search"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Sub-agent spawned via Agent/Task tool.",
+      "type": "object",
+      "required": [
+        "agent_id",
+        "agent_type",
+        "description",
+        "status",
+        "type"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Agent identifier.",
+          "type": "string"
+        },
+        "agent_type": {
+          "description": "Agent type (e.g., \"general-purpose\", \"Explore\").",
+          "type": "string"
+        },
+        "description": {
+          "description": "Short description of the agent's task.",
+          "type": "string"
+        },
+        "is_background": {
+          "description": "Whether the agent is running in background.",
+          "default": false,
+          "type": "boolean"
+        },
+        "result": {
+          "description": "Agent result (set on completion).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Current status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ItemStatus"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "subagent"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Catch-all for other built-in tools (Read, Glob, Grep, etc.).",
+      "type": "object",
+      "required": [
+        "status",
+        "tool",
+        "type"
+      ],
+      "properties": {
+        "input": {
+          "description": "Tool input (JSON).",
+          "default": null
+        },
+        "is_error": {
+          "description": "Whether the tool returned an error.",
+          "default": false,
+          "type": "boolean"
+        },
+        "output": {
+          "description": "Tool output.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Current status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ItemStatus"
+            }
+          ]
+        },
+        "tool": {
+          "description": "Tool name.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "tool_call"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Non-fatal error surfaced as an item.",
+      "type": "object",
+      "required": [
+        "message",
+        "type"
+      ],
+      "properties": {
+        "message": {
+          "description": "Error message.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "error"
+          ]
+        }
+      }
+    }
+  ],
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "description": "Unique identifier for this item.",
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "FileChange": {
+      "description": "A single file change within a `FileChangeItem`.",
+      "type": "object",
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Kind of change.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/FileChangeKind"
+            }
+          ]
+        },
+        "path": {
+          "description": "File path (relative or absolute).",
+          "type": "string"
+        }
+      }
+    },
+    "FileChangeKind": {
+      "description": "Kind of file modification.",
+      "oneOf": [
+        {
+          "description": "New file created.",
+          "type": "string",
+          "enum": [
+            "add"
+          ]
+        },
+        {
+          "description": "Existing file deleted.",
+          "type": "string",
+          "enum": [
+            "delete"
+          ]
+        },
+        {
+          "description": "Existing file modified.",
+          "type": "string",
+          "enum": [
+            "update"
+          ]
+        }
+      ]
+    },
+    "ItemStatus": {
+      "description": "Lifecycle status of a thread item.",
+      "oneOf": [
+        {
+          "description": "Operation is running.",
+          "type": "string",
+          "enum": [
+            "in_progress"
+          ]
+        },
+        {
+          "description": "Operation finished successfully.",
+          "type": "string",
+          "enum": [
+            "completed"
+          ]
+        },
+        {
+          "description": "Operation failed.",
+          "type": "string",
+          "enum": [
+            "failed"
+          ]
+        },
+        {
+          "description": "Tool was declined by user or permission system.",
+          "type": "string",
+          "enum": [
+            "declined"
+          ]
+        }
+      ]
+    },
+    "McpToolCallError": {
+      "description": "Error from a failed MCP tool call.",
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "description": "Error message.",
+          "type": "string"
+        }
+      }
+    },
+    "McpToolCallResult": {
+      "description": "Successful result from an MCP tool call.",
+      "type": "object",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "description": "Content blocks returned by the MCP server.",
+          "type": "array",
+          "items": true
+        },
+        "structured_content": {
+          "description": "Structured content (if provided by MCP server)."
+        }
+      }
+    }
+  }
+}

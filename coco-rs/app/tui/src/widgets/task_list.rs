@@ -1,0 +1,147 @@
+//! Task list widget — background task management state.
+//!
+//! TS: src/components/tasks/ (12 files, 4K LOC)
+//! Shows running/completed/failed tasks with progress, output preview, and controls.
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
+
+use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
+
+/// A task entry for the task list display.
+#[derive(Debug, Clone)]
+pub struct TaskEntry {
+    pub id: String,
+    pub name: String,
+    pub status: TaskDisplayStatus,
+    pub task_type: TaskDisplayType,
+    pub progress: Option<String>,
+    pub elapsed_ms: i64,
+}
+
+/// Task display status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskDisplayStatus {
+    Running,
+    Completed,
+    Failed,
+    Backgrounded,
+}
+
+/// Task display type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskDisplayType {
+    Shell,
+    Agent,
+    Dream,
+    Remote,
+}
+
+/// Task list widget for the state.
+pub struct TaskListWidget<'a> {
+    tasks: &'a [TaskEntry],
+    selected: i32,
+    styles: UiStyles<'a>,
+}
+
+impl<'a> TaskListWidget<'a> {
+    pub fn new(tasks: &'a [TaskEntry], styles: UiStyles<'a>) -> Self {
+        Self {
+            tasks,
+            selected: 0,
+            styles,
+        }
+    }
+
+    pub fn selected(mut self, index: i32) -> Self {
+        self.selected = index;
+        self
+    }
+}
+
+impl Widget for TaskListWidget<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let mut lines: Vec<Line> = Vec::new();
+
+        if self.tasks.is_empty() {
+            lines.push(Line::from(
+                Span::raw(format!("  {}", t!("task.none"))).fg(self.styles.dim()),
+            ));
+        }
+
+        for (i, task) in self.tasks.iter().enumerate() {
+            let is_selected = i as i32 == self.selected;
+            let marker = if is_selected { "▸ " } else { "  " };
+
+            let (icon, color) = match task.status {
+                TaskDisplayStatus::Running => ("●", self.styles.tool_running()),
+                TaskDisplayStatus::Completed => ("✓", self.styles.tool_completed()),
+                TaskDisplayStatus::Failed => ("✗", self.styles.tool_error()),
+                TaskDisplayStatus::Backgrounded => ("◐", self.styles.dim()),
+            };
+
+            let type_label = match task.task_type {
+                TaskDisplayType::Shell => t!("task.type_shell"),
+                TaskDisplayType::Agent => t!("task.type_agent"),
+                TaskDisplayType::Dream => t!("task.type_dream"),
+                TaskDisplayType::Remote => t!("task.type_remote"),
+            };
+
+            let elapsed = format_elapsed(task.elapsed_ms);
+
+            let mut spans = vec![
+                Span::raw(marker),
+                Span::raw(format!("{icon} ")).fg(color),
+                Span::raw(&task.name).fg(self.styles.text()),
+                Span::raw(format!(" [{type_label}]")).fg(self.styles.dim()),
+                Span::raw(format!(" ({elapsed})")).fg(self.styles.dim()),
+            ];
+
+            if let Some(ref progress) = task.progress {
+                spans.push(
+                    Span::raw(format!(" — {progress}"))
+                        .fg(self.styles.dim())
+                        .italic(),
+                );
+            }
+
+            lines.push(Line::from(spans));
+        }
+
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::raw(format!("  {}", t!("task.hint_view"))).fg(self.styles.dim()),
+            Span::raw(t!("task.hint_kill").to_string()).fg(self.styles.dim()),
+            Span::raw(t!("task.hint_close").to_string()).fg(self.styles.dim()),
+        ]));
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(t!("task.panel_title").to_string())
+            .border_style(ratatui::style::Style::default().fg(self.styles.focused_border()));
+
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
+        paragraph.render(area, buf);
+    }
+}
+
+fn format_elapsed(ms: i64) -> String {
+    if ms >= 60_000 {
+        format!("{}m{}s", ms / 60_000, (ms % 60_000) / 1000)
+    } else if ms >= 1000 {
+        format!("{}s", ms / 1000)
+    } else {
+        format!("{ms}ms")
+    }
+}

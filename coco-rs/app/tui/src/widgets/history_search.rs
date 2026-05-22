@@ -1,0 +1,221 @@
+//! History search widget — search through conversation history.
+//!
+//! TS: src/hooks/useHistorySearch.ts (19KB)
+//! Fuzzy/regex search with match highlighting and jump-to navigation.
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
+
+use crate::i18n::t;
+use crate::presentation::styles::UiStyles;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
+
+/// A search match in the message history.
+#[derive(Debug, Clone)]
+pub struct SearchMatch {
+    /// Index into the messages array.
+    pub message_index: i32,
+    /// Preview of the matching content.
+    pub preview: String,
+    /// Role label for display.
+    pub role_label: String,
+}
+
+/// History search state.
+#[derive(Debug, Clone)]
+pub struct HistorySearchState {
+    /// Current search query.
+    pub query: String,
+    /// Matching results.
+    pub matches: Vec<SearchMatch>,
+    /// Currently selected match index.
+    pub selected: i32,
+}
+
+impl HistorySearchState {
+    /// Create a new search state.
+    pub fn new() -> Self {
+        Self {
+            query: String::new(),
+            matches: Vec::new(),
+            selected: 0,
+        }
+    }
+
+    /// Execute search against the engine-authoritative cell list.
+    pub fn search(&mut self, cells: &[RenderedCell]) {
+        let query_lower = self.query.to_lowercase();
+        self.matches.clear();
+        self.selected = 0;
+
+        if query_lower.is_empty() {
+            return;
+        }
+
+        for (i, cell) in cells.iter().enumerate() {
+            let Some((text, role_label)) = cell_search_target(cell) else {
+                continue;
+            };
+            if !text.to_lowercase().contains(&query_lower) {
+                continue;
+            }
+            let preview = if text.len() > 80 {
+                if let Some(pos) = text.to_lowercase().find(&query_lower) {
+                    let start = pos.saturating_sub(20);
+                    let end = (pos + query_lower.len() + 40).min(text.len());
+                    format!("...{}...", &text[start..end])
+                } else {
+                    text[..80].to_string()
+                }
+            } else {
+                text.to_string()
+            };
+            self.matches.push(SearchMatch {
+                message_index: i as i32,
+                preview,
+                role_label: role_label.to_string(),
+            });
+        }
+    }
+
+    /// Move selection up.
+    pub fn select_prev(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    pub fn select_next(&mut self) {
+        if self.selected < self.matches.len() as i32 - 1 {
+            self.selected += 1;
+        }
+    }
+
+    /// Get the selected match's message index.
+    pub fn selected_message_index(&self) -> Option<i32> {
+        self.matches
+            .get(self.selected as usize)
+            .map(|m| m.message_index)
+    }
+}
+
+/// Extract (text, role_label) from a cell when it is a searchable
+/// row. Returns `None` for cells that have no searchable body
+/// (attachments / progress / tombstones / pure-marker system rows).
+fn cell_search_target(cell: &RenderedCell) -> Option<(&str, &'static str)> {
+    match &cell.kind {
+        CellKind::UserText { text } => Some((text.as_str(), "you")),
+        CellKind::AssistantText { text, .. } => Some((text.as_str(), "assistant")),
+        CellKind::AssistantThinking { text, .. } => Some((text.as_str(), "assistant")),
+        CellKind::System(_) => {
+            if let coco_messages::Message::System(coco_messages::SystemMessage::Informational(
+                info,
+            )) = cell.source.as_ref()
+            {
+                Some((info.message.as_str(), "system"))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+impl Default for HistorySearchState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// History search state widget.
+pub struct HistorySearchWidget<'a> {
+    state: &'a HistorySearchState,
+    styles: UiStyles<'a>,
+}
+
+impl<'a> HistorySearchWidget<'a> {
+    pub fn new(state: &'a HistorySearchState, styles: UiStyles<'a>) -> Self {
+        Self { state, styles }
+    }
+}
+
+impl Widget for HistorySearchWidget<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let mut lines: Vec<Line> = Vec::new();
+
+        // Search input
+        lines.push(Line::from(vec![
+            Span::raw("  🔍 ").fg(self.styles.accent()),
+            if self.state.query.is_empty() {
+                Span::raw(t!("history_search.type_to_search").to_string()).fg(self.styles.dim())
+            } else {
+                Span::raw(&self.state.query).fg(self.styles.text())
+            },
+            Span::raw("▌").fg(self.styles.accent()),
+        ]));
+        lines.push(Line::default());
+
+        // Results
+        if self.state.matches.is_empty() && !self.state.query.is_empty() {
+            lines.push(Line::from(
+                Span::raw(format!("  {}", t!("history_search.no_matches"))).fg(self.styles.dim()),
+            ));
+        }
+
+        for (i, m) in self.state.matches.iter().enumerate().take(15) {
+            let is_selected = i as i32 == self.state.selected;
+            let marker = if is_selected { "▸ " } else { "  " };
+            let role_color = match m.role_label.as_str() {
+                "you" => self.styles.user_message(),
+                "assistant" => self.styles.assistant_message(),
+                _ => self.styles.dim(),
+            };
+
+            lines.push(Line::from(vec![
+                Span::raw(marker),
+                Span::raw(format!("[{}] ", m.role_label)).fg(role_color),
+                Span::raw(&m.preview).fg(self.styles.text()),
+            ]));
+        }
+
+        if self.state.matches.len() > 15 {
+            lines.push(Line::from(
+                Span::raw(
+                    t!(
+                        "history_search.more_matches",
+                        count = self.state.matches.len() - 15
+                    )
+                    .to_string(),
+                )
+                .fg(self.styles.dim()),
+            ));
+        }
+
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::raw(format!("  {}", t!("history_search.hint_jump"))).fg(self.styles.dim()),
+            Span::raw(t!("history_search.hint_navigate").to_string()).fg(self.styles.dim()),
+            Span::raw(t!("history_search.hint_close").to_string()).fg(self.styles.dim()),
+        ]));
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(t!("history_search.panel_title").to_string())
+            .border_style(ratatui::style::Style::default().fg(self.styles.focused_border()));
+
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
+        paragraph.render(area, buf);
+    }
+}
