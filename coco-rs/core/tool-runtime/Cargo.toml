@@ -33,7 +33,7 @@ serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 async-trait.workspace = true
 futures = { workspace = true, features = ["alloc"] }
-jsonschema = "0.18"
+jsonschema.workspace = true
 # Used by `derive` module to produce `ToolInputSchema` from
 # `#[derive(JsonSchema)]` input/output structs — one artifact per tool
 # is the source of truth for both schema and typed parsing.

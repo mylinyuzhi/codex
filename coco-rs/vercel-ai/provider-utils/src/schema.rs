@@ -20,7 +20,7 @@ pub trait Schema: Send + Sync {
 pub struct JsonSchemaWrapper<T> {
     schema: JSONSchema,
     #[cfg(feature = "schema-validation")]
-    compiled: Option<jsonschema::JSONSchema>,
+    compiled: Option<jsonschema::Validator>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -29,7 +29,7 @@ impl<T> JsonSchemaWrapper<T> {
     pub fn new(schema: JSONSchema) -> Self {
         #[cfg(feature = "schema-validation")]
         {
-            let compiled = jsonschema::JSONSchema::compile(&schema).ok();
+            let compiled = jsonschema::validator_for(&schema).ok();
             Self {
                 schema,
                 compiled,
@@ -60,11 +60,11 @@ impl<T: DeserializeOwned + Send + Sync + 'static> Schema for JsonSchemaWrapper<T
         #[cfg(feature = "schema-validation")]
         {
             if let Some(compiled) = &self.compiled {
-                let result = compiled.validate(value);
-                if let Err(errors) = result {
-                    let messages: Vec<String> = errors
-                        .map(|e| format!("{} at {}", e, e.instance_path))
-                        .collect();
+                let messages: Vec<String> = compiled
+                    .iter_errors(value)
+                    .map(|e| format!("{} at {}", e, e.instance_path()))
+                    .collect();
+                if !messages.is_empty() {
                     return Err(ValidationError::SchemaValidation(messages));
                 }
             }

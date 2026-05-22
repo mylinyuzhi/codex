@@ -83,10 +83,7 @@ pub fn effective_tool_schema(tool: &dyn DynTool) -> Value {
 /// caches it for subsequent calls.
 #[derive(Clone, Default)]
 pub struct ToolSchemaValidator {
-    cache: Arc<RwLock<HashMap<ToolId, Arc<jsonschema::JSONSchema>>>>,
-    // jsonschema 0.18 exposes `JSONSchema` as the compiled handle.
-    // The 0.20 series renames it to `Validator`; when we upgrade,
-    // this type alias + `compile` callsite change.
+    cache: Arc<RwLock<HashMap<ToolId, Arc<jsonschema::Validator>>>>,
 }
 
 /// Error returned by [`ToolSchemaValidator::validate`].
@@ -136,7 +133,7 @@ impl ToolSchemaValidator {
         }
         // Slow path: compile + insert under write lock.
         let schema = effective_tool_schema(tool);
-        let validator = jsonschema::JSONSchema::compile(&schema).map_err(|e| {
+        let validator = jsonschema::validator_for(&schema).map_err(|e| {
             SchemaValidationError::SchemaCompileFailed {
                 message: e.to_string(),
             }
@@ -150,20 +147,21 @@ impl ToolSchemaValidator {
 
     /// Internal: run a single validation, aggregating errors.
     fn validate_with(
-        validator: &jsonschema::JSONSchema,
+        validator: &jsonschema::Validator,
         input: &Value,
     ) -> Result<(), SchemaValidationError> {
-        match validator.validate(input) {
-            Ok(()) => Ok(()),
-            Err(errors) => {
-                // Surface up to 3 errors for signal without flooding.
-                let joined = errors
-                    .take(3)
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                Err(SchemaValidationError::Rejected { message: joined })
-            }
+        // Surface up to 3 errors for signal without flooding.
+        let errors: Vec<String> = validator
+            .iter_errors(input)
+            .take(3)
+            .map(|e| e.to_string())
+            .collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(SchemaValidationError::Rejected {
+                message: errors.join("; "),
+            })
         }
     }
 
@@ -191,7 +189,7 @@ impl ToolSchemaValidator {
         } else {
             // Slow path: compile + insert
             let schema = effective_tool_schema(tool);
-            let compiled = jsonschema::JSONSchema::compile(&schema).map_err(|e| {
+            let compiled = jsonschema::validator_for(&schema).map_err(|e| {
                 SchemaValidationError::SchemaCompileFailed {
                     message: e.to_string(),
                 }
@@ -201,12 +199,14 @@ impl ToolSchemaValidator {
             cache.entry(tool_id).or_insert(compiled).clone()
         };
 
-        match validator.validate(input) {
-            Ok(()) => Ok(Ok(())),
-            Err(errors) => {
-                let issues = errors.map(SchemaIssue::from_jsonschema).collect::<Vec<_>>();
-                Ok(Err(issues))
-            }
+        let issues: Vec<SchemaIssue> = validator
+            .iter_errors(input)
+            .map(SchemaIssue::from_jsonschema)
+            .collect();
+        if issues.is_empty() {
+            Ok(Ok(()))
+        } else {
+            Ok(Err(issues))
         }
     }
 }
@@ -242,8 +242,10 @@ impl SchemaIssue {
     fn from_jsonschema(err: jsonschema::ValidationError<'_>) -> Self {
         use jsonschema::error::ValidationErrorKind;
 
-        let path = err.instance_path.to_string();
-        match &err.kind {
+        let path = err.instance_path().to_string();
+        let message = err.to_string();
+        let instance_type = json_type_name(err.instance());
+        match err.kind() {
             ValidationErrorKind::Required { property } => SchemaIssue::MissingRequired {
                 path,
                 field: property
@@ -261,25 +263,18 @@ impl SchemaIssue {
                         field: first.clone(),
                     }
                 } else {
-                    SchemaIssue::Other {
-                        path,
-                        message: err.to_string(),
-                    }
+                    SchemaIssue::Other { path, message }
                 }
             }
             ValidationErrorKind::Type { kind } => {
                 let expected = format_type_kind(kind);
-                let received = json_type_name(err.instance.as_ref());
                 SchemaIssue::TypeMismatch {
                     path,
                     expected,
-                    received: received.into(),
+                    received: instance_type.into(),
                 }
             }
-            _ => SchemaIssue::Other {
-                path,
-                message: err.to_string(),
-            },
+            _ => SchemaIssue::Other { path, message },
         }
     }
 }
