@@ -126,13 +126,45 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
 ///    settings, …) that aren't in the TS schema yet.
 pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctx = active_context(state);
+    let (cmd, source) = resolve_key(state, key, ctx);
+    match cmd.as_ref() {
+        Some(c) => tracing::debug!(
+            target: "coco_tui::keybinding",
+            key = ?key.code,
+            mods = ?key.modifiers,
+            ctx = ?ctx,
+            source,
+            cmd = ?c,
+            "key → TuiCommand",
+        ),
+        None => tracing::trace!(
+            target: "coco_tui::keybinding",
+            key = ?key.code,
+            mods = ?key.modifiers,
+            ctx = ?ctx,
+            source,
+            "key swallowed (no TuiCommand)",
+        ),
+    }
+    cmd
+}
 
+/// Inner resolution returning both the command and where it came from
+/// (`resolver`, `cascade`, `pending`, `consumed`, `unmapped`). The
+/// `source` tag is the breadcrumb that distinguishes "resolver knew
+/// this and dispatched" from "resolver had nothing → cascade picked it
+/// up" — critical when a user reports a customized binding misfiring.
+fn resolve_key(
+    state: &AppState,
+    key: KeyEvent,
+    ctx: KeybindingContext,
+) -> (Option<TuiCommand>, &'static str) {
     if matches!(ctx, KeybindingContext::Transcript) {
         if matches!(key.code, KeyCode::BackTab) {
-            return None;
+            return (None, "transcript_backtab");
         }
         if let Some(cmd) = map_transcript_key(key) {
-            return Some(cmd);
+            return (Some(cmd), "transcript");
         }
     }
 
@@ -140,26 +172,26 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     match state.ui.kb_handle.resolve_key(key, ctx) {
         crate::keybinding_resolver::ResolverResult::Action(action) => {
             if let Some(cmd) = crate::keybinding_dispatch::dispatch_action(&action, state) {
-                return Some(cmd);
+                return (Some(cmd), "resolver");
             }
             // Resolver knew about this action but the TUI doesn't have
             // a handler yet. Swallow the keystroke instead of falling
             // through to the cascade — that path would do the wrong
             // thing for a user who customized the chord.
-            return None;
+            return (None, "resolver_no_handler");
         }
         crate::keybinding_resolver::ResolverResult::Pending => {
             // Caller should render a "ctrl+x …" chord status hint.
             // We don't have a dedicated TuiCommand for that yet, so
             // swallow the keystroke. Status-bar wiring is P8 follow-up.
-            return None;
+            return (None, "chord_pending");
         }
-        crate::keybinding_resolver::ResolverResult::Consumed => return None,
+        crate::keybinding_resolver::ResolverResult::Consumed => return (None, "consumed"),
         crate::keybinding_resolver::ResolverResult::NotResolved => {}
     }
 
     // Layer 2: legacy hardcoded cascade (TUI-only shortcuts).
-    match ctx {
+    let cmd = match ctx {
         KeybindingContext::Confirmation => map_confirmation_key(key),
         KeybindingContext::ModelPicker => map_model_picker_key(key),
         KeybindingContext::Picker => map_picker_key(key),
@@ -173,7 +205,9 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
             .or_else(|| map_input_key(state, key)),
         KeybindingContext::Settings | KeybindingContext::ThemePicker => map_settings_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),
-    }
+    };
+    let source = if cmd.is_some() { "cascade" } else { "unmapped" };
+    (cmd, source)
 }
 
 /// Keys for the model picker: Up/Down chooses a model, Left/Right chooses

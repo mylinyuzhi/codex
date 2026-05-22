@@ -121,7 +121,16 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                 } else {
                     (true, None)
                 };
-                let _ = command_tx
+                tracing::info!(
+                    target: "coco_tui::permission",
+                    request_id = %p.request_id,
+                    tool_name = %p.tool_name,
+                    permission_decision = if approved { "approve" } else { "deny" },
+                    always_allow = false,
+                    multi_choice = p.choices.is_some(),
+                    "user permission decision",
+                );
+                if let Err(e) = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id: p.request_id.clone(),
                         approved,
@@ -131,10 +140,24 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                         permission_updates: vec![],
                         content_blocks: None,
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(
+                        target: "coco_tui::permission",
+                        error = %e,
+                        "failed to dispatch ApprovalResponse (channel closed)",
+                    );
+                }
                 state.ui.dismiss_prompt();
             }
             PanePromptState::SandboxPermission(s) => {
+                tracing::info!(
+                    target: "coco_tui::permission",
+                    request_id = %s.request_id,
+                    kind = "sandbox",
+                    permission_decision = "approve",
+                    "user sandbox permission decision",
+                );
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id: s.request_id.clone(),
@@ -149,6 +172,13 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                 state.ui.dismiss_prompt();
             }
             PanePromptState::McpServerApproval(m) => {
+                tracing::info!(
+                    target: "coco_tui::permission",
+                    request_id = %m.request_id,
+                    kind = "mcp_server",
+                    permission_decision = "approve",
+                    "user MCP server approval decision",
+                );
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id: m.request_id.clone(),
@@ -258,6 +288,14 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
     if let Some(prompt) = state.ui.interaction.active_prompt.as_ref() {
         match prompt {
             PanePromptState::Permission(p) => {
+                tracing::info!(
+                    target: "coco_tui::permission",
+                    request_id = %p.request_id,
+                    tool_name = %p.tool_name,
+                    permission_decision = "deny",
+                    always_allow = false,
+                    "user permission decision",
+                );
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id: p.request_id.clone(),
@@ -272,6 +310,13 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
                 state.ui.dismiss_prompt();
             }
             PanePromptState::SandboxPermission(s) => {
+                tracing::info!(
+                    target: "coco_tui::permission",
+                    request_id = %s.request_id,
+                    kind = "sandbox",
+                    permission_decision = "deny",
+                    "user sandbox permission decision",
+                );
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id: s.request_id.clone(),
@@ -286,6 +331,13 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
                 state.ui.dismiss_prompt();
             }
             PanePromptState::McpServerApproval(m) => {
+                tracing::info!(
+                    target: "coco_tui::permission",
+                    request_id = %m.request_id,
+                    kind = "mcp_server",
+                    permission_decision = "deny",
+                    "user MCP server approval decision",
+                );
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id: m.request_id.clone(),
@@ -364,6 +416,20 @@ pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<
     if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref()
         && p.show_always_allow
     {
+        let updates = always_allow_updates(
+            &p.tool_name,
+            p.original_input.as_ref(),
+            &p.permission_suggestions,
+        );
+        tracing::info!(
+            target: "coco_tui::permission",
+            request_id = %p.request_id,
+            tool_name = %p.tool_name,
+            permission_decision = "approve",
+            always_allow = true,
+            rules = updates.len(),
+            "user always-allow decision",
+        );
         let _ = command_tx
             .send(UserCommand::ApprovalResponse {
                 request_id: p.request_id.clone(),
@@ -371,11 +437,7 @@ pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<
                 always_allow: true,
                 feedback: None,
                 updated_input: None,
-                permission_updates: always_allow_updates(
-                    &p.tool_name,
-                    p.original_input.as_ref(),
-                    &p.permission_suggestions,
-                ),
+                permission_updates: updates,
                 content_blocks: None,
             })
             .await;
@@ -487,6 +549,14 @@ pub(super) async fn classifier_auto_approve(
     if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref()
         && p.request_id == request_id
     {
+        tracing::info!(
+            target: "coco_tui::permission",
+            request_id = %p.request_id,
+            tool_name = %p.tool_name,
+            permission_decision = "approve",
+            source = "classifier",
+            "classifier auto-approve",
+        );
         let _ = command_tx
             .send(UserCommand::ApprovalResponse {
                 request_id: p.request_id.clone(),

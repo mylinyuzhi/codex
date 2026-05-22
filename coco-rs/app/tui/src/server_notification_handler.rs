@@ -59,10 +59,135 @@ pub fn handle_core_event(
     event: CoreEvent,
     command_tx: &Sender<UserCommand>,
 ) -> bool {
+    // Top-level breadcrumb. Per-arm handlers in `protocol.rs` / `tui_only.rs`
+    // emit richer logs for the variants that matter; this one is the
+    // "did we even receive the event" hook for forensics. Stream deltas
+    // (TextDelta / ThinkingDelta) fire per-chunk so they get `trace!`;
+    // everything else is debug.
+    match &event {
+        CoreEvent::Stream(coco_types::AgentStreamEvent::TextDelta { .. })
+        | CoreEvent::Stream(coco_types::AgentStreamEvent::ThinkingDelta { .. }) => {
+            tracing::trace!(target: "coco_tui::core_event", layer = "stream", "stream delta");
+        }
+        CoreEvent::Protocol(notif) => tracing::debug!(
+            target: "coco_tui::core_event",
+            layer = "protocol",
+            variant = core_event_variant(notif),
+            "CoreEvent fold",
+        ),
+        CoreEvent::Stream(s) => tracing::debug!(
+            target: "coco_tui::core_event",
+            layer = "stream",
+            variant = stream_event_variant(s),
+            "CoreEvent fold",
+        ),
+        CoreEvent::Tui(t) => tracing::debug!(
+            target: "coco_tui::core_event",
+            layer = "tui",
+            variant = tui_event_variant(t),
+            "CoreEvent fold",
+        ),
+    }
     match event {
         CoreEvent::Protocol(notif) => protocol::handle(state, notif, command_tx),
         CoreEvent::Stream(stream_evt) => stream::handle(state, stream_evt),
         CoreEvent::Tui(tui_evt) => tui_only::handle(state, tui_evt, command_tx),
+    }
+}
+
+/// Cheap variant-name extraction for logging. Avoids paying the `Debug`
+/// price for the full payload on the per-event hot path.
+fn core_event_variant(notif: &coco_types::ServerNotification) -> &'static str {
+    use coco_types::ServerNotification as N;
+    match notif {
+        N::SessionStarted(_) => "SessionStarted",
+        N::SessionResult(_) => "SessionResult",
+        N::SessionEnded(_) => "SessionEnded",
+        N::TurnStarted(_) => "TurnStarted",
+        N::TurnCompleted(_) => "TurnCompleted",
+        N::TurnFailed(_) => "TurnFailed",
+        N::TurnInterrupted(_) => "TurnInterrupted",
+        N::MaxTurnsReached { .. } => "MaxTurnsReached",
+        N::ItemStarted { .. } => "ItemStarted",
+        N::ItemUpdated { .. } => "ItemUpdated",
+        N::ItemCompleted { .. } => "ItemCompleted",
+        N::AgentMessageDelta(_) => "AgentMessageDelta",
+        N::ReasoningDelta(_) => "ReasoningDelta",
+        N::MessageAppended { .. } => "MessageAppended",
+        N::MessageTruncated { .. } => "MessageTruncated",
+        N::SessionResetForResume { .. } => "SessionResetForResume",
+        N::ReasoningMetadataAttached(_) => "ReasoningMetadataAttached",
+        N::HistoryReplaced { .. } => "HistoryReplaced",
+        N::ToolUseSummary(_) => "ToolUseSummary",
+        N::ToolProgress(_) => "ToolProgress",
+        N::SummarizeCompleted(_) => "SummarizeCompleted",
+        N::SummarizeFailed { .. } => "SummarizeFailed",
+        N::StreamStallDetected { .. } => "StreamStallDetected",
+        N::StreamWatchdogWarning { .. } => "StreamWatchdogWarning",
+        N::StreamRequestEnd { .. } => "StreamRequestEnd",
+        N::SessionStateChanged { .. } => "SessionStateChanged",
+        N::LocalCommandOutput(_) => "LocalCommandOutput",
+        N::FilesPersisted(_) => "FilesPersisted",
+        N::ElicitationComplete(_) => "ElicitationComplete",
+        N::PluginsChanged { .. } => "PluginsChanged",
+        N::WorktreeExited(_) => "WorktreeExited",
+        N::SubagentSpawned(_) => "SubagentSpawned",
+        N::SubagentCompleted(_) => "SubagentCompleted",
+        _ => "Other",
+    }
+}
+
+fn stream_event_variant(s: &coco_types::AgentStreamEvent) -> &'static str {
+    use coco_types::AgentStreamEvent as E;
+    match s {
+        E::TextDelta { .. } => "TextDelta",
+        E::ThinkingDelta { .. } => "ThinkingDelta",
+        E::ToolUseQueued { .. } => "ToolUseQueued",
+        E::ToolUseStarted { .. } => "ToolUseStarted",
+        E::ToolUseCompleted { .. } => "ToolUseCompleted",
+        E::McpToolCallBegin { .. } => "McpToolCallBegin",
+        E::McpToolCallEnd { .. } => "McpToolCallEnd",
+    }
+}
+
+fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
+    use coco_types::TuiOnlyEvent as E;
+    match t {
+        E::ApprovalRequired { .. } => "ApprovalRequired",
+        E::DiffStatsReady { .. } => "DiffStatsReady",
+        E::RewindCompleted { .. } => "RewindCompleted",
+        E::QuestionAsked { .. } => "QuestionAsked",
+        E::ElicitationRequested { .. } => "ElicitationRequested",
+        E::SandboxApprovalRequired { .. } => "SandboxApprovalRequired",
+        E::PluginDataReady { .. } => "PluginDataReady",
+        E::OutputStylesReady { .. } => "OutputStylesReady",
+        E::AvailableCommandsRefreshed { .. } => "AvailableCommandsRefreshed",
+        E::RewindCheckpointsReady { .. } => "RewindCheckpointsReady",
+        E::CompactionCircuitBreakerOpen { .. } => "CompactionCircuitBreakerOpen",
+        E::MicroCompactionApplied { .. } => "MicroCompactionApplied",
+        E::SessionMemoryCompactApplied { .. } => "SessionMemoryCompactApplied",
+        E::SpeculativeRolledBack { .. } => "SpeculativeRolledBack",
+        E::SessionMemoryExtractionStarted => "SessionMemoryExtractionStarted",
+        E::SessionMemoryExtractionCompleted { .. } => "SessionMemoryExtractionCompleted",
+        E::SessionMemoryExtractionFailed { .. } => "SessionMemoryExtractionFailed",
+        E::CronJobDisabled { .. } => "CronJobDisabled",
+        E::CronJobsMissed { .. } => "CronJobsMissed",
+        E::ToolCallDelta { .. } => "ToolCallDelta",
+        E::ToolProgress { .. } => "ToolProgress",
+        E::ToolExecutionAborted { .. } => "ToolExecutionAborted",
+        E::SlashCommandResult { .. } => "SlashCommandResult",
+        E::OpenRewindPicker => "OpenRewindPicker",
+        E::OpenMemoryDialog { .. } => "OpenMemoryDialog",
+        E::MemoryFileOpened { .. } => "MemoryFileOpened",
+        E::MemoryFileOpenFailed { .. } => "MemoryFileOpenFailed",
+        E::PlanFileOpened { .. } => "PlanFileOpened",
+        E::PlanFileOpenFailed { .. } => "PlanFileOpenFailed",
+        E::ExternalEditorPrepare { .. } => "ExternalEditorPrepare",
+        E::PromptEditorCompleted { .. } => "PromptEditorCompleted",
+        E::PromptEditorFailed { .. } => "PromptEditorFailed",
+        E::BashCommandCompleted { .. } => "BashCommandCompleted",
+        E::OpenModelPicker => "OpenModelPicker",
+        E::SlashCommandStatus { .. } => "SlashCommandStatus",
     }
 }
 

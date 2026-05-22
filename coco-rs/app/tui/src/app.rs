@@ -231,6 +231,11 @@ impl App {
     /// - Tick timer (250ms — toast expiry, idle detection)
     /// - Spinner timer (50ms — animation frames)
     pub async fn run(&mut self) -> io::Result<()> {
+        tracing::info!(
+            target: "coco_tui::app",
+            terminal_size = ?self.state.ui.terminal_size,
+            "TUI run loop start",
+        );
         // Initial render
         self.redraw()?;
 
@@ -337,6 +342,11 @@ impl App {
     async fn handle_core_event(&mut self, event: CoreEvent) -> io::Result<bool> {
         if let CoreEvent::Tui(TuiOnlyEvent::ExternalEditorPrepare { request_id }) = event {
             if self.external_editor_active.is_some() {
+                tracing::warn!(
+                    target: "coco_tui::external_editor",
+                    request_id = %request_id,
+                    "ExternalEditorPrepare rejected: another editor is already active",
+                );
                 let _ = self
                     .command_tx
                     .send(UserCommand::ExternalEditorTerminalPrepareFailed {
@@ -349,6 +359,11 @@ impl App {
 
             match self.tui.prepare_external_process() {
                 Ok(()) => {
+                    tracing::info!(
+                        target: "coco_tui::external_editor",
+                        request_id = %request_id,
+                        "terminal prepared for external editor",
+                    );
                     self.external_editor_active = Some(request_id.clone());
                     if self
                         .command_tx
@@ -356,12 +371,22 @@ impl App {
                         .await
                         .is_err()
                     {
+                        tracing::warn!(
+                            target: "coco_tui::external_editor",
+                            "command_tx closed before ExternalEditorTerminalReady could be sent; restoring",
+                        );
                         self.external_editor_active = None;
                         self.tui.restore_after_external_process()?;
                         return Ok(true);
                     }
                 }
                 Err(err) => {
+                    tracing::error!(
+                        target: "coco_tui::external_editor",
+                        request_id = %request_id,
+                        error = %err,
+                        "prepare_external_process failed",
+                    );
                     let _ = self
                         .command_tx
                         .send(UserCommand::ExternalEditorTerminalPrepareFailed {
@@ -381,6 +406,11 @@ impl App {
 
         let mut needs_redraw = false;
         if self.external_editor_active.take().is_some() {
+            tracing::info!(
+                target: "coco_tui::external_editor",
+                deferred_events = self.deferred_core_events.len(),
+                "external editor completed; restoring terminal",
+            );
             self.tui.restore_after_external_process()?;
             needs_redraw = true;
         }
@@ -541,6 +571,12 @@ impl App {
                 if self.tui.retained_surface_visible() {
                     self.state.ui.record_surface_interaction(now);
                 }
+                tracing::debug!(
+                    target: "coco_tui::input",
+                    chars = text.len(),
+                    lines = text.lines().count(),
+                    "bracketed paste",
+                );
                 // Batch insertion via TextArea is O(text.len()) and only
                 // recomputes the wrap cache once, vs N times for per-char insert.
                 self.state.ui.input.textarea.insert_str(&text);
@@ -550,6 +586,7 @@ impl App {
                 true
             }
             TuiEvent::Suspend => {
+                tracing::info!(target: "coco_tui::app", "Ctrl+Z suspend requested");
                 // Blocks until SIGCONT (typically delivered by `fg` in
                 // the parent shell). On return, `Tui::draw` will pick
                 // up the pending resume action and clear/repaint the native
@@ -561,13 +598,25 @@ impl App {
                     self.state.quit();
                     return false;
                 }
+                tracing::info!(target: "coco_tui::app", "TUI resumed after SIGCONT");
                 true
             }
             TuiEvent::Resize { width, height } => {
+                tracing::debug!(
+                    target: "coco_tui::app",
+                    width,
+                    height,
+                    "terminal resized",
+                );
                 self.state.ui.terminal_size = ratatui::layout::Size::new(width, height);
                 true
             }
             TuiEvent::FocusChanged { focused } => {
+                tracing::debug!(
+                    target: "coco_tui::app",
+                    focused,
+                    "terminal focus changed",
+                );
                 // Track focus for turn-complete notification gating.
                 self.state.ui.terminal_focused = focused;
                 if focused {
@@ -635,6 +684,11 @@ impl App {
         if qct.elapsed() < IDLE_PROMPT_THRESHOLD {
             return;
         }
+        tracing::info!(
+            target: "coco_tui::idle_prompt",
+            idle_secs = qct.elapsed().as_secs(),
+            "firing idle_prompt notification hook",
+        );
         let _ = self
             .command_tx
             .send(UserCommand::FireIdleNotification {
