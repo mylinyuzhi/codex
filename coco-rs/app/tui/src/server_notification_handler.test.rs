@@ -20,36 +20,212 @@ use crate::server_notification_handler::handle_event_for_test as handle_core_eve
 use crate::state::AppState;
 
 #[test]
-fn test_subagent_lifecycle() {
+fn test_bg_agent_task_started_bridges_into_subagents() {
+    // BgAgent TaskStarted (wire `task_type == "local_agent"`) populates
+    // `session.subagents`. The bridge links via `tool_use_id` so the
+    // inline `AgentProgressLine` renderer can later attach the row to
+    // the parent `Agent` tool execution.
     let mut state = AppState::new();
 
     handle_core_event(
         &mut state,
-        CoreEvent::Protocol(ServerNotification::SubagentSpawned(
-            coco_types::SubagentSpawnedParams {
-                agent_id: "a1".into(),
-                agent_type: "Explore".into(),
-                description: "Searching codebase".into(),
+        CoreEvent::Protocol(ServerNotification::TaskStarted(
+            coco_types::TaskStartedParams {
+                task_id: "agent-bg-1".into(),
+                tool_use_id: Some("tu-42".into()),
+                description: "Investigate auth flow".into(),
+                task_type: Some("local_agent".into()),
+                workflow_name: None,
+                prompt: None,
+                agent_name: None,
+                team_name: None,
                 color: None,
+                backend_kind: None,
             },
         )),
     );
+
     assert_eq!(state.session.subagents.len(), 1);
+    let agent = &state.session.subagents[0];
+    assert_eq!(agent.agent_id, "agent-bg-1");
+    assert_eq!(agent.tool_use_id.as_deref(), Some("tu-42"));
+    assert_eq!(agent.description, "Investigate auth flow");
+    assert_eq!(agent.status, crate::state::session::SubagentStatus::Running);
+    // active_tasks projection still works.
+    assert_eq!(state.session.active_tasks.len(), 1);
+}
+
+#[test]
+fn test_shell_task_started_does_not_create_subagent() {
+    // Only `local_agent` / `in_process_teammate` task_types bridge into
+    // `session.subagents`; `local_bash` (and `dream`) stay in
+    // `active_tasks` only — they're not "subagents" in the TS sense.
+    let mut state = AppState::new();
 
     handle_core_event(
         &mut state,
-        CoreEvent::Protocol(ServerNotification::SubagentCompleted(
-            coco_types::SubagentCompletedParams {
-                agent_id: "a1".into(),
-                result: "Found 3 files".into(),
-                is_error: false,
+        CoreEvent::Protocol(ServerNotification::TaskStarted(
+            coco_types::TaskStartedParams {
+                task_id: "sh-1".into(),
+                tool_use_id: Some("tu-99".into()),
+                description: "sleep 30".into(),
+                task_type: Some("local_bash".into()),
+                workflow_name: None,
+                prompt: None,
+                agent_name: None,
+                team_name: None,
+                color: None,
+                backend_kind: None,
             },
         )),
     );
+
+    assert_eq!(state.session.subagents.len(), 0);
+    assert_eq!(state.session.active_tasks.len(), 1);
+}
+
+#[test]
+fn test_in_process_teammate_task_started_creates_teammate_kind_row() {
+    // TS-aligned spawn: coordinator emits `task/started` with
+    // `task_type == "in_process_teammate"` and the optional teammate
+    // metadata populated. coco-rs projects that into a SubagentInstance
+    // with kind=Teammate, team_name set, tool_use_id None.
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TaskStarted(
+            coco_types::TaskStartedParams {
+                task_id: "researcher@my-team".into(),
+                tool_use_id: None,
+                description: "Kick off auth research".into(),
+                task_type: Some("in_process_teammate".into()),
+                workflow_name: None,
+                prompt: None,
+                agent_name: Some("researcher".into()),
+                team_name: Some("my-team".into()),
+                color: Some("blue".into()),
+                backend_kind: Some("in_process".into()),
+            },
+        )),
+    );
+
+    assert_eq!(state.session.subagents.len(), 1);
+    let agent = &state.session.subagents[0];
+    assert_eq!(agent.agent_id, "researcher@my-team");
+    assert!(matches!(
+        agent.kind,
+        crate::state::session::SubagentKind::Teammate
+    ));
+    assert_eq!(agent.agent_type, "researcher");
+    assert_eq!(agent.team_name.as_deref(), Some("my-team"));
+    assert_eq!(agent.tool_use_id, None);
+    assert_eq!(agent.color.as_deref(), Some("blue"));
+    // active_tasks projection works in parallel.
+    assert_eq!(state.session.active_tasks.len(), 1);
+}
+
+#[test]
+fn test_teammate_task_started_dedupes_on_task_id() {
+    // Re-emit with the same task_id is a no-op (coordinator may
+    // republish refresh-style events without duplicating rows).
+    let mut state = AppState::new();
+    let params = coco_types::TaskStartedParams {
+        task_id: "r@t".into(),
+        tool_use_id: None,
+        description: "".into(),
+        task_type: Some("in_process_teammate".into()),
+        workflow_name: None,
+        prompt: None,
+        agent_name: Some("r".into()),
+        team_name: Some("t".into()),
+        color: None,
+        backend_kind: Some("in_process".into()),
+    };
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TaskStarted(params.clone())),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TaskStarted(params)),
+    );
+    // active_tasks accumulates (TS does the same — the dedup is only
+    // for the subagent projection).
+    assert_eq!(state.session.subagents.len(), 1);
+}
+
+#[test]
+fn test_bg_agent_task_started_marks_subagent_kind() {
+    // The BgAgent bridge should set `kind == Subagent`, not Teammate.
+    let mut state = AppState::new();
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TaskStarted(
+            coco_types::TaskStartedParams {
+                task_id: "agent-bg-X".into(),
+                tool_use_id: Some("tu-1".into()),
+                description: "task".into(),
+                task_type: Some("local_agent".into()),
+                workflow_name: None,
+                prompt: None,
+                agent_name: None,
+                team_name: None,
+                color: None,
+                backend_kind: None,
+            },
+        )),
+    );
+    let agent = &state.session.subagents[0];
+    assert!(matches!(
+        agent.kind,
+        crate::state::session::SubagentKind::Subagent
+    ));
+    assert_eq!(agent.team_name, None);
+}
+
+#[test]
+fn test_bg_agent_task_completed_updates_subagent_status() {
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TaskStarted(
+            coco_types::TaskStartedParams {
+                task_id: "agent-bg-1".into(),
+                tool_use_id: Some("tu-42".into()),
+                description: "task".into(),
+                task_type: Some("local_agent".into()),
+                workflow_name: None,
+                prompt: None,
+                agent_name: None,
+                team_name: None,
+                color: None,
+                backend_kind: None,
+            },
+        )),
+    );
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TaskCompleted(
+            coco_types::TaskCompletedParams {
+                task_id: "agent-bg-1".into(),
+                tool_use_id: Some("tu-42".into()),
+                status: coco_types::TaskCompletionStatus::Completed,
+                output_file: String::new(),
+                summary: "Found 7 callers".into(),
+                usage: None,
+            },
+        )),
+    );
+
+    let agent = &state.session.subagents[0];
     assert_eq!(
-        state.session.subagents[0].status,
+        agent.status,
         crate::state::session::SubagentStatus::Completed
     );
+    assert_eq!(agent.final_message.as_deref(), Some("Found 7 callers"));
 }
 
 #[test]

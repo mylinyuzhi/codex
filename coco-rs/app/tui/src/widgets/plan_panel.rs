@@ -8,10 +8,41 @@
 //! 3. **Running tasks** — background shell/agent tasks
 //!    (`SessionState::active_tasks`), already tracked separately.
 //!
-//! TS parity: `components/tasks/BackgroundTasksDialog.tsx` for the
-//! running list, plus the V1 todo renderer in `components/todos/`.
-//! We collapse all three into a single panel that the user toggles
-//! open — auto-expanded when `expanded_view == Tasks`.
+//! ## V1 / V2 mutual exclusion (`Feature::TaskV2`)
+//!
+//! `Feature::TaskV2` (key `task_v2`, default-on) is the runtime gate
+//! mirroring TS `isTodoV2Enabled()` (`utils/tasks.ts:133-139`). It
+//! decides which task-tool family the model sees:
+//!
+//! - **TaskV2 ON**: `TaskCreate/TaskGet/TaskUpdate/TaskList` are
+//!   registered; `TodoWrite` is filtered out. The server emits
+//!   `TaskPanelChanged` → `plan_tasks` populated; `todos_by_agent`
+//!   stays empty.
+//! - **TaskV2 OFF**: `TodoWrite` is the only task tool; the V2
+//!   quartet is filtered out. The server emits per-agent todo updates
+//!   → `todos_by_agent` populated; `plan_tasks` stays empty.
+//!
+//! The two are **never both populated** in normal operation, so the
+//! `is_empty()` gates below collapse to "render whichever has data".
+//! No explicit `Feature` lookup is needed — data presence is the gate.
+//!
+//! ## Divergence from TS (intentional, coco-rs extension)
+//!
+//! TS does **not** render the V1 TodoWrite list anywhere — TodoWrite
+//! is a silent in-memory mutation on `appState.todos[sessionId]` with
+//! no UI panel. Only `TaskListV2.tsx` renders, and it short-circuits
+//! to `null` when `!isTodoV2Enabled()` — so TS users in interactive
+//! REPL mode (V2 default-off in TS) see no task panel at all.
+//!
+//! coco-rs surfaces V1 in this panel as a deliberate extension so the
+//! "Tasks" expanded view always has content when there's something to
+//! show, regardless of which task-tool family is active. The default
+//! in coco-rs is `Feature::TaskV2` default-on (V2 by default), so V1
+//! rendering only fires for users who opted out via `settings.json`
+//! `features.task_v2 = false` or a session that forces V1.
+//!
+//! TS parity reference: `components/tasks/BackgroundTasksDialog.tsx`
+//! for the running list. V1 rendering has no TS counterpart.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -133,6 +164,20 @@ impl Widget for PlanPanel<'_> {
             for key in keys {
                 let items = &self.todos[key];
                 if items.is_empty() {
+                    continue;
+                }
+                // TS parity (`TodoWriteTool`): when every entry under
+                // an agent reaches `completed`, collapse the whole
+                // group to a single dim summary line so the panel keeps
+                // the per-agent header visible without flooding with
+                // checked-off items the user already finished. Reading
+                // back through the transcript expands them in full.
+                let all_completed = items.iter().all(|it| it.status == "completed");
+                if all_completed {
+                    lines.push(Line::from(
+                        Span::raw(format!("  [{key}] ({} completed)", items.len()))
+                            .fg(self.styles.dim()),
+                    ));
                     continue;
                 }
                 lines.push(Line::from(

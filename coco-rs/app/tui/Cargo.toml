@@ -20,6 +20,7 @@ coco-file-watch.workspace = true
 coco-git.workspace = true
 coco-keybindings = { workspace = true, features = ["crossterm", "loader"] }
 coco-subagent.workspace = true
+coco-utils-string.workspace = true
 dirs.workspace = true
 
 serde = { workspace = true, features = ["derive"] }

@@ -307,6 +307,39 @@ impl TaskManager {
         updated
     }
 
+    /// Flip `is_backgrounded` on every non-terminal, non-already-backgrounded
+    /// running task whose type supports backgrounding (BgAgent + Shell).
+    /// Returns the wire ids that were just transitioned. Emits no wire event
+    /// — TS aligns: foreground→background is a pure UI-state transition, not
+    /// a task lifecycle event (the task continues running and will emit its
+    /// own `task/completed` with the `output_file` populated when it actually
+    /// terminates). The TUI mirror in `session.subagents` flips to
+    /// `Backgrounded` optimistically inside the keybinding handler before
+    /// dispatching the `UserCommand::BackgroundAllTasks`; Shell rows likewise
+    /// flip silently and surface via `is_backgrounded` at render time.
+    ///
+    /// Drives the user-initiated `Ctrl+B` single-press path (`task:background`
+    /// → `UserCommand::BackgroundAllTasks`). Idempotent: a second call with
+    /// no foreground tasks returns an empty Vec.
+    pub async fn background_all_foreground(&self) -> Vec<String> {
+        let mut transitions: Vec<String> = Vec::new();
+        let mut rows = self.rows.write().await;
+        for (id, row) in rows.iter_mut() {
+            if row.status.is_terminal() || row.extras.is_backgrounded() {
+                continue;
+            }
+            let task_type = row.extras.task_type();
+            if !matches!(task_type, TaskType::BgAgent | TaskType::Shell) {
+                continue;
+            }
+            if !row.extras.set_backgrounded(true) {
+                continue;
+            }
+            transitions.push(id.clone());
+        }
+        transitions
+    }
+
     pub async fn set_error(&self, id: &str, error: String) {
         if let Some(extras) = self
             .rows
@@ -514,6 +547,13 @@ impl TaskManager {
             }
             row.status = status;
             row.end_time = Some(current_time_ms());
+            // Dream tasks complete silently — auto-mark notified so
+            // `remove_completed` can evict them without waiting for a
+            // surface that will never read the result. Symmetric with
+            // `kill_running` which already auto-notifies Shell + Dream.
+            if matches!(row.task_type(), TaskType::Dream) {
+                row.notified = true;
+            }
             if matches!(row.extras.task_type(), TaskType::BgAgent)
                 && let Some(extras) = row.extras.bg_agent_mut()
                 && !extras.retain
@@ -783,6 +823,10 @@ impl TaskManager {
             task_type: Some(task_type_wire_name(state.task_type()).to_string()),
             workflow_name: None,
             prompt: None,
+            agent_name: None,
+            team_name: None,
+            color: None,
+            backend_kind: None,
         };
         let _ = tx
             .send(CoreEvent::Protocol(ServerNotification::TaskStarted(params)))
@@ -861,12 +905,18 @@ fn current_time_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// TS-canonical `task_type` discriminator for the `task/*` SDK events.
+/// Pinned to the variants in `Task.ts:6-13` (the only authoritative
+/// source — `bg_agent` / `teammate` / `shell` were a coco-rs invention
+/// and never existed in TS). Drift here will break the TUI projection
+/// in `app/tui/src/server_notification_handler/protocol.rs` which keys
+/// off these exact strings.
 pub fn task_type_wire_name(task_type: TaskType) -> &'static str {
     match task_type {
-        TaskType::Shell => "shell",
-        TaskType::BgAgent => "bg_agent",
-        TaskType::Teammate => "teammate",
-        TaskType::RemoteTeammate => "remote_teammate",
+        TaskType::Shell => "local_bash",
+        TaskType::BgAgent => "local_agent",
+        TaskType::Teammate => "in_process_teammate",
+        TaskType::RemoteTeammate => "remote_agent",
         TaskType::Dream => "dream",
     }
 }

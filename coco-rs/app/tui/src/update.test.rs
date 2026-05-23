@@ -279,13 +279,19 @@ async fn escape_in_teammates_view_interrupts_focused_teammate_current_work() {
         .session
         .subagents
         .push(crate::state::session::SubagentInstance {
+            kind: crate::state::session::SubagentKind::Subagent,
             agent_id: "worker@team".into(),
             agent_type: "general".into(),
             description: "scan".into(),
             status: crate::state::session::SubagentStatus::Running,
             color: None,
+            team_name: None,
+            tool_use_id: None,
             started_at_ms: None,
             token_usage: None,
+            last_tool_name: None,
+            tool_count: 0,
+            final_message: None,
         });
     let (tx, mut rx) = drained_channel();
 
@@ -297,6 +303,81 @@ async fn escape_in_teammates_view_interrupts_focused_teammate_current_work() {
         }
         other => panic!("expected InterruptAgentCurrentWork, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn background_all_tasks_optimistically_flips_running_subagents() {
+    // Ctrl+B emits no wire event for the foreground→background transition
+    // (TS aligned). The TUI must flip its own Running BgAgent rows to
+    // Backgrounded inline before forwarding the engine command, otherwise
+    // the activity panel stays out of sync until the eventual TaskCompleted.
+    let mut state = AppState::new();
+    state
+        .session
+        .subagents
+        .push(crate::state::session::SubagentInstance {
+            kind: crate::state::SubagentKind::Subagent,
+            agent_id: "bg-1".into(),
+            agent_type: "subagent".into(),
+            description: "scan".into(),
+            status: crate::state::SubagentStatus::Running,
+            color: None,
+            team_name: None,
+            tool_use_id: Some("tu-1".into()),
+            started_at_ms: None,
+            token_usage: None,
+            last_tool_name: None,
+            tool_count: 0,
+            final_message: None,
+        });
+    // A teammate row must NOT flip (only BgAgent subagents background).
+    state
+        .session
+        .subagents
+        .push(crate::state::session::SubagentInstance {
+            kind: crate::state::SubagentKind::Teammate,
+            agent_id: "tm@team".into(),
+            agent_type: "researcher".into(),
+            description: "research".into(),
+            status: crate::state::SubagentStatus::Running,
+            color: None,
+            team_name: Some("team".into()),
+            tool_use_id: None,
+            started_at_ms: None,
+            token_usage: None,
+            last_tool_name: None,
+            tool_count: 0,
+            final_message: None,
+        });
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::BackgroundAllTasks, &tx).await;
+
+    assert_eq!(
+        state.session.subagents[0].status,
+        crate::state::SubagentStatus::Backgrounded,
+        "BgAgent subagent must flip to Backgrounded inline"
+    );
+    assert_eq!(
+        state.session.subagents[1].status,
+        crate::state::SubagentStatus::Running,
+        "Teammate must NOT be affected by Ctrl+B"
+    );
+    match rx.try_recv() {
+        Ok(UserCommand::BackgroundAllTasks) => {}
+        other => panic!("expected BackgroundAllTasks forwarded to engine, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn background_all_tasks_no_op_when_nothing_running() {
+    // No foreground tasks → Ctrl+B emits nothing and changes no state.
+    let mut state = AppState::new();
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::BackgroundAllTasks, &tx).await;
+
+    assert!(rx.try_recv().is_err(), "no UserCommand should fire");
 }
 
 #[tokio::test]

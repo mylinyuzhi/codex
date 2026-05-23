@@ -104,8 +104,23 @@ pub struct TodoRecord {
 // ── UI view state ─────────────────────────────────────────────────────
 
 /// Which panel the TUI should have expanded in the task area.
+///
 /// TS parity: `AppState.expandedView` in `AppStateStore.ts` (3 variants:
 /// `'none' | 'tasks' | 'teammates'`).
+///
+/// **`Teammates` ≠ general subagents.** In TS, `expandedView ===
+/// 'teammates'` mounts `TeammateSpinnerTree`, which strictly filters
+/// `task.type === 'in_process_teammate'` — i.e. agents created by
+/// `spawnTeammate()` with persistent identity (`agentId@teamName`,
+/// survives `/clear`, mailbox-based). Async subagents from the
+/// `Agent` tool (TS `LocalAgentTask`, type `'local_agent'`) render
+/// inline in the transcript via `AgentProgressLine` and in the
+/// `BackgroundTaskStatus` pill row — **not** here.
+///
+/// A subagent only appears in this view when the Agent tool was
+/// invoked with `isAgentSwarmsEnabled() && teamName` set, which
+/// routes through `spawnTeammate()` and transforms the worker into
+/// a first-class teammate.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

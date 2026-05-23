@@ -1461,6 +1461,47 @@ async fn run_agent_driver(
                 }
             }
 
+            UserCommand::BackgroundAllTasks => {
+                // Ctrl+B single press: flip every foreground BgAgent /
+                // Shell row to backgrounded server-side. The TUI mirror
+                // in `session.subagents` is updated optimistically inside
+                // `TuiCommand::BackgroundAllTasks` (update.rs) — TS aligns
+                // here: foreground→background is a UI-state transition,
+                // not a task lifecycle event, so no `task/*` wire event
+                // fires now. The eventual real `task/completed` (with
+                // `output_file` populated) flows when the bg task
+                // actually terminates. Idempotent — a second press with
+                // no foreground tasks transitions nothing.
+                if let Some(task_runtime) = runtime.current_task_runtime().await {
+                    let ids = task_runtime.manager().background_all_foreground().await;
+                    let count = ids.len();
+                    info!(count, "BackgroundAllTasks: backgrounded foreground tools");
+                }
+            }
+
+            UserCommand::BackgroundCurrentTurn => {
+                // **Scaffolding** — no current TUI key path produces
+                // this `UserCommand`. The double-press Ctrl+B dispatch
+                // in `update.rs::TuiCommand::BackgroundAllTasks` mirrors
+                // TS's kill-switched second branch and never arms its
+                // tracker. See `app/tui/src/state/ui.rs::bg_tracker`
+                // and `app/tui/src/update.rs` for the wiring story.
+                //
+                // The reason this handler is **inert** rather than
+                // routed to `cancel()` is to avoid semantically
+                // duplicating `UserCommand::Interrupt` — ESC already
+                // owns the "discard the in-flight work" gesture, and
+                // mirroring TS's intent for Ctrl+B requires the
+                // opposite ("preserve and detach") via a
+                // background-agent executor that inherits the query
+                // state. Until that executor lands, treating this
+                // variant as a no-op is the only correct option.
+                tracing::warn!(
+                    "BackgroundCurrentTurn received but no key path should produce it; \
+                     the variant is reserved for the future detached-turn executor."
+                );
+            }
+
             UserCommand::PushSystemMessage { kind } => {
                 // TUI-originated transcript content (slash output,
                 // file-open notices, plan-rejected body, …) round-trips

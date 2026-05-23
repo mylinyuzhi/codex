@@ -271,13 +271,25 @@ fn test_prompt_n_denies() {
 }
 
 #[test]
-fn test_ctrl_t_cycles_thinking_level_in_chat_context() {
-    // coco-rs extension: in Chat context Ctrl+T cycles the Main role's
-    // thinking effort through the active model's `supported_thinking_levels`
-    // (`ChatCycleThinking → CycleThinkingLevel`). The Global
-    // `app:toggleTodos` binding stays reachable from non-Chat contexts.
+fn test_ctrl_t_cycles_view_in_chat_context() {
+    // Ctrl+T now binds globally to `app:toggleTodos` (view cycle:
+    // Chat → Tasks → Subagents). The previous Chat-context shadow that
+    // routed Ctrl+T to `ChatCycleThinking` has moved to Ctrl+Y so the
+    // view cycle wins from every context including the input bar.
     let state = AppState::new();
     let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
+    assert!(matches!(cmd, Some(TuiCommand::ToggleExpandedTasksView)));
+}
+
+#[test]
+fn test_ctrl_y_cycles_thinking_level_in_chat_context() {
+    // coco-rs extension: in Chat context Ctrl+Y cycles the Main role's
+    // thinking effort through the active model's
+    // `supported_thinking_levels` (`ChatCycleThinking → CycleThinkingLevel`).
+    // Displaces the readline `yank` default; the legacy `input:yank`
+    // cascade only applies in non-Chat contexts.
+    let state = AppState::new();
+    let cmd = map_key(&state, ctrl(KeyCode::Char('y')));
     assert!(matches!(cmd, Some(TuiCommand::CycleThinkingLevel)));
 }
 

@@ -112,6 +112,23 @@ pub struct UiState {
     /// only controls whether the second Esc opens the rewind picker.
     /// TS: `useDoublePress` inside `PromptInput.tsx`.
     pub esc_tracker: DoublePressTracker<()>,
+    /// Double-press tracker for the future Ctrl+B →
+    /// background-current-turn path. **Currently inert** — no key
+    /// dispatch calls `poll()` on this tracker (see
+    /// `crate::update::TuiCommand::BackgroundAllTasks` for why).
+    ///
+    /// Kept as scaffolding mirroring TS's
+    /// `components/SessionBackgroundHint.tsx::handleDoublePress` — that
+    /// React hook is also fully wired in TS but never fires because
+    /// the surrounding `isEnvTruthy("false") && isLoading` gate is a
+    /// hard-coded `false`. When TS removes the kill switch and ships
+    /// `BackgroundQueryAgent` (a detached agent that inherits the
+    /// in-flight query state and continues to completion), coco-rs
+    /// mirrors by enabling the second arm in
+    /// `TuiCommand::BackgroundAllTasks` so this tracker arms on first
+    /// press and fires `BackgroundCurrentTurn` on second press within
+    /// `DOUBLE_PRESS_TIMEOUT`.
+    pub bg_tracker: DoublePressTracker<()>,
     /// Whether the terminal window currently has focus. Used to gate
     /// turn-complete notifications so they only fire when the user has
     /// switched away — matches TS `ink::focus` semantics.
@@ -209,6 +226,7 @@ impl UiState {
             ctrl_c_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             ctrl_d_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             esc_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
+            bg_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             terminal_focused: true,
             surface_visibility_known_at: None,
             surface_visibility_confirmation_pending: false,
@@ -451,7 +469,8 @@ impl UiState {
         let a = self.ctrl_c_tracker.tick(now);
         let b = self.ctrl_d_tracker.tick(now);
         let c = self.esc_tracker.tick(now);
-        a || b || c
+        let d = self.bg_tracker.tick(now);
+        a || b || c || d
     }
 }
 

@@ -8,13 +8,19 @@ use crate::state::session::SubagentStatus;
 
 fn running_subagent() -> SubagentInstance {
     SubagentInstance {
+        kind: crate::state::session::SubagentKind::Subagent,
         agent_id: "t-1".into(),
         agent_type: "explore".into(),
         description: "scan".into(),
         status: SubagentStatus::Running,
         color: None,
+        team_name: None,
+        tool_use_id: None,
         started_at_ms: None,
         token_usage: None,
+        last_tool_name: None,
+        tool_count: 0,
+        final_message: None,
     }
 }
 

@@ -601,11 +601,23 @@ pub enum ToolStatus {
 /// than synthesising fake zeros.
 #[derive(Debug, Clone)]
 pub struct SubagentInstance {
+    /// Which TS concept this row tracks. See [`SubagentKind`].
+    pub kind: SubagentKind,
     pub agent_id: String,
     pub agent_type: String,
     pub description: String,
     pub status: SubagentStatus,
     pub color: Option<String>,
+    /// Team name for `kind == Teammate`. `None` for subagents (they
+    /// have no team affiliation) and for legacy / dormant entries.
+    pub team_name: Option<String>,
+    /// `tool_use_id` of the parent `Agent` tool invocation that
+    /// spawned this row (when the entry came from a TaskStarted bridge
+    /// for a `BgAgent` task). Used by the inline `AgentProgressLine`
+    /// renderer to attach this row visually beneath the matching
+    /// `ToolExecution` in the transcript. `None` for teammates (they
+    /// have no originating tool call).
+    pub tool_use_id: Option<String>,
     /// Unix-epoch ms when the subagent started. `None` while the
     /// protocol handler hasn't populated it yet. The renderer shows
     /// `elapsed = now - started_at` only when this is set.
@@ -613,6 +625,20 @@ pub struct SubagentInstance {
     /// Cumulative token usage for this teammate. The renderer shows
     /// `↑input ↓output` arrows so the user sees direction at a glance.
     pub token_usage: Option<TokenUsage>,
+    /// Most recently dispatched tool. Mirror of `TaskProgress.last_tool_name`
+    /// for BgAgent rows so the AgentProgressLine subline can render
+    /// `<tool> · N tools · M tok` like the TS reference. `None` before
+    /// the first tool call.
+    pub last_tool_name: Option<String>,
+    /// Cumulative tool invocation count. Lifted from `TaskProgress.usage.tool_uses`
+    /// for parity with TS `AgentProgressLine`'s "8 tool uses" metric.
+    /// Width matches `TaskUsage.tool_uses` (i32) so no widening cast is
+    /// needed at the bridge site.
+    pub tool_count: i32,
+    /// Final assistant message after the subagent completes — first
+    /// 80 chars rendered inline so the user sees the closing statement
+    /// without expanding the transcript.
+    pub final_message: Option<String>,
 }
 
 /// Subagent lifecycle status.
@@ -622,6 +648,29 @@ pub enum SubagentStatus {
     Completed,
     Backgrounded,
     Failed,
+}
+
+/// What TS concept a [`SubagentInstance`] row represents.
+///
+/// TS keeps these strictly separate (`InProcessTeammateTask` vs
+/// `LocalAgentTask`); coco-rs collapses them into one TUI struct
+/// (`SubagentInstance`) but tags the kind so renderers can show the
+/// right badge / placement and lifecycle handlers can apply the right
+/// semantics (teammate lives across `/clear`; subagent evicts).
+///
+/// The unification at the TUI struct level is a coco-rs choice — both
+/// surfaces share the same status / tool-count / token / final-message
+/// vocabulary, so duplicating types yielded no benefit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentKind {
+    /// `Agent`-tool spawned worker. TS `LocalAgentTask` (type
+    /// `'local_agent'`). Transient — evicts on completion. Has
+    /// `tool_use_id` pointing to the parent assistant's `ToolUse`.
+    Subagent,
+    /// Coordinator-spawned persistent team member. TS
+    /// `InProcessTeammateTask` (type `'in_process_teammate'`).
+    /// Lives across `/clear`. Identity is `agent_name@team_name`.
+    Teammate,
 }
 
 /// Per-message reasoning metadata stamped on `TurnCompleted`.

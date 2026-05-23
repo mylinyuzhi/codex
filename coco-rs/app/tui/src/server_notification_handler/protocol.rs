@@ -1,9 +1,17 @@
 //! Protocol-layer handler.
 //!
-//! Handles all 65 [`ServerNotification`] variants. The TUI matches
+//! Handles all 62 [`ServerNotification`] variants. The TUI matches
 //! exhaustively — adding a new variant in `coco-types` fails compilation
 //! here until a TUI behavior is chosen (even if that behavior is an
 //! explicit `false` no-op with a comment).
+//!
+//! Subagent / teammate lifecycle is **not** a separate event family on the
+//! wire — it rides on [`ServerNotification::TaskStarted`] /
+//! [`ServerNotification::TaskProgress`] / [`ServerNotification::TaskCompleted`]
+//! with [`TaskStartedParams::task_type`] discriminating (`bg_agent`,
+//! `in_process_teammate`, `shell`, `dream`, …). Matches TS, which has no
+//! `subagent/*` SDK events either. See the `TaskStarted` arm below for the
+//! `SubagentInstance` projection.
 //!
 //! Item lifecycle (`ItemStarted`, `ItemUpdated`, `ItemCompleted`,
 //! `AgentMessageDelta`, `ReasoningDelta`) are intentionally no-ops: they're
@@ -11,10 +19,8 @@
 //! TUI channel in the current architecture. See `event-system-design.md`
 //! §12 for the consumer routing matrix.
 
-use coco_messages::SystemMessageLevel;
 use coco_types::ServerNotification;
 
-use crate::command::SystemPushKind;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ModalState;
@@ -24,6 +30,7 @@ use crate::state::session::HookEntryStatus;
 use crate::state::session::McpServerStatus;
 use crate::state::session::RateLimitInfo;
 use crate::state::session::SubagentInstance;
+use crate::state::session::SubagentKind;
 use crate::state::session::SubagentStatus;
 use crate::state::session::TaskEntry;
 use crate::state::session::TaskEntryStatus;
@@ -158,80 +165,6 @@ pub(super) fn handle(
         // === Content deltas (SDK path — TUI uses Stream layer) ===
         ServerNotification::AgentMessageDelta(_) | ServerNotification::ReasoningDelta(_) => false,
 
-        // === Subagent ===
-        ServerNotification::SubagentSpawned(p) => {
-            state.session.subagents.push(SubagentInstance {
-                agent_id: p.agent_id,
-                agent_type: p.agent_type,
-                description: p.description,
-                status: SubagentStatus::Running,
-                color: p.color,
-                started_at_ms: Some(crate::state::session::now_ms()),
-                token_usage: None,
-            });
-            true
-        }
-        ServerNotification::SubagentCompleted(p) => {
-            if let Some(agent) = state
-                .session
-                .subagents
-                .iter_mut()
-                .find(|a| a.agent_id == p.agent_id)
-            {
-                agent.status = if p.is_error {
-                    SubagentStatus::Failed
-                } else {
-                    SubagentStatus::Completed
-                };
-            }
-            // Surface the completion line in the teammate preview
-            // (TS getMessagePreview includes the final assistant
-            // message). Falls back to a canned status line when the
-            // result is empty.
-            let line = if p.result.is_empty() {
-                if p.is_error {
-                    t!("teammate.completed_failed").to_string()
-                } else {
-                    t!("teammate.completed_ok").to_string()
-                }
-            } else {
-                p.result.clone()
-            };
-            push_teammate_message(state, &p.agent_id, &line, command_tx);
-            true
-        }
-        ServerNotification::SubagentBackgrounded(p) => {
-            if let Some(agent) = state
-                .session
-                .subagents
-                .iter_mut()
-                .find(|a| a.agent_id == p.agent_id)
-            {
-                agent.status = SubagentStatus::Backgrounded;
-            }
-            true
-        }
-        ServerNotification::SubagentProgress(p) => {
-            if let Some(msg) = &p.summary {
-                state.ui.add_toast(Toast::info(
-                    t!(
-                        "toast.agent_progress",
-                        id = p.agent_id.as_str(),
-                        msg = msg.as_str()
-                    )
-                    .to_string(),
-                ));
-                // Push a teammate message onto the engine transcript so
-                // the teammate spinner-line preview
-                // (`showTeammateMessagePreview`) and transcript reader
-                // can pick it up. Tagged as a meta system message so it
-                // stays out of the regular chat scroll — surfaces in the
-                // transcript reader and per-teammate preview only.
-                push_teammate_message(state, &p.agent_id, msg, command_tx);
-            }
-            true
-        }
-
         // === MCP ===
         ServerNotification::McpStartupStatus(p) => {
             let connected = matches!(p.status, coco_types::McpConnectionStatus::Connected);
@@ -354,6 +287,95 @@ pub(super) fn handle(
 
         // === Task ===
         ServerNotification::TaskStarted(p) => {
+            // TS-aligned spawn projection. Mirror of TS's two parallel
+            // writes in `spawnMultiAgent.ts:452-486`:
+            //   1. `setAppState(... teamContext.teammates[id] = {...} )`
+            //      — teammate roster metadata (only for teammates)
+            //   2. `registerOutOfProcessTeammateTask(...)` → enqueues
+            //      `task_started` SDK event with `task_type`
+            // coco-rs runs single-process React for the SDK consumer's
+            // view, but our TUI sits across a process boundary, so the
+            // teammate roster fields ride along on `TaskStarted` as
+            // optional metadata (`agent_name` / `team_name` / `color`
+            // / `backend_kind`). Subagent (BgAgent) rows leave them
+            // `None` — they're discriminated by `task_type ==
+            // "local_agent"` and identified by `task_id`.
+            //
+            // TS-canonical wire strings (see `Task.ts:6-13` and
+            // `coco_tasks::task_type_wire_name`):
+            //   `"local_agent"` — Agent-tool subagent worker
+            //                     (coco-rs `TaskType::BgAgent`)
+            //   `"in_process_teammate"` — Coordinator persistent
+            //                             teammate
+            //   `"local_bash"` / `"dream"` / `"remote_agent"` — not
+            //       projected into `session.subagents`
+            match p.task_type.as_deref() {
+                Some("local_agent") => {
+                    let already_tracked = state
+                        .session
+                        .subagents
+                        .iter()
+                        .any(|a| a.agent_id == p.task_id);
+                    if !already_tracked {
+                        state.session.subagents.push(SubagentInstance {
+                            kind: SubagentKind::Subagent,
+                            agent_id: p.task_id.clone(),
+                            // BgAgentExtras carries agent_type / color
+                            // server-side but `TaskStartedParams` doesn't
+                            // surface them yet — TS bridges the same way
+                            // (the `task_started` SDK event omits the
+                            // agent_type for BgAgent rows; the teammate
+                            // metadata fields stay None). Extend
+                            // `TaskStartedParams` if the activity panel
+                            // needs the agent identity later.
+                            agent_type: "subagent".to_string(),
+                            description: p.description.clone(),
+                            status: SubagentStatus::Running,
+                            color: None,
+                            team_name: None,
+                            tool_use_id: p.tool_use_id.clone(),
+                            started_at_ms: Some(crate::state::session::now_ms()),
+                            token_usage: None,
+                            last_tool_name: None,
+                            tool_count: 0,
+                            final_message: None,
+                        });
+                    }
+                }
+                Some("in_process_teammate") => {
+                    let already_tracked = state
+                        .session
+                        .subagents
+                        .iter()
+                        .any(|a| a.agent_id == p.task_id);
+                    if !already_tracked {
+                        state.session.subagents.push(SubagentInstance {
+                            kind: SubagentKind::Teammate,
+                            agent_id: p.task_id.clone(),
+                            // `agent_name` is the teammate's bare name;
+                            // fall back to the `name@team` task_id when
+                            // the engine didn't populate the optional
+                            // field (older emitters / hand-crafted
+                            // payloads).
+                            agent_type: p.agent_name.clone().unwrap_or_else(|| p.task_id.clone()),
+                            description: p.description.clone(),
+                            status: SubagentStatus::Running,
+                            color: p.color.clone(),
+                            team_name: p.team_name.clone().filter(|s| !s.is_empty()),
+                            // Teammates have no originating Agent-tool
+                            // call — `tool_use_id` is reserved for the
+                            // Agent-tool → BgAgent linkage.
+                            tool_use_id: None,
+                            started_at_ms: Some(crate::state::session::now_ms()),
+                            token_usage: None,
+                            last_tool_name: None,
+                            tool_count: 0,
+                            final_message: None,
+                        });
+                    }
+                }
+                _ => {}
+            }
             state.session.active_tasks.push(TaskEntry {
                 task_id: p.task_id,
                 description: p.description,
@@ -375,6 +397,32 @@ pub(super) fn handle(
             {
                 task.status = status;
             }
+            // Mirror onto the SubagentInstance projection — pair with the
+            // BgAgent bridge in `TaskStarted` so subagent rows transition
+            // out of `Running` when the underlying BgAgent task lands.
+            if let Some(agent) = state
+                .session
+                .subagents
+                .iter_mut()
+                .find(|a| a.agent_id == p.task_id)
+            {
+                agent.status = match p.status {
+                    coco_types::TaskCompletionStatus::Completed => SubagentStatus::Completed,
+                    coco_types::TaskCompletionStatus::Failed => SubagentStatus::Failed,
+                    coco_types::TaskCompletionStatus::Stopped => SubagentStatus::Backgrounded,
+                };
+                if !p.summary.is_empty() {
+                    let trimmed = p.summary.lines().next().unwrap_or(&p.summary);
+                    let preview = if trimmed.chars().count() > 80 {
+                        let mut out: String = trimmed.chars().take(80).collect();
+                        out.push('…');
+                        out
+                    } else {
+                        trimmed.to_string()
+                    };
+                    agent.final_message = Some(preview);
+                }
+            }
             true
         }
         ServerNotification::TaskProgress(p) => {
@@ -384,7 +432,23 @@ pub(super) fn handle(
                 .iter_mut()
                 .find(|t| t.task_id == p.task_id)
             {
-                task.description = p.description;
+                task.description = p.description.clone();
+            }
+            // BgAgent task IDs are also subagent IDs (see `TaskStateBase
+            // ::identity` in coco-types). Mirror the progress counters
+            // onto the matching `SubagentInstance` so the activity
+            // panel can render `<last_tool> · N tools · M tok` like
+            // TS `AgentProgressLine`. The Vec walk is O(n_subagents) per
+            // tick; with the typical 1–8 active subagents per session
+            // this is well under a microsecond.
+            if let Some(agent) = state
+                .session
+                .subagents
+                .iter_mut()
+                .find(|a| a.agent_id == p.task_id)
+            {
+                agent.last_tool_name = p.last_tool_name.clone();
+                agent.tool_count = p.usage.tool_uses;
             }
             true
         }
@@ -1192,38 +1256,6 @@ fn apply_auto_restore(
             target_message_id = %target_message_id,
             error = ?e,
             "apply_auto_restore: failed to dispatch Rewind AutoRestore",
-        );
-    }
-}
-
-/// Queue a teammate-attributed message for engine round-trip so the
-/// per-teammate spinner-line preview (`UiState::show_teammate_message_preview`)
-/// and the transcript state can surface it. Empty / whitespace-only
-/// content is dropped so progress pings without a body don't pollute
-/// the preview. Routed as `SystemMessage::Informational` with a
-/// `teammate:<agent>` title so the renderer can distinguish the row.
-fn push_teammate_message(
-    _state: &mut AppState,
-    agent_id: &str,
-    content: &str,
-    command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
-) {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    if let Err(e) = command_tx.try_send(crate::command::UserCommand::PushSystemMessage {
-        kind: SystemPushKind::Informational {
-            level: SystemMessageLevel::Info,
-            title: format!("teammate:{agent_id}"),
-            message: trimmed.to_string(),
-        },
-    }) {
-        tracing::warn!(
-            target: "coco_tui::teammate_message",
-            %agent_id,
-            error = ?e,
-            "push_teammate_message: failed to dispatch PushSystemMessage",
         );
     }
 }

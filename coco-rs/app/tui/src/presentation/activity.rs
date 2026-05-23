@@ -354,11 +354,22 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             SubagentStatus::Failed => ("✗", ActivityTone::Error),
         };
         let focus_marker = if is_focused { "▸ " } else { "  " };
+        // Kind badge: differentiate TS `InProcessTeammateTask` (persistent
+        // team member, `@name` prefix) from `LocalAgentTask` (Agent-tool
+        // worker, plain agent_type). Mirrors TS `TeammateSpinnerLine`'s
+        // `@{agentName}` rendering vs `AgentProgressLine`'s plain label.
+        let label = match agent.kind {
+            crate::state::SubagentKind::Teammate => match &agent.team_name {
+                Some(team) => format!("@{}@{}", agent.agent_type, team),
+                None => format!("@{}", agent.agent_type),
+            },
+            crate::state::SubagentKind::Subagent => agent.agent_type.clone(),
+        };
         let mut spans = vec![
             ActivitySpan::raw(focus_marker),
             ActivitySpan::tone(format!("{icon} "), tone),
             ActivitySpan::raw(agent.description.clone()),
-            ActivitySpan::tone(format!(" ({})", agent.agent_type), ActivityTone::Dim),
+            ActivitySpan::tone(format!(" ({label})"), ActivityTone::Dim),
         ];
         if let Some(started_ms) = agent.started_at_ms {
             let elapsed_ms = (crate::state::session::now_ms() - started_ms).max(0);
@@ -377,6 +388,74 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             }
         }
         lines.push(ActivityLine { spans });
+
+        // TS `AgentProgressLine` subline: tool count + last invoked
+        // tool. Renders under the agent's main row so the user sees
+        // `<tool> · N tools` without expanding the transcript. Skip
+        // entirely when both fields are empty (fresh-spawned agent or
+        // completed agent without tools).
+        let has_tool_subline = agent.tool_count > 0 || agent.last_tool_name.is_some();
+        if has_tool_subline && matches!(agent.status, SubagentStatus::Running) {
+            let mut subline = vec![ActivitySpan::raw("      ")];
+            if let Some(tool) = &agent.last_tool_name {
+                subline.push(ActivitySpan::tone(tool.clone(), ActivityTone::Dim));
+                subline.push(ActivitySpan::tone(" · ".to_string(), ActivityTone::Dim));
+            }
+            subline.push(ActivitySpan::tone(
+                format!("{} tools", agent.tool_count),
+                ActivityTone::Dim,
+            ));
+            lines.push(ActivityLine { spans: subline });
+        }
+
+        // Completion summary mirrors TS `Done (N tools · ... · duration)`
+        // plus the final assistant message preview when one was captured.
+        if matches!(
+            agent.status,
+            SubagentStatus::Completed | SubagentStatus::Failed
+        ) {
+            let elapsed_ms = agent
+                .started_at_ms
+                .map(|s| (crate::state::session::now_ms() - s).max(0));
+            let duration = elapsed_ms
+                .map(|ms| format!(" · {}", format_short_elapsed(ms)))
+                .unwrap_or_default();
+            let done_label = if matches!(agent.status, SubagentStatus::Failed) {
+                "Failed"
+            } else {
+                "Done"
+            };
+            lines.push(ActivityLine {
+                spans: vec![
+                    ActivitySpan::raw("      "),
+                    ActivitySpan::tone(
+                        format!("{done_label} ({} tools{duration})", agent.tool_count),
+                        ActivityTone::Dim,
+                    ),
+                ],
+            });
+            if let Some(msg) = &agent.final_message {
+                lines.push(ActivityLine {
+                    spans: vec![
+                        ActivitySpan::raw("      "),
+                        ActivitySpan::tone(format!("“{msg}”"), ActivityTone::Dim),
+                    ],
+                });
+            }
+        }
+
+        // Backgrounded → hint the user how to bring it back.
+        if matches!(agent.status, SubagentStatus::Backgrounded) {
+            lines.push(ActivityLine {
+                spans: vec![
+                    ActivitySpan::raw("      "),
+                    ActivitySpan::tone(
+                        "↓ manage · Ctrl+T → Subagents".to_string(),
+                        ActivityTone::Dim,
+                    ),
+                ],
+            });
+        }
 
         if state.ui.show_teammate_message_preview {
             // Engine-pushed teammate Informational entries (Commit 2

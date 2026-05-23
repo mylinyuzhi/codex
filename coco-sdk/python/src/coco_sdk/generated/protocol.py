@@ -294,10 +294,6 @@ class NotificationMethod(str, Enum):
     item_completed = 'item/completed'
     agentMessage_delta = 'agentMessage/delta'
     reasoning_delta = 'reasoning/delta'
-    subagent_spawned = 'subagent/spawned'
-    subagent_completed = 'subagent/completed'
-    subagent_backgrounded = 'subagent/backgrounded'
-    subagent_progress = 'subagent/progress'
     mcp_startupStatus = 'mcp/startupStatus'
     mcp_startupComplete = 'mcp/startupComplete'
     lsp_prewarmComplete = 'lsp/prewarmComplete'
@@ -784,28 +780,6 @@ class SessionStartedParams(BaseModel):
     slash_commands: list[str] = []
     tools: list[str] = []
 
-class SubagentBackgroundedParams(BaseModel):
-    agent_id: str
-    output_file: str
-
-class SubagentCompletedParams(BaseModel):
-    agent_id: str
-    result: str
-    is_error: bool = False
-
-class SubagentProgressParams(BaseModel):
-    agent_id: str
-    current_step: int | None = None
-    message: str | None = None
-    summary: str | None = None
-    total_steps: int | None = None
-
-class SubagentSpawnedParams(BaseModel):
-    agent_id: str
-    agent_type: str
-    description: str
-    color: str | None = None
-
 class SummarizeCompletedParams(BaseModel):
     from_turn: int
     summary_tokens: int
@@ -836,8 +810,12 @@ class TaskProgressParams(BaseModel):
 class TaskStartedParams(BaseModel):
     description: str
     task_id: str
+    agent_name: str | None = None
+    backend_kind: str | None = None
+    color: str | None = None
     prompt: str | None = None
     task_type: str | None = None
+    team_name: str | None = None
     tool_use_id: str | None = None
     workflow_name: str | None = None
 
@@ -987,10 +965,6 @@ class NotificationMethod(str, Enum):
     ITEM_COMPLETED = 'item/completed'
     AGENT_MESSAGE_DELTA = 'agentMessage/delta'
     REASONING_DELTA = 'reasoning/delta'
-    SUBAGENT_SPAWNED = 'subagent/spawned'
-    SUBAGENT_COMPLETED = 'subagent/completed'
-    SUBAGENT_BACKGROUNDED = 'subagent/backgrounded'
-    SUBAGENT_PROGRESS = 'subagent/progress'
     MCP_STARTUP_STATUS = 'mcp/startupStatus'
     MCP_STARTUP_COMPLETE = 'mcp/startupComplete'
     LSP_PREWARM_COMPLETE = 'lsp/prewarmComplete'
@@ -1140,26 +1114,6 @@ class ServerNotification(BaseModel):
     def as_reasoning_delta(self) -> ContentDeltaParams | None:
         if self.method == 'reasoning/delta':
             return ContentDeltaParams.model_validate(self.params)
-        return None
-
-    def as_subagent_spawned(self) -> SubagentSpawnedParams | None:
-        if self.method == 'subagent/spawned':
-            return SubagentSpawnedParams.model_validate(self.params)
-        return None
-
-    def as_subagent_completed(self) -> SubagentCompletedParams | None:
-        if self.method == 'subagent/completed':
-            return SubagentCompletedParams.model_validate(self.params)
-        return None
-
-    def as_subagent_backgrounded(self) -> SubagentBackgroundedParams | None:
-        if self.method == 'subagent/backgrounded':
-            return SubagentBackgroundedParams.model_validate(self.params)
-        return None
-
-    def as_subagent_progress(self) -> SubagentProgressParams | None:
-        if self.method == 'subagent/progress':
-            return SubagentProgressParams.model_validate(self.params)
         return None
 
     def as_mcp_startup_status(self) -> McpStartupStatusParams | None:

@@ -98,15 +98,15 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 // unless users opt into "Option as Meta". F2 avoids
                 // readline editing keys and does not insert text.
                 ("f2", KeybindingAction::ChatThinkingToggle),
-                // coco-rs extension (no TS counterpart): Ctrl+T in the
+                // coco-rs extension (no TS counterpart): Ctrl+Y in the
                 // Chat context cycles the Main role's thinking effort
                 // forward through the active model's
-                // `supported_thinking_levels`. Shadows the Global
-                // `ctrl+t → app:toggleTodos` while the user is at the
-                // input; the global binding stays reachable from other
-                // contexts (Picker, Settings, Scrollable) where the
-                // task panel toggle still makes sense.
-                ("ctrl+t", KeybindingAction::ChatCycleThinking),
+                // `supported_thinking_levels`. Ctrl+T is reserved for the
+                // global `app:toggleTodos` view cycle (Chat → Tasks →
+                // Subagents), which now wins from every context — the
+                // input-edit `Ctrl+Y → yank` fallback only applies in
+                // non-Chat contexts via the legacy cascade.
+                ("ctrl+y", KeybindingAction::ChatCycleThinking),
                 ("enter", KeybindingAction::ChatSubmit),
                 ("up", KeybindingAction::HistoryPrevious),
                 ("down", KeybindingAction::HistoryNext),

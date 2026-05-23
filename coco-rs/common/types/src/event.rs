@@ -57,7 +57,7 @@ use crate::wire_tagged::wire_tagged_enum;
 ///
 /// **`large_enum_variant` exemption.** `Protocol(ServerNotification)` is
 /// considerably larger than `Stream` / `Tui` because `ServerNotification`
-/// carries 66 wire-tagged variants. Boxing it would churn hundreds of
+/// carries 62 wire-tagged variants. Boxing it would churn hundreds of
 /// pattern matches across `coco-query` / `coco-tui` / `coco-cli` for a
 /// per-event overhead that is dominated by per-turn work. Each
 /// `CoreEvent` is sent over `mpsc`, consumed once, and dropped — the
@@ -255,7 +255,7 @@ pub enum ItemStatus {
 }
 
 // ---------------------------------------------------------------------------
-// NotificationMethod + ServerNotification — protocol-layer notifications (66 variants)
+// NotificationMethod + ServerNotification — protocol-layer notifications (62 variants)
 // ---------------------------------------------------------------------------
 
 wire_tagged_enum! {
@@ -269,8 +269,12 @@ reference `NotificationMethod::SessionStarted` rather than compare against \
 raw wire strings.",
     tagged_doc = "\
 Protocol-level notifications visible to all consumers.\n\n\
-69 variants across 21 categories. See `event-system-design.md` Section 2 \
-and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle \
+62 variants across 20 categories. Subagent lifecycle (spawn / progress / \
+completion / background transition) rides on `task/started`, `task/progress`, \
+and `task/completed` with `task_type` discriminating (`bg_agent` / \
+`in_process_teammate`), matching TS — no dedicated `subagent/*` family. \
+See `event-system-design.md` Section 2 and \
+`engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle \
 category. Each variant's wire method is generated together with the \
 matching `NotificationMethod` discriminant.",
     variants = {
@@ -375,17 +379,6 @@ matching `NotificationMethod` discriminant.",
     "agentMessage/delta" => AgentMessageDelta(ContentDeltaParams),
     /// Reasoning/thinking delta.
     "reasoning/delta" => ReasoningDelta(ContentDeltaParams),
-
-    // === Subagent (4) ===
-
-    /// Subagent spawned.
-    "subagent/spawned" => SubagentSpawned(SubagentSpawnedParams),
-    /// Subagent completed.
-    "subagent/completed" => SubagentCompleted(SubagentCompletedParams),
-    /// Subagent moved to background.
-    "subagent/backgrounded" => SubagentBackgrounded(SubagentBackgroundedParams),
-    /// Subagent progress update.
-    "subagent/progress" => SubagentProgress(SubagentProgressParams),
 
     // === MCP (2) ===
 
@@ -927,46 +920,6 @@ pub struct ContentDeltaParams {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubagentSpawnedParams {
-    pub agent_id: String,
-    pub agent_type: String,
-    pub description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubagentCompletedParams {
-    pub agent_id: String,
-    pub result: String,
-    #[serde(default)]
-    pub is_error: bool,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubagentBackgroundedParams {
-    pub agent_id: String,
-    pub output_file: String,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubagentProgressParams {
-    pub agent_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_step: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_steps: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStartupStatusParams {
     pub server: String,
     pub status: crate::server_request::McpConnectionStatus,
@@ -1074,8 +1027,19 @@ pub struct ContextClearedParams {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Matches TS `SDKTaskStartedMessage` (coreSchemas.ts:1715-1733).
-/// TS has `description` required and `task_type` optional.
+/// Matches TS `SDKTaskStartedMessage` (`coreSchemas.ts:1715-1733`)
+/// plus optional teammate-metadata fields used when
+/// `task_type == "in_process_teammate"`.
+///
+/// TS encodes both teammate and async-subagent spawn through this same
+/// `task_started` SDK event, discriminated by `task_type` — the canonical
+/// strings live in `Task.ts:6-13`: `"local_bash"`, `"local_agent"`,
+/// `"remote_agent"`, `"in_process_teammate"`, `"local_workflow"`,
+/// `"monitor_mcp"`, `"dream"`. The teammate-roster rich metadata that TS
+/// stores in `AppState.teamContext.teammates` rides along as the
+/// optional fields below so the TUI in coco-rs (no shared store across
+/// processes) can construct the same `SubagentInstance { kind:
+/// Teammate, ... }` projection on the wire alone.
 pub struct TaskStartedParams {
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1087,6 +1051,26 @@ pub struct TaskStartedParams {
     pub workflow_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+
+    // ── Teammate-only fields (populated when task_type ==
+    //    "in_process_teammate"). Mirror of TS `teamContext.teammates`
+    //    sidecar. ────────────────────────────────────────────────────
+    /// Bare agent name (e.g. `"researcher"`). The fully-qualified
+    /// `name@team` lives in [`Self::task_id`] for teammate rows so the
+    /// existing task identity machinery doesn't need a second key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    /// Team this teammate joins. Empty / missing for solo teammates
+    /// and for non-teammate tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
+    /// Color hint (`AgentColorName`) for the UI badge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Backend hosting the teammate process — `"in_process"` /
+    /// `"tmux_pane"` / `"tmux_window"`. None for non-teammate tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_kind: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

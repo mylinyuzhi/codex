@@ -131,8 +131,6 @@ fn core_event_variant(notif: &coco_types::ServerNotification) -> &'static str {
         N::ElicitationComplete(_) => "ElicitationComplete",
         N::PluginsChanged { .. } => "PluginsChanged",
         N::WorktreeExited(_) => "WorktreeExited",
-        N::SubagentSpawned(_) => "SubagentSpawned",
-        N::SubagentCompleted(_) => "SubagentCompleted",
         _ => "Other",
     }
 }

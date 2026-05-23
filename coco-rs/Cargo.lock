@@ -2232,6 +2232,7 @@ dependencies = [
  "coco-messages",
  "coco-subagent",
  "coco-types",
+ "coco-utils-string",
  "crossterm",
  "dirs",
  "insta",

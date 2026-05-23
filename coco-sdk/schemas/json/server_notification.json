@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ServerNotification",
-  "description": "Protocol-level notifications visible to all consumers.\n\n69 variants across 21 categories. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
+  "description": "Protocol-level notifications visible to all consumers.\n\n62 variants across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`bg_agent` / `in_process_teammate`), matching TS — no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
   "oneOf": [
     {
       "description": "New session started.",
@@ -381,74 +381,6 @@
         },
         "params": {
           "$ref": "#/$defs/ContentDeltaParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    {
-      "description": "Subagent spawned.",
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string",
-          "const": "subagent/spawned"
-        },
-        "params": {
-          "$ref": "#/$defs/SubagentSpawnedParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    {
-      "description": "Subagent completed.",
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string",
-          "const": "subagent/completed"
-        },
-        "params": {
-          "$ref": "#/$defs/SubagentCompletedParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    {
-      "description": "Subagent moved to background.",
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string",
-          "const": "subagent/backgrounded"
-        },
-        "params": {
-          "$ref": "#/$defs/SubagentBackgroundedParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    {
-      "description": "Subagent progress update.",
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string",
-          "const": "subagent/progress"
-        },
-        "params": {
-          "$ref": "#/$defs/SubagentProgressParams"
         }
       },
       "required": [
@@ -2292,7 +2224,7 @@
       ]
     },
     "ExpandedView": {
-      "description": "Which panel the TUI should have expanded in the task area.\nTS parity: `AppState.expandedView` in `AppStateStore.ts` (3 variants:\n`'none' | 'tasks' | 'teammates'`).",
+      "description": "Which panel the TUI should have expanded in the task area.\n\nTS parity: `AppState.expandedView` in `AppStateStore.ts` (3 variants:\n`'none' | 'tasks' | 'teammates'`).\n\n**`Teammates` ≠ general subagents.** In TS, `expandedView ===\n'teammates'` mounts `TeammateSpinnerTree`, which strictly filters\n`task.type === 'in_process_teammate'` — i.e. agents created by\n`spawnTeammate()` with persistent identity (`agentId@teamName`,\nsurvives `/clear`, mailbox-based). Async subagents from the\n`Agent` tool (TS `LocalAgentTask`, type `'local_agent'`) render\ninline in the transcript via `AgentProgressLine` and in the\n`BackgroundTaskStatus` pill row — **not** here.\n\nA subagent only appears in this view when the Agent tool was\ninvoked with `isAgentSwarmsEnabled() && teamName` set, which\nroutes through `spawnTeammate()` and transforms the worker into\na first-class teammate.",
       "type": "string",
       "enum": [
         "none",
@@ -4355,102 +4287,6 @@
         "data"
       ]
     },
-    "SubagentBackgroundedParams": {
-      "type": "object",
-      "properties": {
-        "agent_id": {
-          "type": "string"
-        },
-        "output_file": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "agent_id",
-        "output_file"
-      ]
-    },
-    "SubagentCompletedParams": {
-      "type": "object",
-      "properties": {
-        "agent_id": {
-          "type": "string"
-        },
-        "is_error": {
-          "type": "boolean",
-          "default": false
-        },
-        "result": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "agent_id",
-        "result"
-      ]
-    },
-    "SubagentProgressParams": {
-      "type": "object",
-      "properties": {
-        "agent_id": {
-          "type": "string"
-        },
-        "current_step": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "message": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "summary": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "total_steps": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        }
-      },
-      "required": [
-        "agent_id"
-      ]
-    },
-    "SubagentSpawnedParams": {
-      "type": "object",
-      "properties": {
-        "agent_id": {
-          "type": "string"
-        },
-        "agent_type": {
-          "type": "string"
-        },
-        "color": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "agent_id",
-        "agent_type",
-        "description"
-      ]
-    },
     "SummarizeCompletedParams": {
       "type": "object",
       "properties": {
@@ -5210,9 +5046,30 @@
       ]
     },
     "TaskStartedParams": {
-      "description": "Matches TS `SDKTaskStartedMessage` (coreSchemas.ts:1715-1733).\nTS has `description` required and `task_type` optional.",
+      "description": "Matches TS `SDKTaskStartedMessage` (`coreSchemas.ts:1715-1733`)\nplus optional teammate-metadata fields used when\n`task_type == \"in_process_teammate\"`.\n\nTS encodes both teammate and async-subagent spawn through this same\n`task_started` SDK event, discriminated by `task_type` — the canonical\nstrings live in `Task.ts:6-13`: `\"local_bash\"`, `\"local_agent\"`,\n`\"remote_agent\"`, `\"in_process_teammate\"`, `\"local_workflow\"`,\n`\"monitor_mcp\"`, `\"dream\"`. The teammate-roster rich metadata that TS\nstores in `AppState.teamContext.teammates` rides along as the\noptional fields below so the TUI in coco-rs (no shared store across\nprocesses) can construct the same `SubagentInstance { kind:\nTeammate, ... }` projection on the wire alone.",
       "type": "object",
       "properties": {
+        "agent_name": {
+          "description": "Bare agent name (e.g. `\"researcher\"`). The fully-qualified\n`name@team` lives in [`Self::task_id`] for teammate rows so the\nexisting task identity machinery doesn't need a second key.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "backend_kind": {
+          "description": "Backend hosting the teammate process — `\"in_process\"` /\n`\"tmux_pane\"` / `\"tmux_window\"`. None for non-teammate tasks.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color": {
+          "description": "Color hint (`AgentColorName`) for the UI badge.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": "string"
         },
@@ -5226,6 +5083,13 @@
           "type": "string"
         },
         "task_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "team_name": {
+          "description": "Team this teammate joins. Empty / missing for solo teammates\nand for non-teammate tasks.",
           "type": [
             "string",
             "null"

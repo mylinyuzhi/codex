@@ -17,13 +17,19 @@ fn test_format_tokens() {
 fn test_coordinator_task_from_subagent_running() {
     use crate::state::{SubagentInstance, SubagentStatus};
     let instance = SubagentInstance {
+        kind: crate::state::session::SubagentKind::Subagent,
         agent_id: "agent-7af2".into(),
         agent_type: "Explore".into(),
         description: "Find auth code".into(),
         status: SubagentStatus::Running,
         color: Some("blue".into()),
+        team_name: None,
+        tool_use_id: None,
         started_at_ms: None,
         token_usage: None,
+        last_tool_name: None,
+        tool_count: 0,
+        final_message: None,
     };
     let task = CoordinatorTask::from_subagent(&instance);
     assert_eq!(task.task_id, "agent-7af2");
@@ -38,13 +44,19 @@ fn test_coordinator_task_from_subagent_running() {
 fn test_coordinator_task_from_subagent_completed_not_running() {
     use crate::state::{SubagentInstance, SubagentStatus};
     let instance = SubagentInstance {
+        kind: crate::state::session::SubagentKind::Subagent,
         agent_id: "agent-1".into(),
         agent_type: "Plan".into(),
         description: "Plan refactor".into(),
         status: SubagentStatus::Completed,
         color: None,
+        team_name: None,
+        tool_use_id: None,
         started_at_ms: None,
         token_usage: None,
+        last_tool_name: None,
+        tool_count: 0,
+        final_message: None,
     };
     assert!(
         !CoordinatorTask::from_subagent(&instance).is_running,
@@ -57,13 +69,19 @@ fn test_coordinator_task_from_subagent_failed_or_backgrounded_not_running() {
     use crate::state::{SubagentInstance, SubagentStatus};
     for status in [SubagentStatus::Failed, SubagentStatus::Backgrounded] {
         let instance = SubagentInstance {
+            kind: crate::state::session::SubagentKind::Subagent,
             agent_id: "agent-x".into(),
             agent_type: "general-purpose".into(),
             description: "doing stuff".into(),
             status,
             color: None,
+            team_name: None,
+            tool_use_id: None,
             started_at_ms: None,
             token_usage: None,
+            last_tool_name: None,
+            tool_count: 0,
+            final_message: None,
         };
         assert!(
             !CoordinatorTask::from_subagent(&instance).is_running,

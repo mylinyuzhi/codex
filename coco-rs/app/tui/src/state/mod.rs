@@ -43,6 +43,7 @@ pub use session::SavedSession;
 pub use session::SessionState;
 pub use session::SlashCommandInfo;
 pub use session::SubagentInstance;
+pub use session::SubagentKind;
 pub use session::SubagentStatus;
 pub use session::TokenUsage;
 pub use session::ToolExecution;

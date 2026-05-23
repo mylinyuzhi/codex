@@ -366,6 +366,10 @@ fn task_started_params_description_required_task_type_optional() {
         task_type: None, // optional
         workflow_name: None,
         prompt: None,
+        agent_name: None,
+        team_name: None,
+        color: None,
+        backend_kind: None,
     };
     let j = serde_json::to_value(&p).unwrap();
     assert_eq!(j["description"], "do something");

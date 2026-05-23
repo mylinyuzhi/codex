@@ -7,7 +7,7 @@ expression: output
             │Cursor & history                                      │            
             │Ctrl+A             Move to beginning of line          │            
             │Ctrl+E             Move to end of line                │            
-            │Ctrl+B             Move one character left            │            
+            │←                  Move one character left            │            
             │Ctrl+F             Move one character right           │            
             │Alt+B              Move one word left                 │            
             │Alt+F              Move one word right                │            
@@ -20,9 +20,9 @@ expression: output
             │Ctrl+W             Delete the previous word           │            
             │Ctrl+Delete        Delete the next word               │            
             │Ctrl+K             Kill text from cursor to end of    │            
-            │line (Ctrl+Y to paste)                                │            
+            │line                                                  │            
             │Ctrl+U             Kill text from beginning of line to│            
 ────────────│cursor                                                │────────────
-❯           │Ctrl+Y             Paste the most recently killed text│            
+❯           │Shift+Enter        Insert a newline (multi-line input)│            
 ────────────└──────────────────────────────────────────────────────┘────────────
  opus-4 * auto | show thinking(F2):off | ↑0 ↓0 · cache 0% | ctx 0% | 0 msgs
