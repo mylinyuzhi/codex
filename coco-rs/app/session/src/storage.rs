@@ -11,11 +11,29 @@
 use coco_paths::ProjectPaths;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::io::BufRead;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use uuid::Uuid;
+
+#[path = "storage/preview.rs"]
+mod preview;
+#[path = "storage/wire.rs"]
+mod wire;
+use preview::extract_text_content;
+use preview::is_synthetic_first_prompt_candidate;
+#[cfg(test)]
+use preview::truncate_prompt;
+pub use wire::TranscriptEntryOptions;
+use wire::is_compact_boundary_message;
+pub use wire::messages_from_transcript_entry;
+use wire::remember_assistant_tool_calls;
+use wire::source_assistant_uuid_for_tool_result;
+use wire::tool_result_use_id;
+pub use wire::transcript_entries_for_message;
 
 /// Maximum transcript file size we will fully read into memory (50 MB).
 /// Matches the TS `MAX_TRANSCRIPT_READ_BYTES` constant.
@@ -26,21 +44,22 @@ const MAX_TRANSCRIPT_READ_BYTES: u64 = 50 * 1024 * 1024;
 // ---------------------------------------------------------------------------
 
 /// Closed set of `entry_type` discriminators we write to the JSONL.
-/// Centralised so `build_transcript_entry` (write side) and
-/// `reconstruct_message` (read side) can't drift, per the
-/// "no hardcoded strings for closed sets" rule in CLAUDE.md.
+/// Centralised so the write side (`storage::wire::transcript_entries_for_message`),
+/// the read side (`storage::wire::reconstruct_regular_message`), and
+/// the lite-metadata head/tail scan (`storage::read_transcript_metadata`)
+/// can't drift. Mirrors TS `isTranscriptMessage` (`sessionStorage.ts:139-146`).
 pub mod entry_kind {
     pub const USER: &str = "user";
     pub const ASSISTANT: &str = "assistant";
     pub const SYSTEM: &str = "system";
     pub const ATTACHMENT: &str = "attachment";
-    pub const TOOL_RESULT: &str = "tool_result";
 }
 
-/// Token usage for a single transcript entry. Field names mirror
-/// TS `Usage` so transcripts are byte-compatible with `claude-code`.
+/// Token usage for a single transcript entry.
+///
+/// Wire shape is **snake_case JSON** — Rust-native, not TS-byte-
+/// compatible. See module doc for the cross-implementation policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct TranscriptUsage {
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -52,22 +71,27 @@ pub struct TranscriptUsage {
 
 /// A transcript message entry (user, assistant, system, attachment).
 ///
-/// On-disk shape mirrors TS `SerializedMessage` from
-/// `types/logs.ts`: camelCase keys (`parentUuid`, `sessionId`,
-/// `isSidechain`, `gitBranch`, `costUsd`) so a JSONL written by
-/// coco-rs is wire-compatible with `claude-code`'s.
+/// **Wire format is Rust-native snake_case JSON.** Coco-rs deliberately
+/// does NOT mirror the TS Claude Code byte layout — the file content
+/// is semantically equivalent (same UUIDs, same timestamps, same
+/// `tool_use_id`-keyed records, same chain semantics, same metadata
+/// categories) but field names follow Rust convention so we don't
+/// have to maintain `camelCase` serde aliases on every new struct
+/// member. TS-written transcripts must go through
+/// `coco_session::import_ts` to migrate; cross-load is not supported.
 ///
 /// `timestamp` is an ISO 8601 / RFC 3339 string — the leaf walk in
 /// `recovery.rs` sorts leaves by lexicographic timestamp, which is
 /// only correct for that format.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct TranscriptEntry {
     #[serde(rename = "type")]
     pub entry_type: String,
     pub uuid: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_uuid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_parent_uuid: Option<String>,
     #[serde(default)]
     pub session_id: String,
     #[serde(default)]
@@ -80,6 +104,8 @@ pub struct TranscriptEntry {
     pub git_branch: Option<String>,
     #[serde(default)]
     pub is_sidechain: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     /// The raw message payload (role + content).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<serde_json::Value>,
@@ -99,28 +125,32 @@ pub struct TranscriptEntry {
 
 /// Metadata entries that live alongside transcript messages in the JSONL.
 ///
-/// Variants use `kebab-case` for the `type` discriminator (TS-aligned:
-/// `custom-title`, `last-prompt`, `marble-origami-commit`); inner
-/// fields use camelCase so the on-disk shape matches TS Claude Code
-/// (`{type:"custom-title", sessionId, customTitle}`).
+/// `type:` discriminator is kebab-case (`custom-title`, `last-prompt`,
+/// `file-history-snapshot`, …) to match TS Claude Code's discriminator
+/// strings — those drive cross-system tooling that key on them and
+/// changing them would force re-indexing. Payload field NAMES, on the
+/// other hand, are Rust snake_case; we don't mirror TS camelCase for
+/// payloads (see [`TranscriptEntry`] doc). Field VALUES carry the same
+/// semantic content as TS.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum MetadataEntry {
-    #[serde(rename_all = "camelCase")]
     CustomTitle {
         session_id: String,
         custom_title: String,
     },
-    #[serde(rename_all = "camelCase")]
-    Tag { session_id: String, tag: String },
-    #[serde(rename_all = "camelCase")]
+    Tag {
+        session_id: String,
+        tag: String,
+    },
     LastPrompt {
         session_id: String,
         last_prompt: String,
     },
-    #[serde(rename_all = "camelCase")]
-    Summary { leaf_uuid: String, summary: String },
-    #[serde(rename_all = "camelCase")]
+    Summary {
+        leaf_uuid: String,
+        summary: String,
+    },
     CostSummary {
         session_id: String,
         total_input_tokens: i64,
@@ -129,17 +159,14 @@ pub enum MetadataEntry {
         #[serde(default)]
         model_usage: std::collections::HashMap<String, ModelCostEntry>,
     },
-    /// File-history snapshot recorded by the rewind subsystem.
-    ///
-    /// TS: `FileHistorySnapshotMessage` from `types/logs.ts:188` —
-    /// `{type: 'file-history-snapshot', messageId, snapshot, isSnapshotUpdate}`.
-    /// Replayed on resume by `buildFileHistorySnapshotChain`
-    /// (`utils/sessionStorage.ts:2248`) to rebuild the rewind picker
-    /// and the disk-backup mapping. The `snapshot` payload is a
-    /// passthrough JSON blob to keep `coco-session` free of a
-    /// `coco-context` dependency — `coco-context::FileHistorySnapshot`
-    /// owns the typed shape and (de)serializes through this Value.
-    #[serde(rename_all = "camelCase")]
+    /// File-history snapshot recorded by the rewind subsystem. Replayed
+    /// on resume by [`build_file_history_snapshot_chain`] to rebuild
+    /// the rewind picker and the disk-backup mapping (TS algorithm
+    /// `buildFileHistorySnapshotChain` at `sessionStorage.ts:2248`).
+    /// The `snapshot` payload is a passthrough JSON blob to keep
+    /// `coco-session` free of a `coco-context` dependency —
+    /// `coco-context::FileHistorySnapshot` owns the typed shape and
+    /// (de)serializes through this Value.
     FileHistorySnapshot {
         message_id: String,
         snapshot: serde_json::Value,
@@ -164,102 +191,96 @@ pub enum MetadataEntry {
         #[serde(flatten)]
         payload: serde_json::Value,
     },
-    /// Tool-result budget replacement record. TS writes these so a
-    /// resumed session can replay the exact `<persisted-output>`
-    /// replacement string for a tool_use_id and preserve prompt-cache
-    /// stability.
-    #[serde(rename = "content-replacement", rename_all = "camelCase")]
+    /// Tool-result budget replacement record. Resume replays the
+    /// exact persisted-output string for a `tool_use_id` so
+    /// prompt-cache stability survives a restart.
+    #[serde(rename = "content-replacement")]
     ContentReplacement {
-        #[serde(flatten)]
-        record: ContentReplacementRecord,
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+        replacements: Vec<ContentReplacementRecord>,
     },
 
-    // ---------- TS parity additions (Phase 4) ----------------------
-    //
-    // The variants below mirror metadata kinds the TS Claude Code
-    // transcript writer emits. coco-rs may not yet produce all of
-    // them — but for parity we MUST be able to read them back from
-    // a JSONL written by TS without surfacing them as `Unknown`.
     /// AI-generated session title. Lower priority than `CustomTitle`
-    /// (user override wins). TS: `'ai-title'` —
-    /// `utils/sessionStorage.ts ~580`. Unlike `CustomTitle`, this
-    /// variant is **not** re-appended to the tail on cleanup; the
-    /// session picker still finds it via head-window scanning.
-    #[serde(rename_all = "camelCase")]
+    /// (user override wins). Unlike `CustomTitle`, this variant is
+    /// **not** re-appended to the tail on cleanup; the session picker
+    /// still finds it via head-window scanning.
     AiTitle {
         session_id: String,
         ai_title: String,
     },
 
-    /// Periodic fork-generated task snapshot. TS: `'task-summary'`.
-    /// Untyped passthrough — payload shape is decided by the
-    /// summary fork, which lives in the agent layer.
+    /// Periodic fork-generated task snapshot. Payload is opaque JSON
+    /// — the summary fork (agent layer) owns the shape.
     #[serde(rename = "task-summary")]
     TaskSummary {
         #[serde(flatten)]
         payload: serde_json::Value,
     },
 
-    /// Custom name assigned to a swarm agent. TS: `'agent-name'`.
-    #[serde(rename_all = "camelCase")]
+    /// Custom name assigned to a swarm agent.
     AgentName {
         session_id: String,
         agent_name: String,
     },
 
-    /// UI color for a swarm agent. TS: `'agent-color'`.
-    #[serde(rename_all = "camelCase")]
+    /// UI color for a swarm agent.
     AgentColor {
         session_id: String,
         agent_color: String,
     },
 
-    /// Agent definition that this session uses. TS: `'agent-setting'`.
-    #[serde(rename_all = "camelCase")]
+    /// Agent definition that this session uses.
     AgentSetting {
         session_id: String,
         agent_setting: String,
     },
 
-    /// GitHub PR link recorded alongside a session. TS: `'pr-link'` —
-    /// passthrough because the field set evolves (`prNumber`, `prUrl`,
-    /// `prRepository`, `timestamp`) and we don't want to break-read
-    /// older transcripts when new fields land upstream.
+    /// GitHub PR link recorded alongside a session. Payload is opaque
+    /// JSON — the PR-link emitter (commands layer) owns the shape so
+    /// new fields can land without breaking the read path.
     #[serde(rename = "pr-link")]
     PrLink {
         #[serde(flatten)]
         payload: serde_json::Value,
     },
 
-    /// Claude character contributions per file. TS:
-    /// `'attribution-snapshot'`. Note: TS `listSessions` filters
-    /// these out before extracting fields (only the LAST one
-    /// matters); the read side here preserves them so resume can
-    /// rebuild attribution state.
+    /// Claude character contributions per file. Payload is opaque
+    /// JSON — only the LATEST one matters; read-side preserves all so
+    /// resume can rebuild attribution state.
     #[serde(rename = "attribution-snapshot")]
     AttributionSnapshot {
         #[serde(flatten)]
         payload: serde_json::Value,
     },
 
-    /// Persisted worktree session state. TS: `'worktree-state'` —
-    /// last-wins on resume. Payload mirrors
-    /// `PersistedWorktreeSession` (`types/logs.ts:149-159`).
+    /// Persisted worktree session state — last-wins by session_id on
+    /// resume. Payload is opaque JSON.
     #[serde(rename = "worktree-state")]
     WorktreeState {
         #[serde(flatten)]
         payload: serde_json::Value,
     },
 
-    /// Session execution mode: `coordinator` vs `normal`. TS: `'mode'`.
-    #[serde(rename_all = "camelCase")]
-    Mode { session_id: String, mode: String },
+    /// Session execution mode: `coordinator` vs `normal`.
+    Mode {
+        session_id: String,
+        mode: String,
+    },
 }
 
+/// One content-replacement record.
+///
+/// Three fields — `kind`, `tool_use_id`, `replacement`. Records are
+/// keyed by `tool_use_id`, which is globally unique within a session.
+/// Wire shape is snake_case, like the rest of the JSONL envelope; the
+/// content semantics (one record per replaced tool result, exact
+/// persisted-output string) match TS Claude Code's
+/// `ContentReplacementRecord`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ContentReplacementRecord {
-    #[serde(rename_all = "camelCase")]
     ToolResult {
         tool_use_id: String,
         replacement: String,
@@ -289,12 +310,37 @@ impl ContentReplacementRecord {
 
 /// Per-model cost breakdown within a session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct ModelCostEntry {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cost_usd: f64,
     pub request_count: i32,
+}
+
+/// Options for appending a batch of conversation messages as one chain.
+///
+/// `starting_parent_uuid` is the already-written prefix parent. Once the
+/// first new message is written, later already-written messages in `messages`
+/// no longer advance the parent. That mirrors TS `recordTranscript` and keeps
+/// compact-preserved suffixes from reconnecting the new branch to the old tail.
+#[derive(Debug, Clone, Default)]
+pub struct ChainWriteOptions {
+    pub cwd: String,
+    pub timestamp: String,
+    pub is_sidechain: bool,
+    pub agent_id: Option<String>,
+    pub starting_parent_uuid: Option<String>,
+    /// Git branch for `cwd` at the time of the chain write. Stamped on
+    /// every transcript line — TS `sessionStorage.ts:1013-1019,1062`
+    /// resolves this once via `getBranch()`. `None` ⇒ field is omitted.
+    pub git_branch: Option<String>,
+}
+
+/// Result of appending a transcript chain.
+#[derive(Debug, Clone, Default)]
+pub struct ChainWriteResult {
+    pub appended: usize,
+    pub last_written_uuid: Option<Uuid>,
 }
 
 /// Union of all entry kinds that can appear in a JSONL transcript.
@@ -326,11 +372,10 @@ impl Serialize for Entry {
 // ---------------------------------------------------------------------------
 
 /// Lightweight metadata extracted from a transcript file without loading
-/// every message. Mirrors the TS `LiteMetadata` / `LogOption` fields used
-/// by the session picker (`--resume`). Camel-case serde so the shape
-/// matches TS `LogOption`.
+/// every message. Surfaced by the resume picker (`--resume`). Same
+/// semantic fields as TS `LogOption`, snake_case JSON like the rest of
+/// the wire envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct TranscriptMetadata {
     pub session_id: String,
     pub first_prompt: String,
@@ -356,14 +401,13 @@ pub struct TranscriptMetadata {
 // AgentMetadata
 // ---------------------------------------------------------------------------
 
-/// Per-agent metadata sidecar. Mirrors TS `AgentMetadata`
-/// (`utils/sessionStorage.ts:264-272`) — written when a background
-/// AgentTool spawn registers, read when the model invokes
-/// `agent/resume` to rehydrate the spawn.
+/// Per-agent metadata sidecar — written when a background AgentTool
+/// spawn registers, read when the model invokes `agent/resume` to
+/// rehydrate the spawn. Same semantic fields as TS `AgentMetadata`,
+/// snake_case wire.
 ///
 /// Persisted as `<sessions_dir>/<session_id>/subagents/agent-<id>.meta.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct AgentMetadata {
     /// Agent type used at original spawn (e.g. `general-purpose`,
     /// `Explore`). Resume reads this to route correctly when
@@ -420,26 +464,26 @@ impl TranscriptStore {
         &self.paths
     }
 
-    /// `<project>/<sessionId>.jsonl` — session transcript JSONL.
+    /// `<project>/<session_id>.jsonl` — session transcript JSONL.
     pub fn transcript_path(&self, session_id: &str) -> PathBuf {
         self.paths.transcript(session_id)
     }
 
-    /// `<project>/<sessionId>/subagents/agent-<agentId>.jsonl` —
+    /// `<project>/<session_id>/subagents/agent-<agent_id>.jsonl` —
     /// background-agent transcript. Mirrors TS
     /// `getAgentTranscriptPath` (`utils/sessionStorage.ts:247-258`).
     pub fn agent_transcript_path(&self, session_id: &str, agent_id: &str) -> PathBuf {
         self.paths.agent_transcript(session_id, agent_id)
     }
 
-    /// `<project>/<sessionId>/subagents/agent-<agentId>.meta.json` —
+    /// `<project>/<session_id>/subagents/agent-<agent_id>.meta.json` —
     /// metadata sidecar for a background agent's spawn. Mirrors TS
     /// `getAgentMetadataPath` (`utils/sessionStorage.ts:260-262`).
     pub fn agent_metadata_path(&self, session_id: &str, agent_id: &str) -> PathBuf {
         self.paths.agent_metadata(session_id, agent_id)
     }
 
-    /// `<project>/<sessionId>/tool-results/` — persisted tool result
+    /// `<project>/<session_id>/tool-results/` — persisted tool result
     /// blob directory. TS: `toolResultStorage.ts:104-106`.
     pub fn tool_results_session_dir(&self, session_id: &str) -> PathBuf {
         self.paths.tool_results_dir(session_id)
@@ -530,7 +574,7 @@ impl TranscriptStore {
         Ok(removed)
     }
 
-    /// `<project>/<sessionId>/` — the per-session artifact root.
+    /// `<project>/<session_id>/` — the per-session artifact root.
     ///
     /// Tool-result helpers receive this root and append
     /// `tool-results/` themselves.
@@ -648,6 +692,78 @@ impl TranscriptStore {
         self.append_entry(session_id, &Entry::Metadata(entry.clone()))
     }
 
+    /// Append messages using TS-compatible wire conversion and prefix-only
+    /// dedup semantics.
+    pub fn append_message_chain<'a, I>(
+        &self,
+        session_id: &str,
+        messages: I,
+        seen: &mut HashSet<Uuid>,
+        options: ChainWriteOptions,
+    ) -> crate::Result<ChainWriteResult>
+    where
+        I: IntoIterator<Item = &'a coco_messages::Message>,
+    {
+        let mut prev_uuid = options.starting_parent_uuid.clone();
+        let mut wrote_new = false;
+        let mut result = ChainWriteResult::default();
+        let mut source_by_tool_use: std::collections::HashMap<String, Uuid> =
+            std::collections::HashMap::new();
+
+        for msg in messages {
+            let Some(uuid) = msg.uuid().copied() else {
+                continue;
+            };
+            remember_assistant_tool_calls(msg, uuid, &mut source_by_tool_use);
+
+            if seen.contains(&uuid) {
+                if !wrote_new {
+                    prev_uuid = Some(uuid.to_string());
+                }
+                continue;
+            }
+
+            let logical_parent_uuid = prev_uuid.clone();
+            let source_assistant_uuid = source_assistant_uuid_for_tool_result(msg).or_else(|| {
+                tool_result_use_id(msg).and_then(|id| source_by_tool_use.get(id).copied())
+            });
+            let parent_uuid = if is_compact_boundary_message(msg) {
+                None
+            } else if let Some(source_uuid) = source_assistant_uuid {
+                Some(source_uuid.to_string())
+            } else {
+                prev_uuid.clone()
+            };
+            let entries = transcript_entries_for_message(
+                msg,
+                TranscriptEntryOptions {
+                    session_id,
+                    cwd: &options.cwd,
+                    timestamp: &options.timestamp,
+                    parent_uuid: parent_uuid.as_deref(),
+                    logical_parent_uuid: logical_parent_uuid.as_deref(),
+                    is_sidechain: options.is_sidechain,
+                    agent_id: options.agent_id.as_deref(),
+                    git_branch: options.git_branch.as_deref(),
+                },
+            );
+            if entries.is_empty() {
+                continue;
+            }
+
+            for entry in &entries {
+                self.append_message(session_id, entry)?;
+            }
+            seen.insert(uuid);
+            wrote_new = true;
+            prev_uuid = Some(uuid.to_string());
+            result.last_written_uuid = Some(uuid);
+            result.appended += entries.len();
+        }
+
+        Ok(result)
+    }
+
     /// Persist a file-history snapshot to the JSONL transcript.
     ///
     /// `snapshot_json` is the `FileHistorySnapshot`'s serialized JSON
@@ -677,7 +793,7 @@ impl TranscriptStore {
     /// Persist a marble-origami commit entry to the transcript.
     ///
     /// `payload` is the serialized [`coco_compact::staged::CommitEntry`]
-    /// (camelCase). TS:
+    /// (snake_case).
     /// `utils/sessionStorage.ts:1541 recordContextCollapseCommit`.
     pub fn append_marble_origami_commit(
         &self,
@@ -704,17 +820,20 @@ impl TranscriptStore {
     pub fn insert_content_replacement(
         &self,
         session_id: &str,
+        agent_id: Option<&str>,
         records: &[ContentReplacementRecord],
     ) -> crate::Result<()> {
-        for record in records {
-            self.append_metadata(
-                session_id,
-                &MetadataEntry::ContentReplacement {
-                    record: record.clone(),
-                },
-            )?;
+        if records.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        self.append_metadata(
+            session_id,
+            &MetadataEntry::ContentReplacement {
+                session_id: session_id.to_string(),
+                agent_id: agent_id.map(str::to_string),
+                replacements: records.to_vec(),
+            },
+        )
     }
 
     pub fn load_content_replacements(
@@ -725,16 +844,37 @@ impl TranscriptStore {
         Ok(entries
             .into_iter()
             .filter_map(|e| match e {
-                Entry::Metadata(MetadataEntry::ContentReplacement { record }) => Some(record),
+                Entry::Metadata(MetadataEntry::ContentReplacement {
+                    session_id: entry_session_id,
+                    replacements,
+                    ..
+                }) if entry_session_id == session_id => Some(replacements),
                 _ => None,
             })
+            .flatten()
             .collect())
+    }
+
+    /// Load all content-replacement records for this `session_id`
+    /// filtered by `agent_id` presence. TS `sessionStorage.ts:3682-3693`
+    /// routes records into two maps purely by `agentId`-vs-no-agentId:
+    /// no per-message-uuid scope, because `tool_use_id` is globally
+    /// unique within a session.
+    pub fn load_content_replacements_for_chain(
+        &self,
+        session_id: &str,
+        agent_id: Option<&str>,
+    ) -> crate::Result<Vec<ContentReplacementRecord>> {
+        let entries = self.load_entries(session_id)?;
+        Ok(content_replacements_for_chain(
+            &entries, session_id, agent_id,
+        ))
     }
 
     /// Replay marble-origami entries on resume. Returns
     /// `(commits_in_order, last_snapshot_or_none)` filtered by
     /// `session_id` (snapshot last-wins). Each `serde_json::Value` is
-    /// the original camelCase payload — caller deserializes back into
+    /// the original payload — caller deserializes back into
     /// `coco_compact::staged::{CommitEntry, SnapshotEntry}`.
     ///
     /// TS: `utils/sessionStorage.ts:2345-2351 loadAllLogs` filter +
@@ -767,20 +907,28 @@ impl TranscriptStore {
 
     /// Replay file-history snapshots from the transcript JSONL.
     ///
-    /// Returns the ordered chain of snapshot JSON values keyed by
-    /// `message_id`, with later `is_snapshot_update == true` entries
-    /// overwriting earlier ones at the same id (TS `last-wins` rule
-    /// from `buildFileHistorySnapshotChain` in
-    /// `utils/sessionStorage.ts:2248-2272`).
+    /// Replay file-history snapshots in conversation-chain order, with
+    /// `is_snapshot_update` semantics.
     ///
-    /// Caller deserializes each Value into the typed snapshot
-    /// (decoupled so coco-session doesn't depend on coco-context).
-    pub fn load_file_history_snapshots(
+    /// `chain_message_uuids` is the resolved chain of message UUIDs in
+    /// conversation order (typically computed by
+    /// `coco_session::recovery::load_conversation_for_resume` from the
+    /// reconstructed `messages` Vec). Per TS
+    /// `utils/sessionStorage.ts:2248-2272 buildFileHistorySnapshotChain`,
+    /// the chain walk drives lookup — disk append order is irrelevant
+    /// once the messages map is built. Caller deserializes each Value
+    /// into the typed snapshot (decoupled so `coco-session` doesn't
+    /// depend on `coco-context`).
+    pub fn load_file_history_snapshots_for_chain(
         &self,
         session_id: &str,
+        chain_message_uuids: &[String],
     ) -> crate::Result<Vec<serde_json::Value>> {
         let entries = self.load_entries(session_id)?;
-        Ok(build_file_history_snapshot_chain(&entries))
+        Ok(build_file_history_snapshot_chain(
+            &entries,
+            chain_message_uuids,
+        ))
     }
 
     /// Load all entries from a transcript file.
@@ -873,15 +1021,34 @@ fn try_remove_empty_dir(path: &Path) {
 // File-level helpers
 // ---------------------------------------------------------------------------
 
-/// Walk transcript entries and reconstruct the file-history snapshot
-/// chain. Implements TS `buildFileHistorySnapshotChain`:
-/// `is_snapshot_update == false` appends a new snapshot for that
-/// `message_id`; `is_snapshot_update == true` overwrites the prior
-/// snapshot for the same id at its position in the vec (last-wins).
-pub fn build_file_history_snapshot_chain(entries: &[Entry]) -> Vec<serde_json::Value> {
+/// Walk a conversation chain and reconstruct the file-history snapshot
+/// list to replay on resume. Mirrors TS `buildFileHistorySnapshotChain`
+/// (`utils/sessionStorage.ts:2248-2272`):
+///
+/// 1. Index the metadata entries by their OUTER `message_id` (the
+///    JSONL row's field), keeping the LAST entry per outer id.
+/// 2. Walk `chain_message_uuids` in conversation order. For each id,
+///    look up its corresponding snapshot. If absent → continue.
+/// 3. `is_snapshot_update == false` → push a new snapshot and remember
+///    its position by the INNER `snapshot.messageId` (not the outer
+///    one — TS keys on the inner field because `trackEdit` writes
+///    update entries whose outer `messageId` is the **current** turn
+///    while the inner `snapshot.messageId` keeps the original
+///    snapshot's id).
+/// 4. `is_snapshot_update == true` → if an entry exists for the inner
+///    `snapshot.messageId`, overwrite it in place; otherwise treat as
+///    a new append (TS does the same — `existingIndex === undefined`
+///    falls through to the push branch).
+pub fn build_file_history_snapshot_chain(
+    entries: &[Entry],
+    chain_message_uuids: &[String],
+) -> Vec<serde_json::Value> {
     use std::collections::HashMap;
-    let mut snapshots: Vec<serde_json::Value> = Vec::new();
-    let mut index_by_message_id: HashMap<String, usize> = HashMap::new();
+    // Step 1: build outer-messageId → (inner_message_id, snapshot,
+    // is_snapshot_update). Later entries overwrite earlier ones for the
+    // same outer id (matches TS Map<UUID, FileHistorySnapshotMessage>
+    // last-write-wins at `sessionStorage.ts:3490-3510`).
+    let mut by_outer: HashMap<&str, (String, &serde_json::Value, bool)> = HashMap::new();
     for entry in entries {
         let Entry::Metadata(MetadataEntry::FileHistorySnapshot {
             message_id,
@@ -891,21 +1058,65 @@ pub fn build_file_history_snapshot_chain(entries: &[Entry]) -> Vec<serde_json::V
         else {
             continue;
         };
-        if *is_snapshot_update && let Some(&idx) = index_by_message_id.get(message_id) {
-            snapshots[idx] = snapshot.clone();
+        let inner_message_id = snapshot
+            .get("message_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(message_id.as_str())
+            .to_string();
+        by_outer.insert(
+            message_id.as_str(),
+            (inner_message_id, snapshot, *is_snapshot_update),
+        );
+    }
+
+    let mut snapshots: Vec<serde_json::Value> = Vec::new();
+    let mut index_by_inner: HashMap<String, usize> = HashMap::new();
+    for chain_uuid in chain_message_uuids {
+        let Some((inner_id, snapshot, is_update)) = by_outer.get(chain_uuid.as_str()) else {
+            continue;
+        };
+        if *is_update && let Some(&idx) = index_by_inner.get(inner_id) {
+            snapshots[idx] = (*snapshot).clone();
             continue;
         }
-        index_by_message_id.insert(message_id.clone(), snapshots.len());
-        snapshots.push(snapshot.clone());
+        index_by_inner.insert(inner_id.clone(), snapshots.len());
+        snapshots.push((*snapshot).clone());
     }
     snapshots
 }
 
-/// Whether a marble-origami payload's `sessionId` field equals
-/// `session_id`. Untyped match — payload is camelCase JSON.
+/// Collect every `content-replacement` record for `(session_id,
+/// agent_id)`. TS `sessionStorage.ts:3682-3693` routes records by
+/// `agentId` presence and applies them all on resume — no further
+/// per-message scope, because `tool_use_id` is globally unique within
+/// a session.
+pub fn content_replacements_for_chain(
+    entries: &[Entry],
+    session_id: &str,
+    agent_id: Option<&str>,
+) -> Vec<ContentReplacementRecord> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Metadata(MetadataEntry::ContentReplacement {
+                session_id: entry_session_id,
+                agent_id: entry_agent_id,
+                replacements,
+            }) if entry_session_id == session_id && entry_agent_id.as_deref() == agent_id => {
+                Some(replacements)
+            }
+            _ => None,
+        })
+        .flat_map(|records| records.iter())
+        .cloned()
+        .collect()
+}
+
+/// Whether a marble-origami payload's session id field equals `session_id`.
+/// Snake_case to match the rest of the coco-rs wire envelope.
 fn matches_session(payload: &serde_json::Value, session_id: &str) -> bool {
     payload
-        .get("sessionId")
+        .get("session_id")
         .and_then(|v| v.as_str())
         .is_some_and(|s| s == session_id)
 }
@@ -957,20 +1168,39 @@ fn load_entries_from_file(path: &Path) -> crate::Result<Vec<Entry>> {
 }
 
 /// Parse a single JSONL line into an [`Entry`].
+///
+/// Dispatch order: parse once into `serde_json::Value`, then route by
+/// the `type` field. Transcript types
+/// (`user`/`assistant`/`system`/`attachment`) go to `TranscriptEntry`;
+/// every other `type` value is attempted as a `MetadataEntry`; anything
+/// that fails to deserialize lands as `Entry::Unknown` with a
+/// `tracing::debug!` so the failure shows up in logs instead of being
+/// silently swallowed.
 fn parse_entry(line: &str) -> Entry {
-    // Try metadata first (tagged enum with "type" discriminator).
-    if let Ok(meta) = serde_json::from_str::<MetadataEntry>(line) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        tracing::debug!(line = %line, "transcript line was not valid json");
+        return Entry::Unknown(serde_json::Value::String(line.to_string()));
+    };
+    let entry_type = value
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let looks_like_transcript = matches!(
+        entry_type,
+        entry_kind::USER | entry_kind::ASSISTANT | entry_kind::SYSTEM | entry_kind::ATTACHMENT
+    );
+    if looks_like_transcript {
+        if let Ok(transcript) = serde_json::from_value::<TranscriptEntry>(value.clone()) {
+            return Entry::Transcript(Box::new(transcript));
+        }
+    } else if let Ok(meta) = serde_json::from_value::<MetadataEntry>(value.clone()) {
         return Entry::Metadata(meta);
     }
-    // Try transcript message.
-    if let Ok(transcript) = serde_json::from_str::<TranscriptEntry>(line) {
-        return Entry::Transcript(Box::new(transcript));
-    }
-    // Fallback: preserve the raw JSON value.
-    match serde_json::from_str::<serde_json::Value>(line) {
-        Ok(v) => Entry::Unknown(v),
-        Err(_) => Entry::Unknown(serde_json::Value::String(line.to_string())),
-    }
+    tracing::debug!(
+        entry_type = %entry_type,
+        "transcript line did not match any known Entry shape — preserving as Unknown",
+    );
+    Entry::Unknown(value)
 }
 
 /// Lite-read window: when a transcript exceeds this size, scan only
@@ -1050,10 +1280,10 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
         let entry = parse_entry(line);
         match &entry {
             Entry::Transcript(t) => {
-                if t.entry_type == "user" || t.entry_type == "assistant" {
+                if t.entry_type == entry_kind::USER || t.entry_type == entry_kind::ASSISTANT {
                     message_count += 1;
                 }
-                if first_prompt.is_empty() && t.entry_type == "user" {
+                if first_prompt.is_empty() && t.entry_type == entry_kind::USER {
                     let candidate = extract_text_content(t);
                     // TS parity: `sessionStorage.ts:125`'s
                     // `SKIP_FIRST_PROMPT_PATTERN` filters synthetic
@@ -1094,7 +1324,7 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
                 // AI title is the picker fallback when no
                 // user-provided `CustomTitle` exists. The session
                 // picker (TS `listSessions`) already prefers
-                // `customTitle > aiTitle`, so we only set the
+                // `custom_title > ai_title`, so we only set the
                 // metadata field when nothing else has filled it.
                 MetadataEntry::AiTitle { ai_title, .. } => {
                     if custom_title.is_none() {
@@ -1238,7 +1468,7 @@ fn list_transcript_sessions(sessions_dir: &Path) -> crate::Result<Vec<Transcript
 /// Mirrors TS `sessionStoragePortable.ts:403-466` return shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSessionFile {
-    /// Absolute path to `<sessionId>.jsonl`.
+    /// Absolute path to `<session_id>.jsonl`.
     pub file_path: PathBuf,
     /// The project root associated with the file. For a direct
     /// match this is `cwd_hint`; for a worktree fallback it's the
@@ -1373,124 +1603,6 @@ fn has_nonzero_file(path: &Path) -> bool {
         std::fs::metadata(path),
         Ok(m) if m.is_file() && m.len() > 0,
     )
-}
-
-/// Extract a short text snippet from a transcript entry's message content.
-fn extract_text_content(entry: &TranscriptEntry) -> String {
-    let Some(message) = &entry.message else {
-        return String::new();
-    };
-
-    // Message has a "content" field that is either a string or an array.
-    let Some(content) = message.get("content") else {
-        return String::new();
-    };
-
-    if let Some(text) = content.as_str() {
-        return truncate_prompt(text);
-    }
-
-    // Array content: find the first text block.
-    if let Some(arr) = content.as_array() {
-        for block in arr {
-            if block.get("type").and_then(|t| t.as_str()) == Some("text")
-                && let Some(text) = block.get("text").and_then(|t| t.as_str())
-            {
-                return truncate_prompt(text);
-            }
-        }
-    }
-
-    String::new()
-}
-
-/// Returns true if the candidate text should be skipped when picking
-/// the resume-picker's "first prompt" preview. Mirrors TS
-/// `sessionStorage.ts:125` `SKIP_FIRST_PROMPT_PATTERN`.
-fn is_synthetic_first_prompt_candidate(text: &str) -> bool {
-    let trimmed = text.trim();
-    trimmed == coco_messages::INTERRUPT_MESSAGE
-        || trimmed == coco_messages::INTERRUPT_MESSAGE_FOR_TOOL_USE
-        || trimmed.starts_with("[Request interrupted by user")
-}
-
-/// Truncate a prompt string for display (matching TS 200-char limit).
-fn truncate_prompt(text: &str) -> String {
-    let flat = text.replace('\n', " ");
-    let trimmed = flat.trim();
-    if trimmed.len() > 200 {
-        format!("{}...", &trimmed[..200].trim())
-    } else {
-        trimmed.to_string()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Cost restoration
-// ---------------------------------------------------------------------------
-
-/// Summary of costs restored from transcript entries.
-#[derive(Debug, Clone, Default)]
-pub struct RestoredCostSummary {
-    pub total_input_tokens: i64,
-    pub total_output_tokens: i64,
-    pub total_cost_usd: f64,
-    pub model_usage: std::collections::HashMap<String, ModelCostEntry>,
-}
-
-/// Reconstruct total costs from transcript entries on session resume.
-///
-/// Scans all entries for usage data and aggregates per-model costs.
-/// If a CostSummary metadata entry exists, uses that directly.
-pub fn restore_cost_from_transcript(entries: &[Entry]) -> RestoredCostSummary {
-    // Check for explicit CostSummary first (most accurate).
-    for entry in entries.iter().rev() {
-        if let Entry::Metadata(MetadataEntry::CostSummary {
-            total_input_tokens,
-            total_output_tokens,
-            total_cost_usd,
-            model_usage,
-            ..
-        }) = entry
-        {
-            return RestoredCostSummary {
-                total_input_tokens: *total_input_tokens,
-                total_output_tokens: *total_output_tokens,
-                total_cost_usd: *total_cost_usd,
-                model_usage: model_usage.clone(),
-            };
-        }
-    }
-
-    // Fallback: aggregate from individual transcript entries.
-    let mut summary = RestoredCostSummary::default();
-    for entry in entries {
-        if let Entry::Transcript(t) = entry {
-            if let Some(ref usage) = t.usage {
-                summary.total_input_tokens += usage.input_tokens;
-                summary.total_output_tokens += usage.output_tokens;
-            }
-            if let Some(cost) = t.cost_usd {
-                summary.total_cost_usd += cost;
-            }
-            if let (Some(model), Some(usage)) = (&t.model, &t.usage) {
-                let entry = summary
-                    .model_usage
-                    .entry(model.clone())
-                    .or_insert(ModelCostEntry {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        cost_usd: 0.0,
-                        request_count: 0,
-                    });
-                entry.input_tokens += usage.input_tokens;
-                entry.output_tokens += usage.output_tokens;
-                entry.cost_usd += t.cost_usd.unwrap_or(0.0);
-                entry.request_count += 1;
-            }
-        }
-    }
-    summary
 }
 
 #[cfg(test)]

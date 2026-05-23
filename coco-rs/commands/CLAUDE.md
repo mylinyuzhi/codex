@@ -112,6 +112,24 @@ command's behavior. **Do not introduce `is_enabled` for these in coco-rs**
 | `/tag` | Toggles a searchable tag on the current session via `SessionManager::toggle_tag` (sentinel-based dispatch). |
 | `/files` | Lists `git ls-files` grouped by top-level directory with rough context-size estimate. (Description: "List git-tracked files in this repository".) |
 
+## Rewind / Resume Naming
+
+Two distinct features:
+
+- **`/rewind`** — in-session TUI checkpoint picker (TS
+  `commands/rewind/rewind.ts` → `openMessageSelector`). Operates on file-
+  history snapshots; touches no transcript-on-disk.
+- **`/resume`** — load a prior transcript and continue. CLI form: `--resume`
+  / `-r`. Reads JSONL; rebuilds chain via `coco_session::recovery`.
+
+**Canonical names only.** TS ships aliases (`/rewind` → `[checkpoint]`,
+`/resume` → `[continue]`); coco-rs intentionally drops them. Single dispatch
+arm per command — no `matches!(name, "rewind" | "checkpoint" | "undo")`
+fan-out, no alias entries in `RegisteredCommand.base.aliases`. Audits that
+reintroduce an alias must first justify why the divergence from this rule is
+worth carrying. The historical `/restore` and `--restore` names from an
+earlier coco-rs draft are likewise off the table.
+
 ## Permission/persistence gaps below the slash-command layer
 
 These items are NOT command-handler bugs but show up in audits because

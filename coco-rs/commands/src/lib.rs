@@ -581,8 +581,25 @@ mod seam_tests {
             std::path::PathBuf::from("/home/test"),
             None,
         );
-        // TS-parity handlers are present.
+        // TS-parity handlers are present. Canonical names only — no
+        // aliases for /rewind or /resume.
         assert!(reg.get("rewind").is_some());
+        assert!(
+            reg.get("checkpoint").is_none(),
+            "/checkpoint alias removed; use canonical /rewind"
+        );
+        assert!(
+            reg.get("undo").is_none(),
+            "/undo alias removed; use canonical /rewind"
+        );
+        assert!(
+            reg.get("continue").is_none(),
+            "/continue alias removed; use canonical /resume"
+        );
+        assert!(
+            reg.get("restore").is_none(),
+            "session continuation uses resume; rewind actions are not slash command aliases"
+        );
         assert!(reg.get("memory").is_some());
         assert!(reg.get("init").is_some());
         assert!(reg.get("security-review").is_some());

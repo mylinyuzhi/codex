@@ -120,7 +120,7 @@ impl SdkServer {
 
     /// Install a disk-backed [`coco_session::SessionManager`] so the
     /// `session/list`, `session/read`, `session/resume` handlers can
-    /// browse and restore historical sessions. Without this, those
+    /// browse and resume historical sessions. Without this, those
     /// handlers reply with `METHOD_NOT_FOUND`.
     pub fn with_session_manager(self, manager: Arc<coco_session::SessionManager>) -> Self {
         let Ok(mut slot) = self.state.session_manager.try_write() else {

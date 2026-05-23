@@ -40,6 +40,7 @@ fn assistant_with_tool_call(text: &str, tool_id: &str, tool_name: &str) -> Arc<M
 fn tool_result(tool_use_id: &str, output_text: &str) -> Arc<Message> {
     Arc::new(Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
+        source_assistant_uuid: None,
         message: LlmMessage::Tool {
             content: vec![ToolContentPart::ToolResult(ToolResultPart::new(
                 tool_use_id,

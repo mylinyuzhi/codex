@@ -237,11 +237,12 @@ fn registration_json_wire_format_is_camel_case() {
     };
     let json = serde_json::to_value(&rec).unwrap();
     let obj = json.as_object().unwrap();
-    assert!(obj.contains_key("sessionId"));
-    assert!(obj.contains_key("startedAt"));
-    assert!(obj.contains_key("bridgeSessionId"));
-    assert!(obj.contains_key("updatedAt"));
-    assert!(obj.contains_key("waitingFor"));
+    // Snake_case wire — `<pid>.json` is coco-rs's own registry shape.
+    assert!(obj.contains_key("session_id"));
+    assert!(obj.contains_key("started_at"));
+    assert!(obj.contains_key("bridge_session_id"));
+    assert!(obj.contains_key("updated_at"));
+    assert!(obj.contains_key("waiting_for"));
     assert_eq!(obj.get("kind").unwrap(), "daemon-worker");
     assert_eq!(obj.get("status").unwrap(), "idle");
 }

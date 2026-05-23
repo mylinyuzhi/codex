@@ -192,7 +192,7 @@ async fn test_can_restore() {
         snapshots: vec![FileHistorySnapshot {
             message_id: "msg-42".to_string(),
             tracked_file_backups: HashMap::new(),
-            timestamp: 0,
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(0).unwrap(),
         }],
         ..Default::default()
     };
@@ -231,14 +231,78 @@ async fn test_copy_file_history_for_resume() {
         .await
         .unwrap();
 
-    let copied = copy_file_history_for_resume(config_home.path(), "old-session", "new-session")
-        .await
-        .unwrap();
+    let copied =
+        copy_file_history_for_resume(config_home.path(), "old-session", "new-session", &[], None)
+            .await
+            .unwrap();
 
     assert_eq!(copied, 2);
     let dst_dir = backup_dir(config_home.path(), "new-session");
     assert!(dst_dir.join("backup1").exists());
     assert!(dst_dir.join("backup2").exists());
+}
+
+/// TS-parity: `copyFileHistoryForResume` replays the snapshot chain
+/// into the new session's transcript via `recordFileHistorySnapshot`.
+/// Verify that a sink passed in receives every snapshot.
+#[tokio::test]
+async fn test_copy_file_history_for_resume_replays_snapshots_into_new_session() {
+    use std::sync::Mutex;
+
+    let config_home = TempDir::new().unwrap();
+    let src_dir = backup_dir(config_home.path(), "old-session");
+    tokio::fs::create_dir_all(&src_dir).await.unwrap();
+
+    #[derive(Default)]
+    struct CapturedSink {
+        records: Mutex<Vec<(String, serde_json::Value, bool)>>,
+    }
+    #[async_trait::async_trait]
+    impl FileHistorySnapshotSink for CapturedSink {
+        async fn record(
+            &self,
+            message_id: &str,
+            snapshot: serde_json::Value,
+            is_snapshot_update: bool,
+        ) {
+            self.records.lock().unwrap().push((
+                message_id.to_string(),
+                snapshot,
+                is_snapshot_update,
+            ));
+        }
+    }
+
+    let sink = CapturedSink::default();
+    let snapshots = vec![
+        FileHistorySnapshot {
+            message_id: "msg-a".to_string(),
+            tracked_file_backups: HashMap::new(),
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(100).unwrap(),
+        },
+        FileHistorySnapshot {
+            message_id: "msg-b".to_string(),
+            tracked_file_backups: HashMap::new(),
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(200).unwrap(),
+        },
+    ];
+
+    copy_file_history_for_resume(
+        config_home.path(),
+        "old-session",
+        "new-session",
+        &snapshots,
+        Some(&sink),
+    )
+    .await
+    .unwrap();
+
+    let captured = sink.records.into_inner().unwrap();
+    assert_eq!(captured.len(), 2, "every snapshot should be replayed");
+    assert_eq!(captured[0].0, "msg-a");
+    assert!(!captured[0].2, "replay must use isSnapshotUpdate=false");
+    assert_eq!(captured[1].0, "msg-b");
+    assert!(!captured[1].2, "replay must use isSnapshotUpdate=false");
 }
 
 #[tokio::test]
@@ -253,12 +317,13 @@ async fn test_restore_from_snapshots() {
                     FileHistoryBackup {
                         backup_file_name: Some("abc@v1".to_string()),
                         version: 1,
-                        backup_time: 100,
+                        backup_time: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(100)
+                            .unwrap(),
                     },
                 );
                 m
             },
-            timestamp: 100,
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(100).unwrap(),
         },
         FileHistorySnapshot {
             message_id: "m2".to_string(),
@@ -269,7 +334,8 @@ async fn test_restore_from_snapshots() {
                     FileHistoryBackup {
                         backup_file_name: Some("abc@v2".to_string()),
                         version: 2,
-                        backup_time: 200,
+                        backup_time: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(200)
+                            .unwrap(),
                     },
                 );
                 m.insert(
@@ -277,12 +343,13 @@ async fn test_restore_from_snapshots() {
                     FileHistoryBackup {
                         backup_file_name: Some("def@v1".to_string()),
                         version: 1,
-                        backup_time: 200,
+                        backup_time: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(200)
+                            .unwrap(),
                     },
                 );
                 m
             },
-            timestamp: 200,
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(200).unwrap(),
         },
     ];
 
@@ -290,4 +357,111 @@ async fn test_restore_from_snapshots() {
     assert_eq!(state.snapshots.len(), 2);
     assert_eq!(state.tracked_files.len(), 2);
     assert_eq!(state.snapshot_sequence, 2);
+}
+
+#[tokio::test]
+async fn test_rewind_skips_invalid_backup_name_without_aborting() {
+    let dir = TempDir::new().unwrap();
+    let config_home = TempDir::new().unwrap();
+    let good_file = dir.path().join("good.txt");
+    let bad_file = dir.path().join("bad.txt");
+    fs::write(&good_file, "current").await.unwrap();
+    fs::write(&bad_file, "current").await.unwrap();
+
+    let backups = backup_dir(config_home.path(), "session-1");
+    fs::create_dir_all(&backups).await.unwrap();
+    fs::write(backups.join("good@v1"), "restored")
+        .await
+        .unwrap();
+
+    let mut state = FileHistoryState::new();
+    state.tracked_files.insert(good_file.clone());
+    state.tracked_files.insert(bad_file.clone());
+    state.snapshots.push(FileHistorySnapshot {
+        message_id: "m1".to_string(),
+        tracked_file_backups: {
+            let mut m = HashMap::new();
+            m.insert(
+                good_file.clone(),
+                FileHistoryBackup {
+                    backup_file_name: Some("good@v1".to_string()),
+                    version: 1,
+                    backup_time: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(100)
+                        .unwrap(),
+                },
+            );
+            m.insert(
+                bad_file.clone(),
+                FileHistoryBackup {
+                    backup_file_name: Some("../escape".to_string()),
+                    version: 1,
+                    backup_time: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(100)
+                        .unwrap(),
+                },
+            );
+            m
+        },
+        timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(100).unwrap(),
+    });
+
+    let changed = state
+        .rewind("m1", config_home.path(), "session-1")
+        .await
+        .unwrap();
+    assert_eq!(changed, vec![good_file.clone()]);
+    assert_eq!(fs::read_to_string(&good_file).await.unwrap(), "restored");
+    assert_eq!(fs::read_to_string(&bad_file).await.unwrap(), "current");
+}
+
+#[test]
+fn test_file_history_snapshot_serializes_with_snake_case() {
+    let snapshot = FileHistorySnapshot {
+        message_id: "m1".to_string(),
+        tracked_file_backups: {
+            let mut m = HashMap::new();
+            m.insert(
+                PathBuf::from("/a.txt"),
+                FileHistoryBackup {
+                    backup_file_name: Some("abc@v1".to_string()),
+                    version: 1,
+                    backup_time: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(100)
+                        .unwrap(),
+                },
+            );
+            m
+        },
+        timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(100).unwrap(),
+    };
+
+    let value = serde_json::to_value(snapshot).unwrap();
+    // Snake_case wire — coco-rs's own format, not TS byte-compatible.
+    assert!(value.get("message_id").is_some());
+    assert!(value.get("tracked_file_backups").is_some());
+    assert!(
+        value
+            .pointer("/tracked_file_backups/~1a.txt/backup_file_name")
+            .is_some()
+    );
+    assert!(
+        value
+            .pointer("/tracked_file_backups/~1a.txt/backup_time")
+            .is_some()
+    );
+    assert!(value.get("messageId").is_none());
+    assert!(value.get("trackedFileBackups").is_none());
+    // Time fields are `chrono::DateTime<Utc>` so they serialize to
+    // RFC 3339 strings, not numbers. Same semantic content as TS
+    // `Date` values but Rust-idiomatic typing.
+    let timestamp = value.get("timestamp").expect("timestamp present");
+    assert!(
+        timestamp.is_string(),
+        "timestamp must be an ISO 8601 string, got {timestamp}"
+    );
+    let backup_time = value
+        .pointer("/tracked_file_backups/~1a.txt/backup_time")
+        .expect("backup_time present");
+    assert!(
+        backup_time.is_string(),
+        "backup_time must be an ISO 8601 string, got {backup_time}"
+    );
 }

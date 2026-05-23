@@ -130,6 +130,7 @@ pub fn create_tool_result_message(
     };
     Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
+        source_assistant_uuid: None,
         message: LlmMessage::tool(vec![ToolContent::ToolResult(tool_result)]),
         tool_use_id: tool_call_id.to_string(),
         tool_id,
@@ -190,6 +191,7 @@ pub fn create_tool_result_message_with_parts(
     };
     Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
+        source_assistant_uuid: None,
         message: LlmMessage::tool(vec![ToolContent::ToolResult(tool_result)]),
         tool_use_id: tool_call_id.to_string(),
         tool_id,

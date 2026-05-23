@@ -171,16 +171,11 @@ async fn test_memory_handler() {
     assert!(output.contains("Memory Files"));
 }
 
-#[test]
-fn test_rewind_handler() {
-    // Args are dropped — the TUI command palette intercepts /rewind
-    // before this handler runs and opens the picker overlay. Both
-    // empty and arg invocations return the same opener-status text.
-    let out_empty = rewind_handler("");
-    let out_with_arg = rewind_handler("5");
-    assert!(!out_empty.is_empty());
-    assert_eq!(out_empty, out_with_arg);
-}
+// `/rewind` no longer has an inline string handler — the duplicate
+// registration in `register_extended_builtins` was removed and
+// `register_ts_parity_handlers` now owns the only handler
+// (`handlers::rewind::RewindHandler`). The TUI command palette
+// intercepts before that handler is reached.
 
 #[tokio::test]
 async fn test_skills_handler() {
@@ -545,6 +540,10 @@ fn test_alias_lookups_in_extended() {
     assert_eq!(by_alias.unwrap().base.name, "permissions");
 
     let by_alias = registry.get("checkpoint");
+    assert!(by_alias.is_some());
+    assert_eq!(by_alias.unwrap().base.name, "rewind");
+
+    let by_alias = registry.get("undo");
     assert!(by_alias.is_some());
     assert_eq!(by_alias.unwrap().base.name, "rewind");
 

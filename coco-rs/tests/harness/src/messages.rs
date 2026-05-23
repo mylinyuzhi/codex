@@ -159,6 +159,7 @@ pub fn assistant_with_tool_call(tool_name: &str, input: serde_json::Value) -> Me
 pub fn tool_result(tool: ToolName, tool_use_id: &str, content: &str) -> Message {
     Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
+        source_assistant_uuid: None,
         message: LlmMessage::Tool {
             content: vec![ToolContent::ToolResult(ToolResultContent {
                 tool_call_id: tool_use_id.to_string(),

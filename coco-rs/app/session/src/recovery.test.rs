@@ -28,23 +28,21 @@ fn test_fork_conversation() {
 
 /// Build a JSONL line for a `user` transcript entry with plain-text content.
 ///
-/// `parent` matches TS's `parentUuid` linkage — every user message
+/// `parent` matches the `parent_uuid` linkage — every user message
 /// after the first should chain to the prior assistant so the resume
-/// walker reconstructs the full chain via DAG traversal. Uses the
-/// camelCase wire shape (`sessionId`, `parentUuid`, `isSidechain`)
-/// the on-disk JSONL actually carries — TS-compat by design.
+/// walker reconstructs the full chain via DAG traversal.
 fn user_line_with_parent(uuid: &str, parent: Option<&str>, text: &str) -> String {
     let mut entry = json!({
         "type": "user",
         "uuid": uuid,
-        "sessionId": "s1",
+        "session_id": "s1",
         "cwd": "/tmp/p",
         "timestamp": "2025-01-15T10:00:00Z",
-        "isSidechain": false,
+        "is_sidechain": false,
         "message": { "role": "user", "content": [{"type": "text", "text": text}] },
     });
     if let Some(p) = parent {
-        entry["parentUuid"] = json!(p);
+        entry["parent_uuid"] = json!(p);
     }
     serde_json::to_string(&entry).unwrap()
 }
@@ -66,11 +64,11 @@ fn assistant_line(
     let mut entry = json!({
         "type": "assistant",
         "uuid": uuid,
-        "parentUuid": parent,
-        "sessionId": "s1",
+        "parent_uuid": parent,
+        "session_id": "s1",
         "cwd": "/tmp/p",
         "timestamp": "2025-01-15T10:00:01Z",
-        "isSidechain": false,
+        "is_sidechain": false,
         "message": {
             "role": "assistant",
             "content": [{"type": "text", "text": text}],
@@ -79,8 +77,8 @@ fn assistant_line(
     });
     if let Some((input, output)) = usage {
         entry["usage"] = json!({
-            "inputTokens": input,
-            "outputTokens": output,
+            "input_tokens": input,
+            "output_tokens": output,
         });
     }
     serde_json::to_string(&entry).unwrap()
@@ -114,28 +112,28 @@ fn test_load_conversation_for_resume_basic_round_trip() {
     );
     std::fs::write(&path, body).unwrap();
 
-    let recovered = load_conversation_for_resume(&path).expect("resume loads");
+    let conversation = load_conversation_for_resume(&path).expect("resume loads");
 
     // 4 messages total — alternating user/assistant.
-    assert_eq!(recovered.messages.len(), 4);
-    assert!(matches!(recovered.messages[0], Message::User(_)));
-    assert!(matches!(recovered.messages[1], Message::Assistant(_)));
-    assert!(matches!(recovered.messages[2], Message::User(_)));
-    assert!(matches!(recovered.messages[3], Message::Assistant(_)));
+    assert_eq!(conversation.messages.len(), 4);
+    assert!(matches!(conversation.messages[0], Message::User(_)));
+    assert!(matches!(conversation.messages[1], Message::Assistant(_)));
+    assert!(matches!(conversation.messages[2], Message::User(_)));
+    assert!(matches!(conversation.messages[3], Message::Assistant(_)));
 
     // turn_count counts assistant entries.
-    assert_eq!(recovered.turn_count, 2);
+    assert_eq!(conversation.turn_count, 2);
 
     // Latest model wins (both are the same here).
-    assert_eq!(recovered.model, "claude-sonnet-4-6");
+    assert_eq!(conversation.model, "claude-sonnet-4-6");
 
     // Token aggregation across the two assistant turns.
-    assert_eq!(recovered.total_input_tokens, 40);
-    assert_eq!(recovered.total_output_tokens, 60);
+    assert_eq!(conversation.total_input_tokens, 40);
+    assert_eq!(conversation.total_output_tokens, 60);
 
     // No sidechain in this transcript.
-    assert!(!recovered.has_sidechain);
-    assert!(recovered.plan_slug.is_none());
+    assert!(!conversation.has_sidechain);
+    assert!(conversation.plan_slug.is_none());
 }
 
 #[test]
@@ -154,7 +152,7 @@ fn test_load_conversation_for_resume_skips_metadata_lines() {
     .map(|t| {
         serde_json::to_string(&json!({
             "type": t,
-            "sessionId": "s2",
+            "session_id": "s2",
         }))
         .unwrap()
     })
@@ -169,15 +167,15 @@ fn test_load_conversation_for_resume_skips_metadata_lines() {
     );
     std::fs::write(&path, body).unwrap();
 
-    let recovered = load_conversation_for_resume(&path).expect("resume loads");
+    let conversation = load_conversation_for_resume(&path).expect("resume loads");
 
     // Only the user + assistant entries materialize as messages.
     assert_eq!(
-        recovered.messages.len(),
+        conversation.messages.len(),
         2,
         "metadata + blank lines should be skipped",
     );
-    assert_eq!(recovered.turn_count, 1);
+    assert_eq!(conversation.turn_count, 1);
 }
 
 #[test]
@@ -189,8 +187,8 @@ fn test_load_conversation_for_resume_sidechain_flag_and_filter() {
     let sidechain = serde_json::to_string(&json!({
         "type": "user",
         "uuid": "side1",
-        "sessionId": "s3",
-        "isSidechain": true,
+        "session_id": "s3",
+        "is_sidechain": true,
         "message": {"role": "user", "content": "subagent prompt"},
     }))
     .unwrap();
@@ -202,13 +200,13 @@ fn test_load_conversation_for_resume_sidechain_flag_and_filter() {
     );
     std::fs::write(&path, body).unwrap();
 
-    let recovered = load_conversation_for_resume(&path).expect("resume loads");
-    assert!(recovered.has_sidechain, "sidechain flag should flip");
+    let conversation = load_conversation_for_resume(&path).expect("resume loads");
+    assert!(conversation.has_sidechain, "sidechain flag should flip");
     assert_eq!(
-        recovered.messages.len(),
+        conversation.messages.len(),
         2,
         "sidechain entry must not appear in main messages: got {} msgs",
-        recovered.messages.len(),
+        conversation.messages.len(),
     );
 }
 
@@ -221,8 +219,8 @@ fn test_load_conversation_for_resume_plan_slug_extracted() {
     let with_slug = serde_json::to_string(&json!({
         "type": "user",
         "uuid": "u1",
-        "sessionId": "s4",
-        "isSidechain": false,
+        "session_id": "s4",
+        "is_sidechain": false,
         "slug": "rebuild-cache",
         "message": {"role": "user", "content": "kick off plan"},
     }))
@@ -234,8 +232,8 @@ fn test_load_conversation_for_resume_plan_slug_extracted() {
     );
     std::fs::write(&path, body).unwrap();
 
-    let recovered = load_conversation_for_resume(&path).expect("resume loads");
-    assert_eq!(recovered.plan_slug.as_deref(), Some("rebuild-cache"));
+    let conversation = load_conversation_for_resume(&path).expect("resume loads");
+    assert_eq!(conversation.plan_slug.as_deref(), Some("rebuild-cache"));
 }
 
 #[test]
@@ -262,16 +260,16 @@ fn test_load_conversation_for_resume_invalid_lines_skipped() {
     );
     std::fs::write(&path, body).unwrap();
 
-    let recovered = load_conversation_for_resume(&path).expect("resume tolerates bad lines");
-    assert_eq!(recovered.messages.len(), 2);
-    assert_eq!(recovered.turn_count, 1);
-    assert_eq!(recovered.total_input_tokens, 5);
-    assert_eq!(recovered.total_output_tokens, 5);
+    let conversation = load_conversation_for_resume(&path).expect("resume tolerates bad lines");
+    assert_eq!(conversation.messages.len(), 2);
+    assert_eq!(conversation.turn_count, 1);
+    assert_eq!(conversation.total_input_tokens, 5);
+    assert_eq!(conversation.total_output_tokens, 5);
 }
 
 #[test]
 fn test_load_conversation_for_resume_latest_model_wins() {
-    // Two assistant turns from different models — recovered.model is
+    // Two assistant turns from different models — conversation.model is
     // the latest non-empty one (per recovery.rs "latest wins"). DAG
     // links u2 → a1 so the leaf walker reconstructs both turns.
     let dir = tempfile::tempdir().unwrap();
@@ -285,9 +283,9 @@ fn test_load_conversation_for_resume_latest_model_wins() {
     );
     std::fs::write(&path, body).unwrap();
 
-    let recovered = load_conversation_for_resume(&path).expect("resume loads");
-    assert_eq!(recovered.model, "claude-opus-4-7");
-    assert_eq!(recovered.turn_count, 2);
+    let conversation = load_conversation_for_resume(&path).expect("resume loads");
+    assert_eq!(conversation.model, "claude-opus-4-7");
+    assert_eq!(conversation.turn_count, 2);
 }
 
 /// New: tool_use / tool_result blocks must round-trip on resume so
@@ -308,9 +306,9 @@ fn test_load_conversation_for_resume_preserves_tool_blocks() {
     let assistant_msg_with_tool = json!({
         "type": "assistant",
         "uuid": "a1",
-        "parentUuid": "u1",
-        "sessionId": "s7",
-        "isSidechain": false,
+        "parent_uuid": "u1",
+        "session_id": "s7",
+        "is_sidechain": false,
         "timestamp": "2025-01-15T10:00:01Z",
         "model": "claude-sonnet-4-6",
         "message": {
@@ -333,13 +331,13 @@ fn test_load_conversation_for_resume_preserves_tool_blocks() {
     );
     std::fs::write(&path, body).unwrap();
 
-    let recovered = load_conversation_for_resume(&path).expect("resume loads");
-    assert_eq!(recovered.messages.len(), 2);
+    let conversation = load_conversation_for_resume(&path).expect("resume loads");
+    assert_eq!(conversation.messages.len(), 2);
 
     // Assistant message must round-trip both the text and the
     // tool_call so resumed turns can match the tool_result against
     // a real prior tool_use.
-    let Message::Assistant(assistant) = &recovered.messages[1] else {
+    let Message::Assistant(assistant) = &conversation.messages[1] else {
         panic!("expected assistant message at index 1");
     };
     let LlmMessage::Assistant { content, .. } = &assistant.message else {
@@ -352,4 +350,113 @@ fn test_load_conversation_for_resume_preserves_tool_blocks() {
         has_tool_call,
         "tool_call must round-trip; got content: {content:?}"
     );
+}
+
+#[test]
+fn test_load_conversation_for_resume_tool_result_user_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s8.jsonl");
+    let assistant = json!({
+        "type": "assistant",
+        "uuid": "a1",
+        "parent_uuid": "u1",
+        "session_id": "s8",
+        "is_sidechain": false,
+        "timestamp": "2025-01-15T10:00:01Z",
+        "model": "claude-sonnet-4-6",
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "tool-call",
+                "toolCallId": "toolu_1",
+                "toolName": "Read",
+                "input": {"file_path": "a.txt"}
+            }],
+        },
+    });
+    let tool_result = json!({
+        "type": "user",
+        "uuid": "tr1",
+        "parent_uuid": "a1",
+        "session_id": "s8",
+        "is_sidechain": false,
+        "timestamp": "2025-01-15T10:00:02Z",
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "tool_name": "Read",
+                "content": "file contents"
+            }],
+        },
+    });
+    let body = format!(
+        "{}\n{}\n{}\n",
+        user_line("u1", "read"),
+        serde_json::to_string(&assistant).unwrap(),
+        serde_json::to_string(&tool_result).unwrap(),
+    );
+    std::fs::write(&path, body).unwrap();
+
+    let conversation = load_conversation_for_resume(&path).expect("resume loads");
+    assert_eq!(conversation.messages.len(), 3);
+    let Message::ToolResult(result) = &conversation.messages[2] else {
+        panic!("expected tool result, got {:?}", conversation.messages[2]);
+    };
+    assert_eq!(result.tool_use_id, "toolu_1");
+    assert_eq!(result.tool_id.to_string(), "Read");
+}
+
+#[test]
+fn test_load_session_state_for_resume_splits_multi_tool_result_blocks_with_unique_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s9.jsonl");
+    let assistant_uuid = uuid::Uuid::new_v4();
+    let tool_result = json!({
+        "type": "user",
+        "uuid": "11111111-1111-4111-8111-111111111111",
+        "parent_uuid": assistant_uuid.to_string(),
+        "session_id": "s9",
+        "is_sidechain": false,
+        "timestamp": "2025-01-15T10:00:02Z",
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "tool_name": "Read",
+                    "content": "one"
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_2",
+                    "tool_name": "Read",
+                    "content": "two"
+                }
+            ]
+        },
+    });
+    std::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string(&tool_result).unwrap()),
+    )
+    .unwrap();
+
+    let resume_state = load_session_state_for_resume(&path).expect("resume loads");
+    assert_eq!(resume_state.messages.len(), 2);
+    let ids = resume_state
+        .messages
+        .iter()
+        .filter_map(Message::uuid)
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(ids.len(), 2, "split tool results must not share UUIDs");
+    for message in &resume_state.messages {
+        let Message::ToolResult(result) = message else {
+            panic!("expected tool result, got {message:?}");
+        };
+        assert_eq!(result.source_assistant_uuid, Some(assistant_uuid));
+    }
 }

@@ -331,55 +331,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             is_fork = plan.is_fork,
             "resume: hydrating session",
         );
-        runtime.start_new_session(plan.session_id.clone()).await;
-        {
-            let mut history = runtime.history.lock().await;
-            history.clear();
-            for m in plan.prior_messages.iter().cloned() {
-                history.push(m);
-            }
-        }
-        runtime
-            .seed_transcript_dedup(plan.prior_messages.iter().filter_map(|m| m.uuid().copied()))
-            .await;
-        runtime
-            .seed_tool_result_replacement_state(&plan.prior_messages, &plan.session_id)
-            .await;
-        // Phase 4 hydration. Two events:
-        //   1. `SessionResetForResume` rotates the conversation id and
-        //      clears the prior session's UI-only state (streaming
-        //      overlay, tool widgets, side-caches).
-        //   2. `HistoryReplaced` carries the loaded JSONL transcript
-        //      in one shot so the TUI does a single cache-rebuild pass
-        //      instead of N `MessageAppended` round-trips. For a 5k-
-        //      message transcript that's the difference between one
-        //      vec extend and ~20 channel-bounded yields.
-        // Live appends after this still go through `MessageAppended` —
-        // the bulk path is modeled as a separate event because it IS
-        // a different operation (full replace vs. incremental
-        // append). See `engine-tui-unified-transcript-plan.md` §7.3.
-        let _ = notification_tx
-            .send(CoreEvent::Protocol(
-                coco_types::ServerNotification::SessionResetForResume {
-                    session_id: plan.session_id.clone(),
-                    agent_id: None,
-                },
-            ))
-            .await;
-        let _ = notification_tx
-            .send(CoreEvent::Protocol(
-                coco_types::ServerNotification::HistoryReplaced {
-                    messages: plan
-                        .prior_messages
-                        .iter()
-                        .cloned()
-                        .map(std::sync::Arc::new)
-                        .collect(),
-                    session_id: plan.session_id.clone(),
-                    agent_id: None,
-                },
-            ))
-            .await;
+        hydrate_resume_plan(&plan, &runtime, &notification_tx).await;
         eprintln!(
             "{} session {} ({} prior message(s))",
             if plan.is_fork { "Forked" } else { "Resumed" },
@@ -1666,6 +1618,194 @@ fn parse_slash_command(text: &str) -> Option<(&str, &str)> {
     })
 }
 
+async fn hydrate_resume_plan(
+    plan: &ResumePlan,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    runtime.start_new_session(plan.session_id.clone()).await;
+    {
+        let mut history = runtime.history.lock().await;
+        history.clear();
+        for message in plan.prior_messages.iter().cloned() {
+            history.push(message);
+        }
+    }
+    runtime
+        .seed_transcript_dedup(plan.prior_messages.iter().filter_map(|m| m.uuid().copied()))
+        .await;
+    // Main-thread TUI session — agent_id is None. Subagent transcripts
+    // are handled by the AgentTool spawn path, not by `/resume`.
+    runtime
+        .seed_tool_result_replacement_state(&plan.prior_messages, &plan.session_id, None)
+        .await;
+
+    // Bulk resume hydration mirrors the startup `--resume` path:
+    // reset UI-only state first, then replace transcript scrollback in
+    // one pass instead of replaying thousands of individual appends.
+    let _ = event_tx
+        .send(CoreEvent::Protocol(
+            coco_types::ServerNotification::SessionResetForResume {
+                session_id: plan.session_id.clone(),
+                agent_id: None,
+            },
+        ))
+        .await;
+    let _ = event_tx
+        .send(CoreEvent::Protocol(
+            coco_types::ServerNotification::HistoryReplaced {
+                messages: plan
+                    .prior_messages
+                    .iter()
+                    .cloned()
+                    .map(std::sync::Arc::new)
+                    .collect(),
+                session_id: plan.session_id.clone(),
+                agent_id: None,
+            },
+        ))
+        .await;
+}
+
+async fn dispatch_resume(
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> SlashOutcome {
+    let target = args.trim();
+    if target.is_empty() {
+        let manager = Arc::clone(&runtime.session_manager);
+        let sessions = match tokio::task::spawn_blocking(move || manager.list()).await {
+            Ok(Ok(sessions)) => sessions,
+            Ok(Err(err)) => {
+                emit_slash_text(
+                    event_tx,
+                    "resume",
+                    &format!("Failed to list sessions: {err}"),
+                )
+                .await;
+                return SlashOutcome::Handled;
+            }
+            Err(err) => {
+                emit_slash_text(
+                    event_tx,
+                    "resume",
+                    &format!("Session listing task failed: {err}"),
+                )
+                .await;
+                return SlashOutcome::Handled;
+            }
+        };
+        let sessions = sessions.into_iter().map(session_to_sdk_summary).collect();
+        let _ = event_tx
+            .send(CoreEvent::Tui(TuiOnlyEvent::OpenSessionBrowser {
+                sessions,
+            }))
+            .await;
+        return SlashOutcome::Handled;
+    }
+
+    match load_resume_plan_for_target(runtime, target).await {
+        Ok(plan) => {
+            tracing::info!(
+                target: "coco_cli::resume",
+                session_id = %plan.session_id,
+                source_session_id = %plan.source_session_id,
+                prior_messages = plan.prior_messages.len(),
+                "slash resume: hydrating session",
+            );
+            hydrate_resume_plan(&plan, runtime, event_tx).await;
+        }
+        Err(err) => {
+            emit_slash_text(
+                event_tx,
+                "resume",
+                &format!("Failed to resume session: {err}"),
+            )
+            .await;
+        }
+    }
+
+    SlashOutcome::Handled
+}
+
+async fn load_resume_plan_for_target(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    target: &str,
+) -> anyhow::Result<ResumePlan> {
+    let manager = Arc::clone(&runtime.session_manager);
+    let target = target.to_string();
+    // Project root for THIS runtime — canonicalised through
+    // `find_canonical_git_root` to match how `coco_paths::ProjectPaths`
+    // computes the project slug. Resume targets whose
+    // canonical-project-root differs from this are cross-project: we
+    // refuse rather than mid-flight re-point the runtime's
+    // `transcript_store` Arc, which is wired into many other Arcs.
+    let runtime_project_root = coco_git::find_canonical_git_root(&runtime.original_cwd)
+        .unwrap_or_else(|| runtime.original_cwd.clone());
+    tokio::task::spawn_blocking(move || {
+        let session = match manager.resume(&target) {
+            Ok(session) => session,
+            Err(id_err) => manager
+                .list()?
+                .into_iter()
+                .find(|session| session.title.as_deref() == Some(target.as_str()))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no session found for id or title '{target}': {id_err}")
+                })?,
+        };
+        let session_project_root = coco_git::find_canonical_git_root(&session.working_dir)
+            .unwrap_or_else(|| session.working_dir.clone());
+        if session_project_root != runtime_project_root {
+            anyhow::bail!(
+                "session {} lives under project {} but this runtime is at {} — \
+                 cross-project /resume is not supported. cd to the source \
+                 project and try again.",
+                session.id,
+                session_project_root.display(),
+                runtime_project_root.display(),
+            );
+        }
+        let transcript_path = coco_session::TranscriptStore::new(coco_cli::paths::project_paths(
+            &session.working_dir,
+        ))
+        .transcript_path(&session.id);
+        if !coco_session::recovery::can_resume_session(&transcript_path) {
+            anyhow::bail!(
+                "transcript at {} is empty or unreadable; nothing to resume",
+                transcript_path.display()
+            );
+        }
+        let conversation = coco_session::recovery::load_conversation_for_resume(&transcript_path)?;
+        let prior_messages = conversation.messages.clone();
+        let session_id = session.id;
+        Ok(ResumePlan {
+            session_id: session_id.clone(),
+            source_session_id: session_id,
+            source_path: transcript_path.clone(),
+            destination_path: transcript_path,
+            prior_messages,
+            conversation,
+            is_fork: false,
+        })
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("resume task failed: {err}"))?
+}
+
+fn session_to_sdk_summary(session: coco_session::Session) -> coco_types::SdkSessionSummary {
+    coco_types::SdkSessionSummary {
+        session_id: session.id,
+        model: session.model,
+        cwd: session.working_dir.to_string_lossy().into_owned(),
+        created_at: session.created_at,
+        updated_at: session.updated_at,
+        title: session.title,
+        message_count: session.message_count,
+        total_tokens: session.total_tokens,
+    }
+}
+
 fn session_plans_dir(
     config_home: &std::path::Path,
     project_dir: Option<&std::path::Path>,
@@ -1886,9 +2026,12 @@ async fn dispatch_slash_command(
             }
         };
     }
-    // `/rewind` / `/checkpoint` need current TUI session state for the
-    // picker, so the command layer asks the TUI to open the modal.
-    if matches!(name, "rewind" | "checkpoint") {
+    if name == "resume" {
+        return dispatch_resume(args, runtime, event_tx).await;
+    }
+    // `/rewind` needs current TUI session state for the picker, so the
+    // command layer asks the TUI to open the modal. No aliases.
+    if name == "rewind" {
         let _ = event_tx
             .send(CoreEvent::Tui(TuiOnlyEvent::OpenRewindPicker))
             .await;
@@ -3033,6 +3176,7 @@ async fn handle_rewind(
 
     let mut files_changed = 0i32;
     let mut messages_removed = 0i32;
+    let mut keep_count_to_emit = None;
 
     tracing::info!(
         target: "coco_cli::rewind",
@@ -3117,16 +3261,7 @@ async fn handle_rewind(
                     messages_removed as i64,
                     idx as i64,
                 );
-                // Explicit-rewind converges on the same `MessageTruncated`
-                // event the AutoRestore path emits, so SDK consumers see
-                // one authoritative truncation signal regardless of trigger.
-                let _ = event_tx
-                    .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
-                        keep_count: idx as i64,
-                        session_id: String::new(),
-                        agent_id: None,
-                    }))
-                    .await;
+                keep_count_to_emit = Some(idx as i64);
             }
             None => {
                 tracing::warn!(
@@ -3149,6 +3284,20 @@ async fn handle_rewind(
             files_changed,
         }))
         .await;
+
+    // Explicit-rewind converges on the same `MessageTruncated` event the
+    // AutoRestore path emits, but it must arrive after the TUI-only
+    // completion event. `on_rewind_completed` restores the selected prompt
+    // from the still-intact transcript before this truncation applies.
+    if let Some(keep_count) = keep_count_to_emit {
+        let _ = event_tx
+            .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
+                keep_count,
+                session_id: String::new(),
+                agent_id: None,
+            }))
+            .await;
+    }
 
     // Protocol-level event for SDK consumers (Phase 3.2). Coco-rs ext
     // — TS doesn't emit a wire event for rewind because the React

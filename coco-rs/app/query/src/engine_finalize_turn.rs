@@ -747,39 +747,32 @@ impl QueryEngine {
         };
 
         let mut seen_guard = seen.lock().await;
-        let cwd = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
+        let cwd_path = std::env::current_dir().unwrap_or_default();
+        let cwd = cwd_path.display().to_string();
+        // TS-parity: `sessionStorage.ts:1013-1019` captures `getBranch()`
+        // once per chain and stamps it on every line. Treat a git
+        // failure (not in a repo, command missing) as `None` so the
+        // field is omitted rather than producing an empty string.
+        let git_branch = coco_git::get_current_branch(&cwd_path)
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty());
         let now = chrono::Utc::now().to_rfc3339();
-        let mut prev_uuid: Option<String> = None;
-
-        for msg in history.iter() {
-            let Some(uuid) = msg.uuid().copied() else {
-                continue;
-            };
-            // Track chain order even for already-written entries so the
-            // next *new* entry's parent_uuid points to the most recent
-            // message rather than the last new one.
-            if !seen_guard.insert(uuid) {
-                prev_uuid = Some(uuid.to_string());
-                continue;
-            }
-            let entry =
-                match build_transcript_entry(msg, &uuid, prev_uuid.as_deref(), sid, &cwd, &now) {
-                    Some(e) => e,
-                    None => {
-                        prev_uuid = Some(uuid.to_string());
-                        continue;
-                    }
-                };
-            if let Err(e) = store.append_message(sid, &entry) {
-                warn!(error = %e, "failed to append transcript entry");
-                // Don't mark uuid as written when the append fails —
-                // a retry on the next turn can recover, mirroring TS
-                // best-effort persistence semantics.
-                seen_guard.remove(&uuid);
-            }
-            prev_uuid = Some(uuid.to_string());
+        let options = coco_session::storage::ChainWriteOptions {
+            cwd,
+            timestamp: now,
+            is_sidechain: self.config.agent_id.is_some(),
+            agent_id: self.config.agent_id.clone(),
+            starting_parent_uuid: None,
+            git_branch,
+        };
+        if let Err(e) = store.append_message_chain(
+            sid,
+            history.iter().map(AsRef::as_ref),
+            &mut seen_guard,
+            options,
+        ) {
+            warn!(error = %e, "failed to append transcript chain");
         }
     }
 
@@ -1492,87 +1485,6 @@ fn main_agent_wrote_memory<M: std::borrow::Borrow<coco_messages::Message>>(
         }
     }
     false
-}
-
-/// Build a `coco_session::TranscriptEntry` from a [`coco_messages::Message`].
-///
-/// Returns `None` for messages we don't persist (`Progress`,
-/// `Tombstone`, `ToolUseSummary` — none round-trip through resume).
-/// TS parity: `Project.recordTranscript` in `utils/sessionStorage.ts`
-/// writes user/assistant/system/attachment/tool_result entries, with
-/// `isSidechain` set for subagent transcripts.
-fn build_transcript_entry(
-    msg: &coco_messages::Message,
-    uuid: &uuid::Uuid,
-    parent_uuid: Option<&str>,
-    session_id: &str,
-    cwd: &str,
-    timestamp: &str,
-) -> Option<coco_session::TranscriptEntry> {
-    use coco_messages::Message;
-    use coco_session::storage::entry_kind;
-    let (entry_type, message_value, model, usage, cost_usd) = match msg {
-        Message::User(u) => (
-            entry_kind::USER,
-            serde_json::to_value(&u.message).ok(),
-            None,
-            None,
-            None,
-        ),
-        Message::Assistant(a) => {
-            let usage = a.usage.as_ref().map(|u| coco_session::TranscriptUsage {
-                input_tokens: u.input_tokens,
-                output_tokens: u.output_tokens,
-                cache_read_tokens: Some(u.input_token_details.cache_read_tokens),
-                cache_creation_tokens: Some(u.input_token_details.cache_write_tokens),
-            });
-            (
-                entry_kind::ASSISTANT,
-                serde_json::to_value(&a.message).ok(),
-                Some(a.model.clone()).filter(|m| !m.is_empty()),
-                usage,
-                a.cost_usd,
-            )
-        }
-        Message::System(s) => (
-            entry_kind::SYSTEM,
-            serde_json::to_value(s).ok(),
-            None,
-            None,
-            None,
-        ),
-        Message::Attachment(att) => (
-            entry_kind::ATTACHMENT,
-            serde_json::to_value(&att.body).ok(),
-            None,
-            None,
-            None,
-        ),
-        Message::ToolResult(t) => (
-            entry_kind::TOOL_RESULT,
-            serde_json::to_value(t).ok(),
-            None,
-            None,
-            None,
-        ),
-        Message::Progress(_) | Message::Tombstone(_) => return None,
-    };
-    Some(coco_session::TranscriptEntry {
-        entry_type: entry_type.to_string(),
-        uuid: uuid.to_string(),
-        parent_uuid: parent_uuid.map(str::to_string),
-        session_id: session_id.to_string(),
-        cwd: cwd.to_string(),
-        timestamp: timestamp.to_string(),
-        version: Some(env!("CARGO_PKG_VERSION").to_string()),
-        git_branch: None,
-        is_sidechain: false,
-        message: message_value,
-        usage,
-        model,
-        cost_usd,
-        extra: serde_json::Map::new(),
-    })
 }
 
 /// Phase 7c: prune `rate_limits` entries whose `reset_at_ms` has

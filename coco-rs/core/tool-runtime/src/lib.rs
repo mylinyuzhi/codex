@@ -180,7 +180,6 @@ pub use task_list_handle::TodoRecord;
 pub use task_list_handle::check_verification_nudge;
 pub use tool_result_storage::ContentReplacementRecord;
 pub use tool_result_storage::ResultSizeBound;
-pub use tool_result_storage::reconstruct_content_replacement_state;
 pub use traits::DescriptionOptions;
 pub use traits::DynTool;
 pub use traits::InterruptBehavior;

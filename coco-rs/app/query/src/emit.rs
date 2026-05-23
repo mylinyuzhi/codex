@@ -178,6 +178,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::PluginDataReady { .. } => "plugin_data_ready",
         TuiOnlyEvent::OutputStylesReady { .. } => "output_styles_ready",
         TuiOnlyEvent::AvailableCommandsRefreshed { .. } => "available_commands_refreshed",
+        TuiOnlyEvent::OpenSessionBrowser { .. } => "open_session_browser",
         TuiOnlyEvent::RewindCheckpointsReady { .. } => "rewind_checkpoints_ready",
         TuiOnlyEvent::DiffStatsReady { .. } => "diff_stats_ready",
         TuiOnlyEvent::CompactionCircuitBreakerOpen { .. } => "compaction_circuit_breaker_open",

@@ -20,6 +20,8 @@ use crate::state::MemoryDialogScope;
 use crate::state::MemoryDialogState;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
+use crate::state::SessionBrowserState;
+use crate::state::SessionOption;
 use crate::state::SlashCommandName;
 use crate::state::ui::ToastSeverity;
 
@@ -120,6 +122,56 @@ async fn submit_slash_dispatches_typed_command_without_chat_echo() {
         Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
             assert_eq!(name, "rewind");
             assert_eq!(args, "last");
+        }
+        other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn submit_rewind_undo_alias_dispatches_typed_command() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("/undo");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+            assert_eq!(name, "undo");
+            assert!(args.is_empty());
+        }
+        other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn session_browser_confirm_dispatches_resume_command() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .show_modal(ModalState::SessionBrowser(SessionBrowserState {
+            sessions: vec![SessionOption {
+                id: "session-123".to_string(),
+                label: "Auth refactor".to_string(),
+                message_count: 8,
+                created_at: "2026-05-23T00:00:00Z".to_string(),
+            }],
+            filter: String::new(),
+            selected: 0,
+        }));
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SurfaceConfirm, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+            assert_eq!(name, "resume");
+            assert_eq!(args, "session-123");
         }
         other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
     }

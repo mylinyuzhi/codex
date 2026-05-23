@@ -1497,21 +1497,42 @@ impl SessionRuntime {
     /// Seed the transcript dedup set with uuids that are already
     /// persisted on disk. Called on resume / fork so the first
     /// post-load turn doesn't re-write the loaded messages.
+    ///
+    /// MUST clear the dedup set first. In-TUI `/resume` reuses the
+    /// runtime, so without the clear the prior session's UUIDs leak
+    /// into the new session and any colliding new write gets silently
+    /// suppressed.
     pub async fn seed_transcript_dedup<I>(&self, uuids: I)
     where
         I: IntoIterator<Item = uuid::Uuid>,
     {
         let mut g = self.transcript_dedup.lock().await;
+        g.clear();
         g.extend(uuids);
     }
 
     /// Reconstruct Level 2 tool-result replacement state from the
     /// restored messages plus transcript content-replacement records.
     /// Called on resume/fork before the first resumed turn.
-    pub async fn seed_tool_result_replacement_state(&self, messages: &[Message], session_id: &str) {
+    ///
+    /// `agent_id` MUST be the runtime's current agent_id (None for
+    /// main-thread sessions, Some for subagents). The transcript
+    /// content-replacement records are stamped with `agent_id` at
+    /// write time (`engine_prompt.rs:200-216`); reading with
+    /// `agent_id: None` for a subagent resume would silently drop
+    /// every Level-2 replacement and force the model to re-read the
+    /// full tool result, breaking prompt-cache stability.
+    /// TS parity: `types/logs.ts:178-180` documents the agentId
+    /// presence-vs-absence routing.
+    pub async fn seed_tool_result_replacement_state(
+        &self,
+        messages: &[Message],
+        session_id: &str,
+        agent_id: Option<&str>,
+    ) {
         let records = self
             .transcript_store
-            .load_content_replacements(session_id)
+            .load_content_replacements_for_chain(session_id, agent_id)
             .unwrap_or_default();
         let mut next =
             coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);

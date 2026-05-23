@@ -832,13 +832,22 @@ pub(super) async fn handle_session_resume(
     // session starts cold rather than failing the resume call).
     //
     // The transcript lives in the resumed session's own project
-    // tree (`<memory_base>/projects/<slug>/<sid>.jsonl`), so we
-    // derive the project paths from `session.working_dir`.
-    let transcript_path =
-        coco_session::TranscriptStore::new(crate::paths::project_paths(&session.working_dir))
-            .transcript_path(&session.id);
-    let recovered = if transcript_path.exists() {
-        match coco_session::recovery::load_conversation_for_resume(&transcript_path) {
+    // tree (`<memory_base>/projects/<slug>/<sid>.jsonl`). Route
+    // through `resolve_session_file_path` so a linked worktree (whose
+    // long cwd path produces a different djb2 slug suffix than its
+    // sibling repo) still resolves to the right file — matches TS
+    // `sessionStoragePortable.ts:403-466`.
+    let memory_base = coco_config::global_config::config_home();
+    let transcript_path = coco_session::storage::resolve_session_file_path(
+        &memory_base,
+        &session.id,
+        Some(&session.working_dir),
+    )
+    .ok()
+    .flatten()
+    .map(|r| r.file_path);
+    let conversation = if let Some(transcript_path) = transcript_path.as_ref() {
+        match coco_session::recovery::load_conversation_for_resume(transcript_path) {
             Ok(r) => Some(r),
             Err(e) => {
                 warn!(
@@ -880,26 +889,37 @@ pub(super) async fn handle_session_resume(
     // the loaded chain rather than starting cold.
     if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
         runtime.start_new_session(session.id.clone()).await;
-        if let Some(rec) = &recovered {
+        if let Some(conversation) = &conversation {
             {
                 let mut h = runtime.history.lock().await;
                 h.clear();
-                for m in rec.messages.iter().cloned() {
+                for m in conversation.messages.iter().cloned() {
                     h.push(m);
                 }
             }
             runtime
-                .seed_transcript_dedup(rec.messages.iter().filter_map(|m| m.uuid().copied()))
+                .seed_transcript_dedup(
+                    conversation
+                        .messages
+                        .iter()
+                        .filter_map(|m| m.uuid().copied()),
+                )
                 .await;
+            // SDK `session/resume` is main-thread only — subagent
+            // resume goes through the AgentTool spawn API. agent_id =
+            // None matches the load filter for main-thread records.
             runtime
-                .seed_tool_result_replacement_state(&rec.messages, &session.id)
+                .seed_tool_result_replacement_state(&conversation.messages, &session.id, None)
                 .await;
         }
     }
 
     info!(
         session_id = %session.id,
-        prior_messages = recovered.as_ref().map(|r| r.messages.len()).unwrap_or(0),
+        prior_messages = conversation
+            .as_ref()
+            .map(|conversation| conversation.messages.len())
+            .unwrap_or(0),
         "SdkServer: session/resume"
     );
     HandlerResult::ok(coco_types::SessionResumeResult {

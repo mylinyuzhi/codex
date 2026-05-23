@@ -49,6 +49,7 @@ fn assistant(parts: Vec<AssistantContentPart>) -> Arc<Message> {
 fn tool_result(tool_use_id: &str) -> Arc<Message> {
     Arc::new(Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
+        source_assistant_uuid: None,
         message: LlmMessage::Tool {
             content: vec![ToolContentPart::ToolResult(ToolResultPart::new(
                 tool_use_id,

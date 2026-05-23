@@ -332,48 +332,6 @@ impl ContentReplacementState {
     }
 }
 
-/// Rebuild [`ContentReplacementState`] from transcript records on session
-/// resume. Mirrors TS `reconstructContentReplacementState`:
-///
-/// 1. Start from `inherited` replacements (e.g. parent-fork state).
-/// 2. Overlay records the transcript wrote during the live session,
-///    keeping only those whose `tool_use_id` is present in
-///    `candidate_ids` (the current message-window's tool results) —
-///    stale ids that have rolled out of view stay dropped.
-/// 3. Mark every record id as `seen` so the budget pass won't re-select
-///    the same candidate (prevents replacement instability across resume).
-///
-/// Returns a fresh state with `per_message_chars` set verbatim — the
-/// caller supplies the resolved cap (feature gate handled there).
-pub fn reconstruct_content_replacement_state(
-    candidate_ids: &std::collections::HashSet<String>,
-    records: &[ContentReplacementRecord],
-    inherited: Option<&HashMap<String, String>>,
-    per_message_chars: i64,
-) -> ContentReplacementState {
-    let mut state = ContentReplacementState::new(per_message_chars);
-
-    if let Some(inh) = inherited {
-        for (id, rep) in inh {
-            if candidate_ids.contains(id) {
-                state.replacements.insert(id.clone(), rep.clone());
-                state.seen_ids.insert(id.clone());
-            }
-        }
-    }
-
-    for rec in records {
-        if candidate_ids.contains(&rec.tool_use_id) {
-            state
-                .replacements
-                .insert(rec.tool_use_id.clone(), rec.replacement.clone());
-            state.seen_ids.insert(rec.tool_use_id.clone());
-        }
-    }
-
-    state
-}
-
 /// Shared handle for engine wiring.
 pub type ContentReplacementStateRef = Arc<RwLock<ContentReplacementState>>;
 
@@ -403,12 +361,15 @@ pub struct ToolResultCandidate {
 /// A single tool-result replacement record.
 ///
 /// Returned by [`apply_tool_result_budget`] as `BudgetOutcome.newly_replaced`
-/// and persisted alongside the message log (see [`ContentReplacementRecord`])
-/// so [`reconstruct_content_replacement_state`] can rebuild the replacement
-/// map on session resume.
+/// and persisted alongside the message log. Resume seeds the
+/// replacement map directly off the loaded records (see
+/// `seed_tool_result_replacement_state` in `coco-cli`); no shared
+/// rebuild function — each consumer (TUI, SDK, headless) owns the
+/// seeding because the surrounding state plumbing differs slightly.
 ///
 /// Serializable for transcript persistence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContentReplacement {
     pub tool_use_id: String,
     pub replacement: String,

@@ -186,6 +186,7 @@ impl QueryEngine {
             )
             .await;
 
+            let mut persist_records_failed = false;
             if budget.persist_records
                 && !outcome.newly_replaced.is_empty()
                 && let (Some(store), Some(session_id)) =
@@ -201,11 +202,22 @@ impl QueryEngine {
                         )
                     })
                     .collect();
-                if let Err(e) = store.insert_content_replacement(session_id, &records) {
+                if let Err(e) = store.insert_content_replacement(
+                    session_id,
+                    self.config.agent_id.as_deref(),
+                    &records,
+                ) {
                     tracing::warn!(
                         error = %e,
                         "failed to persist tool-result content replacement records"
                     );
+                    persist_records_failed = true;
+                }
+            }
+            if persist_records_failed {
+                let mut state = self.tool_result_replacement_state.write().await;
+                for replacement in &outcome.newly_replaced {
+                    state.replacements.remove(&replacement.tool_use_id);
                 }
             }
 
@@ -268,9 +280,7 @@ impl QueryEngine {
         {
             return Some(store.session_artifact_dir(session_id));
         }
-        self.config_home
-            .as_ref()
-            .map(|home| home.join("sessions").join(&self.config.session_id))
+        None
     }
 
     /// Build tool definitions for the LLM (function tool schemas).
@@ -824,6 +834,7 @@ fn rewrite_tool_result_to_placeholder(
         .collect();
     Some(ToolResultMessage {
         uuid: orig.uuid,
+        source_assistant_uuid: orig.source_assistant_uuid,
         message: LlmMessage::Tool {
             content: new_content,
             provider_options: provider_options.clone(),

@@ -811,6 +811,7 @@ pub async fn run_chat_with_options(
     let file_read_state = Arc::new(tokio::sync::RwLock::new(coco_context::FileReadState::new()));
 
     let session_id_for_engine = config.session_id.clone();
+    let agent_id_for_engine = config.agent_id.clone();
     let mut engine = QueryEngine::new(config, client, tools, cancel, Some(hook_registry))
         .with_fallback_clients(fallback_clients)
         .with_file_read_state(file_read_state.clone());
@@ -834,7 +835,10 @@ pub async fn run_chat_with_options(
         }
         let dedup = Arc::new(tokio::sync::Mutex::new(seen));
         let records = store
-            .load_content_replacements(&session_id_for_engine)
+            .load_content_replacements_for_chain(
+                &session_id_for_engine,
+                agent_id_for_engine.as_deref(),
+            )
             .unwrap_or_default();
         let mut replacement_state =
             coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);

@@ -1439,7 +1439,7 @@ impl PermissionDisplayInput {
 /// (TUI-only, never sent to SDK) is preserved via consumer dispatch rules
 /// in `StreamAccumulator` and `handle_core_event()`.
 ///
-/// 22 variants (20 from design §4.1 + 2 coco-rs extensions).
+/// 23 variants (20 from design §4.1 + 3 coco-rs extensions).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1510,6 +1510,13 @@ pub enum TuiOnlyEvent {
     /// the snapshot because the registry lives in the CLI process.
     AvailableCommandsRefreshed {
         commands: Vec<crate::SlashCommandInfo>,
+    },
+    /// Open the resume picker inside the running TUI session.
+    ///
+    /// TS parity: `/resume` with no args opens the saved-chat picker;
+    /// `/resume <id-or-name>` bypasses this and resumes directly.
+    OpenSessionBrowser {
+        sessions: Vec<crate::SdkSessionSummary>,
     },
     /// Rewind selector checkpoints loaded.
     RewindCheckpointsReady { checkpoints: Vec<serde_json::Value> },

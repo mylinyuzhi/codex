@@ -8,6 +8,7 @@ use super::*;
 fn make_tool_result(tool_use_id: &str, content: &str) -> Message {
     Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
+        source_assistant_uuid: None,
         message: LlmMessage::Tool {
             content: vec![coco_messages::ToolContent::ToolResult(
                 coco_messages::ToolResultContent {

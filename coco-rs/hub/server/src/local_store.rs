@@ -500,8 +500,7 @@ fn event_rows_from_line(
     let agent_id = transcript
         .as_ref()
         .filter(|entry| entry.is_sidechain)
-        .and_then(|entry| entry.extra.get("agentId"))
-        .and_then(as_string_value);
+        .and_then(|entry| entry.agent_id.clone());
     let role = message_value(&payload)
         .and_then(|message| message.get("role"))
         .and_then(serde_json::Value::as_str)
@@ -829,12 +828,17 @@ fn analyze_content_block(role: &str, block: &serde_json::Value) -> EventAnalysis
 }
 
 fn preview_for_value(value: &serde_json::Value) -> Option<String> {
+    // Wire fields are snake_case (coco_session::MetadataEntry write
+    // path). The CustomTitle / LastPrompt metadata variants serialize
+    // their payload fields as `custom_title` / `last_prompt`; the
+    // store reads the raw JSON here so we have to match those names
+    // literally rather than going through the typed enum.
     value
         .get("message")
         .and_then(|message| message.get("content"))
         .and_then(preview_for_content)
-        .or_else(|| value.get("customTitle").and_then(as_string_value))
-        .or_else(|| value.get("lastPrompt").and_then(as_string_value))
+        .or_else(|| value.get("custom_title").and_then(as_string_value))
+        .or_else(|| value.get("last_prompt").and_then(as_string_value))
         .map(|text| truncate_preview(&text))
 }
 

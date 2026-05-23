@@ -88,11 +88,11 @@ pub enum SessionStatus {
     Waiting,
 }
 
-/// Wire shape of a single `<pid>.json` file. Field order matches TS
-/// for diff-friendliness; `Option`s skipped when missing keeps the
-/// on-disk record minimal.
+/// Wire shape of a single `<pid>.json` file. Snake_case wire,
+/// `Option`s skipped when missing — same fields TS Claude Code tracks
+/// for `claude ps` but Rust-native naming. The file is coco-rs's own
+/// registry; no cross-implementation consumer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SessionRegistration {
     pub pid: u32,
     pub session_id: String,
@@ -227,7 +227,7 @@ impl SessionRegistry {
     pub fn update_session_bridge_id(&self, bridge_session_id: Option<&str>) {
         let mut patch = serde_json::Map::new();
         patch.insert(
-            "bridgeSessionId".into(),
+            "bridge_session_id".into(),
             match bridge_session_id {
                 Some(s) => serde_json::Value::String(s.to_string()),
                 None => serde_json::Value::Null,
@@ -238,7 +238,7 @@ impl SessionRegistry {
 
     /// Push live activity state for the `coco ps` sparkline. Both
     /// fields are optional patches — pass `None` to leave the existing
-    /// value untouched. Always stamps `updatedAt` so the reader can
+    /// value untouched. Always stamps `updated_at` so the reader can
     /// tell stale rows apart.
     pub fn update_session_activity(
         &self,
@@ -254,12 +254,12 @@ impl SessionRegistry {
         }
         if let Some(s) = waiting_for {
             patch.insert(
-                "waitingFor".into(),
+                "waiting_for".into(),
                 serde_json::Value::String(s.to_string()),
             );
         }
         patch.insert(
-            "updatedAt".into(),
+            "updated_at".into(),
             serde_json::Value::Number(serde_json::Number::from(now_ms())),
         );
         self.apply_patch(patch);

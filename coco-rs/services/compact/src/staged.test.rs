@@ -52,7 +52,7 @@ fn test_ledger_reset_clears_all_state() {
 }
 
 #[test]
-fn test_commit_entry_round_trip_camel_case() {
+fn test_commit_entry_round_trip_ts_camelcase() {
     let entry = CommitEntry::new(
         Uuid::nil(),
         "0000000000000001".into(),
@@ -70,7 +70,7 @@ fn test_commit_entry_round_trip_camel_case() {
 }
 
 #[test]
-fn test_snapshot_entry_round_trip_camel_case() {
+fn test_snapshot_entry_round_trip_ts_camelcase() {
     let snap = SnapshotEntry {
         type_: SnapshotEntry::TYPE.into(),
         session_id: Uuid::nil(),

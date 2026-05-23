@@ -9,9 +9,8 @@
 //! transcript lines for cross-session continuity.
 //!
 //! coco-rs ships a self-designed re-port behind
-//! `compact.experimental.staged_compact.*` with the same persistence
-//! shape so transcripts remain interchangeable. Wire format:
-//! camelCase JSON, type discriminator preserved verbatim.
+//! `compact.experimental.staged_compact.*` with TS-compatible camelCase
+//! JSON fields and the type discriminator preserved verbatim.
 //!
 //! TS schema sources:
 //!   - types/logs.ts:255-269 `ContextCollapseCommitEntry`
@@ -31,9 +30,9 @@ use uuid::Uuid;
 
 /// One staged span awaiting commit.
 ///
-/// TS: `staged[]` items inside `ContextCollapseSnapshotEntry`.
+/// Same semantic fields as TS `staged[]` items inside
+/// `ContextCollapseSnapshotEntry`; wire is snake_case JSON.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct StagedRange {
     /// First archived message UUID (inclusive).
     pub start_uuid: Uuid,
@@ -47,11 +46,9 @@ pub struct StagedRange {
     pub staged_at: i64,
 }
 
-/// Committed collapse — archived span replaced by a placeholder.
-///
-/// TS: `ContextCollapseCommitEntry` (logs.ts:255).
+/// Committed collapse — archived span replaced by a placeholder. Same
+/// semantic shape as TS `ContextCollapseCommitEntry`; wire snake_case.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CommitEntry {
     /// `'marble-origami-commit'`.
     #[serde(rename = "type")]
@@ -67,11 +64,9 @@ pub struct CommitEntry {
 }
 
 /// Latest snapshot of pending staged ranges + spawn-clock state.
-///
-/// TS: `ContextCollapseSnapshotEntry` (logs.ts:282). Last-wins by
-/// `session_id` on resume.
+/// Same semantic shape as TS `ContextCollapseSnapshotEntry`; wire
+/// snake_case. Last-wins by `session_id` on resume.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SnapshotEntry {
     /// `'marble-origami-snapshot'`.
     #[serde(rename = "type")]
