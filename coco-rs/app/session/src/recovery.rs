@@ -7,17 +7,22 @@
 //! `tool_use` / `tool_result` content blocks so the resumed model
 //! sees the same DAG it left.
 
+use crate::storage::ContentReplacementRecord;
+use crate::storage::Entry;
+use crate::storage::MetadataEntry;
 use crate::storage::TranscriptEntry;
-use crate::storage::entry_kind;
+use crate::storage::build_file_history_snapshot_chain;
+use crate::storage::content_replacements_for_chain;
+use crate::storage::messages_from_transcript_entry;
 use coco_messages::Message;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::BufRead;
 use std::path::Path;
-use uuid::Uuid;
 
-/// Conversation recovery result.
+/// Conversation loaded from transcript for session resume.
 #[derive(Debug)]
-pub struct RecoveredConversation {
+pub struct ConversationForResume {
     pub messages: Vec<Message>,
     pub model: String,
     pub turn_count: i32,
@@ -26,6 +31,22 @@ pub struct RecoveredConversation {
     /// Plan slug extracted from transcript (for plan resume).
     pub plan_slug: Option<String>,
     /// Whether the session had sidechain entries.
+    pub has_sidechain: bool,
+}
+
+/// Full session state for resume, anchored to one selected conversation chain.
+#[derive(Debug)]
+pub struct SessionResumeState {
+    pub messages: Vec<Message>,
+    pub selected_chain_uuids: HashSet<String>,
+    pub content_replacements: Vec<ContentReplacementRecord>,
+    pub agent_content_replacements: HashMap<String, Vec<ContentReplacementRecord>>,
+    pub file_history_snapshots: Vec<serde_json::Value>,
+    pub model: String,
+    pub turn_count: i32,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub plan_slug: Option<String>,
     pub has_sidechain: bool,
 }
 
@@ -42,54 +63,50 @@ pub struct RecoveredConversation {
 /// (`utils/conversationRecovery.ts`).
 pub fn load_conversation_for_resume(
     transcript_path: &Path,
-) -> crate::Result<RecoveredConversation> {
+) -> crate::Result<ConversationForResume> {
+    let resume_state = load_session_state_for_resume(transcript_path)?;
+    Ok(ConversationForResume {
+        messages: resume_state.messages,
+        model: resume_state.model,
+        turn_count: resume_state.turn_count,
+        total_input_tokens: resume_state.total_input_tokens,
+        total_output_tokens: resume_state.total_output_tokens,
+        plan_slug: resume_state.plan_slug,
+        has_sidechain: resume_state.has_sidechain,
+    })
+}
+
+pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<SessionResumeState> {
     if !transcript_path.exists() {
         return Err(crate::SessionError::TranscriptNotFound {
             path: transcript_path.to_path_buf(),
         });
     }
 
-    let content = std::fs::read_to_string(transcript_path)?;
-
-    // Pass 1: parse every JSONL line into either a TranscriptEntry or
-    // discard. Track sidechain flag and plan slug; collect transcript
-    // entries in disk order.
     let mut entries: Vec<TranscriptEntry> = Vec::new();
+    let mut metadata_entries: Vec<Entry> = Vec::new();
     let mut plan_slug: Option<String> = None;
     let mut has_sidechain = false;
 
-    // Metadata `type` discriminators we filter out before the leaf
-    // walk. Mirrors the kebab-case TS values; centralised here so a
-    // new metadata variant only needs adding in one place.
-    const METADATA_DISCRIMINATORS: &[&str] = &[
-        "custom-title",
-        "tag",
-        "last-prompt",
-        "summary",
-        "cost-summary",
-        "file-history-snapshot",
-        "marble-origami-commit",
-        "marble-origami-snapshot",
-        "content-replacement",
-    ];
-
-    for line in content.lines() {
+    let file = std::fs::File::open(transcript_path)?;
+    let reader = std::io::BufReader::new(file);
+    for line in reader.lines() {
+        let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
         let entry_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if METADATA_DISCRIMINATORS.contains(&entry_type) {
+        if !is_transcript_message_type(entry_type) {
+            if let Ok(meta) = serde_json::from_value::<MetadataEntry>(value) {
+                metadata_entries.push(Entry::Metadata(meta));
+            }
             continue;
         }
-        // TS Claude Code writes `isSidechain` (camelCase). Tolerate
-        // legacy snake_case for transcripts authored by an older
-        // build of coco-rs.
         if value
-            .get("isSidechain")
-            .or_else(|| value.get("is_sidechain"))
+            .get("is_sidechain")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
         {
@@ -107,6 +124,16 @@ pub fn load_conversation_for_resume(
         };
         entries.push(te);
     }
+    // TS-parity: `sessionStorage.ts:3654-3657` — a compact_boundary entry
+    // keeps every pre-boundary message in the `messages` map and only
+    // resets marble-origami state; the boundary message itself stamps
+    // `parentUuid: null` / `logicalParentUuid: prev` so the chain walk
+    // naturally terminates without us dropping data. Truncating the
+    // entries Vec here would break `applyPreservedSegmentRelinks`
+    // (`sessionStorage.ts:1855-1865`) which still resolves UUIDs from
+    // the pre-boundary range. microcompact_boundary is NOT a chain
+    // break in TS (see `messages.ts:4608-4612`); it's a plain system
+    // message that stays inline.
 
     // Pass 2: build a uuid → entry index and the set of parent uuids
     // so we can identify leaves (uuids that no other entry points at).
@@ -125,20 +152,55 @@ pub fn load_conversation_for_resume(
         }
     }
 
-    // Find leaves: entries whose uuid is not a parent of any other
-    // entry. Pick the latest by timestamp string (RFC3339 sorts
-    // lexicographically). When no parent_uuid links exist (older
-    // fixtures), every entry is a "leaf" by this definition — fall
-    // back to disk order to preserve the TS-aligned behavior of
-    // returning every persisted message.
+    // Find leaves the way TS does (`sessionStorage.ts:3768-3784`):
+    // 1) terminal = entries whose uuid is no one's parent;
+    // 2) for each terminal, walk back via parent_uuid to its nearest
+    //    user/assistant ancestor — attachments / system / progress are
+    //    skipped because they can't anchor a turn;
+    // 3) among the resulting set of valid leaf uuids, pick the latest
+    //    by timestamp using strict `>` (TS `findLatestMessage`,
+    //    `sessionStorage.ts:2046-2060`, is first-wins on tie).
+    //
+    // No-parent-links fixture: fall back to disk order so every
+    // persisted message round-trips.
     let any_parent_link = !parent_uuids.is_empty();
     let chain_indices: Vec<usize> = if any_parent_link {
-        let leaf_idx = entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| !e.uuid.is_empty() && !parent_uuids.contains(&e.uuid))
-            .max_by(|(_, a), (_, b)| a.timestamp.cmp(&b.timestamp))
-            .map(|(idx, _)| idx);
+        let mut leaf_idxs: Vec<usize> = Vec::new();
+        let mut leaf_seen: HashSet<usize> = HashSet::new();
+        for (idx, terminal) in entries.iter().enumerate() {
+            if terminal.uuid.is_empty() || parent_uuids.contains(&terminal.uuid) {
+                continue;
+            }
+            // Walk back to nearest user/assistant ancestor.
+            let mut visited: HashSet<String> = HashSet::new();
+            let mut cursor = Some(idx);
+            while let Some(i) = cursor {
+                let entry = &entries[i];
+                if !entry.uuid.is_empty() && !visited.insert(entry.uuid.clone()) {
+                    break;
+                }
+                if entry.entry_type == "user" || entry.entry_type == "assistant" {
+                    if leaf_seen.insert(i) {
+                        leaf_idxs.push(i);
+                    }
+                    break;
+                }
+                cursor = entry
+                    .parent_uuid
+                    .as_deref()
+                    .filter(|p| !p.is_empty())
+                    .and_then(|p| by_uuid.get(p).copied());
+            }
+        }
+        // First-wins tie-break: keep the first index whose timestamp
+        // strictly exceeds the running max. Mirrors TS `t > maxTime`.
+        let leaf_idx = leaf_idxs
+            .into_iter()
+            .fold(None::<usize>, |best, idx| match best {
+                Some(b) if entries[idx].timestamp > entries[b].timestamp => Some(idx),
+                Some(b) => Some(b),
+                None => Some(idx),
+            });
         match leaf_idx {
             Some(idx) => {
                 let mut walked: Vec<usize> = Vec::new();
@@ -169,6 +231,7 @@ pub fn load_conversation_for_resume(
     // turn counters along the way. `latest_model` mirrors TS's "newest
     // assistant model wins" rule used by the resume picker.
     let mut messages: Vec<Message> = Vec::with_capacity(chain_indices.len());
+    let mut selected_chain_uuids: HashSet<String> = HashSet::new();
     let mut latest_model = String::new();
     let mut total_input: i64 = 0;
     let mut total_output: i64 = 0;
@@ -176,6 +239,9 @@ pub fn load_conversation_for_resume(
 
     for idx in chain_indices {
         let te = &entries[idx];
+        if !te.uuid.is_empty() {
+            selected_chain_uuids.insert(te.uuid.clone());
+        }
         if let Some(m) = &te.model
             && !m.is_empty()
         {
@@ -185,16 +251,75 @@ pub fn load_conversation_for_resume(
             total_input += usage.input_tokens;
             total_output += usage.output_tokens;
         }
-        if let Some(msg) = reconstruct_message(te) {
+        let entry_messages = messages_from_transcript_entry(te);
+        if !entry_messages.is_empty() {
             if te.entry_type == "assistant" {
                 turn_count += 1;
             }
-            messages.push(msg);
+            messages.extend(entry_messages);
         }
     }
 
-    Ok(RecoveredConversation {
+    for msg in &messages {
+        if let Some(uuid) = msg.uuid() {
+            selected_chain_uuids.insert(uuid.to_string());
+        }
+    }
+
+    let session_id = entries
+        .iter()
+        .find_map(|entry| (!entry.session_id.is_empty()).then(|| entry.session_id.clone()))
+        .unwrap_or_else(|| {
+            transcript_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default()
+                .to_string()
+        });
+    let content_replacements = content_replacements_for_chain(&metadata_entries, &session_id, None);
+    // TS-parity: `sessionStorage.ts:3682-3693` routes content-replacement
+    // records by `agentId` presence — no per-message-uuid scope. Records
+    // are keyed by `tool_use_id` (TS `toolResultStorage.ts:475-479`),
+    // which is globally unique within a session.
+    let mut agent_content_replacements: HashMap<String, Vec<ContentReplacementRecord>> =
+        HashMap::new();
+    for entry in &metadata_entries {
+        let Entry::Metadata(MetadataEntry::ContentReplacement {
+            session_id: entry_session_id,
+            agent_id: Some(agent_id),
+            replacements,
+        }) = entry
+        else {
+            continue;
+        };
+        if entry_session_id != &session_id {
+            continue;
+        }
+        if !replacements.is_empty() {
+            agent_content_replacements
+                .entry(agent_id.clone())
+                .or_default()
+                .extend(replacements.iter().cloned());
+        }
+    }
+    // Build the conversation-ordered chain of message UUIDs for the
+    // file-history replay. TS `buildFileHistorySnapshotChain`
+    // (`utils/sessionStorage.ts:2248-2272`) walks the resolved
+    // conversation chain; without that order, isSnapshotUpdate
+    // overwrites can hit the wrong index.
+    let chain_message_uuids: Vec<String> = messages
+        .iter()
+        .filter_map(|m| m.uuid().map(std::string::ToString::to_string))
+        .collect();
+    let file_history_snapshots =
+        build_file_history_snapshot_chain(&metadata_entries, &chain_message_uuids);
+
+    Ok(SessionResumeState {
         messages,
+        selected_chain_uuids,
+        content_replacements,
+        agent_content_replacements,
+        file_history_snapshots,
         model: latest_model,
         turn_count,
         total_input_tokens: total_input,
@@ -204,133 +329,8 @@ pub fn load_conversation_for_resume(
     })
 }
 
-/// Reconstruct a `Message` from a `TranscriptEntry`.
-///
-/// Round-trips full content blocks (`tool_use`, `tool_result`,
-/// `reasoning`, `image`) by deserializing the persisted `message`
-/// field directly into `LlmMessage`. Falls back to a text-only
-/// reconstruction when the persisted shape is missing or malformed.
-/// TS parity: `deserializeMessages` in
-/// `utils/conversationRecovery.ts` — preserves the DAG so resumed
-/// turns don't surface orphan tool_use blocks.
-fn reconstruct_message(entry: &TranscriptEntry) -> Option<Message> {
-    let uuid = entry
-        .uuid
-        .parse::<Uuid>()
-        .unwrap_or_else(|_| Uuid::new_v4());
-    let msg_value = entry.message.clone()?;
-
-    let kind = entry.entry_type.as_str();
-    if kind == entry_kind::USER {
-        let llm = match serde_json::from_value::<coco_messages::LlmMessage>(msg_value.clone()) {
-            Ok(m) => m,
-            Err(_) => coco_messages::LlmMessage::user_text(extract_text_from_content(
-                msg_value.get("content").unwrap_or(&serde_json::Value::Null),
-            )),
-        };
-        return Some(Message::User(coco_messages::UserMessage {
-            message: llm,
-            uuid,
-            timestamp: entry.timestamp.clone(),
-            is_visible_in_transcript_only: false,
-            is_virtual: false,
-            is_compact_summary: false,
-            permission_mode: None,
-            origin: None,
-            parent_tool_use_id: None,
-        }));
-    }
-    if kind == entry_kind::ASSISTANT {
-        let llm = match serde_json::from_value::<coco_messages::LlmMessage>(msg_value.clone()) {
-            Ok(m) => m,
-            Err(_) => coco_messages::LlmMessage::assistant_text(extract_text_from_content(
-                msg_value.get("content").unwrap_or(&serde_json::Value::Null),
-            )),
-        };
-        let usage = entry.usage.as_ref().map(|u| coco_types::TokenUsage {
-            input_tokens: u.input_tokens,
-            output_tokens: u.output_tokens,
-            input_token_details: coco_types::InputTokenDetails {
-                cache_read_tokens: u.cache_read_tokens.unwrap_or(0),
-                cache_write_tokens: u.cache_creation_tokens.unwrap_or(0),
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-        return Some(Message::Assistant(coco_messages::AssistantMessage {
-            message: llm,
-            uuid,
-            model: entry.model.clone().unwrap_or_default(),
-            stop_reason: None,
-            usage,
-            cost_usd: entry.cost_usd,
-            request_id: None,
-            api_error: None,
-        }));
-    }
-    if kind == entry_kind::TOOL_RESULT {
-        // Persisted as the bare `ToolResultMessage` JSON. Inject the
-        // outer `Message` discriminator and deserialize via the enum
-        // so derived fields (`parent_tool_use_id`, `is_error`,
-        // structured content) survive round-trip.
-        return tag_and_deserialize_message(msg_value, entry_kind::TOOL_RESULT);
-    }
-    if kind == entry_kind::SYSTEM {
-        // Same shape as ToolResult: standalone struct, needs the
-        // outer enum tag re-injected. Fall back to a synthetic
-        // CriticalSystemReminder attachment when the original
-        // sub-variant doesn't round-trip (e.g. a renamed variant
-        // from a prior build).
-        return tag_and_deserialize_message(msg_value.clone(), entry_kind::SYSTEM).or_else(|| {
-            let llm = coco_messages::LlmMessage::user_text(extract_text_from_content(&msg_value));
-            let mut att = coco_messages::AttachmentMessage::api(
-                coco_types::AttachmentKind::CriticalSystemReminder,
-                llm,
-            );
-            att.uuid = uuid;
-            Some(Message::Attachment(att))
-        });
-    }
-    // entry_kind::ATTACHMENT and unknown kinds: skip on resume.
-    // Attachments are reminder-driven and re-injected by the
-    // per-turn reminder pipeline (TS `deserializeMessages` filters
-    // them for the same reason).
-    None
-}
-
-/// Inject a `type` discriminator into a stored payload and deserialize
-/// it as a `Message`. Lifts the duplication that used to live in the
-/// system / tool_result arms.
-fn tag_and_deserialize_message(payload: serde_json::Value, kind: &str) -> Option<Message> {
-    let mut map = match payload {
-        serde_json::Value::Object(m) => m,
-        _ => return None,
-    };
-    map.insert(
-        "type".to_string(),
-        serde_json::Value::String(kind.to_string()),
-    );
-    serde_json::from_value::<Message>(serde_json::Value::Object(map)).ok()
-}
-
-/// Extract a plain-text fallback from a JSON content field. Handles
-/// both string content and array-of-blocks content shapes.
-fn extract_text_from_content(content: &serde_json::Value) -> String {
-    if let Some(s) = content.as_str() {
-        return s.to_string();
-    }
-    if let Some(arr) = content.as_array() {
-        let mut parts = Vec::new();
-        for item in arr {
-            if item.get("type").and_then(|v| v.as_str()) == Some("text")
-                && let Some(text) = item.get("text").and_then(|v| v.as_str())
-            {
-                parts.push(text);
-            }
-        }
-        return parts.join("\n");
-    }
-    String::new()
+fn is_transcript_message_type(entry_type: &str) -> bool {
+    matches!(entry_type, "user" | "assistant" | "system" | "attachment")
 }
 
 /// Check if a session can be resumed (transcript exists and is valid).

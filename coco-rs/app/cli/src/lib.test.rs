@@ -115,3 +115,17 @@ fn parses_single_fallback_model_flag_as_one_tier_chain() {
     assert_eq!(cli.fallback_model, vec!["anthropic/claude-sonnet-4-6"]);
     assert!(cli.permission_prompt_tool.is_none());
 }
+
+#[test]
+fn parses_resume_short_flag() {
+    let cli = Cli::try_parse_from(["coco", "-r", "auth-refactor"]).expect("parse -r resume");
+    assert_eq!(cli.resume.as_deref(), Some("auth-refactor"));
+}
+
+#[test]
+fn resume_does_not_accept_restore_alias() {
+    let Err(err) = Cli::try_parse_from(["coco", "--restore", "auth-refactor"]) else {
+        panic!("session resume must use --resume/-r; --restore is not a Claude Code CLI flag");
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+}

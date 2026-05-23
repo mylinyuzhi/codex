@@ -5,6 +5,7 @@
 
 use pretty_assertions::assert_eq;
 
+use coco_types::SdkSessionSummary;
 use coco_types::SlashCommandInfo;
 use coco_types::TuiOnlyEvent;
 
@@ -12,7 +13,9 @@ use super::handle;
 use crate::command::SystemPushKind;
 use crate::command::UserCommand;
 use crate::state::AppState;
+use crate::state::ModalState;
 use crate::state::SuggestionKind;
+use crate::state::derive::test_helpers;
 use crate::state::ui::ToastSeverity;
 
 /// Channel pair scoped to one test. Caller drives `handle` with `&tx`
@@ -116,6 +119,64 @@ fn available_commands_refreshed_repopulates_open_popup() {
     assert_eq!(sug.kind, SuggestionKind::SlashCommand);
     let labels: Vec<String> = sug.items.iter().map(|i| i.label.clone()).collect();
     assert_eq!(labels, vec!["/fresh-cmd"]);
+}
+
+#[test]
+fn open_session_browser_populates_resume_picker() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::OpenSessionBrowser {
+            sessions: vec![SdkSessionSummary {
+                session_id: "s1".to_string(),
+                model: "claude-sonnet-4-6".to_string(),
+                cwd: "/repo".to_string(),
+                created_at: "2026-05-23T00:00:00Z".to_string(),
+                updated_at: None,
+                title: Some("Auth refactor".to_string()),
+                message_count: 12,
+                total_tokens: 345,
+            }],
+        },
+        &tx,
+    );
+
+    assert!(consumed);
+    assert_eq!(state.session.saved_sessions.len(), 1);
+    assert_eq!(state.session.saved_sessions[0].label, "Auth refactor");
+    let Some(ModalState::SessionBrowser(browser)) = state.ui.modal.as_ref() else {
+        panic!("expected session browser modal");
+    };
+    assert_eq!(browser.sessions[0].id, "s1");
+    assert_eq!(browser.sessions[0].label, "Auth refactor");
+}
+
+#[test]
+fn rewind_completed_restores_prompt_before_message_truncation() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+    let user_uuid = test_helpers::push_user_text(&mut state.session, "u1", "continue this prompt");
+    test_helpers::push_assistant_text(&mut state.session, "assistant tail");
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::RewindCompleted {
+            target_message_id: user_uuid.to_string(),
+            files_changed: 0,
+        },
+        &tx,
+    );
+
+    assert!(consumed);
+    assert_eq!(state.ui.input.text(), "continue this prompt");
+    assert!(state.session.conversation_id.is_some());
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert!(
+        state.session.transcript.len() > 1,
+        "TUI-only completion must not truncate before the protocol event"
+    );
 }
 
 #[test]

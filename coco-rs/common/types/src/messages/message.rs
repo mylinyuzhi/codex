@@ -439,6 +439,8 @@ fn llm_message_text(msg: &LlmMessage) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultMessage {
     pub uuid: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_assistant_uuid: Option<Uuid>,
     pub message: LlmMessage,
     pub tool_use_id: String,
     pub tool_id: ToolId,
@@ -478,6 +480,13 @@ pub enum MessageKind {
 
 /// System messages have sub-types for different notification kinds.
 /// All system messages are `role: "user"` with `is_meta: true` for the API.
+///
+/// Wire discriminator is `kind`, matching the rest of the coco-rs
+/// closed-set enums (`PermissionRule`, `ContentReplacementRecord`,
+/// `event::*`). The semantic taxonomy (compact_boundary,
+/// microcompact_boundary, …) matches TS `subtype:` values, but we
+/// don't mirror the field name — see `coco-session::storage` doc for
+/// the snake_case wire policy.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

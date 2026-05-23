@@ -15,6 +15,7 @@ use sha2::Digest;
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -112,14 +113,20 @@ impl std::fmt::Debug for FileHistoryState {
 }
 
 /// A snapshot of file states at a particular point in the conversation.
+///
+/// Wire shape is snake_case JSON; semantic fields match TS
+/// `FileHistorySnapshot` (`fileHistory.ts:36`). Timestamps are
+/// `chrono::DateTime<Utc>` so they serialize to RFC 3339 strings —
+/// this is the Rust-idiomatic choice for date fields, and it's also
+/// what TS produces for `Date` values via `JSON.stringify`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileHistorySnapshot {
     /// Message UUID that triggered this snapshot.
     pub message_id: String,
     /// Per-file backup info.
     pub tracked_file_backups: HashMap<PathBuf, FileHistoryBackup>,
-    /// When the snapshot was taken (epoch ms).
-    pub timestamp: i64,
+    /// When the snapshot was taken (RFC 3339 string).
+    pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 /// Backup info for a single file.
@@ -130,8 +137,8 @@ pub struct FileHistoryBackup {
     pub backup_file_name: Option<String>,
     /// Version counter for this file within the session.
     pub version: i32,
-    /// When the backup was created (epoch ms).
-    pub backup_time: i64,
+    /// When the backup was created (RFC 3339 string).
+    pub backup_time: chrono::DateTime<chrono::Utc>,
 }
 
 /// Result of a diff stats preview (what `rewind` would change).
@@ -257,11 +264,6 @@ impl FileHistoryState {
             .find_map(|s| s.tracked_file_backups.get(path))
     }
 
-    /// Next version number for a file (1-based).
-    fn next_version(&self, path: &Path) -> i32 {
-        self.latest_backup(path).map_or(1, |b| b.version + 1)
-    }
-
     /// Evict oldest snapshots beyond the cap.
     fn enforce_cap(&mut self) {
         while self.snapshots.len() > MAX_SNAPSHOTS {
@@ -271,8 +273,25 @@ impl FileHistoryState {
 
     /// Track a file edit BEFORE writing. Creates a backup of pre-edit content.
     ///
-    /// Three-phase: check state → async I/O → commit.
-    /// Idempotent: safe to call multiple times per turn for the same file.
+    /// Three-phase: check state → async I/O → commit. **Always
+    /// updates the most-recent snapshot in place.** Never pushes a new
+    /// snapshot — that is `make_snapshot`'s job, which runs once per
+    /// user message and bumps per-file `version`. Within a single
+    /// snapshot the per-file `version` is fixed at `1` because the
+    /// snapshot represents "pre-edit state for this turn"; subsequent
+    /// re-edits of the same file inside the same turn observe the
+    /// file is already tracked and skip (Phase 1).
+    ///
+    /// TS-parity: `fileHistory.ts:86-193 fileHistoryTrackEdit`:
+    /// - Phase 1 skip is `mostRecent.trackedFileBackups[path]` —
+    ///   **independent of `messageId`**;
+    /// - Phase 2 calls `createBackup(filePath, 1)` — version literal;
+    /// - Phase 3 writes back the same `mostRecentSnapshot` with the
+    ///   new backup spliced in, and `recordFileHistorySnapshot(...,
+    ///   true)` — `isSnapshotUpdate = true`. The OUTER metadata-entry
+    ///   `messageId` is the `messageId` parameter (the message
+    ///   currently being authored); the INNER `snapshot.messageId`
+    ///   stays as the snapshot's own messageId (unchanged).
     pub async fn track_edit(
         &mut self,
         file_path: &Path,
@@ -280,19 +299,40 @@ impl FileHistoryState {
         config_home: &Path,
         session_id: &str,
     ) -> Result<()> {
-        // Phase 1: Check if already tracked in current snapshot.
-        if let Some(snapshot) = self.snapshots.last()
-            && snapshot.message_id == message_id
-            && snapshot.tracked_file_backups.contains_key(file_path)
-        {
+        const TRACK_EDIT_VERSION: i32 = 1;
+
+        // Phase 1: skip if the file is already tracked in the most
+        // recent snapshot, regardless of which messageId that snapshot
+        // belongs to. Speculative writes would otherwise clobber the
+        // {hash}@v1 backup on every repeat call.
+        //
+        // No snapshot yet → bootstrap an empty one for `message_id`
+        // and proceed. This is a small deviation from TS (which
+        // `logError`s and returns) but lets the typical turn
+        // lifecycle (`make_snapshot` → tool → `track_edit`) and the
+        // edge case (tool runs before the per-turn `make_snapshot`)
+        // both work without callers having to know which path they're
+        // on.
+        let already_tracked = match self.snapshots.last() {
+            Some(snap) => snap.tracked_file_backups.contains_key(file_path),
+            None => {
+                self.snapshots.push(FileHistorySnapshot {
+                    message_id: message_id.to_string(),
+                    tracked_file_backups: HashMap::new(),
+                    timestamp: chrono::Utc::now(),
+                });
+                false
+            }
+        };
+        if already_tracked {
             return Ok(());
         }
 
         self.tracked_files.insert(file_path.to_path_buf());
 
-        // Phase 2: Create backup of pre-edit content.
-        let version = self.next_version(file_path);
-        let backup_name = backup_file_name(file_path, version);
+        // Phase 2: Create backup of pre-edit content. Version is
+        // hard-coded to 1 — see method doc.
+        let backup_name = backup_file_name(file_path, TRACK_EDIT_VERSION);
         let dest = resolve_backup_path(config_home, session_id, &backup_name);
 
         let backup_file_name = match fs::read(file_path).await {
@@ -312,7 +352,7 @@ impl FileHistoryState {
                 }
                 coco_otel::events::emit_file_backup_created(
                     &file_path.display().to_string(),
-                    version,
+                    TRACK_EDIT_VERSION,
                     size,
                 );
                 Some(backup_name)
@@ -324,66 +364,44 @@ impl FileHistoryState {
             Err(e) => return Err(e.into()),
         };
 
-        // Phase 3: Commit to state.
-        self.snapshot_sequence += 1;
+        // Phase 3: Re-check race and commit by splicing into the most
+        // recent snapshot. Never push a new snapshot — `make_snapshot`
+        // is the only producer of new snapshots.
         let is_new_file = backup_file_name.is_none();
         let backup = FileHistoryBackup {
             backup_file_name,
-            version,
-            backup_time: current_time_ms(),
+            version: TRACK_EDIT_VERSION,
+            backup_time: chrono::Utc::now(),
         };
 
-        if let Some(snapshot) = self.snapshots.last_mut()
-            && snapshot.message_id == message_id
-        {
-            snapshot
-                .tracked_file_backups
-                .insert(file_path.to_path_buf(), backup);
-            // TS: tengu_file_history_track_edit_success
-            coco_otel::events::emit_file_track_edit_success(
-                &file_path.display().to_string(),
-                version,
-                is_new_file,
-            );
-            // Persist the in-place update to the JSONL transcript.
-            // TS: recordFileHistorySnapshot(messageId, snapshot, true)
-            // — `true` means rewrite-existing in the chain builder.
-            if let (Some(sink), Some(snap)) = (self.sink.clone(), self.snapshots.last().cloned())
-                && let Ok(snap_json) = serde_json::to_value(&snap)
-            {
-                sink.record(message_id, snap_json, true).await;
-            }
+        let Some(snapshot) = self.snapshots.last_mut() else {
+            return Ok(());
+        };
+        if snapshot.tracked_file_backups.contains_key(file_path) {
+            // Lost the race; the other writer won — leave its backup
+            // intact (matches TS no-op return in the racy branch).
             return Ok(());
         }
+        snapshot
+            .tracked_file_backups
+            .insert(file_path.to_path_buf(), backup);
 
-        // New snapshot — inherit backups from previous.
-        let mut backups = self
-            .snapshots
-            .last()
-            .map(|s| s.tracked_file_backups.clone())
-            .unwrap_or_default();
-        backups.insert(file_path.to_path_buf(), backup);
-
-        let new_snapshot = FileHistorySnapshot {
-            message_id: message_id.to_string(),
-            tracked_file_backups: backups,
-            timestamp: current_time_ms(),
-        };
-        self.snapshots.push(new_snapshot.clone());
-        self.enforce_cap();
-        // TS: tengu_file_history_track_edit_success
         coco_otel::events::emit_file_track_edit_success(
             &file_path.display().to_string(),
-            version,
+            TRACK_EDIT_VERSION,
             is_new_file,
         );
+
         if let Some(sink) = self.sink.clone()
-            && let Ok(snap_json) = serde_json::to_value(&new_snapshot)
+            && let Some(snap) = self.snapshots.last().cloned()
+            && let Ok(snap_json) = serde_json::to_value(&snap)
         {
-            // First time we're writing this message_id — `false`
-            // appends; later updates within the same turn will use
-            // `true` via the branch above.
-            sink.record(message_id, snap_json, false).await;
+            // Outer entry.messageId = the messageId arg (current
+            // turn). Inner snapshot.messageId stays as snap's own
+            // messageId (unchanged by serializing the existing
+            // snapshot). isSnapshotUpdate is always true — trackEdit
+            // never produces a fresh snapshot.
+            sink.record(message_id, snap_json, true).await;
         }
         Ok(())
     }
@@ -455,7 +473,7 @@ impl FileHistoryState {
                     FileHistoryBackup {
                         backup_file_name: backup_file,
                         version,
-                        backup_time: current_time_ms(),
+                        backup_time: chrono::Utc::now(),
                     },
                 );
             }
@@ -465,7 +483,7 @@ impl FileHistoryState {
         let new_snapshot = FileHistorySnapshot {
             message_id: message_id.to_string(),
             tracked_file_backups: backups,
-            timestamp: current_time_ms(),
+            timestamp: chrono::Utc::now(),
         };
         self.snapshots.push(new_snapshot.clone());
         self.enforce_cap();
@@ -678,17 +696,23 @@ impl FileHistoryState {
     }
 
     /// Rebuild state from persisted snapshots (session resume).
+    ///
+    /// `snapshot_sequence` is the **count of snapshots**, not the
+    /// maximum per-file version. TS-parity:
+    /// `fileHistory.ts:912-916` returns `snapshotSequence: snapshots.length`
+    /// — the UI's `useGitDiffStats` activity polling treats this as a
+    /// monotonic tick. Using max_version would let one heavily-edited
+    /// file inflate the counter independently of how many snapshots
+    /// actually exist.
     pub fn restore_from_snapshots(snapshots: Vec<FileHistorySnapshot>) -> Self {
         let mut tracked_files = HashSet::new();
-        let mut max_version: i32 = 0;
         for snapshot in &snapshots {
-            for (path, backup) in &snapshot.tracked_file_backups {
+            for path in snapshot.tracked_file_backups.keys() {
                 tracked_files.insert(path.clone());
-                max_version = max_version.max(backup.version);
             }
         }
         Self {
-            snapshot_sequence: max_version as i64,
+            snapshot_sequence: snapshots.len() as i64,
             tracked_files,
             snapshots,
             sink: None,
@@ -713,7 +737,7 @@ async fn apply_snapshot(
     config_home: &Path,
     session_id: &str,
 ) -> Result<Vec<PathBuf>> {
-    let mut changed = Vec::new();
+    let mut plan = Vec::new();
     // Iterate the full tracked-files set (not just snapshot's
     // backups). For files the snapshot has no entry for, fall back
     // to their first-version backup so files first edited mid-
@@ -736,70 +760,214 @@ async fn apply_snapshot(
             },
         };
 
-        match backup_file_name {
-            Some(bname) => {
-                let bp = resolve_backup_path(config_home, session_id, &bname);
-                if origin_file_changed(file_path, &bp).await.unwrap_or(true) {
-                    let content = fs::read(&bp).await.map_err(|e| {
-                        crate::ContextError::generic(format!(
-                            "reading backup {}: {e}",
-                            bp.display()
-                        ))
-                    })?;
-                    ensure_parent_dir(file_path).await?;
-                    fs::write(file_path, &content).await?;
-                    // Restore file permissions (TS: chmod(filePath, backupStats.mode))
-                    #[cfg(unix)]
-                    if let Ok(meta) = fs::metadata(&bp).await {
-                        let _ = fs::set_permissions(file_path, meta.permissions()).await;
-                    }
-                    changed.push(file_path.clone());
-                }
+        match plan_snapshot_file(config_home, session_id, file_path, backup_file_name).await {
+            Ok(Some(action)) => plan.push(action),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    target: "file_history",
+                    path = %file_path.display(),
+                    error = %e,
+                    "failed to restore file from snapshot; continuing",
+                );
             }
-            None => {
-                // File didn't exist at snapshot time — delete if it exists now.
-                if fs::metadata(file_path).await.is_ok() {
-                    fs::remove_file(file_path).await?;
-                    changed.push(file_path.clone());
-                }
+        }
+    }
+    apply_restore_plan(plan).await
+}
+
+struct RestorePlanAction {
+    path: PathBuf,
+    op: RestorePlanOp,
+}
+
+enum RestorePlanOp {
+    Copy {
+        content: Vec<u8>,
+        #[cfg(unix)]
+        permissions: Option<std::fs::Permissions>,
+    },
+    Delete,
+}
+
+async fn plan_snapshot_file(
+    config_home: &Path,
+    session_id: &str,
+    file_path: &Path,
+    backup_file_name: Option<String>,
+) -> Result<Option<RestorePlanAction>> {
+    match backup_file_name {
+        Some(bname) => {
+            let bp = checked_backup_path(config_home, session_id, &bname)?;
+            if origin_file_changed(file_path, &bp).await.unwrap_or(true) {
+                let content = fs::read(&bp).await.map_err(|e| {
+                    crate::ContextError::generic(format!("reading backup {}: {e}", bp.display()))
+                })?;
+                #[cfg(unix)]
+                let permissions = fs::metadata(&bp).await.ok().map(|meta| meta.permissions());
+                return Ok(Some(RestorePlanAction {
+                    path: file_path.to_path_buf(),
+                    op: RestorePlanOp::Copy {
+                        content,
+                        #[cfg(unix)]
+                        permissions,
+                    },
+                }));
+            }
+            Ok(None)
+        }
+        None => {
+            // File didn't exist at snapshot time — delete if it exists now.
+            if fs::metadata(file_path).await.is_ok() {
+                return Ok(Some(RestorePlanAction {
+                    path: file_path.to_path_buf(),
+                    op: RestorePlanOp::Delete,
+                }));
+            }
+            Ok(None)
+        }
+    }
+}
+
+async fn apply_restore_plan(plan: Vec<RestorePlanAction>) -> Result<Vec<PathBuf>> {
+    let mut changed = Vec::new();
+    for action in plan {
+        match apply_restore_action(&action).await {
+            Ok(()) => changed.push(action.path),
+            Err(e) => {
+                tracing::warn!(
+                    target: "file_history",
+                    path = %action.path.display(),
+                    error = %e,
+                    "failed to apply file restore action; continuing",
+                );
             }
         }
     }
     Ok(changed)
 }
 
+async fn apply_restore_action(action: &RestorePlanAction) -> Result<()> {
+    match &action.op {
+        RestorePlanOp::Copy {
+            content,
+            #[cfg(unix)]
+            permissions,
+        } => {
+            ensure_parent_dir(&action.path).await?;
+            atomic_write(&action.path, content).await?;
+            #[cfg(unix)]
+            if let Some(permissions) = permissions {
+                let _ = fs::set_permissions(&action.path, permissions.clone()).await;
+            }
+            Ok(())
+        }
+        RestorePlanOp::Delete => {
+            fs::remove_file(&action.path).await?;
+            Ok(())
+        }
+    }
+}
+
+fn checked_backup_path(config_home: &Path, session_id: &str, backup_name: &str) -> Result<PathBuf> {
+    let backup_name_path = Path::new(backup_name);
+    if backup_name_path.is_absolute()
+        || backup_name_path
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err(crate::ContextError::generic(format!(
+            "invalid backup name: {backup_name}"
+        )));
+    }
+    let dir = backup_dir(config_home, session_id);
+    let path = dir.join(backup_name_path);
+    if !path.starts_with(&dir) {
+        return Err(crate::ContextError::generic(format!(
+            "backup path escapes backup dir: {}",
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
+async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| crate::ContextError::generic("target path has no parent directory"))?;
+    let file_name = path.file_name().and_then(OsStr::to_str).unwrap_or("file");
+    let tmp = parent.join(format!(".{file_name}.coco-tmp-{}", current_time_ms()));
+    fs::write(&tmp, content).await?;
+    match fs::rename(&tmp, path).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = fs::remove_file(&tmp).await;
+            Err(e.into())
+        }
+    }
+}
+
 /// Copy file history backups for session resume (hard-link with copy fallback).
+///
+/// **Replay step (`snapshots` + `sink`)**: TS-parity
+/// `copyFileHistoryForResume` (`utils/fileHistory.ts:922-1046`) does
+/// not stop at copying backup files — after each successful copy it
+/// calls `recordFileHistorySnapshot(messageId, snapshot, false)` so
+/// the resumed session's transcript contains the snapshot chain.
+/// Without that replay the new transcript has no
+/// `file-history-snapshot` entries and the rewind picker can't reach
+/// any pre-resume checkpoint. Pass the prior session's `snapshots` and
+/// a sink wired to the **new** session's JSONL to replicate the
+/// behavior. Callers that only want the file-copy half (e.g. tests)
+/// can pass `(&[], None)`.
 pub async fn copy_file_history_for_resume(
     config_home: &Path,
     from_session: &str,
     to_session: &str,
+    snapshots: &[FileHistorySnapshot],
+    sink: Option<&dyn FileHistorySnapshotSink>,
 ) -> Result<i32> {
     let src_dir = backup_dir(config_home, from_session);
     let dst_dir = backup_dir(config_home, to_session);
 
-    if !src_dir.exists() {
-        return Ok(0);
-    }
-    fs::create_dir_all(&dst_dir).await?;
-
     let mut copied = 0i32;
-    let mut entries = fs::read_dir(&src_dir).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let src = entry.path();
-        let dst = dst_dir.join(entry.file_name());
-        if dst.exists() {
-            continue;
-        }
-        // Try hard-link first (fast, no copy).
-        if fs::hard_link(&src, &dst).await.is_err() {
-            // Fallback to copy.
-            if let Err(e) = fs::copy(&src, &dst).await {
-                tracing::warn!("failed to copy backup {}: {e}", src.display());
+    if src_dir.exists() {
+        fs::create_dir_all(&dst_dir).await?;
+        let mut entries = fs::read_dir(&src_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let src = entry.path();
+            let dst = dst_dir.join(entry.file_name());
+            if dst.exists() {
                 continue;
             }
+            // Try hard-link first (fast, no copy).
+            if fs::hard_link(&src, &dst).await.is_err() {
+                // Fallback to copy.
+                if let Err(e) = fs::copy(&src, &dst).await {
+                    tracing::warn!("failed to copy backup {}: {e}", src.display());
+                    continue;
+                }
+            }
+            copied += 1;
         }
-        copied += 1;
     }
+
+    // Replay snapshot chain into the new session's transcript. TS
+    // emits `isSnapshotUpdate: false` for every replayed snapshot,
+    // re-creating the chain rather than diff-overlaying.
+    if let Some(sink) = sink {
+        for snapshot in snapshots {
+            let Ok(snap_json) = serde_json::to_value(snapshot) else {
+                tracing::warn!(
+                    message_id = %snapshot.message_id,
+                    "failed to serialize snapshot during resume replay"
+                );
+                continue;
+            };
+            sink.record(&snapshot.message_id, snap_json, false).await;
+        }
+    }
+
     Ok(copied)
 }
 

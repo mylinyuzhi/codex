@@ -32,15 +32,15 @@ fn write_minimal_session(memory_base: &std::path::Path, id: &str) {
         serde_json::json!({
             "type": "user",
             "uuid": format!("{id}-u1"),
-            "sessionId": id,
+            "session_id": id,
             "timestamp": "2025-01-15T10:00:00Z",
             "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
         }),
         serde_json::json!({
             "type": "assistant",
             "uuid": format!("{id}-a1"),
-            "parentUuid": format!("{id}-u1"),
-            "sessionId": id,
+            "parent_uuid": format!("{id}-u1"),
+            "session_id": id,
             "timestamp": "2025-01-15T10:00:01Z",
             "model": "claude-sonnet-4-6",
             "message": {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
@@ -71,7 +71,7 @@ fn resume_by_id_loads_messages() {
     assert_eq!(plan.source_session_id, "alpha");
     assert!(!plan.is_fork);
     assert_eq!(plan.prior_messages.len(), 2);
-    assert_eq!(plan.recovered.turn_count, 1);
+    assert_eq!(plan.conversation.turn_count, 1);
     assert_eq!(plan.destination_path, plan.source_path);
 }
 

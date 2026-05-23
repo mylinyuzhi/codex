@@ -30,6 +30,7 @@ fn user_marker(text: &str) -> Message {
 fn tool_result_marker(tool_use_id: &str, output: &str, is_error: bool) -> Message {
     Message::ToolResult(ToolResultMessage {
         uuid: uuid::Uuid::new_v4(),
+        source_assistant_uuid: None,
         message: LlmMessage::Tool {
             content: vec![ToolContent::ToolResult(coco_llm_types::ToolResultPart {
                 tool_call_id: tool_use_id.into(),

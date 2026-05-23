@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use coco_session::TranscriptStore;
-use coco_session::recovery::RecoveredConversation;
+use coco_session::recovery::ConversationForResume;
 use coco_session::recovery::can_resume_session;
 use coco_session::recovery::fork_conversation;
 use coco_session::recovery::load_conversation_for_resume;
@@ -50,10 +50,10 @@ pub struct ResumePlan {
     pub destination_path: PathBuf,
     /// Pre-loaded messages from the source transcript.
     pub prior_messages: Vec<coco_messages::Message>,
-    /// Aggregate metadata recovered from the source transcript.
+    /// Conversation and aggregate metadata loaded from the source transcript.
     /// Callers surface `model` and token counts in their startup
     /// banner so the user sees what they're continuing.
-    pub recovered: RecoveredConversation,
+    pub conversation: ConversationForResume,
     /// `true` when `--fork-session` was set (the destination diverged).
     pub is_fork: bool,
 }
@@ -118,10 +118,10 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
             source_path.display(),
         );
     }
-    let recovered = load_conversation_for_resume(&source_path)
+    let conversation = load_conversation_for_resume(&source_path)
         .map_err(|e| anyhow::anyhow!("failed to load transcript {}: {e}", source_path.display()))?;
 
-    let prior_messages = recovered.messages.clone();
+    let prior_messages = conversation.messages.clone();
 
     if cli.fork_session {
         let dest_id = cli
@@ -142,7 +142,7 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
             source_path,
             destination_path: dest_path,
             prior_messages,
-            recovered,
+            conversation,
             is_fork: true,
         }));
     }
@@ -153,7 +153,7 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
         source_path: source_path.clone(),
         destination_path: source_path,
         prior_messages,
-        recovered,
+        conversation,
         is_fork: false,
     }))
 }
@@ -190,15 +190,14 @@ fn resolve_source_arg(
         return Ok((id, abs));
     }
 
-    // Bare id: prefer this project, then fall back to a global scan
-    // (TS `resolveSessionFilePath` with worktree + global stages).
+    // Bare id: look only under the current project (with sibling-
+    // worktree fallback). TS `sessionStoragePortable.ts:425-461` returns
+    // undefined when `dir` is set and the direct + worktree probes both
+    // miss — it does NOT cross over into other projects. A global scan
+    // here would silently open someone else's session and write follow-up
+    // turns into the wrong project dir, so we mirror TS and stop here.
     if let Some(resolved) =
         coco_session::storage::resolve_session_file_path(memory_base, arg, Some(cwd))?
-    {
-        return Ok((arg.to_string(), resolved.file_path));
-    }
-    if let Some(resolved) =
-        coco_session::storage::resolve_session_file_path(memory_base, arg, None)?
     {
         return Ok((arg.to_string(), resolved.file_path));
     }

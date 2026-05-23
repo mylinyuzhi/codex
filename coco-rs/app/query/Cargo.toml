@@ -32,6 +32,7 @@ coco-mcp.workspace = true
 coco-memory.workspace = true
 coco-session.workspace = true
 coco-tasks.workspace = true
+coco-git.workspace = true
 chrono.workspace = true
 lru.workspace = true
 once_cell.workspace = true

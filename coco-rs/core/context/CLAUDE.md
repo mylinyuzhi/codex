@@ -42,7 +42,7 @@ System context assembly: environment info, memory-file discovery (`CLAUDE.md` / 
 ## Architecture
 
 - `Platform` + `ShellKind` enums owned here (cross-crate env types).
-- File history uses ordered `Vec` + content-addressed files on disk (TS-aligned; NOT HashMap).
+- File history uses ordered `Vec` + content-addressed files on disk (TS-aligned; NOT HashMap). The `FileHistorySnapshot` JSON wire shape is snake_case (`message_id`, `tracked_file_backups`, `backup_file_name`, `backup_time`) and `DateTime<Utc>` for time fields (RFC 3339 strings) — content-equivalent to TS `FileHistorySnapshot` but Rust-native naming. See `coco-session` CLAUDE.md for the cross-crate wire policy.
 - Plan mode scoped by session-local `plan_slug` for fork/resume isolation.
 - Phase-4 + Interview plan workflows exposed via `settings.json` (`plan_mode.phase4_variant`, `plan_mode.workflow`) — no GrowthBook / `USER_TYPE=ant` env vars. Ultraplan (CCR web UI) intentionally skipped.
 

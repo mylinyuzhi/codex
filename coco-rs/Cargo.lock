@@ -1156,6 +1156,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "coco-config",
  "coco-error",
  "coco-frontmatter",
@@ -1692,6 +1693,7 @@ dependencies = [
  "coco-config",
  "coco-context",
  "coco-error",
+ "coco-git",
  "coco-hooks",
  "coco-inference",
  "coco-llm-types",

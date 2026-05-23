@@ -17,6 +17,9 @@ use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
+use crate::state::SavedSession;
+use crate::state::SessionBrowserState;
+use crate::state::SessionOption;
 use crate::state::ui::Toast;
 
 /// Dispatch a TUI-originated `Informational` system message directly
@@ -175,6 +178,36 @@ pub(super) fn handle(
             // against the new list so the next render reflects it
             // without waiting for another keystroke.
             crate::autocomplete::refresh_suggestions(state);
+            true
+        }
+        TuiOnlyEvent::OpenSessionBrowser { sessions } => {
+            let saved_sessions = sessions
+                .into_iter()
+                .map(|session| SavedSession {
+                    id: session.session_id.clone(),
+                    label: session.title.unwrap_or_else(|| session.session_id.clone()),
+                    message_count: session.message_count,
+                    created_at: session.created_at,
+                    model: Some(session.model),
+                })
+                .collect::<Vec<_>>();
+            let picker_sessions = saved_sessions
+                .iter()
+                .map(|session| SessionOption {
+                    id: session.id.clone(),
+                    label: session.label.clone(),
+                    message_count: session.message_count,
+                    created_at: session.created_at.clone(),
+                })
+                .collect();
+            state.session.saved_sessions = saved_sessions;
+            state
+                .ui
+                .show_modal(ModalState::SessionBrowser(SessionBrowserState {
+                    sessions: picker_sessions,
+                    filter: String::new(),
+                    selected: 0,
+                }));
             true
         }
         // No-op: checkpoint data consumed by ShowRewind state, not stored.

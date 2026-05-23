@@ -26,6 +26,7 @@ fn test_tool_result_lookup() {
         crate::creation::create_user_message("hi"),
         Message::ToolResult(ToolResultMessage {
             uuid: Uuid::new_v4(),
+            source_assistant_uuid: None,
             message: LlmMessage::Tool {
                 content: vec![],
                 provider_options: None,

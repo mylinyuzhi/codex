@@ -162,6 +162,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::PluginDataReady { .. } => "PluginDataReady",
         E::OutputStylesReady { .. } => "OutputStylesReady",
         E::AvailableCommandsRefreshed { .. } => "AvailableCommandsRefreshed",
+        E::OpenSessionBrowser { .. } => "OpenSessionBrowser",
         E::RewindCheckpointsReady { .. } => "RewindCheckpointsReady",
         E::CompactionCircuitBreakerOpen { .. } => "CompactionCircuitBreakerOpen",
         E::MicroCompactionApplied { .. } => "MicroCompactionApplied",

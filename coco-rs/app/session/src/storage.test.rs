@@ -25,12 +25,14 @@ fn make_user_entry(uuid: &str, session_id: &str, text: &str) -> TranscriptEntry 
         entry_type: "user".to_string(),
         uuid: uuid.to_string(),
         parent_uuid: None,
+        logical_parent_uuid: None,
         session_id: session_id.to_string(),
         cwd: "/tmp/project".to_string(),
         timestamp: "2025-01-15T10:00:00Z".to_string(),
         version: Some("1.0.0".to_string()),
         git_branch: Some("main".to_string()),
         is_sidechain: false,
+        agent_id: None,
         message: Some(json!({
             "role": "user",
             "content": text,
@@ -47,12 +49,14 @@ fn make_assistant_entry(uuid: &str, parent_uuid: &str, session_id: &str) -> Tran
         entry_type: "assistant".to_string(),
         uuid: uuid.to_string(),
         parent_uuid: Some(parent_uuid.to_string()),
+        logical_parent_uuid: None,
         session_id: session_id.to_string(),
         cwd: "/tmp/project".to_string(),
         timestamp: "2025-01-15T10:00:01Z".to_string(),
         version: Some("1.0.0".to_string()),
         git_branch: Some("main".to_string()),
         is_sidechain: false,
+        agent_id: None,
         message: Some(json!({
             "role": "assistant",
             "content": [{"type": "text", "text": "Sure, I can help."}],
@@ -158,7 +162,9 @@ fn test_content_replacement_records_round_trip() {
         "toolu_1",
         "<persisted-output>\npreview\n</persisted-output>",
     )];
-    store.insert_content_replacement(sid, &records).unwrap();
+    store
+        .insert_content_replacement(sid, /*agent_id*/ None, &records)
+        .unwrap();
 
     assert_eq!(
         store.tool_results_session_dir(sid),
@@ -343,7 +349,7 @@ fn test_file_history_snapshot_round_trip_appends_in_order() {
         .insert_file_history_snapshot(
             sid,
             "msg-1",
-            json!({"files": {"a.txt": {"content": "v1"}}}),
+            json!({"message_id": "msg-1", "files": {"a.txt": {"content": "v1"}}}),
             /*is_snapshot_update*/ false,
         )
         .unwrap();
@@ -351,14 +357,18 @@ fn test_file_history_snapshot_round_trip_appends_in_order() {
         .insert_file_history_snapshot(
             sid,
             "msg-2",
-            json!({"files": {"a.txt": {"content": "v2"}}}),
+            json!({"message_id": "msg-2", "files": {"a.txt": {"content": "v2"}}}),
             false,
         )
         .unwrap();
 
-    let chain = store.load_file_history_snapshots(sid).unwrap();
+    let chain_uuids: Vec<String> = vec!["msg-1".into(), "msg-2".into()];
+    let chain = store
+        .load_file_history_snapshots_for_chain(sid, &chain_uuids)
+        .unwrap();
     assert_eq!(chain.len(), 2, "expected one snapshot per message_id");
-    // Order matches insertion order.
+    // Order matches the chain (= insertion order here since both msgs
+    // are in the chain).
     assert_eq!(
         chain[0]
             .pointer("/files/a.txt/content")
@@ -375,11 +385,15 @@ fn test_file_history_snapshot_round_trip_appends_in_order() {
 
 #[test]
 fn test_file_history_snapshot_chain_last_wins_on_update() {
-    // The rewind subsystem's `tracked_edit` flow rewrites a not-yet-
+    // The rewind subsystem's `track_edit` flow rewrites a not-yet-
     // flushed snapshot in place — `is_snapshot_update = true` should
-    // overwrite the prior entry for the same `message_id` rather than
-    // appending a new row. This is the load-bearing invariant for the
-    // rewind picker (TS `buildFileHistorySnapshotChain`).
+    // overwrite the prior entry for the same INNER `snapshot.messageId`
+    // rather than appending a new row. TS-parity invariant for
+    // `buildFileHistorySnapshotChain` (`sessionStorage.ts:2248-2272`).
+    //
+    // The update entry's outer `message_id` (the current turn's id)
+    // differs from the inner `snapshot.messageId` (the original
+    // snapshot's id); TS keys on the INNER field.
     let (_dir, store, _project_dir) = test_store();
     let sid = "update-session";
     store
@@ -387,22 +401,39 @@ fn test_file_history_snapshot_chain_last_wins_on_update() {
         .unwrap();
 
     store
-        .insert_file_history_snapshot(sid, "msg-A", json!({"version": "first"}), false)
-        .unwrap();
-    store
-        .insert_file_history_snapshot(sid, "msg-B", json!({"version": "first-B"}), false)
-        .unwrap();
-    // Update msg-A in place — new snapshot, same message_id.
-    store
         .insert_file_history_snapshot(
             sid,
             "msg-A",
-            json!({"version": "second"}),
+            json!({"message_id": "msg-A", "version": "first"}),
+            false,
+        )
+        .unwrap();
+    store
+        .insert_file_history_snapshot(
+            sid,
+            "msg-B",
+            json!({"message_id": "msg-B", "version": "first-B"}),
+            false,
+        )
+        .unwrap();
+    // Update for msg-A: outer message_id is the *current* turn
+    // ("msg-update-turn") but the inner snapshot.messageId is still
+    // "msg-A" — TS `recordFileHistorySnapshot(messageId, snapshot,
+    // true)` always sets the outer to `messageId` while the inner
+    // tracks the snapshot it overwrites.
+    store
+        .insert_file_history_snapshot(
+            sid,
+            "msg-update-turn",
+            json!({"message_id": "msg-A", "version": "second"}),
             /*is_snapshot_update*/ true,
         )
         .unwrap();
 
-    let chain = store.load_file_history_snapshots(sid).unwrap();
+    let chain_uuids: Vec<String> = vec!["msg-A".into(), "msg-B".into(), "msg-update-turn".into()];
+    let chain = store
+        .load_file_history_snapshots_for_chain(sid, &chain_uuids)
+        .unwrap();
     assert_eq!(
         chain.len(),
         2,
@@ -422,24 +453,28 @@ fn test_file_history_snapshot_chain_last_wins_on_update() {
 
 #[test]
 fn test_file_history_snapshot_chain_unknown_id_ignored() {
-    // An update for a `message_id` that hasn't been recorded yet
-    // should be treated as a fresh insert (TS parity — the chain
-    // builder only consults the index for known ids).
+    // An update whose inner messageId has not been recorded yet should
+    // be treated as a fresh insert (TS parity at
+    // `sessionStorage.ts:2264`: `existingIndex === undefined` falls
+    // through to push). The chain walk uses the conversation-ordered
+    // UUID list — entries for ids absent from the chain are silently
+    // skipped.
     let entries = vec![
         Entry::Metadata(MetadataEntry::FileHistorySnapshot {
             message_id: "msg-A".into(),
-            snapshot: json!({"v": "a1"}),
+            snapshot: json!({"message_id": "msg-A", "v": "a1"}),
             is_snapshot_update: false,
         }),
-        // is_snapshot_update=true for an *unknown* id — falls through
-        // and gets pushed as a new entry.
+        // is_snapshot_update=true for an *unknown* inner id — falls
+        // through and gets pushed as a new entry.
         Entry::Metadata(MetadataEntry::FileHistorySnapshot {
             message_id: "msg-Z".into(),
-            snapshot: json!({"v": "z-update"}),
+            snapshot: json!({"message_id": "msg-Z", "v": "z-update"}),
             is_snapshot_update: true,
         }),
     ];
-    let chain = build_file_history_snapshot_chain(&entries);
+    let chain_uuids: Vec<String> = vec!["msg-A".into(), "msg-Z".into()];
+    let chain = build_file_history_snapshot_chain(&entries, &chain_uuids);
     assert_eq!(chain.len(), 2);
     assert_eq!(chain[0].pointer("/v").and_then(|v| v.as_str()), Some("a1"));
     assert_eq!(
@@ -462,24 +497,24 @@ fn test_marble_origami_entries_filtered_by_session() {
 
     // Two commits for our session, one for a different session.
     store
-        .append_marble_origami_commit(sid, json!({"sessionId": sid, "id": "c1"}))
+        .append_marble_origami_commit(sid, json!({"session_id": sid, "id": "c1"}))
         .unwrap();
     store
-        .append_marble_origami_commit(sid, json!({"sessionId": "other", "id": "c-other"}))
+        .append_marble_origami_commit(sid, json!({"session_id": "other", "id": "c-other"}))
         .unwrap();
     store
-        .append_marble_origami_commit(sid, json!({"sessionId": sid, "id": "c2"}))
+        .append_marble_origami_commit(sid, json!({"session_id": sid, "id": "c2"}))
         .unwrap();
 
-    // Two snapshots — last-wins by session_id; only the our-session one counts.
+    // Two snapshots — last-wins by sessionId; only the our-session one counts.
     store
-        .append_marble_origami_snapshot(sid, json!({"sessionId": "other", "v": "ignore"}))
+        .append_marble_origami_snapshot(sid, json!({"session_id": "other", "v": "ignore"}))
         .unwrap();
     store
-        .append_marble_origami_snapshot(sid, json!({"sessionId": sid, "v": "keep-1"}))
+        .append_marble_origami_snapshot(sid, json!({"session_id": sid, "v": "keep-1"}))
         .unwrap();
     store
-        .append_marble_origami_snapshot(sid, json!({"sessionId": sid, "v": "keep-2"}))
+        .append_marble_origami_snapshot(sid, json!({"session_id": sid, "v": "keep-2"}))
         .unwrap();
 
     let (commits, snapshot) = store.load_marble_origami_entries(sid).unwrap();
@@ -501,24 +536,24 @@ fn test_marble_origami_entries_filtered_by_session() {
     );
 }
 
-/// Wire-format regression: TS Claude Code's JSONL transcript uses
-/// camelCase keys (`parentUuid`, `sessionId`, `isSidechain`, `gitBranch`,
-/// `costUsd`, `inputTokens`, `outputTokens`, `cacheReadTokens`, etc.).
-/// If anyone "corrects" our serde to snake_case, this test fails — and
-/// every prior on-disk transcript becomes unreadable for the next
-/// resume. Lock the wire shape here.
+/// Wire-format regression: transcript JSONL is snake_case JSON; the
+/// content is semantically equivalent to TS Claude Code but the
+/// field names follow Rust convention. No `serde(rename_all =
+/// "camelCase")` on the wire types.
 #[test]
-fn test_transcript_entry_serializes_with_camelcase_keys() {
+fn test_transcript_entry_serializes_with_snake_case_keys() {
     let entry = TranscriptEntry {
         entry_type: "assistant".into(),
         uuid: "uu".into(),
         parent_uuid: Some("pp".into()),
+        logical_parent_uuid: None,
         session_id: "ss".into(),
         cwd: "/tmp".into(),
         timestamp: "2025-01-15T10:00:00Z".into(),
         version: Some("1.0".into()),
         git_branch: Some("main".into()),
         is_sidechain: true,
+        agent_id: None,
         message: Some(json!({"role": "assistant", "content": []})),
         usage: Some(TranscriptUsage {
             input_tokens: 1,
@@ -531,63 +566,232 @@ fn test_transcript_entry_serializes_with_camelcase_keys() {
         extra: serde_json::Map::new(),
     };
     let v = serde_json::to_value(&entry).unwrap();
-    // Top-level transcript fields.
-    assert!(
-        v.get("parentUuid").is_some(),
-        "parentUuid must be camelCase"
-    );
-    assert!(v.get("sessionId").is_some());
-    assert!(v.get("isSidechain").is_some());
-    assert!(v.get("gitBranch").is_some());
-    assert!(v.get("costUsd").is_some());
-    // Snake_case versions must be ABSENT — sole source of truth is camelCase.
-    assert!(v.get("parent_uuid").is_none());
-    assert!(v.get("session_id").is_none());
-    assert!(v.get("is_sidechain").is_none());
-    // Nested usage block.
+    // Snake_case wire — no TS-byte mirror. See storage.rs module doc.
+    assert!(v.get("parent_uuid").is_some());
+    assert!(v.get("session_id").is_some());
+    assert!(v.get("is_sidechain").is_some());
+    assert!(v.get("git_branch").is_some());
+    assert!(v.get("cost_usd").is_some());
+    assert!(v.get("parentUuid").is_none());
+    assert!(v.get("sessionId").is_none());
+    assert!(v.get("isSidechain").is_none());
     let usage = v.get("usage").expect("usage present");
-    assert!(usage.get("inputTokens").is_some());
-    assert!(usage.get("outputTokens").is_some());
-    assert!(usage.get("cacheReadTokens").is_some());
-    assert!(usage.get("cacheCreationTokens").is_some());
+    assert!(usage.get("input_tokens").is_some());
+    assert!(usage.get("output_tokens").is_some());
+    assert!(usage.get("cache_read_tokens").is_some());
+    assert!(usage.get("cache_creation_tokens").is_some());
+    assert!(usage.get("inputTokens").is_none());
 }
 
-/// Same check for `MetadataEntry` — TS writes
-/// `{type:"custom-title", sessionId, customTitle}` (kebab-case
-/// discriminator + camelCase payload).
+/// MetadataEntry uses a kebab-case `type:` discriminator (matches TS
+/// semantic taxonomy) but payload field names are Rust snake_case.
 #[test]
-fn test_metadata_entry_serializes_with_camelcase_payload() {
+fn test_metadata_entry_serializes_with_snake_case_payload() {
     let m = MetadataEntry::CustomTitle {
         session_id: "ss".into(),
         custom_title: "My Bug Hunt".into(),
     };
     let v = serde_json::to_value(&m).unwrap();
     assert_eq!(v.get("type").and_then(|t| t.as_str()), Some("custom-title"));
-    assert_eq!(v.get("sessionId").and_then(|t| t.as_str()), Some("ss"));
+    assert_eq!(v.get("session_id").and_then(|t| t.as_str()), Some("ss"));
     assert_eq!(
-        v.get("customTitle").and_then(|t| t.as_str()),
+        v.get("custom_title").and_then(|t| t.as_str()),
         Some("My Bug Hunt"),
     );
-    assert!(
-        v.get("custom_title").is_none(),
-        "snake_case payload must be gone"
-    );
+    assert!(v.get("sessionId").is_none());
+    assert!(v.get("customTitle").is_none());
 }
 
 #[test]
 fn test_content_replacement_serializes_ts_shape() {
+    // Three fields per record — `kind`, `tool_use_id`, `replacement`.
+    // No `message_uuid` — records are matched on `tool_use_id` only.
     let m = MetadataEntry::ContentReplacement {
-        record: ContentReplacementRecord::tool_result("toolu_1", "replacement"),
+        session_id: "ss".into(),
+        agent_id: None,
+        replacements: vec![ContentReplacementRecord::tool_result(
+            "toolu_1",
+            "replacement",
+        )],
     };
     let v = serde_json::to_value(&m).unwrap();
     assert_eq!(
         v.get("type").and_then(|t| t.as_str()),
         Some("content-replacement")
     );
-    assert_eq!(v.get("kind").and_then(|t| t.as_str()), Some("tool-result"));
-    assert_eq!(v.get("toolUseId").and_then(|t| t.as_str()), Some("toolu_1"));
+    assert_eq!(v.get("session_id").and_then(|t| t.as_str()), Some("ss"));
+    let replacements = v
+        .get("replacements")
+        .and_then(|t| t.as_array())
+        .expect("replacements array");
+    assert_eq!(replacements.len(), 1);
     assert_eq!(
-        v.get("replacement").and_then(|t| t.as_str()),
+        replacements[0].get("kind").and_then(|t| t.as_str()),
+        Some("tool-result")
+    );
+    assert!(
+        replacements[0].get("message_uuid").is_none(),
+        "message_uuid must not be present — records key on tool_use_id"
+    );
+    assert_eq!(
+        replacements[0].get("tool_use_id").and_then(|t| t.as_str()),
+        Some("toolu_1")
+    );
+    assert_eq!(
+        replacements[0].get("replacement").and_then(|t| t.as_str()),
         Some("replacement")
     );
+}
+
+#[test]
+fn test_tool_result_transcript_serializes_as_user_message_with_tool_result_block() {
+    let tool_result = coco_messages::create_tool_result_message(
+        "toolu_1",
+        "Read",
+        coco_types::ToolId::Custom("Read".into()),
+        "file contents",
+        false,
+    );
+    let entries = transcript_entries_for_message(
+        &tool_result,
+        TranscriptEntryOptions {
+            session_id: "ss",
+            cwd: "/tmp",
+            timestamp: "2025-01-15T10:00:00Z",
+            parent_uuid: Some("assistant-uuid"),
+            logical_parent_uuid: None,
+            is_sidechain: false,
+            agent_id: None,
+            git_branch: None,
+        },
+    );
+    assert_eq!(entries.len(), 1);
+    let v = serde_json::to_value(&entries[0]).unwrap();
+    assert_eq!(v.get("type").and_then(|t| t.as_str()), Some("user"));
+    assert_ne!(v.get("type").and_then(|t| t.as_str()), Some("tool_result"));
+    let content = v
+        .pointer("/message/content")
+        .and_then(|t| t.as_array())
+        .expect("content blocks");
+    assert_eq!(content.len(), 1);
+    assert_eq!(
+        content[0].get("type").and_then(|t| t.as_str()),
+        Some("tool_result")
+    );
+    assert_eq!(
+        content[0].get("tool_use_id").and_then(|t| t.as_str()),
+        Some("toolu_1")
+    );
+    assert_eq!(
+        content[0].get("content").and_then(|t| t.as_str()),
+        Some("file contents")
+    );
+}
+
+#[test]
+fn test_append_message_chain_parents_tool_result_to_source_assistant() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "source-parent";
+    let user = coco_messages::create_user_message("read it");
+    let assistant = coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::ToolCall(
+            coco_messages::ToolCallContent::new(
+                "toolu_1".to_string(),
+                "Read".to_string(),
+                json!({"file_path": "a.txt"}),
+            ),
+        )],
+        "mock",
+        coco_types::TokenUsage::default(),
+    );
+    let assistant_uuid = assistant.uuid().copied().unwrap();
+    let hook_message = coco_messages::create_user_message("hook inserted context");
+    let tool_result = coco_messages::create_tool_result_message(
+        "toolu_1",
+        "Read",
+        coco_types::ToolId::Custom("Read".into()),
+        "file contents",
+        false,
+    );
+    let tool_result_uuid = tool_result.uuid().copied().unwrap();
+    let messages = [user, assistant, hook_message, tool_result];
+    let mut seen = std::collections::HashSet::new();
+
+    store
+        .append_message_chain(
+            sid,
+            messages.iter(),
+            &mut seen,
+            ChainWriteOptions {
+                cwd: "/tmp".into(),
+                timestamp: "2025-01-15T10:00:00Z".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let entries = store.load_transcript_messages(sid).unwrap();
+    let persisted_tool_result = entries
+        .iter()
+        .find(|entry| entry.uuid == tool_result_uuid.to_string())
+        .expect("tool result persisted");
+    assert_eq!(
+        persisted_tool_result.parent_uuid,
+        Some(assistant_uuid.to_string())
+    );
+}
+
+#[test]
+fn test_replay_metadata_filters_to_selected_chain_and_agent() {
+    // File-history snapshots key by the message the snapshot was
+    // attached to; the chain walk respects conversation order so
+    // entries for messages outside the chain are skipped.
+    // Content-replacement records key by `tool_use_id` only (TS
+    // `toolResultStorage.ts:475-479`) and are routed purely by
+    // `agentId` presence (TS `sessionStorage.ts:3682-3693`) — no
+    // per-message scope.
+    let chain_uuids: Vec<String> = vec!["msg-current".into()];
+    let entries = vec![
+        Entry::Metadata(MetadataEntry::FileHistorySnapshot {
+            message_id: "msg-stale".into(),
+            snapshot: json!({"message_id": "msg-stale", "v": "stale"}),
+            is_snapshot_update: false,
+        }),
+        Entry::Metadata(MetadataEntry::FileHistorySnapshot {
+            message_id: "msg-current".into(),
+            snapshot: json!({"message_id": "msg-current", "v": "current"}),
+            is_snapshot_update: false,
+        }),
+        Entry::Metadata(MetadataEntry::ContentReplacement {
+            session_id: "s".into(),
+            agent_id: None,
+            replacements: vec![
+                ContentReplacementRecord::tool_result("toolu_1", "stale"),
+                ContentReplacementRecord::tool_result("toolu_1", "current"),
+            ],
+        }),
+        Entry::Metadata(MetadataEntry::ContentReplacement {
+            session_id: "s".into(),
+            agent_id: Some("agent-a".into()),
+            replacements: vec![ContentReplacementRecord::tool_result("toolu_1", "agent")],
+        }),
+    ];
+
+    let snapshots = build_file_history_snapshot_chain(&entries, &chain_uuids);
+    assert_eq!(
+        snapshots,
+        vec![json!({"message_id": "msg-current", "v": "current"})]
+    );
+
+    // Main-thread (agent_id=None) returns both records — caller
+    // applies-in-order so the later "current" overrides the earlier
+    // "stale" by tool_use_id when seeding ContentReplacementState.
+    let main_replacements = content_replacements_for_chain(&entries, "s", None);
+    assert_eq!(main_replacements.len(), 2);
+    assert_eq!(main_replacements[0].replacement(), "stale");
+    assert_eq!(main_replacements[1].replacement(), "current");
+
+    let agent_replacements = content_replacements_for_chain(&entries, "s", Some("agent-a"));
+    assert_eq!(agent_replacements.len(), 1);
+    assert_eq!(agent_replacements[0].replacement(), "agent");
 }

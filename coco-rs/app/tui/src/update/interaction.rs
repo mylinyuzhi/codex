@@ -843,13 +843,13 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                 return;
             }
             ModalState::SessionBrowser(s) => {
-                if let Some(session) = filtered_sessions(&s).get(s.selected as usize) {
+                if let Some(session) = filtered_sessions(&s).get(s.selected as usize)
+                    && let Ok(name) = crate::state::SlashCommandName::new("resume")
+                {
                     let _ = command_tx
-                        .send(UserCommand::SubmitInput {
-                            user_message_id: uuid::Uuid::new_v4().to_string(),
-                            content: format!("/resume {}", session.id),
-                            display_text: None,
-                            images: Vec::new(),
+                        .send(UserCommand::ExecuteSlashCommand {
+                            name,
+                            args: session.id.clone(),
                         })
                         .await;
                 }

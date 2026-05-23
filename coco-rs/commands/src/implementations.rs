@@ -341,15 +341,9 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         // editor mode to ~/.coco/state/editor_mode.
         // /keybindings registered as async (handlers::keybindings::handler)
         // below — writes a template if the file is missing then opens $EDITOR.
-        (
-            names::REWIND,
-            "Restore the code and/or conversation to a previous point",
-            &["checkpoint"],
-            rewind_handler,
-            false,
-            LocalOnly,
-            None,
-        ),
+        // /rewind is registered by register_ts_parity_handlers below — the
+        // duplicate registration here was last-write-wins dead code; the
+        // parity-handler version owns the real handler.
         // ── PR-G4 batch 1 ──
         (
             names::ENV,
@@ -484,7 +478,8 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         (
             names::RESUME,
             "Resume a previous conversation",
-            &["continue"],
+            // Canonical name only; no /continue alias.
+            &[],
             resume_handler_async,
             /*overlay*/ true,
             LocalOnly,
@@ -666,14 +661,6 @@ fn plan_handler(args: &str) -> String {
             format!("Creating plan: {description}\nUse the EnterPlanMode tool to enter plan mode.")
         }
     }
-}
-
-fn rewind_handler(_args: &str) -> String {
-    // The TUI command palette intercepts /rewind and /checkpoint
-    // before this handler runs (`update/overlay.rs:441`) and opens
-    // the picker overlay. Args are intentionally ignored here — TS
-    // does the same; the picker is the only entry point.
-    "Opening rewind picker.".to_string()
 }
 
 fn branch_handler(args: &str) -> String {
@@ -1406,7 +1393,8 @@ pub fn register_ts_parity_handlers(
 ) {
     use coco_types::CommandSource;
 
-    // /rewind — TS: commands/rewind/rewind.ts
+    // /rewind — TS: commands/rewind/rewind.ts.
+    // Aliases intentionally not registered; canonical name only.
     {
         let base = crate::builtin_base_ext(
             names::REWIND,

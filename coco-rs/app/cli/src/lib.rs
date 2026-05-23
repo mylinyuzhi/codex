@@ -85,7 +85,7 @@ pub struct Cli {
     pub bg: bool,
 
     /// Resume a specific session by ID (shorthand for `resume <id>`).
-    #[arg(long)]
+    #[arg(long, short = 'r')]
     pub resume: Option<String>,
 
     /// Thinking budget for extended thinking mode.
