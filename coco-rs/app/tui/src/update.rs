@@ -690,66 +690,23 @@ pub async fn handle_command(
 
         // ── Task management ──
         TuiCommand::BackgroundAllTasks => {
-            // Single-press only path — TS parity with the live branch of
-            // `SessionBackgroundHint.tsx:44-52`:
-            //
-            // ```typescript
-            // if (hasForegroundTasks(state)) {
-            //   backgroundAll(...)
-            // } else if (isEnvTruthy("false") && isLoading) {  // ← kill switch
-            //   handleDoublePress()
-            // }
-            // ```
-            //
-            // The second branch is a hard-coded `false` gate in TS —
-            // `isEnvTruthy("false")` is the string `"false"` which always
-            // returns false. TS keeps the implementation (`useDoublePress`
-            // + `SessionBackgroundHint`) wired but never fires it because
-            // the underlying `BackgroundQueryAgent` (spawning a bg agent
-            // that inherits the in-flight query state) is not finished.
-            //
-            // coco-rs mirrors this: the scaffolding is preserved
-            // ([`crate::state::UiState::bg_tracker`],
-            // [`TuiCommand::BackgroundCurrentTurn`],
-            // [`UserCommand::BackgroundCurrentTurn`],
-            // [`crate::update::has_foreground_tasks`],
-            // [`crate::presentation::footer::is_running_in_tmux`] +
-            // the `status.background_again` locale key) but no key path
-            // currently arms the tracker. When TS unblocks the gate and
-            // ships its detached-agent executor, the call site here is
-            // the one place to re-enable: drop in the `else if turn_active
-            // && bg_tracker.poll(...) == Double` arm and the rest of the
-            // pipeline lights up.
+            // TS-parity single-press Ctrl+B (`SessionBackgroundHint.tsx`):
+            // background every foreground BgAgent. There is no wire
+            // event for the foreground→background transition, so the
+            // TUI mirror flips its own rows optimistically before
+            // dispatching the engine command. `is_backgrounded` is a
+            // sticky UI flag; the eventual `TaskCompleted` carries the
+            // real terminal status into `agent.status`.
             if has_foreground_tasks(state) {
-                // Optimistically flip the BgAgent subagent rows the user
-                // is about to background — TS aligns: there is no
-                // wire-level event for the foreground→background
-                // transition, so the TUI mirror has to update itself
-                // before the engine call. `Backgrounded` is a sticky UI
-                // state; when the underlying task actually terminates
-                // later, the normal `TaskCompleted` flow will overwrite
-                // to `Completed` / `Failed` based on the real status.
                 for agent in state.session.subagents.iter_mut() {
                     if matches!(agent.kind, crate::state::SubagentKind::Subagent)
                         && matches!(agent.status, crate::state::SubagentStatus::Running)
                     {
-                        agent.status = crate::state::SubagentStatus::Backgrounded;
+                        agent.is_backgrounded = true;
                     }
                 }
                 let _ = command_tx.send(UserCommand::BackgroundAllTasks).await;
             }
-            true
-        }
-        TuiCommand::BackgroundCurrentTurn => {
-            // Scaffolding kept for the future TS-mirror of double-press
-            // Ctrl+B (see `BackgroundAllTasks` arm above). No key path
-            // currently produces this variant — the dispatch table here
-            // is dead until the engine ships a real detached-turn
-            // executor that PRESERVES the in-flight query (vs. ESC
-            // which DISCARDS it). Wiring this to the existing cancel
-            // path would semantically duplicate ESC, which is exactly
-            // the bug we want to avoid until the proper executor lands.
-            let _ = command_tx.send(UserCommand::BackgroundCurrentTurn).await;
             true
         }
         TuiCommand::KillAllAgents => {
@@ -975,24 +932,15 @@ async fn apply_exit_effect(
     }
 }
 
-/// Whether any foreground tools / subagents are still running.
-///
-/// Currently the only consumer is the live single-press path in
-/// `TuiCommand::BackgroundAllTasks` — when `true`, Ctrl+B backgrounds
-/// the matching subagent / tool tasks. When `false`, Ctrl+B is a
-/// no-op (the double-press → `BackgroundCurrentTurn` arm is preserved
-/// as scaffolding but never armed; see `bg_tracker` docs).
-///
-/// `Backgrounded` subagents and non-`Running` tool executions do not
-/// count as foreground. `Queued` tools are intentionally excluded
-/// because TS `hasForegroundTasks` only counts active execution
-/// — adjust here once TS broadens the check.
-pub(crate) fn has_foreground_tasks(state: &AppState) -> bool {
-    let any_running_subagent = state
-        .session
-        .subagents
-        .iter()
-        .any(|s| matches!(s.status, crate::state::SubagentStatus::Running));
+/// Whether any foreground tools / subagents are still running. Drives
+/// the live Ctrl+B path in `TuiCommand::BackgroundAllTasks`. A
+/// subagent flipped to `is_backgrounded` no longer counts; `Queued`
+/// tool executions are excluded for parity with TS `hasForegroundTasks`.
+fn has_foreground_tasks(state: &AppState) -> bool {
+    let any_running_subagent =
+        state.session.subagents.iter().any(|s| {
+            matches!(s.status, crate::state::SubagentStatus::Running) && !s.is_backgrounded
+        });
     let any_running_tool = state
         .session
         .tool_executions

@@ -2156,6 +2156,16 @@ class ReasoningPart(BaseModel):
     text: str
     providerMetadata: ProviderMetadata | None = None
 
+class SdkSessionSummary(BaseModel):
+    created_at: str
+    cwd: str
+    model: str
+    session_id: str
+    message_count: int = 0
+    title: str | None = None
+    total_tokens: int = 0
+    updated_at: str | None = None
+
 class SessionModelUsage(BaseModel):
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
@@ -2339,6 +2349,7 @@ class ToolResultMessage(BaseModel):
     tool_use_id: str
     uuid: str
     is_error: bool = False
+    source_assistant_uuid: str | None = None
 
 class ToolResultPart(BaseModel):
     output: ToolResultContent

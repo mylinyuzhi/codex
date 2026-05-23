@@ -288,9 +288,10 @@ async fn escape_in_teammates_view_interrupts_focused_teammate_current_work() {
             team_name: None,
             tool_use_id: None,
             started_at_ms: None,
-            token_usage: None,
             last_tool_name: None,
             tool_count: 0,
+            total_tokens: 0,
+            is_backgrounded: false,
             final_message: None,
         });
     let (tx, mut rx) = drained_channel();
@@ -309,8 +310,9 @@ async fn escape_in_teammates_view_interrupts_focused_teammate_current_work() {
 async fn background_all_tasks_optimistically_flips_running_subagents() {
     // Ctrl+B emits no wire event for the foreground→background transition
     // (TS aligned). The TUI must flip its own Running BgAgent rows to
-    // Backgrounded inline before forwarding the engine command, otherwise
-    // the activity panel stays out of sync until the eventual TaskCompleted.
+    // is_backgrounded flipped inline before forwarding the engine command,
+    // otherwise the activity panel stays out of sync until the eventual
+    // TaskCompleted.
     let mut state = AppState::new();
     state
         .session
@@ -325,9 +327,10 @@ async fn background_all_tasks_optimistically_flips_running_subagents() {
             team_name: None,
             tool_use_id: Some("tu-1".into()),
             started_at_ms: None,
-            token_usage: None,
             last_tool_name: None,
             tool_count: 0,
+            total_tokens: 0,
+            is_backgrounded: false,
             final_message: None,
         });
     // A teammate row must NOT flip (only BgAgent subagents background).
@@ -344,24 +347,33 @@ async fn background_all_tasks_optimistically_flips_running_subagents() {
             team_name: Some("team".into()),
             tool_use_id: None,
             started_at_ms: None,
-            token_usage: None,
             last_tool_name: None,
             tool_count: 0,
+            total_tokens: 0,
+            is_backgrounded: false,
             final_message: None,
         });
     let (tx, mut rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::BackgroundAllTasks, &tx).await;
 
+    assert!(
+        state.session.subagents[0].is_backgrounded,
+        "BgAgent subagent must flip is_backgrounded inline"
+    );
     assert_eq!(
         state.session.subagents[0].status,
-        crate::state::SubagentStatus::Backgrounded,
-        "BgAgent subagent must flip to Backgrounded inline"
+        crate::state::SubagentStatus::Running,
+        "Backgrounded BgAgent keeps Running status until TaskCompleted lands"
+    );
+    assert!(
+        !state.session.subagents[1].is_backgrounded,
+        "Teammate must NOT be backgrounded by Ctrl+B"
     );
     assert_eq!(
         state.session.subagents[1].status,
         crate::state::SubagentStatus::Running,
-        "Teammate must NOT be affected by Ctrl+B"
+        "Teammate status unchanged"
     );
     match rx.try_recv() {
         Ok(UserCommand::BackgroundAllTasks) => {}

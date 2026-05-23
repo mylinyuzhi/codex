@@ -23,9 +23,10 @@ fn subagent() -> SubagentInstance {
         team_name: None,
         tool_use_id: None,
         started_at_ms: None,
-        token_usage: None,
         last_tool_name: None,
         tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: false,
         final_message: None,
     }
 }

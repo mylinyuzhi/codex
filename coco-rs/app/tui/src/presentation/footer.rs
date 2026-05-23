@@ -127,29 +127,6 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
         spans.push(FooterSpan::bold(hint, FooterTone::Warning));
     }
 
-    if state.ui.bg_tracker.pending().is_some() {
-        // **Currently dead branch** — `bg_tracker` is never polled so
-        // `pending()` always returns `None`. Kept as scaffolding for
-        // the future TS-mirror of double-press Ctrl+B (see
-        // [`crate::state::UiState::bg_tracker`] and
-        // `TuiCommand::BackgroundAllTasks` in `update.rs` for context).
-        //
-        // When TS unblocks its `isEnvTruthy("false")` gate, the
-        // dispatch in `update.rs` will start arming the tracker on
-        // first press; this hint then lights up "press ctrl+b again
-        // to background session" (or the tmux double-prefix variant).
-        let key_label = if is_running_in_tmux() {
-            "ctrl+b ctrl+b (twice)"
-        } else {
-            "ctrl+b"
-        };
-        separator(&mut spans);
-        spans.push(FooterSpan::bold(
-            t!("status.background_again", key = key_label).to_string(),
-            FooterTone::Warning,
-        ));
-    }
-
     if let Some(warning) = state.ui.terminal_compatibility_warning.as_ref() {
         separator(&mut spans);
         spans.push(FooterSpan::bold(warning.clone(), FooterTone::Warning));
@@ -228,15 +205,6 @@ fn permission_mode_status_label(mode: PermissionMode) -> Option<(String, FooterT
         PermissionMode::Bubble => ("permission_mode.status.bubble", FooterTone::Dim),
     };
     Some((t!(key).to_string(), tone))
-}
-
-/// Detect tmux to adjust the Ctrl+B hint count. In tmux, Ctrl+B is the
-/// default prefix key, so the first press is intercepted by tmux itself;
-/// users must press it twice for the terminal to see one Ctrl+B. The
-/// hint adapts so the count matches what the user actually has to do.
-/// TS parity: `BashTool/UI.tsx` (env.terminal === "tmux" branch).
-fn is_running_in_tmux() -> bool {
-    std::env::var("TMUX").is_ok()
 }
 
 pub(crate) fn format_token_count(count: i64) -> String {

@@ -394,6 +394,7 @@ pub use task::TeammateRef;
 pub use task::TeammateTaskMessage;
 pub use task::generate_bg_agent_id;
 pub use task::generate_task_id;
+pub use task::task_type_wire;
 pub use task_list::ExpandedView;
 pub use task_list::TaskClaimOutcome;
 pub use task_list::TaskListStatus;

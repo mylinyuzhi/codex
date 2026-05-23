@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ServerNotification",
-  "description": "Protocol-level notifications visible to all consumers.\n\n62 variants across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`bg_agent` / `in_process_teammate`), matching TS — no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
+  "description": "Protocol-level notifications visible to all consumers.\n\n62 variants across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`), matching TS — no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
   "oneOf": [
     {
       "description": "New session started.",
@@ -4540,7 +4540,7 @@
       ]
     },
     "SystemMessage": {
-      "description": "System messages have sub-types for different notification kinds.\nAll system messages are `role: \"user\"` with `is_meta: true` for the API.",
+      "description": "System messages have sub-types for different notification kinds.\nAll system messages are `role: \"user\"` with `is_meta: true` for the API.\n\nWire discriminator is `kind`, matching the rest of the coco-rs\nclosed-set enums (`PermissionRule`, `ContentReplacementRecord`,\n`event::*`). The semantic taxonomy (compact_boundary,\nmicrocompact_boundary, …) matches TS `subtype:` values, but we\ndon't mirror the field name — see `coco-session::storage` doc for\nthe snake_case wire policy.",
       "oneOf": [
         {
           "type": "object",
@@ -6122,6 +6122,13 @@
         },
         "message": {
           "$ref": "#/$defs/LanguageModelV4Message"
+        },
+        "source_assistant_uuid": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
         },
         "tool_id": {
           "type": "string"

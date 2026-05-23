@@ -20,6 +20,8 @@
 //! §12 for the consumer routing matrix.
 
 use coco_types::ServerNotification;
+use coco_types::TaskStartedParams;
+use coco_types::task_type_wire;
 
 use crate::i18n::t;
 use crate::state::AppState;
@@ -287,92 +289,23 @@ pub(super) fn handle(
 
         // === Task ===
         ServerNotification::TaskStarted(p) => {
-            // TS-aligned spawn projection. Mirror of TS's two parallel
-            // writes in `spawnMultiAgent.ts:452-486`:
-            //   1. `setAppState(... teamContext.teammates[id] = {...} )`
-            //      — teammate roster metadata (only for teammates)
-            //   2. `registerOutOfProcessTeammateTask(...)` → enqueues
-            //      `task_started` SDK event with `task_type`
-            // coco-rs runs single-process React for the SDK consumer's
-            // view, but our TUI sits across a process boundary, so the
-            // teammate roster fields ride along on `TaskStarted` as
-            // optional metadata (`agent_name` / `team_name` / `color`
-            // / `backend_kind`). Subagent (BgAgent) rows leave them
-            // `None` — they're discriminated by `task_type ==
-            // "local_agent"` and identified by `task_id`.
+            // TS-aligned spawn projection. TS sets the teammate roster
+            // sidecar through `setAppState(... teamContext.teammates[id]
+            // = {...})` in the same process the SDK consumer reads; our
+            // TUI sits across a process boundary so the same metadata
+            // (`agent_name` / `team_name` / `color` / `backend_kind`)
+            // rides on `TaskStarted` for teammate rows only.
             //
-            // TS-canonical wire strings (see `Task.ts:6-13` and
-            // `coco_tasks::task_type_wire_name`):
-            //   `"local_agent"` — Agent-tool subagent worker
-            //                     (coco-rs `TaskType::BgAgent`)
-            //   `"in_process_teammate"` — Coordinator persistent
-            //                             teammate
-            //   `"local_bash"` / `"dream"` / `"remote_agent"` — not
-            //       projected into `session.subagents`
+            // Subagent (BgAgent) rows leave those `None` — they're
+            // discriminated by `task_type == "local_agent"` and identified
+            // by `task_id`. See `coco_tasks::task_type_wire_name` for the
+            // TS-canonical wire strings (`Task.ts:6-13`).
             match p.task_type.as_deref() {
-                Some("local_agent") => {
-                    let already_tracked = state
-                        .session
-                        .subagents
-                        .iter()
-                        .any(|a| a.agent_id == p.task_id);
-                    if !already_tracked {
-                        state.session.subagents.push(SubagentInstance {
-                            kind: SubagentKind::Subagent,
-                            agent_id: p.task_id.clone(),
-                            // BgAgentExtras carries agent_type / color
-                            // server-side but `TaskStartedParams` doesn't
-                            // surface them yet — TS bridges the same way
-                            // (the `task_started` SDK event omits the
-                            // agent_type for BgAgent rows; the teammate
-                            // metadata fields stay None). Extend
-                            // `TaskStartedParams` if the activity panel
-                            // needs the agent identity later.
-                            agent_type: "subagent".to_string(),
-                            description: p.description.clone(),
-                            status: SubagentStatus::Running,
-                            color: None,
-                            team_name: None,
-                            tool_use_id: p.tool_use_id.clone(),
-                            started_at_ms: Some(crate::state::session::now_ms()),
-                            token_usage: None,
-                            last_tool_name: None,
-                            tool_count: 0,
-                            final_message: None,
-                        });
-                    }
+                Some(s) if s == task_type_wire::LOCAL_AGENT => {
+                    ensure_subagent_row(state, SubagentKind::Subagent, &p);
                 }
-                Some("in_process_teammate") => {
-                    let already_tracked = state
-                        .session
-                        .subagents
-                        .iter()
-                        .any(|a| a.agent_id == p.task_id);
-                    if !already_tracked {
-                        state.session.subagents.push(SubagentInstance {
-                            kind: SubagentKind::Teammate,
-                            agent_id: p.task_id.clone(),
-                            // `agent_name` is the teammate's bare name;
-                            // fall back to the `name@team` task_id when
-                            // the engine didn't populate the optional
-                            // field (older emitters / hand-crafted
-                            // payloads).
-                            agent_type: p.agent_name.clone().unwrap_or_else(|| p.task_id.clone()),
-                            description: p.description.clone(),
-                            status: SubagentStatus::Running,
-                            color: p.color.clone(),
-                            team_name: p.team_name.clone().filter(|s| !s.is_empty()),
-                            // Teammates have no originating Agent-tool
-                            // call — `tool_use_id` is reserved for the
-                            // Agent-tool → BgAgent linkage.
-                            tool_use_id: None,
-                            started_at_ms: Some(crate::state::session::now_ms()),
-                            token_usage: None,
-                            last_tool_name: None,
-                            tool_count: 0,
-                            final_message: None,
-                        });
-                    }
+                Some(s) if s == task_type_wire::IN_PROCESS_TEAMMATE => {
+                    ensure_subagent_row(state, SubagentKind::Teammate, &p);
                 }
                 _ => {}
             }
@@ -384,7 +317,7 @@ pub(super) fn handle(
             true
         }
         ServerNotification::TaskCompleted(p) => {
-            let status = match p.status {
+            let entry_status = match p.status {
                 coco_types::TaskCompletionStatus::Completed => TaskEntryStatus::Completed,
                 coco_types::TaskCompletionStatus::Failed => TaskEntryStatus::Failed,
                 coco_types::TaskCompletionStatus::Stopped => TaskEntryStatus::Stopped,
@@ -395,11 +328,14 @@ pub(super) fn handle(
                 .iter_mut()
                 .find(|t| t.task_id == p.task_id)
             {
-                task.status = status;
+                task.status = entry_status;
             }
             // Mirror onto the SubagentInstance projection — pair with the
-            // BgAgent bridge in `TaskStarted` so subagent rows transition
-            // out of `Running` when the underlying BgAgent task lands.
+            // BgAgent bridge in `TaskStarted`. `Stopped` (wire mapping of
+            // `TaskStatus::Killed`) is a terminal failure from the user's
+            // perspective; the orthogonal `is_backgrounded` flag is owned
+            // by the optimistic Ctrl+B flip in `update.rs`, never by a
+            // terminal status.
             if let Some(agent) = state
                 .session
                 .subagents
@@ -408,19 +344,11 @@ pub(super) fn handle(
             {
                 agent.status = match p.status {
                     coco_types::TaskCompletionStatus::Completed => SubagentStatus::Completed,
-                    coco_types::TaskCompletionStatus::Failed => SubagentStatus::Failed,
-                    coco_types::TaskCompletionStatus::Stopped => SubagentStatus::Backgrounded,
+                    coco_types::TaskCompletionStatus::Failed
+                    | coco_types::TaskCompletionStatus::Stopped => SubagentStatus::Failed,
                 };
                 if !p.summary.is_empty() {
-                    let trimmed = p.summary.lines().next().unwrap_or(&p.summary);
-                    let preview = if trimmed.chars().count() > 80 {
-                        let mut out: String = trimmed.chars().take(80).collect();
-                        out.push('…');
-                        out
-                    } else {
-                        trimmed.to_string()
-                    };
-                    agent.final_message = Some(preview);
+                    agent.final_message = Some(preview_summary(&p.summary, 80));
                 }
             }
             true
@@ -438,17 +366,19 @@ pub(super) fn handle(
             // ::identity` in coco-types). Mirror the progress counters
             // onto the matching `SubagentInstance` so the activity
             // panel can render `<last_tool> · N tools · M tok` like
-            // TS `AgentProgressLine`. The Vec walk is O(n_subagents) per
-            // tick; with the typical 1–8 active subagents per session
-            // this is well under a microsecond.
+            // TS `AgentProgressLine`. Counters are monotonically maxed
+            // so an out-of-order snapshot can't roll them backwards.
             if let Some(agent) = state
                 .session
                 .subagents
                 .iter_mut()
                 .find(|a| a.agent_id == p.task_id)
             {
-                agent.last_tool_name = p.last_tool_name.clone();
-                agent.tool_count = p.usage.tool_uses;
+                if p.last_tool_name.is_some() {
+                    agent.last_tool_name = p.last_tool_name.clone();
+                }
+                agent.tool_count = agent.tool_count.max(p.usage.tool_uses);
+                agent.total_tokens = agent.total_tokens.max(p.usage.total_tokens);
             }
             true
         }
@@ -1258,6 +1188,77 @@ fn apply_auto_restore(
             "apply_auto_restore: failed to dispatch Rewind AutoRestore",
         );
     }
+}
+
+/// Push (or no-op dedupe) a `SubagentInstance` row for the given
+/// [`TaskStartedParams`]. Teammate-only metadata (`agent_name`,
+/// `team_name`, `color`) is only consulted for [`SubagentKind::Teammate`];
+/// BgAgent rows leave those `None` because their wire payload does too.
+fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStartedParams) {
+    if state
+        .session
+        .subagents
+        .iter()
+        .any(|a| a.agent_id == p.task_id)
+    {
+        return;
+    }
+    let (agent_type, color, team_name, tool_use_id) = match kind {
+        SubagentKind::Subagent => {
+            // `TaskStartedParams` doesn't yet surface the BgAgent's
+            // declared agent_type (Explore / Plan / Review / …) — TS
+            // bridges via a parallel `SubagentTypeAttachment`. Until
+            // that lands, fall back to the wire literal so the badge
+            // is at least non-empty.
+            (
+                task_type_wire::LOCAL_AGENT.to_string(),
+                None,
+                None,
+                p.tool_use_id.clone(),
+            )
+        }
+        SubagentKind::Teammate => {
+            // `agent_name` is the bare name; fall back to the
+            // `name@team` task_id when older emitters didn't
+            // populate it.
+            (
+                p.agent_name.clone().unwrap_or_else(|| p.task_id.clone()),
+                p.color.clone(),
+                p.team_name.clone().filter(|s| !s.is_empty()),
+                // Teammates have no originating Agent-tool call.
+                None,
+            )
+        }
+    };
+    state.session.subagents.push(SubagentInstance {
+        kind,
+        agent_id: p.task_id.clone(),
+        agent_type,
+        description: p.description.clone(),
+        status: SubagentStatus::Running,
+        color,
+        team_name,
+        tool_use_id,
+        started_at_ms: Some(crate::state::session::now_ms()),
+        last_tool_name: None,
+        tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: false,
+        final_message: None,
+    });
+}
+
+/// First line of `text`, char-truncated to `max_chars - 1` glyphs plus
+/// an ellipsis when truncation actually fires. The `-1` accounts for the
+/// ellipsis so the final visible width never exceeds `max_chars`.
+fn preview_summary(text: &str, max_chars: usize) -> String {
+    let trimmed = text.lines().next().unwrap_or(text);
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 #[cfg(test)]

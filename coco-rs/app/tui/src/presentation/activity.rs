@@ -8,7 +8,6 @@ use crate::constants;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::SubagentStatus;
-use crate::state::TokenUsage;
 use crate::state::session::TaskEntryStatus;
 use crate::state::session::ToolStatus;
 
@@ -347,23 +346,30 @@ fn append_plan_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
 fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
     for (i, agent) in state.session.subagents.iter().enumerate() {
         let is_focused = state.session.focused_subagent_index == Some(i as i32);
-        let (icon, tone) = match agent.status {
-            SubagentStatus::Running => ("●", ActivityTone::Running),
-            SubagentStatus::Completed => ("✓", ActivityTone::Completed),
-            SubagentStatus::Backgrounded => ("◐", ActivityTone::Dim),
-            SubagentStatus::Failed => ("✗", ActivityTone::Error),
+        // Backgrounded is orthogonal to status — a Running agent flipped
+        // to background renders with the dim half-circle so the user can
+        // tell it's detached but still alive.
+        let (icon, tone) = if agent.is_backgrounded {
+            ("◐", ActivityTone::Dim)
+        } else {
+            match agent.status {
+                SubagentStatus::Running => ("●", ActivityTone::Running),
+                SubagentStatus::Completed => ("✓", ActivityTone::Completed),
+                SubagentStatus::Failed => ("✗", ActivityTone::Error),
+            }
         };
         let focus_marker = if is_focused { "▸ " } else { "  " };
         // Kind badge: differentiate TS `InProcessTeammateTask` (persistent
         // team member, `@name` prefix) from `LocalAgentTask` (Agent-tool
         // worker, plain agent_type). Mirrors TS `TeammateSpinnerLine`'s
         // `@{agentName}` rendering vs `AgentProgressLine`'s plain label.
+        let agent_type = &agent.agent_type;
         let label = match agent.kind {
-            crate::state::SubagentKind::Teammate => match &agent.team_name {
-                Some(team) => format!("@{}@{}", agent.agent_type, team),
-                None => format!("@{}", agent.agent_type),
+            crate::state::SubagentKind::Teammate => match agent.team_name.as_deref() {
+                Some(team) => format!("@{agent_type}@{team}"),
+                None => format!("@{agent_type}"),
             },
-            crate::state::SubagentKind::Subagent => agent.agent_type.clone(),
+            crate::state::SubagentKind::Subagent => agent_type.clone(),
         };
         let mut spans = vec![
             ActivitySpan::raw(focus_marker),
@@ -378,14 +384,11 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
                 ActivityTone::Dim,
             ));
         }
-        if let Some(tokens) = agent.token_usage.as_ref() {
-            let total = tokens.input_tokens + tokens.output_tokens;
-            if total > 0 {
-                spans.push(ActivitySpan::tone(
-                    format!(" ↕{}", format_short_tokens(total)),
-                    ActivityTone::Dim,
-                ));
-            }
+        if agent.total_tokens > 0 {
+            spans.push(ActivitySpan::tone(
+                format!(" ↕{}", format_short_tokens(agent.total_tokens)),
+                ActivityTone::Dim,
+            ));
         }
         lines.push(ActivityLine { spans });
 
@@ -444,8 +447,11 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             }
         }
 
-        // Backgrounded → hint the user how to bring it back.
-        if matches!(agent.status, SubagentStatus::Backgrounded) {
+        // Backgrounded but still alive — hint the user how to bring it back.
+        // After the underlying task terminates the flag stays set but the
+        // status icon already conveys the outcome, so the hint stays useful
+        // only while running.
+        if agent.is_backgrounded && matches!(agent.status, SubagentStatus::Running) {
             lines.push(ActivityLine {
                 spans: vec![
                     ActivitySpan::raw("      "),
@@ -493,14 +499,11 @@ fn append_coordinator_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             ActivitySpan::raw(desc),
             ActivitySpan::tone(" 0s", ActivityTone::Dim),
         ];
-        if let Some(tokens) = agent.token_usage.as_ref() {
-            let total = total_tokens(tokens);
-            if total > 0 {
-                spans.push(ActivitySpan::tone(
-                    format!(" ↕{}", format_short_tokens(total)),
-                    ActivityTone::Dim,
-                ));
-            }
+        if agent.total_tokens > 0 {
+            spans.push(ActivitySpan::tone(
+                format!(" ↕{}", format_short_tokens(agent.total_tokens)),
+                ActivityTone::Dim,
+            ));
         }
         lines.push(ActivityLine { spans });
     }
@@ -609,10 +612,6 @@ fn format_short_tokens(total: i64) -> String {
     } else {
         format!("{:.1}k", total as f64 / 1_000.0)
     }
-}
-
-fn total_tokens(tokens: &TokenUsage) -> i64 {
-    tokens.input_tokens + tokens.output_tokens
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {

@@ -26,9 +26,10 @@ fn test_coordinator_task_from_subagent_running() {
         team_name: None,
         tool_use_id: None,
         started_at_ms: None,
-        token_usage: None,
         last_tool_name: None,
         tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: false,
         final_message: None,
     };
     let task = CoordinatorTask::from_subagent(&instance);
@@ -53,9 +54,10 @@ fn test_coordinator_task_from_subagent_completed_not_running() {
         team_name: None,
         tool_use_id: None,
         started_at_ms: None,
-        token_usage: None,
         last_tool_name: None,
         tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: false,
         final_message: None,
     };
     assert!(
@@ -65,27 +67,50 @@ fn test_coordinator_task_from_subagent_completed_not_running() {
 }
 
 #[test]
-fn test_coordinator_task_from_subagent_failed_or_backgrounded_not_running() {
+fn test_coordinator_task_from_subagent_failed_not_running() {
     use crate::state::{SubagentInstance, SubagentStatus};
-    for status in [SubagentStatus::Failed, SubagentStatus::Backgrounded] {
-        let instance = SubagentInstance {
-            kind: crate::state::session::SubagentKind::Subagent,
-            agent_id: "agent-x".into(),
-            agent_type: "general-purpose".into(),
-            description: "doing stuff".into(),
-            status,
-            color: None,
-            team_name: None,
-            tool_use_id: None,
-            started_at_ms: None,
-            token_usage: None,
-            last_tool_name: None,
-            tool_count: 0,
-            final_message: None,
-        };
-        assert!(
-            !CoordinatorTask::from_subagent(&instance).is_running,
-            "{status:?} must not register as is_running"
-        );
-    }
+    let instance = SubagentInstance {
+        kind: crate::state::session::SubagentKind::Subagent,
+        agent_id: "agent-x".into(),
+        agent_type: "general-purpose".into(),
+        description: "doing stuff".into(),
+        status: SubagentStatus::Failed,
+        color: None,
+        team_name: None,
+        tool_use_id: None,
+        started_at_ms: None,
+        last_tool_name: None,
+        tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: false,
+        final_message: None,
+    };
+    assert!(
+        !CoordinatorTask::from_subagent(&instance).is_running,
+        "Failed must not register as is_running"
+    );
+}
+
+#[test]
+fn test_coordinator_task_from_subagent_backgrounded_running_still_is_running() {
+    // is_backgrounded is orthogonal to status. A Running subagent that
+    // the user backgrounded is still actively running.
+    use crate::state::{SubagentInstance, SubagentStatus};
+    let instance = SubagentInstance {
+        kind: crate::state::session::SubagentKind::Subagent,
+        agent_id: "agent-y".into(),
+        agent_type: "general-purpose".into(),
+        description: "doing stuff".into(),
+        status: SubagentStatus::Running,
+        color: None,
+        team_name: None,
+        tool_use_id: None,
+        started_at_ms: None,
+        last_tool_name: None,
+        tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: true,
+        final_message: None,
+    };
+    assert!(CoordinatorTask::from_subagent(&instance).is_running);
 }

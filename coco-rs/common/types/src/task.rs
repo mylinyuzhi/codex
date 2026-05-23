@@ -219,6 +219,35 @@ pub enum TaskType {
     Dream,
 }
 
+impl TaskType {
+    /// TS-canonical wire string for the `task_type` field on the
+    /// `task/started`, `task/progress`, and `task/completed` events.
+    /// Pinned to `Task.ts:6-13` — see [`task_type_wire`] for the same
+    /// constants exposed as module items, useful when matching against
+    /// `Option<String>` from a deserialized payload.
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Shell => task_type_wire::LOCAL_BASH,
+            Self::BgAgent => task_type_wire::LOCAL_AGENT,
+            Self::Teammate => task_type_wire::IN_PROCESS_TEAMMATE,
+            Self::RemoteTeammate => task_type_wire::REMOTE_AGENT,
+            Self::Dream => task_type_wire::DREAM,
+        }
+    }
+}
+
+/// TS-canonical wire-string constants for [`TaskType`]. Use these on
+/// both producer and consumer sides instead of raw string literals —
+/// drift between [`TaskType::wire_name`] and a match arm becomes a
+/// compile error rather than a silent miss.
+pub mod task_type_wire {
+    pub const LOCAL_BASH: &str = "local_bash";
+    pub const LOCAL_AGENT: &str = "local_agent";
+    pub const IN_PROCESS_TEAMMATE: &str = "in_process_teammate";
+    pub const REMOTE_AGENT: &str = "remote_agent";
+    pub const DREAM: &str = "dream";
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {

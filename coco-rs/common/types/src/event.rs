@@ -271,7 +271,7 @@ raw wire strings.",
 Protocol-level notifications visible to all consumers.\n\n\
 62 variants across 20 categories. Subagent lifecycle (spawn / progress / \
 completion / background transition) rides on `task/started`, `task/progress`, \
-and `task/completed` with `task_type` discriminating (`bg_agent` / \
+and `task/completed` with `task_type` discriminating (`local_agent` / \
 `in_process_teammate`), matching TS — no dedicated `subagent/*` family. \
 See `event-system-design.md` Section 2 and \
 `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle \

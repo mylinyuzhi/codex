@@ -547,10 +547,18 @@ impl TaskManager {
             }
             row.status = status;
             row.end_time = Some(current_time_ms());
-            // Dream tasks complete silently — auto-mark notified so
-            // `remove_completed` can evict them without waiting for a
-            // surface that will never read the result. Symmetric with
-            // `kill_running` which already auto-notifies Shell + Dream.
+            // Dream tasks have no model-facing `<task-notification>`
+            // envelope (UI-only). Auto-mark notified so
+            // `remove_completed` evicts them without waiting for a reader.
+            //
+            // Shell is intentionally NOT auto-notified here: the natural
+            // completion path runs through `apply_shell_terminal_state`,
+            // which itself claims the notification slot via
+            // `mark_notified_once` to compose the model-visible
+            // `<shell-terminal>` envelope. Pre-setting `notified` would
+            // suppress that producer. The asymmetry with `kill_running`
+            // is deliberate: kill_running runs ahead of the producer to
+            // ensure the cancellation path skips the duplicate envelope.
             if matches!(row.task_type(), TaskType::Dream) {
                 row.notified = true;
             }
@@ -905,28 +913,26 @@ fn current_time_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// TS-canonical `task_type` discriminator for the `task/*` SDK events.
-/// Pinned to the variants in `Task.ts:6-13` (the only authoritative
-/// source — `bg_agent` / `teammate` / `shell` were a coco-rs invention
-/// and never existed in TS). Drift here will break the TUI projection
-/// in `app/tui/src/server_notification_handler/protocol.rs` which keys
-/// off these exact strings.
+/// Re-export of [`TaskType::wire_name`] kept as a free function for
+/// callers that already imported it under this path. The canonical
+/// definition lives on [`TaskType`] in `coco_types` so the matching
+/// `coco_types::task_type_wire` constants stay paired with it.
 pub fn task_type_wire_name(task_type: TaskType) -> &'static str {
-    match task_type {
-        TaskType::Shell => "local_bash",
-        TaskType::BgAgent => "local_agent",
-        TaskType::Teammate => "in_process_teammate",
-        TaskType::RemoteTeammate => "remote_agent",
-        TaskType::Dream => "dream",
-    }
+    task_type.wire_name()
 }
 
+/// Map the terminal [`TaskStatus`] onto the SDK-facing
+/// [`TaskCompletionStatus`]. Only called from [`TaskManager::emit_task_completed`],
+/// which itself only fires after [`TaskManager::transition_terminal`] has set
+/// a terminal status. A `Pending` / `Running` value here is a caller bug.
 fn task_status_to_completion(status: TaskStatus) -> TaskCompletionStatus {
     match status {
         TaskStatus::Completed => TaskCompletionStatus::Completed,
         TaskStatus::Failed => TaskCompletionStatus::Failed,
         TaskStatus::Killed => TaskCompletionStatus::Stopped,
-        TaskStatus::Pending | TaskStatus::Running => TaskCompletionStatus::Completed,
+        TaskStatus::Pending | TaskStatus::Running => {
+            unreachable!("emit_task_completed called with non-terminal status {status:?}")
+        }
     }
 }
 

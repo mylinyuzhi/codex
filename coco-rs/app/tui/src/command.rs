@@ -259,15 +259,6 @@ pub enum UserCommand {
     /// Background all foreground tasks. Sent by the live single-press
     /// Ctrl+B path (`TuiCommand::BackgroundAllTasks` in update.rs).
     BackgroundAllTasks,
-    /// Background the currently-running turn — **scaffolding only**.
-    /// No TUI key path currently produces this variant; the
-    /// `tui_runner.rs` handler is wired but inert. Mirrors TS's
-    /// `handleBackgroundQuery` which spawns a detached
-    /// `BackgroundQueryAgent` carrying the in-flight query state.
-    /// coco-rs will route this to a real detached-turn executor when
-    /// that lands; until then, wiring this would semantically duplicate
-    /// `Interrupt` (which discards work) instead of preserving it.
-    BackgroundCurrentTurn,
     /// Kill all running agents.
     KillAllAgents,
     /// Toggle fast mode.

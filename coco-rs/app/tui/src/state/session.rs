@@ -593,12 +593,12 @@ pub enum ToolStatus {
 
 /// Subagent instance tracking.
 ///
-/// `started_at_ms` and `token_usage` are optional so the TUI can render
-/// elapsed-time / token-cost telemetry alongside the spinner line —
-/// TS parity with `CoordinatorAgentStatus.tsx`. The protocol handler
-/// populates them on `SubagentStarted` / `SubagentTokens` notifications
-/// when available, and the renderer hides each field when unset rather
-/// than synthesising fake zeros.
+/// TS parity with `CoordinatorAgentStatus.tsx` / `AgentProgressLine` /
+/// `TeammateSpinnerLine`. Lifecycle is split into two orthogonal axes:
+/// terminal lifecycle in [`SubagentStatus`], and the UI-only
+/// foreground-vs-background flag in [`Self::is_backgrounded`]. A task
+/// can be backgrounded while still `Running` (TS: `task.status ===
+/// 'running' && task.extras.isBackgrounded`).
 #[derive(Debug, Clone)]
 pub struct SubagentInstance {
     /// Which TS concept this row tracks. See [`SubagentKind`].
@@ -622,9 +622,6 @@ pub struct SubagentInstance {
     /// protocol handler hasn't populated it yet. The renderer shows
     /// `elapsed = now - started_at` only when this is set.
     pub started_at_ms: Option<i64>,
-    /// Cumulative token usage for this teammate. The renderer shows
-    /// `↑input ↓output` arrows so the user sees direction at a glance.
-    pub token_usage: Option<TokenUsage>,
     /// Most recently dispatched tool. Mirror of `TaskProgress.last_tool_name`
     /// for BgAgent rows so the AgentProgressLine subline can render
     /// `<tool> · N tools · M tok` like the TS reference. `None` before
@@ -632,21 +629,31 @@ pub struct SubagentInstance {
     pub last_tool_name: Option<String>,
     /// Cumulative tool invocation count. Lifted from `TaskProgress.usage.tool_uses`
     /// for parity with TS `AgentProgressLine`'s "8 tool uses" metric.
-    /// Width matches `TaskUsage.tool_uses` (i32) so no widening cast is
-    /// needed at the bridge site.
+    /// Monotonically maxed at the bridge so out-of-order progress
+    /// snapshots don't roll the counter backwards.
     pub tool_count: i32,
+    /// Cumulative total token count. Mirror of
+    /// `TaskProgress.usage.total_tokens` — monotonically maxed for the
+    /// same reason as [`Self::tool_count`]. Zero means "not yet reported".
+    pub total_tokens: i64,
+    /// UI-only flag for the foreground→background transition (Ctrl+B).
+    /// Not produced by any wire event — the optimistic flip lives in
+    /// `update::handle_command(TuiCommand::BackgroundAllTasks)`. TS:
+    /// `task.extras.isBackgrounded`, orthogonal to status.
+    pub is_backgrounded: bool,
     /// Final assistant message after the subagent completes — first
     /// 80 chars rendered inline so the user sees the closing statement
     /// without expanding the transcript.
     pub final_message: Option<String>,
 }
 
-/// Subagent lifecycle status.
+/// Subagent lifecycle status. Mirrors the terminal axis of TS
+/// `TaskStatus` filtered down to what the TUI displays. The orthogonal
+/// foreground/background axis lives on [`SubagentInstance::is_backgrounded`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubagentStatus {
     Running,
     Completed,
-    Backgrounded,
     Failed,
 }
 

@@ -248,12 +248,6 @@ pub enum TuiCommand {
     /// least one foreground subagent / tool execution is running —
     /// see `update.rs::TuiCommand::BackgroundAllTasks` dispatch.
     BackgroundAllTasks,
-    /// Background the currently-running turn (future Ctrl+B double
-    /// press path when no foreground tools are running). **Scaffolding
-    /// only — not produced by any current key dispatch.** Mirrors TS's
-    /// kill-switched `handleBackgroundQuery` path. See
-    /// `state/ui.rs::bg_tracker` docs for the activation conditions.
-    BackgroundCurrentTurn,
     /// Kill all running agents.
     KillAllAgents,
 

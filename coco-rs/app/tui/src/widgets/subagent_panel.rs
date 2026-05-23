@@ -129,11 +129,17 @@ impl Widget for SubagentPanel<'_> {
         for (i, agent) in self.subagents.iter().enumerate() {
             let is_focused = self.focused_index == Some(i as i32);
 
-            let (icon, color) = match agent.status {
-                SubagentStatus::Running => ("●", self.styles.tool_running()),
-                SubagentStatus::Completed => ("✓", self.styles.tool_completed()),
-                SubagentStatus::Backgrounded => ("◐", self.styles.dim()),
-                SubagentStatus::Failed => ("✗", self.styles.tool_error()),
+            // Backgrounded is orthogonal to status — dim half-circle
+            // when detached but still alive (status flips later to its
+            // terminal value).
+            let (icon, color) = if agent.is_backgrounded {
+                ("◐", self.styles.dim())
+            } else {
+                match agent.status {
+                    SubagentStatus::Running => ("●", self.styles.tool_running()),
+                    SubagentStatus::Completed => ("✓", self.styles.tool_completed()),
+                    SubagentStatus::Failed => ("✗", self.styles.tool_error()),
+                }
             };
 
             // TS parity: BLACK_CIRCLE for the currently-viewed agent,
@@ -166,14 +172,11 @@ impl Widget for SubagentPanel<'_> {
             // `↑input ↓output` separately; coco-rs collapses to the
             // total because the compact activity surface is narrow and the
             // direction is less actionable than the magnitude.
-            if let Some(tokens) = agent.token_usage.as_ref() {
-                let total = tokens.input_tokens + tokens.output_tokens;
-                if total > 0 {
-                    spans.push(
-                        Span::raw(format!(" ↕{}", format_short_tokens(total)))
-                            .fg(self.styles.dim()),
-                    );
-                }
+            if agent.total_tokens > 0 {
+                spans.push(
+                    Span::raw(format!(" ↕{}", format_short_tokens(agent.total_tokens)))
+                        .fg(self.styles.dim()),
+                );
             }
 
             lines.push(Line::from(spans));
