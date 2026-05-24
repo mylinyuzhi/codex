@@ -1,0 +1,16 @@
+Help the user customize their keyboard shortcuts. The keybindings file is at `~/.claude/keybindings.json`.
+
+1. Read the current keybindings file if it exists
+2. Show the user their current bindings and available actions
+3. Apply requested changes
+4. Default keybindings:
+   - Ctrl+C: Interrupt
+   - Ctrl+D/Ctrl+Q: Quit
+   - Ctrl+L: Clear screen
+   - Ctrl+M: Cycle model
+   - Ctrl+P: Command palette
+   - Ctrl+T: Cycle thinking level
+   - Tab: Toggle plan mode
+   - Enter: Submit input
+5. Support chord bindings (e.g., Ctrl+K Ctrl+C)
+6. Write the updated keybindings file

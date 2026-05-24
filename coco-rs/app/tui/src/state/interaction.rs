@@ -1,0 +1,261 @@
+//! Bottom interaction-pane state.
+//!
+//! The pane owns composer-adjacent popups and agent/user prompts that should
+//! remain in the retained viewport. Full-screen surfaces live in
+//! [`crate::state::modal`].
+
+use std::collections::VecDeque;
+use std::fmt;
+use std::time::Duration;
+use std::time::Instant;
+
+use crate::state::surface_payloads::CostWarningPromptState;
+use crate::state::surface_payloads::McpServerApprovalPromptState;
+use crate::state::surface_payloads::PermissionPromptState;
+use crate::state::surface_payloads::PlanApprovalPromptState;
+use crate::state::surface_payloads::PlanEntryPromptState;
+use crate::state::surface_payloads::PlanExitPromptState;
+use crate::state::surface_payloads::QuestionPromptState;
+use crate::state::surface_payloads::SandboxPermissionPromptState;
+use crate::state::ui::SuggestionKind;
+
+const PERMISSION_PROMPT_DELAY: Duration = Duration::from_secs(1);
+
+/// Validated slash command name without a leading slash.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SlashCommandName(String);
+
+impl SlashCommandName {
+    pub fn new(name: impl Into<String>) -> Result<Self, InvalidSlashCommandName> {
+        let name = name.into();
+        if name.is_empty()
+            || name.contains('/')
+            || name.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+        {
+            return Err(InvalidSlashCommandName);
+        }
+        Ok(Self(name))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for SlashCommandName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<&str> for SlashCommandName {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+/// Slash command name validation failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidSlashCommandName;
+
+impl fmt::Display for InvalidSlashCommandName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("slash command names must be non-empty and contain no slash, whitespace, or control characters")
+    }
+}
+
+impl std::error::Error for InvalidSlashCommandName {}
+
+/// Placeholder composer state. The editable buffer still lives in
+/// `UiState::input`; this struct is the pane-local anchor for future composer
+/// state that is not shared with legacy call sites.
+#[derive(Debug, Clone, Default)]
+pub struct ComposerState;
+
+#[derive(Debug, Clone)]
+pub enum ComposerPopupState {
+    Slash(SlashPopupState),
+    File(FilePopupState),
+    Symbol(SymbolPopupState),
+    Agent(AgentPopupState),
+}
+
+#[derive(Debug, Clone)]
+pub struct SlashPopupState;
+
+#[derive(Debug, Clone)]
+pub struct FilePopupState;
+
+#[derive(Debug, Clone)]
+pub struct SymbolPopupState;
+
+#[derive(Debug, Clone)]
+pub struct AgentPopupState;
+
+impl ComposerPopupState {
+    pub fn kind(&self) -> SuggestionKind {
+        match self {
+            Self::Slash(_) => SuggestionKind::SlashCommand,
+            Self::File(_) => SuggestionKind::File,
+            Self::Symbol(_) => SuggestionKind::Symbol,
+            Self::Agent(_) => SuggestionKind::Agent,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum PanePromptState {
+    Permission(PermissionPromptState),
+    Question(QuestionPromptState),
+    SandboxPermission(SandboxPermissionPromptState),
+    CostWarning(CostWarningPromptState),
+    PlanEntry(PlanEntryPromptState),
+    PlanExit(PlanExitPromptState),
+    PlanApproval(PlanApprovalPromptState),
+    McpServerApproval(McpServerApprovalPromptState),
+}
+
+impl PanePromptState {
+    pub fn priority(&self) -> i32 {
+        match self {
+            Self::SandboxPermission(_) => 0,
+            Self::Permission(_) | Self::PlanEntry(_) | Self::PlanExit(_) => 1,
+            Self::Question(_) | Self::McpServerApproval(_) | Self::PlanApproval(_) => 2,
+            Self::CostWarning(_) => 3,
+        }
+    }
+
+    pub fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::Permission(p) => Some(p.request_id.as_str()),
+            Self::Question(q) => Some(q.request_id.as_str()),
+            Self::SandboxPermission(s) => Some(s.request_id.as_str()),
+            Self::CostWarning(_)
+            | Self::PlanEntry(_)
+            | Self::PlanExit(_)
+            | Self::PlanApproval(_)
+            | Self::McpServerApproval(_) => None,
+        }
+    }
+
+    /// True for prompts that pause the status-indicator elapsed clock.
+    ///
+    /// TS parity: `REPL.tsx:2076-2088` pauses iff
+    /// `focusedInputDialog === 'tool-permission'`. coco-rs maps
+    /// [`Self::Permission`] to that path.
+    ///
+    /// TS-DIVERGE: [`Self::SandboxPermission`] also pauses even
+    /// though TS has no analog variant. The semantic is identical
+    /// ("tool blocked waiting on user approval"), so widening the
+    /// pause to cover sandbox approvals avoids a user-visible clock
+    /// drift while we wait. Other prompts (Question, PlanEntry/Exit/
+    /// Approval, McpServerApproval, CostWarning) do not pause — TS
+    /// keeps the clock running through them.
+    pub fn pauses_status_clock(&self) -> bool {
+        matches!(self, Self::Permission(_) | Self::SandboxPermission(_))
+    }
+}
+
+#[cfg(test)]
+#[path = "interaction.test.rs"]
+mod tests;
+
+/// State for the retained bottom interaction pane.
+#[derive(Debug, Clone)]
+pub struct InteractionPaneState {
+    pub composer: ComposerState,
+    pub popup: Option<ComposerPopupState>,
+    pub active_prompt: Option<PanePromptState>,
+    pub prompt_queue: VecDeque<PanePromptState>,
+    pub delayed_permissions: VecDeque<DelayedPermissionPrompt>,
+}
+
+impl InteractionPaneState {
+    pub fn new() -> Self {
+        Self {
+            composer: ComposerState,
+            popup: None,
+            active_prompt: None,
+            prompt_queue: VecDeque::new(),
+            delayed_permissions: VecDeque::new(),
+        }
+    }
+
+    pub fn push_prompt(&mut self, prompt: PanePromptState) {
+        if self
+            .active_prompt
+            .as_ref()
+            .and_then(PanePromptState::request_id)
+            .zip(prompt.request_id())
+            .is_some_and(|(active, incoming)| active == incoming)
+        {
+            self.active_prompt = Some(prompt);
+            return;
+        }
+        match self.active_prompt.take() {
+            None => self.active_prompt = Some(prompt),
+            Some(current) if prompt.priority() < current.priority() => {
+                self.active_prompt = Some(prompt);
+                self.enqueue_prompt(current);
+            }
+            Some(current) => {
+                self.active_prompt = Some(current);
+                self.enqueue_prompt(prompt);
+            }
+        }
+    }
+
+    pub fn push_permission(&mut self, prompt: PermissionPromptState, now: Instant) {
+        let ready_at = now + PERMISSION_PROMPT_DELAY;
+        self.delayed_permissions
+            .push_back(DelayedPermissionPrompt { prompt, ready_at });
+    }
+
+    pub fn pop_ready_permission(&mut self, now: Instant) -> Option<PermissionPromptState> {
+        if self
+            .delayed_permissions
+            .front()
+            .is_some_and(|permission| permission.ready_at <= now)
+        {
+            return self
+                .delayed_permissions
+                .pop_front()
+                .map(|permission| permission.prompt);
+        }
+        None
+    }
+
+    pub fn dismiss_active_prompt(&mut self) {
+        self.active_prompt = self.prompt_queue.pop_front();
+    }
+
+    pub fn active_prompt_mut(&mut self) -> Option<&mut PanePromptState> {
+        self.active_prompt.as_mut()
+    }
+
+    fn enqueue_prompt(&mut self, prompt: PanePromptState) {
+        let prio = prompt.priority();
+        let pos = self
+            .prompt_queue
+            .iter()
+            .position(|queued| queued.priority() > prio)
+            .unwrap_or(self.prompt_queue.len());
+        self.prompt_queue.insert(pos, prompt);
+    }
+}
+
+impl Default for InteractionPaneState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DelayedPermissionPrompt {
+    pub prompt: PermissionPromptState,
+    pub ready_at: Instant,
+}

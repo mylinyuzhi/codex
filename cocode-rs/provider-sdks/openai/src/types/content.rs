@@ -1,0 +1,615 @@
+//! Content types for input and output blocks.
+
+use serde::Deserialize;
+use serde::Serialize;
+
+/// Image media types supported by OpenAI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImageMediaType {
+    /// JPEG image.
+    #[serde(rename = "image/jpeg")]
+    Jpeg,
+    /// PNG image.
+    #[serde(rename = "image/png")]
+    Png,
+    /// GIF image.
+    #[serde(rename = "image/gif")]
+    Gif,
+    /// WebP image.
+    #[serde(rename = "image/webp")]
+    Webp,
+}
+
+/// Image detail level for vision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageDetail {
+    /// Low resolution processing.
+    Low,
+    /// High resolution processing.
+    High,
+    /// Auto-select based on image size.
+    #[default]
+    Auto,
+}
+
+/// Image source - base64 encoded or URL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ImageSource {
+    /// Base64 encoded image data.
+    Base64 {
+        /// Base64 encoded image data.
+        data: String,
+        /// Media type of the image.
+        media_type: ImageMediaType,
+    },
+    /// URL to the image.
+    Url {
+        /// URL to the image.
+        url: String,
+        /// Detail level for image processing.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<ImageDetail>,
+    },
+    /// File ID reference.
+    FileId {
+        /// File ID from OpenAI Files API.
+        file_id: String,
+        /// Detail level for image processing.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<ImageDetail>,
+    },
+}
+
+/// Input content blocks for requests (Responses API format).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InputContentBlock {
+    /// Text content.
+    InputText {
+        /// The text content.
+        text: String,
+    },
+    /// Assistant output text from a previous turn (for conversation history).
+    OutputText {
+        /// The text content.
+        text: String,
+    },
+    /// Image content.
+    InputImage {
+        /// Image source (base64, URL, or file ID).
+        #[serde(flatten)]
+        source: ImageSource,
+    },
+    /// Audio content.
+    InputAudio {
+        /// Base64-encoded audio data.
+        data: String,
+        /// Audio format.
+        format: AudioFormat,
+    },
+    /// File reference.
+    InputFile {
+        /// File ID from OpenAI Files API.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_id: Option<String>,
+        /// Optional file name.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        /// Inline file data.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_data: Option<String>,
+        /// URL to the file.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_url: Option<String>,
+    },
+    /// Function call output (tool result).
+    FunctionCallOutput {
+        /// ID of the function call this is responding to.
+        call_id: String,
+        /// Output of the function call.
+        output: String,
+        /// Unique ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Status of the output.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// Computer call output (screenshot/result).
+    #[serde(rename = "computer_call_output")]
+    ComputerCallOutput {
+        /// ID of the computer call this is responding to.
+        call_id: String,
+        /// Output type.
+        output: ComputerCallOutputData,
+        /// Acknowledged safety checks.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        acknowledged_safety_checks: Vec<String>,
+        /// Unique ID.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Status of the output.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// File search call output.
+    #[serde(rename = "file_search_call_output")]
+    FileSearchCallOutput {
+        /// ID of the file search call this is responding to.
+        call_id: String,
+        /// Output (results fed back).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// Web search call output.
+    #[serde(rename = "web_search_call_output")]
+    WebSearchCallOutput {
+        /// ID of the web search call this is responding to.
+        call_id: String,
+        /// Output (results fed back).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// Code interpreter call output.
+    #[serde(rename = "code_interpreter_call_output")]
+    CodeInterpreterCallOutput {
+        /// ID of the code interpreter call this is responding to.
+        call_id: String,
+        /// Output (execution results fed back).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// Local shell call output.
+    #[serde(rename = "local_shell_call_output")]
+    LocalShellCallOutput {
+        /// ID of the shell call this is responding to.
+        call_id: String,
+        /// Output (command results fed back).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// MCP call output.
+    #[serde(rename = "mcp_call_output")]
+    McpCallOutput {
+        /// ID of the MCP call this is responding to.
+        call_id: String,
+        /// Output (tool results fed back).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        /// Error if any.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Apply patch call output.
+    #[serde(rename = "apply_patch_call_output")]
+    ApplyPatchCallOutput {
+        /// ID of the apply patch call this is responding to.
+        call_id: String,
+        /// Output (patch application result).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// Custom tool call output.
+    #[serde(rename = "custom_tool_call_output")]
+    CustomToolCallOutput {
+        /// ID of the custom tool call this is responding to.
+        call_id: String,
+        /// Output from the custom tool.
+        output: String,
+        /// Unique ID (optional).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    /// Item reference (reference previous conversation items by ID).
+    ItemReference {
+        /// ID of the item to reference.
+        id: String,
+    },
+}
+
+/// Audio format for input audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioFormat {
+    /// WAV format.
+    Wav,
+    /// MP3 format.
+    Mp3,
+    /// FLAC format.
+    Flac,
+    /// OGG format.
+    Ogg,
+    /// PCM format (raw audio).
+    Pcm16,
+}
+
+/// Computer call output data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ComputerCallOutputData {
+    /// Screenshot output.
+    #[serde(rename = "computer_screenshot")]
+    ComputerScreenshot {
+        /// File ID reference.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_id: Option<String>,
+        /// Image URL.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        image_url: Option<String>,
+    },
+    /// Action output.
+    #[serde(rename = "action")]
+    Action {
+        /// Action result.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+    },
+}
+
+impl InputContentBlock {
+    /// Create a text content block.
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::InputText { text: text.into() }
+    }
+
+    /// Create an output text content block (for assistant messages in conversation history).
+    pub fn output_text(text: impl Into<String>) -> Self {
+        Self::OutputText { text: text.into() }
+    }
+
+    /// Create an image content block from base64 data.
+    pub fn image_base64(data: impl Into<String>, media_type: ImageMediaType) -> Self {
+        Self::InputImage {
+            source: ImageSource::Base64 {
+                data: data.into(),
+                media_type,
+            },
+        }
+    }
+
+    /// Create an image content block from a URL.
+    pub fn image_url(url: impl Into<String>) -> Self {
+        Self::InputImage {
+            source: ImageSource::Url {
+                url: url.into(),
+                detail: None,
+            },
+        }
+    }
+
+    /// Create an image content block from a URL with detail level.
+    pub fn image_url_with_detail(url: impl Into<String>, detail: ImageDetail) -> Self {
+        Self::InputImage {
+            source: ImageSource::Url {
+                url: url.into(),
+                detail: Some(detail),
+            },
+        }
+    }
+
+    /// Create an image content block from a file ID.
+    pub fn image_file(file_id: impl Into<String>) -> Self {
+        Self::InputImage {
+            source: ImageSource::FileId {
+                file_id: file_id.into(),
+                detail: None,
+            },
+        }
+    }
+
+    /// Create an image content block from a file ID with detail level.
+    pub fn image_file_with_detail(file_id: impl Into<String>, detail: ImageDetail) -> Self {
+        Self::InputImage {
+            source: ImageSource::FileId {
+                file_id: file_id.into(),
+                detail: Some(detail),
+            },
+        }
+    }
+
+    /// Create a function call output content block.
+    pub fn function_call_output(call_id: impl Into<String>, output: impl Into<String>) -> Self {
+        Self::FunctionCallOutput {
+            call_id: call_id.into(),
+            output: output.into(),
+            id: None,
+            status: None,
+        }
+    }
+
+    /// Create an audio content block.
+    pub fn audio(data: impl Into<String>, format: AudioFormat) -> Self {
+        Self::InputAudio {
+            data: data.into(),
+            format,
+        }
+    }
+
+    /// Create a file reference content block.
+    pub fn file(file_id: impl Into<String>) -> Self {
+        Self::InputFile {
+            file_id: Some(file_id.into()),
+            filename: None,
+            file_data: None,
+            file_url: None,
+        }
+    }
+
+    /// Create a file reference content block with filename.
+    pub fn file_with_name(file_id: impl Into<String>, filename: impl Into<String>) -> Self {
+        Self::InputFile {
+            file_id: Some(file_id.into()),
+            filename: Some(filename.into()),
+            file_data: None,
+            file_url: None,
+        }
+    }
+
+    /// Create a computer call output content block with screenshot.
+    pub fn computer_call_output_screenshot(
+        call_id: impl Into<String>,
+        file_id: Option<String>,
+        image_url: Option<String>,
+    ) -> Self {
+        Self::ComputerCallOutput {
+            call_id: call_id.into(),
+            output: ComputerCallOutputData::ComputerScreenshot { file_id, image_url },
+            acknowledged_safety_checks: vec![],
+            id: None,
+            status: None,
+        }
+    }
+
+    /// Create a computer call output content block with action result.
+    pub fn computer_call_output_action(call_id: impl Into<String>, result: Option<String>) -> Self {
+        Self::ComputerCallOutput {
+            call_id: call_id.into(),
+            output: ComputerCallOutputData::Action { result },
+            acknowledged_safety_checks: vec![],
+            id: None,
+            status: None,
+        }
+    }
+
+    /// Create a file search call output content block.
+    pub fn file_search_call_output(call_id: impl Into<String>, output: Option<String>) -> Self {
+        Self::FileSearchCallOutput {
+            call_id: call_id.into(),
+            output,
+        }
+    }
+
+    /// Create a web search call output content block.
+    pub fn web_search_call_output(call_id: impl Into<String>, output: Option<String>) -> Self {
+        Self::WebSearchCallOutput {
+            call_id: call_id.into(),
+            output,
+        }
+    }
+
+    /// Create a code interpreter call output content block.
+    pub fn code_interpreter_call_output(
+        call_id: impl Into<String>,
+        output: Option<String>,
+    ) -> Self {
+        Self::CodeInterpreterCallOutput {
+            call_id: call_id.into(),
+            output,
+        }
+    }
+
+    /// Create a local shell call output content block.
+    pub fn local_shell_call_output(call_id: impl Into<String>, output: Option<String>) -> Self {
+        Self::LocalShellCallOutput {
+            call_id: call_id.into(),
+            output,
+        }
+    }
+
+    /// Create an MCP call output content block.
+    pub fn mcp_call_output(
+        call_id: impl Into<String>,
+        output: Option<String>,
+        error: Option<String>,
+    ) -> Self {
+        Self::McpCallOutput {
+            call_id: call_id.into(),
+            output,
+            error,
+        }
+    }
+
+    /// Create an apply patch call output content block.
+    pub fn apply_patch_call_output(call_id: impl Into<String>, output: Option<String>) -> Self {
+        Self::ApplyPatchCallOutput {
+            call_id: call_id.into(),
+            output,
+        }
+    }
+
+    /// Create a custom tool call output content block.
+    pub fn custom_tool_call_output(call_id: impl Into<String>, output: impl Into<String>) -> Self {
+        Self::CustomToolCallOutput {
+            call_id: call_id.into(),
+            output: output.into(),
+            id: None,
+        }
+    }
+
+    /// Create an item reference content block.
+    pub fn item_reference(id: impl Into<String>) -> Self {
+        Self::ItemReference { id: id.into() }
+    }
+}
+
+// ============================================================================
+// Logprobs types
+// ============================================================================
+
+/// Token-level log probability information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenLogprob {
+    /// The token string.
+    pub token: String,
+    /// Log probability of this token.
+    pub logprob: f64,
+    /// Byte representation of the token (if applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<Vec<i32>>,
+}
+
+/// Alternative token with log probability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopLogprob {
+    /// The token string.
+    pub token: String,
+    /// Log probability of this token.
+    pub logprob: f64,
+    /// Byte representation of the token (if applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<Vec<i32>>,
+}
+
+/// Log probability information for a token position.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogprobContent {
+    /// The token at this position.
+    pub token: String,
+    /// Log probability of the chosen token.
+    pub logprob: f64,
+    /// Byte representation of the token (if applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<Vec<i32>>,
+    /// Top alternative tokens with their log probabilities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_logprobs: Vec<TopLogprob>,
+}
+
+/// Full logprobs data for output text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Logprobs {
+    /// Token-level log probability information.
+    #[serde(default)]
+    pub content: Vec<LogprobContent>,
+}
+
+impl Logprobs {
+    /// Get the total log probability sum.
+    pub fn total_logprob(&self) -> f64 {
+        self.content.iter().map(|c| c.logprob).sum()
+    }
+
+    /// Get tokens as strings.
+    pub fn tokens(&self) -> Vec<&str> {
+        self.content.iter().map(|c| c.token.as_str()).collect()
+    }
+}
+
+// ============================================================================
+// Annotation types
+// ============================================================================
+
+/// Annotation for output text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Annotation {
+    /// File citation.
+    FileCitation {
+        /// File ID referenced.
+        file_id: String,
+        /// Index in the text.
+        #[serde(default)]
+        index: i32,
+        /// Filename of the cited file.
+        #[serde(default)]
+        filename: String,
+    },
+    /// URL citation.
+    UrlCitation {
+        /// URL referenced.
+        url: String,
+        /// Title of the page.
+        #[serde(default)]
+        title: String,
+        /// Start index in text.
+        #[serde(default)]
+        start_index: i32,
+        /// End index in text.
+        #[serde(default)]
+        end_index: i32,
+    },
+    /// Container file citation.
+    ContainerFileCitation {
+        /// Container ID.
+        container_id: String,
+        /// End index in text.
+        end_index: i32,
+        /// File ID.
+        file_id: String,
+        /// Filename.
+        filename: String,
+        /// Start index in text.
+        start_index: i32,
+    },
+    /// File path annotation.
+    FilePath {
+        /// File ID.
+        file_id: String,
+        /// Index in the text.
+        index: i32,
+    },
+}
+
+/// Output content blocks from responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OutputContentBlock {
+    /// Text content.
+    OutputText {
+        /// The text content.
+        text: String,
+        /// Annotations in the text.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        annotations: Vec<Annotation>,
+        /// Log probability information (when include: ["message.output_text.logprobs"]).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        logprobs: Option<Logprobs>,
+    },
+    /// Refusal content (content was refused).
+    Refusal {
+        /// The refusal message.
+        refusal: String,
+    },
+}
+
+impl OutputContentBlock {
+    /// Get the text content if this is a text block.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::OutputText { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Get the refusal message if this is a refusal block.
+    pub fn as_refusal(&self) -> Option<&str> {
+        match self {
+            Self::Refusal { refusal } => Some(refusal),
+            _ => None,
+        }
+    }
+
+    /// Get the logprobs if present.
+    pub fn as_logprobs(&self) -> Option<&Logprobs> {
+        match self {
+            Self::OutputText { logprobs, .. } => logprobs.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "content.test.rs"]
+mod tests;

@@ -1,0 +1,13 @@
+Debug tools and inspect internal state.
+
+1. Show current session information:
+   - Model, tokens used, turn count
+   - Active tools and permissions
+   - MCP server connections
+   - Loaded skills and plugins
+2. If a specific component is mentioned, dive deeper:
+   - Tool execution logs
+   - Permission evaluation traces
+   - Context window breakdown
+   - Hook execution history
+3. Suggest relevant diagnostic commands

@@ -1,0 +1,106 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch",
+      "Bash(cargo:*)",
+      "Bash(just:*)",
+      "Bash(rustc:*)",
+      "Bash(rustup:*)",
+      "Bash(rustfmt:*)",
+      "Bash(rust-analyzer:*)",
+      "Bash(sccache:*)",
+      "Bash(git:*)",
+      "Bash(ls:*)",
+      "Bash(tree:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(comm:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(sed:*)",
+      "Bash(awk:*)",
+      "Bash(tee:*)",
+      "Bash(echo:*)",
+      "Bash(test:*)",
+      "Bash(xxd:*)",
+      "Bash(cp:*)",
+      "Bash(touch:*)",
+      "Bash(mkdir:*)",
+      "Bash(env)",
+      "Bash(export:*)",
+      "Bash(cd:*)",
+      "Bash(du:*)",
+      "Bash(jobs:*)",
+      "Bash(wait)",
+      "Bash(python3:*)",
+      "Bash(pip3 list:*)",
+      "Bash(npm list:*)",
+      "Skill(update-claude-md)",
+      "Skill(wt-del)",
+      "Skill(squash)",
+      "Read(//tmp/**)"
+    ],
+    "deny": [],
+    "ask": [],
+    "additionalDirectories": []
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/rust-quality-check.sh\" --light",
+            "timeout": 60,
+            "statusMessage": "Running Rust quality checks (light: seam + fmt)..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/toolname-constants-check.sh\"",
+            "timeout": 30,
+            "statusMessage": "Checking tool name constants..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/sdk-schema-check.sh\"",
+            "timeout": 300,
+            "statusMessage": "Checking SDK schema freshness..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/no-inline-tests-check.sh\"",
+            "timeout": 30,
+            "statusMessage": "Checking for inline test modules..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/workspace-deps-check.sh\"",
+            "timeout": 30,
+            "statusMessage": "Checking workspace dep unification..."
+          }
+        ]
+      }
+    ]
+  },
+  "disableAllHooks": false
+}
