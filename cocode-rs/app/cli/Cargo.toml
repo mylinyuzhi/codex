@@ -1,0 +1,57 @@
+[package]
+name = "cocode-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Multi-provider LLM CLI"
+
+[[bin]]
+name = "cocode"
+path = "src/main.rs"
+
+[dependencies]
+# Internal
+cocode-arg0.workspace = true
+cocode-process-hardening.workspace = true
+cocode-session = { workspace = true, features = [] }
+cocode-subagent.workspace = true
+cocode-config.workspace = true
+cocode-otel.workspace = true
+cocode-plugin.workspace = true
+cocode-protocol.workspace = true
+cocode-skill.workspace = true
+cocode-system-reminder.workspace = true
+cocode-tui.workspace = true
+cocode-loop.workspace = true
+cocode-utils-common.workspace = true
+cocode-error.workspace = true
+cocode-app-server-protocol.workspace = true
+cocode-app-server.workspace = true
+cocode-hooks.workspace = true
+cocode-tools-api.workspace = true
+cocode-rmcp-client.workspace = true
+cocode-mcp-types.workspace = true
+
+# External
+async-trait.workspace = true
+serde.workspace = true
+clap = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["full"] }
+tokio-util.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+dirs.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

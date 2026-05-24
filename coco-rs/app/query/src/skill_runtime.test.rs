@@ -1,0 +1,381 @@
+//! Tests for [`QuerySkillRuntime`].
+//!
+//! Uses in-memory `SkillManager` fixtures + a stub
+//! `AgentQueryEngine` to exercise both inline and fork routing
+//! without touching the filesystem.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use coco_skills::SkillContext;
+use coco_skills::SkillDefinition;
+use coco_skills::SkillManager;
+use coco_skills::SkillSource;
+use coco_tool_runtime::AgentQueryConfig;
+use coco_tool_runtime::AgentQueryEngine;
+use coco_tool_runtime::AgentQueryResult;
+use coco_tool_runtime::SkillHandle;
+use coco_tool_runtime::SkillInvocationError;
+use coco_tool_runtime::SkillInvocationResult;
+use coco_tool_runtime::SubagentInheritance;
+use pretty_assertions::assert_eq;
+
+use super::*;
+
+fn sample_skill(
+    name: &str,
+    prompt: &str,
+    context: SkillContext,
+    disabled: bool,
+    disable_model: bool,
+) -> SkillDefinition {
+    SkillDefinition {
+        name: name.into(),
+        display_name: None,
+        description: format!("{name} description"),
+        prompt: prompt.into(),
+        source: SkillSource::Bundled,
+        aliases: Vec::new(),
+        allowed_tools: None,
+        model: None,
+        model_role: None,
+        when_to_use: None,
+        argument_names: Vec::new(),
+        paths: Vec::new(),
+        effort: None,
+        context,
+        agent: None,
+        version: None,
+        disabled,
+        hooks: None,
+        argument_hint: None,
+        user_invocable: true,
+        disable_model_invocation: disable_model,
+        shell: None,
+        content_length: prompt.len() as i64,
+        has_user_specified_description: true,
+        progress_message: Some("running".to_string()),
+        is_hidden: false,
+        gated_by: None,
+        files: std::collections::HashMap::new(),
+        skill_root: None,
+    }
+}
+
+fn runtime_with(skills: Vec<SkillDefinition>) -> QuerySkillRuntime {
+    let mgr = SkillManager::new();
+    for s in skills {
+        mgr.register(s);
+    }
+    QuerySkillRuntime::new(Arc::new(mgr))
+}
+
+#[tokio::test]
+async fn test_not_found_returns_not_found_error() {
+    let rt = runtime_with(vec![]);
+    let err = rt
+        .invoke_skill("nope", "", SubagentInheritance::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SkillInvocationError::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn test_disabled_skill_returns_disabled_error() {
+    let skill = sample_skill("foo", "body", SkillContext::Inline, true, false);
+    let rt = runtime_with(vec![skill]);
+    let err = rt
+        .invoke_skill("foo", "", SubagentInheritance::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SkillInvocationError::Disabled { .. }));
+}
+
+#[tokio::test]
+async fn test_disable_model_invocation_returns_hidden_error() {
+    let skill = sample_skill("foo", "body", SkillContext::Inline, false, true);
+    let rt = runtime_with(vec![skill]);
+    let err = rt
+        .invoke_skill("foo", "", SubagentInheritance::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SkillInvocationError::HiddenFromModel { .. }));
+}
+
+#[tokio::test]
+async fn test_inline_skill_expands_prompt_into_new_messages() {
+    let skill = sample_skill(
+        "greet",
+        "Hello from a skill!",
+        SkillContext::Inline,
+        false,
+        false,
+    );
+    let rt = runtime_with(vec![skill]);
+    let result = rt
+        .invoke_skill("greet", "", SubagentInheritance::default())
+        .await
+        .expect("ok");
+    match result {
+        SkillInvocationResult::Inline {
+            summary,
+            new_messages,
+            permission_updates: _,
+        } => {
+            assert!(summary.contains("greet"));
+            assert_eq!(new_messages.len(), 1);
+            // Serialized UserMessage should carry the expanded prompt.
+            let json = &new_messages[0];
+            let text = serde_json::to_string(json).unwrap();
+            assert!(
+                text.contains("Hello from a skill"),
+                "expanded prompt must appear in new_messages; got: {text}"
+            );
+        }
+        other => panic!("expected Inline, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_inline_skill_expands_arguments() {
+    // `expand_skill_prompt_simple` substitutes $ARGUMENTS with the
+    // raw args string. Prove the substitution happens.
+    let skill = sample_skill(
+        "echo",
+        "You said: $ARGUMENTS",
+        SkillContext::Inline,
+        false,
+        false,
+    );
+    let rt = runtime_with(vec![skill]);
+    let result = rt
+        .invoke_skill("echo", "hello world", SubagentInheritance::default())
+        .await
+        .expect("ok");
+    let json = match result {
+        SkillInvocationResult::Inline { new_messages, .. } => new_messages[0].clone(),
+        _ => panic!("expected Inline"),
+    };
+    let text = serde_json::to_string(&json).unwrap();
+    assert!(
+        text.contains("hello world"),
+        "args should be substituted; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_fork_skill_without_engine_fails_forked() {
+    let skill = sample_skill("run", "Run something", SkillContext::Fork, false, false);
+    let rt = runtime_with(vec![skill]);
+    let err = rt
+        .invoke_skill("run", "", SubagentInheritance::default())
+        .await
+        .unwrap_err();
+    match err {
+        SkillInvocationError::Forked { reason } => {
+            assert!(
+                reason.contains("no AgentQueryEngine"),
+                "must explain why; got: {reason}"
+            );
+        }
+        other => panic!("expected Forked, got {other:?}"),
+    }
+}
+
+struct StubEngine;
+
+#[async_trait]
+impl AgentQueryEngine for StubEngine {
+    async fn execute_query(
+        &self,
+        prompt: &str,
+        _config: AgentQueryConfig,
+    ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+        Ok(AgentQueryResult {
+            response_text: Some(format!("child got: {prompt}")),
+            messages: Vec::new(),
+            turns: 1,
+            input_tokens: 10,
+            output_tokens: 5,
+            tool_use_count: 0,
+            cancelled: false,
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_fork_skill_with_engine_routes_through_agent_query() {
+    let skill = sample_skill(
+        "analyze",
+        "Analyze the input: $ARGUMENTS",
+        SkillContext::Fork,
+        false,
+        false,
+    );
+    let rt = runtime_with(vec![skill]).with_agent_engine(Arc::new(StubEngine));
+
+    let result = rt
+        .invoke_skill("analyze", "a signal", SubagentInheritance::default())
+        .await
+        .expect("ok");
+    match result {
+        SkillInvocationResult::Forked { agent_id, output } => {
+            assert!(agent_id.starts_with("skill-analyze-"));
+            assert!(
+                output.contains("a signal"),
+                "child prompt must reflect args; got: {output}"
+            );
+        }
+        other => panic!("expected Forked, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_name_normalization_strips_leading_slash() {
+    // Users may invoke `/greet` in slash-command style; the
+    // runtime should strip the slash.
+    let skill = sample_skill("greet", "Hi!", SkillContext::Inline, false, false);
+    let rt = runtime_with(vec![skill]);
+    let ok = rt
+        .invoke_skill("/greet", "", SubagentInheritance::default())
+        .await;
+    assert!(ok.is_ok(), "leading slash should normalize away");
+}
+
+#[tokio::test]
+async fn test_inline_skill_without_allowed_tools_has_no_updates() {
+    // Baseline: an inline skill with no `allowed-tools` frontmatter
+    // produces an empty `permission_updates` vec. Nothing flows into
+    // the executor's permission-rule handle on that path.
+    let skill = sample_skill("plain", "Hi!", SkillContext::Inline, false, false);
+    let rt = runtime_with(vec![skill]);
+    let result = rt
+        .invoke_skill("plain", "", SubagentInheritance::default())
+        .await
+        .expect("ok");
+    match result {
+        SkillInvocationResult::Inline {
+            permission_updates, ..
+        } => {
+            assert!(
+                permission_updates.is_empty(),
+                "no `allowed-tools` ⇒ no updates, got: {permission_updates:?}"
+            );
+        }
+        other => panic!("expected Inline, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_inline_skill_with_allowed_tools_emits_command_rules() {
+    // TS parity: a skill frontmatter `allowed-tools: Read, Edit(*.md)`
+    // becomes a single `PermissionUpdate::AddRules { destination:
+    // Command }` carrying two `PermissionRule { source: Command,
+    // behavior: Allow, ... }` entries. The destination is `Command`
+    // (NOT `Session`) so the rules live in the same slot TS uses
+    // (`alwaysAllowRules.command`) — observable for audit + cleanly
+    // separated from user-clicked Always-Allow rules.
+    let mut skill = sample_skill("editor", "Edit stuff", SkillContext::Inline, false, false);
+    skill.allowed_tools = Some(vec!["Read".to_string(), "Edit(*.md)".to_string()]);
+    let rt = runtime_with(vec![skill]);
+    let result = rt
+        .invoke_skill("editor", "", SubagentInheritance::default())
+        .await
+        .expect("ok");
+    let permission_updates = match result {
+        SkillInvocationResult::Inline {
+            permission_updates, ..
+        } => permission_updates,
+        other => panic!("expected Inline, got {other:?}"),
+    };
+    assert_eq!(
+        permission_updates.len(),
+        1,
+        "one AddRules update per skill invocation"
+    );
+    match &permission_updates[0] {
+        coco_types::PermissionUpdate::AddRules { rules, destination } => {
+            assert_eq!(
+                *destination,
+                coco_types::PermissionUpdateDestination::Command,
+                "TS parity: destination is Command, not Session"
+            );
+            assert_eq!(rules.len(), 2);
+            assert_eq!(rules[0].source, coco_types::PermissionRuleSource::Command);
+            assert_eq!(rules[0].behavior, coco_types::PermissionBehavior::Allow);
+            assert_eq!(rules[0].value.tool_pattern, "Read");
+            assert!(rules[0].value.rule_content.is_none());
+            // `Edit(*.md)` parses to `tool_pattern: Edit` + content `*.md`.
+            assert_eq!(rules[1].value.tool_pattern, "Edit");
+            assert_eq!(rules[1].value.rule_content.as_deref(), Some("*.md"));
+        }
+        other => panic!("expected AddRules, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
+    // TS-mirror behavior: fork-mode skills push `allowed-tools` into
+    // `extra_permission_rules` (auto-allow), NOT `allowed_tools`
+    // (registry filter). The forked subagent therefore sees the full
+    // inherited tool registry; the listed entries are simply
+    // auto-allowed.
+    //
+    // We assert this on the config the runtime hands to the engine
+    // by recording the value through a capturing `AgentQueryEngine`.
+    use std::sync::Mutex;
+
+    struct CapturingEngine {
+        captured: Arc<Mutex<Option<AgentQueryConfig>>>,
+    }
+
+    #[async_trait]
+    impl AgentQueryEngine for CapturingEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            *self.captured.lock().unwrap() = Some(config);
+            Ok(AgentQueryResult {
+                response_text: Some("ok".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 0,
+                cancelled: false,
+            })
+        }
+    }
+
+    let mut skill = sample_skill("scan", "Scan!", SkillContext::Fork, false, false);
+    skill.allowed_tools = Some(vec!["Read".to_string(), "Grep".to_string()]);
+    let captured = Arc::new(Mutex::new(None));
+    let engine = Arc::new(CapturingEngine {
+        captured: captured.clone(),
+    });
+    let rt = runtime_with(vec![skill]).with_agent_engine(engine);
+    rt.invoke_skill("scan", "", SubagentInheritance::default())
+        .await
+        .expect("ok");
+
+    let config = captured.lock().unwrap().take().expect("captured config");
+    // Registry filter MUST be empty — TS doesn't narrow tools[] for skills.
+    assert!(
+        config.allowed_tools.is_empty(),
+        "fork-skill must NOT set registry filter; got: {:?}",
+        config.allowed_tools
+    );
+    // Auto-allow set MUST contain the two Command-source rules.
+    assert_eq!(config.extra_permission_rules.len(), 2);
+    assert!(
+        config
+            .extra_permission_rules
+            .iter()
+            .all(|r| r.source == coco_types::PermissionRuleSource::Command
+                && r.behavior == coco_types::PermissionBehavior::Allow),
+        "extra_permission_rules must all be Command + Allow; got: {:?}",
+        config.extra_permission_rules
+    );
+}

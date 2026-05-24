@@ -1,0 +1,31 @@
+{
+  "name": "agent_spawn_with_model",
+  "description": "Spawn agent with explicit model override (haiku for fast exploration)",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Quick scan of project structure",
+            "description": "Quick scan",
+            "subagent_type": "Explore",
+            "model": "haiku"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Quick scan completed using haiku model."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "not_cancelled": true,
+    "min_event_counts": {
+      "ToolUseEnd": 1
+    }
+  }
+}

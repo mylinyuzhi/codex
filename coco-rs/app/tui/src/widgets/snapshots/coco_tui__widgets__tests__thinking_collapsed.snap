@@ -1,0 +1,18 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCO v0.0.0                                                                           
+ │●│ │●│  opus-4  *  auto                                                                       
+ ╰─╯ ╰─╯                                                                                        
+                                                                                                
+❯ hello                                                                                         
+                                                                                                
+⏺ Thinking · 1.6s · 22 reasoning tokens                                                         
+                                                                                                
+⏺ Hello! How can I help?                                                                        
+                                                                                                
+────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                               
+────────────────────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto | show thinking(F2):off | ↑0 ↓0 · cache 0% | ctx 0% | 3 msgs
