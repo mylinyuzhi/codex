@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Usage",
+  "description": "Token usage for a turn or session.",
+  "type": "object",
+  "properties": {
+    "cache_creation_tokens": {
+      "description": "Tokens written to prompt cache.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "cache_read_tokens": {
+      "description": "Tokens served from prompt cache.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "input_tokens": {
+      "description": "Input tokens consumed.",
+      "default": 0,
+      "type": "integer",
+      "format": "int64"
+    },
+    "output_tokens": {
+      "description": "Output tokens generated.",
+      "default": 0,
+      "type": "integer",
+      "format": "int64"
+    },
+    "reasoning_tokens": {
+      "description": "Tokens used for extended thinking / reasoning.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    }
+  }
+}

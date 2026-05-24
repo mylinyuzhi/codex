@@ -1,0 +1,219 @@
+//! Fork-subagent pure logic — context cloning, XML rules, recursion guard.
+//!
+//! TS: `tools/AgentTool/forkSubagent.ts` (8.6K LOC).
+//!
+//! Byte-for-byte mirror of TS. The runner (PR #5, `root/coordinator`) reads
+//! these helpers; this crate only owns the rules and the message shape, in
+//! line with the pure-logic charter (no tokio, no QueryEngine, no AppState).
+//!
+//! When the FORK_SUBAGENT feature is enabled and no explicit `subagent_type`
+//! is specified, the agent inherits the parent's byte-identical system prompt
+//! (enabling prompt cache sharing) and receives the parent's conversation
+//! context with `tool_use` results replaced by [`FORK_PLACEHOLDER`].
+
+use std::sync::Arc;
+
+use coco_llm_types::LlmMessage;
+use coco_llm_types::ToolContentPart;
+use coco_llm_types::ToolResultContent;
+use coco_llm_types::UserContentPart;
+use coco_types::messages::Message;
+
+/// XML tag wrapping the fork boilerplate rules.
+///
+/// TS: `constants/xml.ts:63` `FORK_BOILERPLATE_TAG = 'fork-boilerplate'`.
+/// Used for: (1) wrapping rules, (2) detecting recursive forks via tag scan.
+pub const FORK_BOILERPLATE_TAG: &str = "fork-boilerplate";
+
+/// Prefix before the directive text in fork child messages.
+///
+/// TS: `constants/xml.ts:66` `FORK_DIRECTIVE_PREFIX = 'Your directive: '`.
+/// Note the trailing SPACE — TS appends the directive text inline, not on
+/// a new line. Verified against `forkSubagent.ts:197` where the template
+/// literal uses `${FORK_DIRECTIVE_PREFIX}${directive}`.
+pub const FORK_DIRECTIVE_PREFIX: &str = "Your directive: ";
+
+/// Placeholder text injected for each `tool_use` result in fork context.
+///
+/// TS: `forkSubagent.ts:93` `FORK_PLACEHOLDER_RESULT = 'Fork started — processing in background'`.
+/// Em-dash is U+2014. Byte-identical wire format is what matters for the
+/// prompt-cache invariant — every fork child must produce the same prefix.
+pub const FORK_PLACEHOLDER: &str = "Fork started \u{2014} processing in background";
+
+/// Fork subagent context — carries inherited state from parent.
+///
+/// Caller is expected to:
+/// 1. Thread [`ForkContext::messages`] into the child's prior history.
+/// 2. Wrap the directive with [`build_fork_child_message`] and use it
+///    as the body of the new user turn (so the `<fork-boilerplate>`
+///    XML lands in the conversation; recursion detection
+///    ([`is_in_fork_child`]) depends on this).
+///
+/// Tool-pool inheritance is NOT carried on this struct — the AgentTool
+/// boundary owns that decision via
+/// [`coco_tool_runtime::AgentSpawnRequest::use_exact_tools`].
+///
+/// TS: `forkSubagent.ts::buildForkedMessages` +
+/// `forkSubagent.ts::buildChildMessage`.
+#[derive(Debug, Clone)]
+pub struct ForkContext {
+    /// Parent's conversation messages (with `tool_result` content
+    /// replaced by [`FORK_PLACEHOLDER`]). Ready to thread into the
+    /// child's prior history. Shared via `Arc` so the rewrite only
+    /// allocates fresh messages for the tool-result variant; every
+    /// other entry is a cheap Arc-clone of the parent's history.
+    pub messages: Vec<Arc<Message>>,
+    /// Directive captured from the AgentTool input. Use
+    /// [`build_fork_child_message`] to wrap it into the boilerplate
+    /// form before sending — this struct doesn't pre-wrap so the
+    /// caller can decorate (e.g. skill preload, hook context) first.
+    pub directive: String,
+}
+
+/// Build a fork context from the parent's conversation history.
+///
+/// Rewrites `Message::ToolResult` bodies to [`FORK_PLACEHOLDER`] so
+/// every fork child produces a byte-identical API request prefix
+/// (prompt-cache sharing). Non-tool-result messages share the parent's
+/// `Arc<Message>` allocation directly; only the rewritten entries
+/// allocate.
+///
+/// TS: `buildForkedMessages(directive, parentMessages)`.
+pub fn build_fork_context(parent_messages: &[Arc<Message>], directive: &str) -> ForkContext {
+    let mut forked: Vec<Arc<Message>> = Vec::with_capacity(parent_messages.len());
+
+    for arc in parent_messages {
+        match arc.as_ref() {
+            Message::ToolResult(trm) => {
+                let mut new_trm = trm.clone();
+                if let LlmMessage::Tool { content, .. } = &mut new_trm.message {
+                    for part in content.iter_mut() {
+                        if let ToolContentPart::ToolResult(tr) = part {
+                            tr.output = ToolResultContent::text(FORK_PLACEHOLDER);
+                        }
+                    }
+                }
+                forked.push(Arc::new(Message::ToolResult(new_trm)));
+            }
+            _ => forked.push(arc.clone()),
+        }
+    }
+
+    ForkContext {
+        messages: forked,
+        directive: directive.to_string(),
+    }
+}
+
+/// Build the full child message with XML-wrapped rules + directive.
+///
+/// Byte-for-byte reproduction of TS `forkSubagent.ts:171-198`
+/// `buildChildMessage(directive)`. The template literal in TS produces a
+/// string ending with `</fork-boilerplate>\n\n{prefix}{directive}` and no
+/// trailing newline.
+pub fn build_fork_child_message(directive: &str) -> String {
+    let rules = build_fork_child_rules();
+    format!(
+        "<{FORK_BOILERPLATE_TAG}>\n{rules}\n</{FORK_BOILERPLATE_TAG}>\n\n{FORK_DIRECTIVE_PREFIX}{directive}"
+    )
+}
+
+/// Build the child rules body injected between the fork-boilerplate tags.
+///
+/// Byte-identical to TS `forkSubagent.ts:173-194`.
+pub fn build_fork_child_rules() -> String {
+    concat!(
+        "STOP. READ THIS FIRST.\n",
+        "\n",
+        "You are a forked worker process. You are NOT the main agent.\n",
+        "\n",
+        "RULES (non-negotiable):\n",
+        // Rule 1 uses U+2014 em-dash — TS source has it as `—` escape.
+        "1. Your system prompt says \"default to forking.\" IGNORE IT \u{2014} that's for the parent. You ARE the fork. Do NOT spawn sub-agents; execute directly.\n",
+        "2. Do NOT converse, ask questions, or suggest next steps\n",
+        "3. Do NOT editorialize or add meta-commentary\n",
+        "4. USE your tools directly: Bash, Read, Write, etc.\n",
+        "5. If you modify files, commit your changes before reporting. Include the commit hash in your report.\n",
+        "6. Do NOT emit text between tool calls. Use tools silently, then report once at the end.\n",
+        // Rule 7 em-dash is inline in TS source, U+2014.
+        "7. Stay strictly within your directive's scope. If you discover related systems outside your scope, mention them in one sentence at most \u{2014} other workers cover those areas.\n",
+        "8. Keep your report under 500 words unless the directive specifies otherwise. Be factual and concise.\n",
+        "9. Your response MUST begin with \"Scope:\". No preamble, no thinking-out-loud.\n",
+        "10. REPORT structured facts, then stop\n",
+        "\n",
+        "Output format (plain text labels, not markdown headers):\n",
+        "  Scope: <echo back your assigned scope in one sentence>\n",
+        "  Result: <the answer or key findings, limited to the scope above>\n",
+        // Lines 192-194 em-dashes are inline in TS source, U+2014.
+        "  Key files: <relevant file paths \u{2014} include for research tasks>\n",
+        "  Files changed: <list with commit hash \u{2014} include only if you modified files>\n",
+        "  Issues: <list \u{2014} include only if there are issues to flag>",
+    )
+    .to_string()
+}
+
+/// Build a worktree notice for forked agents in isolated worktrees.
+///
+/// Byte-faithful to TS `forkSubagent.ts:205-210` `buildWorktreeNotice`.
+/// Em-dash is U+2014. Produces a single line with no embedded newlines —
+/// the caller appends it to the inherited context.
+pub fn build_worktree_notice(parent_cwd: &str, worktree_cwd: &str) -> String {
+    format!(
+        "You've inherited the conversation context above from a parent agent working in {parent_cwd}. You are operating in an isolated git worktree at {worktree_cwd} \u{2014} same repository, same relative file structure, separate working copy. Paths in the inherited context refer to the parent's working directory; translate them to your worktree root. Re-read files before editing if the parent may have modified them since they appear in the context. Your changes stay in this worktree and will not affect the parent's files."
+    )
+}
+
+/// Check if we are inside a fork child (prevents recursive forking).
+///
+/// Scans user-role messages for the [`FORK_BOILERPLATE_TAG`] inside
+/// any text content part — the tag is only present in fork child
+/// contexts (injected by [`build_fork_child_message`]).
+///
+/// TS: isInForkChild(messages) in forkSubagent.ts
+pub fn is_in_fork_child(messages: &[Arc<Message>]) -> bool {
+    let tag_marker = format!("<{FORK_BOILERPLATE_TAG}>");
+    messages.iter().any(|arc| {
+        let Message::User(user) = arc.as_ref() else {
+            return false;
+        };
+        let LlmMessage::User { content, .. } = &user.message else {
+            return false;
+        };
+        content.iter().any(|part| {
+            matches!(
+                part,
+                UserContentPart::Text(t) if t.text.contains(&tag_marker)
+            )
+        })
+    })
+}
+
+/// Check if fork subagent feature is enabled.
+///
+/// Enabled when [`coco_config::EnvKey::CocoForkSubagent`] (`COCO_FORK_SUBAGENT`)
+/// is truthy (`1`/`true`/`yes`/`on`). TS: `isForkSubagentEnabled()` in
+/// `forkSubagent.ts`. **Note**: TS additionally short-circuits to `false` when
+/// `isCoordinatorMode()` is true or the session is non-interactive — that
+/// gating happens in [`crate::coordinator_mode::is_fork_subagent_active`],
+/// which composes this check with the coordinator/interactivity guards.
+pub fn is_fork_enabled() -> bool {
+    coco_config::env::is_env_truthy(coco_config::EnvKey::CocoForkSubagent)
+}
+
+/// Check if a fork is allowed for this context.
+///
+/// Fork requires: feature enabled, depth 0, no explicit `subagent_type`,
+/// and not already inside a fork child.
+///
+/// TS: Recursive fork guard in forkSubagent.ts
+pub fn is_fork_allowed(
+    query_depth: i32,
+    subagent_type: Option<&str>,
+    messages: &[Arc<Message>],
+) -> bool {
+    is_fork_enabled() && query_depth == 0 && subagent_type.is_none() && !is_in_fork_child(messages)
+}
+
+#[cfg(test)]
+#[path = "fork.test.rs"]
+mod tests;

@@ -1,0 +1,216 @@
+use super::*;
+use vercel_ai_provider::TextPart;
+use vercel_ai_provider::ToolCallPart;
+use vercel_ai_provider::ToolResultPart;
+
+#[test]
+fn converts_system_as_developer() {
+    let prompt = vec![LanguageModelV4Message::system("Be helpful")];
+    let (items, warnings) =
+        convert_to_openai_responses_input(&prompt, SystemMessageMode::Developer);
+    assert!(warnings.is_empty());
+    assert_eq!(items[0]["role"], "developer");
+    assert_eq!(items[0]["content"], "Be helpful");
+}
+
+#[test]
+fn converts_developer_message() {
+    let prompt = vec![LanguageModelV4Message::developer_text("Follow app policy")];
+    let (items, warnings) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert!(warnings.is_empty());
+    assert_eq!(items[0]["role"], "developer");
+    assert_eq!(items[0]["content"], "Follow app policy");
+}
+
+#[test]
+fn converts_user_text() {
+    let prompt = vec![LanguageModelV4Message::User {
+        content: vec![UserContentPart::Text(TextPart {
+            text: "Hello".into(),
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert_eq!(items[0]["role"], "user");
+    assert_eq!(items[0]["content"][0]["type"], "input_text");
+    assert_eq!(items[0]["content"][0]["text"], "Hello");
+}
+
+#[test]
+fn converts_assistant_with_tool_call() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            AssistantContentPart::Text(TextPart {
+                text: "Let me check".into(),
+                provider_metadata: None,
+            }),
+            AssistantContentPart::ToolCall(ToolCallPart {
+                tool_call_id: "call_1".into(),
+                tool_name: "get_weather".into(),
+                input: serde_json::json!({"city": "SF"}),
+                provider_executed: None,
+                provider_metadata: None,
+                invalid: false,
+                invalid_reason: None,
+            }),
+        ],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    // First item: assistant text message
+    assert_eq!(items[0]["role"], "assistant");
+    // Second item: function_call
+    assert_eq!(items[1]["type"], "function_call");
+    assert_eq!(items[1]["name"], "get_weather");
+}
+
+#[test]
+fn converts_tool_result() {
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_1".into(),
+            tool_name: "get_weather".into(),
+            output: ToolResultContent::Text {
+                value: "72F".into(),
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert_eq!(items[0]["type"], "function_call_output");
+    assert_eq!(items[0]["call_id"], "call_1");
+    assert_eq!(items[0]["output"], "72F");
+}
+
+#[test]
+fn tool_result_content_image_data_passes_through_as_input_image() {
+    // Responses API natively supports images in tool results via
+    // `input_image` with a `data:` URL. Pre-refactor the FileData branch
+    // didn't exist on this conversion path.
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_img".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![ToolResultContentPart::FileData {
+                    data: "iVBOR...".into(),
+                    media_type: "image/png".into(),
+                    filename: None,
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    let output = &items[0]["output"];
+    assert_eq!(output[0]["type"], "input_image");
+    let url = output[0]["image_url"].as_str().unwrap();
+    assert!(
+        url.starts_with("data:image/png;base64,iVBOR"),
+        "expected data URL, got: {url}"
+    );
+}
+
+#[test]
+fn tool_result_content_image_url_passes_through_as_input_image() {
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_url".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![ToolResultContentPart::FileUrl {
+                    url: "https://example.com/cat.png".into(),
+                    media_type: "image/png".into(),
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    let output = &items[0]["output"];
+    assert_eq!(output[0]["type"], "input_image");
+    assert_eq!(output[0]["image_url"], "https://example.com/cat.png");
+}
+
+#[test]
+fn tool_result_content_pdf_data_degrades_to_input_text_marker() {
+    // Responses API only accepts images in tool_result blocks — PDFs and
+    // other documents are degraded to an explicit text marker rather
+    // than silently dropped.
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_pdf".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![ToolResultContentPart::FileData {
+                    data: "JVBER...".into(),
+                    media_type: "application/pdf".into(),
+                    filename: None,
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    let output = &items[0]["output"];
+    assert_eq!(output[0]["type"], "input_text");
+    let text = output[0]["text"].as_str().unwrap();
+    assert!(text.contains("application/pdf"), "got: {text}");
+    assert!(
+        text.contains("only accepts images"),
+        "expected document degradation marker, got: {text}"
+    );
+}
+
+#[test]
+fn tool_result_content_mixed_text_and_image_emits_both_parts() {
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_mix".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![
+                    ToolResultContentPart::Text {
+                        text: "explanation".into(),
+                        provider_options: None,
+                    },
+                    ToolResultContentPart::FileData {
+                        data: "iVBOR...".into(),
+                        media_type: "image/png".into(),
+                        filename: None,
+                        provider_options: None,
+                    },
+                ],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    let output = &items[0]["output"];
+    assert_eq!(output[0]["type"], "input_text");
+    assert_eq!(output[0]["text"], "explanation");
+    assert_eq!(output[1]["type"], "input_image");
+}

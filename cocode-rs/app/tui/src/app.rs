@@ -1,0 +1,712 @@
+//! Main TUI application loop.
+//!
+//! This module provides the [`App`] struct which orchestrates the TUI,
+//! managing the event loop, state updates, and rendering.
+
+use std::io;
+use std::sync::Arc;
+
+use cocode_app_server_protocol::StreamAccumulator;
+use cocode_config::Config;
+use cocode_protocol::CoreEvent;
+use cocode_protocol::RoleSelection;
+use futures::StreamExt;
+use tokio::sync::mpsc;
+
+use cocode_keybindings::manager::KeybindingResult;
+use cocode_keybindings::manager::KeybindingsManager;
+
+use crate::agent_search::AgentInfo;
+use crate::agent_search::AgentSearchManager;
+use crate::clipboard_paste;
+use crate::command::UserCommand;
+use crate::editor;
+use crate::event::TuiCommand;
+use crate::event::TuiEvent;
+use crate::file_search::FileSearchEvent;
+use crate::file_search::FileSearchManager;
+use crate::file_search::create_file_search_channel;
+use crate::paste::PasteManager;
+use crate::render::render;
+use crate::server_notification_handler::handle_server_notification;
+use crate::skill_search::SkillSearchManager;
+use crate::state::AppState;
+use crate::state::Overlay;
+use crate::stream_event_handler::handle_stream_event_tui;
+use crate::symbol_search::SymbolSearchEvent;
+use crate::symbol_search::SymbolSearchManager;
+use crate::symbol_search::create_symbol_search_channel;
+use crate::terminal::Tui;
+use crate::tui_event_handler::handle_tui_event;
+use crate::update::handle_command;
+use crate::update::handle_file_search_event;
+use crate::update::handle_symbol_search_event;
+
+/// The main TUI application.
+///
+/// This struct manages the complete lifecycle of the TUI, including:
+/// - Event handling (keyboard, mouse, agent events)
+/// - State management
+/// - Rendering
+/// - Communication with the core agent
+pub struct App {
+    /// The TUI terminal manager.
+    tui: Tui,
+    /// Application state.
+    state: AppState,
+    /// Receiver for events from the core agent.
+    agent_rx: mpsc::Receiver<CoreEvent>,
+    /// Sender for commands to the core agent.
+    command_tx: mpsc::Sender<UserCommand>,
+    /// Available models for the picker.
+    available_models: Vec<RoleSelection>,
+    /// File search manager for @mention autocomplete.
+    file_search: FileSearchManager,
+    /// Receiver for file search events.
+    file_search_rx: mpsc::Receiver<FileSearchEvent>,
+    /// Skill search manager for /command autocomplete.
+    skill_search: SkillSearchManager,
+    /// Agent search manager for @agent-* autocomplete.
+    agent_search: AgentSearchManager,
+    /// Symbol search manager for @# autocomplete.
+    symbol_search: SymbolSearchManager,
+    /// Receiver for symbol search events.
+    symbol_search_rx: mpsc::Receiver<SymbolSearchEvent>,
+    /// Paste manager for handling large pastes.
+    paste_manager: PasteManager,
+    /// Keybindings manager for customizable key resolution.
+    keybindings: KeybindingsManager,
+    /// Accumulates `StreamEvent`s into `ServerNotification`s during a turn.
+    stream_accumulator: Option<StreamAccumulator>,
+}
+
+impl App {
+    /// Create a new TUI application.
+    ///
+    /// # Arguments
+    ///
+    /// * `agent_rx` - Receiver for events from the core agent loop
+    /// * `command_tx` - Sender for commands to the core agent
+    /// * `config` - Application configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if terminal setup fails.
+    pub fn new(
+        agent_rx: mpsc::Receiver<CoreEvent>,
+        command_tx: mpsc::Sender<UserCommand>,
+        config: Arc<Config>,
+    ) -> io::Result<Self> {
+        // Initialize i18n before anything else
+        crate::i18n::init();
+
+        let tui = Tui::new()?;
+
+        // Build available models from Config snapshot
+        let available_models = config.all_model_selections();
+
+        // Find initial selection matching main model
+        let state = available_models
+            .iter()
+            .find(|s| config.main_model().is_some_and(|m| *m == s.model))
+            .map(|sel| AppState::with_selection(sel.clone()))
+            .unwrap_or_else(AppState::new);
+
+        // Create symbol search manager (before file search)
+        let (symbol_search_tx, symbol_search_rx) = create_symbol_search_channel();
+        let symbol_search = SymbolSearchManager::new(config.cwd.clone(), symbol_search_tx);
+
+        // Create file search manager
+        let (file_search_tx, file_search_rx) = create_file_search_channel();
+        let file_search = FileSearchManager::new(config.cwd.clone(), file_search_tx);
+
+        // Create skill search manager
+        let skill_search = SkillSearchManager::new();
+
+        // Create agent search manager and load all agents (builtin + custom)
+        let mut agent_search = AgentSearchManager::new();
+        let agent_defs =
+            cocode_subagent::all_agents(&config.cocode_home, Some(config.cwd.as_path()));
+        agent_search.load_agents(agent_defs.iter().map(AgentInfo::from));
+
+        // Create paste manager
+        let paste_manager = PasteManager::new(&config.cocode_home);
+
+        // Create keybindings manager (feature-gated)
+        let kb_enabled =
+            config.is_feature_enabled(cocode_protocol::Feature::KeybindingCustomization);
+        let keybindings = KeybindingsManager::new(config.cocode_home.clone(), kb_enabled);
+
+        Ok(Self {
+            tui,
+            state,
+            agent_rx,
+            command_tx,
+            available_models,
+            file_search,
+            file_search_rx,
+            skill_search,
+            agent_search,
+            symbol_search,
+            symbol_search_rx,
+            paste_manager,
+            keybindings,
+            stream_accumulator: None,
+        })
+    }
+
+    /// Create a new TUI application with an existing terminal (for testing).
+    #[cfg(test)]
+    pub fn with_terminal(
+        tui: Tui,
+        agent_rx: mpsc::Receiver<CoreEvent>,
+        command_tx: mpsc::Sender<UserCommand>,
+    ) -> Self {
+        use std::path::PathBuf;
+        let (file_search_tx, file_search_rx) = create_file_search_channel();
+        let file_search = FileSearchManager::new(PathBuf::from("."), file_search_tx);
+        let skill_search = SkillSearchManager::new();
+        let agent_search = AgentSearchManager::new();
+        let (symbol_search_tx, symbol_search_rx) = create_symbol_search_channel();
+        let symbol_search = SymbolSearchManager::new(PathBuf::from("."), symbol_search_tx);
+
+        Self {
+            tui,
+            state: AppState::new(),
+            agent_rx,
+            command_tx,
+            available_models: vec![],
+            file_search,
+            file_search_rx,
+            skill_search,
+            agent_search,
+            symbol_search,
+            symbol_search_rx,
+            paste_manager: PasteManager::with_cache_dir(
+                std::env::temp_dir().join("cocode-test-paste-cache"),
+            ),
+            keybindings: KeybindingsManager::defaults_only(),
+            stream_accumulator: None,
+        }
+    }
+
+    /// Get a reference to the application state.
+    pub fn state(&self) -> &AppState {
+        &self.state
+    }
+
+    /// Get a mutable reference to the application state.
+    pub fn state_mut(&mut self) -> &mut AppState {
+        &mut self.state
+    }
+
+    /// Get the command sender for external use.
+    pub fn command_tx(&self) -> mpsc::Sender<UserCommand> {
+        self.command_tx.clone()
+    }
+
+    /// Run the main application loop.
+    ///
+    /// This method blocks until the application exits. It handles:
+    /// - Terminal events (keyboard, mouse, resize)
+    /// - Agent events from the core loop
+    /// - File search events for autocomplete
+    /// - Periodic tick events for animations
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Terminal I/O fails
+    /// - Event stream terminates unexpectedly
+    pub async fn run(&mut self) -> io::Result<()> {
+        // Create event stream
+        let mut event_stream = self.tui.event_stream();
+
+        // Initial render
+        self.render()?;
+
+        // Trigger initial file index refresh
+        self.file_search.refresh_index();
+
+        // Start building symbol index in the background
+        self.symbol_search.start_indexing();
+
+        loop {
+            tokio::select! {
+                // Handle TUI events (keyboard, tick, draw)
+                Some(event) = event_stream.next() => {
+                    self.handle_tui_event(event).await?;
+                }
+                // Handle agent events
+                Some(core_event) = self.agent_rx.recv() => {
+                    self.handle_core_event(core_event);
+                    self.tui.request_redraw();
+                }
+                // Handle file search results
+                Some(search_event) = self.file_search_rx.recv() => {
+                    handle_file_search_event(&mut self.state, search_event);
+                    self.tui.request_redraw();
+                }
+                // Handle symbol search results
+                Some(symbol_event) = self.symbol_search_rx.recv() => {
+                    handle_symbol_search_event(&mut self.state, symbol_event);
+                    self.tui.request_redraw();
+                }
+            }
+
+            // Check if we should exit
+            if self.state.should_exit() {
+                // Send shutdown command to core
+                let _ = self.command_tx.send(UserCommand::Shutdown).await;
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle a TUI event.
+    async fn handle_tui_event(&mut self, event: TuiEvent) -> io::Result<()> {
+        match event {
+            TuiEvent::Key(key) => {
+                self.state.ui.touch_activity();
+
+                let contexts = crate::keybinding_bridge::active_contexts(&self.state);
+                let result = self.keybindings.process_key(&contexts, &key);
+
+                let cmd = match result {
+                    KeybindingResult::Action(action) => {
+                        crate::keybinding_bridge::action_to_command(&action, &self.state)
+                    }
+                    KeybindingResult::PendingChord => {
+                        // Chord in progress — show indicator, no command yet
+                        None
+                    }
+                    KeybindingResult::ChordCancelled => {
+                        // Chord cancelled — no command
+                        None
+                    }
+                    KeybindingResult::Unhandled => {
+                        // No binding matched — treat as character input
+                        crate::keybinding_bridge::unhandled_key_to_command(&key, &self.state)
+                    }
+                };
+
+                if let Some(cmd) = cmd {
+                    self.handle_command_internal(cmd).await;
+                }
+
+                // Check for @mention or /command after input changes
+                self.check_at_mention();
+                self.check_slash_command();
+
+                self.tui.request_redraw();
+            }
+            TuiEvent::Mouse(_mouse) => {
+                // Mouse events can be handled here if needed
+            }
+            TuiEvent::Resize { .. } => {
+                self.tui.request_redraw();
+            }
+            TuiEvent::FocusChanged { focused } => {
+                self.state.ui.set_terminal_focused(focused);
+                // Could pause animations here if needed
+            }
+            TuiEvent::Draw => {
+                self.render()?;
+            }
+            TuiEvent::SpinnerTick => {
+                let mut needs_render = false;
+
+                // Advance streaming display cursor (adaptive pacing)
+                if let Some(ref mut streaming) = self.state.ui.streaming
+                    && streaming.advance_display()
+                {
+                    needs_render = true;
+                }
+
+                // Redraw for time-based spinner frame
+                if self.state.should_show_spinner() {
+                    needs_render = true;
+                }
+
+                if needs_render {
+                    self.tui.request_redraw();
+                }
+            }
+            TuiEvent::Tick => {
+                // 250ms tick for toast expiry, idle detection, chord timeout, etc.
+                let mut needs_render = false;
+
+                // Check chord timeout — resolve pending prefix as fallback.
+                // E.g., single Esc times out from Esc-Esc chord → fires ChatCancel.
+                let contexts = crate::keybinding_bridge::active_contexts(&self.state);
+                if let Some(action) = self.keybindings.check_chord_timeout(&contexts) {
+                    if let Some(cmd) =
+                        crate::keybinding_bridge::action_to_command(&action, &self.state)
+                    {
+                        self.handle_command_internal(cmd).await;
+                    }
+                    needs_render = true;
+                }
+
+                // Expire old toasts
+                if self.state.ui.has_toasts() {
+                    self.state.ui.expire_toasts();
+                    needs_render = true;
+                }
+
+                // Expire sandbox violation flash (5s after last violation)
+                if let Some(deadline) = self.state.session.sandbox_violation_flash_until
+                    && std::time::Instant::now() >= deadline
+                {
+                    self.state.session.sandbox_violation_count = 0;
+                    self.state.session.sandbox_violation_flash_until = None;
+                    needs_render = true;
+                }
+
+                // Check for idle notification
+                if self.state.ui.check_idle() {
+                    self.state
+                        .ui
+                        .toast_info(crate::i18n::t!("toast.idle_waiting").to_string());
+                    needs_render = true;
+                }
+
+                if needs_render {
+                    self.tui.request_redraw();
+                }
+            }
+            TuiEvent::Paste(text) => {
+                // Terminal bracketed paste already gave us text — use it directly.
+                // No need to probe the clipboard for images here (that's Ctrl+V's job).
+                let processed = self.paste_manager.process_text(text);
+                for c in processed.chars() {
+                    self.state.ui.input.insert_char(c);
+                }
+                // Check for @mention or /command after paste
+                self.check_at_mention();
+                self.check_slash_command();
+                self.tui.request_redraw();
+            }
+            TuiEvent::Agent(core_event) => {
+                self.handle_core_event(core_event);
+                self.tui.request_redraw();
+            }
+            TuiEvent::Command(cmd) => {
+                self.handle_command_internal(cmd).await;
+                self.tui.request_redraw();
+            }
+        }
+        Ok(())
+    }
+
+    /// Check for @mention in input and trigger file, agent, or symbol search if needed.
+    ///
+    /// Suppressed in plan mode — the model should focus on planning,
+    /// and inline autocomplete suggestions would be distracting.
+    fn check_at_mention(&mut self) {
+        if self.state.session.plan_mode {
+            self.state.ui.clear_file_suggestions();
+            self.state.ui.clear_agent_suggestions();
+            self.state.ui.clear_symbol_suggestions();
+            self.file_search.cancel();
+            self.symbol_search.cancel();
+            return;
+        }
+        if let Some((start_pos, query)) = self.state.ui.input.current_at_token() {
+            if has_line_range_suffix(&query) {
+                // User is typing a line range suffix — dismiss autocomplete
+                self.state.ui.clear_file_suggestions();
+                self.state.ui.clear_agent_suggestions();
+                self.state.ui.clear_symbol_suggestions();
+                self.file_search.cancel();
+                self.symbol_search.cancel();
+                return;
+            }
+
+            if let Some(symbol_query) = query.strip_prefix('#') {
+                // Symbol mention: @#query → search symbols
+                self.state.ui.clear_file_suggestions();
+                self.state.ui.clear_agent_suggestions();
+                self.file_search.cancel();
+                self.state
+                    .ui
+                    .start_symbol_suggestions(symbol_query.to_string(), start_pos);
+                self.symbol_search
+                    .on_query(symbol_query.to_string(), start_pos);
+            } else if query.starts_with("agent") && self.agent_search.has_agents() {
+                // Agent mention: synchronous search, no debounce needed
+                self.state.ui.clear_file_suggestions();
+                self.state.ui.clear_symbol_suggestions();
+                self.file_search.cancel();
+                self.symbol_search.cancel();
+                self.state
+                    .ui
+                    .start_agent_suggestions(query.clone(), start_pos);
+                let suggestions = self.agent_search.search(&query);
+                self.state.ui.update_agent_suggestions(suggestions);
+            } else {
+                // File/directory mention: async search
+                self.state.ui.clear_agent_suggestions();
+                self.state.ui.clear_symbol_suggestions();
+                self.symbol_search.cancel();
+                self.state
+                    .ui
+                    .start_file_suggestions(query.clone(), start_pos);
+                self.file_search.on_query(query, start_pos);
+            }
+        } else {
+            // No @mention, clear all suggestions
+            self.state.ui.clear_file_suggestions();
+            self.state.ui.clear_agent_suggestions();
+            self.state.ui.clear_symbol_suggestions();
+            self.file_search.cancel();
+            self.symbol_search.cancel();
+        }
+    }
+
+    /// Check for /command in input and trigger skill search if needed.
+    ///
+    /// Suppressed in plan mode — the model should focus on planning, not skills.
+    fn check_slash_command(&mut self) {
+        if self.state.session.plan_mode {
+            self.state.ui.clear_skill_suggestions();
+            return;
+        }
+        if let Some((start_pos, query)) = self.state.ui.input.current_slash_token() {
+            // Skill suggestions are exclusive with file/agent suggestions
+            self.state.ui.clear_file_suggestions();
+            self.state.ui.clear_agent_suggestions();
+            self.file_search.cancel();
+            // Start or update skill suggestions
+            self.state
+                .ui
+                .start_skill_suggestions(query.clone(), start_pos);
+            let suggestions = self.skill_search.search(&query);
+            self.state.ui.update_skill_suggestions(suggestions);
+        } else {
+            // No /command, clear suggestions
+            self.state.ui.clear_skill_suggestions();
+        }
+    }
+
+    /// Load skills into the skill search manager.
+    pub fn load_skills<'a>(
+        &mut self,
+        skills: impl Iterator<Item = &'a cocode_skill::SkillPromptCommand>,
+    ) {
+        self.skill_search.load_skills(skills);
+    }
+
+    /// Load agents into the agent search manager.
+    pub fn load_agents(&mut self, agents: impl Iterator<Item = AgentInfo>) {
+        self.agent_search.load_agents(agents);
+    }
+
+    /// Handle a TUI command internally.
+    async fn handle_command_internal(&mut self, cmd: TuiCommand) {
+        // Handle external editor specially - it needs terminal access
+        if matches!(cmd, TuiCommand::OpenExternalEditor) {
+            self.handle_external_editor();
+            return;
+        }
+
+        // Handle clipboard paste specially - needs &mut paste_manager
+        if matches!(cmd, TuiCommand::PasteFromClipboard) {
+            self.handle_clipboard_paste();
+            return;
+        }
+
+        handle_command(
+            &mut self.state,
+            cmd,
+            &self.command_tx,
+            &self.available_models,
+            &self.paste_manager,
+        )
+        .await;
+    }
+
+    /// Handle opening an external editor.
+    fn handle_external_editor(&mut self) {
+        let current_input = self.state.ui.input.text().to_string();
+
+        // Run the external editor (this blocks and suspends the TUI)
+        match editor::edit_in_external_editor(&current_input) {
+            Ok(result) => {
+                if result.modified {
+                    self.state.ui.input.set_text(result.content);
+                    tracing::info!("Input updated from external editor");
+                } else {
+                    tracing::debug!("External editor: no changes made");
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to open external editor: {e}");
+                self.state
+                    .ui
+                    .set_overlay(Overlay::Error(format!("External editor failed: {e}")));
+            }
+        }
+    }
+
+    /// Clipboard paste triggered by Ctrl+V / Alt+V.
+    ///
+    /// Opens the clipboard once, tries image first, falls back to text.
+    /// This is separate from `TuiEvent::Paste` which is terminal-provided text.
+    /// When the question overlay "Other" input is active, pastes into that field.
+    fn handle_clipboard_paste(&mut self) {
+        let cb = match clipboard_paste::open_clipboard() {
+            Ok(cb) => cb,
+            Err(_) => return,
+        };
+
+        // Check if question overlay "Other" input is active
+        let in_question_other = matches!(
+            &self.state.ui.overlay,
+            Some(Overlay::Question(q)) if q.other_input_active
+        );
+
+        // 1. Try clipboard image first (JPEG, PNG, GIF, WebP)
+        match clipboard_paste::paste_image(cb) {
+            Ok((data, media_type)) => {
+                let pill = self.paste_manager.process_image(data, media_type);
+                if in_question_other {
+                    if let Some(Overlay::Question(q)) = &mut self.state.ui.overlay {
+                        q.other_text.push_str(&pill);
+                    }
+                } else {
+                    for c in pill.chars() {
+                        self.state.ui.input.insert_char(c);
+                    }
+                }
+                self.state
+                    .ui
+                    .toast_success(crate::i18n::t!("toast.image_pasted").to_string());
+                return;
+            }
+            Err(_) => {
+                // No image — try text below
+            }
+        }
+
+        // 2. Fall back to text (need a fresh clipboard handle)
+        let cb = match clipboard_paste::open_clipboard() {
+            Ok(cb) => cb,
+            Err(_) => return,
+        };
+        if let Ok(text) = clipboard_paste::paste_text(cb) {
+            let processed = self.paste_manager.process_text(text);
+            if in_question_other {
+                if let Some(Overlay::Question(q)) = &mut self.state.ui.overlay {
+                    q.other_text.push_str(&processed);
+                }
+            } else {
+                for c in processed.chars() {
+                    self.state.ui.input.insert_char(c);
+                }
+            }
+        }
+    }
+
+    /// Handle a core event from the agent loop.
+    ///
+    /// Dispatches by variant:
+    /// - `Protocol` → `handle_server_notification` (same as SDK clients)
+    /// - `Stream`   → TUI display + `StreamAccumulator` → notifications
+    /// - `Tui`      → `handle_tui_event` (overlays, toasts, progress)
+    fn handle_core_event(&mut self, event: CoreEvent) {
+        use cocode_app_server_protocol::ServerNotification;
+
+        self.state.ui.touch_activity();
+
+        match event {
+            CoreEvent::Protocol(ref sn) => {
+                // Initialize accumulator on TurnStarted
+                if let ServerNotification::TurnStarted(params) = sn {
+                    self.stream_accumulator = Some(StreamAccumulator::new(params.turn_id.clone()));
+                }
+
+                // Update TUI agent search on AgentsRegistered
+                if let ServerNotification::AgentsRegistered(params) = sn {
+                    self.agent_search
+                        .load_agents(params.agents.iter().map(|a| AgentInfo {
+                            agent_type: a.agent_type.clone(),
+                            name: a.name.clone(),
+                            description: a.description.clone().unwrap_or_default(),
+                        }));
+                }
+
+                handle_server_notification(&mut self.state, sn.clone());
+
+                // Flush accumulator on TurnCompleted
+                if let ServerNotification::TurnCompleted(_) = sn
+                    && let Some(ref mut acc) = self.stream_accumulator
+                {
+                    for notification in acc.flush() {
+                        handle_server_notification(&mut self.state, notification);
+                    }
+                }
+            }
+            CoreEvent::Stream(se) => {
+                // Direct TUI handling (streaming buffers, tool tracking)
+                handle_stream_event_tui(&mut self.state, &se);
+
+                // Accumulate into protocol notifications
+                if let Some(ref mut acc) = self.stream_accumulator {
+                    for notification in acc.process(se) {
+                        handle_server_notification(&mut self.state, notification);
+                    }
+                }
+            }
+            CoreEvent::Tui(te) => {
+                handle_tui_event(&mut self.state, te);
+            }
+        }
+    }
+
+    /// Render the current state to the terminal.
+    fn render(&mut self) -> io::Result<()> {
+        self.tui.draw(|frame| {
+            render(frame, &self.state);
+        })
+    }
+}
+
+/// Check if query ends with a line range suffix (e.g., ":10" or ":10-20").
+fn has_line_range_suffix(query: &str) -> bool {
+    if let Some(colon_pos) = query.rfind(':') {
+        let after_colon = &query[colon_pos + 1..];
+        !after_colon.is_empty()
+            && after_colon
+                .split('-')
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+    } else {
+        false
+    }
+}
+
+/// Create a channel pair for TUI-agent communication.
+///
+/// Returns `(agent_tx, agent_rx, command_tx, command_rx)` where:
+/// - `agent_tx`: Core sends CoreEvents to TUI
+/// - `agent_rx`: TUI receives CoreEvents
+/// - `command_tx`: TUI sends UserCommands to Core
+/// - `command_rx`: Core receives UserCommands
+pub fn create_channels(
+    buffer_size: usize,
+) -> (
+    mpsc::Sender<CoreEvent>,
+    mpsc::Receiver<CoreEvent>,
+    mpsc::Sender<UserCommand>,
+    mpsc::Receiver<UserCommand>,
+) {
+    let (agent_tx, agent_rx) = mpsc::channel(buffer_size);
+    let (command_tx, command_rx) = mpsc::channel(buffer_size);
+    (agent_tx, agent_rx, command_tx, command_rx)
+}
+
+#[cfg(test)]
+#[path = "app.test.rs"]
+mod tests;

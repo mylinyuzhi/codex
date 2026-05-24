@@ -17,7 +17,9 @@ storybook-static/
 
 # ignore README for publishing
 codex-cli/README.md
-
+.codex/*
+!.codex/skills/
+!.codex/skills/**
 # ignore Nix derivation results
 result
 
@@ -29,9 +31,10 @@ result
 *.swp
 *~
 
+# Claude Code scheduler runtime state
+.claude/scheduled_tasks.lock
+
 # cli tools
-CLAUDE.md
-.claude/
 AGENTS.override.md
 
 # caches

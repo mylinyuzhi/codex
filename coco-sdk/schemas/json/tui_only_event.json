@@ -1,0 +1,1450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TuiOnlyEvent",
+  "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\n23 variants (20 from design §4.1 + 3 coco-rs extensions).",
+  "oneOf": [
+    {
+      "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.updated_input` as a\n`{ ..original_input, user_choice: \"<value>\" }` JSON object so\nthe tool's `execute()` can branch on the choice. TS parity:\n`ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can splice\nthe picked `user_choice` into it verbatim and derive path-scoped\nread permission updates for classic \"always allow\" approvals.",
+      "type": "object",
+      "properties": {
+        "choices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/PermissionAskChoice"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "display_input": {
+          "$ref": "#/$defs/PermissionDisplayInput"
+        },
+        "original_input": true,
+        "permission_suggestions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionUpdate"
+          }
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "show_always_allow": {
+          "description": "Whether the UI may offer an \"always allow\" action. False\nwhen managed policy restricts local/session rule changes.",
+          "type": "boolean",
+          "default": false
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "approval_required"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "tool_name",
+        "description",
+        "display_input"
+      ]
+    },
+    {
+      "description": "AskUserQuestion overlay needed. `input` carries the full tool\ninput dict (the `questions[]` array, etc.) verbatim so the TUI\nrenders the rich multi-question UI (multiSelect, preview, notes)\nmatching TS `AskUserQuestionPermissionRequest.tsx`. The TUI\nechoes the answer payload back via `UserCommand::ApprovalResponse`\nwith `updated_input = Some({...input, answers, annotations})`.",
+      "type": "object",
+      "properties": {
+        "input": true,
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "question_asked"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "input"
+      ]
+    },
+    {
+      "description": "MCP elicitation overlay needed.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "schema": true,
+        "server": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "elicitation_requested"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "server",
+        "schema"
+      ]
+    },
+    {
+      "description": "Sandbox approval overlay needed.",
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "sandbox_approval_required"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "operation"
+      ]
+    },
+    {
+      "description": "Plugin picker data loaded.",
+      "type": "object",
+      "properties": {
+        "plugins": {
+          "type": "array",
+          "items": true
+        },
+        "type": {
+          "type": "string",
+          "const": "plugin_data_ready"
+        }
+      },
+      "required": [
+        "type",
+        "plugins"
+      ]
+    },
+    {
+      "description": "Output style picker data loaded.",
+      "type": "object",
+      "properties": {
+        "styles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "output_styles_ready"
+        }
+      },
+      "required": [
+        "type",
+        "styles"
+      ]
+    },
+    {
+      "description": "Slash-command catalogue changed — sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync. TS parity:\nthe TS popup re-queries `getCommands()` inline; coco-rs pushes\nthe snapshot because the registry lives in the CLI process.",
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SlashCommandInfo"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "available_commands_refreshed"
+        }
+      },
+      "required": [
+        "type",
+        "commands"
+      ]
+    },
+    {
+      "description": "Open the resume picker inside the running TUI session.\n\nTS parity: `/resume` with no args opens the saved-chat picker;\n`/resume <id-or-name>` bypasses this and resumes directly.",
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SdkSessionSummary"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "open_session_browser"
+        }
+      },
+      "required": [
+        "type",
+        "sessions"
+      ]
+    },
+    {
+      "description": "Rewind picker per-row metadata, emitted once on picker mount.\n\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) — the\npicker renders \"⚠ No code restore\" for that row.\n`metadata == Some { files_changed: 0, .. }` means the snapshot\nexists but nothing changed — picker renders \"No code changes\".\n\nTS: the per-row `Promise.all(messageOptions.map(...))` walk in\n`MessageSelector.tsx:285-312`. Bundled here so the bounded\nTUI command channel does not drop individual row events on\ntranscripts with many user messages.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RewindRowMetadata"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "rewind_row_metadata_ready"
+        }
+      },
+      "required": [
+        "type",
+        "rows"
+      ]
+    },
+    {
+      "description": "Rewind restore-preview diff stats for the selected message,\nemitted after the user confirms a checkpoint pick. `stats ==\nNone` means `fileHistoryCanRestore(...)` was false — the\noption screen suppresses code-restore choices and shows the\nconversation-only path.\n\nTS: the single `await fileHistoryGetDiffStats(...)` call at\n`MessageSelector.tsx:173`.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "stats": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RewindDiffStatsPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "const": "rewind_restore_preview_ready"
+        }
+      },
+      "required": [
+        "type",
+        "message_id"
+      ]
+    },
+    {
+      "description": "Compaction circuit breaker opened.",
+      "type": "object",
+      "properties": {
+        "failures": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "compaction_circuit_breaker_open"
+        }
+      },
+      "required": [
+        "type",
+        "failures"
+      ]
+    },
+    {
+      "description": "Micro-compaction applied notification.",
+      "type": "object",
+      "properties": {
+        "removed": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "micro_compaction_applied"
+        }
+      },
+      "required": [
+        "type",
+        "removed"
+      ]
+    },
+    {
+      "description": "Session memory compaction applied notification.",
+      "type": "object",
+      "properties": {
+        "summary_tokens": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "session_memory_compact_applied"
+        }
+      },
+      "required": [
+        "type",
+        "summary_tokens"
+      ]
+    },
+    {
+      "description": "Speculative execution rolled back.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "speculative_rolled_back"
+        }
+      },
+      "required": [
+        "type",
+        "reason"
+      ]
+    },
+    {
+      "description": "Memory extraction started.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session_memory_extraction_started"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Memory extraction completed.",
+      "type": "object",
+      "properties": {
+        "extracted": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "session_memory_extraction_completed"
+        }
+      },
+      "required": [
+        "type",
+        "extracted"
+      ]
+    },
+    {
+      "description": "Memory extraction failed.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "session_memory_extraction_failed"
+        }
+      },
+      "required": [
+        "type",
+        "error"
+      ]
+    },
+    {
+      "description": "Cron job disabled by circuit breaker.",
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "cron_job_disabled"
+        }
+      },
+      "required": [
+        "type",
+        "job_id",
+        "reason"
+      ]
+    },
+    {
+      "description": "Missed cron job fires.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "cron_jobs_missed"
+        }
+      },
+      "required": [
+        "type",
+        "count"
+      ]
+    },
+    {
+      "description": "Streaming tool input delta (typing effect).\n\n# Status: reserved scaffolding, not yet wired\n\nThe TUI has a handler (`server_notification_handler::handle_tui_only`)\nthat appends the delta to `ToolExecution.streaming_input` for a\ntyping-effect display, but **no producer currently emits this variant**\nin coco-rs.\n\nThe inference layer's `StreamEvent::ToolCallDelta` (a different type,\ninternal to `coco-inference`) is fully accumulated into the complete\ntool input before the engine emits `AgentStreamEvent::ToolUseQueued`\nwith the finalized input. Consumers see the complete input at once.\n\nFuture work to wire this up would require the inference layer to\nforward the partial JSON fragments alongside the accumulation, and\nthe engine to emit them here as `CoreEvent::Tui(ToolCallDelta { ... })`.\n\n# Why keep it in TuiOnlyEvent (not AgentStreamEvent)\n\nPer `event-system-design.md` §3.3: partial JSON deltas serve a purely\nUI display purpose (typing effect) and the SDK does not need them —\n`ToolUseQueued` already contains the complete input. Promoting to\n`AgentStreamEvent` would burden SDK consumers with partial JSON they\nmust re-assemble, with no behavioral benefit.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_call_delta"
+        }
+      },
+      "required": [
+        "type",
+        "call_id",
+        "delta"
+      ]
+    },
+    {
+      "description": "Tool progress update (progress bar).",
+      "type": "object",
+      "properties": {
+        "data": true,
+        "tool_use_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_progress"
+        }
+      },
+      "required": [
+        "type",
+        "tool_use_id",
+        "data"
+      ]
+    },
+    {
+      "description": "Tool execution aborted notification.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_execution_aborted"
+        }
+      },
+      "required": [
+        "type",
+        "tool_use_id",
+        "reason"
+      ]
+    },
+    {
+      "description": "Rewind completed — TUI truncates messages and restores input state.\ncoco-rs extension: UI-only because it carries TUI-specific identifiers\nfor message truncation and input repopulation. Out-of-band from the\ndesign's `rewind/completed` ServerNotification which carries protocol\nmetadata only.",
+      "type": "object",
+      "properties": {
+        "files_changed": {
+          "description": "Number of files restored (0 if conversation-only).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "target_message_id": {
+          "description": "UUID of the target user message. Empty = code-only rewind.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "rewind_completed"
+        }
+      },
+      "required": [
+        "type",
+        "target_message_id",
+        "files_changed"
+      ]
+    },
+    {
+      "description": "Local slash-command produced a `CommandResult::Text` (or\n`Compact { display_text }`). Surfaced as a system-role chat message\nso it reads inline with the transcript. `text` is the pre-rendered\nbody — never translated, since it carries the handler's actual\noutput (often command-specific status / git output / prompt\npreview).",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "slash_command_result"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "text"
+      ]
+    },
+    {
+      "description": "Dispatcher-side breadcrumb for slash commands the runtime couldn't\nfully execute (missing handler, handler error, empty Prompt body,\ndialog wiring pending). The TUI translates `kind` via the i18n\ncatalog before rendering.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SlashCommandStatusKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "slash_command_status"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "kind"
+      ]
+    },
+    {
+      "description": "Tell the TUI to open the rewind picker overlay.\n\nEmitted by the slash-command dispatcher when `/rewind` resolves\nthrough the generic `DialogSpec` mapping. The TUI consumes the\ncurrent transcript cells to build the bare picker; preselected\nrewind remains an internal UI command path.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_rewind_picker"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash\ndispatcher pre-builds entries via\n`coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries`\nand carries them through here so the TUI doesn't recompute paths.\nOn selection the TUI sends an `OpenMemoryFile` command to the CLI\nbridge; the bridge creates the file (`mode wx` semantics), opens\n`$VISUAL || $EDITOR`, and reports the result back as a transcript\nvisible event. On cancel the TUI emits \"Cancelled memory editing\".\nTS parity: `commands/memory/memory.tsx`.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryDialogEntry"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "open_memory_dialog"
+        }
+      },
+      "required": [
+        "type",
+        "entries"
+      ]
+    },
+    {
+      "description": "`/memory` editor launch completed successfully.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Path of the file passed to the editor.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "memory_file_opened"
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ]
+    },
+    {
+      "description": "`/memory` editor launch failed before a process was started.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path of the file the user selected.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "memory_file_open_failed"
+        }
+      },
+      "required": [
+        "type",
+        "path",
+        "error"
+      ]
+    },
+    {
+      "description": "Plan editor launch completed successfully.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Path of the session plan file passed to the editor.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "plan_file_opened"
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ]
+    },
+    {
+      "description": "Plan editor launch failed before a process was started.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path of the session plan file.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "plan_file_open_failed"
+        }
+      },
+      "required": [
+        "type",
+        "path",
+        "error"
+      ]
+    },
+    {
+      "description": "Request the foreground TUI to leave raw mode / alt-screen before\nthe CLI runner starts an interactive editor process.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "description": "Opaque request id echoed back by the TUI once terminal modes\nare ready for the external editor.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "external_editor_prepare"
+        }
+      },
+      "required": [
+        "type",
+        "request_id"
+      ]
+    },
+    {
+      "description": "External prompt editor completed.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "Edited prompt content read back from the temp file.",
+          "type": "string"
+        },
+        "modified": {
+          "description": "Whether the edited content differs from the initial content.",
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string",
+          "const": "prompt_editor_completed"
+        }
+      },
+      "required": [
+        "type",
+        "content",
+        "modified"
+      ]
+    },
+    {
+      "description": "External prompt editor failed before content could be read back.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "prompt_editor_failed"
+        }
+      },
+      "required": [
+        "type",
+        "error"
+      ]
+    },
+    {
+      "description": "Result of a prompt-mode `!`-prefixed bash submission. The TUI\nfolds this into a `MessageContent::BashOutput` chat message\nkeyed by the same `user_message_id` as the matching\n`BashInput`. Emitted by the CLI bridge after running the\ncommand via `coco_shell::ShellExecutor`. TS parity:\n`LocalShellTask` completion.",
+      "type": "object",
+      "properties": {
+        "exit_code": {
+          "description": "Process exit code; non-zero shades the output red.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "output": {
+          "description": "Merged stdout + stderr, already truncated to a reasonable\ndisplay size by the bridge.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "bash_command_completed"
+        },
+        "user_message_id": {
+          "description": "Shared id of the bash input/output pair so rewind groups them.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "user_message_id",
+        "output",
+        "exit_code"
+      ]
+    },
+    {
+      "description": "Tell the TUI to open the provider-grouped model picker. Emitted\nwhen the slash dispatcher resolves `/model` with no args (typed\n`/model` from input bar). The TUI consumes the current\n`state.session.model` to mark the \"current\" entry.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_model_picker"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    }
+  ],
+  "$defs": {
+    "MemoryDialogEntry": {
+      "description": "One row in the `/memory` file-picker overlay. Built by the slash\ndispatcher and shipped to the TUI via [`TuiOnlyEvent::OpenMemoryDialog`].",
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "Display label shown in the picker row.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Filesystem path of the memory file (also the editor target).",
+          "type": "string"
+        },
+        "row_kind": {
+          "description": "Row semantics for rendering and selection behavior.",
+          "$ref": "#/$defs/MemoryDialogRowKind",
+          "default": {
+            "exists": false,
+            "kind": "file",
+            "read_only": false
+          }
+        },
+        "scope": {
+          "description": "Scope tag (drives ordering and color hint).",
+          "$ref": "#/$defs/MemoryDialogScope"
+        }
+      },
+      "required": [
+        "path",
+        "label",
+        "scope"
+      ]
+    },
+    "MemoryDialogRowKind": {
+      "description": "Semantic row kind for the `/memory` picker.",
+      "oneOf": [
+        {
+          "description": "Editable memory file.",
+          "type": "object",
+          "properties": {
+            "exists": {
+              "description": "Whether the file already exists at event construction time.",
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "type": "string",
+              "const": "file"
+            },
+            "read_only": {
+              "description": "Whether the row should be treated as read-only by future UIs.",
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Folder grouping row for future memory directory surfaces.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "description": "Whether the folder is currently enabled.",
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "type": "string",
+              "const": "folder"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Toggle row for future auto-memory settings.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "description": "Current toggle state.",
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "type": "string",
+              "const": "toggle"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "MemoryDialogScope": {
+      "description": "Scope tag for a memory file picker entry. Mirrors\n`coco_commands::MemoryScope` — kept in `coco-types` so the TUI can\nconsume the event without depending on `coco-commands`.",
+      "oneOf": [
+        {
+          "description": "Enterprise / managed (typically read-only for the user).",
+          "type": "string",
+          "const": "managed"
+        },
+        {
+          "description": "User-global (`~/.coco/CLAUDE.md` or `~/CLAUDE.md`).",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "Project (`./CLAUDE.md`).",
+          "type": "string",
+          "const": "project"
+        },
+        {
+          "description": "Project-local (`./CLAUDE.local.md`, gitignored).",
+          "type": "string",
+          "const": "project_local"
+        },
+        {
+          "description": "`<dir>/.claude/CLAUDE.md` — project-config-dir convention.",
+          "type": "string",
+          "const": "project_config"
+        },
+        {
+          "description": "Subdirectory CLAUDE.md (auto-loaded under cwd).",
+          "type": "string",
+          "const": "subdir"
+        },
+        {
+          "description": "File loaded transitively via `@-import` from a parent memory file.",
+          "type": "string",
+          "const": "imported"
+        },
+        {
+          "description": "Auto-memory directory entry (`<memdir>/`).",
+          "type": "string",
+          "const": "auto_mem_folder"
+        },
+        {
+          "description": "Team memory directory entry (`<memdir>/team/`).",
+          "type": "string",
+          "const": "team_mem_folder"
+        },
+        {
+          "description": "Per-agent memory directory entry.",
+          "type": "string",
+          "const": "agent_mem_folder"
+        }
+      ]
+    },
+    "PermissionAskChoice": {
+      "description": "One option in a multi-choice permission dialog.\n\nUsed by `ToolCheckResult::Ask.choices` and surfaced on the wire via\n`PermissionDecision::Ask.choices`. The TUI renders one row per\nchoice; the picked `value` is echoed back so the tool's `execute()`\ncan branch on the user's selection.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional one-line explanation rendered under the label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "Short row label shown to the user.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-keep-context\"`, `\"yes-clear-context\"`, `\"no\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "PermissionBehavior": {
+      "description": "Permission behavior for a rule.",
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ]
+    },
+    "PermissionDisplayInput": {
+      "description": "Bounded, UI-ready permission input display.\n\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "json"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "empty"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "PermissionMode": {
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at\n`coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits',\n'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the\ndrifting variants accept legacy snake_case input so old session\ntranscripts deserialize cleanly.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "default",
+            "plan",
+            "bypassPermissions",
+            "dontAsk",
+            "acceptEdits"
+          ]
+        },
+        {
+          "description": "Feature-gated auto mode.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Internal: escalate to parent agent.",
+          "type": "string",
+          "const": "bubble"
+        }
+      ]
+    },
+    "PermissionRule": {
+      "description": "A single permission rule.",
+      "type": "object",
+      "properties": {
+        "behavior": {
+          "$ref": "#/$defs/PermissionBehavior"
+        },
+        "source": {
+          "$ref": "#/$defs/PermissionRuleSource"
+        },
+        "value": {
+          "$ref": "#/$defs/PermissionRuleValue"
+        }
+      },
+      "required": [
+        "source",
+        "behavior",
+        "value"
+      ]
+    },
+    "PermissionRuleSource": {
+      "description": "Source of a permission rule (ordered by priority: Session is most specific).",
+      "type": "string",
+      "enum": [
+        "user_settings",
+        "project_settings",
+        "local_settings",
+        "flag_settings",
+        "policy_settings",
+        "cli_arg",
+        "command",
+        "session"
+      ]
+    },
+    "PermissionRuleValue": {
+      "description": "Permission rule value — tool_pattern is a glob/wildcard expression.\nExamples: \"Read\", \"Bash(git *)\", \"mcp__slack__*\", \"*\"",
+      "type": "object",
+      "properties": {
+        "rule_content": {
+          "description": "Command pattern within tool (e.g. \"git *\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_pattern": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_pattern"
+      ]
+    },
+    "PermissionUpdate": {
+      "description": "A permission update action.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "add_rules"
+            }
+          },
+          "required": [
+            "type",
+            "rules",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "replace_rules"
+            }
+          },
+          "required": [
+            "type",
+            "rules",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_rules"
+            }
+          },
+          "required": [
+            "type",
+            "rules",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_mode"
+            }
+          },
+          "required": [
+            "type",
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "add_directories"
+            }
+          },
+          "required": [
+            "type",
+            "directories",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_directories"
+            }
+          },
+          "required": [
+            "type",
+            "directories",
+            "destination"
+          ]
+        }
+      ]
+    },
+    "PermissionUpdateDestination": {
+      "description": "Destination for persisting permission updates.\n\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. TS parity: same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`). TS parity:\n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user_settings",
+            "project_settings",
+            "local_settings",
+            "session",
+            "cli_arg"
+          ]
+        },
+        {
+          "description": "Rules contributed by a command/skill frontmatter `allowed-tools`.\nIn-memory only; cleared on session end.",
+          "type": "string",
+          "const": "command"
+        }
+      ]
+    },
+    "RewindDiffStatsPayload": {
+      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n\nTS: `DiffStats` from `utils/fileHistory.ts:55-61`. `file_paths`\nmatches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels at\n`MessageSelector.tsx:481-523`.\n\n# Two semantics, one wire type\n\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n\n- [`TuiOnlyEvent::RewindRowMetadataReady`] — **forward-time**.\n  `insertions` = lines added between two adjacent user-message\n  checkpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\n  to mirror TS `computeDiffStatsBetweenMessages`\n  (`MessageSelector.tsx:722-765`), which counts `+` lines from\n  `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] — **rewind-direction**.\n  `insertions` = lines that rewind would add back; `deletions` =\n  lines that rewind would remove. Computed via\n  [`FileHistoryState::get_diff_stats`] to mirror TS\n  `computeDiffStatsForFile` (`fileHistory.ts:705`)'s\n  `diffLines(originalContent, backupContent)` direction.\n\nTS itself returns the same `DiffStats` shape from both call sites\nand lets context disambiguate — Rust matches that contract.",
+      "type": "object",
+      "properties": {
+        "deletions": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "file_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "insertions": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "insertions",
+        "deletions",
+        "file_paths"
+      ]
+    },
+    "RewindRowMetadata": {
+      "description": "Per-row metadata for a single rewind picker row.\n\nTS: one entry of the `fileHistoryMetadata: Record<number,\nDiffStats>` map in `MessageSelector.tsx:285-312`.\n`metadata == None` corresponds to `canRestore = false` (no\nsnapshot — picker shows \"⚠ No code restore\").",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RewindDiffStatsPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message_id"
+      ]
+    },
+    "SdkSessionSummary": {
+      "description": "Minimal session metadata returned by `session/list` and `session/read`.",
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "message_count": {
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        },
+        "model": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "model",
+        "cwd",
+        "created_at"
+      ]
+    },
+    "SlashCommandInfo": {
+      "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of\nthese at startup (and again after `/reload-plugins`) so the\nautocomplete popup and command palette can render and rank without\nreaching into [`CommandBase`] every time.\n\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a\n[`crate::TuiOnlyEvent`] variant — events are the only path between\nthe agent driver and the TUI, and event payload types must be\nfoundation-layer.",
+      "type": "object",
+      "properties": {
+        "aliases": {
+          "description": "Alternate names that also match this command. Searched by the\nranker so `/cls` finds `/clear` when `cls` is an alias.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "argument_hint": {
+          "description": "Hint string rendered next to the description when the command\ntakes arguments (e.g. `\"<file>\"` for `/add-dir`). Mirrors\n[`CommandBase::argument_hint`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Short description shown dimmed in the popup. `None` when the\nsource command registered without one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Canonical command name without the leading `/`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "SlashCommandStatusKind": {
+      "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to\na `slash.status.*` key in the TUI locale catalog.\n\nWire format intentionally tagged so SDK clients can render their own\nlocalized strings instead of consuming the TUI's English fallback.",
+      "oneOf": [
+        {
+          "description": "Registered command has no `handler` — typically a plugin\ncontribution stub that wasn't bridged.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "no_handler"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Handler returned `Err`. `error` is the formatted error message.",
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "kind",
+            "error"
+          ]
+        },
+        {
+          "description": "Handler returned `CommandResult::Prompt` with no text parts.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "empty_prompt"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Handler returned `CommandResult::OpenDialog`, but coco-rs has not\nyet bound this dialog kind to a TUI overlay. `dialog_kind` is a\nhuman-readable label like \"memory file selector\".",
+          "type": "object",
+          "properties": {
+            "dialog_kind": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "dialog_pending"
+            }
+          },
+          "required": [
+            "kind",
+            "dialog_kind"
+          ]
+        },
+        {
+          "description": "`/permissions allow` invoked with no tool name. Dispatcher-side\nusage hint — the TUI translates via `slash.permissions.usage_allow`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "permissions_usage_allow"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "`/permissions deny` invoked with no tool name. Dispatcher-side\nusage hint — the TUI translates via `slash.permissions.usage_deny`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "permissions_usage_deny"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    }
+  }
+}
