@@ -177,26 +177,34 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             .build_engine_from_config(engine_config, cancel, None)
             .await;
 
+        let parent_msg_count = agent_config.fork_context_messages.len();
+        tracing::debug!(
+            fork_label = %options.fork_label,
+            query_source = %options.query_source,
+            parent_message_count = parent_msg_count,
+            "fork dispatch start"
+        );
+
         // Drive the engine. `fork_context_messages` carries the
         // parent's history verbatim (shared via `Arc<Message>`),
         // mirroring the cache-share path. Empty fork-context messages
         // → run with the prompt only (rare; promptSuggestion etc.
         // always pass parent history).
-        let result = if !agent_config.fork_context_messages.is_empty() {
+        let result = if parent_msg_count > 0 {
             let mut messages: Vec<std::sync::Arc<coco_messages::Message>> =
                 agent_config.fork_context_messages.clone();
             messages.push(std::sync::Arc::new(coco_messages::create_user_message(
                 prompt,
             )));
-            // Discard event stream — fork output goes back via the
-            // returned text, not via the parent's CoreEvent channel.
-            let (tx, _rx) = tokio::sync::mpsc::channel(8);
-            engine.run_with_messages(messages, tx).await.map_err(|e| {
-                Box::new(coco_error::PlainError::new(
-                    format!("fork engine run_with_messages: {e}"),
-                    coco_error::StatusCode::Internal,
-                )) as coco_error::BoxedError
-            })?
+            engine
+                .run_with_messages_no_events(messages)
+                .await
+                .map_err(|e| {
+                    Box::new(coco_error::PlainError::new(
+                        format!("fork engine run_with_messages_no_events: {e}"),
+                        coco_error::StatusCode::Internal,
+                    )) as coco_error::BoxedError
+                })?
         } else {
             engine.run(prompt).await.map_err(|e| {
                 Box::new(coco_error::PlainError::new(
@@ -212,13 +220,20 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // the user prompt the fork prepended so the caller only sees
         // the fork's own emissions. Slicing an Arc-vec is a vec of
         // pointer bumps — no deep clone of message bodies.
-        let parent_msg_count = agent_config.fork_context_messages.len();
         let fork_messages: Vec<std::sync::Arc<coco_messages::Message>> = result
             .final_messages
             .iter()
             .skip(parent_msg_count + 1) // +1 for the user prompt the fork prepended
             .cloned()
             .collect();
+
+        tracing::debug!(
+            fork_label = %options.fork_label,
+            query_source = %options.query_source,
+            parent_message_count = parent_msg_count,
+            stop_reason = ?result.stop_reason,
+            "fork dispatch complete"
+        );
 
         Ok(ForkedAgentResult {
             messages: fork_messages,
@@ -235,4 +250,103 @@ pub async fn install(runtime: Arc<SessionRuntime>) {
     let dispatcher: coco_query::forked_agent::ForkDispatcherRef =
         Arc::new(SessionRuntimeForkDispatcher::new(runtime.clone()));
     runtime.attach_fork_dispatcher(dispatcher).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use clap::Parser;
+    use coco_config::CatalogPaths;
+    use coco_config::EnvSnapshot;
+    use coco_config::RuntimeOverrides;
+    use coco_config::Settings;
+    use coco_config::SettingsWithSource;
+    use coco_types::ForkLabel;
+    use tempfile::TempDir;
+
+    use crate::Cli;
+    use crate::session_runtime::SessionRuntimeBuildOpts;
+
+    async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
+        let settings = SettingsWithSource {
+            merged: Settings {
+                model: Some("anthropic/claude-opus-4-7".into()),
+                ..Default::default()
+            },
+            per_source: std::collections::HashMap::new(),
+            source_paths: std::collections::HashMap::new(),
+        };
+        let runtime_config = coco_config::build_runtime_config_with(
+            settings,
+            EnvSnapshot::default(),
+            RuntimeOverrides::default(),
+            CatalogPaths::empty_in(home.path()),
+        )
+        .expect("runtime config");
+        let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
+        let model: Arc<dyn coco_inference::LanguageModel> =
+            Arc::new(crate::headless::MockModel::new());
+        let client = Arc::new(coco_inference::ApiClient::with_default_fingerprint(
+            model, retry,
+        ));
+        let cli = Cli::try_parse_from(["coco"]).expect("parse default cli");
+
+        SessionRuntime::build(SessionRuntimeBuildOpts {
+            cli: &cli,
+            runtime_config: Arc::new(runtime_config),
+            cwd: home.path().to_path_buf(),
+            model_id: "mock-model".into(),
+            system_prompt: "test".to_string(),
+            bypass_permissions_available: false,
+            permission_mode: coco_types::PermissionMode::default(),
+            client,
+            fallback_clients: Vec::new(),
+            recovery_policy: None,
+            tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
+            session_manager: Arc::new(coco_session::SessionManager::new(
+                home.path().join("sessions"),
+            )),
+            fast_model_spec: None,
+            permission_bridge: None,
+            command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
+                coco_commands::CommandRegistry::new(),
+            ))),
+            skill_manager: Arc::new(coco_skills::SkillManager::new()),
+            agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+            builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+        })
+        .await
+        .expect("build SessionRuntime")
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_parent_history_uses_no_event_message_path() {
+        let home = TempDir::new().expect("home tempdir");
+        let runtime = build_runtime(&home).await;
+        let dispatcher = SessionRuntimeForkDispatcher::new(runtime);
+        let cache = CacheSafeParams {
+            rendered_system_prompt: "test".into(),
+            model_id: "mock-model".into(),
+            provider: "mock".into(),
+            prompt_cache: None,
+            fork_context_messages: vec![Arc::new(coco_messages::create_user_message(
+                "parent turn",
+            ))],
+        };
+        let options = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            dispatcher.dispatch(&cache, &options, "fork turn", None),
+        )
+        .await
+        .expect("fork dispatch must complete without a drained event receiver")
+        .expect("fork dispatch should succeed");
+
+        assert_eq!(result.messages.len(), 1);
+        let text = coco_messages::wrapping::extract_text_from_message(&result.messages[0]);
+        assert!(text.contains("parent turn"));
+        assert!(text.contains("fork turn"));
+    }
 }

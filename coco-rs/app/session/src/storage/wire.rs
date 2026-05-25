@@ -44,10 +44,10 @@ pub fn transcript_entries_for_message(
         ),
         coco_messages::Message::Assistant(a) => {
             let usage = a.usage.as_ref().map(|u| TranscriptUsage {
-                input_tokens: u.input_tokens,
-                output_tokens: u.output_tokens,
-                cache_read_tokens: Some(u.input_token_details.cache_read_tokens),
-                cache_creation_tokens: Some(u.input_token_details.cache_write_tokens),
+                input_tokens: u.input_tokens.total,
+                output_tokens: u.output_tokens.total,
+                cache_read_tokens: Some(u.input_tokens.cache_read),
+                cache_creation_tokens: Some(u.input_tokens.cache_write),
             });
             (
                 entry_kind::ASSISTANT,
@@ -255,14 +255,16 @@ fn reconstruct_regular_message(entry: &TranscriptEntry) -> Option<coco_messages:
                     ))
                 });
             let usage = entry.usage.as_ref().map(|u| coco_types::TokenUsage {
-                input_tokens: u.input_tokens,
-                output_tokens: u.output_tokens,
-                input_token_details: coco_types::InputTokenDetails {
-                    cache_read_tokens: u.cache_read_tokens.unwrap_or(0),
-                    cache_write_tokens: u.cache_creation_tokens.unwrap_or(0),
+                input_tokens: coco_types::InputTokens {
+                    total: u.input_tokens,
+                    cache_read: u.cache_read_tokens.unwrap_or(0),
+                    cache_write: u.cache_creation_tokens.unwrap_or(0),
                     ..Default::default()
                 },
-                ..Default::default()
+                output_tokens: coco_types::OutputTokens {
+                    total: u.output_tokens,
+                    ..Default::default()
+                },
             });
             Some(coco_messages::Message::Assistant(
                 coco_messages::AssistantMessage {

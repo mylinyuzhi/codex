@@ -24,14 +24,14 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
 
     let total_usage = &outcome.result.total_usage;
     assert!(
-        total_usage.input_tokens > 0,
-        "{provider}/{model}: expected total_usage.input_tokens > 0, got {}",
-        total_usage.input_tokens,
+        total_usage.input_tokens.total > 0,
+        "{provider}/{model}: expected total_usage.input_tokens.total > 0, got {}",
+        total_usage.input_tokens.total,
     );
     assert!(
-        total_usage.output_tokens > 0,
-        "{provider}/{model}: expected total_usage.output_tokens > 0, got {}",
-        total_usage.output_tokens,
+        total_usage.output_tokens.total > 0,
+        "{provider}/{model}: expected total_usage.output_tokens.total > 0, got {}",
+        total_usage.output_tokens.total,
     );
 
     let session_result = outcome.events.iter().rev().find_map(|e| match e {
@@ -46,11 +46,11 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
     });
 
     assert_eq!(
-        total_usage.input_tokens, session_result.usage.input_tokens,
+        total_usage.input_tokens.total, session_result.usage.input_tokens.total,
         "{provider}/{model}: input_tokens mismatch QueryResult vs SessionResult",
     );
     assert_eq!(
-        total_usage.output_tokens, session_result.usage.output_tokens,
+        total_usage.output_tokens.total, session_result.usage.output_tokens.total,
         "{provider}/{model}: output_tokens mismatch QueryResult vs SessionResult",
     );
 

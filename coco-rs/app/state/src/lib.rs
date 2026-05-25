@@ -404,8 +404,8 @@ pub fn create_app_state_with(
 /// Helper functions on the store.
 pub async fn update_token_usage(store: &AppStateStore, input: i64, output: i64) {
     let mut state = store.write().await;
-    state.total_input_tokens += input;
-    state.total_output_tokens += output;
+    state.total_input_tokens = state.total_input_tokens.saturating_add(input);
+    state.total_output_tokens = state.total_output_tokens.saturating_add(output);
 }
 
 pub async fn set_busy(store: &AppStateStore, busy: bool, tool: Option<&str>) {

@@ -79,14 +79,14 @@ pub async fn run_token_usage(target: &LiveTarget) -> Result<()> {
     );
 
     assert!(
-        result.usage.input_tokens > 0,
+        result.usage.input_tokens.total > 0,
         "{}/{}: expected non-zero input tokens, usage={:?}",
         target.provider,
         target.model,
         result.usage
     );
     assert!(
-        result.usage.output_tokens > 0,
+        result.usage.output_tokens.total > 0,
         "{}/{}: expected non-zero output tokens, usage={:?}",
         target.provider,
         target.model,

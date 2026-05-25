@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::Result;
 use tokio::sync::Mutex;
@@ -610,6 +611,7 @@ async fn run_agent_driver(
     // `tokio::spawn` to free the recv loop.
     let active_turn: Arc<Mutex<Option<ActiveTurn>>> = Arc::new(Mutex::new(None));
     let mut pending_editor_requests: HashMap<String, PendingEditorRequest> = HashMap::new();
+    let mut explicit_shutdown = false;
     let (turn_done_tx, mut turn_done_rx) = mpsc::channel::<uuid::Uuid>(16);
 
     loop {
@@ -680,7 +682,7 @@ async fn run_agent_driver(
                 // turn before starting the new one — last-write-wins
                 // semantics, matches TS REPL.tsx behavior where a new
                 // onSubmit aborts the previous query() generator.
-                drain_active_turn(&active_turn).await;
+                drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
 
                 let turn_cancel = CancellationToken::new();
                 let turn_id = uuid::Uuid::new_v4();
@@ -847,7 +849,7 @@ async fn run_agent_driver(
                         warn!(%name, "ExecuteSkill: command not registered");
                     }
                     SlashFollowup::RunEngine(content) => {
-                        drain_active_turn(&active_turn).await;
+                        drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                         spawn_slash_run_engine_turn(
                             content,
                             &runtime,
@@ -884,7 +886,7 @@ async fn run_agent_driver(
                         .await;
                     }
                     SlashFollowup::RunEngine(content) => {
-                        drain_active_turn(&active_turn).await;
+                        drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                         spawn_slash_run_engine_turn(
                             content,
                             &runtime,
@@ -903,7 +905,7 @@ async fn run_agent_driver(
                 // Drain first — rewind reads file_history snapshots
                 // and rewrites runtime.history; an in-flight turn that
                 // mutates either would race.
-                drain_active_turn(&active_turn).await;
+                drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                 match mode {
                     coco_tui::command::RewindMode::Explicit {
                         restore_type,
@@ -1338,12 +1340,16 @@ async fn run_agent_driver(
 
             UserCommand::Shutdown { reason } => {
                 info!(%reason, "Shutdown requested by TUI");
-                // Drain in-flight turn before emitting SessionEnded so
-                // the engine stops promptly and any pending events
-                // flush through `event_tx` ahead of the lifecycle
-                // notification.
-                drain_active_turn(&active_turn).await;
-                drain_pending_memory_extraction(&runtime).await;
+                // User-confirmed exit must return control to the
+                // terminal promptly. Give an in-flight turn a short
+                // cooperative-cancel window, but do not wait on the
+                // long memory drains here; those can take up to 75s
+                // and make the double-press exit look ignored.
+                drain_active_turn(
+                    &active_turn,
+                    ActiveTurnDrain::AbortAfter(TUI_SHUTDOWN_ACTIVE_TURN_DRAIN_TIMEOUT),
+                )
+                .await;
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::SessionEnded(
                         coco_types::SessionEndedParams {
@@ -1351,6 +1357,7 @@ async fn run_agent_driver(
                         },
                     )))
                     .await;
+                explicit_shutdown = true;
                 break;
             }
 
@@ -1423,8 +1430,12 @@ async fn run_agent_driver(
     // turn that's still running so we don't leak a JoinHandle, and
     // wait briefly on any pending auto-memory extraction so partial
     // writes don't get cut off.
-    drain_active_turn(&active_turn).await;
-    drain_pending_memory_extraction(&runtime).await;
+    if explicit_shutdown {
+        debug!("skipping memory extraction drain after explicit TUI shutdown");
+    } else {
+        drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
+        drain_pending_memory_extraction(&runtime).await;
+    }
     // G8: re-append metadata one more time at process-exit so the
     // tail window of the final transcript JSONL definitely carries
     // the user's title/tag/agent-name. TS parity: cleanup handler in
@@ -2764,15 +2775,25 @@ impl Drop for TurnDoneGuard {
     }
 }
 
+const TUI_SHUTDOWN_ACTIVE_TURN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveTurnDrain {
+    Wait,
+    AbortAfter(Duration),
+}
+
 enum PendingEditorRequest {
     Memory { path: std::path::PathBuf },
     Plan { path: std::path::PathBuf },
     Prompt { initial_content: String },
 }
 
-/// Cancel the in-flight turn (if any) and await its completion.
+/// Cancel the in-flight turn (if any) and drain its task.
 /// Used by every arm whose semantics conflict with a concurrent
 /// turn (Clear / Compact / Rewind / Shutdown / next SubmitInput).
+/// `AbortAfter` is reserved for explicit process shutdown so a stuck
+/// tool or stream cannot leave the terminal sitting on the exit hint.
 ///
 /// Always records `SystemPreempt` as the reason — these callers are
 /// running cleanup work, not honouring a user "stop this turn"
@@ -2780,12 +2801,32 @@ enum PendingEditorRequest {
 /// invoking `.cancel()` so the OnceLock has already been written by
 /// the time the loop reaches `drain_active_turn` (write-once means
 /// the subsequent `SystemPreempt` write here is silently dropped).
-async fn drain_active_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>) {
+async fn drain_active_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>, mode: ActiveTurnDrain) {
     let state = { slot.lock().await.take() };
     if let Some(s) = state {
         let _ = s.cancel_reason.set(CancelReason::SystemPreempt);
         s.cancel.cancel();
-        let _ = s.task.await;
+        match mode {
+            ActiveTurnDrain::Wait => {
+                let _ = s.task.await;
+            }
+            ActiveTurnDrain::AbortAfter(timeout) => {
+                let mut task = s.task;
+                tokio::select! {
+                    result = &mut task => {
+                        let _ = result;
+                    }
+                    _ = tokio::time::sleep(timeout) => {
+                        warn!(
+                            timeout_ms = timeout.as_millis(),
+                            "active turn did not stop during TUI shutdown; aborting task"
+                        );
+                        task.abort();
+                        let _ = task.await;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2819,7 +2860,7 @@ async fn run_manual_compact(
     // Drain any active turn before compacting — compact mutates
     // `runtime.history` and runs an LLM call that races with the
     // in-flight engine.
-    drain_active_turn(active_turn).await;
+    drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
     run_manual_compact_inner(runtime, event_tx, custom_instructions).await;
 }
 
@@ -2867,7 +2908,7 @@ async fn run_clear_conversation(
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    drain_active_turn(active_turn).await;
+    drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
     if let Err(e) = runtime.clear_conversation().await {
         warn!(error = %e, "/clear failed");
         return;

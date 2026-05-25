@@ -302,7 +302,11 @@ pub(super) async fn handle_context_usage(ctx: &HandlerContext) -> HandlerResult 
     // Default context window used by QueryEngineRunner. A future
     // refactor can make this dynamic per-model.
     let max_tokens: i64 = 200_000;
-    let total = stats.usage.input_tokens + stats.usage.output_tokens;
+    let total = stats
+        .usage
+        .input_tokens
+        .total
+        .saturating_add(stats.usage.output_tokens.total);
     let percentage = if max_tokens > 0 {
         (total as f64 / max_tokens as f64) * 100.0
     } else {

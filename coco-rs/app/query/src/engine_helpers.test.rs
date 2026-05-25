@@ -11,11 +11,11 @@ use coco_messages::create_user_message;
 use coco_types::TokenUsage;
 
 fn assistant_with_total(total: i64) -> Message {
-    // Distribute the total so the helper's sum of
-    // (input + cache_read + cache_creation + output) equals `total`.
-    // Concentrate on `input_tokens` for predictability.
     let usage = TokenUsage {
-        input_tokens: total,
+        input_tokens: coco_types::InputTokens {
+            total,
+            ..Default::default()
+        },
         ..TokenUsage::default()
     };
     create_assistant_message(vec![AssistantContent::text("(test)")], "test-model", usage)
@@ -56,24 +56,25 @@ fn looks_only_at_most_recent_assistant_turn() {
 }
 
 #[test]
-fn aggregates_input_cache_and_output_tokens() {
+fn uses_normalized_input_and_output_tokens() {
     let usage = TokenUsage {
-        input_tokens: 100_000,
-        output_tokens: 50_000,
-        input_token_details: coco_types::InputTokenDetails {
-            no_cache_tokens: 0,
-            cache_read_tokens: 60_000,
-            cache_write_tokens: 5_000,
+        input_tokens: coco_types::InputTokens {
+            total: 100_000,
+            no_cache: 0,
+            cache_read: 60_000,
+            cache_write: 5_000,
         },
-        ..TokenUsage::default()
+        output_tokens: coco_types::OutputTokens {
+            total: 50_000,
+            ..Default::default()
+        },
     };
     let msgs = vec![create_assistant_message(
         vec![AssistantContent::text("(test)")],
         "test-model",
         usage,
     )];
-    // 100k + 50k + 60k + 5k = 215k > 200k.
-    assert!(most_recent_assistant_exceeds(&msgs, 200_000));
-    // Threshold 220k → does not exceed.
-    assert!(!most_recent_assistant_exceeds(&msgs, 220_000));
+    // Normalized input already includes cache read/write: 100k + 50k = 150k.
+    assert!(!most_recent_assistant_exceeds(&msgs, 200_000));
+    assert!(most_recent_assistant_exceeds(&msgs, 149_999));
 }

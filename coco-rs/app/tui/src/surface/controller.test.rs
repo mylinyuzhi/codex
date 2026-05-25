@@ -158,6 +158,82 @@ fn native_draw_replays_history_when_source_prefix_diverges() {
 }
 
 #[test]
+fn native_draw_replays_history_when_thinking_display_changes() {
+    let backend = TestBackend::new(64, 10);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 6, 64, 4));
+    let mut state = AppState::new();
+    test_helpers::push_assistant_thinking(&mut state.session, "Need to inspect files.", 1300, 15);
+    let mut controller = NativeSurfaceController::new();
+    controller.draw(&mut terminal, &state).expect("first draw");
+
+    state.ui.show_thinking = true;
+    let outcome = controller
+        .draw(&mut terminal, &state)
+        .expect("thinking replay");
+
+    assert!(matches!(
+        outcome.history,
+        HistoryEmissionOutcome::Replayed {
+            message_count: 1,
+            ..
+        }
+    ));
+    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(text.contains("Need to inspect files."));
+}
+
+#[test]
+fn native_draw_replays_history_when_reasoning_metadata_changes() {
+    let backend = TestBackend::new(64, 10);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 6, 64, 4));
+    let mut state = AppState::new();
+    let msg = coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::Reasoning(
+            coco_messages::ReasoningContent::new("Need to inspect files."),
+        )],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    let uuid = match &msg {
+        coco_messages::Message::Assistant(a) => a.uuid,
+        _ => unreachable!("create_assistant_message yields Assistant"),
+    };
+    state
+        .session
+        .transcript
+        .on_message_appended(std::sync::Arc::new(msg));
+    let mut controller = NativeSurfaceController::new();
+    controller.draw(&mut terminal, &state).expect("first draw");
+    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(text.contains("thinking hidden (F2)"));
+    assert!(!text.contains("reasoning tokens"));
+
+    state.session.insert_reasoning_metadata(
+        uuid,
+        crate::state::session::ReasoningMetadata {
+            duration_ms: None,
+            reasoning_tokens: 22,
+        },
+    );
+    let outcome = controller
+        .draw(&mut terminal, &state)
+        .expect("metadata replay");
+
+    assert!(matches!(
+        outcome.history,
+        HistoryEmissionOutcome::Replayed {
+            message_count: 1,
+            ..
+        }
+    ));
+    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(text.contains("22 reasoning tokens"), "{text}");
+    assert!(text.contains("thinking hidden (F2)"), "{text}");
+}
+
+#[test]
 fn native_draw_replays_after_resize_requested_during_stream_finishes() {
     let backend = TestBackend::new(48, 8);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");

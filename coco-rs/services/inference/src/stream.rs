@@ -637,8 +637,8 @@ pub async fn process_stream_with_config(
                 debug!(
                     event = "finish",
                     stop_reason = %stop_reason,
-                    tokens_in = usage.input_tokens,
-                    tokens_out = usage.output_tokens,
+                    tokens_in = usage.input_tokens.total,
+                    tokens_out = usage.output_tokens.total,
                     emitted = emitted_events,
                     "stream event"
                 );
@@ -650,8 +650,8 @@ pub async fn process_stream_with_config(
                     warn!(
                         event = "finish",
                         stop_reason = %stop_reason,
-                        tokens_in = usage.input_tokens,
-                        tokens_out = usage.output_tokens,
+                        tokens_in = usage.input_tokens.total,
+                        tokens_out = usage.output_tokens.total,
                         emitted = emitted_events,
                         "stream ended on non-normal stop_reason"
                     );
@@ -717,30 +717,27 @@ fn stream_event_from_part(
     }
 }
 
-fn token_usage_from_provider_usage(usage: &Usage) -> TokenUsage {
-    let input_total = u64_to_i64(usage.input_tokens.total.unwrap_or(0));
-    let output_total = u64_to_i64(usage.output_tokens.total.unwrap_or(0));
+pub(crate) fn token_usage_from_provider_usage(usage: &Usage) -> TokenUsage {
     TokenUsage {
-        input_tokens: input_total,
-        output_tokens: output_total,
-        total_tokens: input_total + output_total,
-        input_token_details: coco_types::InputTokenDetails {
-            no_cache_tokens: u64_to_i64(usage.input_tokens.no_cache.unwrap_or(0)),
-            cache_read_tokens: u64_to_i64(usage.input_tokens.cache_read.unwrap_or(0)),
-            cache_write_tokens: u64_to_i64(usage.input_tokens.cache_write.unwrap_or(0)),
+        input_tokens: coco_types::InputTokens {
+            total: u64_to_i64(usage.input_tokens.total().unwrap_or(0)),
+            no_cache: u64_to_i64(usage.input_tokens.no_cache().unwrap_or(0)),
+            cache_read: u64_to_i64(usage.input_tokens.cache_read().unwrap_or(0)),
+            cache_write: u64_to_i64(usage.input_tokens.cache_write().unwrap_or(0)),
         },
         // Reasoning + text breakdown when the provider reports them.
         // For DeepSeek V4 / GPT-5 thinking / Claude extended thinking
         // these are non-zero on every reasoning-emitting turn. `0` when
         // the provider's wire shape doesn't separate the two.
-        output_token_details: coco_types::OutputTokenDetails {
-            text_tokens: u64_to_i64(usage.output_tokens.text.unwrap_or(0)),
-            reasoning_tokens: u64_to_i64(usage.output_tokens.reasoning.unwrap_or(0)),
+        output_tokens: coco_types::OutputTokens {
+            total: u64_to_i64(usage.output_tokens.total.unwrap_or(0)),
+            text: u64_to_i64(usage.output_tokens.text.unwrap_or(0)),
+            reasoning: u64_to_i64(usage.output_tokens.reasoning.unwrap_or(0)),
         },
     }
 }
 
-fn u64_to_i64(value: u64) -> i64 {
+pub(crate) fn u64_to_i64(value: u64) -> i64 {
     value.try_into().unwrap_or(i64::MAX)
 }
 

@@ -233,7 +233,7 @@ impl HookLlmHandle for QueryHookLlm {
                 if stop.is_some_and(coco_messages::StopReason::is_abnormal) {
                     tracing::warn!(
                         stop_reason = ?stop,
-                        tokens_out = query_result.usage.output_tokens,
+                        tokens_out = query_result.usage.output_tokens.total,
                         "hook prompt unexpected stop_reason — \
                          decision may default to Cancelled"
                     );

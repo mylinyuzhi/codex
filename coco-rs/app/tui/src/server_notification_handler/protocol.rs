@@ -979,8 +979,7 @@ pub(super) fn handle(
             // it'll be cleared on session reset.
             state
                 .session
-                .reasoning_metadata
-                .retain(|uuid, _| surviving_uuids.contains(uuid));
+                .retain_reasoning_metadata_for_messages(&surviving_uuids);
             state.ui.streaming = None;
             tracing::info!(
                 target: "coco_tui::history",
@@ -1028,7 +1027,7 @@ pub(super) fn handle(
                 duration_ms = ?p.duration_ms,
                 "stamping reasoning metadata in side-cache (event-driven)",
             );
-            state.session.reasoning_metadata.insert(
+            state.session.insert_reasoning_metadata(
                 uuid,
                 crate::state::session::ReasoningMetadata {
                     duration_ms: p.duration_ms,
@@ -1098,7 +1097,7 @@ fn clear_session_boundary_state(state: &mut AppState) {
     state.session.stream_stall = false;
     state.session.tool_executions.clear();
     state.session.tool_group_summaries.clear();
-    state.session.reasoning_metadata.clear();
+    state.session.clear_reasoning_metadata();
     state.session.queued_commands.clear();
     state.session.active_hooks.clear();
     state.session.prompt_suggestions.clear();
@@ -1136,11 +1135,11 @@ fn on_turn_completed(
     state.session.last_user_interaction_at = now;
     state.session.idle_prompt_fired = false;
     state.session.update_tokens(TokenUsage {
-        input_tokens: p.usage.input_tokens,
-        output_tokens: p.usage.output_tokens,
-        reasoning_tokens: p.usage.reasoning_output_tokens(),
-        cache_read_tokens: p.usage.cache_read_input_tokens(),
-        cache_creation_tokens: p.usage.cache_creation_input_tokens(),
+        input_tokens: p.usage.input_tokens.total,
+        output_tokens: p.usage.output_tokens.total,
+        reasoning_tokens: p.usage.output_tokens.reasoning,
+        cache_read_tokens: p.usage.input_tokens.cache_read,
+        cache_creation_tokens: p.usage.input_tokens.cache_write,
     });
     // Emit a terminal notification when the user has switched away — they
     // typically want a ping when a long turn finishes in the background.

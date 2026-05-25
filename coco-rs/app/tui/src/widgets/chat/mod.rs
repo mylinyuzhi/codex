@@ -196,7 +196,7 @@ impl<'a> ChatWidget<'a> {
                 self.render_tool_call(*invocation, *result, expanded, lines);
                 lines.push(Line::default());
             }
-            TranscriptSourceCell::Committed(TranscriptCell::ToolBatch { start, end, count }) => {
+            TranscriptSourceCell::Committed(TranscriptCell::ToolBatch { count, .. }) => {
                 lines.push(Line::from(
                     Span::raw(format!(
                         "  ‖ {}",
@@ -205,11 +205,6 @@ impl<'a> ChatWidget<'a> {
                     .fg(self.styles.secondary())
                     .dim(),
                 ));
-                for j in *start..*end {
-                    if let Some(c) = self.cells.get(j) {
-                        self.render_cell(c, lines);
-                    }
-                }
                 lines.push(Line::default());
             }
             TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(view)) => {
@@ -322,7 +317,7 @@ impl<'a> ChatWidget<'a> {
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
         let mut spans = vec![
-            Span::raw("🔨 ").fg(self.styles.dim()),
+            Span::raw("🔧 ").fg(self.styles.dim()),
             Span::raw(tool_name.to_string())
                 .fg(tool_tone_color(tool_name_tone(tool_name), self.styles))
                 .bold(),
@@ -416,6 +411,29 @@ impl<'a> ChatWidget<'a> {
         format!("({chord} to expand)")
     }
 
+    pub(crate) fn thinking_toggle_hint(&self) -> String {
+        let chord = self
+            .kb_handle
+            .and_then(|handle| {
+                handle.display_for(
+                    &coco_keybindings::KeybindingAction::ChatThinkingToggle,
+                    crate::keybinding_bridge::KeybindingContext::Chat,
+                )
+            })
+            .unwrap_or_else(|| "F2".to_string());
+        let state = if self.show_thinking_internal {
+            t!("status.show_thinking_visible")
+        } else {
+            t!("status.show_thinking_hidden")
+        };
+        t!(
+            "status.show_thinking",
+            shortcut = chord.as_str(),
+            state = state.as_ref()
+        )
+        .to_string()
+    }
+
     /// Render a single-line collapsed preview for a meta (system reminder)
     /// cell. Keeps the user aware that system content exists without
     /// taking vertical space.
@@ -463,6 +481,7 @@ impl<'a> ChatWidget<'a> {
                             content: "",
                             duration_ms: None,
                             reasoning_tokens: Some(count),
+                            toggle_hint: Some(&self.thinking_toggle_hint()),
                             display: ThinkingDisplay::Collapsed,
                         },
                         self.styles,

@@ -8,12 +8,7 @@ use super::openai_completion_api::OpenAICompletionUsage;
 pub fn convert_openai_completion_usage(usage: Option<&OpenAICompletionUsage>) -> Usage {
     let Some(usage) = usage else {
         return Usage {
-            input_tokens: InputTokens {
-                total: None,
-                no_cache: None,
-                cache_read: None,
-                cache_write: None,
-            },
+            input_tokens: InputTokens::default(),
             output_tokens: OutputTokens {
                 total: None,
                 text: None,
@@ -23,16 +18,10 @@ pub fn convert_openai_completion_usage(usage: Option<&OpenAICompletionUsage>) ->
         };
     };
 
-    let prompt_tokens = usage.prompt_tokens.unwrap_or(0);
     let completion_tokens = usage.completion_tokens.unwrap_or(0);
 
     Usage {
-        input_tokens: InputTokens {
-            total: usage.prompt_tokens,
-            no_cache: Some(prompt_tokens),
-            cache_read: None,
-            cache_write: None,
-        },
+        input_tokens: InputTokens::from_uncached(usage.prompt_tokens),
         output_tokens: OutputTokens {
             total: usage.completion_tokens,
             text: Some(completion_tokens),

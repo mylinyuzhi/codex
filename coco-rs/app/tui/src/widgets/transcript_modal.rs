@@ -252,6 +252,7 @@ struct TranscriptCellRenderer<'a> {
     tool_executions: &'a [ToolExecution],
     reasoning_metadata: &'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>,
     compact_boundary_shortcut: String,
+    thinking_toggle_hint: String,
     width: u16,
     styles: UiStyles<'a>,
 }
@@ -268,6 +269,7 @@ impl<'a> TranscriptCellRenderer<'a> {
             tool_executions: &state.session.tool_executions,
             reasoning_metadata: &state.session.reasoning_metadata,
             compact_boundary_shortcut: compact_boundary_shortcut(state),
+            thinking_toggle_hint: thinking_toggle_hint(state),
             width,
             styles,
         }
@@ -326,7 +328,7 @@ impl<'a> TranscriptCellRenderer<'a> {
                 self.render_tool_call(*invocation, *result, expanded, &mut lines);
                 lines.push(Line::default());
             }
-            TranscriptSourceCell::Committed(TranscriptCell::ToolBatch { start, end, count }) => {
+            TranscriptSourceCell::Committed(TranscriptCell::ToolBatch { count, .. }) => {
                 lines.push(Line::from(
                     Span::raw(format!(
                         "  ‖ {}",
@@ -335,11 +337,6 @@ impl<'a> TranscriptCellRenderer<'a> {
                     .fg(self.styles.secondary())
                     .dim(),
                 ));
-                for index in *start..*end {
-                    if let Some(c) = self.cells.get(index) {
-                        self.render_cell_content(c, expanded, &mut lines);
-                    }
-                }
                 lines.push(Line::default());
             }
             TranscriptSourceCell::Active(active) => match active {
@@ -358,6 +355,7 @@ impl<'a> TranscriptCellRenderer<'a> {
                                         content: "",
                                         duration_ms: None,
                                         reasoning_tokens: Some(*count),
+                                        toggle_hint: Some(&self.thinking_toggle_hint),
                                         display: ThinkingDisplay::Collapsed,
                                     },
                                     self.styles,
@@ -446,6 +444,7 @@ impl<'a> TranscriptCellRenderer<'a> {
                         content: text,
                         duration_ms: meta.and_then(|m| m.duration_ms),
                         reasoning_tokens: meta.map(|m| m.reasoning_tokens),
+                        toggle_hint: Some(&self.thinking_toggle_hint),
                         display: if expanded {
                             ThinkingDisplay::Expanded {
                                 max_body_lines: TRANSCRIPT_EXPANDED_CELL_LINE_CAP,
@@ -569,7 +568,7 @@ impl<'a> TranscriptCellRenderer<'a> {
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
         let mut spans = vec![
-            Span::raw("🔨 ").fg(self.styles.dim()),
+            Span::raw("🔧 ").fg(self.styles.dim()),
             Span::raw(tool_name.to_string())
                 .fg(tool_tone_color(tool_name_tone(tool_name), self.styles))
                 .bold(),
@@ -1113,6 +1112,28 @@ fn compact_boundary_shortcut(state: &AppState) -> String {
             KeybindingContext::Chat,
         )
         .unwrap_or_else(|| "ctrl+o".to_string())
+}
+
+fn thinking_toggle_hint(state: &AppState) -> String {
+    let shortcut = state
+        .ui
+        .kb_handle
+        .display_for(
+            &KeybindingAction::ChatThinkingToggle,
+            KeybindingContext::Chat,
+        )
+        .unwrap_or_else(|| "F2".to_string());
+    let thinking_state = if state.ui.show_thinking {
+        t!("status.show_thinking_visible")
+    } else {
+        t!("status.show_thinking_hidden")
+    };
+    t!(
+        "status.show_thinking",
+        shortcut = shortcut.as_str(),
+        state = thinking_state.as_ref()
+    )
+    .to_string()
 }
 
 fn mix_str(mut hash: u64, value: &str) -> u64 {

@@ -57,6 +57,6 @@ async def test_query_basic_completes(live_deepseek, isolated_cwd) -> None:
     assert saw_turn_started, "expected turn/started after sending turn/start"
     assert saw_text_delta, "expected at least one assistant text delta"
     assert saw_turn_completed, "expected turn/completed terminator"
-    assert final_usage and final_usage.get("output_tokens", 0) > 0, (
-        f"expected non-zero output tokens, got {final_usage!r}"
-    )
+    assert (
+        final_usage and final_usage.get("output_tokens", {}).get("total", 0) > 0
+    ), f"expected non-zero output tokens, got {final_usage!r}"

@@ -10,12 +10,7 @@ pub fn convert_openai_compatible_completion_usage(
 ) -> Usage {
     let Some(usage) = usage else {
         return Usage {
-            input_tokens: InputTokens {
-                total: None,
-                no_cache: None,
-                cache_read: None,
-                cache_write: None,
-            },
+            input_tokens: InputTokens::default(),
             output_tokens: OutputTokens {
                 total: None,
                 text: None,
@@ -29,12 +24,7 @@ pub fn convert_openai_compatible_completion_usage(
     let completion_tokens = usage.completion_tokens.unwrap_or(0);
 
     Usage {
-        input_tokens: InputTokens {
-            total: Some(prompt_tokens),
-            no_cache: Some(prompt_tokens),
-            cache_read: None,
-            cache_write: None,
-        },
+        input_tokens: InputTokens::from_uncached(Some(prompt_tokens)),
         output_tokens: OutputTokens {
             total: Some(completion_tokens),
             text: Some(completion_tokens),

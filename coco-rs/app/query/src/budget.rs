@@ -53,10 +53,13 @@ impl BudgetTracker {
 
     /// Record token usage from an LLM response.
     pub fn record_usage(&mut self, usage: &TokenUsage) {
-        let delta = usage.input_tokens + usage.output_tokens;
-        self.consumed_tokens += delta;
+        let delta = usage
+            .input_tokens
+            .total
+            .saturating_add(usage.output_tokens.total);
+        self.consumed_tokens = self.consumed_tokens.saturating_add(delta);
         self.last_delta_tokens = self.current_delta_tokens;
-        self.current_delta_tokens = usage.output_tokens;
+        self.current_delta_tokens = usage.output_tokens.total;
     }
 
     /// Increment the continuation counter (for auto-continue scenarios).

@@ -50,14 +50,14 @@ fn test_create_info_message() {
 fn test_create_assistant_message() {
     let content = vec![AssistantContent::text("response")];
     let usage = TokenUsage {
-        input_tokens: 10,
-        output_tokens: 20,
-        input_token_details: coco_types::InputTokenDetails {
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
+        input_tokens: coco_types::InputTokens {
+            total: 10,
             ..Default::default()
         },
-        ..Default::default()
+        output_tokens: coco_types::OutputTokens {
+            total: 20,
+            ..Default::default()
+        },
     };
     let msg = create_assistant_message(content, "gpt-4", usage);
     let Message::Assistant(a) = &msg else {

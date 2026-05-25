@@ -220,9 +220,9 @@ pub struct ResponseLog {
 
 /// Format a response log as a compact single-line summary for tracing output.
 pub fn format_response_log(log: &ResponseLog) -> String {
-    let cache_pct = if log.usage.input_tokens > 0 {
-        let pct =
-            (log.usage.cache_read_input_tokens() as f64 / log.usage.input_tokens as f64) * 100.0;
+    let cache_pct = if log.usage.input_tokens.total > 0 {
+        let pct = (log.usage.input_tokens.cache_read as f64 / log.usage.input_tokens.total as f64)
+            * 100.0;
         format!(" cache={pct:.0}%")
     } else {
         String::new()
@@ -250,7 +250,11 @@ pub fn format_response_log(log: &ResponseLog) -> String {
     };
     format!(
         "API response: model={} in={}tok out={}tok{cache_pct} {}ms{ttft}{stop} cost=${:.4}{retries}{gateway_str}{fast}{warnings_str}",
-        log.model, log.usage.input_tokens, log.usage.output_tokens, log.duration_ms, log.cost_usd,
+        log.model,
+        log.usage.input_tokens.total,
+        log.usage.output_tokens.total,
+        log.duration_ms,
+        log.cost_usd,
     )
 }
 
@@ -421,19 +425,19 @@ pub fn response_log_to_properties(log: &ResponseLog) -> HashMap<String, serde_js
     props.insert("model".into(), serde_json::json!(log.model));
     props.insert(
         "input_tokens".into(),
-        serde_json::json!(log.usage.input_tokens),
+        serde_json::json!(log.usage.input_tokens.total),
     );
     props.insert(
         "output_tokens".into(),
-        serde_json::json!(log.usage.output_tokens),
+        serde_json::json!(log.usage.output_tokens.total),
     );
     props.insert(
         "cache_read_tokens".into(),
-        serde_json::json!(log.usage.cache_read_input_tokens()),
+        serde_json::json!(log.usage.input_tokens.cache_read),
     );
     props.insert(
         "cache_creation_tokens".into(),
-        serde_json::json!(log.usage.cache_creation_input_tokens()),
+        serde_json::json!(log.usage.input_tokens.cache_write),
     );
     props.insert("duration_ms".into(), serde_json::json!(log.duration_ms));
     props.insert("attempt".into(), serde_json::json!(log.attempt));

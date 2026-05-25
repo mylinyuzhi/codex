@@ -455,11 +455,17 @@ async fn accumulate_session_result(
     s.usage += params.usage;
     for (model, mu) in &params.model_usage {
         let entry = s.model_usage.entry(model.clone()).or_default();
-        entry.input_tokens += mu.input_tokens;
-        entry.output_tokens += mu.output_tokens;
-        entry.cache_read_input_tokens += mu.cache_read_input_tokens;
-        entry.cache_creation_input_tokens += mu.cache_creation_input_tokens;
-        entry.web_search_requests += mu.web_search_requests;
+        entry.input_tokens = entry.input_tokens.saturating_add(mu.input_tokens);
+        entry.output_tokens = entry.output_tokens.saturating_add(mu.output_tokens);
+        entry.cache_read_input_tokens = entry
+            .cache_read_input_tokens
+            .saturating_add(mu.cache_read_input_tokens);
+        entry.cache_creation_input_tokens = entry
+            .cache_creation_input_tokens
+            .saturating_add(mu.cache_creation_input_tokens);
+        entry.web_search_requests = entry
+            .web_search_requests
+            .saturating_add(mu.web_search_requests);
         entry.cost_usd += mu.cost_usd;
     }
     s.permission_denials

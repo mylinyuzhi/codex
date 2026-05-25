@@ -4,14 +4,25 @@
 //! `ApiClient`, spawns tokio tasks, etc.) so we exercise only the
 //! decomposed pure logic here.
 
+use super::ActiveTurn;
+use super::ActiveTurnDrain;
 use super::PermissionsMutation;
 use super::SentinelTrigger;
 use super::classify_sentinel_trigger;
+use super::drain_active_turn;
 use super::parse_editor_command;
 use super::parse_permissions_mutation;
 use super::parse_slash_command;
 use super::session_plan_file_path;
 use super::should_trigger_title_gen;
+use coco_types::CancelReason;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn title_gen_fires_when_all_conditions_met() {
@@ -20,6 +31,41 @@ fn title_gen_fires_when_all_conditions_met() {
         /*fast_spec_present*/ true, /*plan_has_exited*/ true,
         /*plan_text_non_empty*/ true,
     ));
+}
+
+#[tokio::test]
+async fn shutdown_drain_aborts_stuck_active_turn_after_timeout() {
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped_for_task = dropped.clone();
+    let task = tokio::spawn(async move {
+        let _guard = DropFlag(dropped_for_task);
+        std::future::pending::<()>().await;
+    });
+    let cancel_reason = Arc::new(OnceLock::new());
+    let slot = Arc::new(Mutex::new(Some(ActiveTurn {
+        id: uuid::Uuid::new_v4(),
+        task,
+        cancel: CancellationToken::new(),
+        cancel_reason: cancel_reason.clone(),
+    })));
+
+    drain_active_turn(
+        &slot,
+        ActiveTurnDrain::AbortAfter(Duration::from_millis(10)),
+    )
+    .await;
+
+    assert!(slot.lock().await.is_none());
+    assert!(dropped.load(Ordering::SeqCst));
+    assert_eq!(cancel_reason.get(), Some(&CancelReason::SystemPreempt));
 }
 
 #[test]

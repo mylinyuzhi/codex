@@ -4,6 +4,8 @@ use vercel_ai_provider::InputTokens;
 use vercel_ai_provider::OutputTokens;
 use vercel_ai_provider::Usage;
 
+use crate::provider_options::PromptTokensTotalSemantics;
+
 /// Raw usage from an OpenAI-compatible Chat Completions API.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct OpenAICompatibleChatUsage {
@@ -27,15 +29,13 @@ pub struct CompletionTokensDetails {
 }
 
 /// Convert OpenAI-compatible Chat usage to the SDK's unified `Usage` type.
-pub fn convert_openai_compatible_chat_usage(usage: Option<&OpenAICompatibleChatUsage>) -> Usage {
+pub fn convert_openai_compatible_chat_usage(
+    usage: Option<&OpenAICompatibleChatUsage>,
+    prompt_tokens_total_semantics: PromptTokensTotalSemantics,
+) -> Usage {
     let Some(usage) = usage else {
         return Usage {
-            input_tokens: InputTokens {
-                total: None,
-                no_cache: None,
-                cache_read: None,
-                cache_write: None,
-            },
+            input_tokens: InputTokens::default(),
             output_tokens: OutputTokens {
                 total: None,
                 text: None,
@@ -52,6 +52,10 @@ pub fn convert_openai_compatible_chat_usage(usage: Option<&OpenAICompatibleChatU
         .as_ref()
         .and_then(|d| d.cached_tokens)
         .unwrap_or(0);
+    let normalized_prompt_tokens = match prompt_tokens_total_semantics {
+        PromptTokensTotalSemantics::Inclusive => prompt_tokens,
+        PromptTokensTotalSemantics::NonInclusive => prompt_tokens.saturating_add(cached_tokens),
+    };
     let reasoning_tokens = usage
         .completion_tokens_details
         .as_ref()
@@ -59,12 +63,11 @@ pub fn convert_openai_compatible_chat_usage(usage: Option<&OpenAICompatibleChatU
         .unwrap_or(0);
 
     Usage {
-        input_tokens: InputTokens {
-            total: Some(prompt_tokens),
-            no_cache: Some(prompt_tokens.saturating_sub(cached_tokens)),
-            cache_read: Some(cached_tokens),
-            cache_write: None,
-        },
+        input_tokens: InputTokens::from_inclusive_total(
+            Some(normalized_prompt_tokens),
+            Some(cached_tokens),
+            None,
+        ),
         output_tokens: OutputTokens {
             total: Some(completion_tokens),
             text: Some(completion_tokens.saturating_sub(reasoning_tokens)),

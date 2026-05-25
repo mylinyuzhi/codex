@@ -11,6 +11,7 @@ use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
+use coco_llm_types::ReasoningPart;
 use coco_llm_types::StopReason;
 use coco_llm_types::TextPart;
 use coco_llm_types::ToolCallPart;
@@ -61,6 +62,64 @@ impl LanguageModel for TextMock {
             response: None,
         })
     }
+    async fn do_stream(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+struct ReasoningTextMock {
+    reasoning: String,
+    text: String,
+    reasoning_tokens: u64,
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for ReasoningTextMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "mock-reasoning-text"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        let mut usage = Usage::new(10, 8);
+        usage.output_tokens.text = Some(5);
+        usage.output_tokens.reasoning = Some(self.reasoning_tokens);
+        Ok(LanguageModelGenerateResult {
+            content: vec![
+                AssistantContentPart::Reasoning(ReasoningPart {
+                    text: self.reasoning.clone(),
+                    provider_metadata: None,
+                }),
+                AssistantContentPart::Text(TextPart {
+                    text: self.text.clone(),
+                    provider_metadata: None,
+                }),
+            ],
+            usage,
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
     async fn do_stream(
         &self,
         options: &LanguageModelCallOptions,
@@ -451,6 +510,45 @@ async fn test_single_turn_text_only() {
     assert!(!result.cancelled);
 }
 
+#[tokio::test]
+async fn text_only_end_turn_emits_reasoning_metadata() {
+    let model = Arc::new(ReasoningTextMock {
+        reasoning: "I should answer briefly.".into(),
+        text: "Hello!".into(),
+        reasoning_tokens: 3,
+    });
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(event) = event_rx.recv().await {
+            events.push(event);
+        }
+        events
+    });
+
+    let result = engine
+        .run_with_events("hi", event_tx)
+        .await
+        .expect("should succeed");
+    let events = collector.await.expect("collector should join");
+
+    assert_eq!(result.response_text, "Hello!");
+    let metadata = events.iter().find_map(|event| match event {
+        CoreEvent::Protocol(ServerNotification::ReasoningMetadataAttached(p)) => Some(p),
+        _ => None,
+    });
+    let metadata = metadata.expect("reasoning metadata should be emitted");
+    assert_eq!(metadata.reasoning_tokens, 3);
+    assert!(metadata.duration_ms.is_none());
+}
+
 // ── D8: post-turn cache-safe params slot ──
 
 #[tokio::test]
@@ -621,8 +719,8 @@ async fn test_multi_turn_tool_call_then_text() {
         "The file does not exist. Let me help you create it."
     );
     // Usage accumulated from both turns
-    assert_eq!(result.total_usage.input_tokens, 50); // 20 + 30
-    assert_eq!(result.total_usage.output_tokens, 25); // 15 + 10
+    assert_eq!(result.total_usage.input_tokens.total, 50); // 20 + 30
+    assert_eq!(result.total_usage.output_tokens.total, 25); // 15 + 10
     assert!(!result.cancelled);
 }
 
@@ -648,8 +746,8 @@ async fn test_multi_tool_calls_in_one_response() {
     assert_eq!(result.turns, 2);
     assert_eq!(result.response_text, "Both files could not be read.");
     // Usage: 15+25 input, 10+8 output
-    assert_eq!(result.total_usage.input_tokens, 40);
-    assert_eq!(result.total_usage.output_tokens, 18);
+    assert_eq!(result.total_usage.input_tokens.total, 40);
+    assert_eq!(result.total_usage.output_tokens.total, 18);
 }
 
 #[tokio::test]
@@ -1048,9 +1146,14 @@ async fn test_budget_tracker_stops_on_limit() {
 
     let mut tracker = BudgetTracker::new(Some(100), 30, 3);
     tracker.record_usage(&coco_types::TokenUsage {
-        input_tokens: 80,
-        output_tokens: 30,
-        ..Default::default()
+        input_tokens: coco_types::InputTokens {
+            total: 80,
+            ..Default::default()
+        },
+        output_tokens: coco_types::OutputTokens {
+            total: 30,
+            ..Default::default()
+        },
     });
     assert!(matches!(tracker.check(1), BudgetDecision::Stop { .. }));
 }
@@ -1333,6 +1436,22 @@ fn completed_event_output(events: &[CoreEvent], tool_use_id: &str) -> Option<Str
     })
 }
 
+fn appended_tool_result_count(events: &[CoreEvent], tool_use_id: &str) -> usize {
+    events
+        .iter()
+        .filter(|event| {
+            let CoreEvent::Protocol(ServerNotification::MessageAppended { message, .. }) = event
+            else {
+                return false;
+            };
+            let coco_messages::Message::ToolResult(result) = message.as_ref() else {
+                return false;
+            };
+            result.tool_use_id == tool_use_id
+        })
+        .count()
+}
+
 #[tokio::test]
 async fn unknown_tool_call_gets_error_result_and_completed_event() {
     let model = Arc::new(OneToolThenTextMock {
@@ -1363,6 +1482,29 @@ async fn unknown_tool_call_gets_error_result_and_completed_event() {
     assert_eq!(started, 0, "unknown tool call is never runnable");
     assert_eq!(completed, 1, "queued unknown tool call must complete");
     assert_eq!(completed_is_error, Some(true));
+}
+
+#[tokio::test]
+async fn successful_tool_result_emits_message_appended() {
+    let dir = tempfile::tempdir().unwrap();
+    let test_file = dir.path().join("sample.txt");
+    std::fs::write(&test_file, "message-appended-payload").unwrap();
+
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "append_read_1".into(),
+        tool_name: "Read".into(),
+        input: serde_json::json!({"file_path": test_file}),
+        final_text: "done".into(),
+    });
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(ReadTool));
+    let tools = Arc::new(registry);
+    let config = QueryEngineConfig::default();
+    let (result, events) = collect_events_from_run(model, tools, config, None, "read it").await;
+
+    assert_eq!(result.response_text, "done");
+    assert_eq!(appended_tool_result_count(&events, "append_read_1"), 1);
 }
 
 #[tokio::test]
@@ -3488,6 +3630,34 @@ async fn run_with_messages_uses_last_user_message_for_history_key() {
 
     assert_eq!(result.response_text, "ack");
     // The combined list + the assistant reply should be in final_messages.
+    assert!(result.final_messages.len() >= 3);
+}
+
+#[tokio::test]
+async fn run_with_messages_no_events_accepts_prebuilt_messages() {
+    let model = Arc::new(TextMock { text: "ack".into() });
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+
+    let messages = vec![
+        Arc::new(coco_messages::create_user_message("parent turn")),
+        Arc::new(coco_messages::create_user_message("fork turn")),
+    ];
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        engine.run_with_messages_no_events(messages),
+    )
+    .await
+    .expect("no-event prebuilt-message run must not block")
+    .expect("should succeed");
+
+    assert_eq!(result.response_text, "ack");
     assert!(result.final_messages.len() >= 3);
 }
 

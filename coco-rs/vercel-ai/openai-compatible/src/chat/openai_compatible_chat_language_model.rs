@@ -368,7 +368,10 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
 
         let finish_reason =
             map_openai_compatible_chat_finish_reason(choice.finish_reason.as_deref());
-        let usage = convert_openai_compatible_chat_usage(response.usage.as_ref());
+        let usage = convert_openai_compatible_chat_usage(
+            response.usage.as_ref(),
+            self.config.prompt_tokens_total_semantics,
+        );
 
         // Provider metadata
         let mut provider_meta = HashMap::new();
@@ -487,6 +490,7 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
             include_raw,
             provider_name.to_string(),
             stream_extractor,
+            self.config.prompt_tokens_total_semantics,
         );
 
         Ok(LanguageModelV4StreamResult {
@@ -520,6 +524,7 @@ fn create_chat_stream(
     include_raw: bool,
     provider_name: String,
     stream_extractor: Option<Box<dyn StreamMetadataExtractor>>,
+    prompt_tokens_total_semantics: crate::provider_options::PromptTokensTotalSemantics,
 ) -> Pin<Box<dyn Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send>> {
     let stream = futures::stream::unfold(
         ChatStreamState::new(
@@ -528,6 +533,7 @@ fn create_chat_stream(
             include_raw,
             provider_name,
             stream_extractor,
+            prompt_tokens_total_semantics,
         ),
         |mut state| async move {
             loop {
@@ -633,7 +639,10 @@ fn create_chat_stream(
                             };
 
                             let finish = LanguageModelV4StreamPart::Finish {
-                                usage: convert_openai_compatible_chat_usage(state.usage.as_ref()),
+                                usage: convert_openai_compatible_chat_usage(
+                                    state.usage.as_ref(),
+                                    state.prompt_tokens_total_semantics,
+                                ),
                                 finish_reason: map_openai_compatible_chat_finish_reason(
                                     state.finish_reason.as_deref(),
                                 ),
@@ -678,6 +687,7 @@ struct ChatStreamState {
     include_raw: bool,
     provider_name: String,
     stream_extractor: Option<Box<dyn StreamMetadataExtractor>>,
+    prompt_tokens_total_semantics: crate::provider_options::PromptTokensTotalSemantics,
 }
 
 impl ChatStreamState {
@@ -687,6 +697,7 @@ impl ChatStreamState {
         include_raw: bool,
         provider_name: String,
         stream_extractor: Option<Box<dyn StreamMetadataExtractor>>,
+        prompt_tokens_total_semantics: crate::provider_options::PromptTokensTotalSemantics,
     ) -> Self {
         let mut pending = std::collections::VecDeque::new();
         pending.push_back(LanguageModelV4StreamPart::StreamStart { warnings });
@@ -733,6 +744,7 @@ impl ChatStreamState {
             include_raw,
             provider_name,
             stream_extractor,
+            prompt_tokens_total_semantics,
         }
     }
 

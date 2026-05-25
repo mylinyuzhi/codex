@@ -85,6 +85,7 @@ impl TranscriptView {
             return;
         }
         let derived = message_to_cells(msg.clone());
+        log_message_appended(&msg, derived.len());
         if derived.is_empty() {
             return;
         }
@@ -146,6 +147,7 @@ impl TranscriptView {
         self.by_uuid.clear();
         for arc in messages {
             let derived = message_to_cells(arc.clone());
+            log_message_appended(arc, derived.len());
             if derived.is_empty() {
                 continue;
             }
@@ -167,6 +169,24 @@ impl TranscriptView {
             }
         }
     }
+}
+
+fn log_message_appended(msg: &Message, cell_count: usize) {
+    let visibility = msg.visibility();
+    let attachment_kind = match msg {
+        Message::Attachment(attachment) => Some(attachment.kind),
+        _ => None,
+    };
+    tracing::debug!(
+        target: "coco_tui::transcript_view",
+        uuid = ?msg.uuid(),
+        kind = ?msg.kind(),
+        cell_count,
+        visibility_api = visibility.api,
+        visibility_ui = visibility.ui,
+        attachment_kind = ?attachment_kind,
+        "MessageAppended projected into TUI cells",
+    );
 }
 
 /// One render cell derived from a (possibly partial) engine `Message`.

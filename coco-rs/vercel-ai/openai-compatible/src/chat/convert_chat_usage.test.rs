@@ -1,9 +1,10 @@
 use super::*;
+use crate::provider_options::PromptTokensTotalSemantics;
 
 #[test]
 fn converts_none_usage() {
-    let usage = convert_openai_compatible_chat_usage(None);
-    assert!(usage.input_tokens.total.is_none());
+    let usage = convert_openai_compatible_chat_usage(None, PromptTokensTotalSemantics::Inclusive);
+    assert!(usage.input_tokens.total().is_none());
     assert!(usage.output_tokens.total.is_none());
 }
 
@@ -15,10 +16,11 @@ fn converts_basic_usage() {
         total_tokens: Some(150),
         ..Default::default()
     };
-    let usage = convert_openai_compatible_chat_usage(Some(&raw));
-    assert_eq!(usage.input_tokens.total, Some(100));
-    assert_eq!(usage.input_tokens.no_cache, Some(100));
-    assert_eq!(usage.input_tokens.cache_read, Some(0));
+    let usage =
+        convert_openai_compatible_chat_usage(Some(&raw), PromptTokensTotalSemantics::Inclusive);
+    assert_eq!(usage.input_tokens.total(), Some(100));
+    assert_eq!(usage.input_tokens.no_cache(), Some(100));
+    assert_eq!(usage.input_tokens.cache_read(), Some(0));
     assert_eq!(usage.output_tokens.total, Some(50));
     assert_eq!(usage.output_tokens.text, Some(50));
     assert_eq!(usage.output_tokens.reasoning, Some(0));
@@ -39,11 +41,30 @@ fn converts_usage_with_details() {
             rejected_prediction_tokens: Some(5),
         }),
     };
-    let usage = convert_openai_compatible_chat_usage(Some(&raw));
-    assert_eq!(usage.input_tokens.total, Some(200));
-    assert_eq!(usage.input_tokens.no_cache, Some(150));
-    assert_eq!(usage.input_tokens.cache_read, Some(50));
+    let usage =
+        convert_openai_compatible_chat_usage(Some(&raw), PromptTokensTotalSemantics::Inclusive);
+    assert_eq!(usage.input_tokens.total(), Some(200));
+    assert_eq!(usage.input_tokens.no_cache(), Some(150));
+    assert_eq!(usage.input_tokens.cache_read(), Some(50));
     assert_eq!(usage.output_tokens.total, Some(100));
     assert_eq!(usage.output_tokens.text, Some(70));
     assert_eq!(usage.output_tokens.reasoning, Some(30));
+}
+
+#[test]
+fn normalizes_non_inclusive_cached_tokens() {
+    let raw = OpenAICompatibleChatUsage {
+        prompt_tokens: Some(20),
+        completion_tokens: Some(10),
+        total_tokens: Some(30),
+        prompt_tokens_details: Some(PromptTokensDetails {
+            cached_tokens: Some(80),
+        }),
+        ..Default::default()
+    };
+    let usage =
+        convert_openai_compatible_chat_usage(Some(&raw), PromptTokensTotalSemantics::NonInclusive);
+    assert_eq!(usage.input_tokens.total(), Some(100));
+    assert_eq!(usage.input_tokens.no_cache(), Some(20));
+    assert_eq!(usage.input_tokens.cache_read(), Some(80));
 }

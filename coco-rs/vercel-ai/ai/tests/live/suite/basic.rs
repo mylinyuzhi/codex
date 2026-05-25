@@ -42,7 +42,7 @@ pub async fn run_token_usage(model: &Arc<dyn LanguageModelV4>) -> Result<()> {
     .await?;
 
     assert!(
-        result.usage.input_tokens.total.unwrap_or(0) > 0,
+        result.usage.input_tokens.total().unwrap_or(0) > 0,
         "Expected non-zero input tokens"
     );
     assert!(

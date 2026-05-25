@@ -484,7 +484,7 @@ impl QueryEngine {
             is_auto_compact_enabled: reminder_auto_compact_enabled,
             context_window: reminder_context_window,
             effective_context_window: reminder_effective_window,
-            used_tokens: total_usage.input_tokens,
+            used_tokens: total_usage.input_tokens.total,
             new_date: reminder_new_date,
             has_pending_plan_verification: app_state_snapshot.pending_plan_verification,
             // Phase 1 engine-local inputs.
@@ -493,7 +493,7 @@ impl QueryEngine {
             // Injected at turn start — TS `getTurnOutputTokens()` is zero
             // at this point; cumulative session count comes from usage.
             output_tokens_turn: 0,
-            output_tokens_session: total_usage.output_tokens,
+            output_tokens_session: total_usage.output_tokens.total,
             // Not yet wired (requires feature('TOKEN_BUDGET')-equivalent).
             output_token_budget: None,
             // Companion subsystem lives in a future Buddy crate; for now
