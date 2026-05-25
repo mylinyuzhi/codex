@@ -7,6 +7,12 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# Emit `JsonSchema` impls for hook input DTOs. Used by the
+# `export_hook_input_schema` example to build the SDK schema bundle.
+schema = ["dep:schemars", "coco-types/schema"]
+
 [dependencies]
 coco-config.workspace = true
 coco-error.workspace = true
@@ -16,6 +22,7 @@ coco-shell-discovery.workspace = true
 coco-system-reminder.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+schemars = { workspace = true, optional = true }
 thiserror.workspace = true
 async-trait.workspace = true
 futures = { workspace = true, features = ["std"] }
@@ -30,3 +37,11 @@ uuid = { workspace = true, features = ["v4"] }
 [dev-dependencies]
 anyhow.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+# Gate the schema-export example on the `schema` feature so plain
+# `cargo build`/`nextest` runs (which include `--examples` /
+# `--all-targets`) don't try to compile it without the optional
+# `schemars` dep wired in.
+[[example]]
+name = "export_hook_input_schema"
+required-features = ["schema"]

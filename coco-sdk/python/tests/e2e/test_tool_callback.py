@@ -15,18 +15,6 @@ from coco_sdk import CocoClient, tool
 from coco_sdk.generated.protocol import NotificationMethod
 
 
-@pytest.mark.xfail(
-    reason=(
-        "coco-rs gap: `handle_initialize` (app/cli/src/sdk_server/handlers/"
-        "session.rs:41) reads `agent_progress_summaries` only and silently "
-        "drops `sdk_mcp_servers`. Tools registered via the Python `@tool()` "
-        "decorator are never wired into the model's tool catalog, so the "
-        "model has nothing to call. Re-enable when coco-rs persists the SDK "
-        "MCP server roster and emits `mcp/routeMessage` for `tools/list` "
-        "discovery."
-    ),
-    strict=True,
-)
 async def test_sdk_hosted_tool_invocation(live_deepseek, isolated_cwd) -> None:
     invocations: list[dict] = []
 

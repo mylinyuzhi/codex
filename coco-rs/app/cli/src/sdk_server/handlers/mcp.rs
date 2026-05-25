@@ -22,14 +22,17 @@ use super::HandlerResult;
 /// TS reference: `SDKControlMcpStatusResponseSchema`
 /// (controlSchemas.ts:165-173).
 pub(super) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
-    let manager_slot = ctx.state.mcp_manager.read().await;
-    let Some(manager) = manager_slot.as_ref() else {
-        info!("SdkServer: mcp/status (no MCP manager wired, returning empty)");
-        return HandlerResult::ok(coco_types::McpStatusResult {
-            mcp_servers: Vec::new(),
-        });
+    let manager = {
+        let manager_slot = ctx.state.mcp_manager.read().await;
+        let Some(manager) = manager_slot.as_ref() else {
+            info!("SdkServer: mcp/status (no MCP manager wired, returning empty)");
+            return HandlerResult::ok(coco_types::McpStatusResult {
+                mcp_servers: Vec::new(),
+            });
+        };
+        let manager = manager.lock().await;
+        manager.clone()
     };
-    let manager = manager.lock().await;
     let names = manager.registered_server_names();
     let mut statuses: Vec<coco_types::McpServerStatus> = Vec::new();
     for name in &names {
@@ -70,10 +73,9 @@ pub(super) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
 /// Convert the tools of a connected MCP server into `McpToolSchema` values
 /// ready for `register_mcp_tools`.
 ///
-/// The `McpConnectionManager::get_state` is awaited while the caller already
-/// holds the manager lock, so this is a `&McpConnectionManager` call (not
-/// `&mut`). Safety: the lock was acquired by the caller and we are still
-/// inside that scope.
+/// Reads connected-state from the manager. Cloned managers share connection
+/// state, so callers can avoid holding the SDK server's outer manager mutex
+/// while waiting on MCP connection locks.
 async fn collect_server_schemas(
     manager: &coco_mcp::McpConnectionManager,
     server_name: &str,
@@ -96,6 +98,13 @@ async fn collect_server_schemas(
             input_schema: t.input_schema.clone(),
         })
         .collect()
+}
+
+pub(crate) async fn collect_server_schemas_for_manager(
+    manager: &coco_mcp::McpConnectionManager,
+    server_name: &str,
+) -> Vec<coco_tool_runtime::McpToolSchema> {
+    collect_server_schemas(manager, server_name).await
 }
 
 /// Register MCP server tools in the shared `ToolRegistry` via the session
@@ -133,10 +142,17 @@ async fn build_send_elicitation(
     ctx: &HandlerContext,
     server_name: &str,
 ) -> coco_mcp::SendElicitation {
+    build_send_elicitation_for_state(ctx.state.clone(), server_name.to_string()).await
+}
+
+pub(crate) async fn build_send_elicitation_for_state(
+    state: Arc<super::SdkServerState>,
+    server_name: String,
+) -> coco_mcp::SendElicitation {
     use std::future::Future;
     use std::pin::Pin;
-    let state = ctx.state.clone();
-    let server_name_for_base = server_name.to_string();
+    let server_name_for_base = server_name.clone();
+    let base_state = state.clone();
     let base: coco_mcp::SendElicitation = Box::new(
         move |_request_id,
               elicitation|
@@ -150,7 +166,7 @@ async fn build_send_elicitation(
                     > + Send,
             >,
         > {
-            let state = state.clone();
+            let state = base_state.clone();
             let server_name = server_name_for_base.clone();
             Box::pin(async move {
                 bridge_elicitation_to_sdk_client(&state, &server_name, elicitation).await
@@ -158,7 +174,7 @@ async fn build_send_elicitation(
         },
     );
     let runtime = {
-        let guard = ctx.state.session_runtime.read().await;
+        let guard = state.session_runtime.read().await;
         guard.clone()
     };
     let Some(runtime) = runtime else { return base };
@@ -174,7 +190,7 @@ async fn build_send_elicitation(
         .elicitation_pending_count
         .clone();
     crate::elicitation_hooks::wrap_send_elicitation_with_hooks(
-        server_name.to_string(),
+        server_name,
         registry,
         factory,
         Some(elicit_counter),

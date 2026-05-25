@@ -139,131 +139,19 @@ pub struct HookJsonOutput {
     pub hook_specific_output: Option<HookSpecificOutput>,
 }
 
-/// Event-specific hook output (TS parity).
-///
-/// TS: hookSpecificOutput in syncHookResponseSchema — tagged by hookEventName.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "hookEventName")]
-pub enum HookSpecificOutput {
-    PreToolUse {
-        #[serde(default, alias = "permissionDecision")]
-        permission_decision: Option<String>,
-        #[serde(default, alias = "permissionDecisionReason")]
-        permission_decision_reason: Option<String>,
-        #[serde(default, alias = "updatedInput")]
-        updated_input: Option<serde_json::Value>,
-        #[serde(default, alias = "additionalContext")]
-        additional_context: Option<String>,
-    },
-    PostToolUse {
-        #[serde(default, alias = "additionalContext")]
-        additional_context: Option<String>,
-        #[serde(default, alias = "updatedMCPToolOutput")]
-        updated_mcp_tool_output: Option<serde_json::Value>,
-    },
-    PostToolUseFailure {
-        #[serde(default, alias = "additionalContext")]
-        additional_context: Option<String>,
-    },
-    UserPromptSubmit {
-        #[serde(default, alias = "additionalContext")]
-        additional_context: Option<String>,
-    },
-    SessionStart {
-        #[serde(default, alias = "additionalContext")]
-        additional_context: Option<String>,
-        #[serde(default, alias = "initialUserMessage")]
-        initial_user_message: Option<String>,
-        #[serde(default, alias = "watchPaths")]
-        watch_paths: Option<Vec<String>>,
-    },
-    Setup {
-        #[serde(default, alias = "additionalContext")]
-        additional_context: Option<String>,
-    },
-    SubagentStart {
-        #[serde(default, alias = "additionalContext")]
-        additional_context: Option<String>,
-    },
-    PermissionDenied {
-        #[serde(default)]
-        retry: Option<bool>,
-    },
-    Notification {
-        #[serde(default, alias = "additionalContext")]
-        additional_context: Option<String>,
-    },
-    PermissionRequest {
-        decision: Option<PermissionRequestDecision>,
-    },
-    Elicitation {
-        action: Option<String>,
-        content: Option<serde_json::Value>,
-    },
-    ElicitationResult {
-        action: Option<String>,
-        content: Option<serde_json::Value>,
-    },
-    CwdChanged {
-        #[serde(default, alias = "watchPaths")]
-        watch_paths: Option<Vec<String>>,
-    },
-    FileChanged {
-        #[serde(default, alias = "watchPaths")]
-        watch_paths: Option<Vec<String>>,
-    },
-    WorktreeCreate {
-        #[serde(default, alias = "worktreePath")]
-        worktree_path: Option<String>,
-    },
-}
-
-impl HookSpecificOutput {
-    /// The `hookEventName` discriminator the hook claimed in its
-    /// JSON output. Used by [`aggregate_results`] to enforce TS
-    /// parity with `processHookJSONOutput()` (`hooks.ts:583-590`):
-    /// when the hook firing for event X emits
-    /// `hookSpecificOutput.hookEventName: "Y"`, the mismatch is
-    /// flagged so output isn't applied to the wrong code path.
-    pub fn claimed_event(&self) -> HookEventType {
-        match self {
-            Self::PreToolUse { .. } => HookEventType::PreToolUse,
-            Self::PostToolUse { .. } => HookEventType::PostToolUse,
-            Self::PostToolUseFailure { .. } => HookEventType::PostToolUseFailure,
-            Self::UserPromptSubmit { .. } => HookEventType::UserPromptSubmit,
-            Self::SessionStart { .. } => HookEventType::SessionStart,
-            Self::Setup { .. } => HookEventType::Setup,
-            Self::SubagentStart { .. } => HookEventType::SubagentStart,
-            Self::PermissionDenied { .. } => HookEventType::PermissionDenied,
-            Self::Notification { .. } => HookEventType::Notification,
-            Self::PermissionRequest { .. } => HookEventType::PermissionRequest,
-            Self::Elicitation { .. } => HookEventType::Elicitation,
-            Self::ElicitationResult { .. } => HookEventType::ElicitationResult,
-            Self::CwdChanged { .. } => HookEventType::CwdChanged,
-            Self::FileChanged { .. } => HookEventType::FileChanged,
-            Self::WorktreeCreate { .. } => HookEventType::WorktreeCreate,
-        }
-    }
-}
-
-/// Decision from a PermissionRequest hook.
-///
-/// TS: PermissionRequestResult — allow with optional updatedInput, or deny
-/// with optional message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "behavior")]
-pub enum PermissionRequestDecision {
-    #[serde(rename = "allow")]
-    Allow {
-        #[serde(default, alias = "updatedInput")]
-        updated_input: Option<serde_json::Value>,
-    },
-    #[serde(rename = "deny")]
-    Deny {
-        message: Option<String>,
-        interrupt: Option<bool>,
-    },
-}
+// Event-specific hook output and the PermissionRequest sub-decision
+// live in `coco-types` so the SDK boundary (`SdkHookOutput`) and the
+// internal hook orchestrator parse the same typed shape — no
+// translation layer, no string matching, no serde duplication.
+//
+// Re-exported here so existing `coco_hooks::orchestration::*` import
+// paths keep working. `ElicitationAction` is re-exported from
+// `crate::inputs` earlier in this file (it serves both hook INPUT
+// and hook OUTPUT — one wire vocabulary).
+pub use coco_types::HookDecision;
+pub use coco_types::HookPermissionDecision;
+pub use coco_types::HookSpecificOutput;
+pub use coco_types::PermissionRequestDecision;
 
 /// Parse hook stdout, attempting JSON first, falling back to plain text.
 ///
@@ -323,11 +211,15 @@ impl HookBlockingError {
 
 /// What produced a [`HookBlockingError`]. Lets consumers branch on the
 /// real provider rather than scraping a synthetic command string.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookBlockingSource {
     /// Settings-loaded `HookHandler::Command` — the literal shell
     /// command string that fired the hook.
     Command(String),
+    /// Settings-loaded `HookHandler::Http` — carries the configured
+    /// URL so consumers can distinguish HTTP webhook denials from
+    /// shell-command denials without parsing a synthetic label.
+    Http(String),
     /// In-memory [`crate::FunctionHook`] — carries the hook's id so
     /// log lines and telemetry can correlate to the registration
     /// site.
@@ -336,6 +228,11 @@ pub enum HookBlockingSource {
     /// No command/id; the LLM's blocking decision lives in
     /// `blocking_error`.
     Llm,
+    /// SDK-supplied [`crate::HookHandler::SdkCallback`] — carries the
+    /// `callback_id` registered at `initialize` time so telemetry,
+    /// log filtering, and error rendering can distinguish SDK denials
+    /// from shell-hook denials.
+    Sdk { callback_id: String },
 }
 
 /// Aggregated result from executing all matching hooks for a single event.
@@ -383,10 +280,12 @@ pub struct SessionStartHookExecution {
 
 /// Elicitation response from a hook.
 ///
-/// TS: elicitationResponse in HookResult.
+/// TS: elicitationResponse in HookResult. `action` is the typed
+/// `ElicitationAction` (Accept / Decline / Cancel) — the wire
+/// shape is fixed by `coco_types::ElicitationAction`'s lowercase serde.
 #[derive(Debug, Clone)]
 pub struct ElicitationResponse {
-    pub action: String,
+    pub action: ElicitationAction,
     pub content: Option<serde_json::Value>,
 }
 
@@ -410,6 +309,28 @@ pub struct SingleHookResult {
     pub status_message: Option<String>,
     /// When true, the hook runner should re-wake after async completion.
     pub async_rewake: bool,
+    /// Provenance for the [`HookBlockingError`] this result may
+    /// produce. Required (no `Option`) so every construction site
+    /// makes an explicit choice — SDK callbacks must carry
+    /// `Sdk { callback_id }`, HTTP hooks carry `Http(url)`, etc.
+    /// The previous `Option<...>` default-to-Command shape silently
+    /// mis-tagged HTTP and SDK denials as shell-command sources.
+    pub source: HookBlockingSource,
+    /// SDK callback typed output, if this result came from an
+    /// `SdkCallback` handler. When `Some`, aggregation applies the
+    /// typed [`coco_types::SdkHookOutput`] directly via
+    /// [`apply_sdk_hook_output`] — no JSON `parse_hook_output`
+    /// fallback, no string-vs-typed round-trip. `None` for every
+    /// other handler kind (Command/Http/Prompt/Agent).
+    pub sdk_output: Option<coco_types::SdkHookOutput>,
+}
+
+impl SingleHookResult {
+    /// Snapshot the source. Borrowed-clone helper for aggregation
+    /// sites that consume the source into a `HookBlockingError`.
+    fn blocking_source(&self) -> HookBlockingSource {
+        self.source.clone()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +625,7 @@ async fn execute_hooks_parallel_filtered(
     tracing::info!(hook_count = matching.len(), "hook_event firing");
 
     let (tx, mut rx) = mpsc::channel::<SingleHookResult>(matching.len());
+    let sdk_hook_callback = registry.sdk_hook_callback();
 
     let policy_set: Option<HashSet<&str>> =
         http_env_var_policy.map(|p| p.iter().map(String::as_str).collect());
@@ -742,11 +664,18 @@ async fn execute_hooks_parallel_filtered(
         let input_json = hook_input_json.to_string();
         let timeout = resolve_timeout(&handler, default_timeout);
         let command_label = handler_label(&handler);
+        // Tag this spawn with its provenance so `apply_hook_specific_output`
+        // and `aggregate_results_for_event` can build `HookBlockingError`
+        // with the correct `HookBlockingSource` variant — SDK callbacks
+        // carry `Sdk { callback_id }` instead of a synthetic `sdk:<id>`
+        // command-label string.
+        let handler_source = derive_handler_source(&handler);
         let hook_id = format!("hook-{idx}");
         let hook_event_str = format!("{event:?}");
         let event_tx = event_tx.cloned();
         let emitter = attachment_emitter.clone();
         let llm_handle_clone = llm_handle.cloned();
+        let sdk_hook_callback = sdk_hook_callback.clone();
         let is_async = hook.is_async;
         let async_rewake = hook.async_rewake;
         // Only clone sender for sync hooks. Async hooks deliver
@@ -830,6 +759,8 @@ async fn execute_hooks_parallel_filtered(
                         outcome: HookOutcome::Cancelled,
                         status_message: None,
                         async_rewake: false,
+                        source: handler_source.clone(),
+                        sdk_output: None,
                     }
                 }
                 res = tokio::time::timeout(
@@ -839,11 +770,17 @@ async fn execute_hooks_parallel_filtered(
                         &env,
                         Some(&input_json),
                         llm_handle_clone.as_ref(),
+                        sdk_hook_callback.as_ref(),
+                        event,
                         timeout,
                     ),
                 ) => {
                     match res {
-                        Ok(Ok(exec_result)) => process_execution_result(exec_result, &command_label),
+                        Ok(Ok(exec_result)) => process_execution_result(
+                            exec_result,
+                            &command_label,
+                            handler_source.clone(),
+                        ),
                         Ok(Err(e)) => {
                             // TS `hook_error_during_execution`
                             // (`utils/attachments.ts:405-414`, API-hidden,
@@ -866,6 +803,8 @@ async fn execute_hooks_parallel_filtered(
                                 outcome: HookOutcome::NonBlockingError,
                                 status_message: None,
                                 async_rewake: false,
+                                source: handler_source.clone(),
+                                sdk_output: None,
                             }
                         }
                         Err(_elapsed) => {
@@ -889,6 +828,8 @@ async fn execute_hooks_parallel_filtered(
                                 outcome: HookOutcome::NonBlockingError,
                                 status_message: None,
                                 async_rewake: false,
+                                source: handler_source.clone(),
+                                sdk_output: None,
                             }
                         }
                     }
@@ -1006,18 +947,27 @@ pub fn aggregate_results_for_event(
     let mut agg = AggregatedHookResult::default();
 
     for r in results {
-        if r.blocked {
-            agg.blocking_error = Some(HookBlockingError {
-                blocking_error: r.output.clone(),
-                source: HookBlockingSource::Command(r.command.clone()),
-            });
-        }
-
         if r.status_message.is_some() {
             agg.status_message.clone_from(&r.status_message);
         }
         if r.async_rewake {
             agg.async_rewake = true;
+        }
+
+        // **Typed SDK path** — when the callback returned a typed
+        // `SdkHookOutput`, apply it directly without parsing the
+        // legacy shell-hook stdout JSON. Skips the round-trip
+        // `Value → string → parse_hook_output` rescue entirely.
+        if let Some(sdk_output) = &r.sdk_output {
+            apply_sdk_hook_output(&mut agg, sdk_output, r, expected_event);
+            continue;
+        }
+
+        if r.blocked {
+            agg.blocking_error = Some(HookBlockingError {
+                blocking_error: r.output.clone(),
+                source: r.blocking_source(),
+            });
         }
 
         // Parse stdout for JSON control signals.
@@ -1047,12 +997,17 @@ pub fn aggregate_results_for_event(
                                 .reason
                                 .clone()
                                 .unwrap_or_else(|| "Blocked by hook".to_string()),
-                            source: HookBlockingSource::Command(r.command.clone()),
+                            source: r.blocking_source(),
                         });
                     }
                     _ => {}
                 }
 
+                // Flat-format `permissionDecision` (legacy shell-hook
+                // emission). TS canonical `'allow' | 'deny'` — `ask`
+                // was a coco-rs extension that the typed SDK path
+                // doesn't support; we drop it here too so the wire
+                // vocabulary stays consistent across both paths.
                 match json.permission_decision.as_deref() {
                     Some("allow") => {
                         agg.permission_behavior = Some(merge_permission(
@@ -1064,12 +1019,6 @@ pub fn aggregate_results_for_event(
                         agg.permission_behavior = Some(merge_permission(
                             agg.permission_behavior,
                             PermissionBehavior::Deny,
-                        ));
-                    }
-                    Some("ask") => {
-                        agg.permission_behavior = Some(merge_permission(
-                            agg.permission_behavior,
-                            PermissionBehavior::Ask,
                         ));
                     }
                     _ => {}
@@ -1145,7 +1094,7 @@ pub fn aggregate_results_for_event(
                             "hook returned hookSpecificOutput.hookEventName mismatch; ignoring nested fields"
                         );
                     } else {
-                        apply_hook_specific_output(&mut agg, specific, &r.command);
+                        apply_hook_specific_output(&mut agg, specific, r);
                     }
                 }
             }
@@ -1177,14 +1126,97 @@ fn merge_permission(
     }
 }
 
+/// Apply a typed [`coco_types::SdkHookOutput`] to the aggregated
+/// result. Used by [`aggregate_results_for_event`] when the spawn
+/// loop populates `SingleHookResult.sdk_output` from an `SdkCallback`
+/// handler — bypasses the legacy shell-hook stdout parser.
+///
+/// TS parity: mirrors `processHookJSONOutput` but consumes the typed
+/// `hookJSONOutputSchema` shape directly. The top-level fields
+/// (`continue`, `suppressOutput`, `decision`, `reason`, `systemMessage`)
+/// and the nested `hookSpecificOutput` union are applied in one pass.
+fn apply_sdk_hook_output(
+    agg: &mut AggregatedHookResult,
+    output: &coco_types::SdkHookOutput,
+    result: &SingleHookResult,
+    expected_event: Option<HookEventType>,
+) {
+    use coco_types::HookDecision;
+    let source = result.blocking_source();
+
+    // continue: false ⇒ stop the loop. Pair with stop_reason.
+    if output.r#continue == Some(false) {
+        agg.prevent_continuation = true;
+        if output.stop_reason.is_some() {
+            agg.stop_reason.clone_from(&output.stop_reason);
+        }
+    }
+
+    if output.suppress_output == Some(true) {
+        agg.suppress_output = true;
+    }
+
+    if let Some(msg) = &output.system_message {
+        agg.system_message = Some(msg.clone());
+    }
+
+    // Top-level decision (TS `'approve' | 'block'`).
+    match output.decision {
+        Some(HookDecision::Approve) => {
+            agg.permission_behavior = Some(merge_permission(
+                agg.permission_behavior,
+                PermissionBehavior::Allow,
+            ));
+        }
+        Some(HookDecision::Block) => {
+            agg.permission_behavior = Some(merge_permission(
+                agg.permission_behavior,
+                PermissionBehavior::Deny,
+            ));
+            agg.blocking_error = Some(HookBlockingError {
+                blocking_error: output
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "Blocked by hook".to_string()),
+                source,
+            });
+        }
+        None => {}
+    }
+
+    if output.reason.is_some() && agg.permission_behavior.is_some() {
+        agg.hook_permission_decision_reason
+            .clone_from(&output.reason);
+    }
+
+    // hookSpecificOutput dispatch. TS-parity cross-check: when the
+    // hook fired for event X emits `hookSpecificOutput.hookEventName = Y`,
+    // ignore the nested fields and log (matches the legacy parser).
+    if let Some(specific) = &output.hook_specific_output {
+        let claimed = specific.claimed_event();
+        let mismatch = expected_event.map(|exp| exp != claimed).unwrap_or(false);
+        if mismatch {
+            tracing::warn!(
+                expected = ?expected_event,
+                claimed = ?claimed,
+                command = %result.command,
+                "SDK hook returned hookSpecificOutput.hookEventName mismatch; ignoring nested fields"
+            );
+        } else {
+            apply_hook_specific_output(agg, specific, result);
+        }
+    }
+}
+
 /// Apply event-specific output from `hookSpecificOutput` to the aggregated result.
 ///
 /// TS: processHookJSONOutput() — switches on hookSpecificOutput.hookEventName.
 fn apply_hook_specific_output(
     agg: &mut AggregatedHookResult,
     specific: &HookSpecificOutput,
-    command: &str,
+    result: &SingleHookResult,
 ) {
+    let source = result.blocking_source();
     match specific {
         HookSpecificOutput::PreToolUse {
             permission_decision,
@@ -1193,14 +1225,14 @@ fn apply_hook_specific_output(
             additional_context,
         } => {
             if let Some(pd) = permission_decision {
-                match pd.as_str() {
-                    "allow" => {
+                match pd {
+                    HookPermissionDecision::Allow => {
                         agg.permission_behavior = Some(merge_permission(
                             agg.permission_behavior,
                             PermissionBehavior::Allow,
                         ));
                     }
-                    "deny" => {
+                    HookPermissionDecision::Deny => {
                         agg.permission_behavior = Some(merge_permission(
                             agg.permission_behavior,
                             PermissionBehavior::Deny,
@@ -1209,16 +1241,9 @@ fn apply_hook_specific_output(
                             blocking_error: permission_decision_reason
                                 .clone()
                                 .unwrap_or_else(|| "Blocked by hook".to_string()),
-                            source: HookBlockingSource::Command(command.to_string()),
+                            source,
                         });
                     }
-                    "ask" => {
-                        agg.permission_behavior = Some(merge_permission(
-                            agg.permission_behavior,
-                            PermissionBehavior::Ask,
-                        ));
-                    }
-                    _ => {}
                 }
             }
             if let Some(reason) = permission_decision_reason {
@@ -1297,28 +1322,28 @@ fn apply_hook_specific_output(
         }
         HookSpecificOutput::Elicitation { action, content } => {
             if let Some(act) = action {
-                if act == "decline" {
+                if matches!(act, ElicitationAction::Decline) {
                     agg.blocking_error = Some(HookBlockingError {
                         blocking_error: "Elicitation denied by hook".to_string(),
-                        source: HookBlockingSource::Command(command.to_string()),
+                        source: result.blocking_source(),
                     });
                 }
                 agg.elicitation_response = Some(ElicitationResponse {
-                    action: act.clone(),
+                    action: *act,
                     content: content.clone(),
                 });
             }
         }
         HookSpecificOutput::ElicitationResult { action, content } => {
             if let Some(act) = action {
-                if act == "decline" {
+                if matches!(act, ElicitationAction::Decline) {
                     agg.blocking_error = Some(HookBlockingError {
                         blocking_error: "Elicitation result blocked by hook".to_string(),
-                        source: HookBlockingSource::Command(command.to_string()),
+                        source: result.blocking_source(),
                     });
                 }
                 agg.elicitation_result_response = Some(ElicitationResponse {
-                    action: act.clone(),
+                    action: *act,
                     content: content.clone(),
                 });
             }
@@ -1462,7 +1487,6 @@ pub async fn execute_pre_tool_use(
 ) -> crate::Result<AggregatedHookResult> {
     let input = PreToolUseInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::PreToolUse,
         tool_name: tool_name.to_string(),
         tool_input: tool_input.clone(),
         tool_use_id: tool_use_id.to_string(),
@@ -1516,7 +1540,6 @@ pub async fn execute_post_tool_use(
 ) -> crate::Result<AggregatedHookResult> {
     let input = PostToolUseInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::PostToolUse,
         tool_name: tool_name.to_string(),
         tool_input: tool_input.clone(),
         tool_response: tool_response.clone(),
@@ -1574,7 +1597,6 @@ pub async fn execute_post_tool_use_failure(
 ) -> crate::Result<AggregatedHookResult> {
     let input = PostToolUseFailureInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::PostToolUseFailure,
         tool_name: tool_name.to_string(),
         tool_input: tool_input.clone(),
         tool_use_id: tool_use_id.to_string(),
@@ -1627,7 +1649,6 @@ pub async fn execute_pre_compact(
 ) -> crate::Result<PreCompactResult> {
     let input = PreCompactInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::PreCompact,
         trigger,
         custom_instructions: custom_instructions.map(String::from),
     };
@@ -1714,7 +1735,6 @@ pub async fn execute_post_compact(
 ) -> crate::Result<PostCompactResult> {
     let input = PostCompactInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::PostCompact,
         trigger,
         compact_summary: compact_summary.to_string(),
     };
@@ -1824,7 +1844,6 @@ async fn execute_session_start_raw(
 ) -> crate::Result<(Vec<SingleHookResult>, AggregatedHookResult)> {
     let input = SessionStartInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::SessionStart,
         source,
         agent_type: agent_type.map(String::from),
         model: model.map(String::from),
@@ -1882,7 +1901,6 @@ pub async fn execute_user_prompt_submit(
     }
     let input = UserPromptSubmitInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::UserPromptSubmit,
         prompt: prompt_text.to_string(),
     };
 
@@ -2027,7 +2045,6 @@ pub async fn execute_subagent_start(
     }
     let input = SubagentStartInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::SubagentStart,
         agent_type: agent_type.to_string(),
         agent_id: agent_id.to_string(),
     };
@@ -2088,7 +2105,6 @@ pub async fn execute_subagent_stop(
     }
     let input = SubagentStopInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::SubagentStop,
         stop_hook_active,
         agent_type: agent_type.to_string(),
         agent_id: agent_id.to_string(),
@@ -2141,7 +2157,6 @@ pub async fn execute_session_end(
     let timeout = session_end_timeout();
     let input = SessionEndInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::SessionEnd,
         reason,
     };
 
@@ -2205,7 +2220,6 @@ pub async fn execute_stop(
     }
     let input = StopInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::Stop,
         stop_hook_active,
         last_assistant_message: last_assistant_message.map(String::from),
     };
@@ -2364,7 +2378,6 @@ pub async fn execute_stop_failure(
 ) -> crate::Result<Vec<SingleHookResult>> {
     let input = StopFailureInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::StopFailure,
         error: error.to_string(),
         error_details: error_details.map(String::from),
         last_assistant_message: last_assistant_message.map(String::from),
@@ -2422,7 +2435,6 @@ pub async fn execute_setup(
     }
     let input = crate::inputs::SetupInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::Setup,
         trigger,
     };
     let json_input = serde_json::to_string(&input)?;
@@ -2473,7 +2485,6 @@ pub async fn execute_notification(
     }
     let input = crate::inputs::NotificationInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::Notification,
         notification_type: notification_type.to_string(),
         message: message.to_string(),
         title: title.map(String::from),
@@ -2528,7 +2539,6 @@ pub async fn execute_permission_request(
     }
     let input = crate::inputs::PermissionRequestInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::PermissionRequest,
         tool_name: tool_name.to_string(),
         tool_input: tool_input.clone(),
         permission_suggestions: permission_suggestions.cloned(),
@@ -2583,7 +2593,6 @@ pub async fn execute_permission_denied(
     }
     let input = crate::inputs::PermissionDeniedInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::PermissionDenied,
         tool_name: tool_name.to_string(),
         tool_input: tool_input.clone(),
         tool_use_id: tool_use_id.to_string(),
@@ -2642,7 +2651,6 @@ pub async fn execute_elicitation(
     }
     let input = crate::inputs::ElicitationInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::Elicitation,
         mcp_server_name: mcp_server_name.to_string(),
         message: message.to_string(),
         mode,
@@ -2701,7 +2709,6 @@ pub async fn execute_elicitation_result(
     }
     let input = crate::inputs::ElicitationResultInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::ElicitationResult,
         mcp_server_name: mcp_server_name.to_string(),
         elicitation_id: elicitation_id.map(String::from),
         mode,
@@ -2753,7 +2760,6 @@ pub async fn execute_config_change(
     }
     let input = crate::inputs::ConfigChangeInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::ConfigChange,
         source,
         file_path: file_path.map(String::from),
     };
@@ -2810,7 +2816,6 @@ pub async fn execute_instructions_loaded(
     }
     let input = crate::inputs::InstructionsLoadedInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::InstructionsLoaded,
         file_path: file_path.to_string(),
         memory_type,
         load_reason,
@@ -2863,7 +2868,6 @@ pub async fn execute_cwd_changed(
     }
     let input = crate::inputs::CwdChangedInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::CwdChanged,
         old_cwd: old_cwd.to_string(),
         new_cwd: new_cwd.to_string(),
     };
@@ -2914,7 +2918,6 @@ pub async fn execute_file_changed(
     }
     let input = crate::inputs::FileChangedInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::FileChanged,
         file_path: file_path.to_string(),
         event,
     };
@@ -2968,7 +2971,6 @@ pub async fn execute_worktree_create(
     }
     let input = crate::inputs::WorktreeCreateInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::WorktreeCreate,
         name: name.to_string(),
     };
     let json_input = serde_json::to_string(&input)?;
@@ -3015,7 +3017,6 @@ pub async fn execute_worktree_remove(
     }
     let input = crate::inputs::WorktreeRemoveInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::WorktreeRemove,
         worktree_path: worktree_path.to_string(),
     };
     let json_input = serde_json::to_string(&input)?;
@@ -3109,7 +3110,6 @@ pub async fn execute_task_created(
 ) -> crate::Result<AggregatedHookResult> {
     let input = crate::inputs::TaskCreatedInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::TaskCreated,
         task_id: task_id.to_string(),
         task_subject: task_subject.to_string(),
         task_description: task_description.map(String::from),
@@ -3134,7 +3134,6 @@ pub async fn execute_task_completed(
 ) -> crate::Result<AggregatedHookResult> {
     let input = crate::inputs::TaskCompletedInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::TaskCompleted,
         task_id: task_id.to_string(),
         task_subject: task_subject.to_string(),
         task_description: task_description.map(String::from),
@@ -3156,7 +3155,6 @@ pub async fn execute_teammate_idle(
 ) -> crate::Result<AggregatedHookResult> {
     let input = crate::inputs::TeammateIdleInput {
         base: base_from_ctx(ctx),
-        hook_event_name: HookEventType::TeammateIdle,
         teammate_name: teammate_name.to_string(),
         team_name: team_name.to_string(),
     };
@@ -3201,9 +3199,46 @@ async fn run_hook_via_handle_or_fallback(
     env_vars: &std::collections::HashMap<String, String>,
     stdin_input: Option<&str>,
     llm_handle: Option<&std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
+    sdk_hook_callback: Option<&crate::SdkHookCallback>,
+    event: HookEventType,
     timeout: Duration,
 ) -> crate::Result<HookExecutionResult> {
     use crate::llm_handle::HookEvaluationResult;
+
+    if let HookHandler::SdkCallback { callback_id, .. } = handler {
+        let Some(callback) = sdk_hook_callback else {
+            return Err(crate::HooksError::generic(format!(
+                "SDK hook callback {callback_id:?} is not installed"
+            )));
+        };
+        // The hook input is the already-serialized JSON the orchestrator
+        // built — parse to a `Value` so the callback receives the same
+        // shape it would have over the SDK wire.
+        let input = match stdin_input {
+            Some(raw) => serde_json::from_str(raw)?,
+            None => serde_json::Value::Null,
+        };
+        // `tool_use_id` is on the typed input struct; for callback
+        // dispatch we re-extract it from the serialized form so the
+        // callback signature stays stable across all event types.
+        let tool_use_id = input
+            .get("tool_use_id")
+            .or_else(|| input.get("toolUseID"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        // Typed end-to-end: callback returns `SdkHookOutput` directly,
+        // we wrap as `HookExecutionResult::SdkOutput`, aggregation
+        // applies it via `apply_sdk_hook_output` — no JSON round-trip,
+        // no `parse_hook_output` rescue.
+        let output = callback(crate::SdkHookCallbackRequest {
+            callback_id: callback_id.clone(),
+            event,
+            input,
+            tool_use_id,
+        })
+        .await?;
+        return Ok(HookExecutionResult::SdkOutput(output));
+    }
 
     let Some(llm) = llm_handle else {
         return execute_hook(handler, env_vars, stdin_input).await;
@@ -3264,11 +3299,27 @@ fn resolve_timeout(handler: &HookHandler, default: Duration) -> Duration {
         HookHandler::Http { timeout_ms, .. } => *timeout_ms,
         HookHandler::Prompt { timeout_ms, .. } => *timeout_ms,
         HookHandler::Agent { timeout_ms, .. } => *timeout_ms,
+        HookHandler::SdkCallback { timeout_ms, .. } => *timeout_ms,
     };
     explicit
         .and_then(|ms| u64::try_from(ms).ok())
         .map(Duration::from_millis)
         .unwrap_or(default)
+}
+
+/// Derive the [`HookBlockingSource`] provenance for a handler. Every
+/// handler maps to exactly one source variant — no implicit default,
+/// so a new handler type fails compilation here instead of silently
+/// defaulting to `Command`.
+fn derive_handler_source(handler: &HookHandler) -> HookBlockingSource {
+    match handler {
+        HookHandler::Command { command, .. } => HookBlockingSource::Command(command.clone()),
+        HookHandler::Http { url, .. } => HookBlockingSource::Http(url.clone()),
+        HookHandler::Prompt { .. } | HookHandler::Agent { .. } => HookBlockingSource::Llm,
+        HookHandler::SdkCallback { callback_id, .. } => HookBlockingSource::Sdk {
+            callback_id: callback_id.clone(),
+        },
+    }
 }
 
 /// Human-readable label for a hook handler (used in result reporting).
@@ -3278,11 +3329,16 @@ fn handler_label(handler: &HookHandler) -> String {
         HookHandler::Prompt { prompt, .. } => format!("prompt:{prompt}"),
         HookHandler::Http { url, .. } => url.clone(),
         HookHandler::Agent { prompt, .. } => format!("agent:{prompt}"),
+        HookHandler::SdkCallback { callback_id, .. } => format!("sdk:{callback_id}"),
     }
 }
 
 /// Process a raw `HookExecutionResult` into a `SingleHookResult`.
-fn process_execution_result(exec: HookExecutionResult, label: &str) -> SingleHookResult {
+fn process_execution_result(
+    exec: HookExecutionResult,
+    label: &str,
+    source: HookBlockingSource,
+) -> SingleHookResult {
     match exec {
         HookExecutionResult::CommandOutput {
             exit_code,
@@ -3304,6 +3360,8 @@ fn process_execution_result(exec: HookExecutionResult, label: &str) -> SingleHoo
                 },
                 status_message: None,
                 async_rewake: false,
+                source,
+                sdk_output: None,
             }
         }
         HookExecutionResult::PromptText(text) => SingleHookResult {
@@ -3314,8 +3372,69 @@ fn process_execution_result(exec: HookExecutionResult, label: &str) -> SingleHoo
             outcome: HookOutcome::Success,
             status_message: None,
             async_rewake: false,
+            source,
+            sdk_output: None,
         },
+        HookExecutionResult::SdkOutput(out) => {
+            // Compute `blocked` directly from the typed output. TS
+            // semantics: top-level `decision: 'block'` or
+            // `hookSpecificOutput.PreToolUse.permissionDecision: 'deny'`
+            // both signal a blocking-error result. Elicitation
+            // `action: decline` is also a block. Everything else is a
+            // non-blocking success — even with `continue: false`
+            // (that's `prevent_continuation`, not a blocking error).
+            let blocked = is_sdk_output_blocking(&out);
+            SingleHookResult {
+                command: label.to_string(),
+                succeeded: true,
+                output: String::new(),
+                blocked,
+                outcome: if blocked {
+                    HookOutcome::Blocking
+                } else {
+                    HookOutcome::Success
+                },
+                status_message: None,
+                async_rewake: false,
+                source,
+                sdk_output: Some(out),
+            }
+        }
     }
+}
+
+/// Determine whether a typed `SdkHookOutput` should be treated as a
+/// blocking result. Mirrors the rules `aggregate_results_for_event`
+/// applies — used here to set `SingleHookResult.blocked` consistently
+/// before aggregation sees it.
+fn is_sdk_output_blocking(out: &coco_types::SdkHookOutput) -> bool {
+    use coco_types::HookDecision;
+    use coco_types::HookPermissionDecision;
+    use coco_types::HookSpecificOutput;
+    if out.decision == Some(HookDecision::Block) {
+        return true;
+    }
+    if let Some(spec) = &out.hook_specific_output {
+        match spec {
+            HookSpecificOutput::PreToolUse {
+                permission_decision: Some(HookPermissionDecision::Deny),
+                ..
+            } => return true,
+            HookSpecificOutput::PermissionRequest {
+                decision: Some(coco_types::PermissionRequestDecision::Deny { .. }),
+            } => return true,
+            HookSpecificOutput::Elicitation {
+                action: Some(coco_types::ElicitationAction::Decline),
+                ..
+            } => return true,
+            HookSpecificOutput::ElicitationResult {
+                action: Some(coco_types::ElicitationAction::Decline),
+                ..
+            } => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Get the SessionEnd hook timeout, optionally overridden via env var.

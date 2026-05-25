@@ -1,10 +1,13 @@
 //! `ClientRequest` — SDK-to-agent protocol requests.
 //!
-//! TS source: `src/entrypoints/sdk/controlSchemas.ts` (21 control request
-//! subtypes). coco-rs extends this to 31 variants: 22 cocode-rs base +
-//! `elicitation/resolve` (TS-aligned) + 8 P1 gap additions.
+//! TS source: `src/entrypoints/sdk/controlSchemas.ts`. coco-rs ships
+//! 29 variants: TS-aligned session / turn / runtime / config / MCP /
+//! plugin / approval / elicitation primitives.
 //!
-//! See `event-system-design.md` §5.
+//! Hook and MCP-route SDK-side responses ride the **synchronous
+//! JSON-RPC reply** to the corresponding `hook/callback` /
+//! `mcp/routeMessage` server request — there is no separate client
+//! request variant for them. See `event-system-design.md` §5.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -72,10 +75,6 @@ the 8 gap additions (`elicitation/resolve` is TS-aligned). 31 total.",
         "config/read" => ConfigRead,
         "config/value/write" => ConfigWrite(ConfigWriteParams),
 
-        // === Hook + MCP message routing responses (2) ===
-        "hook/callbackResponse" => HookCallbackResponse(HookCallbackResponseParams),
-        "mcp/routeMessageResponse" => McpRouteMessageResponse(McpRouteMessageResponseParams),
-
         // === TS P1 gap additions (7) — event-system-design §5.4 ===
         /// Query MCP server connection status.
         /// TS: `SDKControlMcpStatusRequestSchema`
@@ -130,7 +129,7 @@ pub struct InitializeParams {
     pub append_system_prompt: Option<String>,
     /// Custom agent definitions keyed by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agents: Option<HashMap<String, serde_json::Value>>,
+    pub agents: Option<HashMap<String, SdkAgentDefinition>>,
     /// Enable prompt suggestions in the output stream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_suggestions: Option<bool>,
@@ -148,6 +147,62 @@ pub struct HookCallbackMatcher {
     pub hook_callback_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<i64>,
+}
+
+/// SDK-supplied custom subagent spec carried on `InitializeParams.agents`.
+///
+/// Mirrors TS `AgentDefinitionSchema` (`entrypoints/sdk/coreSchemas.ts:1110-1183`).
+/// **Distinct** from the internal [`crate::AgentDefinition`] which is the
+/// resolved post-load representation merged from markdown / plugin /
+/// SDK sources. This type is the wire-level DTO only.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SdkAgentDefinition {
+    /// Natural-language description shown in the AgentTool prompt list.
+    pub description: String,
+    /// Agent system prompt body.
+    pub prompt: String,
+    /// Allowed tool names. `None` inherits all parent tools (TS `tools: undefined`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
+    /// Explicit tool deny-list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disallowed_tools: Option<Vec<String>>,
+    /// Model alias / full id / `"inherit"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Per-agent MCP servers (`string` name-ref or inline `{name: config}` map).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<Vec<crate::AgentMcpServerSpec>>,
+    /// Experimental critical system reminder appended to the system prompt.
+    /// Wire field is `criticalSystemReminder_EXPERIMENTAL` per TS.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "criticalSystemReminder_EXPERIMENTAL"
+    )]
+    pub critical_system_reminder_experimental: Option<String>,
+    /// Skill names auto-loaded into the agent context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    /// Auto-submitted as the first user turn when this agent is the main thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_prompt: Option<String>,
+    /// Hard ceiling on agentic turns before the agent stops.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<i32>,
+    /// Run as a fire-and-forget background task when invoked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
+    /// Auto-loading scope for agent memory files (`user` / `project` / `local`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<crate::MemoryScope>,
+    /// Reasoning effort selector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<crate::ReasoningEffort>,
+    /// Permission mode override for tool executions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<PermissionMode>,
 }
 
 /// Params for `session/start`.
@@ -382,26 +437,6 @@ pub struct ConfigWriteParams {
     /// Optional scope: "user" | "project" | "local".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
-}
-
-/// Matches TS `SDKHookCallbackRequestSchema` response direction flipped —
-/// client→server reply to a prior `hook/callback` ServerRequest.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HookCallbackResponseParams {
-    pub callback_id: String,
-    /// Hook output (stdout/stderr + optional behavior field).
-    pub output: serde_json::Value,
-}
-
-/// Matches TS `SDKControlMcpMessageRequestSchema` response direction —
-/// client→server reply to a prior `mcp/routeMessage` ServerRequest.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpRouteMessageResponseParams {
-    pub request_id: String,
-    /// JSON-RPC message response from the SDK-hosted MCP server.
-    pub message: serde_json::Value,
 }
 
 // --- TS gap additions (7) ---

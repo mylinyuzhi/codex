@@ -26,8 +26,6 @@
     "agent/interruptCurrentWork",
     "config/read",
     "config/value/write",
-    "hook/callbackResponse",
-    "mcp/routeMessageResponse",
     "mcp/status",
     "context/usage",
     "mcp/setServers",

@@ -31,6 +31,27 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+/// Request delivered to an SDK-registered hook callback.
+#[derive(Debug, Clone)]
+pub struct SdkHookCallbackRequest {
+    pub callback_id: String,
+    pub event: HookEventType,
+    pub input: serde_json::Value,
+    pub tool_use_id: Option<String>,
+}
+
+/// Callback returns the typed `SdkHookOutput` directly — no JSON
+/// round-trip. The orchestration layer applies the typed output to
+/// `AggregatedHookResult` via [`crate::orchestration::apply_sdk_hook_output`],
+/// preserving TS-canonical wire shape end-to-end.
+pub type SdkHookCallbackFuture =
+    Pin<Box<dyn Future<Output = Result<coco_types::SdkHookOutput>> + Send>>;
+pub type SdkHookCallback =
+    Arc<dyn Fn(SdkHookCallbackRequest) -> SdkHookCallbackFuture + Send + Sync + 'static>;
 
 /// Hook definition — an event handler with matcher, command, and priority.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +140,13 @@ pub enum HookHandler {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<i64>,
     },
+    /// Invoke a callback registered by the SDK client for this session.
+    #[serde(skip)]
+    SdkCallback {
+        callback_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<i64>,
+    },
 }
 
 /// Outcome of executing a single hook handler.
@@ -132,6 +160,11 @@ pub enum HookExecutionResult {
     },
     /// Prompt text to inject into the conversation.
     PromptText(String),
+    /// SDK-supplied callback returned a typed
+    /// [`coco_types::SdkHookOutput`]. Aggregation handles this via the
+    /// typed `apply_sdk_hook_output` path instead of round-tripping
+    /// through JSON / `parse_hook_output`.
+    SdkOutput(coco_types::SdkHookOutput),
 }
 
 /// Metadata returned alongside a hook execution result.
@@ -196,6 +229,10 @@ pub struct HookRegistry {
     ///
     /// TS source: `AppState.sessionHooks` (`utils/hooks/sessionHooks.ts`).
     function_hooks: std::sync::RwLock<Vec<FunctionHook>>,
+    /// Runtime-only callback used by SDK-supplied hooks. This is not part
+    /// of settings serialization; `initialize.hooks` registers
+    /// `HookHandler::SdkCallback` values that dispatch through this slot.
+    sdk_hook_callback: std::sync::RwLock<Option<SdkHookCallback>>,
 }
 
 impl HookRegistry {
@@ -207,6 +244,19 @@ impl HookRegistry {
         if let Ok(mut hooks) = self.hooks.write() {
             hooks.push(hook);
         }
+    }
+
+    pub fn set_sdk_hook_callback(&self, callback: SdkHookCallback) {
+        if let Ok(mut slot) = self.sdk_hook_callback.write() {
+            *slot = Some(callback);
+        }
+    }
+
+    pub fn sdk_hook_callback(&self) -> Option<SdkHookCallback> {
+        self.sdk_hook_callback
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone())
     }
 
     /// Register a hook, skipping duplicates based on handler + if_condition + shell.
@@ -1060,6 +1110,9 @@ pub async fn execute_hook(
             );
             Ok(HookExecutionResult::PromptText(prompt.clone()))
         }
+        HookHandler::SdkCallback { callback_id, .. } => Err(crate::HooksError::generic(format!(
+            "SDK hook callback {callback_id:?} cannot run without the SDK runtime bridge"
+        ))),
     }
 }
 
@@ -1347,6 +1400,13 @@ fn apply_timeout_to_handler(handler: HookHandler, timeout_secs: Option<i64>) -> 
             model,
             timeout_ms: Some(ms),
         },
+        HookHandler::SdkCallback {
+            callback_id,
+            timeout_ms: None,
+        } => HookHandler::SdkCallback {
+            callback_id,
+            timeout_ms: Some(ms),
+        },
         other => other,
     }
 }
@@ -1468,6 +1528,7 @@ fn dedup_key(hook: &HookDefinition) -> String {
         HookHandler::Prompt { prompt, .. } => format!("prompt:{prompt}"),
         HookHandler::Http { url, .. } => format!("http:{url}"),
         HookHandler::Agent { prompt, .. } => format!("agent:{prompt}"),
+        HookHandler::SdkCallback { callback_id, .. } => format!("sdk:{callback_id}"),
     };
     format!(
         "{handler_key}\0{}",

@@ -28,6 +28,8 @@ pub use channel_permission::DenyAllRelay;
 pub use channel_permission::StaticPermissionRelay;
 pub use client::McpClientError;
 pub use client::McpConnectionManager;
+pub use client::SdkRouteFuture;
+pub use client::SdkRouteMessage;
 pub use config::McpConfigLoader;
 pub use config_watcher::McpConfigChanged;
 pub use config_watcher::watch_mcp_configs;

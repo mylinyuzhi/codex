@@ -322,6 +322,7 @@ impl FromStr for AgentIsolation {
 /// `coco-types`); keeping it as opaque JSON avoids a back-edge.
 ///
 /// TS: `tools/AgentTool/loadAgentsDir.ts:58 AgentMcpServerSpec`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AgentMcpServerSpec {
@@ -362,6 +363,7 @@ impl AgentMcpServerSpec {
 /// Scope for agent memory persistence.
 ///
 /// TS: MemoryScope — controls where MEMORY.md is stored/read.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {

@@ -33,6 +33,7 @@ use crate::sdk_server::handlers::HandlerResult;
 use crate::sdk_server::handlers::SdkServerState;
 use crate::sdk_server::handlers::TurnRunner;
 use crate::sdk_server::handlers::dispatch_client_request;
+use crate::sdk_server::outbound::OutboundMessage;
 use crate::sdk_server::transport::SdkTransport;
 use crate::sdk_server::transport::TransportError;
 
@@ -200,6 +201,7 @@ impl SdkServer {
         self,
         runtime: Arc<crate::session_runtime::SessionRuntime>,
     ) -> Self {
+        crate::sdk_server::sdk_hooks::install_runtime_callback(self.state.clone(), &runtime);
         let Ok(mut slot) = self.state.session_runtime.try_write() else {
             panic!("with_session_runtime: state was already locked at construction time");
         };
@@ -251,8 +253,24 @@ impl SdkServer {
         // `send_server_request` and the approval bridge work correctly
         // from the moment the server exists, not just from the moment
         // `run()` executes its first await point.
-        let (notif_tx, mut notif_rx) = mpsc::channel::<CoreEvent>(256);
-        let (reply_tx, mut reply_rx) = mpsc::channel::<JsonRpcMessage>(256);
+        let (outbound_tx, mut outbound_rx) = mpsc::channel::<OutboundMessage>(256);
+        {
+            let mut slot = self.state.outbound_tx.write().await;
+            *slot = Some(outbound_tx.clone());
+        }
+
+        let mcp_manager = {
+            let slot = self.state.mcp_manager.read().await;
+            slot.as_ref().cloned()
+        };
+        if let Some(manager) = mcp_manager {
+            crate::sdk_server::sdk_mcp::install_route(
+                manager,
+                self.state.clone(),
+                self.transport.clone(),
+            )
+            .await;
+        }
 
         // Merge any external notification sources (e.g. plugin
         // watcher) into the same `notif_tx` stream so they ride the
@@ -267,25 +285,28 @@ impl SdkServer {
             std::mem::take(&mut *guard)
         };
         for mut rx in external {
-            let forwarded_tx = notif_tx.clone();
+            let forwarded_tx = outbound_tx.clone();
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
-                    if forwarded_tx.send(event).await.is_err() {
+                    if forwarded_tx
+                        .send(OutboundMessage::core_event(event))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
             });
         }
 
-        // Background task: single-writer transport serializer. Drains both
-        // the notification channel and the per-request reply channel,
-        // preferring notifications first so every notification queued
-        // before a reply is written to the transport first.
+        // Background task: single-writer transport serializer. Every
+        // outbound notification, reply, and server request is enqueued into
+        // this one channel so the wire order matches enqueue order.
         //
-        // Routing all outbound transport writes through this one task
-        // gives the SDK a total order on wire messages — critical for
-        // `session/archive`, where the aggregated `SessionResult` event
-        // must land BEFORE the archive's own JSON-RPC reply.
+        // This is critical for `session/archive`, where the aggregated
+        // `SessionResult` event must land BEFORE the archive's own JSON-RPC
+        // reply, and for SDK MCP/hook callbacks that share stdout with turn
+        // events.
         let notif_transport = self.transport.clone();
         // Tag every event emitted from the writer task with `sdk_writer` so
         // downstream log filters can trace "what did the SDK see, in what
@@ -339,102 +360,81 @@ impl SdkServer {
                     true
                 }
 
-                loop {
-                    tokio::select! {
-                        biased;
-                        event = notif_rx.recv() => {
-                            match event {
-                                Some(CoreEvent::Protocol(notif)) => {
-                                    // Lifecycle hooks for accumulator scoping.
-                                    match &notif {
-                                        ServerNotification::TurnStarted(p) => {
-                                            let turn_id = p.turn_id.clone().unwrap_or_default();
-                                            let mut acc = StreamAccumulator::new(turn_id);
-                                            // Drain any stream events that arrived before TurnStarted.
-                                            let buffered: Vec<_> = pre_turn_buffer
-                                                .drain(..)
-                                                .flat_map(|evt| acc.process(evt))
-                                                .collect();
-                                            if !send_accumulated(&*notif_transport, buffered).await {
-                                                break;
-                                            }
-                                            accumulator = Some(acc);
-                                        }
-                                        ServerNotification::TurnCompleted(_)
-                                        | ServerNotification::TurnFailed(_)
-                                        | ServerNotification::TurnInterrupted(_) => {
-                                            // Flush trailing items BEFORE the terminator.
-                                            if let Some(ref mut acc) = accumulator {
-                                                let flushed = acc.flush();
-                                                if !send_accumulated(&*notif_transport, flushed).await {
-                                                    break;
-                                                }
-                                            }
-                                            accumulator = None;
-                                            pre_turn_buffer.clear();
-                                        }
-                                        _ => {}
-                                    }
-                                    // Forward the protocol event itself via the
-                                    // transport's fast path.
-                                    if !send_notif(&*notif_transport, &notif).await {
-                                        break;
-                                    }
-                                }
-                                Some(CoreEvent::Stream(stream_evt)) => {
-                                    // Feed the accumulator, which converts raw
-                                    // stream events into semantic item lifecycle
-                                    // ServerNotifications.
-                                    let notifications = if let Some(ref mut acc) = accumulator {
-                                        acc.process(stream_evt)
-                                    } else {
-                                        if pre_turn_buffer.len() >= PRE_TURN_BUFFER_CAP {
-                                            // Structured field `metric = "pre_turn_buffer_overflow"`
-                                            // is keyed by downstream log extractors as a counter.
-                                            // Separate from the capacity so metrics infra can
-                                            // alert without parsing free-text messages.
-                                            warn!(
-                                                metric = "pre_turn_buffer_overflow",
-                                                cap = PRE_TURN_BUFFER_CAP,
-                                                "pre-turn buffer full, dropping stream event"
-                                            );
-                                        } else {
-                                            debug!("stream event before TurnStarted; buffering");
-                                            pre_turn_buffer.push(stream_evt);
-                                        }
-                                        Vec::new()
-                                    };
-                                    if !send_accumulated(&*notif_transport, notifications).await {
-                                        break;
-                                    }
-                                }
-                                Some(CoreEvent::Tui(_)) => {
-                                    // TUI-only events are dropped by non-TUI consumers.
-                                }
-                                None => {
-                                    // Notification channel closed — drain replies then exit.
-                                    while let Some(reply) = reply_rx.recv().await {
-                                        if let Err(e) = notif_transport.send(reply).await {
-                                            warn!(error = %e, "reply forward failed");
+                while let Some(outbound) = outbound_rx.recv().await {
+                    match outbound {
+                        OutboundMessage::CoreEvent(event) => match *event {
+                            CoreEvent::Protocol(notif) => {
+                                // Lifecycle hooks for accumulator scoping.
+                                match &notif {
+                                    ServerNotification::TurnStarted(p) => {
+                                        let turn_id = p.turn_id.clone().unwrap_or_default();
+                                        let mut acc = StreamAccumulator::new(turn_id);
+                                        // Drain any stream events that arrived before TurnStarted.
+                                        let buffered: Vec<_> = pre_turn_buffer
+                                            .drain(..)
+                                            .flat_map(|evt| acc.process(evt))
+                                            .collect();
+                                        if !send_accumulated(&*notif_transport, buffered).await {
                                             break;
                                         }
+                                        accumulator = Some(acc);
                                     }
+                                    ServerNotification::TurnCompleted(_)
+                                    | ServerNotification::TurnFailed(_)
+                                    | ServerNotification::TurnInterrupted(_) => {
+                                        // Flush trailing items BEFORE the terminator.
+                                        if let Some(ref mut acc) = accumulator {
+                                            let flushed = acc.flush();
+                                            if !send_accumulated(&*notif_transport, flushed).await {
+                                                break;
+                                            }
+                                        }
+                                        accumulator = None;
+                                        pre_turn_buffer.clear();
+                                    }
+                                    _ => {}
+                                }
+                                // Forward the protocol event itself via the
+                                // transport's fast path.
+                                if !send_notif(&*notif_transport, &notif).await {
                                     break;
                                 }
                             }
-                        }
-                        reply = reply_rx.recv() => {
-                            match reply {
-                                Some(reply) => {
-                                    if let Err(e) = notif_transport.send(reply).await {
-                                        warn!(error = %e, "reply forward failed");
-                                        break;
+                            CoreEvent::Stream(stream_evt) => {
+                                // Feed the accumulator, which converts raw
+                                // stream events into semantic item lifecycle
+                                // ServerNotifications.
+                                let notifications = if let Some(ref mut acc) = accumulator {
+                                    acc.process(stream_evt)
+                                } else {
+                                    if pre_turn_buffer.len() >= PRE_TURN_BUFFER_CAP {
+                                        // Structured field `metric = "pre_turn_buffer_overflow"`
+                                        // is keyed by downstream log extractors as a counter.
+                                        // Separate from the capacity so metrics infra can
+                                        // alert without parsing free-text messages.
+                                        warn!(
+                                            metric = "pre_turn_buffer_overflow",
+                                            cap = PRE_TURN_BUFFER_CAP,
+                                            "pre-turn buffer full, dropping stream event"
+                                        );
+                                    } else {
+                                        debug!("stream event before TurnStarted; buffering");
+                                        pre_turn_buffer.push(stream_evt);
                                     }
+                                    Vec::new()
+                                };
+                                if !send_accumulated(&*notif_transport, notifications).await {
+                                    break;
                                 }
-                                None => {
-                                    // Reply channel closed; notifications still
-                                    // coming — keep looping to drain them.
-                                }
+                            }
+                            CoreEvent::Tui(_) => {
+                                // TUI-only events are dropped by non-TUI consumers.
+                            }
+                        },
+                        OutboundMessage::JsonRpc(msg) => {
+                            if let Err(e) = notif_transport.send(msg).await {
+                                warn!(error = %e, "json-rpc forward failed");
+                                break;
                             }
                         }
                     }
@@ -448,7 +448,7 @@ impl SdkServer {
         loop {
             match self.transport.recv().await {
                 Ok(Some(msg)) => {
-                    self.handle_message(msg, notif_tx.clone(), &reply_tx).await;
+                    self.handle_message(msg, outbound_tx.clone()).await;
                 }
                 Ok(None) => {
                     info!("SdkServer: transport EOF, shutting down");
@@ -465,10 +465,13 @@ impl SdkServer {
             }
         }
 
-        // Drop the notification + reply senders to signal the writer
-        // task to exit. It drains any pending items first.
-        drop(notif_tx);
-        drop(reply_tx);
+        {
+            let mut slot = self.state.outbound_tx.write().await;
+            *slot = None;
+        }
+        // Drop the outbound sender to signal the writer task to exit.
+        // It drains any queued items first.
+        drop(outbound_tx);
         let _ = writer_task.await;
 
         Ok(())
@@ -485,16 +488,13 @@ impl SdkServer {
     async fn handle_message(
         &self,
         msg: JsonRpcMessage,
-        notif_tx: mpsc::Sender<CoreEvent>,
-        reply_tx: &mpsc::Sender<JsonRpcMessage>,
+        outbound_tx: mpsc::Sender<OutboundMessage>,
     ) {
         match msg {
             JsonRpcMessage::Request(req) => {
                 let request_id = req.request_id.clone();
-                let reply = self.handle_request(req, notif_tx).await;
-                // Route via the writer task so replies are ordered AFTER
-                // any notifications the handler emitted on `notif_tx`.
-                if let Err(e) = reply_tx.send(reply).await {
+                let reply = self.handle_request(req, outbound_tx.clone()).await;
+                if let Err(e) = outbound_tx.send(OutboundMessage::JsonRpc(reply)).await {
                     warn!(error = %e, request_id = %request_id.as_display(), "reply send failed");
                 }
             }
@@ -519,7 +519,7 @@ impl SdkServer {
     async fn handle_request(
         &self,
         req: JsonRpcRequest,
-        notif_tx: mpsc::Sender<CoreEvent>,
+        notif_tx: mpsc::Sender<OutboundMessage>,
     ) -> JsonRpcMessage {
         let request_id = req.request_id.clone();
 

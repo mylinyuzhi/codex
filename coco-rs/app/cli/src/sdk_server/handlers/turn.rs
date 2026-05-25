@@ -252,51 +252,6 @@ pub(super) async fn handle_user_input_resolve(
     })
 }
 
-/// `hook/callbackResponse` — client→server reply to a prior
-/// `hook/callback` ServerRequest. Delivers the hook output via the
-/// oneshot registered by `register_hook_callback`.
-///
-/// The server's hook orchestration registers the oneshot before sending
-/// `hook/callback`; this handler wakes the awaiting tool loop.
-///
-/// Errors:
-/// - `INVALID_REQUEST` if no pending callback matches `callback_id`
-pub(super) async fn handle_hook_callback_response(
-    params: coco_types::ClientHookCallbackResponseParams,
-    ctx: &HandlerContext,
-) -> HandlerResult {
-    let callback_id = params.callback_id.clone();
-    let outcome = ctx
-        .state
-        .pending_hook_callbacks
-        .resolve(&callback_id, params)
-        .await;
-    handle_resolve_outcome(outcome, "hook callback", &callback_id, |id| {
-        info!(callback_id = %id, "SdkServer: hook/callbackResponse");
-    })
-}
-
-/// `mcp/routeMessageResponse` — client→server reply to a prior
-/// `mcp/routeMessage` ServerRequest. Delivers the forwarded JSON-RPC
-/// response via the oneshot registered by `register_mcp_route`.
-///
-/// Errors:
-/// - `INVALID_REQUEST` if no pending route matches `request_id`
-pub(super) async fn handle_mcp_route_message_response(
-    params: coco_types::McpRouteMessageResponseParams,
-    ctx: &HandlerContext,
-) -> HandlerResult {
-    let request_id = params.request_id.clone();
-    let outcome = ctx
-        .state
-        .pending_mcp_routes
-        .resolve(&request_id, params)
-        .await;
-    handle_resolve_outcome(outcome, "mcp route", &request_id, |id| {
-        info!(request_id = %id, "SdkServer: mcp/routeMessageResponse");
-    })
-}
-
 /// `control/cancelRequest` — cancel a previously-issued ServerRequest.
 ///
 /// The SDK client uses this to abort a `ServerRequest::AskForApproval`
@@ -315,16 +270,13 @@ pub(super) async fn handle_cancel_request(
     let request_id = params.request_id;
     let reason = params.reason.as_deref().unwrap_or("(no reason given)");
     // Try every pending map; the id is unique across categories so at most
-    // one hits. Previously only approvals + user-input were checked, which
-    // silently leaked entries for hook/mcp-route/elicitation cancellations.
+    // one hits. Hook and MCP-route requests are no longer pending-tracked
+    // — they ride the synchronous JSON-RPC reply path on `pending_server_requests`
+    // and the outer dispatcher cancels via that path.
     let cancelled_kind = if ctx.state.pending_approvals.remove(&request_id).await {
         Some("approval")
     } else if ctx.state.pending_user_input.remove(&request_id).await {
         Some("user_input")
-    } else if ctx.state.pending_hook_callbacks.remove(&request_id).await {
-        Some("hook_callback")
-    } else if ctx.state.pending_mcp_routes.remove(&request_id).await {
-        Some("mcp_route")
     } else if ctx.state.pending_elicitations.remove(&request_id).await {
         Some("elicitation")
     } else {
