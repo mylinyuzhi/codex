@@ -6,11 +6,11 @@ use super::layout;
 use super::styles::UiStyles;
 use crate::constants;
 use crate::i18n::t;
+use crate::state::DiffStatsPreview;
 use crate::state::rewind::RestoreType;
 use crate::state::rewind::RewindPhase;
 use crate::state::rewind::RewindState;
 use crate::state::rewind::RewindableMessage;
-use coco_types::RewindDiffStatsPayload;
 
 pub(crate) fn rewind_surface_content(
     state: &RewindState,
@@ -88,7 +88,7 @@ fn message_select(state: &RewindState, styles: UiStyles<'_>) -> (String, String,
             } else {
                 " "
             };
-            if msg.is_synthetic() {
+            if msg.is_current_prompt {
                 return format!("{marker} {}", msg.display_text);
             }
 
@@ -130,7 +130,7 @@ fn message_select(state: &RewindState, styles: UiStyles<'_>) -> (String, String,
 }
 
 fn picker_is_empty(state: &RewindState) -> bool {
-    !state.messages.iter().any(|msg| !msg.is_synthetic())
+    !state.messages.iter().any(|msg| !msg.is_current_prompt)
 }
 
 fn row_diff_stats_line(msg: &RewindableMessage) -> Option<String> {
@@ -143,7 +143,7 @@ fn row_diff_stats_line(msg: &RewindableMessage) -> Option<String> {
         (None, Some(false)) => return Some(t!("dialog.rewind_diff_no_restore").to_string()),
         _ => return None,
     };
-    if stats.files_changed() == 0 {
+    if stats.file_paths.is_empty() {
         return Some(t!("dialog.rewind_diff_no_changes").to_string());
     }
 
@@ -153,7 +153,7 @@ fn row_diff_stats_line(msg: &RewindableMessage) -> Option<String> {
         }
         _ => t!(
             "dialog.rewind_diff_files_changed_many",
-            count = stats.files_changed() as i32
+            count = stats.files_changed()
         )
         .to_string(),
     };
@@ -173,7 +173,7 @@ fn basename(path: &str) -> String {
         .unwrap_or_else(|| trimmed.to_string())
 }
 
-fn file_label(stats: &RewindDiffStatsPayload) -> Option<String> {
+fn file_label(stats: &DiffStatsPreview) -> Option<String> {
     let bases: Vec<String> = stats.file_paths.iter().map(|path| basename(path)).collect();
     match bases.as_slice() {
         [] => None,
@@ -183,7 +183,7 @@ fn file_label(stats: &RewindDiffStatsPayload) -> Option<String> {
             t!(
                 "dialog.rewind_files_many",
                 first = a.as_str(),
-                rest = (stats.files_changed() as i64) - 1
+                rest = stats.files_changed() - 1
             )
             .to_string(),
         ),
@@ -225,7 +225,7 @@ fn restore_options(state: &RewindState, styles: UiStyles<'_>) -> (String, String
     let code_line = match &focused {
         RestoreType::SummarizeFrom { .. } | RestoreType::SummarizeUpTo { .. } => String::new(),
         RestoreType::Both | RestoreType::CodeOnly => match &state.diff_stats {
-            Some(stats) if stats.files_changed() > 0 => {
+            Some(stats) if !stats.file_paths.is_empty() => {
                 let stats_text = t!(
                     "dialog.rewind_diff_stats_short",
                     ins = stats.insertions,
@@ -234,7 +234,7 @@ fn restore_options(state: &RewindState, styles: UiStyles<'_>) -> (String, String
                 let label = file_label(stats).unwrap_or_else(|| {
                     t!(
                         "dialog.rewind_diff_files_changed_many",
-                        count = stats.files_changed() as i32
+                        count = stats.files_changed()
                     )
                     .to_string()
                 });

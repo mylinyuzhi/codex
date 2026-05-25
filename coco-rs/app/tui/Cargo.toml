@@ -26,7 +26,6 @@ dirs.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
-chrono.workspace = true
 ratatui.workspace = true
 crossterm = { workspace = true, features = ["event-stream"] }
 tokio = { workspace = true, features = ["sync", "macros", "time", "process"] }

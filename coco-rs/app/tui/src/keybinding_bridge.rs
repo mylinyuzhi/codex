@@ -391,10 +391,14 @@ fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('f') if ctrl => Some(TuiCommand::KillAllAgents),
         KeyCode::Char('p') if ctrl => Some(TuiCommand::ShowCommandPalette),
         KeyCode::Char('s') if ctrl => Some(TuiCommand::ShowSessionBrowser),
-        // Ctrl+O / Ctrl+Shift+O / Ctrl+B are owned by the keybindings
-        // resolver (`app:toggleTranscript` / `app:toggleTeammatePreview`
-        // / `task:background`). Keep them out of the legacy cascade so
-        // hints and defaults cannot diverge.
+        // Ctrl+O: copy the last agent response (codex-rs parity). Fallback
+        // to Quick Open when Shift is also held so power users still have
+        // access to it — Shift+Ctrl+O = open, Ctrl+O = copy.
+        KeyCode::Char('o') if ctrl && shift => Some(TuiCommand::ShowQuickOpen),
+        KeyCode::Char('o') if ctrl => Some(TuiCommand::CopyLastMessage),
+        // Ctrl+B routes through the resolver (defaults.rs Task context →
+        // TaskBackground action → keybinding_dispatch maps to
+        // BackgroundAllTasks). Single source of truth.
         KeyCode::Char('v') if ctrl || alt => Some(TuiCommand::PasteFromClipboard),
         KeyCode::Char('m') if ctrl => Some(TuiCommand::CycleModel),
         KeyCode::Char('g') if ctrl => Some(TuiCommand::OpenPlanEditor),

@@ -10334,7 +10334,7 @@
           "type": "object"
         },
         {
-          "description": "Rewind picker per-row metadata, emitted once on picker mount.\n\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) \u2014 the\npicker renders \"\u26a0 No code restore\" for that row.\n`metadata == Some { files_changed: 0, .. }` means the snapshot\nexists but nothing changed \u2014 picker renders \"No code changes\".\n\nTS: the per-row `Promise.all(messageOptions.map(...))` walk in\n`MessageSelector.tsx:285-312`. Bundled here so the bounded\nTUI command channel does not drop individual row events on\ntranscripts with many user messages.",
+          "description": "Rewind picker per-row metadata, emitted once on picker mount.\n\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) \u2014 the\npicker renders \"\u26a0 No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed \u2014 picker renders \"No code changes\".\n\nTS: the per-row `Promise.all(messageOptions.map(...))` walk in\n`MessageSelector.tsx:285-312`. Bundled here so the bounded\nTUI command channel does not drop individual row events on\ntranscripts with many user messages.",
           "properties": {
             "rows": {
               "items": {

@@ -1073,10 +1073,12 @@ pub(super) async fn request_diff_stats_if_rewind(
 ) {
     if let Some(ModalState::Rewind(r)) = state.ui.modal.as_ref()
         && let Some(msg) = r.messages.get(r.selected as usize)
-        && let Some(message_id) = msg.message_id
+        && !msg.is_current_prompt
     {
         let _ = command_tx
-            .send(UserCommand::RequestDiffStats { message_id })
+            .send(UserCommand::RequestDiffStats {
+                message_id: msg.message_id.to_string(),
+            })
             .await;
     }
 }

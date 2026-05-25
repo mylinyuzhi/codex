@@ -31,15 +31,6 @@ fn ctrl(code: KeyCode) -> KeyEvent {
     }
 }
 
-fn ctrl_shift(code: KeyCode) -> KeyEvent {
-    KeyEvent {
-        code,
-        modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        kind: KeyEventKind::Press,
-        state: KeyEventState::NONE,
-    }
-}
-
 fn model_picker_state() -> AppState {
     let mut state = AppState::new();
     state.ui.show_modal(crate::state::ModalState::ModelPicker(
@@ -216,23 +207,6 @@ fn test_ctrl_q_quits() {
     let state = AppState::new();
     let cmd = map_key(&state, ctrl(KeyCode::Char('q')));
     assert!(matches!(cmd, Some(TuiCommand::Quit)));
-}
-
-#[test]
-fn test_ctrl_o_toggles_transcript() {
-    let state = AppState::new();
-    let cmd = map_key(&state, ctrl(KeyCode::Char('o')));
-    assert!(matches!(cmd, Some(TuiCommand::ToggleTranscript)));
-}
-
-#[test]
-fn test_ctrl_shift_o_toggles_teammate_preview() {
-    let state = AppState::new();
-    let cmd = map_key(&state, ctrl_shift(KeyCode::Char('o')));
-    assert!(matches!(
-        cmd,
-        Some(TuiCommand::ToggleTeammateMessagePreview)
-    ));
 }
 
 #[test]

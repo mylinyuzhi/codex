@@ -187,7 +187,7 @@ pub enum TuiCommand {
     ShowSessionBrowser,
     /// Show global search (Ctrl+Shift+F).
     ShowGlobalSearch,
-    /// Show quick open.
+    /// Show quick open (Ctrl+O).
     ShowQuickOpen,
     /// Show export dialog.
     ShowExport,
@@ -272,7 +272,7 @@ pub enum TuiCommand {
     // ── Clipboard ──
     /// Paste from clipboard (image first, text fallback).
     PasteFromClipboard,
-    /// Copy the last agent response to the system clipboard (`/copy`).
+    /// Copy the last agent response to the system clipboard (Ctrl+O / /copy).
     /// Mirrors codex-rs's `ChatWidget::copy_last_agent_markdown`.
     CopyLastMessage,
 

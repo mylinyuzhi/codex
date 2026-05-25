@@ -1,6 +1,6 @@
 //! Clipboard-related command handlers.
 //!
-//! [`copy_last_message`] backs `/copy`.
+//! [`copy_last_message`] backs `Ctrl+O` / `/copy`.
 //! [`paste_from_clipboard`] backs `Ctrl+V` — the image-paste path for
 //! screenshot → multimodal-agent flows. Plain-text paste is owned by the
 //! terminal's bracketed-paste (Cmd+V / Ctrl+Shift+V), so this handler is

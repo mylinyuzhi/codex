@@ -15,7 +15,6 @@
 //! ```
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -531,7 +530,25 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Run TUI (blocks until exit)
     let tui_result = app.run().await;
 
-    // Wait for agent driver
+    // Capture the session id BEFORE dropping the App — the TUI's Drop
+    // restores the terminal but moves the AppState out of reach.
+    let session_id = app.state().session.session_id.clone();
+    // Explicit drop: `Tui::drop` (inside App) is what leaves alt-screen
+    // and disables raw mode. Without this the resume hint below would
+    // scroll inside the alt buffer and vanish when the terminal
+    // restores the main buffer on exit. TS parity:
+    // `gracefulShutdown.ts::cleanupTerminalModes` runs before
+    // `printResumeHint`.
+    drop(app);
+
+    // TS parity (`gracefulShutdown.ts:431-437`): print the resume hint
+    // **before** any async cleanup so the user sees it immediately on
+    // Ctrl+C, even when the agent driver is mid-shutdown (tool flush,
+    // transcript append, telemetry). The driver writes only to stderr
+    // / log files, so it cannot clobber this stdout write.
+    coco_cli::resume_hint::print_resume_hint(&cwd, session_id.as_deref());
+
+    // Wait for agent driver to finish its own teardown.
     let _ = driver_handle.await;
 
     tui_result.map_err(|e| anyhow::anyhow!("TUI error: {e}"))
@@ -935,12 +952,20 @@ async fn run_agent_driver(
                 // code-restore choices for that row.
                 if let Some(fh) = &runtime.file_history {
                     let fh = fh.read().await;
-                    let stats =
-                        compute_restore_preview(&fh, message_id, &runtime.config_home, &session_id)
-                            .await;
+                    let stats = if fh.can_restore(&message_id) {
+                        match fh
+                            .get_diff_stats(&message_id, &runtime.config_home, &session_id)
+                            .await
+                        {
+                            Ok(stats) => Some(diff_stats_to_payload(stats)),
+                            Err(_) => Some(coco_types::RewindDiffStatsPayload::default()),
+                        }
+                    } else {
+                        None
+                    };
                     let _ = event_tx
                         .send(CoreEvent::Tui(TuiOnlyEvent::RewindRestorePreviewReady {
-                            message_id: message_id.to_string(),
+                            message_id,
                             stats,
                         }))
                         .await;
@@ -958,18 +983,26 @@ async fn run_agent_driver(
                 if let Some(fh) = &runtime.file_history {
                     let fh = fh.read().await;
                     let mut rows = Vec::with_capacity(message_ids.len());
-                    for (idx, message_id) in message_ids.iter().copied().enumerate() {
-                        let next = message_ids.get(idx + 1).copied();
-                        let metadata = compute_row_metadata(
-                            &fh,
-                            message_id,
-                            next,
-                            &runtime.config_home,
-                            &session_id,
-                        )
-                        .await;
+                    for (idx, message_id) in message_ids.iter().enumerate() {
+                        let metadata = if fh.can_restore(message_id) {
+                            let next = message_ids.get(idx + 1).map(String::as_str);
+                            match fh
+                                .get_diff_stats_between(
+                                    message_id,
+                                    next,
+                                    &runtime.config_home,
+                                    &session_id,
+                                )
+                                .await
+                            {
+                                Ok(stats) => Some(diff_stats_to_payload(stats)),
+                                Err(_) => Some(coco_types::RewindDiffStatsPayload::default()),
+                            }
+                        } else {
+                            None
+                        };
                         rows.push(coco_types::RewindRowMetadata {
-                            message_id: message_id.to_string(),
+                            message_id: message_id.clone(),
                             metadata,
                         });
                     }
@@ -1563,6 +1596,8 @@ enum SlashOutcome {
     TriggerReloadHooks,
 }
 
+/// Split `/<name> <args>` into `(name, args)`. Returns `None` when
+/// `text` does not start with `/` or has no name. Whitespace-trimmed.
 /// Convert a `coco_context::DiffStats` to the wire payload variant.
 /// Centralised so the single-row and batch paths emit identically.
 fn diff_stats_to_payload(stats: coco_context::DiffStats) -> coco_types::RewindDiffStatsPayload {
@@ -1578,69 +1613,6 @@ fn diff_stats_to_payload(stats: coco_context::DiffStats) -> coco_types::RewindDi
     }
 }
 
-/// Compute the restore-preview diff for the selected checkpoint.
-/// `None` means `fileHistoryCanRestore == false`; `Some(empty)` means
-/// the snapshot exists but the IO failed (logged) — the TUI shows
-/// "no changes" in both cases, matching TS `computeDiffStatsForFile`'s
-/// best-effort behavior (`fileHistory.ts:715`).
-async fn compute_restore_preview(
-    fh: &coco_context::FileHistoryState,
-    message_id: uuid::Uuid,
-    config_home: &Path,
-    session_id: &str,
-) -> Option<coco_types::RewindDiffStatsPayload> {
-    let id_str = message_id.to_string();
-    if !fh.can_restore(&id_str) {
-        return None;
-    }
-    match fh.get_diff_stats(&id_str, config_home, session_id).await {
-        Ok(stats) => Some(diff_stats_to_payload(stats)),
-        Err(e) => {
-            tracing::warn!(
-                target: "rewind",
-                %message_id,
-                error = %e,
-                "get_diff_stats failed; reporting empty restore preview",
-            );
-            Some(coco_types::RewindDiffStatsPayload::default())
-        }
-    }
-}
-
-/// Compute one row's per-row metadata: `+X -Y` between `message_id`
-/// and `next` (or the live working tree when `next` is `None`).
-/// Same `None` / `Some(empty)` contract as `compute_restore_preview`.
-async fn compute_row_metadata(
-    fh: &coco_context::FileHistoryState,
-    message_id: uuid::Uuid,
-    next: Option<uuid::Uuid>,
-    config_home: &Path,
-    session_id: &str,
-) -> Option<coco_types::RewindDiffStatsPayload> {
-    let id_str = message_id.to_string();
-    if !fh.can_restore(&id_str) {
-        return None;
-    }
-    let next_str = next.map(|u| u.to_string());
-    match fh
-        .get_diff_stats_between(&id_str, next_str.as_deref(), config_home, session_id)
-        .await
-    {
-        Ok(stats) => Some(diff_stats_to_payload(stats)),
-        Err(e) => {
-            tracing::warn!(
-                target: "rewind",
-                %message_id,
-                error = %e,
-                "get_diff_stats_between failed; reporting empty row metadata",
-            );
-            Some(coco_types::RewindDiffStatsPayload::default())
-        }
-    }
-}
-
-/// Split `/<name> <args>` into `(name, args)`. Returns `None` when
-/// `text` does not start with `/` or has no name. Whitespace-trimmed.
 fn parse_slash_command(text: &str) -> Option<(&str, &str)> {
     let stripped = text.trim().strip_prefix('/')?;
     if stripped.is_empty() {

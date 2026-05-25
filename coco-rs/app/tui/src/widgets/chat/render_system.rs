@@ -5,10 +5,6 @@
 //! the TUI through the engine `MessageHistory` flow — only variants
 //! the engine actually emits have renderer arms.
 
-#[cfg(test)]
-#[path = "render_system.test.rs"]
-mod tests;
-
 use coco_messages::Message;
 use coco_messages::SystemMessage;
 use ratatui::style::Stylize;
@@ -16,8 +12,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 
 use super::ChatWidget;
-use crate::i18n::t;
-use crate::keybinding_bridge::KeybindingContext;
 use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
 use crate::state::transcript_view::SystemCellKind;
@@ -60,11 +54,9 @@ pub(super) fn try_render(
             Some(())
         }
         CellKind::System(SystemCellKind::CompactBoundary) => {
-            let shortcut = compact_boundary_shortcut(w);
+            let border = "─".repeat(40);
             lines.push(Line::from(
-                Span::raw(format!("  {}", compact_boundary_text(&shortcut)))
-                    .fg(w.styles.border())
-                    .dim(),
+                Span::raw(format!("  {border}")).fg(w.styles.border()).dim(),
             ));
             Some(())
         }
@@ -86,21 +78,6 @@ pub(super) fn try_render(
         }
         _ => None,
     }
-}
-
-fn compact_boundary_shortcut(w: &ChatWidget<'_>) -> String {
-    w.kb_handle
-        .and_then(|handle| {
-            handle.display_for(
-                &coco_keybindings::KeybindingAction::AppToggleTranscript,
-                KeybindingContext::Chat,
-            )
-        })
-        .unwrap_or_else(|| "ctrl+o".to_string())
-}
-
-pub(super) fn compact_boundary_text(shortcut: &str) -> String {
-    t!("chat.compact_boundary", shortcut = shortcut).to_string()
 }
 
 /// Best-effort short summary of a [`SystemMessage`] for the

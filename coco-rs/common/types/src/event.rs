@@ -305,8 +305,8 @@ pub struct RewindDiffStatsPayload {
 }
 
 impl RewindDiffStatsPayload {
-    /// Number of files in `file_paths`. Convenience for renderers that
-    /// previously read a redundant `files_changed: i32` field.
+    /// Number of files in `file_paths`. Single source of truth — derived
+    /// rather than stored so the count cannot drift from the array.
     pub fn files_changed(&self) -> usize {
         self.file_paths.len()
     }
@@ -1575,7 +1575,7 @@ pub enum TuiOnlyEvent {
     /// next_user_message_or_now)`. `metadata == None` means
     /// `fileHistoryCanRestore(...)` was false (no snapshot) — the
     /// picker renders "⚠ No code restore" for that row.
-    /// `metadata == Some { files_changed: 0, .. }` means the snapshot
+    /// `metadata == Some { file_paths: [], .. }` means the snapshot
     /// exists but nothing changed — picker renders "No code changes".
     ///
     /// TS: the per-row `Promise.all(messageOptions.map(...))` walk in

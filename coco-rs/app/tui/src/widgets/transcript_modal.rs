@@ -18,7 +18,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
-use crate::keybinding_bridge::KeybindingContext;
+use crate::keybinding_bridge::KeybindingContext as TuiContext;
 use crate::presentation::layout::text_width;
 use crate::presentation::streaming::StreamingTailBlock;
 use crate::presentation::styles::UiStyles;
@@ -226,10 +226,7 @@ impl TranscriptStateWidget<'_> {
             .state
             .ui
             .kb_handle
-            .display_for(
-                &KeybindingAction::AppToggleTranscript,
-                KeybindingContext::Chat,
-            )
+            .display_for(&KeybindingAction::AppToggleTranscript, TuiContext::Chat)
             .unwrap_or_else(|| "ctrl+o".to_string());
         let nav = t!("transcript.hint_footer_nav", toggle = toggle_chord.as_str()).to_string();
         Line::from(Span::raw(nav).fg(self.styles.dim())).render(Rect { height: 1, ..area }, buf);
@@ -251,7 +248,6 @@ struct TranscriptCellRenderer<'a> {
     cells: &'a [RenderedCell],
     tool_executions: &'a [ToolExecution],
     reasoning_metadata: &'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>,
-    compact_boundary_shortcut: String,
     width: u16,
     styles: UiStyles<'a>,
 }
@@ -267,7 +263,6 @@ impl<'a> TranscriptCellRenderer<'a> {
             cells,
             tool_executions: &state.session.tool_executions,
             reasoning_metadata: &state.session.reasoning_metadata,
-            compact_boundary_shortcut: compact_boundary_shortcut(state),
             width,
             styles,
         }
@@ -521,17 +516,8 @@ impl<'a> TranscriptCellRenderer<'a> {
                 ));
             }
             SystemCellKind::CompactBoundary => {
-                lines.push(Line::from(
-                    Span::raw(
-                        t!(
-                            "chat.compact_boundary",
-                            shortcut = self.compact_boundary_shortcut.as_str()
-                        )
-                        .to_string(),
-                    )
-                    .fg(self.styles.border())
-                    .dim(),
-                ));
+                let border = "─".repeat(40);
+                lines.push(Line::from(Span::raw(border).fg(self.styles.border()).dim()));
             }
             SystemCellKind::LocalCommand => {
                 let Message::System(SystemMessage::LocalCommand(lc)) = source.as_ref() else {
@@ -1102,17 +1088,6 @@ fn system_summary_text(msg: &Message) -> Option<String> {
         | SystemMessage::LocalCommand(_)
         | SystemMessage::UserInterruption(_) => return None,
     })
-}
-
-fn compact_boundary_shortcut(state: &AppState) -> String {
-    state
-        .ui
-        .kb_handle
-        .display_for(
-            &KeybindingAction::AppToggleTranscript,
-            KeybindingContext::Chat,
-        )
-        .unwrap_or_else(|| "ctrl+o".to_string())
 }
 
 fn mix_str(mut hash: u64, value: &str) -> u64 {

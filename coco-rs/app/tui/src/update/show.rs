@@ -291,13 +291,13 @@ pub(super) async fn rewind_for(
         && rewind
             .messages
             .iter()
-            .any(|m| m.message_id == Some(target_uuid));
+            .any(|m| !m.is_current_prompt && m.message_id == target_uuid);
     state.ui.show_modal(ModalState::Rewind(rewind));
     emit_request_diff_stats(command_tx, row_ids).await;
     if should_load_restore_preview {
         let _ = command_tx
             .send(UserCommand::RequestDiffStats {
-                message_id: target_uuid,
+                message_id: target_uuid.to_string(),
             })
             .await;
     }
@@ -331,11 +331,14 @@ pub(crate) fn preload_diff_stats_targets(rewind: &crate::state::RewindState) -> 
     rewind
         .messages
         .iter()
-        .filter_map(|m| m.message_id)
+        .filter(|m| !m.is_current_prompt)
+        .map(|m| m.message_id)
         .collect()
 }
 
-/// Emit one batched row-metadata request for all picker rows.
+/// Emit one batched row-metadata request for all picker rows. `UserCommand`
+/// keeps `message_id: String` fields on the wire — we stringify here at the
+/// boundary, downstream parses back when needed.
 pub(crate) async fn emit_request_diff_stats(
     command_tx: &mpsc::Sender<UserCommand>,
     row_uuids: Vec<uuid::Uuid>,
@@ -343,10 +346,9 @@ pub(crate) async fn emit_request_diff_stats(
     if row_uuids.is_empty() {
         return;
     }
+    let message_ids = row_uuids.into_iter().map(|id| id.to_string()).collect();
     let _ = command_tx
-        .send(UserCommand::RequestDiffStatsBatch {
-            message_ids: row_uuids,
-        })
+        .send(UserCommand::RequestDiffStatsBatch { message_ids })
         .await;
 }
 

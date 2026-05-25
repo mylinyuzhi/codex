@@ -29,6 +29,7 @@ pub use interaction::SlashPopupState;
 pub use interaction::SymbolPopupState;
 pub use modal::ModalQueue;
 pub use modal::ModalState;
+pub use rewind::DiffStatsPreview;
 pub use rewind::RestoreType;
 pub use rewind::RewindPhase;
 pub use rewind::RewindState;

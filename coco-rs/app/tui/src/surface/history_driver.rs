@@ -80,6 +80,13 @@ impl SurfaceHistoryDriver {
             .as_ref()
             .is_some_and(|emitted| emitted != &header_fingerprint)
         {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "header_fingerprint_changed",
+                cells = cells.len(),
+                emitted_messages = self.emitter.emitted_count(),
+                "history full replay required",
+            );
             return Ok(HistoryEmissionOutcome::ReplayRequired);
         }
 
@@ -89,6 +96,13 @@ impl SurfaceHistoryDriver {
             return Ok(HistoryEmissionOutcome::Noop);
         }
         if matches!(plan, HistoryEmissionPlan::ReplayRequired) {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "emitter_uuid_prefix_mismatch",
+                cells = cells.len(),
+                emitted_messages = self.emitter.emitted_count(),
+                "history full replay required",
+            );
             return Ok(HistoryEmissionOutcome::ReplayRequired);
         }
 
@@ -104,6 +118,15 @@ impl SurfaceHistoryDriver {
         let rows = terminal.insert_history_lines(lines)?;
         self.header_fingerprint = Some(header_fingerprint);
         self.emitter.mark_emitted_through(cells, cells.len());
+        tracing::trace!(
+            target: "tui::surface::append",
+            start,
+            cells_total = cells.len(),
+            message_count = cells.len() - start,
+            rows,
+            emitted_header = should_emit_header,
+            "history incremental append",
+        );
         Ok(HistoryEmissionOutcome::Appended {
             start,
             message_count: cells.len() - start,
@@ -180,6 +203,12 @@ impl SurfaceHistoryDriver {
         let rows = terminal.insert_history_lines(lines)?;
         self.header_fingerprint = Some(header_fingerprint);
         self.emitter.mark_emitted_through(cells, cells.len());
+        tracing::debug!(
+            target: "tui::surface::replay",
+            message_count = cells.len(),
+            rows,
+            "history full replay completed",
+        );
         Ok(HistoryEmissionOutcome::Replayed {
             message_count: cells.len(),
             rows,
