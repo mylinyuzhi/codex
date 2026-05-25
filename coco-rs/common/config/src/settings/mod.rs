@@ -33,6 +33,7 @@ pub use source::SettingSource;
 
 pub const SYNTAX_HIGHLIGHTING_DISABLED_KEY: &str = "syntax_highlighting_disabled";
 pub const SHOW_THINKING_KEY: &str = "show_thinking";
+pub const COPY_FULL_RESPONSE_KEY: &str = "copy_full_response";
 
 /// The merged settings snapshot. Immutable after loading.
 /// TS: SettingsJson type in types.ts (Zod schema)
@@ -162,6 +163,12 @@ pub struct Settings {
     /// toggling is UI-local; settings reload reapplies this default.
     #[serde(default)]
     pub show_thinking: bool,
+    /// When true, `/copy` skips the code-block picker and dumps the
+    /// full assistant response straight to the clipboard. TS mirror:
+    /// `getGlobalConfig().copyFullResponse`. Flipped via the picker's
+    /// "Always copy full response" option.
+    #[serde(default)]
+    pub copy_full_response: bool,
 
     // === Plugins ===
     #[serde(default)]

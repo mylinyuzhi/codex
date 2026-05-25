@@ -40,7 +40,7 @@ fn expect_dispatch(outcome: ConfirmOutcome, ctx: &str) -> (String, RestoreType) 
 
 fn set_selected_diff_stats(state: &mut RewindState, files_changed: i32) {
     let selected = state.selected as usize;
-    let stats = coco_types::RewindDiffStatsPayload {
+    let stats = crate::state::DiffStatsPreview {
         insertions: i64::from(files_changed),
         deletions: 0,
         file_paths: (0..files_changed).map(|i| format!("file-{i}.rs")).collect(),
@@ -48,7 +48,7 @@ fn set_selected_diff_stats(state: &mut RewindState, files_changed: i32) {
     state.messages[selected].diff_stats = Some(stats.clone());
     state.messages[selected].can_restore_code = Some(true);
     state.diff_stats = Some(stats);
-    state.diff_stats_message_id = state.messages[selected].message_id;
+    state.diff_stats_message_id = Some(state.messages[selected].message_id);
 }
 
 #[test]
@@ -62,16 +62,17 @@ fn test_build_rewind_state_appends_synthetic_current_row() {
 
     assert_eq!(state.messages.len(), 4);
     let last = state.messages.last().unwrap();
-    assert!(last.is_synthetic());
-    assert!(
-        last.message_id.is_none(),
-        "synthetic row uses `None` — `is_synthetic()` is the sole gate",
+    assert!(last.is_current_prompt);
+    assert_eq!(
+        last.message_id,
+        uuid::Uuid::nil(),
+        "synthetic row uses Uuid::nil() sentinel — gate is the is_current_prompt flag",
     );
     assert_eq!(state.selected, 3);
     assert_eq!(state.phase, RewindPhase::MessageSelect);
     // The last *real* message is at index N-1 = 2.
-    assert_eq!(state.messages[2].message_id, Some(test_uuid("msg-2")));
-    assert!(!state.messages[2].is_synthetic());
+    assert_eq!(state.messages[2].message_id, test_uuid("msg-2"));
+    assert!(!state.messages[2].is_current_prompt);
 }
 
 #[test]
@@ -88,7 +89,7 @@ fn test_build_rewind_state_does_not_populate_row_stats_eagerly() {
     let rewind = build_rewind_state(&state);
 
     assert_eq!(rewind.messages.len(), 3, "two real rows + synthetic");
-    for row in rewind.messages.iter().filter(|m| !m.is_synthetic()) {
+    for row in rewind.messages.iter().filter(|m| !m.is_current_prompt) {
         assert!(row.diff_stats.is_none(), "row stats arrive async");
         assert!(
             row.can_restore_code.is_none(),
@@ -147,7 +148,7 @@ fn test_handle_rewind_confirm_transitions_to_options() {
     // Move off the synthetic row to the last real message first.
     handle_rewind_nav(&mut state, -1);
     set_selected_diff_stats(&mut state, 1);
-    assert!(!state.messages[state.selected as usize].is_synthetic());
+    assert!(!state.messages[state.selected as usize].is_current_prompt);
 
     // Confirm in MessageSelect -> transitions to RestoreOptions when
     // file history is enabled (TS path that loads diffStatsForRestore).
@@ -168,7 +169,7 @@ fn test_handle_rewind_confirm_requests_diff_stats_before_options() {
     assert_eq!(
         outcome,
         ConfirmOutcome::RequestDiffStats {
-            message_id: test_uuid("msg-1"),
+            message_id: test_uuid("msg-1").to_string(),
         }
     );
     assert_eq!(state.phase, RewindPhase::MessageSelect);
@@ -403,8 +404,8 @@ fn test_build_rewind_state_for_uuid_jumps_to_options_phase() {
     assert_eq!(state.phase, RewindPhase::RestoreOptions);
     assert!(state.preselected);
     let row = &state.messages[state.selected as usize];
-    assert_eq!(row.message_id, Some(target));
-    assert!(!row.is_synthetic());
+    assert_eq!(row.message_id, target);
+    assert!(!row.is_current_prompt);
     assert!(!state.available_options.is_empty());
 }
 
@@ -422,10 +423,9 @@ fn test_build_rewind_state_for_uuid_unknown_falls_back_to_pick_list() {
 
 #[test]
 fn test_build_rewind_state_for_uuid_nil_falls_back_to_pick_list() {
-    // `Uuid::nil()` is *not* the synthetic-row sentinel anymore
-    // (`message_id: None` is), but passing it MUST still fall back to
-    // the picker — `Uuid::nil()` is just a bogus UUID that won't match
-    // any cell-derived UUID.
+    // `Uuid::nil()` is the synthetic-row sentinel; passing it MUST NOT
+    // resolve to the synthetic row (the `is_current_prompt` filter is
+    // explicit in `build_rewind_state_for_uuid`).
     let state = make_state_with_messages(2);
     let state = build_rewind_state_for_uuid(&state, uuid::Uuid::nil());
     assert_eq!(state.phase, RewindPhase::MessageSelect);

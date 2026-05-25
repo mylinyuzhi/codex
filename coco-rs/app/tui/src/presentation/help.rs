@@ -10,7 +10,7 @@
 use ratatui::prelude::Color;
 
 use crate::i18n::t;
-use crate::keybinding_bridge::KeybindingContext;
+use crate::keybinding_bridge::KeybindingContext as TuiContext;
 use crate::keymap::GROUP_ORDER;
 use crate::keymap::KeymapBinding;
 use crate::keymap::KeymapEntry;
@@ -42,7 +42,7 @@ fn render_row(state: &AppState, entry: &KeymapEntry) -> String {
         KeymapBinding::Action { action } => state
             .ui
             .kb_handle
-            .display_for(action, KeybindingContext::Chat)
+            .display_for(action, TuiContext::Chat)
             .unwrap_or_else(|| entry.combo.to_string()),
         // Built-in readline verbs and prompt-prefix markers are
         // hard-coded to the keymap entry's combo display (they're not

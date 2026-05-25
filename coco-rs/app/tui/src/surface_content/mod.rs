@@ -55,6 +55,7 @@ pub(crate) enum TextSurfaceContent<'a> {
     Settings(&'a crate::widgets::settings_panel::SettingsPanelState),
     PlanApproval(&'a crate::state::PlanApprovalPromptState),
     MemoryDialog(&'a crate::state::MemoryDialogState),
+    CopyPicker(&'a crate::state::CopyPickerState),
 }
 
 pub(crate) fn prompt_text_surface(prompt: &PanePromptState) -> TextSurfaceContent<'_> {
@@ -95,6 +96,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::TaskDetail(td) => TextSurfaceContent::TaskDetail(td),
         ModalState::Feedback(f) => TextSurfaceContent::Feedback(f),
         ModalState::McpServerSelect(ms) => TextSurfaceContent::McpServerSelect(ms),
+        ModalState::CopyPicker(cp) => TextSurfaceContent::CopyPicker(cp),
         ModalState::Transcript(_) => return None,
     })
 }
@@ -145,5 +147,6 @@ pub(crate) fn surface_content(
         TextSurfaceContent::Settings(s) => settings::settings_surface_content(s, styles),
         TextSurfaceContent::PlanApproval(p) => confirm::plan_approval_content(p, styles),
         TextSurfaceContent::MemoryDialog(m) => pickers::memory_dialog_content(m, styles),
+        TextSurfaceContent::CopyPicker(cp) => pickers::copy_picker_content(cp, styles),
     }
 }

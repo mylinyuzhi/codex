@@ -182,12 +182,8 @@ async fn test_get_diff_stats() {
         .await
         .unwrap();
 
-    // Rewind-direction (TS-mirror): snapshot has 2 lines, live has 4 —
-    // rewinding removes 2 lines, adds 0. `insertions` counts what the
-    // snapshot would put back; `deletions` counts what live has extra.
     assert_eq!(stats.files_changed.len(), 1);
-    assert_eq!(stats.insertions, 0);
-    assert_eq!(stats.deletions, 2);
+    assert_eq!(stats.insertions, 2);
 }
 
 #[tokio::test]

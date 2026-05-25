@@ -7,13 +7,13 @@ use crate::state::rewind::SummarizeDirection;
 use crate::theme::Theme;
 
 fn message(id: &str, text: &str) -> RewindableMessage {
-    // Empty id → synthetic (`message_id: None`); non-empty derives a
-    // deterministic v5 UUID matching the cell-push helper so assertions
-    // can compare structurally against `Option<Uuid>`.
+    // Tests use stable string ids; derive the v5 uuid the cell-push
+    // helper would have produced so assertions can compare against
+    // `RewindableMessage.message_id: Uuid` structurally.
     let message_id = if id.is_empty() {
-        None
+        uuid::Uuid::nil()
     } else {
-        Some(crate::state::derive::id_to_uuid(id))
+        crate::state::derive::id_to_uuid(id)
     };
     RewindableMessage {
         message_id,
@@ -23,6 +23,7 @@ fn message(id: &str, text: &str) -> RewindableMessage {
         permission_mode: None,
         diff_stats: None,
         can_restore_code: None,
+        is_current_prompt: false,
     }
 }
 
@@ -48,7 +49,8 @@ fn state_with_messages(messages: Vec<RewindableMessage>) -> RewindState {
 fn rewind_message_select_renders_empty_state_when_only_current_row_exists() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let current = message("", "(current)");
+    let mut current = message("", "(current)");
+    current.is_current_prompt = true;
     let state = state_with_messages(vec![current]);
 
     let (title, body, border) = rewind_surface_content(&state, UiStyles::new(&theme));
@@ -63,7 +65,8 @@ fn rewind_message_select_renders_empty_state_when_only_current_row_exists() {
 fn rewind_message_select_renders_current_row_marker() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let current = message("", "(current)");
+    let mut current = message("", "(current)");
+    current.is_current_prompt = true;
     let mut state = state_with_messages(vec![message("msg-1", "older"), current]);
     state.selected = 1;
 
@@ -80,7 +83,7 @@ fn rewind_message_select_renders_diff_metadata_and_scroll_hint() {
     let mut messages = (0..9)
         .map(|i| message(&format!("msg-{i}"), &format!("message {i}")))
         .collect::<Vec<_>>();
-    messages[6].diff_stats = Some(RewindDiffStatsPayload {
+    messages[6].diff_stats = Some(DiffStatsPreview {
         insertions: 3,
         deletions: 1,
         file_paths: vec!["src/main.rs".to_string()],
@@ -106,7 +109,7 @@ fn rewind_message_select_renders_no_changes_and_no_restore_metadata() {
         message("msg-1", "no changes"),
         message("msg-2", "no restore"),
     ];
-    messages[0].diff_stats = Some(RewindDiffStatsPayload::default());
+    messages[0].diff_stats = Some(DiffStatsPreview::default());
     messages[0].can_restore_code = Some(true);
     messages[1].can_restore_code = Some(false);
     let state = state_with_messages(messages);
@@ -128,7 +131,7 @@ fn rewind_restore_options_describes_code_restore_and_manual_warning() {
         RestoreType::ConversationOnly,
         RestoreType::Nevermind,
     ];
-    state.diff_stats = Some(RewindDiffStatsPayload {
+    state.diff_stats = Some(DiffStatsPreview {
         insertions: 10,
         deletions: 4,
         file_paths: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()],
@@ -146,23 +149,23 @@ fn rewind_restore_options_describes_code_restore_and_manual_warning() {
 
 #[test]
 fn rewind_code_restore_file_labels_match_ts_counts() {
-    assert_eq!(file_label(&RewindDiffStatsPayload::default()), None);
+    assert_eq!(file_label(&DiffStatsPreview::default()), None);
     assert_eq!(
-        file_label(&RewindDiffStatsPayload {
+        file_label(&DiffStatsPreview {
             file_paths: vec!["src/main.rs".to_string()],
             ..Default::default()
         }),
         Some("main.rs".to_string())
     );
     assert_eq!(
-        file_label(&RewindDiffStatsPayload {
+        file_label(&DiffStatsPreview {
             file_paths: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()],
             ..Default::default()
         }),
         Some("main.rs and lib.rs".to_string())
     );
     assert_eq!(
-        file_label(&RewindDiffStatsPayload {
+        file_label(&DiffStatsPreview {
             file_paths: vec![
                 "src/main.rs".to_string(),
                 "src/lib.rs".to_string(),

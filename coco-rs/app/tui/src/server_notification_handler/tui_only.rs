@@ -332,6 +332,15 @@ pub(super) fn handle(
             }
             true
         }
+        // /copy [N] — branch into either direct clipboard write or the
+        // CopyPicker modal based on `copy_full_response` + presence of
+        // code blocks. TS parity: `commands/copy/copy.tsx::call`.
+        TuiOnlyEvent::CopyCommandRequested { args } => {
+            if let Some(message) = crate::update::copy::handle_copy_command(state, &args) {
+                enqueue_informational(state, SystemMessageLevel::Info, "", message, command_tx);
+            }
+            true
+        }
         TuiOnlyEvent::MemoryFileOpened { path } => {
             let text = t!("toast.memory_opened", path = path.as_str()).to_string();
             enqueue_informational(
@@ -474,6 +483,13 @@ fn on_open_rewind_picker(
     state: &mut AppState,
     command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
 ) -> bool {
+    let picker_id = uuid::Uuid::new_v4();
+    tracing::info!(
+        target: "rewind::tui",
+        %picker_id,
+        "OpenRewindPicker received",
+    );
+
     let rewind = crate::update_rewind::build_rewind_state(state);
 
     // No empty-rewind early-out: `build_rewind_state` always appends
@@ -482,8 +498,10 @@ fn on_open_rewind_picker(
     // "Nothing to rewind to yet." when only the synthetic row exists,
     // matching TS `MessageSelector.tsx:325-327`. The picker still
     // opens so Esc has a well-defined target.
+
     tracing::info!(
         target: "rewind::tui",
+        %picker_id,
         phase = ?rewind.phase,
         row_count = rewind.messages.len(),
         preselected = rewind.preselected,
@@ -493,16 +511,17 @@ fn on_open_rewind_picker(
 
     let row_uuids = crate::update::show::preload_diff_stats_targets(&rewind);
     state.ui.show_modal(ModalState::Rewind(rewind));
-    if !row_uuids.is_empty()
-        && let Err(e) = command_tx.try_send(crate::command::UserCommand::RequestDiffStatsBatch {
-            message_ids: row_uuids,
-        })
-    {
-        tracing::warn!(
-            target: "rewind::tui",
-            error = ?e,
-            "preload RequestDiffStatsBatch dropped; rows will resolve on selection",
-        );
+    if !row_uuids.is_empty() {
+        let message_ids = row_uuids.into_iter().map(|id| id.to_string()).collect();
+        if let Err(e) =
+            command_tx.try_send(crate::command::UserCommand::RequestDiffStatsBatch { message_ids })
+        {
+            tracing::warn!(
+                target: "rewind::tui",
+                error = ?e,
+                "preload RequestDiffStatsBatch dropped; rows will resolve on selection",
+            );
+        }
     }
     true
 }
@@ -526,14 +545,23 @@ fn on_row_metadata_ready(state: &mut AppState, rows: Vec<coco_types::RewindRowMe
             );
             continue;
         };
-        let Some(row) = r.messages.iter_mut().find(|m| m.message_id == Some(uuid)) else {
+        let Some(row) = r.messages.iter_mut().find(|m| m.message_id == uuid) else {
             continue;
         };
-        // `metadata: Some` is the canonical `fileHistoryCanRestore == true`
-        // signal; payload moves directly into row.diff_stats since wire
-        // and TUI state share the same `RewindDiffStatsPayload` type.
-        row.can_restore_code = Some(entry.metadata.is_some());
-        row.diff_stats = entry.metadata;
+        match entry.metadata {
+            Some(payload) => {
+                row.can_restore_code = Some(true);
+                row.diff_stats = Some(crate::state::DiffStatsPreview {
+                    insertions: payload.insertions,
+                    deletions: payload.deletions,
+                    file_paths: payload.file_paths,
+                });
+            }
+            None => {
+                row.can_restore_code = Some(false);
+                row.diff_stats = None;
+            }
+        }
     }
     true
 }
@@ -561,10 +589,7 @@ fn on_restore_preview_ready(
     let Some(ModalState::Rewind(r)) = state.ui.modal.as_mut() else {
         return false;
     };
-    let selected_id = r
-        .messages
-        .get(r.selected as usize)
-        .and_then(|m| m.message_id);
+    let selected_id = r.messages.get(r.selected as usize).map(|m| m.message_id);
     if selected_id != Some(stats_uuid) {
         // The user navigated away before the preview resolved.
         // `handle_rewind_confirm` re-requests on the new row.
@@ -575,8 +600,13 @@ fn on_restore_preview_ready(
 
     match stats {
         Some(payload) => {
-            r.has_file_changes = payload.files_changed() > 0;
-            r.diff_stats = Some(payload);
+            let preview = crate::state::DiffStatsPreview {
+                insertions: payload.insertions,
+                deletions: payload.deletions,
+                file_paths: payload.file_paths,
+            };
+            r.has_file_changes = !preview.file_paths.is_empty();
+            r.diff_stats = Some(preview);
             r.diff_stats_message_id = Some(stats_uuid);
             r.available_options = crate::state::rewind::build_restore_options(
                 r.file_history_enabled,
@@ -585,11 +615,7 @@ fn on_restore_preview_ready(
             );
             // Also flip the row badge — picker may re-open at this row
             // and the metadata batch may not have arrived yet.
-            if let Some(row) = r
-                .messages
-                .iter_mut()
-                .find(|m| m.message_id == Some(stats_uuid))
-            {
+            if let Some(row) = r.messages.iter_mut().find(|m| m.message_id == stats_uuid) {
                 row.can_restore_code = Some(true);
             }
         }
@@ -602,11 +628,7 @@ fn on_restore_preview_ready(
                 /*has_file_changes*/ false,
                 r.allow_summarize_up_to,
             );
-            if let Some(row) = r
-                .messages
-                .iter_mut()
-                .find(|m| m.message_id == Some(stats_uuid))
-            {
+            if let Some(row) = r.messages.iter_mut().find(|m| m.message_id == stats_uuid) {
                 row.can_restore_code = Some(false);
                 row.diff_stats = None;
             }

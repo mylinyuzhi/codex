@@ -18,6 +18,7 @@ pub mod output;
 pub mod paths;
 pub mod permission_rule_loader;
 pub mod plugin_watch;
+pub mod resume_hint;
 pub mod resume_resolver;
 pub mod sandbox_reload;
 pub mod sdk_server;

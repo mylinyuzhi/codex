@@ -9,6 +9,8 @@ use ratatui::prelude::*;
 use super::layout;
 use super::styles::UiStyles;
 use crate::i18n::t;
+use crate::state::CopyPickerSelection;
+use crate::state::CopyPickerState;
 use crate::state::ExportState;
 use crate::state::GlobalSearchState;
 use crate::state::McpServerSelectState;
@@ -264,6 +266,71 @@ pub(crate) fn export_content(e: &ExportState, styles: UiStyles<'_>) -> (String, 
         ),
         styles.primary(),
     )
+}
+
+pub(crate) fn copy_picker_content(
+    cp: &CopyPickerState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    let lines = cp.full_text.matches('\n').count() + 1;
+    let chars = cp.full_text.chars().count();
+    let full_label = t!("copy.picker_full_response", chars = chars, lines = lines).to_string();
+    let always_label = t!("copy.picker_always").to_string();
+
+    let mut rows: Vec<String> = Vec::with_capacity(cp.option_count());
+    rows.push(format!(
+        "{} {}",
+        copy_picker_marker(cp.selected, CopyPickerSelection::Full),
+        full_label,
+    ));
+    for (i, block) in cp.code_blocks.iter().enumerate() {
+        let lang = block.lang.as_deref().unwrap_or("text");
+        let block_chars = block.code.chars().count();
+        let preview = first_line_preview(&block.code, 60);
+        let label = t!(
+            "copy.picker_code_block",
+            lang = lang,
+            chars = block_chars,
+            preview = preview.as_str(),
+        )
+        .to_string();
+        rows.push(format!(
+            "{} {}",
+            copy_picker_marker(cp.selected, CopyPickerSelection::CodeBlock(i)),
+            label,
+        ));
+    }
+    rows.push(format!(
+        "{} {}",
+        copy_picker_marker(cp.selected, CopyPickerSelection::Always),
+        always_label,
+    ));
+
+    let title = t!("dialog.title_copy_picker", age = cp.message_age + 1).to_string();
+    let body = format!(
+        "{}\n\n{}\n\n{}",
+        t!("dialog.copy_picker_prompt"),
+        rows.join("\n"),
+        t!("dialog.hints_copy_picker"),
+    );
+    (title, body, styles.primary())
+}
+
+fn copy_picker_marker(selected: CopyPickerSelection, arm: CopyPickerSelection) -> &'static str {
+    if selected == arm { "▸" } else { " " }
+}
+
+fn first_line_preview(text: &str, max: usize) -> String {
+    let line = text.lines().next().unwrap_or("");
+    let mut out = String::new();
+    for (width, ch) in line.chars().enumerate() {
+        if width + 1 > max {
+            out.push('\u{2026}');
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 pub(crate) fn memory_dialog_content(

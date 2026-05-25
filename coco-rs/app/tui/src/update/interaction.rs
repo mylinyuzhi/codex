@@ -753,6 +753,17 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
             let count = m.entries.len() as i32;
             m.selected = (m.selected + delta).clamp(0, (count - 1).max(0));
         }
+        Some(ModalState::CopyPicker(cp)) => {
+            if delta < 0 {
+                for _ in 0..delta.unsigned_abs() {
+                    cp.move_up();
+                }
+            } else {
+                for _ in 0..delta as u32 {
+                    cp.move_down();
+                }
+            }
+        }
         Some(
             ModalState::Help
             | ModalState::Doctor(_)
@@ -906,6 +917,9 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                     } else if s.is_syntax_highlighting_selected() {
                         toggle_syntax_highlighting(state);
                         s.set_display_settings(state.ui.display_settings);
+                    } else if s.is_copy_full_response_selected() {
+                        toggle_copy_full_response(state);
+                        s.set_display_settings(state.ui.display_settings);
                     }
                 }
                 // Keep settings open after selection — user may want to try
@@ -934,6 +948,13 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             }
             ModalState::Transcript(t) => {
                 state.ui.restore_modal(ModalState::Transcript(t));
+                return;
+            }
+            ModalState::CopyPicker(cp) => {
+                if let Some(message) = super::copy::confirm_picker_selection(state, cp) {
+                    super::copy::enqueue_copy_output(message, command_tx);
+                }
+                state.ui.finish_taken_modal();
                 return;
             }
             _ => {}
@@ -1073,10 +1094,12 @@ pub(super) async fn request_diff_stats_if_rewind(
 ) {
     if let Some(ModalState::Rewind(r)) = state.ui.modal.as_ref()
         && let Some(msg) = r.messages.get(r.selected as usize)
-        && let Some(message_id) = msg.message_id
+        && !msg.is_current_prompt
     {
         let _ = command_tx
-            .send(UserCommand::RequestDiffStats { message_id })
+            .send(UserCommand::RequestDiffStats {
+                message_id: msg.message_id.to_string(),
+            })
             .await;
     }
 }
@@ -1424,6 +1447,41 @@ pub(super) fn toggle_syntax_highlighting(state: &mut AppState) {
         Err(err) => state.ui.add_toast(Toast::error(
             t!(
                 "toast.syntax_highlighting_save_failed",
+                error = err.to_string().as_str()
+            )
+            .to_string(),
+        )),
+    }
+}
+
+fn toggle_copy_full_response(state: &mut AppState) {
+    let enabled = !state.ui.display_settings.copy_full_response;
+    let next = state.ui.display_settings.with_copy_full_response(enabled);
+
+    match coco_config::global_config::write_user_setting(
+        coco_config::settings::COPY_FULL_RESPONSE_KEY,
+        serde_json::json!(enabled),
+    ) {
+        Ok(path) => {
+            state.ui.apply_display_settings(next);
+            let status = if enabled {
+                t!("settings.enabled")
+            } else {
+                t!("settings.disabled")
+            };
+            let path_text = path.display().to_string();
+            state.ui.add_toast(Toast::success(
+                t!(
+                    "toast.copy_full_response_saved",
+                    status = status.as_ref(),
+                    path = path_text.as_str()
+                )
+                .to_string(),
+            ));
+        }
+        Err(err) => state.ui.add_toast(Toast::error(
+            t!(
+                "toast.copy_preference_save_failed",
                 error = err.to_string().as_str()
             )
             .to_string(),

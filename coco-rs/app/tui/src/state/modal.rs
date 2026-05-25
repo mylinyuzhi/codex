@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 
+use crate::state::surface_payloads::CopyPickerState;
 use crate::state::surface_payloads::DiffViewState;
 use crate::state::surface_payloads::DoctorState;
 use crate::state::surface_payloads::ExportState;
@@ -39,6 +40,7 @@ pub enum ModalState {
     TaskDetail(TaskDetailState),
     Feedback(surface_payloads::FeedbackState),
     McpServerSelect(surface_payloads::McpServerSelectState),
+    CopyPicker(CopyPickerState),
 }
 
 impl ModalState {
@@ -63,6 +65,7 @@ impl ModalState {
             | Self::Settings(_)
             | Self::Transcript(_)
             | Self::MemoryDialog(_)
+            | Self::CopyPicker(_)
             | Self::IdleReturn(_) => 7,
             Self::Help => 8,
         }
