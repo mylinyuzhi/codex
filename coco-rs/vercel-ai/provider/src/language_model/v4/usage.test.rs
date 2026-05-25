@@ -25,17 +25,33 @@ fn test_usage_default() {
 
 #[test]
 fn test_usage_with_input_tokens() {
-    let input = InputTokens {
-        total: Some(100),
-        no_cache: Some(60),
-        cache_read: Some(30),
-        cache_write: Some(10),
-    };
+    let input = InputTokens::from_exclusive_buckets(
+        /*no_cache*/ Some(60),
+        /*cache_read*/ Some(30),
+        /*cache_write*/ Some(10),
+    );
     let usage = Usage::empty().with_input_tokens(input);
-    assert_eq!(usage.input_tokens.total, Some(100));
-    assert_eq!(usage.input_tokens.no_cache, Some(60));
-    assert_eq!(usage.input_tokens.cache_read, Some(30));
-    assert_eq!(usage.input_tokens.cache_write, Some(10));
+    assert_eq!(usage.input_tokens.total(), Some(100));
+    assert_eq!(usage.input_tokens.no_cache(), Some(60));
+    assert_eq!(usage.input_tokens.cache_read(), Some(30));
+    assert_eq!(usage.input_tokens.cache_write(), Some(10));
+}
+
+#[test]
+fn test_input_tokens_total_includes_cache_buckets() {
+    let input = InputTokens::from_exclusive_buckets(
+        /*no_cache*/ Some(60),
+        /*cache_read*/ Some(30),
+        /*cache_write*/ Some(10),
+    );
+    assert_eq!(
+        input.total(),
+        Some(
+            input.no_cache().unwrap_or(0)
+                + input.cache_read().unwrap_or(0)
+                + input.cache_write().unwrap_or(0)
+        )
+    );
 }
 
 #[test]
@@ -54,10 +70,10 @@ fn test_usage_with_output_tokens() {
 #[test]
 fn test_input_tokens_default() {
     let tokens = InputTokens::default();
-    assert_eq!(tokens.total, None);
-    assert_eq!(tokens.no_cache, None);
-    assert_eq!(tokens.cache_read, None);
-    assert_eq!(tokens.cache_write, None);
+    assert_eq!(tokens.total(), None);
+    assert_eq!(tokens.no_cache(), None);
+    assert_eq!(tokens.cache_read(), None);
+    assert_eq!(tokens.cache_write(), None);
 }
 
 #[test]

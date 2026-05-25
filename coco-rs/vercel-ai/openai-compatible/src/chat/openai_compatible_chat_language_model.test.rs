@@ -24,6 +24,8 @@ fn make_config() -> Arc<OpenAICompatibleConfig> {
         error_handler: Arc::new(
             crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler::new("xai"),
         ),
+        prompt_tokens_total_semantics:
+            crate::provider_options::PromptTokensTotalSemantics::Inclusive,
         full_url: None,
     })
 }
@@ -103,6 +105,8 @@ fn get_args_applies_transform_body() {
         error_handler: Arc::new(
             crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler::new("xai"),
         ),
+        prompt_tokens_total_semantics:
+            crate::provider_options::PromptTokensTotalSemantics::Inclusive,
         full_url: None,
     });
 
@@ -146,6 +150,8 @@ fn config_url_with_query_params() {
         error_handler: Arc::new(
             crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler::new("test"),
         ),
+        prompt_tokens_total_semantics:
+            crate::provider_options::PromptTokensTotalSemantics::Inclusive,
         full_url: None,
     };
     let url = config.url("/chat/completions");
@@ -283,10 +289,17 @@ async fn collect_chat_stream(chunks: Vec<Value>) -> Vec<LanguageModelV4StreamPar
             Bytes::from(data),
         )]));
 
-    create_chat_stream(byte_stream, Vec::new(), false, "xai".into(), None)
-        .map(|part| part.expect("stream part"))
-        .collect()
-        .await
+    create_chat_stream(
+        byte_stream,
+        Vec::new(),
+        false,
+        "xai".into(),
+        None,
+        crate::provider_options::PromptTokensTotalSemantics::Inclusive,
+    )
+    .map(|part| part.expect("stream part"))
+    .collect()
+    .await
 }
 
 #[tokio::test]

@@ -348,8 +348,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
             response_text: Some(result.response_text),
             messages: result.final_messages,
             turns: result.turns,
-            input_tokens: result.total_usage.input_tokens,
-            output_tokens: result.total_usage.output_tokens,
+            input_tokens: result.total_usage.input_tokens.total,
+            output_tokens: result.total_usage.output_tokens.total,
             tool_use_count,
             cancelled: result.cancelled,
         })

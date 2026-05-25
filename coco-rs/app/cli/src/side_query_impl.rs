@@ -253,8 +253,8 @@ impl SideQuery for SideQueryAdapter {
             tool_uses,
             stop_reason,
             usage: SideQueryUsage {
-                input_tokens: result.usage.input_tokens,
-                output_tokens: result.usage.output_tokens,
+                input_tokens: result.usage.input_tokens.total,
+                output_tokens: result.usage.output_tokens.total,
             },
             model_used: result.model,
         })

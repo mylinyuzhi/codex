@@ -1,5 +1,7 @@
 //! Tests for markdown rendering.
 
+use ratatui::style::Modifier;
+
 use crate::display_settings::SyntaxHighlighting;
 use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
@@ -21,6 +23,13 @@ fn test_headers() {
     let text = "# H1\n## H2\n### H3";
     let lines = markdown_to_lines(text, styles, 80);
     assert_eq!(lines.len(), 3);
+    for line in lines {
+        assert!(
+            line.spans
+                .iter()
+                .all(|span| !span.style.add_modifier.contains(Modifier::UNDERLINED))
+        );
+    }
 }
 
 #[test]

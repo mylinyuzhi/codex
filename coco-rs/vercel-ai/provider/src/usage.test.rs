@@ -18,12 +18,11 @@ fn test_usage_empty() {
 
 #[test]
 fn test_usage_with_details() {
-    let input = InputTokens {
-        total: Some(100),
-        no_cache: Some(50),
-        cache_read: Some(30),
-        cache_write: Some(20),
-    };
+    let input = InputTokens::from_exclusive_buckets(
+        /*no_cache*/ Some(50),
+        /*cache_read*/ Some(30),
+        /*cache_write*/ Some(20),
+    );
     let output = OutputTokens {
         total: Some(50),
         text: Some(30),
@@ -34,8 +33,8 @@ fn test_usage_with_details() {
         .with_input_tokens(input)
         .with_output_tokens(output);
 
-    assert_eq!(usage.input_tokens.total, Some(100));
-    assert_eq!(usage.input_tokens.no_cache, Some(50));
+    assert_eq!(usage.input_tokens.total(), Some(100));
+    assert_eq!(usage.input_tokens.no_cache(), Some(50));
     assert_eq!(usage.output_tokens.total, Some(50));
     assert_eq!(usage.output_tokens.reasoning, Some(20));
 }

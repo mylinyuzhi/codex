@@ -58,15 +58,15 @@ pub async fn run(provider: &str, model_id: &str) -> Result<()> {
 
     let usage = client.accumulated_usage().await;
     assert!(
-        usage.total.input_tokens > 0,
+        usage.total.input_tokens.total > 0,
         "{provider}/{model_id}: usage accumulator did not record input tokens"
     );
     assert!(
-        usage.total.output_tokens > 0,
+        usage.total.output_tokens.total > 0,
         "{provider}/{model_id}: usage accumulator did not record output tokens"
     );
     assert!(
-        result.usage.input_tokens > 0,
+        result.usage.input_tokens.total > 0,
         "{provider}/{model_id}: per-call input tokens should be > 0"
     );
     assert!(

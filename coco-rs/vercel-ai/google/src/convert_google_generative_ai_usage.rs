@@ -40,23 +40,24 @@ pub struct GoogleUsageMetadata {
 }
 
 /// Convert Google usage metadata to unified Usage type.
+///
+/// Google reports `promptTokenCount` inclusive of cached content, so `total`
+/// preserves the raw prompt total and `no_cache` subtracts cached content.
 pub fn convert_usage(usage: Option<&GoogleUsageMetadata>) -> Usage {
     let Some(usage) = usage else {
         return Usage::empty();
     };
 
     let prompt = usage.prompt_token_count.unwrap_or(0);
-    let cached = usage.cached_content_token_count.unwrap_or(0);
     let candidates = usage.candidates_token_count.unwrap_or(0);
     let thoughts = usage.thoughts_token_count.unwrap_or(0);
 
     Usage {
-        input_tokens: InputTokens {
-            total: Some(prompt),
-            no_cache: Some(prompt.saturating_sub(cached)),
-            cache_read: usage.cached_content_token_count,
-            ..Default::default()
-        },
+        input_tokens: InputTokens::from_inclusive_total(
+            Some(prompt),
+            usage.cached_content_token_count,
+            None,
+        ),
         output_tokens: OutputTokens {
             total: Some(candidates + thoughts),
             text: Some(candidates),

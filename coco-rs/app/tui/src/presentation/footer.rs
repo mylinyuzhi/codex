@@ -1,13 +1,15 @@
 //! Footer/status-bar presentation model.
 
-use coco_keybindings::KeybindingAction;
+use std::collections::HashSet;
+
 use coco_types::ModelRole;
 use coco_types::PermissionMode;
 
 use crate::i18n::t;
-use crate::keybinding_bridge::KeybindingContext;
 use crate::state::AppState;
 use crate::state::ExitKey;
+use crate::state::transcript_view::CellKind;
+use crate::state::transcript_view::RenderedCell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FooterTone {
@@ -91,34 +93,10 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
         FooterTone::Dim,
     ));
 
-    separator(&mut spans);
-    let thinking_shortcut = state
-        .ui
-        .kb_handle
-        .display_for(
-            &KeybindingAction::ChatThinkingToggle,
-            KeybindingContext::Chat,
-        )
-        .unwrap_or_else(|| "F2".to_string());
-    let thinking_state = if state.ui.show_thinking { "on" } else { "off" };
-    spans.push(FooterSpan::new(
-        t!(
-            "status.show_thinking",
-            shortcut = thinking_shortcut.as_str(),
-            state = thinking_state
-        )
-        .to_string(),
-        if state.ui.show_thinking {
-            FooterTone::Accent
-        } else {
-            FooterTone::Dim
-        },
-    ));
-
     if let Some((mode_label, mode_tone)) =
         permission_mode_status_label(state.session.permission_mode)
     {
-        spans.push(FooterSpan::new(", ", FooterTone::Dim));
+        separator(&mut spans);
         spans.push(FooterSpan::new(mode_label, mode_tone));
     }
 
@@ -143,12 +121,16 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
         FooterTone::Dim,
     ));
     let cache_pct = if tokens.input_tokens > 0 {
-        (tokens.cache_read_tokens * 100 / tokens.input_tokens).clamp(0, 100)
+        (tokens.cache_read_tokens.max(0) * 100 / tokens.input_tokens).clamp(0, 100)
     } else {
         0
     };
     spans.push(FooterSpan::new(
-        format!(" · cache {cache_pct}%"),
+        format!(
+            " · cache {}/{}%",
+            format_token_count(tokens.cache_read_tokens),
+            cache_pct
+        ),
         FooterTone::Dim,
     ));
 
@@ -183,11 +165,61 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
 
     separator(&mut spans);
     spans.push(FooterSpan::new(
-        t!("status.msgs", count = state.session.transcript.len()).to_string(),
+        transcript_count_status(state.session.transcript.cells()),
         FooterTone::Dim,
     ));
 
     FooterView::Status { spans }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct TranscriptCounts {
+    users: usize,
+    assistants: usize,
+    tools: usize,
+}
+
+fn transcript_count_status(cells: &[RenderedCell]) -> String {
+    let counts = transcript_counts(cells);
+    if counts.tools > 0 {
+        t!(
+            "status.turn_counts_with_tools",
+            users = counts.users,
+            assistants = counts.assistants,
+            tools = counts.tools
+        )
+        .to_string()
+    } else {
+        t!(
+            "status.turn_counts",
+            users = counts.users,
+            assistants = counts.assistants
+        )
+        .to_string()
+    }
+}
+
+fn transcript_counts(cells: &[RenderedCell]) -> TranscriptCounts {
+    let mut seen = HashSet::new();
+    let mut counts = TranscriptCounts::default();
+    for cell in cells {
+        if !seen.insert(cell.message_uuid) {
+            continue;
+        }
+        match &cell.kind {
+            CellKind::UserText { .. } | CellKind::UserAttachment => counts.users += 1,
+            CellKind::AssistantText { .. }
+            | CellKind::AssistantThinking { .. }
+            | CellKind::AssistantRedactedThinking
+            | CellKind::ToolUse { .. } => counts.assistants += 1,
+            CellKind::ToolResult { .. } => counts.tools += 1,
+            CellKind::Attachment
+            | CellKind::Progress
+            | CellKind::Tombstone
+            | CellKind::System(_) => {}
+        }
+    }
+    counts
 }
 
 fn separator(spans: &mut Vec<FooterSpan>) {

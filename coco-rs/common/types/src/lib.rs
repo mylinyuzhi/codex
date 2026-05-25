@@ -420,9 +420,9 @@ pub use thinking::ReasoningEffort;
 pub use thinking::ThinkingLevel;
 
 // Token types
-pub use token::InputTokenDetails;
+pub use token::InputTokens;
 pub use token::ModelUsage;
-pub use token::OutputTokenDetails;
+pub use token::OutputTokens;
 pub use token::TokenUsage;
 
 // Tool types (ToolResult moved to coco-messages because new_messages: Vec<Message>)

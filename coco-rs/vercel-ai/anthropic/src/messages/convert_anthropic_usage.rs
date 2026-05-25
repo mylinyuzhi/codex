@@ -8,17 +8,15 @@ use super::anthropic_messages_api::AnthropicUsage;
 
 /// Convert Anthropic usage to unified `Usage`.
 ///
+/// Anthropic reports `input_tokens` exclusive of cache reads and cache writes,
+/// so the normalized provider `InputTokens::total` adds all three buckets.
+///
 /// When `iterations` is present (compaction occurred), sums across all iterations
 /// to get the true total tokens consumed/billed.
 pub fn convert_anthropic_usage(usage: Option<&AnthropicUsage>) -> Usage {
     let Some(usage) = usage else {
         return Usage {
-            input_tokens: InputTokens {
-                total: None,
-                no_cache: None,
-                cache_read: None,
-                cache_write: None,
-            },
+            input_tokens: InputTokens::default(),
             output_tokens: OutputTokens {
                 total: None,
                 text: None,
@@ -35,11 +33,15 @@ pub fn convert_anthropic_usage(usage: Option<&AnthropicUsage>) -> Usage {
     let (input_tokens, output_tokens) = if let Some(ref iterations) = usage.iterations
         && !iterations.is_empty()
     {
-        let (total_in, total_out) = iterations
-            .iter()
-            .fold((0u64, 0u64), |(acc_in, acc_out), iter| {
-                (acc_in + iter.input_tokens, acc_out + iter.output_tokens)
-            });
+        let (total_in, total_out) =
+            iterations
+                .iter()
+                .fold((0u64, 0u64), |(acc_in, acc_out), iter| {
+                    (
+                        acc_in.saturating_add(iter.input_tokens),
+                        acc_out.saturating_add(iter.output_tokens),
+                    )
+                });
         (total_in, total_out)
     } else {
         (usage.input_tokens, usage.output_tokens)
@@ -69,12 +71,11 @@ pub fn convert_anthropic_usage(usage: Option<&AnthropicUsage>) -> Usage {
     }
 
     Usage {
-        input_tokens: InputTokens {
-            total: Some(input_tokens + cache_creation_tokens + cache_read_tokens),
-            no_cache: Some(input_tokens),
-            cache_read: Some(cache_read_tokens),
-            cache_write: Some(cache_creation_tokens),
-        },
+        input_tokens: InputTokens::from_exclusive_buckets(
+            Some(input_tokens),
+            Some(cache_read_tokens),
+            Some(cache_creation_tokens),
+        ),
         output_tokens: OutputTokens {
             total: Some(output_tokens),
             text: None,

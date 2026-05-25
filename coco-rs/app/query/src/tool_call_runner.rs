@@ -200,9 +200,8 @@ impl<'a> ToolCallRunner<'a> {
         let contexts = &tool_result_contexts;
         let event_tx = self.event_tx;
 
-        let history_ref: &mut MessageHistory = self.history;
         let mut control = Control::default();
-        let mut event_log: Vec<PendingCompletedEvent> = Vec::new();
+        let mut commit_log: Vec<PendingToolCommit> = Vec::new();
 
         executor
             .execute_with(
@@ -256,12 +255,12 @@ impl<'a> ToolCallRunner<'a> {
                     // the executor finishes driving — we can't
                     // `.await` from the sync `on_outcome` callback.
                     let output_text = render_completed_output(&outcome);
-                    event_log.push(PendingCompletedEvent {
+                    let completed_event = PendingCompletedEvent {
                         call_id: outcome.tool_use_id().to_string(),
                         tool_name,
                         output: output_text,
                         is_error,
-                    });
+                    };
 
                     // Update control signals from prevent_continuation.
                     if let Some(reason) = outcome.prevent_continuation() {
@@ -285,16 +284,27 @@ impl<'a> ToolCallRunner<'a> {
                     if let Some(data) = parts.structured_output.clone() {
                         control.structured_output = Some(data);
                     }
-                    for msg in parts.ordered_messages {
-                        history_ref.push(msg);
-                    }
+                    commit_log.push(PendingToolCommit {
+                        ordered_messages: parts.ordered_messages,
+                        completed_event,
+                    });
                 },
             )
             .await;
 
-        // 5. Drain the Completed event log now that we're outside
-        //    the executor's sync on_outcome boundary.
-        for event in event_log {
+        // 5. Commit ordered messages and emit Completed events now
+        //    that we're outside the executor's sync on_outcome
+        //    boundary. Use history_push_and_emit so the TUI and SDK
+        //    see each tool result through MessageAppended.
+        for commit in commit_log {
+            let PendingToolCommit {
+                ordered_messages,
+                completed_event,
+            } = commit;
+            for msg in ordered_messages {
+                crate::history_sync::history_push_and_emit(self.history, msg, self.event_tx).await;
+            }
+            let event = completed_event;
             let _delivered = emit_stream(
                 event_tx,
                 crate::AgentStreamEvent::ToolUseCompleted {
@@ -349,6 +359,12 @@ struct PendingCompletedEvent {
     tool_name: String,
     output: String,
     is_error: bool,
+}
+
+#[derive(Debug)]
+struct PendingToolCommit {
+    ordered_messages: Vec<coco_messages::Message>,
+    completed_event: PendingCompletedEvent,
 }
 
 #[derive(Debug)]

@@ -114,7 +114,7 @@ fn extract_tool_calls(msg: &LlmMessage) -> Vec<(String, serde_json::Value)> {
 pub fn format_usage(usage: &TokenUsage, cost_usd: f64) -> String {
     format!(
         "Tokens: {}↓ {}↑ | Cost: ${cost_usd:.4}",
-        usage.input_tokens, usage.output_tokens
+        usage.input_tokens.total, usage.output_tokens.total
     )
 }
 

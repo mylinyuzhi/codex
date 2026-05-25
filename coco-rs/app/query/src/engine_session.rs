@@ -61,6 +61,20 @@ impl QueryEngine {
             .await
     }
 
+    /// Run the agent loop with pre-built messages and no event streaming.
+    pub async fn run_with_messages_no_events(
+        &self,
+        messages: Vec<std::sync::Arc<Message>>,
+    ) -> Result<QueryResult, coco_error::BoxedError> {
+        if messages.is_empty() {
+            return Err(Box::new(coco_error::PlainError::new(
+                "No messages to process",
+                coco_error::StatusCode::InvalidArguments,
+            )));
+        }
+        self.run_internal_with_messages(messages, None).await
+    }
+
     /// Run the agent loop with an initial user prompt (no event streaming).
     pub async fn run(&self, user_prompt: &str) -> Result<QueryResult, coco_error::BoxedError> {
         let user_msg = std::sync::Arc::new(create_user_message(user_prompt));
@@ -240,8 +254,8 @@ impl QueryEngine {
                 turns = qr.turns,
                 duration_ms = qr.duration_ms,
                 duration_api_ms = qr.duration_api_ms,
-                tokens_in = qr.total_usage.input_tokens,
-                tokens_out = qr.total_usage.output_tokens,
+                tokens_in = qr.total_usage.input_tokens.total,
+                tokens_out = qr.total_usage.output_tokens.total,
                 cancelled = qr.cancelled,
                 budget_exhausted = qr.budget_exhausted,
                 stop_reason = ?qr.stop_reason,

@@ -53,18 +53,18 @@ pub struct OutputTokenDetails {
 /// Convert from provider `Usage` to flattened `LanguageModelUsage`.
 pub fn as_language_model_usage(usage: &Usage) -> LanguageModelUsage {
     LanguageModelUsage {
-        input_tokens: usage.input_tokens.total,
+        input_tokens: usage.input_tokens.total(),
         input_token_details: InputTokenDetails {
-            no_cache_tokens: usage.input_tokens.no_cache,
-            cache_read_tokens: usage.input_tokens.cache_read,
-            cache_write_tokens: usage.input_tokens.cache_write,
+            no_cache_tokens: usage.input_tokens.no_cache(),
+            cache_read_tokens: usage.input_tokens.cache_read(),
+            cache_write_tokens: usage.input_tokens.cache_write(),
         },
         output_tokens: usage.output_tokens.total,
         output_token_details: OutputTokenDetails {
             text_tokens: usage.output_tokens.text,
             reasoning_tokens: usage.output_tokens.reasoning,
         },
-        total_tokens: add_options(usage.input_tokens.total, usage.output_tokens.total),
+        total_tokens: add_options(usage.input_tokens.total(), usage.output_tokens.total),
         raw: usage.raw.clone(),
     }
 }
@@ -114,15 +114,15 @@ pub fn create_null_language_model_usage() -> LanguageModelUsage {
 /// Sum two `ImageModelUsage` values.
 pub fn add_image_model_usage(a: &ImageModelV4Usage, b: &ImageModelV4Usage) -> ImageModelV4Usage {
     ImageModelV4Usage {
-        prompt_tokens: a.prompt_tokens + b.prompt_tokens,
-        output_tokens: a.output_tokens + b.output_tokens,
-        total_tokens: a.total_tokens + b.total_tokens,
+        prompt_tokens: a.prompt_tokens.saturating_add(b.prompt_tokens),
+        output_tokens: a.output_tokens.saturating_add(b.output_tokens),
+        total_tokens: a.total_tokens.saturating_add(b.total_tokens),
     }
 }
 
 fn add_options(a: Option<u64>, b: Option<u64>) -> Option<u64> {
     match (a, b) {
-        (Some(a), Some(b)) => Some(a + b),
+        (Some(a), Some(b)) => Some(a.saturating_add(b)),
         (Some(a), None) => Some(a),
         (None, Some(b)) => Some(b),
         (None, None) => None,

@@ -343,10 +343,73 @@ fn transcript_projection_groups_parallel_tool_runs() {
             TranscriptCell::ToolBatch {
                 start: 0,
                 end: 3,
-                count: 3,
+                count: 2,
+            },
+            TranscriptCell::ToolCall {
+                invocation: Some(0),
+                result: None,
+                call_id: Some("tool-1".to_string()),
+            },
+            TranscriptCell::MetaPreview { index: 1 },
+            TranscriptCell::ToolCall {
+                invocation: Some(2),
+                result: None,
+                call_id: Some("tool-2".to_string()),
             },
             TranscriptCell::Cell { index: 3 },
         ]
+    );
+}
+
+#[test]
+fn transcript_projection_groups_parallel_tool_runs_with_results() {
+    let cells = vec![
+        tool_use_cell("tool-1", "Glob", serde_json::json!({"pattern": "**/*.rs"})),
+        tool_use_cell("tool-2", "Glob", serde_json::json!({"pattern": "**/*.md"})),
+        tool_result_cell("tool-1", "Glob", "src/lib.rs"),
+        tool_result_cell("tool-2", "Glob", "README.md"),
+    ];
+
+    assert_eq!(
+        projection_cells(&cells, false),
+        vec![
+            TranscriptCell::ToolBatch {
+                start: 0,
+                end: 2,
+                count: 2,
+            },
+            TranscriptCell::ToolCall {
+                invocation: Some(0),
+                result: Some(2),
+                call_id: Some("tool-1".to_string()),
+            },
+            TranscriptCell::ToolCall {
+                invocation: Some(1),
+                result: Some(3),
+                call_id: Some("tool-2".to_string()),
+            },
+        ]
+    );
+}
+
+#[test]
+fn snapshot_transcript_modal_parallel_glob_results() {
+    let _locale = locale_test_guard("en");
+    let mut app_state = AppState::default();
+    push_cells(
+        &mut app_state,
+        [
+            tool_use_cell("tool-1", "Glob", serde_json::json!({"pattern": "**/*.rs"})),
+            tool_use_cell("tool-2", "Glob", serde_json::json!({"pattern": "**/*.md"})),
+            tool_result_cell("tool-1", "Glob", "src/lib.rs\nsrc/main.rs"),
+            tool_result_cell("tool-2", "Glob", "README.md\nAGENTS.md"),
+        ],
+    );
+    let state = TranscriptState::new();
+
+    insta::assert_snapshot!(
+        "transcript_modal_parallel_glob_results",
+        render_transcript_text(&app_state, &state, 84, 14)
     );
 }
 

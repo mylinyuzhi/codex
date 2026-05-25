@@ -164,18 +164,18 @@ pub(crate) fn transcript_projection(
             continue;
         }
 
-        // Tool-use batch: 2+ adjacent ToolUse cells (no intervening
-        // assistant text or tool result) render as a single batch
-        // header followed by the individual rows.
+        // Tool-use batch: 2+ adjacent ToolUse cells (allowing meta
+        // cells between them) render a single batch header before
+        // the individual paired invocation/result rows.
         let batch_end = tool_batch_end(cells, i);
-        if batch_end > i + 1 && !tool_batch_has_results(cells, &consumed, i, batch_end) {
+        let batch_tool_count = tool_use_count(cells, i, batch_end);
+        if is_tool_batch_start(cells, i) && batch_tool_count > 1 {
+            log_tool_batch(cells, &consumed, i, batch_end, batch_tool_count);
             out.push(TranscriptCell::ToolBatch {
                 start: i,
                 end: batch_end,
-                count: batch_end - i,
+                count: batch_tool_count,
             });
-            i = batch_end;
-            continue;
         }
 
         // Tool invocation paired with its result.
@@ -276,18 +276,58 @@ fn tool_batch_end(cells: &[RenderedCell], start: usize) -> usize {
     end
 }
 
-fn tool_batch_has_results(
+fn is_tool_batch_start(cells: &[RenderedCell], index: usize) -> bool {
+    if !matches!(cells[index].kind, CellKind::ToolUse { .. }) {
+        return false;
+    }
+    let mut cursor = index;
+    while cursor > 0 {
+        let previous = &cells[cursor - 1];
+        if matches!(previous.kind, CellKind::ToolUse { .. }) {
+            return false;
+        }
+        if !is_meta(previous) {
+            break;
+        }
+        cursor -= 1;
+    }
+    true
+}
+
+fn tool_use_count(cells: &[RenderedCell], start: usize, end: usize) -> usize {
+    cells[start..end]
+        .iter()
+        .filter(|cell| matches!(cell.kind, CellKind::ToolUse { .. }))
+        .count()
+}
+
+fn log_tool_batch(
     cells: &[RenderedCell],
     consumed: &[bool],
     start: usize,
     end: usize,
-) -> bool {
-    cells[start..end].iter().any(|cell| {
-        let CellKind::ToolUse { call_id, .. } = &cell.kind else {
-            return false;
-        };
-        find_tool_result(cells, consumed, end, call_id).is_some()
-    })
+    count: usize,
+) {
+    let pairings = cells[start..end]
+        .iter()
+        .filter_map(|cell| {
+            let CellKind::ToolUse { call_id, .. } = &cell.kind else {
+                return None;
+            };
+            Some((
+                call_id.as_str(),
+                find_tool_result(cells, consumed, end, call_id).is_some(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    tracing::debug!(
+        target: "coco_tui::transcript",
+        start,
+        end,
+        count,
+        ?pairings,
+        "projected parallel tool batch",
+    );
 }
 
 fn find_tool_result(

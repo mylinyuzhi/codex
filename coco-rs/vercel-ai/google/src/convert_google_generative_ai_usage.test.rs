@@ -16,9 +16,9 @@ fn converts_full_usage() {
     // output total = candidates + thoughts = 200 + 30 = 230
     assert_eq!(usage.output_tokens.total, Some(230));
     assert_eq!(usage.output_tokens.text, Some(200));
-    assert_eq!(usage.input_tokens.cache_read, Some(50));
+    assert_eq!(usage.input_tokens.cache_read(), Some(50));
     // no_cache = prompt - cached = 100 - 50 = 50
-    assert_eq!(usage.input_tokens.no_cache, Some(50));
+    assert_eq!(usage.input_tokens.no_cache(), Some(50));
     assert_eq!(usage.output_tokens.reasoning, Some(30));
     assert!(usage.raw.is_some());
 }
@@ -44,7 +44,7 @@ fn handles_partial_usage() {
     let usage = convert_usage(Some(&google_usage));
     assert_eq!(usage.total_input_tokens(), 100);
     assert_eq!(usage.total_output_tokens(), 0);
-    assert_eq!(usage.input_tokens.no_cache, Some(100));
+    assert_eq!(usage.input_tokens.no_cache(), Some(100));
     assert_eq!(usage.output_tokens.text, Some(0));
 }
 

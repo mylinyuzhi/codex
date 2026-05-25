@@ -109,8 +109,8 @@ async fn test_client_returns_mock_text() {
 
     // Verify we got the mock response
     assert!(!result.content.is_empty());
-    assert_eq!(result.usage.input_tokens, 10);
-    assert_eq!(result.usage.output_tokens, 5);
+    assert_eq!(result.usage.input_tokens.total, 10);
+    assert_eq!(result.usage.output_tokens.total, 5);
     assert_eq!(result.model, "mock-model");
     assert_eq!(result.retries, 0);
     assert!(result.total_duration_ms >= 0);
@@ -137,8 +137,8 @@ async fn test_usage_accumulation() {
 
     let usage = client.accumulated_usage().await;
     assert_eq!(usage.call_count, 2);
-    assert_eq!(usage.total.input_tokens, 20);
-    assert_eq!(usage.total.output_tokens, 10);
+    assert_eq!(usage.total.input_tokens.total, 20);
+    assert_eq!(usage.total.output_tokens.total, 10);
 }
 
 #[tokio::test]

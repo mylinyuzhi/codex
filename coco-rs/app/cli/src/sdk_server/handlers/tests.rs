@@ -265,14 +265,14 @@ impl TurnRunner for StatsEmittingRunner {
                 stop_reason: stop,
                 total_cost_usd: cost,
                 usage: coco_types::TokenUsage {
-                    input_tokens: input,
-                    output_tokens: output,
-                    input_token_details: coco_types::InputTokenDetails {
-                        cache_read_tokens: 0,
-                        cache_write_tokens: 0,
+                    input_tokens: coco_types::InputTokens {
+                        total: input,
                         ..Default::default()
                     },
-                    ..Default::default()
+                    output_tokens: coco_types::OutputTokens {
+                        total: output,
+                        ..Default::default()
+                    },
                 },
                 model_usage: std::collections::HashMap::new(),
                 permission_denials: vec![PermissionDenialInfo {
@@ -1610,8 +1610,8 @@ async fn session_archive_emits_aggregated_session_result() {
         let slot = state.session.read().await;
         let stats = &slot.as_ref().unwrap().stats;
         assert_eq!(stats.total_turns, 2);
-        assert_eq!(stats.usage.input_tokens, 400);
-        assert_eq!(stats.usage.output_tokens, 160);
+        assert_eq!(stats.usage.input_tokens.total, 400);
+        assert_eq!(stats.usage.output_tokens.total, 160);
         assert!((stats.total_cost_usd - 0.04).abs() < 1e-9);
         assert_eq!(stats.permission_denials.len(), 2);
         assert_eq!(stats.last_stop_reason.as_deref(), Some("end_turn"));
@@ -1636,8 +1636,8 @@ async fn session_archive_emits_aggregated_session_result() {
                 assert_eq!(n.method, "session/result");
                 assert_eq!(n.params["session_id"], session_id);
                 assert_eq!(n.params["total_turns"], 2);
-                assert_eq!(n.params["usage"]["input_tokens"], 400);
-                assert_eq!(n.params["usage"]["output_tokens"], 160);
+                assert_eq!(n.params["usage"]["input_tokens"]["total"], 400);
+                assert_eq!(n.params["usage"]["output_tokens"]["total"], 160);
                 assert_eq!(n.params["permission_denials"].as_array().unwrap().len(), 2);
                 assert_eq!(n.params["result"], "hello");
                 assert_eq!(n.params["stop_reason"], "end_turn");
@@ -2123,8 +2123,8 @@ async fn session_archive_is_atomic_under_concurrent_forwarder_updates() {
                 assert_eq!(n.method, "session/result");
                 // Stats from the single turn must be present.
                 assert_eq!(n.params["total_turns"], 1);
-                assert_eq!(n.params["usage"]["input_tokens"], 500);
-                assert_eq!(n.params["usage"]["output_tokens"], 250);
+                assert_eq!(n.params["usage"]["input_tokens"]["total"], 500);
+                assert_eq!(n.params["usage"]["output_tokens"]["total"], 250);
                 assert_eq!(n.params["permission_denials"].as_array().unwrap().len(), 1);
                 saw_notif = true;
             }
@@ -2237,14 +2237,14 @@ impl TurnRunner for SlowRunner {
                     stop_reason: "end_turn".into(),
                     total_cost_usd: 99.0, // distinctive contamination marker
                     usage: coco_types::TokenUsage {
-                        input_tokens: 9999,
-                        output_tokens: 9999,
-                        input_token_details: coco_types::InputTokenDetails {
-                            cache_read_tokens: 0,
-                            cache_write_tokens: 0,
+                        input_tokens: coco_types::InputTokens {
+                            total: 9999,
                             ..Default::default()
                         },
-                        ..Default::default()
+                        output_tokens: coco_types::OutputTokens {
+                            total: 9999,
+                            ..Default::default()
+                        },
                     },
                     model_usage: std::collections::HashMap::new(),
                     permission_denials: Vec::new(),
@@ -2439,9 +2439,9 @@ async fn forwarder_does_not_contaminate_successor_session_stats() {
         let stats = &slot.as_ref().unwrap().stats;
         assert_eq!(stats.total_turns, 0, "B's total_turns contaminated");
         assert_eq!(
-            stats.usage.input_tokens, 0,
+            stats.usage.input_tokens.total, 0,
             "B's input_tokens contaminated: got {}",
-            stats.usage.input_tokens
+            stats.usage.input_tokens.total
         );
         assert_eq!(stats.total_cost_usd, 0.0, "B's cost contaminated");
         assert!(stats.last_result_text.is_none(), "B's result contaminated");

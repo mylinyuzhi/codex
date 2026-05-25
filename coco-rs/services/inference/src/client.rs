@@ -437,10 +437,10 @@ impl ApiClient {
                     info!(
                         attempt,
                         duration_ms = result.total_duration_ms,
-                        tokens_in = result.usage.input_tokens,
-                        tokens_out = result.usage.output_tokens,
-                        cache_read = result.usage.cache_read_input_tokens(),
-                        cache_creation = result.usage.cache_creation_input_tokens(),
+                        tokens_in = result.usage.input_tokens.total,
+                        tokens_out = result.usage.output_tokens.total,
+                        cache_read = result.usage.input_tokens.cache_read,
+                        cache_creation = result.usage.input_tokens.cache_write,
                         stop_reason = ?result.stop_reason,
                         model_id = %result.model,
                         "api_call ok"
@@ -456,7 +456,7 @@ impl ApiClient {
                     {
                         warn!(
                             stop_reason = %reason,
-                            tokens_out = result.usage.output_tokens,
+                            tokens_out = result.usage.output_tokens.total,
                             max_tokens = ?params.max_tokens,
                             query_source = ?params.query_source,
                             model_id = %result.model,
@@ -474,8 +474,8 @@ impl ApiClient {
                     {
                         let res = detector.lock().await.check_response_for_cache_break(
                             query_source,
-                            result.usage.cache_read_input_tokens(),
-                            result.usage.cache_creation_input_tokens(),
+                            result.usage.input_tokens.cache_read,
+                            result.usage.input_tokens.cache_write,
                             params.time_since_last_assistant_ms,
                             params.agent_id.as_deref(),
                         );
@@ -547,67 +547,7 @@ impl ApiClient {
             .await
             .map_err(|e| self.wrap_provider_error(e))?;
 
-        let input_total: i64 = result
-            .usage
-            .input_tokens
-            .total
-            .unwrap_or(0)
-            .try_into()
-            .unwrap_or(0);
-        let output_total: i64 = result
-            .usage
-            .output_tokens
-            .total
-            .unwrap_or(0)
-            .try_into()
-            .unwrap_or(0);
-        let usage = TokenUsage {
-            input_tokens: input_total,
-            output_tokens: output_total,
-            total_tokens: input_total + output_total,
-            input_token_details: coco_types::InputTokenDetails {
-                no_cache_tokens: result
-                    .usage
-                    .input_tokens
-                    .no_cache
-                    .unwrap_or(0)
-                    .try_into()
-                    .unwrap_or(0),
-                cache_read_tokens: result
-                    .usage
-                    .input_tokens
-                    .cache_read
-                    .unwrap_or(0)
-                    .try_into()
-                    .unwrap_or(0),
-                cache_write_tokens: result
-                    .usage
-                    .input_tokens
-                    .cache_write
-                    .unwrap_or(0)
-                    .try_into()
-                    .unwrap_or(0),
-            },
-            // See `coco_types::TokenUsage` doc for provenance — `0` is
-            // valid when the provider's wire shape doesn't separate
-            // reasoning from text output.
-            output_token_details: coco_types::OutputTokenDetails {
-                text_tokens: result
-                    .usage
-                    .output_tokens
-                    .text
-                    .unwrap_or(0)
-                    .try_into()
-                    .unwrap_or(0),
-                reasoning_tokens: result
-                    .usage
-                    .output_tokens
-                    .reasoning
-                    .unwrap_or(0)
-                    .try_into()
-                    .unwrap_or(0),
-            },
-        };
+        let usage = crate::stream::token_usage_from_provider_usage(&result.usage);
 
         let model_id = result
             .response

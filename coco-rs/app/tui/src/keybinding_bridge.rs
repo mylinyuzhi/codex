@@ -128,7 +128,7 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctx = active_context(state);
     let (cmd, source) = resolve_key(state, key, ctx);
     match cmd.as_ref() {
-        Some(c) => tracing::debug!(
+        Some(c) if should_log_key_command(c) => tracing::debug!(
             target: "coco_tui::keybinding",
             key = ?key.code,
             mods = ?key.modifiers,
@@ -137,6 +137,7 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
             cmd = ?c,
             "key → TuiCommand",
         ),
+        Some(_) => {}
         None => tracing::trace!(
             target: "coco_tui::keybinding",
             key = ?key.code,
@@ -149,6 +150,10 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     cmd
 }
 
+fn should_log_key_command(cmd: &TuiCommand) -> bool {
+    !matches!(cmd, TuiCommand::InsertChar(_))
+}
+
 /// Inner resolution returning both the command and where it came from
 /// (`resolver`, `cascade`, `pending`, `consumed`, `unmapped`). The
 /// `source` tag is the breadcrumb that distinguishes "resolver knew
@@ -159,6 +164,18 @@ fn resolve_key(
     key: KeyEvent,
     ctx: KeybindingContext,
 ) -> (Option<TuiCommand>, &'static str) {
+    if key.modifiers == KeyModifiers::CONTROL {
+        match key.code {
+            // Ctrl+C / Ctrl+D are non-rebindable process-level exit
+            // keys. Handle them before context bindings so modal
+            // shortcuts cannot swallow the second press after the
+            // "Press X again to exit" hint is armed.
+            KeyCode::Char('c' | 'C') => return (Some(TuiCommand::Interrupt), "reserved_exit"),
+            KeyCode::Char('d' | 'D') => return (Some(TuiCommand::RequestExit), "reserved_exit"),
+            _ => {}
+        }
+    }
+
     if matches!(ctx, KeybindingContext::Transcript) {
         if matches!(key.code, KeyCode::BackTab) {
             return (None, "transcript_backtab");

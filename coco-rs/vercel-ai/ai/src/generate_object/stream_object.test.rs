@@ -187,7 +187,7 @@ async fn test_stream_object_usage_accessor() {
     while result.stream.next().await.is_some() {}
     // Then access usage via the watch channel
     let usage = result.usage().await;
-    assert_eq!(usage.input_tokens.total, Some(10));
+    assert_eq!(usage.input_tokens.total(), Some(10));
     assert_eq!(usage.output_tokens.total, Some(5));
 }
 

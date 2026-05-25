@@ -7,12 +7,11 @@ use vercel_ai_provider::Usage;
 #[test]
 fn test_as_language_model_usage() {
     let usage = Usage {
-        input_tokens: InputTokens {
-            total: Some(100),
-            no_cache: Some(80),
-            cache_read: Some(15),
-            cache_write: Some(5),
-        },
+        input_tokens: InputTokens::from_exclusive_buckets(
+            /*no_cache*/ Some(80),
+            /*cache_read*/ Some(15),
+            /*cache_write*/ Some(5),
+        ),
         output_tokens: OutputTokens {
             total: Some(50),
             text: Some(40),
@@ -53,10 +52,7 @@ fn test_as_language_model_usage_forwards_raw() {
     raw.insert("custom".to_string(), serde_json::json!(42));
 
     let usage = Usage {
-        input_tokens: InputTokens {
-            total: Some(10),
-            ..Default::default()
-        },
+        input_tokens: InputTokens::from_total(Some(10)),
         output_tokens: OutputTokens {
             total: Some(5),
             ..Default::default()

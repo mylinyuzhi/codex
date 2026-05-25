@@ -424,7 +424,7 @@ pub async fn embed_many(options: EmbedManyOptions) -> Result<EmbedManyResult, AI
         // Collect results
         for result in results {
             all_embeddings.extend(result.embeddings);
-            total_tokens += result.usage.total_tokens;
+            total_tokens = total_tokens.saturating_add(result.usage.total_tokens);
             all_warnings.extend(result.warnings);
             if let Some(raw) = result.raw_response {
                 all_raw_responses.push(raw);

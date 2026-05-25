@@ -7,6 +7,7 @@ use vercel_ai_provider::AISdkError;
 use vercel_ai_provider_utils::ResponseHandler;
 
 use crate::metadata_extractor::MetadataExtractor;
+use crate::provider_options::PromptTokensTotalSemantics;
 
 /// Callback that returns supported URL patterns by MIME type.
 pub type SupportedUrlsFn = dyn Fn() -> HashMap<String, Vec<Regex>> + Send + Sync;
@@ -36,6 +37,8 @@ pub struct OpenAICompatibleConfig {
     pub supported_urls: Option<Arc<SupportedUrlsFn>>,
     /// Error response handler for failed API calls.
     pub error_handler: Arc<dyn ResponseHandler<AISdkError>>,
+    /// Whether prompt token totals include cached tokens.
+    pub prompt_tokens_total_semantics: PromptTokensTotalSemantics,
     /// When `true`, `base_url` is the complete endpoint URL — no API path
     /// suffix is appended. Default (`None`): auto-detect duplicate suffixes.
     pub full_url: Option<bool>,

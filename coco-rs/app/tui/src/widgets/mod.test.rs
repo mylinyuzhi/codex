@@ -307,7 +307,7 @@ fn test_exit_prompt_replaces_status_bar() {
         .unwrap_or_else(|| panic!("exit prompt should render in the status row:\n{output}"));
 
     assert!(
-        !status_line.contains("Default") && !status_line.contains("msgs"),
+        !status_line.contains("Default") && !status_line.contains('←'),
         "exit prompt should replace model/mode/message-count status content:\n{output}",
     );
 }

@@ -643,9 +643,25 @@ impl QueryEngine {
         usage: TokenUsage,
     ) {
         self.flush_successful_turn_state(history).await;
-        // F3: anchor reasoning aggregates by message UUID *before*
-        // TurnCompleted so the TUI side-cache is populated by the
-        // time the renderer reflects the completed turn.
+        self.emit_successful_turn_completed(event_tx, history, turn_id, usage)
+            .await;
+    }
+
+    /// Emit the protocol completion events for a successful model turn.
+    ///
+    /// Keep this separate from [`Self::flush_successful_turn_state`] because
+    /// some no-tool terminal paths intentionally flush before prompt
+    /// suggestion and Stop hooks. The completion invariant still belongs in
+    /// one place: reasoning metadata, when reported by the provider, must be
+    /// anchored by message UUID before `TurnCompleted` lets the TUI render the
+    /// completed turn.
+    pub(crate) async fn emit_successful_turn_completed(
+        &self,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+        history: &MessageHistory,
+        turn_id: String,
+        usage: TokenUsage,
+    ) {
         self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
             .await;
         self.emit_turn_completed(event_tx, turn_id, usage, history.len())
@@ -683,8 +699,8 @@ impl QueryEngine {
     ) {
         info!(
             turn_id = %turn_id,
-            tokens_in = usage.input_tokens,
-            tokens_out = usage.output_tokens,
+            tokens_in = usage.input_tokens.total,
+            tokens_out = usage.output_tokens.total,
             history_len,
             "turn completed"
         );
@@ -710,7 +726,54 @@ impl QueryEngine {
         usage: &TokenUsage,
         duration_ms: Option<i64>,
     ) {
-        if usage.reasoning_output_tokens() <= 0 {
+        if usage.output_tokens.reasoning <= 0 {
+            if let Some(assistant) = history.iter().rev().find_map(|m| match m.as_ref() {
+                coco_messages::Message::Assistant(a) => Some(a),
+                coco_messages::Message::User(_)
+                | coco_messages::Message::System(_)
+                | coco_messages::Message::Attachment(_)
+                | coco_messages::Message::ToolResult(_)
+                | coco_messages::Message::Progress(_)
+                | coco_messages::Message::Tombstone(_) => None,
+            }) && let coco_messages::LlmMessage::Assistant { content, .. } = &assistant.message
+            {
+                let mut reasoning_chars = 0;
+                let mut text_chars = 0;
+                let mut tool_call_count = 0;
+                for part in content {
+                    match part {
+                        coco_llm_types::AssistantContentPart::Reasoning(r) => {
+                            reasoning_chars += r.text.len();
+                        }
+                        coco_llm_types::AssistantContentPart::Text(t) => {
+                            text_chars += t.text.len();
+                        }
+                        coco_llm_types::AssistantContentPart::ToolCall(_) => {
+                            tool_call_count += 1;
+                        }
+                        coco_llm_types::AssistantContentPart::File(_)
+                        | coco_llm_types::AssistantContentPart::ReasoningFile(_)
+                        | coco_llm_types::AssistantContentPart::Custom(_)
+                        | coco_llm_types::AssistantContentPart::ToolResult(_)
+                        | coco_llm_types::AssistantContentPart::Source(_)
+                        | coco_llm_types::AssistantContentPart::ToolApprovalRequest(_) => {}
+                    }
+                }
+                if reasoning_chars > 0 {
+                    tracing::debug!(
+                        message_uuid = %assistant.uuid,
+                        model = %assistant.model,
+                        stop_reason = ?assistant.stop_reason,
+                        tokens_out = usage.output_tokens.total,
+                        text_tokens = usage.output_tokens.text,
+                        reasoning_tokens = usage.output_tokens.reasoning,
+                        reasoning_chars,
+                        text_chars,
+                        tool_call_count,
+                        "assistant reasoning text present without reasoning token usage"
+                    );
+                }
+            }
             return;
         }
         let Some(last_assistant_uuid) = history.iter().rev().find_map(|m| match m.as_ref() {
@@ -725,7 +788,7 @@ impl QueryEngine {
                 coco_types::ReasoningMetadataAttachedParams {
                     message_uuid: last_assistant_uuid.to_string(),
                     duration_ms,
-                    reasoning_tokens: usage.reasoning_output_tokens(),
+                    reasoning_tokens: usage.output_tokens.reasoning,
                 },
             ),
         )
@@ -1229,7 +1292,7 @@ fn extract_recent_tool_writes<M: std::borrow::Borrow<coco_messages::Message>>(
 /// `assistant_turn_count` and `last_response_was_api_error` come from
 /// deserializing the cache slot's `fork_context_messages`;
 /// `parent_uncached_tokens` is the last assistant's
-/// `input + cache_creation_input + output` tokens (TS
+/// `input - cache_read_input + output` tokens (TS
 /// `getParentCacheSuppressReason`). Other fields come from
 /// `ToolAppState`.
 async fn build_suggestion_context(
@@ -1251,11 +1314,7 @@ async fn build_suggestion_context(
         Some(a) => {
             let api_error = a.api_error.is_some();
             let usage = a.usage.unwrap_or_default();
-            let tokens = crate::prompt_suggestion::parent_uncached_tokens(
-                usage.input_tokens,
-                usage.cache_creation_input_tokens(),
-                usage.output_tokens,
-            );
+            let tokens = crate::prompt_suggestion::parent_uncached_tokens(&usage);
             (api_error, tokens)
         }
         None => (false, 0),

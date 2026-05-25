@@ -85,14 +85,16 @@ fn test_format_response_log() {
     let log = ResponseLog {
         model: "claude-sonnet-4-20250514".into(),
         usage: TokenUsage {
-            input_tokens: 10000,
-            output_tokens: 500,
-            input_token_details: coco_types::InputTokenDetails {
-                cache_read_tokens: 8000,
-                cache_write_tokens: 2000,
+            input_tokens: coco_types::InputTokens {
+                total: 10000,
+                cache_read: 8000,
+                cache_write: 2000,
                 ..Default::default()
             },
-            ..Default::default()
+            output_tokens: coco_types::OutputTokens {
+                total: 500,
+                ..Default::default()
+            },
         },
         duration_ms: 1200,
         duration_ms_including_retries: 1200,
@@ -123,14 +125,14 @@ fn test_format_response_log_with_retries_and_gateway() {
     let log = ResponseLog {
         model: "claude-sonnet-4-20250514".into(),
         usage: TokenUsage {
-            input_tokens: 100,
-            output_tokens: 50,
-            input_token_details: coco_types::InputTokenDetails {
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
+            input_tokens: coco_types::InputTokens {
+                total: 100,
                 ..Default::default()
             },
-            ..Default::default()
+            output_tokens: coco_types::OutputTokens {
+                total: 50,
+                ..Default::default()
+            },
         },
         duration_ms: 3000,
         duration_ms_including_retries: 9000,
@@ -217,14 +219,16 @@ fn test_response_log_to_properties() {
     let log = ResponseLog {
         model: "test-model".into(),
         usage: TokenUsage {
-            input_tokens: 100,
-            output_tokens: 50,
-            input_token_details: coco_types::InputTokenDetails {
-                cache_read_tokens: 80,
-                cache_write_tokens: 20,
+            input_tokens: coco_types::InputTokens {
+                total: 100,
+                cache_read: 80,
+                cache_write: 20,
                 ..Default::default()
             },
-            ..Default::default()
+            output_tokens: coco_types::OutputTokens {
+                total: 50,
+                ..Default::default()
+            },
         },
         duration_ms: 500,
         duration_ms_including_retries: 500,

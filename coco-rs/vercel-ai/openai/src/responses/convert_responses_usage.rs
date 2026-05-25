@@ -24,15 +24,13 @@ pub struct OutputTokensDetails {
 }
 
 /// Convert OpenAI Responses usage to the SDK's unified `Usage` type.
+///
+/// OpenAI reports `input_tokens` inclusive of cached tokens, so `total`
+/// preserves the raw input total and `no_cache` subtracts `cached_tokens`.
 pub fn convert_openai_responses_usage(usage: Option<&OpenAIResponsesUsage>) -> Usage {
     let Some(usage) = usage else {
         return Usage {
-            input_tokens: InputTokens {
-                total: None,
-                no_cache: None,
-                cache_read: None,
-                cache_write: None,
-            },
+            input_tokens: InputTokens::default(),
             output_tokens: OutputTokens {
                 total: None,
                 text: None,
@@ -56,12 +54,7 @@ pub fn convert_openai_responses_usage(usage: Option<&OpenAIResponsesUsage>) -> U
         .unwrap_or(0);
 
     Usage {
-        input_tokens: InputTokens {
-            total: Some(input_tokens),
-            no_cache: Some(input_tokens.saturating_sub(cached)),
-            cache_read: Some(cached),
-            cache_write: None,
-        },
+        input_tokens: InputTokens::from_inclusive_total(Some(input_tokens), Some(cached), None),
         output_tokens: OutputTokens {
             total: Some(output_tokens),
             text: Some(output_tokens.saturating_sub(reasoning)),

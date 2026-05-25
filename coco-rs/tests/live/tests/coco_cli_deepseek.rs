@@ -294,7 +294,7 @@ async fn test_coco_cli_max_tokens_deepseek_openai() -> Result<()> {
     let outcome = run_chat(&cli, cli.prompt.as_deref()).await?;
     record_outcome("coco_cli.max_tokens", &outcome);
     assert!(
-        outcome.total_usage.output_tokens > 0,
+        outcome.total_usage.output_tokens.total > 0,
         "expected non-zero output tokens"
     );
     Ok(())
