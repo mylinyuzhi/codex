@@ -7,6 +7,7 @@ use tracing::info;
 use super::DEFAULT_SDK_MODEL;
 use super::HandlerContext;
 use super::HandlerResult;
+use crate::sdk_server::outbound::OutboundMessage;
 
 /// `control/setModel` — mutate the active session's model.
 ///
@@ -127,17 +128,14 @@ pub(super) async fn handle_set_permission_mode(
         .state
         .bypass_permissions_available
         .load(std::sync::atomic::Ordering::Relaxed);
-    let _ = ctx
-        .notif_tx
-        .send(coco_query::CoreEvent::Protocol(
-            coco_types::ServerNotification::PermissionModeChanged(
-                coco_types::PermissionModeChangedParams {
-                    mode: params.mode,
-                    bypass_available,
-                },
-            ),
-        ))
-        .await;
+    let event =
+        coco_query::CoreEvent::Protocol(coco_types::ServerNotification::PermissionModeChanged(
+            coco_types::PermissionModeChangedParams {
+                mode: params.mode,
+                bypass_available,
+            },
+        ));
+    let _ = ctx.notif_tx.send(OutboundMessage::core_event(event)).await;
 
     HandlerResult::ok_empty()
 }

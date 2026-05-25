@@ -268,24 +268,49 @@ def test_permission_mode_enum() -> None:
 # ── 8. Notifications — accessor pattern works on tagged unions ─────
 
 
-def test_server_notification_tagged_accessor() -> None:
-    """``ServerNotification.as_turn_completed()`` returns the typed
-    payload when the wire method matches, ``None`` otherwise.
+def test_server_notification_typed_dispatch() -> None:
+    """``ServerNotification`` is a Pydantic discriminated union; validating
+    a wire payload dispatches to the typed variant class based on the
+    `method` discriminator. Replaces the old `as_X()` accessor pattern.
     """
-    from coco_sdk import NotificationMethod, ServerNotification
-
-    notif = ServerNotification(
-        method=NotificationMethod.TURN_COMPLETED,
-        params={"turn_id": "t1", "usage": {"input_tokens": 1, "output_tokens": 1}},
+    from pydantic import TypeAdapter
+    from coco_sdk import (
+        NotificationMethod,
+        ServerNotification,
+        ServerNotificationSessionStarted,
+        ServerNotificationTurnCompleted,
     )
-    completed = notif.as_turn_completed()
-    assert completed is not None
-    assert completed.turn_id == "t1"
-    assert completed.usage.input_tokens == 1
 
-    # Wrong method → accessor returns None
-    other = ServerNotification(method=NotificationMethod.SESSION_STARTED, params={})
-    assert other.as_turn_completed() is None
+    adapter = TypeAdapter(ServerNotification)
+    notif = adapter.validate_python(
+        {
+            "method": NotificationMethod.TURN_COMPLETED.value,
+            "params": {
+                "turn_id": "t1",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        }
+    )
+    assert isinstance(notif, ServerNotificationTurnCompleted)
+    assert notif.params.turn_id == "t1"
+    assert notif.params.usage.input_tokens == 1
+
+    # Different method → different concrete variant class.
+    other = adapter.validate_python(
+        {
+            "method": NotificationMethod.SESSION_STARTED.value,
+            "params": {
+                "session_id": "s1",
+                "cwd": "/",
+                "model": "claude",
+                "permission_mode": "default",
+                "protocol_version": "1",
+                "version": "0.0",
+            },
+        }
+    )
+    assert isinstance(other, ServerNotificationSessionStarted)
+    assert not isinstance(other, ServerNotificationTurnCompleted)
 
 
 # ── 9. Decorator + Python-only types ───────────────────────────────

@@ -20,6 +20,7 @@ use super::HandlerResult;
 use super::PROTOCOL_VERSION;
 use super::SdkServerState;
 use super::SessionHandle;
+use crate::sdk_server::outbound::OutboundMessage;
 
 /// `initialize` — capability negotiation. Returns a TS-conformant
 /// `InitializeResult`.
@@ -57,6 +58,31 @@ pub(super) async fn handle_initialize(
             .agent_progress_summaries_enabled
             .store(true, std::sync::atomic::Ordering::SeqCst);
         info!("SdkServer: agentProgressSummaries enabled by client");
+    }
+
+    if let Some(runtime) = ctx.state.session_runtime.read().await.clone()
+        && let Some(hooks) = params.hooks.as_ref()
+    {
+        crate::sdk_server::sdk_hooks::install_runtime_callback(ctx.state.clone(), &runtime);
+        let registered = crate::sdk_server::sdk_hooks::register_initialize_hooks(&runtime, hooks);
+        info!(
+            target: "coco::sdk_server::initialize",
+            registered,
+            "SDK hook callbacks registered"
+        );
+    }
+
+    if let Some(server_names) = params.sdk_mcp_servers.clone()
+        && !server_names.is_empty()
+    {
+        let state = ctx.state.clone();
+        tokio::spawn(async move {
+            if let Err(error) =
+                crate::sdk_server::sdk_mcp::register_and_connect(state, server_names).await
+            {
+                warn!(error = %error, "SDK MCP registration failed");
+            }
+        });
     }
 
     // TS parity (`cli/print.ts:4382`): when the SDK client pushes
@@ -372,7 +398,7 @@ pub(super) async fn handle_session_start(
 /// stats into the unrelated new session.
 pub(super) async fn forward_turn_events(
     mut rx: mpsc::Receiver<CoreEvent>,
-    tx: mpsc::Sender<CoreEvent>,
+    tx: mpsc::Sender<OutboundMessage>,
     state: Arc<SdkServerState>,
     owner_session_id: String,
 ) {
@@ -387,7 +413,7 @@ pub(super) async fn forward_turn_events(
                 // Swallow: SessionStarted is owned by the SDK server, not the engine.
             }
             other => {
-                if tx.send(other).await.is_err() {
+                if tx.send(OutboundMessage::core_event(other)).await.is_err() {
                     break;
                 }
             }
@@ -461,13 +487,9 @@ async fn accumulate_session_result(
 /// This gives SDK clients exactly one `SessionResult` per session,
 /// regardless of how many `turn/start` calls happened inside it.
 ///
-/// **Ordering note**: The `SessionResult` notification goes through
-/// `ctx.notif_tx` (drained by the dispatcher's notification forwarder
-/// task) while the archive response goes directly through the
-/// transport from the handler. These two paths are not synchronized,
-/// so the response may reach the wire *before* the notification. SDK
-/// clients that need strict ordering should drain inbound messages
-/// until both arrive, matching on type.
+/// **Ordering note**: The `SessionResult` notification and archive
+/// response both go through the dispatcher's ordered outbound queue, so
+/// the client sees the aggregate before the JSON-RPC response.
 ///
 /// **Archive-during-running-turn**: If a turn is in flight when
 /// `session/archive` is called, the aggregate is built from whatever
@@ -620,7 +642,10 @@ pub(super) async fn handle_session_archive(
     let result_event = CoreEvent::Protocol(coco_types::ServerNotification::SessionResult(
         Box::new(result_params),
     ));
-    let _ = ctx.notif_tx.send(result_event).await;
+    let _ = ctx
+        .notif_tx
+        .send(OutboundMessage::core_event(result_event))
+        .await;
 
     HandlerResult::ok_empty()
 }

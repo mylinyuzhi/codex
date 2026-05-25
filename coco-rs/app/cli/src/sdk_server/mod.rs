@@ -37,8 +37,11 @@ pub mod bridge_control;
 pub mod cli_bootstrap;
 pub mod dispatcher;
 pub mod handlers;
+pub mod outbound;
 pub mod pending_map;
 pub mod sandbox_approval_bridge;
+pub mod sdk_hooks;
+pub mod sdk_mcp;
 pub mod sdk_runner;
 pub mod transport;
 

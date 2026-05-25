@@ -95,3 +95,7 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
+
+# uv lockfiles are generated during local SDK test runs, but this repo
+# does not commit per-package uv locks.
+coco-sdk/python/uv.lock

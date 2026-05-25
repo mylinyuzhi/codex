@@ -14,6 +14,7 @@ use std::time::Duration;
 use coco_types::CoreEvent;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcRequest;
+use coco_types::JsonRpcResponse;
 use coco_types::NotificationMethod;
 use coco_types::RequestId;
 use coco_types::ServerNotification;
@@ -976,28 +977,24 @@ async fn session_archive_clears_active_session() {
         .await
         .unwrap();
 
-    // Drain the aggregated notification + response (order-agnostic).
-    let mut saw_notif = false;
-    let mut saw_response = false;
-    for _ in 0..2 {
-        let msg = client.recv().await.unwrap().unwrap();
-        match msg {
-            JsonRpcMessage::Notification(n) => {
-                assert_eq!(n.method, "session/result");
-                assert_eq!(n.params["session_id"], session_id);
-                assert_eq!(n.params["total_turns"], 0);
-                assert_eq!(n.params["is_error"], false);
-                saw_notif = true;
-            }
-            JsonRpcMessage::Response(r) => {
-                assert_eq!(r.request_id, RequestId::Integer(2));
-                assert!(r.result.is_null());
-                saw_response = true;
-            }
-            other => panic!("unexpected message: {other:?}"),
+    // The single outbound queue preserves handler enqueue order: archive
+    // emits the aggregate first, then the dispatcher enqueues the reply.
+    match client.recv().await.unwrap().unwrap() {
+        JsonRpcMessage::Notification(n) => {
+            assert_eq!(n.method, "session/result");
+            assert_eq!(n.params["session_id"], session_id);
+            assert_eq!(n.params["total_turns"], 0);
+            assert_eq!(n.params["is_error"], false);
         }
+        other => panic!("expected session/result notification, got {other:?}"),
     }
-    assert!(saw_notif && saw_response);
+    match client.recv().await.unwrap().unwrap() {
+        JsonRpcMessage::Response(r) => {
+            assert_eq!(r.request_id, RequestId::Integer(2));
+            assert!(r.result.is_null());
+        }
+        other => panic!("expected archive response, got {other:?}"),
+    }
 
     client
         .send(req(3, "session/start", serde_json::json!({})))
@@ -3321,124 +3318,12 @@ async fn context_usage_reports_accumulated_session_stats() {
     server_task.await.unwrap();
 }
 
-#[tokio::test]
-async fn hook_callback_response_delivers_output_to_pending_receiver() {
-    let (server_task, client, state) = spawn_server_with_state().await;
-
-    let rx = state.register_hook_callback("cb-1".into()).await;
-
-    client
-        .send(req(
-            1,
-            "hook/callbackResponse",
-            serde_json::json!({
-                "callback_id": "cb-1",
-                "output": { "behavior": "allow", "stdout": "ok" }
-            }),
-        ))
-        .await
-        .unwrap();
-    let reply = client.recv().await.unwrap().unwrap();
-    assert!(matches!(reply, JsonRpcMessage::Response(_)));
-
-    let params = tokio::time::timeout(Duration::from_secs(1), rx)
-        .await
-        .expect("receiver should be awoken")
-        .expect("oneshot should deliver");
-    assert_eq!(params.callback_id, "cb-1");
-    assert_eq!(params.output["behavior"], "allow");
-    assert_eq!(params.output["stdout"], "ok");
-
-    drop(client);
-    server_task.await.unwrap();
-}
-
-#[tokio::test]
-async fn hook_callback_response_unknown_id_errors() {
-    let (server_task, client, _state) = spawn_server_with_state().await;
-
-    client
-        .send(req(
-            1,
-            "hook/callbackResponse",
-            serde_json::json!({
-                "callback_id": "missing",
-                "output": {}
-            }),
-        ))
-        .await
-        .unwrap();
-    let reply = client.recv().await.unwrap().unwrap();
-    match reply {
-        JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no pending hook callback"));
-        }
-        other => panic!("expected Error, got {other:?}"),
-    }
-
-    drop(client);
-    server_task.await.unwrap();
-}
-
-#[tokio::test]
-async fn mcp_route_message_response_delivers_to_pending_receiver() {
-    let (server_task, client, state) = spawn_server_with_state().await;
-
-    let rx = state.register_mcp_route("rid-42".into()).await;
-
-    client
-        .send(req(
-            1,
-            "mcp/routeMessageResponse",
-            serde_json::json!({
-                "request_id": "rid-42",
-                "message": { "result": { "content": "ok" } }
-            }),
-        ))
-        .await
-        .unwrap();
-    let reply = client.recv().await.unwrap().unwrap();
-    assert!(matches!(reply, JsonRpcMessage::Response(_)));
-
-    let params = tokio::time::timeout(Duration::from_secs(1), rx)
-        .await
-        .expect("receiver should be awoken")
-        .expect("oneshot should deliver");
-    assert_eq!(params.request_id, "rid-42");
-    assert_eq!(params.message["result"]["content"], "ok");
-
-    drop(client);
-    server_task.await.unwrap();
-}
-
-#[tokio::test]
-async fn mcp_route_message_response_unknown_id_errors() {
-    let (server_task, client, _state) = spawn_server_with_state().await;
-
-    client
-        .send(req(
-            1,
-            "mcp/routeMessageResponse",
-            serde_json::json!({
-                "request_id": "never-was",
-                "message": {}
-            }),
-        ))
-        .await
-        .unwrap();
-    let reply = client.recv().await.unwrap().unwrap();
-    match reply {
-        JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no pending mcp route"));
-        }
-        other => panic!("expected Error, got {other:?}"),
-    }
-
-    drop(client);
-    server_task.await.unwrap();
-}
+// `hook/callbackResponse` and `mcp/routeMessageResponse` were two
+// parallel ClientRequest variants that nothing exercised in practice —
+// hook and MCP responses ride the synchronous JSON-RPC reply path on
+// `pending_server_requests`. The four tests that covered them were
+// deleted along with the dead ClientRequest variants. See the SDK
+// refactor in `sdk_hook_output.rs` for the surviving response shape.
 
 #[tokio::test]
 async fn elicitation_resolve_delivers_values_to_pending_receiver() {
@@ -3723,9 +3608,176 @@ async fn mcp_status_lists_registered_servers_after_set_servers() {
             let servers = r.result["mcpServers"].as_array().unwrap();
             assert_eq!(servers.len(), 1);
             assert_eq!(servers[0]["name"], "github");
-            // Not connected — the registered config exists but no
-            // connect was attempted.
-            assert_eq!(servers[0]["status"], "disconnected");
+            // `register_server` seeds `Pending` state — matches TS
+            // semantics. The wire status is `pending` even though
+            // no `connect` was attempted yet; transitioning happens
+            // when something explicitly calls `mcp/reconnect` or
+            // `mcp/toggle`.
+            assert_eq!(servers[0]["status"], "pending");
+            assert_eq!(servers[0]["tool_count"], 0);
+        }
+        other => panic!("expected Response, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn initialize_sdk_mcp_server_connects_via_route_message() {
+    let (server_task, client, _state, _tmp) = spawn_server_with_mcp_manager().await;
+
+    client
+        .send(req(
+            1,
+            "initialize",
+            serde_json::json!({ "sdk_mcp_servers": ["sdk-tools"] }),
+        ))
+        .await
+        .unwrap();
+
+    let mut saw_initialize_response = false;
+    let mut routed = 0;
+    while !saw_initialize_response || routed < 3 {
+        let message = tokio::time::timeout(Duration::from_secs(2), client.recv())
+            .await
+            .expect("server should send initialize response or MCP route")
+            .unwrap()
+            .unwrap();
+        match message {
+            JsonRpcMessage::Response(response) if response.request_id == RequestId::Integer(1) => {
+                saw_initialize_response = true;
+            }
+            JsonRpcMessage::Request(request) if request.method == "mcp/routeMessage" => {
+                routed += 1;
+                // `mcp/routeMessage` params no longer carry an inner
+                // `request_id` — correlation is the outer JSON-RPC id.
+                // The reply body is `{message: ...}` only.
+                let mcp_message = &request.params["message"];
+                let mcp_response = match mcp_message["method"].as_str().unwrap() {
+                    "initialize" => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": mcp_message["id"].clone(),
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": { "tools": {} },
+                            "serverInfo": {
+                                "name": "sdk-tools",
+                                "version": "0.1.0"
+                            }
+                        }
+                    }),
+                    "tools/list" => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": mcp_message["id"].clone(),
+                        "result": {
+                            "tools": [{
+                                "name": "ping",
+                                "description": "Ping",
+                                "inputSchema": { "type": "object" }
+                            }]
+                        }
+                    }),
+                    "notifications/initialized" => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "result": null
+                    }),
+                    other => panic!("unexpected routed MCP method {other}"),
+                };
+                client
+                    .send(JsonRpcMessage::Response(JsonRpcResponse {
+                        request_id: request.request_id,
+                        result: serde_json::json!({ "message": mcp_response }),
+                    }))
+                    .await
+                    .unwrap();
+            }
+            other => panic!("unexpected message {other:?}"),
+        }
+    }
+
+    let mut connected = false;
+    for request_id in 2..22 {
+        client
+            .send(req(request_id, "mcp/status", serde_json::json!({})))
+            .await
+            .unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(2), client.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        match reply {
+            JsonRpcMessage::Response(response) => {
+                let servers = response.result["mcpServers"].as_array().unwrap();
+                assert_eq!(servers.len(), 1);
+                assert_eq!(servers[0]["name"], "sdk-tools");
+                if servers[0]["status"] == "connected" {
+                    assert_eq!(servers[0]["tool_count"], 1);
+                    connected = true;
+                    break;
+                }
+                assert_eq!(servers[0]["status"], "pending");
+                assert_eq!(servers[0]["tool_count"], 0);
+            }
+            other => panic!("expected Response, got {other:?}"),
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(connected, "SDK MCP server should eventually connect");
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn sdk_mcp_status_reports_pending_while_connect_waits_for_route_response() {
+    let (server_task, client, _state, _tmp) = spawn_server_with_mcp_manager().await;
+
+    client
+        .send(req(
+            1,
+            "initialize",
+            serde_json::json!({ "sdk_mcp_servers": ["sdk-tools"] }),
+        ))
+        .await
+        .unwrap();
+
+    let mut saw_initialize_response = false;
+    let mut saw_mcp_initialize_route = false;
+    while !saw_initialize_response || !saw_mcp_initialize_route {
+        let message = tokio::time::timeout(Duration::from_secs(2), client.recv())
+            .await
+            .expect("server should send initialize response or MCP route")
+            .unwrap()
+            .unwrap();
+        match message {
+            JsonRpcMessage::Response(response) if response.request_id == RequestId::Integer(1) => {
+                saw_initialize_response = true;
+            }
+            JsonRpcMessage::Request(request) if request.method == "mcp/routeMessage" => {
+                assert_eq!(request.params["message"]["method"], "initialize");
+                saw_mcp_initialize_route = true;
+            }
+            other => panic!("unexpected message {other:?}"),
+        }
+    }
+
+    client
+        .send(req(2, "mcp/status", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(1), client.recv())
+        .await
+        .expect("mcp/status should not block behind SDK MCP connect")
+        .unwrap()
+        .unwrap();
+    match reply {
+        JsonRpcMessage::Response(response) => {
+            let servers = response.result["mcpServers"].as_array().unwrap();
+            assert_eq!(servers.len(), 1);
+            assert_eq!(servers[0]["name"], "sdk-tools");
+            assert_eq!(servers[0]["status"], "pending");
             assert_eq!(servers[0]["tool_count"], 0);
         }
         other => panic!("expected Response, got {other:?}"),

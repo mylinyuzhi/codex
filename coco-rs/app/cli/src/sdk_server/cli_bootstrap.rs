@@ -25,9 +25,11 @@ use coco_types::AgentSource;
 use coco_types::AgentTypeId;
 use coco_types::FastModeState;
 use coco_types::SdkAccountInfo;
+use coco_types::SdkAgentDefinition;
 use coco_types::SdkAgentInfo;
 use coco_types::SdkApiProvider;
 use coco_types::SdkSlashCommand;
+use coco_types::ToolAllowList;
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -290,21 +292,13 @@ pub fn auth_method_to_account(auth: &AuthMethod) -> SdkAccountInfo {
 /// handshake on parse errors, just logs and continues with the
 /// successful subset (`logForDebugging` + `logError`).
 pub fn parse_sdk_agent_definitions(
-    agents: &HashMap<String, serde_json::Value>,
+    agents: &HashMap<String, SdkAgentDefinition>,
 ) -> (Vec<AgentDefinition>, Vec<String>) {
     let mut accepted = Vec::with_capacity(agents.len());
     let mut errors = Vec::new();
-    for (name, value) in agents {
-        // Step 1: deserialize value as AgentDefinition.
-        let mut def: AgentDefinition = match serde_json::from_value(value.clone()) {
-            Ok(d) => d,
-            Err(e) => {
-                errors.push(format!(
-                    "agent '{name}': JSON shape doesn't match AgentDefinition: {e}"
-                ));
-                continue;
-            }
-        };
+    for (name, sdk_def) in agents {
+        // Step 1: lower the wire DTO into the internal AgentDefinition.
+        let mut def = sdk_agent_definition_to_internal(sdk_def);
         // Step 2: key wins over any embedded `name`/`agent_type`.
         def.name = name.clone();
         def.agent_type = match AgentTypeId::from_str(name) {
@@ -331,6 +325,43 @@ pub fn parse_sdk_agent_definitions(
         accepted.push(def);
     }
     (accepted, errors)
+}
+
+/// Lower an `SdkAgentDefinition` (wire DTO) into the richer internal
+/// [`AgentDefinition`] used by the subagent runtime. Fields the SDK
+/// doesn't expose (color, identity, required_mcp_servers, isolation,
+/// pending_snapshot_update, …) fall back to defaults.
+fn sdk_agent_definition_to_internal(sdk: &SdkAgentDefinition) -> AgentDefinition {
+    let allowed_tools = match sdk.tools.as_ref() {
+        None => ToolAllowList::Wildcard,
+        Some(list) => ToolAllowList::from_frontmatter(list.clone()),
+    };
+    let permission_mode = sdk.permission_mode.and_then(|m| {
+        // PermissionMode serializes as a JSON string (camelCase). The
+        // internal AgentDefinition holds permission_mode as Option<String>
+        // for legacy reasons — round-trip through serde to obtain the
+        // canonical wire spelling without hard-coding a match.
+        serde_json::to_value(m)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+    });
+    AgentDefinition {
+        description: Some(sdk.description.clone()),
+        system_prompt: Some(sdk.prompt.clone()),
+        allowed_tools,
+        disallowed_tools: sdk.disallowed_tools.clone().unwrap_or_default(),
+        model: sdk.model.clone(),
+        mcp_servers: sdk.mcp_servers.clone().unwrap_or_default(),
+        critical_system_reminder: sdk.critical_system_reminder_experimental.clone(),
+        skills: sdk.skills.clone().unwrap_or_default(),
+        initial_prompt: sdk.initial_prompt.clone(),
+        max_turns: sdk.max_turns,
+        background: sdk.background.unwrap_or(false),
+        memory_scope: sdk.memory,
+        effort: sdk.effort,
+        permission_mode,
+        ..AgentDefinition::default()
+    }
 }
 
 #[cfg(test)]

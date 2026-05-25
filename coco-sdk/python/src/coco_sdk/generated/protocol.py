@@ -11,7 +11,7 @@ DO NOT EDIT MANUALLY — changes will be overwritten by the generator.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,12 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
+
+class ApiProvider(str, Enum):
+    firstParty = 'firstParty'
+    bedrock = 'bedrock'
+    vertex = 'vertex'
+    foundry = 'foundry'
 
 class ApplyPatchToolType(str, Enum):
     freeform = 'freeform'
@@ -120,46 +126,9 @@ class Capability(str, Enum):
     server_side_tool_reference = 'server_side_tool_reference'
     client_side_tool_search = 'client_side_tool_search'
 
-class ClientRequestMethod(str, Enum):
-    initialize = 'initialize'
-    session_start = 'session/start'
-    session_resume = 'session/resume'
-    session_list = 'session/list'
-    session_read = 'session/read'
-    session_archive = 'session/archive'
-    turn_start = 'turn/start'
-    turn_interrupt = 'turn/interrupt'
-    approval_resolve = 'approval/resolve'
-    input_resolveUserInput = 'input/resolveUserInput'
-    elicitation_resolve = 'elicitation/resolve'
-    control_setModel = 'control/setModel'
-    control_setPermissionMode = 'control/setPermissionMode'
-    control_setThinking = 'control/setThinking'
-    control_stopTask = 'control/stopTask'
-    control_rewindFiles = 'control/rewindFiles'
-    control_updateEnv = 'control/updateEnv'
-    control_keepAlive = 'control/keepAlive'
-    control_cancelRequest = 'control/cancelRequest'
-    agent_interruptCurrentWork = 'agent/interruptCurrentWork'
-    config_read = 'config/read'
-    config_value_write = 'config/value/write'
-    hook_callbackResponse = 'hook/callbackResponse'
-    mcp_routeMessageResponse = 'mcp/routeMessageResponse'
-    mcp_status = 'mcp/status'
-    context_usage = 'context/usage'
-    mcp_setServers = 'mcp/setServers'
-    mcp_reconnect = 'mcp/reconnect'
-    mcp_toggle = 'mcp/toggle'
-    plugin_reload = 'plugin/reload'
-    config_applyFlags = 'config/applyFlags'
-
 class CompactTrigger(str, Enum):
     manual = 'manual'
     auto = 'auto'
-    reactive = 'reactive'
-    time_based = 'time_based'
-    session_memory = 'session_memory'
-    context_collapse = 'context_collapse'
 
 class CompactionHookType(str, Enum):
     pre_compact = 'pre_compact'
@@ -171,6 +140,36 @@ class CompactionPhase(str, Enum):
     summarizing = 'summarizing'
     done = 'done'
 
+class ConfigChangeSource(str, Enum):
+    user_settings = 'user_settings'
+    project_settings = 'project_settings'
+    local_settings = 'local_settings'
+    policy_settings = 'policy_settings'
+    skills = 'skills'
+
+class EffortLevel(str, Enum):
+    low = 'low'
+    medium = 'medium'
+    high = 'high'
+    max = 'max'
+
+class ElicitationAction(str, Enum):
+    accept = 'accept'
+    decline = 'decline'
+    cancel = 'cancel'
+
+class ElicitationMode(str, Enum):
+    form = 'form'
+    url = 'url'
+
+class ExitReason(str, Enum):
+    clear = 'clear'
+    resume = 'resume'
+    logout = 'logout'
+    prompt_input_exit = 'prompt_input_exit'
+    other = 'other'
+    bypass_permissions_disabled = 'bypass_permissions_disabled'
+
 class ExpandedView(str, Enum):
     none = 'none'
     tasks = 'tasks'
@@ -181,10 +180,19 @@ class FastModeState(str, Enum):
     cooldown = 'cooldown'
     on = 'on'
 
+class FileChangeEvent(str, Enum):
+    change = 'change'
+    add = 'add'
+    unlink = 'unlink'
+
 class FileChangeKind(str, Enum):
     create = 'create'
     modify = 'modify'
     delete = 'delete'
+
+class HookDecision(str, Enum):
+    approve = 'approve'
+    block = 'block'
 
 class HookEventType(str, Enum):
     PreToolUse = 'PreToolUse'
@@ -224,6 +232,13 @@ class HookPermissionDecision(str, Enum):
     allow = 'allow'
     deny = 'deny'
 
+class InstructionsLoadReason(str, Enum):
+    session_start = 'session_start'
+    nested_traversal = 'nested_traversal'
+    path_glob_match = 'path_glob_match'
+    include = 'include'
+    compact = 'compact'
+
 class ItemStatus(str, Enum):
     in_progress = 'in_progress'
     completed = 'completed'
@@ -250,6 +265,17 @@ class MemoryDialogScope(str, Enum):
     team_mem_folder = 'team_mem_folder'
     agent_mem_folder = 'agent_mem_folder'
 
+class MemoryScope(str, Enum):
+    user = 'user'
+    project = 'project'
+    local = 'local'
+
+class MemoryType(str, Enum):
+    User = 'User'
+    Project = 'Project'
+    Local = 'Local'
+    Managed = 'Managed'
+
 class MessageKind(str, Enum):
     user = 'user'
     assistant = 'assistant'
@@ -275,79 +301,6 @@ class ModelRole(str, Enum):
     hook_agent = 'hook_agent'
     plan = 'plan'
     subagent = 'subagent'
-
-class NotificationMethod(str, Enum):
-    session_started = 'session/started'
-    session_result = 'session/result'
-    session_ended = 'session/ended'
-    history_messageAppended = 'history/messageAppended'
-    history_messageTruncated = 'history/messageTruncated'
-    history_resetForResume = 'history/resetForResume'
-    history_replaced = 'history/replaced'
-    history_reasoningMetadataAttached = 'history/reasoningMetadataAttached'
-    turn_started = 'turn/started'
-    turn_completed = 'turn/completed'
-    turn_failed = 'turn/failed'
-    turn_interrupted = 'turn/interrupted'
-    item_started = 'item/started'
-    item_updated = 'item/updated'
-    item_completed = 'item/completed'
-    agentMessage_delta = 'agentMessage/delta'
-    reasoning_delta = 'reasoning/delta'
-    mcp_startupStatus = 'mcp/startupStatus'
-    mcp_startupComplete = 'mcp/startupComplete'
-    lsp_prewarmComplete = 'lsp/prewarmComplete'
-    context_compacted = 'context/compacted'
-    context_usageWarning = 'context/usageWarning'
-    context_compactionStarted = 'context/compactionStarted'
-    context_compactionPhase = 'context/compactionPhase'
-    context_compactionFailed = 'context/compactionFailed'
-    context_cleared = 'context/cleared'
-    task_started = 'task/started'
-    task_completed = 'task/completed'
-    task_progress = 'task/progress'
-    task_panel_changed = 'task_panel/changed'
-    plan_approval_requested = 'plan_approval/requested'
-    agents_killed = 'agents/killed'
-    model_fallbackStarted = 'model/fallbackStarted'
-    model_fallbackCompleted = 'model/fallbackCompleted'
-    model_fastModeChanged = 'model/fastModeChanged'
-    model_roleChanged = 'model/roleChanged'
-    permission_modeChanged = 'permission/modeChanged'
-    prompt_suggestion = 'prompt/suggestion'
-    error = 'error'
-    rateLimit = 'rateLimit'
-    keepAlive = 'keepAlive'
-    ide_selectionChanged = 'ide/selectionChanged'
-    ide_diagnosticsUpdated = 'ide/diagnosticsUpdated'
-    plan_modeChanged = 'plan/modeChanged'
-    queue_stateChanged = 'queue/stateChanged'
-    queue_commandQueued = 'queue/commandQueued'
-    queue_commandDequeued = 'queue/commandDequeued'
-    rewind_completed = 'rewind/completed'
-    rewind_failed = 'rewind/failed'
-    cost_warning = 'cost/warning'
-    sandbox_stateChanged = 'sandbox/stateChanged'
-    sandbox_violationsDetected = 'sandbox/violationsDetected'
-    agents_registered = 'agents/registered'
-    hook_started = 'hook/started'
-    hook_progress = 'hook/progress'
-    hook_response = 'hook/response'
-    worktree_entered = 'worktree/entered'
-    worktree_exited = 'worktree/exited'
-    summarize_completed = 'summarize/completed'
-    summarize_failed = 'summarize/failed'
-    stream_stallDetected = 'stream/stallDetected'
-    stream_watchdogWarning = 'stream/watchdogWarning'
-    stream_requestEnd = 'stream/requestEnd'
-    session_stateChanged = 'session/stateChanged'
-    turn_maxReached = 'turn/maxReached'
-    localCommand_output = 'localCommand/output'
-    files_persisted = 'files/persisted'
-    elicitation_complete = 'elicitation/complete'
-    tool_useSummary = 'tool/useSummary'
-    tool_progress = 'tool/progress'
-    plugins_changed = 'plugins/changed'
 
 class PermissionBehavior(str, Enum):
     allow = 'allow'
@@ -403,18 +356,20 @@ class ReasoningEffort(str, Enum):
     off = 'off'
     auto = 'auto'
 
-class ServerRequestMethod(str, Enum):
-    approval_askForApproval = 'approval/askForApproval'
-    input_requestUserInput = 'input/requestUserInput'
-    mcp_routeMessage = 'mcp/routeMessage'
-    hook_callback = 'hook/callback'
-    control_cancelRequest = 'control/cancelRequest'
-    mcp_requestElicitation = 'mcp/requestElicitation'
+class SessionStartSource(str, Enum):
+    startup = 'startup'
+    resume = 'resume'
+    clear = 'clear'
+    compact = 'compact'
 
 class SessionState(str, Enum):
     idle = 'idle'
     running = 'running'
     requires_action = 'requires_action'
+
+class SetupTrigger(str, Enum):
+    init = 'init'
+    maintenance = 'maintenance'
 
 class SkillDiscoverySource(str, Enum):
     native = 'native'
@@ -459,8 +414,8 @@ class WireApi(str, Enum):
 # Union type aliases
 # ---------------------------------------------------------------------------
 
-# Agent-loop stream events. Higher-level than `coco_types::StreamEvent`
-AgentStreamEvent = dict[str, Any]
+# One entry in `AgentDefinition.mcp_servers`. Mirrors the TS union:
+AgentMcpServerSpec = str | dict[str, Any]
 
 # Assistant message content parts.
 AssistantContentPart = Union["TextPart", "FilePart", "ReasoningPart", "ReasoningFilePart", "CustomPart", "ToolCallPart", "ToolResultPart", "SourcePart", "ToolApprovalRequestPart"]
@@ -474,35 +429,14 @@ AttachmentExtras = Union["SkillDiscoveryPayload"]
 # Top-level wire message. SDK clients send these over stdin; coco-rs
 JsonRpcMessage = Union["JsonRpcRequest", "JsonRpcResponse", "JsonRpcNotification", "JsonRpcError"]
 
-# Generated file data — either raw bytes/base64 or a URL.
-LanguageModelV4FileData = dict[str, Any]
-
-# A message in a language model prompt.
-LanguageModelV4Message = dict[str, Any]
-
-# Semantic row kind for the `/memory` picker.
-MemoryDialogRowKind = dict[str, Any]
-
 # Top-level message enum.
 Message = Union["UserMessage", "AssistantMessage", "SystemMessage", "AttachmentMessage", "ToolResultMessage", "ProgressMessage", "TombstoneMessage"]
-
-# Bounded, UI-ready permission input display.
-PermissionDisplayInput = dict[str, Any]
-
-# A permission update action.
-PermissionUpdate = dict[str, Any]
 
 # Request identifier. Can be a string or integer per JSON-RPC 2.0.
 RequestId = int | str
 
-# File data as a tagged discriminated union (v4 spec).
-SharedV4FileData = dict[str, Any]
-
 # Typed payload for silent attachment kinds.
 SilentPayload = Union["HookCancelledPayload", "HookErrorDuringExecutionPayload", "HookNonBlockingErrorPayload", "HookSystemMessagePayload", "HookPermissionDecisionPayload", "CommandPermissionsPayload", "StructuredOutputPayload", "DynamicSkillPayload", "MaxTurnsReachedPayload", "AlreadyReadFilePayload", "EditedImageFilePayload"]
-
-# Categorization of a `SlashCommandStatus` payload. Each variant maps to
-SlashCommandStatusKind = dict[str, Any]
 
 # System messages have sub-types for different notification kinds.
 SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "SystemCompactBoundaryMessage", "SystemMicrocompactBoundaryMessage", "SystemLocalCommandMessage", "SystemPermissionRetryMessage", "SystemBridgeStatusMessage", "SystemMemorySavedMessage", "SystemAwaySummaryMessage", "SystemAgentsKilledMessage", "SystemApiMetricsMessage", "SystemStopHookSummaryMessage", "SystemTurnDurationMessage", "SystemScheduledTaskFireMessage", "SystemUserInterruptionMessage"]
@@ -510,20 +444,1203 @@ SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "Sy
 # Tool message content parts.
 ToolContentPart = Union["ToolResultPart", "ToolApprovalResponsePart"]
 
-# Structured cause for an invalid tool call. Drives the wrap prefix
-ToolInputInvalidReason = dict[str, Any]
-
-# Content of a tool result.
-ToolResultContent = dict[str, Any]
-
-# A part of tool result content.
-ToolResultContentPart = dict[str, Any]
-
-# TUI-exclusive events.
-TuiOnlyEvent = dict[str, Any]
-
 # User message content parts.
 UserContentPart = Union["TextPart", "FilePart"]
+
+
+# ---------------------------------------------------------------------------
+# Tagged discriminated unions
+# ---------------------------------------------------------------------------
+
+class AgentStreamEventTextDelta(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['text_delta'] = Field(default='text_delta', alias='type')
+    delta: str
+    turn_id: str
+
+class AgentStreamEventThinkingDelta(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['thinking_delta'] = Field(default='thinking_delta', alias='type')
+    delta: str
+    turn_id: str
+
+class AgentStreamEventToolUseQueued(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['tool_use_queued'] = Field(default='tool_use_queued', alias='type')
+    call_id: str
+    input: Any
+    name: str
+
+class AgentStreamEventToolUseStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['tool_use_started'] = Field(default='tool_use_started', alias='type')
+    call_id: str
+    name: str
+    batch_id: str | None = None
+
+class AgentStreamEventToolUseCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['tool_use_completed'] = Field(default='tool_use_completed', alias='type')
+    call_id: str
+    is_error: bool
+    name: str
+    output: str
+
+class AgentStreamEventMcpToolCallBegin(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['mcp_tool_call_begin'] = Field(default='mcp_tool_call_begin', alias='type')
+    call_id: str
+    server: str
+    tool: str
+
+class AgentStreamEventMcpToolCallEnd(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['mcp_tool_call_end'] = Field(default='mcp_tool_call_end', alias='type')
+    call_id: str
+    is_error: bool
+    server: str
+    tool: str
+
+AgentStreamEvent = Annotated[
+    Union[AgentStreamEventTextDelta, AgentStreamEventThinkingDelta, AgentStreamEventToolUseQueued, AgentStreamEventToolUseStarted, AgentStreamEventToolUseCompleted, AgentStreamEventMcpToolCallBegin, AgentStreamEventMcpToolCallEnd],
+    Field(discriminator='type_'),
+]
+
+class ClientRequestInitialize(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['initialize'] = Field(default='initialize', alias='method')
+    params: InitializeParams
+
+class ClientRequestSessionStart(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/start'] = Field(default='session/start', alias='method')
+    params: SessionStartParams
+
+class ClientRequestSessionResume(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/resume'] = Field(default='session/resume', alias='method')
+    params: SessionResumeParams
+
+class ClientRequestSessionList(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/list'] = Field(default='session/list', alias='method')
+
+class ClientRequestSessionRead(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/read'] = Field(default='session/read', alias='method')
+    params: SessionReadParams
+
+class ClientRequestSessionArchive(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/archive'] = Field(default='session/archive', alias='method')
+    params: SessionArchiveParams
+
+class ClientRequestTurnStart(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['turn/start'] = Field(default='turn/start', alias='method')
+    params: TurnStartParams
+
+class ClientRequestTurnInterrupt(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['turn/interrupt'] = Field(default='turn/interrupt', alias='method')
+
+class ClientRequestApprovalResolve(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['approval/resolve'] = Field(default='approval/resolve', alias='method')
+    params: ApprovalResolveParams
+
+class ClientRequestInputResolveUserInput(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['input/resolveUserInput'] = Field(default='input/resolveUserInput', alias='method')
+    params: UserInputResolveParams
+
+class ClientRequestElicitationResolve(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['elicitation/resolve'] = Field(default='elicitation/resolve', alias='method')
+    params: ElicitationResolveParams
+
+class ClientRequestControlSetModel(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['control/setModel'] = Field(default='control/setModel', alias='method')
+    params: SetModelParams
+
+class ClientRequestControlSetPermissionMode(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['control/setPermissionMode'] = Field(default='control/setPermissionMode', alias='method')
+    params: SetPermissionModeParams
+
+class ClientRequestControlSetThinking(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['control/setThinking'] = Field(default='control/setThinking', alias='method')
+    params: SetThinkingParams
+
+class ClientRequestControlStopTask(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['control/stopTask'] = Field(default='control/stopTask', alias='method')
+    params: StopTaskParams
+
+class ClientRequestControlRewindFiles(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['control/rewindFiles'] = Field(default='control/rewindFiles', alias='method')
+    params: RewindFilesParams
+
+class ClientRequestControlUpdateEnv(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['control/updateEnv'] = Field(default='control/updateEnv', alias='method')
+    params: UpdateEnvParams
+
+class ClientRequestControlKeepAlive(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['control/keepAlive'] = Field(default='control/keepAlive', alias='method')
+
+class ClientRequestControlCancelRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['control/cancelRequest'] = Field(default='control/cancelRequest', alias='method')
+    params: CancelRequestParams
+
+class ClientRequestAgentInterruptCurrentWork(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['agent/interruptCurrentWork'] = Field(default='agent/interruptCurrentWork', alias='method')
+    params: AgentInterruptCurrentWorkParams
+
+class ClientRequestConfigRead(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['config/read'] = Field(default='config/read', alias='method')
+
+class ClientRequestConfigValueWrite(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['config/value/write'] = Field(default='config/value/write', alias='method')
+    params: ConfigWriteParams
+
+class ClientRequestMcpStatus(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/status'] = Field(default='mcp/status', alias='method')
+
+class ClientRequestContextUsage(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['context/usage'] = Field(default='context/usage', alias='method')
+
+class ClientRequestMcpSetServers(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/setServers'] = Field(default='mcp/setServers', alias='method')
+    params: McpSetServersParams
+
+class ClientRequestMcpReconnect(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/reconnect'] = Field(default='mcp/reconnect', alias='method')
+    params: McpReconnectParams
+
+class ClientRequestMcpToggle(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/toggle'] = Field(default='mcp/toggle', alias='method')
+    params: McpToggleParams
+
+class ClientRequestPluginReload(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['plugin/reload'] = Field(default='plugin/reload', alias='method')
+
+class ClientRequestConfigApplyFlags(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['config/applyFlags'] = Field(default='config/applyFlags', alias='method')
+    params: ConfigApplyFlagsParams
+
+ClientRequest = Annotated[
+    Union[ClientRequestInitialize, ClientRequestSessionStart, ClientRequestSessionResume, ClientRequestSessionList, ClientRequestSessionRead, ClientRequestSessionArchive, ClientRequestTurnStart, ClientRequestTurnInterrupt, ClientRequestApprovalResolve, ClientRequestInputResolveUserInput, ClientRequestElicitationResolve, ClientRequestControlSetModel, ClientRequestControlSetPermissionMode, ClientRequestControlSetThinking, ClientRequestControlStopTask, ClientRequestControlRewindFiles, ClientRequestControlUpdateEnv, ClientRequestControlKeepAlive, ClientRequestControlCancelRequest, ClientRequestAgentInterruptCurrentWork, ClientRequestConfigRead, ClientRequestConfigValueWrite, ClientRequestMcpStatus, ClientRequestContextUsage, ClientRequestMcpSetServers, ClientRequestMcpReconnect, ClientRequestMcpToggle, ClientRequestPluginReload, ClientRequestConfigApplyFlags],
+    Field(discriminator='method'),
+]
+
+class HookSpecificOutputPreToolUse(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['PreToolUse'] = Field(default='PreToolUse', alias='hookEventName')
+    additional_context: str | None = Field(default=None, alias='additionalContext')
+    permission_decision: HookPermissionDecision | None = Field(default=None, alias='permissionDecision')
+    permission_decision_reason: str | None = Field(default=None, alias='permissionDecisionReason')
+    updated_input: dict[str, Any] = Field(default=None, alias='updatedInput')
+
+class HookSpecificOutputPostToolUse(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['PostToolUse'] = Field(default='PostToolUse', alias='hookEventName')
+    additional_context: str | None = Field(default=None, alias='additionalContext')
+    updated_mcp_tool_output: dict[str, Any] = Field(default=None, alias='updatedMCPToolOutput')
+
+class HookSpecificOutputPostToolUseFailure(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['PostToolUseFailure'] = Field(default='PostToolUseFailure', alias='hookEventName')
+    additional_context: str | None = Field(default=None, alias='additionalContext')
+
+class HookSpecificOutputUserPromptSubmit(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['UserPromptSubmit'] = Field(default='UserPromptSubmit', alias='hookEventName')
+    additional_context: str | None = Field(default=None, alias='additionalContext')
+
+class HookSpecificOutputSessionStart(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['SessionStart'] = Field(default='SessionStart', alias='hookEventName')
+    additional_context: str | None = Field(default=None, alias='additionalContext')
+    initial_user_message: str | None = Field(default=None, alias='initialUserMessage')
+    watch_paths: list[str] | None = Field(default=None, alias='watchPaths')
+
+class HookSpecificOutputSetup(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['Setup'] = Field(default='Setup', alias='hookEventName')
+    additional_context: str | None = Field(default=None, alias='additionalContext')
+
+class HookSpecificOutputSubagentStart(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['SubagentStart'] = Field(default='SubagentStart', alias='hookEventName')
+    additional_context: str | None = Field(default=None, alias='additionalContext')
+
+class HookSpecificOutputPermissionDenied(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['PermissionDenied'] = Field(default='PermissionDenied', alias='hookEventName')
+    retry: bool | None = None
+
+class HookSpecificOutputNotification(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['Notification'] = Field(default='Notification', alias='hookEventName')
+    additional_context: str | None = Field(default=None, alias='additionalContext')
+
+class HookSpecificOutputPermissionRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['PermissionRequest'] = Field(default='PermissionRequest', alias='hookEventName')
+    decision: PermissionRequestDecision | None = None
+
+class HookSpecificOutputElicitation(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['Elicitation'] = Field(default='Elicitation', alias='hookEventName')
+    action: ElicitationAction | None = None
+    content: dict[str, Any] | None = None
+
+class HookSpecificOutputElicitationResult(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['ElicitationResult'] = Field(default='ElicitationResult', alias='hookEventName')
+    action: ElicitationAction | None = None
+    content: dict[str, Any] | None = None
+
+class HookSpecificOutputCwdChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['CwdChanged'] = Field(default='CwdChanged', alias='hookEventName')
+    watch_paths: list[str] | None = Field(default=None, alias='watchPaths')
+
+class HookSpecificOutputFileChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['FileChanged'] = Field(default='FileChanged', alias='hookEventName')
+    watch_paths: list[str] | None = Field(default=None, alias='watchPaths')
+
+class HookSpecificOutputWorktreeCreate(BaseModel):
+    model_config = {"populate_by_name": True}
+    hook_event_name: Literal['WorktreeCreate'] = Field(default='WorktreeCreate', alias='hookEventName')
+    worktree_path: str | None = Field(default=None, alias='worktreePath')
+
+HookSpecificOutput = Annotated[
+    Union[HookSpecificOutputPreToolUse, HookSpecificOutputPostToolUse, HookSpecificOutputPostToolUseFailure, HookSpecificOutputUserPromptSubmit, HookSpecificOutputSessionStart, HookSpecificOutputSetup, HookSpecificOutputSubagentStart, HookSpecificOutputPermissionDenied, HookSpecificOutputNotification, HookSpecificOutputPermissionRequest, HookSpecificOutputElicitation, HookSpecificOutputElicitationResult, HookSpecificOutputCwdChanged, HookSpecificOutputFileChanged, HookSpecificOutputWorktreeCreate],
+    Field(discriminator='hook_event_name'),
+]
+
+class LanguageModelV4FileDataData(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['data'] = Field(default='data', alias='type')
+    data: str
+
+class LanguageModelV4FileDataUrl(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['url'] = Field(default='url', alias='type')
+    url: str
+
+LanguageModelV4FileData = Annotated[
+    Union[LanguageModelV4FileDataData, LanguageModelV4FileDataUrl],
+    Field(discriminator='type_'),
+]
+
+class LanguageModelV4MessageSystem(BaseModel):
+    model_config = {"populate_by_name": True}
+    role: Literal['system'] = Field(default='system', alias='role')
+    content: list[UserContentPart]
+    provider_options: ProviderOptions | None = None
+
+class LanguageModelV4MessageDeveloper(BaseModel):
+    model_config = {"populate_by_name": True}
+    role: Literal['developer'] = Field(default='developer', alias='role')
+    content: list[UserContentPart]
+    provider_options: ProviderOptions | None = None
+
+class LanguageModelV4MessageUser(BaseModel):
+    model_config = {"populate_by_name": True}
+    role: Literal['user'] = Field(default='user', alias='role')
+    content: list[UserContentPart]
+    provider_options: ProviderOptions | None = None
+
+class LanguageModelV4MessageAssistant(BaseModel):
+    model_config = {"populate_by_name": True}
+    role: Literal['assistant'] = Field(default='assistant', alias='role')
+    content: list[AssistantContentPart]
+    provider_options: ProviderOptions | None = None
+
+class LanguageModelV4MessageTool(BaseModel):
+    model_config = {"populate_by_name": True}
+    role: Literal['tool'] = Field(default='tool', alias='role')
+    content: list[ToolContentPart]
+    provider_options: ProviderOptions | None = None
+
+LanguageModelV4Message = Annotated[
+    Union[LanguageModelV4MessageSystem, LanguageModelV4MessageDeveloper, LanguageModelV4MessageUser, LanguageModelV4MessageAssistant, LanguageModelV4MessageTool],
+    Field(discriminator='role'),
+]
+
+class MemoryDialogRowKindFile(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['file'] = Field(default='file', alias='kind')
+    exists: bool = False
+    read_only: bool = False
+
+class MemoryDialogRowKindFolder(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['folder'] = Field(default='folder', alias='kind')
+    enabled: bool = False
+
+class MemoryDialogRowKindToggle(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['toggle'] = Field(default='toggle', alias='kind')
+    enabled: bool = False
+
+MemoryDialogRowKind = Annotated[
+    Union[MemoryDialogRowKindFile, MemoryDialogRowKindFolder, MemoryDialogRowKindToggle],
+    Field(discriminator='kind'),
+]
+
+class PermissionDisplayInputCommand(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['command'] = Field(default='command', alias='kind')
+    value: str
+
+class PermissionDisplayInputJson(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['json'] = Field(default='json', alias='kind')
+    value: str
+
+class PermissionDisplayInputText(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['text'] = Field(default='text', alias='kind')
+    value: str
+
+class PermissionDisplayInputEmpty(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['empty'] = Field(default='empty', alias='kind')
+
+PermissionDisplayInput = Annotated[
+    Union[PermissionDisplayInputCommand, PermissionDisplayInputJson, PermissionDisplayInputText, PermissionDisplayInputEmpty],
+    Field(discriminator='kind'),
+]
+
+class PermissionRequestDecisionAllow(BaseModel):
+    model_config = {"populate_by_name": True}
+    behavior: Literal['allow'] = Field(default='allow', alias='behavior')
+    updated_input: dict[str, Any] = Field(default=None, alias='updatedInput')
+
+class PermissionRequestDecisionDeny(BaseModel):
+    model_config = {"populate_by_name": True}
+    behavior: Literal['deny'] = Field(default='deny', alias='behavior')
+    interrupt: bool | None = None
+    message: str | None = None
+
+PermissionRequestDecision = Annotated[
+    Union[PermissionRequestDecisionAllow, PermissionRequestDecisionDeny],
+    Field(discriminator='behavior'),
+]
+
+class PermissionUpdateAddRules(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['add_rules'] = Field(default='add_rules', alias='type')
+    destination: PermissionUpdateDestination
+    rules: list[PermissionRule]
+
+class PermissionUpdateReplaceRules(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['replace_rules'] = Field(default='replace_rules', alias='type')
+    destination: PermissionUpdateDestination
+    rules: list[PermissionRule]
+
+class PermissionUpdateRemoveRules(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['remove_rules'] = Field(default='remove_rules', alias='type')
+    destination: PermissionUpdateDestination
+    rules: list[PermissionRule]
+
+class PermissionUpdateSetMode(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['set_mode'] = Field(default='set_mode', alias='type')
+    mode: PermissionMode
+
+class PermissionUpdateAddDirectories(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['add_directories'] = Field(default='add_directories', alias='type')
+    destination: PermissionUpdateDestination
+    directories: list[str]
+
+class PermissionUpdateRemoveDirectories(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['remove_directories'] = Field(default='remove_directories', alias='type')
+    destination: PermissionUpdateDestination
+    directories: list[str]
+
+PermissionUpdate = Annotated[
+    Union[PermissionUpdateAddRules, PermissionUpdateReplaceRules, PermissionUpdateRemoveRules, PermissionUpdateSetMode, PermissionUpdateAddDirectories, PermissionUpdateRemoveDirectories],
+    Field(discriminator='type_'),
+]
+
+class ServerNotificationSessionStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/started'] = Field(default='session/started', alias='method')
+    params: SessionStartedParams
+
+class ServerNotificationSessionResult(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/result'] = Field(default='session/result', alias='method')
+    params: SessionResultParams
+
+class ServerNotificationSessionEnded(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/ended'] = Field(default='session/ended', alias='method')
+    params: SessionEndedParams
+
+class ServerNotificationHistoryMessageAppended(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['history/messageAppended'] = Field(default='history/messageAppended', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationHistoryMessageTruncated(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['history/messageTruncated'] = Field(default='history/messageTruncated', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationHistoryResetForResume(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['history/resetForResume'] = Field(default='history/resetForResume', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationHistoryReplaced(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['history/replaced'] = Field(default='history/replaced', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationHistoryReasoningMetadataAttached(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['history/reasoningMetadataAttached'] = Field(default='history/reasoningMetadataAttached', alias='method')
+    params: ReasoningMetadataAttachedParams
+
+class ServerNotificationTurnStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['turn/started'] = Field(default='turn/started', alias='method')
+    params: TurnStartedParams
+
+class ServerNotificationTurnCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['turn/completed'] = Field(default='turn/completed', alias='method')
+    params: TurnCompletedParams
+
+class ServerNotificationTurnFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['turn/failed'] = Field(default='turn/failed', alias='method')
+    params: TurnFailedParams
+
+class ServerNotificationTurnInterrupted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['turn/interrupted'] = Field(default='turn/interrupted', alias='method')
+    params: TurnInterruptedNotifParams
+
+class ServerNotificationItemStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['item/started'] = Field(default='item/started', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationItemUpdated(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['item/updated'] = Field(default='item/updated', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationItemCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['item/completed'] = Field(default='item/completed', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationAgentMessageDelta(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['agentMessage/delta'] = Field(default='agentMessage/delta', alias='method')
+    params: ContentDeltaParams
+
+class ServerNotificationReasoningDelta(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['reasoning/delta'] = Field(default='reasoning/delta', alias='method')
+    params: ContentDeltaParams
+
+class ServerNotificationMcpStartupStatus(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/startupStatus'] = Field(default='mcp/startupStatus', alias='method')
+    params: McpStartupStatusParams
+
+class ServerNotificationMcpStartupComplete(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/startupComplete'] = Field(default='mcp/startupComplete', alias='method')
+    params: McpStartupCompleteParams
+
+class ServerNotificationLspPrewarmComplete(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['lsp/prewarmComplete'] = Field(default='lsp/prewarmComplete', alias='method')
+    params: LspPrewarmCompleteParams
+
+class ServerNotificationContextCompacted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['context/compacted'] = Field(default='context/compacted', alias='method')
+    params: ContextCompactedParams
+
+class ServerNotificationContextUsageWarning(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['context/usageWarning'] = Field(default='context/usageWarning', alias='method')
+    params: ContextUsageWarningParams
+
+class ServerNotificationContextCompactionStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['context/compactionStarted'] = Field(default='context/compactionStarted', alias='method')
+
+class ServerNotificationContextCompactionPhase(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['context/compactionPhase'] = Field(default='context/compactionPhase', alias='method')
+    params: CompactionPhaseParams
+
+class ServerNotificationContextCompactionFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['context/compactionFailed'] = Field(default='context/compactionFailed', alias='method')
+    params: CompactionFailedParams
+
+class ServerNotificationContextCleared(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['context/cleared'] = Field(default='context/cleared', alias='method')
+    params: ContextClearedParams
+
+class ServerNotificationTaskStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['task/started'] = Field(default='task/started', alias='method')
+    params: TaskStartedParams
+
+class ServerNotificationTaskCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['task/completed'] = Field(default='task/completed', alias='method')
+    params: TaskCompletedParams
+
+class ServerNotificationTaskProgress(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['task/progress'] = Field(default='task/progress', alias='method')
+    params: TaskProgressParams
+
+class ServerNotificationTaskPanelChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['task_panel/changed'] = Field(default='task_panel/changed', alias='method')
+    params: TaskPanelChangedParams
+
+class ServerNotificationPlanApprovalRequested(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['plan_approval/requested'] = Field(default='plan_approval/requested', alias='method')
+    params: PlanApprovalRequestedParams
+
+class ServerNotificationAgentsKilled(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['agents/killed'] = Field(default='agents/killed', alias='method')
+    params: AgentsKilledParams
+
+class ServerNotificationModelFallbackStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['model/fallbackStarted'] = Field(default='model/fallbackStarted', alias='method')
+    params: ModelFallbackParams
+
+class ServerNotificationModelFallbackCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['model/fallbackCompleted'] = Field(default='model/fallbackCompleted', alias='method')
+
+class ServerNotificationModelFastModeChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['model/fastModeChanged'] = Field(default='model/fastModeChanged', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationModelRoleChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['model/roleChanged'] = Field(default='model/roleChanged', alias='method')
+    params: ModelRoleChangedParams
+
+class ServerNotificationPermissionModeChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['permission/modeChanged'] = Field(default='permission/modeChanged', alias='method')
+    params: PermissionModeChangedParams
+
+class ServerNotificationPromptSuggestion(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['prompt/suggestion'] = Field(default='prompt/suggestion', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationError(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['error'] = Field(default='error', alias='method')
+    params: ErrorParams
+
+class ServerNotificationRateLimit(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['rateLimit'] = Field(default='rateLimit', alias='method')
+    params: RateLimitParams
+
+class ServerNotificationKeepAlive(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['keepAlive'] = Field(default='keepAlive', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationIdeSelectionChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['ide/selectionChanged'] = Field(default='ide/selectionChanged', alias='method')
+    params: IdeSelectionChangedParams
+
+class ServerNotificationIdeDiagnosticsUpdated(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['ide/diagnosticsUpdated'] = Field(default='ide/diagnosticsUpdated', alias='method')
+    params: IdeDiagnosticsUpdatedParams
+
+class ServerNotificationPlanModeChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['plan/modeChanged'] = Field(default='plan/modeChanged', alias='method')
+    params: PlanModeChangedParams
+
+class ServerNotificationQueueStateChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['queue/stateChanged'] = Field(default='queue/stateChanged', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationQueueCommandQueued(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['queue/commandQueued'] = Field(default='queue/commandQueued', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationQueueCommandDequeued(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['queue/commandDequeued'] = Field(default='queue/commandDequeued', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationRewindCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['rewind/completed'] = Field(default='rewind/completed', alias='method')
+    params: RewindCompletedParams
+
+class ServerNotificationRewindFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['rewind/failed'] = Field(default='rewind/failed', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationCostWarning(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['cost/warning'] = Field(default='cost/warning', alias='method')
+    params: CostWarningParams
+
+class ServerNotificationSandboxStateChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['sandbox/stateChanged'] = Field(default='sandbox/stateChanged', alias='method')
+    params: SandboxStateChangedParams
+
+class ServerNotificationSandboxViolationsDetected(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['sandbox/violationsDetected'] = Field(default='sandbox/violationsDetected', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationAgentsRegistered(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['agents/registered'] = Field(default='agents/registered', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationHookStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['hook/started'] = Field(default='hook/started', alias='method')
+    params: HookStartedParams
+
+class ServerNotificationHookProgress(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['hook/progress'] = Field(default='hook/progress', alias='method')
+    params: HookProgressParams
+
+class ServerNotificationHookResponse(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['hook/response'] = Field(default='hook/response', alias='method')
+    params: HookResponseParams
+
+class ServerNotificationWorktreeEntered(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['worktree/entered'] = Field(default='worktree/entered', alias='method')
+    params: WorktreeEnteredParams
+
+class ServerNotificationWorktreeExited(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['worktree/exited'] = Field(default='worktree/exited', alias='method')
+    params: WorktreeExitedParams
+
+class ServerNotificationSummarizeCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['summarize/completed'] = Field(default='summarize/completed', alias='method')
+    params: SummarizeCompletedParams
+
+class ServerNotificationSummarizeFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['summarize/failed'] = Field(default='summarize/failed', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationStreamStallDetected(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['stream/stallDetected'] = Field(default='stream/stallDetected', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationStreamWatchdogWarning(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['stream/watchdogWarning'] = Field(default='stream/watchdogWarning', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationStreamRequestEnd(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['stream/requestEnd'] = Field(default='stream/requestEnd', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationSessionStateChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/stateChanged'] = Field(default='session/stateChanged', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationTurnMaxReached(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['turn/maxReached'] = Field(default='turn/maxReached', alias='method')
+    params: dict[str, Any]
+
+class ServerNotificationLocalCommandOutput(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['localCommand/output'] = Field(default='localCommand/output', alias='method')
+    params: LocalCommandOutputParams
+
+class ServerNotificationFilesPersisted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['files/persisted'] = Field(default='files/persisted', alias='method')
+    params: FilesPersistedParams
+
+class ServerNotificationElicitationComplete(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['elicitation/complete'] = Field(default='elicitation/complete', alias='method')
+    params: ElicitationCompleteParams
+
+class ServerNotificationToolUseSummary(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['tool/useSummary'] = Field(default='tool/useSummary', alias='method')
+    params: ToolUseSummaryParams
+
+class ServerNotificationToolProgress(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['tool/progress'] = Field(default='tool/progress', alias='method')
+    params: ToolProgressParams
+
+class ServerNotificationPluginsChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['plugins/changed'] = Field(default='plugins/changed', alias='method')
+    params: dict[str, Any]
+
+ServerNotification = Annotated[
+    Union[ServerNotificationSessionStarted, ServerNotificationSessionResult, ServerNotificationSessionEnded, ServerNotificationHistoryMessageAppended, ServerNotificationHistoryMessageTruncated, ServerNotificationHistoryResetForResume, ServerNotificationHistoryReplaced, ServerNotificationHistoryReasoningMetadataAttached, ServerNotificationTurnStarted, ServerNotificationTurnCompleted, ServerNotificationTurnFailed, ServerNotificationTurnInterrupted, ServerNotificationItemStarted, ServerNotificationItemUpdated, ServerNotificationItemCompleted, ServerNotificationAgentMessageDelta, ServerNotificationReasoningDelta, ServerNotificationMcpStartupStatus, ServerNotificationMcpStartupComplete, ServerNotificationLspPrewarmComplete, ServerNotificationContextCompacted, ServerNotificationContextUsageWarning, ServerNotificationContextCompactionStarted, ServerNotificationContextCompactionPhase, ServerNotificationContextCompactionFailed, ServerNotificationContextCleared, ServerNotificationTaskStarted, ServerNotificationTaskCompleted, ServerNotificationTaskProgress, ServerNotificationTaskPanelChanged, ServerNotificationPlanApprovalRequested, ServerNotificationAgentsKilled, ServerNotificationModelFallbackStarted, ServerNotificationModelFallbackCompleted, ServerNotificationModelFastModeChanged, ServerNotificationModelRoleChanged, ServerNotificationPermissionModeChanged, ServerNotificationPromptSuggestion, ServerNotificationError, ServerNotificationRateLimit, ServerNotificationKeepAlive, ServerNotificationIdeSelectionChanged, ServerNotificationIdeDiagnosticsUpdated, ServerNotificationPlanModeChanged, ServerNotificationQueueStateChanged, ServerNotificationQueueCommandQueued, ServerNotificationQueueCommandDequeued, ServerNotificationRewindCompleted, ServerNotificationRewindFailed, ServerNotificationCostWarning, ServerNotificationSandboxStateChanged, ServerNotificationSandboxViolationsDetected, ServerNotificationAgentsRegistered, ServerNotificationHookStarted, ServerNotificationHookProgress, ServerNotificationHookResponse, ServerNotificationWorktreeEntered, ServerNotificationWorktreeExited, ServerNotificationSummarizeCompleted, ServerNotificationSummarizeFailed, ServerNotificationStreamStallDetected, ServerNotificationStreamWatchdogWarning, ServerNotificationStreamRequestEnd, ServerNotificationSessionStateChanged, ServerNotificationTurnMaxReached, ServerNotificationLocalCommandOutput, ServerNotificationFilesPersisted, ServerNotificationElicitationComplete, ServerNotificationToolUseSummary, ServerNotificationToolProgress, ServerNotificationPluginsChanged],
+    Field(discriminator='method'),
+]
+
+class ServerRequestApprovalAskForApproval(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['approval/askForApproval'] = Field(default='approval/askForApproval', alias='method')
+    params: AskForApprovalParams
+
+class ServerRequestInputRequestUserInput(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['input/requestUserInput'] = Field(default='input/requestUserInput', alias='method')
+    params: RequestUserInputParams
+
+class ServerRequestMcpRouteMessage(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/routeMessage'] = Field(default='mcp/routeMessage', alias='method')
+    params: McpRouteMessageParams
+
+class ServerRequestHookCallback(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['hook/callback'] = Field(default='hook/callback', alias='method')
+    params: HookCallbackParams
+
+class ServerRequestControlCancelRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['control/cancelRequest'] = Field(default='control/cancelRequest', alias='method')
+    params: ServerCancelRequestParams
+
+class ServerRequestMcpRequestElicitation(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/requestElicitation'] = Field(default='mcp/requestElicitation', alias='method')
+    params: RequestElicitationParams
+
+ServerRequest = Annotated[
+    Union[ServerRequestApprovalAskForApproval, ServerRequestInputRequestUserInput, ServerRequestMcpRouteMessage, ServerRequestHookCallback, ServerRequestControlCancelRequest, ServerRequestMcpRequestElicitation],
+    Field(discriminator='method'),
+]
+
+class SharedV4FileDataData(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['data'] = Field(default='data', alias='type')
+    data: str
+
+class SharedV4FileDataUrl(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['url'] = Field(default='url', alias='type')
+    url: str
+
+class SharedV4FileDataReference(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['reference'] = Field(default='reference', alias='type')
+    reference: dict[str, str]
+
+class SharedV4FileDataText(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['text'] = Field(default='text', alias='type')
+    text: str
+
+SharedV4FileData = Annotated[
+    Union[SharedV4FileDataData, SharedV4FileDataUrl, SharedV4FileDataReference, SharedV4FileDataText],
+    Field(discriminator='type_'),
+]
+
+class SlashCommandStatusKindNoHandler(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['no_handler'] = Field(default='no_handler', alias='kind')
+
+class SlashCommandStatusKindFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['failed'] = Field(default='failed', alias='kind')
+    error: str
+
+class SlashCommandStatusKindEmptyPrompt(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['empty_prompt'] = Field(default='empty_prompt', alias='kind')
+
+class SlashCommandStatusKindDialogPending(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['dialog_pending'] = Field(default='dialog_pending', alias='kind')
+    dialog_kind: str
+
+class SlashCommandStatusKindPermissionsUsageAllow(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['permissions_usage_allow'] = Field(default='permissions_usage_allow', alias='kind')
+
+class SlashCommandStatusKindPermissionsUsageDeny(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['permissions_usage_deny'] = Field(default='permissions_usage_deny', alias='kind')
+
+SlashCommandStatusKind = Annotated[
+    Union[SlashCommandStatusKindNoHandler, SlashCommandStatusKindFailed, SlashCommandStatusKindEmptyPrompt, SlashCommandStatusKindDialogPending, SlashCommandStatusKindPermissionsUsageAllow, SlashCommandStatusKindPermissionsUsageDeny],
+    Field(discriminator='kind'),
+]
+
+class ToolInputInvalidReasonJsonParseFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['json_parse_failed'] = Field(default='json_parse_failed', alias='kind')
+    error: str
+    raw: str
+
+class ToolInputInvalidReasonSchemaViolation(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['schema_violation'] = Field(default='schema_violation', alias='kind')
+    message: str
+
+class ToolInputInvalidReasonNoSuchTool(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['no_such_tool'] = Field(default='no_such_tool', alias='kind')
+    tool_name: str
+
+ToolInputInvalidReason = Annotated[
+    Union[ToolInputInvalidReasonJsonParseFailed, ToolInputInvalidReasonSchemaViolation, ToolInputInvalidReasonNoSuchTool],
+    Field(discriminator='kind'),
+]
+
+class ToolResultContentText(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['text'] = Field(default='text', alias='type')
+    value: str
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+class ToolResultContentJson(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['json'] = Field(default='json', alias='type')
+    value: Any
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+class ToolResultContentExecutionDenied(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['execution-denied'] = Field(default='execution-denied', alias='type')
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+    reason: str | None = None
+
+class ToolResultContentErrorText(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['error-text'] = Field(default='error-text', alias='type')
+    value: str
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+class ToolResultContentErrorJson(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['error-json'] = Field(default='error-json', alias='type')
+    value: Any
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+class ToolResultContentContent(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['content'] = Field(default='content', alias='type')
+    value: list[ToolResultContentPart]
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+ToolResultContent = Annotated[
+    Union[ToolResultContentText, ToolResultContentJson, ToolResultContentExecutionDenied, ToolResultContentErrorText, ToolResultContentErrorJson, ToolResultContentContent],
+    Field(discriminator='type_'),
+]
+
+class ToolResultContentPartText(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['text'] = Field(default='text', alias='type')
+    text: str
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+class ToolResultContentPartFileData(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['file-data'] = Field(default='file-data', alias='type')
+    data: str
+    media_type: str = Field(alias='mediaType')
+    filename: str | None = None
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+class ToolResultContentPartFileUrl(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['file-url'] = Field(default='file-url', alias='type')
+    media_type: str = Field(alias='mediaType')
+    url: str
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+class ToolResultContentPartFileReference(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['file-reference'] = Field(default='file-reference', alias='type')
+    provider_reference: dict[str, str] = Field(alias='providerReference')
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+class ToolResultContentPartCustom(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['custom'] = Field(default='custom', alias='type')
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+ToolResultContentPart = Annotated[
+    Union[ToolResultContentPartText, ToolResultContentPartFileData, ToolResultContentPartFileUrl, ToolResultContentPartFileReference, ToolResultContentPartCustom],
+    Field(discriminator='type_'),
+]
+
+class TuiOnlyEventApprovalRequired(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['approval_required'] = Field(default='approval_required', alias='type')
+    description: str
+    display_input: PermissionDisplayInput
+    request_id: str
+    tool_name: str
+    choices: list[PermissionAskChoice] | None = None
+    original_input: dict[str, Any] | None = None
+    permission_suggestions: list[PermissionUpdate] | None = None
+    show_always_allow: bool = False
+
+class TuiOnlyEventQuestionAsked(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['question_asked'] = Field(default='question_asked', alias='type')
+    input: Any
+    request_id: str
+
+class TuiOnlyEventElicitationRequested(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['elicitation_requested'] = Field(default='elicitation_requested', alias='type')
+    request_id: str
+    schema_: Any = Field(alias='schema')
+    server: str
+
+class TuiOnlyEventSandboxApprovalRequired(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['sandbox_approval_required'] = Field(default='sandbox_approval_required', alias='type')
+    operation: str
+    request_id: str
+
+class TuiOnlyEventPluginDataReady(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['plugin_data_ready'] = Field(default='plugin_data_ready', alias='type')
+    plugins: list[Any]
+
+class TuiOnlyEventOutputStylesReady(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['output_styles_ready'] = Field(default='output_styles_ready', alias='type')
+    styles: list[str]
+
+class TuiOnlyEventAvailableCommandsRefreshed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['available_commands_refreshed'] = Field(default='available_commands_refreshed', alias='type')
+    commands: list[SlashCommandInfo]
+
+class TuiOnlyEventOpenSessionBrowser(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_session_browser'] = Field(default='open_session_browser', alias='type')
+    sessions: list[SdkSessionSummary]
+
+class TuiOnlyEventRewindRowMetadataReady(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['rewind_row_metadata_ready'] = Field(default='rewind_row_metadata_ready', alias='type')
+    rows: list[RewindRowMetadata]
+
+class TuiOnlyEventRewindRestorePreviewReady(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['rewind_restore_preview_ready'] = Field(default='rewind_restore_preview_ready', alias='type')
+    message_id: str
+    stats: RewindDiffStatsPayload | None = None
+
+class TuiOnlyEventCompactionCircuitBreakerOpen(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['compaction_circuit_breaker_open'] = Field(default='compaction_circuit_breaker_open', alias='type')
+    failures: int
+
+class TuiOnlyEventMicroCompactionApplied(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['micro_compaction_applied'] = Field(default='micro_compaction_applied', alias='type')
+    removed: int
+
+class TuiOnlyEventSessionMemoryCompactApplied(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['session_memory_compact_applied'] = Field(default='session_memory_compact_applied', alias='type')
+    summary_tokens: int
+
+class TuiOnlyEventSpeculativeRolledBack(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['speculative_rolled_back'] = Field(default='speculative_rolled_back', alias='type')
+    reason: str
+
+class TuiOnlyEventSessionMemoryExtractionStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['session_memory_extraction_started'] = Field(default='session_memory_extraction_started', alias='type')
+
+class TuiOnlyEventSessionMemoryExtractionCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['session_memory_extraction_completed'] = Field(default='session_memory_extraction_completed', alias='type')
+    extracted: int
+
+class TuiOnlyEventSessionMemoryExtractionFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['session_memory_extraction_failed'] = Field(default='session_memory_extraction_failed', alias='type')
+    error: str
+
+class TuiOnlyEventCronJobDisabled(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['cron_job_disabled'] = Field(default='cron_job_disabled', alias='type')
+    job_id: str
+    reason: str
+
+class TuiOnlyEventCronJobsMissed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['cron_jobs_missed'] = Field(default='cron_jobs_missed', alias='type')
+    count: int
+
+class TuiOnlyEventToolCallDelta(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['tool_call_delta'] = Field(default='tool_call_delta', alias='type')
+    call_id: str
+    delta: str
+
+class TuiOnlyEventToolProgress(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['tool_progress'] = Field(default='tool_progress', alias='type')
+    data: Any
+    tool_use_id: str
+
+class TuiOnlyEventToolExecutionAborted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['tool_execution_aborted'] = Field(default='tool_execution_aborted', alias='type')
+    reason: str
+    tool_use_id: str
+
+class TuiOnlyEventRewindCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['rewind_completed'] = Field(default='rewind_completed', alias='type')
+    files_changed: int
+    target_message_id: str
+
+class TuiOnlyEventSlashCommandResult(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['slash_command_result'] = Field(default='slash_command_result', alias='type')
+    name: str
+    text: str
+
+class TuiOnlyEventSlashCommandStatus(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['slash_command_status'] = Field(default='slash_command_status', alias='type')
+    kind: SlashCommandStatusKind
+    name: str
+
+class TuiOnlyEventOpenRewindPicker(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_rewind_picker'] = Field(default='open_rewind_picker', alias='type')
+
+class TuiOnlyEventOpenMemoryDialog(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_memory_dialog'] = Field(default='open_memory_dialog', alias='type')
+    entries: list[MemoryDialogEntry]
+
+class TuiOnlyEventMemoryFileOpened(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['memory_file_opened'] = Field(default='memory_file_opened', alias='type')
+    path: str
+
+class TuiOnlyEventMemoryFileOpenFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['memory_file_open_failed'] = Field(default='memory_file_open_failed', alias='type')
+    error: str
+    path: str
+
+class TuiOnlyEventPlanFileOpened(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['plan_file_opened'] = Field(default='plan_file_opened', alias='type')
+    path: str
+
+class TuiOnlyEventPlanFileOpenFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['plan_file_open_failed'] = Field(default='plan_file_open_failed', alias='type')
+    error: str
+    path: str
+
+class TuiOnlyEventExternalEditorPrepare(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['external_editor_prepare'] = Field(default='external_editor_prepare', alias='type')
+    request_id: str
+
+class TuiOnlyEventPromptEditorCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['prompt_editor_completed'] = Field(default='prompt_editor_completed', alias='type')
+    content: str
+    modified: bool
+
+class TuiOnlyEventPromptEditorFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['prompt_editor_failed'] = Field(default='prompt_editor_failed', alias='type')
+    error: str
+
+class TuiOnlyEventBashCommandCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['bash_command_completed'] = Field(default='bash_command_completed', alias='type')
+    exit_code: int
+    output: str
+    user_message_id: str
+
+class TuiOnlyEventOpenModelPicker(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_model_picker'] = Field(default='open_model_picker', alias='type')
+
+TuiOnlyEvent = Annotated[
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker],
+    Field(discriminator='type_'),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -678,7 +1795,7 @@ class IdeSelectionChangedParams(BaseModel):
     start_line: int
 
 class LocalCommandOutputParams(BaseModel):
-    content: Any
+    content: dict[str, Any]
 
 class LspPrewarmCompleteParams(BaseModel):
     root: str
@@ -1023,373 +2140,7 @@ class NotificationMethod(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Server notifications (tagged union)
-# ---------------------------------------------------------------------------
-
-class ServerNotification(BaseModel):
-    """An event from the server. Use `method` to determine the event type."""
-
-    method: str
-    params: dict[str, Any] = {}
-
-    def as_session_started(self) -> SessionStartedParams | None:
-        if self.method == 'session/started':
-            return SessionStartedParams.model_validate(self.params)
-        return None
-
-    def as_session_result(self) -> SessionResultParams | None:
-        if self.method == 'session/result':
-            return SessionResultParams.model_validate(self.params)
-        return None
-
-    def as_session_ended(self) -> SessionEndedParams | None:
-        if self.method == 'session/ended':
-            return SessionEndedParams.model_validate(self.params)
-        return None
-
-    def as_history_message_appended(self) -> HistoryMessageAppendedParams | None:
-        if self.method == 'history/messageAppended':
-            return HistoryMessageAppendedParams.model_validate(self.params)
-        return None
-
-    def as_history_message_truncated(self) -> HistoryMessageTruncatedParams | None:
-        if self.method == 'history/messageTruncated':
-            return HistoryMessageTruncatedParams.model_validate(self.params)
-        return None
-
-    def as_history_reset_for_resume(self) -> HistoryResetForResumeParams | None:
-        if self.method == 'history/resetForResume':
-            return HistoryResetForResumeParams.model_validate(self.params)
-        return None
-
-    def as_history_replaced(self) -> HistoryReplacedParams | None:
-        if self.method == 'history/replaced':
-            return HistoryReplacedParams.model_validate(self.params)
-        return None
-
-    def as_history_reasoning_metadata_attached(self) -> ReasoningMetadataAttachedParams | None:
-        if self.method == 'history/reasoningMetadataAttached':
-            return ReasoningMetadataAttachedParams.model_validate(self.params)
-        return None
-
-    def as_turn_started(self) -> TurnStartedParams | None:
-        if self.method == 'turn/started':
-            return TurnStartedParams.model_validate(self.params)
-        return None
-
-    def as_turn_completed(self) -> TurnCompletedParams | None:
-        if self.method == 'turn/completed':
-            return TurnCompletedParams.model_validate(self.params)
-        return None
-
-    def as_turn_failed(self) -> TurnFailedParams | None:
-        if self.method == 'turn/failed':
-            return TurnFailedParams.model_validate(self.params)
-        return None
-
-    def as_turn_interrupted(self) -> TurnInterruptedNotifParams | None:
-        if self.method == 'turn/interrupted':
-            return TurnInterruptedNotifParams.model_validate(self.params)
-        return None
-
-    def as_item_started(self) -> ItemStartedParams | None:
-        if self.method == 'item/started':
-            return ItemStartedParams.model_validate(self.params)
-        return None
-
-    def as_item_updated(self) -> ItemUpdatedParams | None:
-        if self.method == 'item/updated':
-            return ItemUpdatedParams.model_validate(self.params)
-        return None
-
-    def as_item_completed(self) -> ItemCompletedParams | None:
-        if self.method == 'item/completed':
-            return ItemCompletedParams.model_validate(self.params)
-        return None
-
-    def as_agent_message_delta(self) -> ContentDeltaParams | None:
-        if self.method == 'agentMessage/delta':
-            return ContentDeltaParams.model_validate(self.params)
-        return None
-
-    def as_reasoning_delta(self) -> ContentDeltaParams | None:
-        if self.method == 'reasoning/delta':
-            return ContentDeltaParams.model_validate(self.params)
-        return None
-
-    def as_mcp_startup_status(self) -> McpStartupStatusParams | None:
-        if self.method == 'mcp/startupStatus':
-            return McpStartupStatusParams.model_validate(self.params)
-        return None
-
-    def as_mcp_startup_complete(self) -> McpStartupCompleteParams | None:
-        if self.method == 'mcp/startupComplete':
-            return McpStartupCompleteParams.model_validate(self.params)
-        return None
-
-    def as_lsp_prewarm_complete(self) -> LspPrewarmCompleteParams | None:
-        if self.method == 'lsp/prewarmComplete':
-            return LspPrewarmCompleteParams.model_validate(self.params)
-        return None
-
-    def as_context_compacted(self) -> ContextCompactedParams | None:
-        if self.method == 'context/compacted':
-            return ContextCompactedParams.model_validate(self.params)
-        return None
-
-    def as_context_usage_warning(self) -> ContextUsageWarningParams | None:
-        if self.method == 'context/usageWarning':
-            return ContextUsageWarningParams.model_validate(self.params)
-        return None
-
-    def as_context_compaction_started(self) -> ContextCompactionStartedParams | None:
-        if self.method == 'context/compactionStarted':
-            return ContextCompactionStartedParams.model_validate(self.params)
-        return None
-
-    def as_context_compaction_phase(self) -> CompactionPhaseParams | None:
-        if self.method == 'context/compactionPhase':
-            return CompactionPhaseParams.model_validate(self.params)
-        return None
-
-    def as_context_compaction_failed(self) -> CompactionFailedParams | None:
-        if self.method == 'context/compactionFailed':
-            return CompactionFailedParams.model_validate(self.params)
-        return None
-
-    def as_context_cleared(self) -> ContextClearedParams | None:
-        if self.method == 'context/cleared':
-            return ContextClearedParams.model_validate(self.params)
-        return None
-
-    def as_task_started(self) -> TaskStartedParams | None:
-        if self.method == 'task/started':
-            return TaskStartedParams.model_validate(self.params)
-        return None
-
-    def as_task_completed(self) -> TaskCompletedParams | None:
-        if self.method == 'task/completed':
-            return TaskCompletedParams.model_validate(self.params)
-        return None
-
-    def as_task_progress(self) -> TaskProgressParams | None:
-        if self.method == 'task/progress':
-            return TaskProgressParams.model_validate(self.params)
-        return None
-
-    def as_task_panel_changed(self) -> TaskPanelChangedParams | None:
-        if self.method == 'task_panel/changed':
-            return TaskPanelChangedParams.model_validate(self.params)
-        return None
-
-    def as_plan_approval_requested(self) -> PlanApprovalRequestedParams | None:
-        if self.method == 'plan_approval/requested':
-            return PlanApprovalRequestedParams.model_validate(self.params)
-        return None
-
-    def as_agents_killed(self) -> AgentsKilledParams | None:
-        if self.method == 'agents/killed':
-            return AgentsKilledParams.model_validate(self.params)
-        return None
-
-    def as_model_fallback_started(self) -> ModelFallbackParams | None:
-        if self.method == 'model/fallbackStarted':
-            return ModelFallbackParams.model_validate(self.params)
-        return None
-
-    def as_model_fallback_completed(self) -> ModelFallbackCompletedParams | None:
-        if self.method == 'model/fallbackCompleted':
-            return ModelFallbackCompletedParams.model_validate(self.params)
-        return None
-
-    def as_model_fast_mode_changed(self) -> ModelFastModeChangedParams | None:
-        if self.method == 'model/fastModeChanged':
-            return ModelFastModeChangedParams.model_validate(self.params)
-        return None
-
-    def as_model_role_changed(self) -> ModelRoleChangedParams | None:
-        if self.method == 'model/roleChanged':
-            return ModelRoleChangedParams.model_validate(self.params)
-        return None
-
-    def as_permission_mode_changed(self) -> PermissionModeChangedParams | None:
-        if self.method == 'permission/modeChanged':
-            return PermissionModeChangedParams.model_validate(self.params)
-        return None
-
-    def as_prompt_suggestion(self) -> PromptSuggestionParams | None:
-        if self.method == 'prompt/suggestion':
-            return PromptSuggestionParams.model_validate(self.params)
-        return None
-
-    def as_error(self) -> ErrorParams | None:
-        if self.method == 'error':
-            return ErrorParams.model_validate(self.params)
-        return None
-
-    def as_rate_limit(self) -> RateLimitParams | None:
-        if self.method == 'rateLimit':
-            return RateLimitParams.model_validate(self.params)
-        return None
-
-    def as_keep_alive(self) -> KeepAliveParams | None:
-        if self.method == 'keepAlive':
-            return KeepAliveParams.model_validate(self.params)
-        return None
-
-    def as_ide_selection_changed(self) -> IdeSelectionChangedParams | None:
-        if self.method == 'ide/selectionChanged':
-            return IdeSelectionChangedParams.model_validate(self.params)
-        return None
-
-    def as_ide_diagnostics_updated(self) -> IdeDiagnosticsUpdatedParams | None:
-        if self.method == 'ide/diagnosticsUpdated':
-            return IdeDiagnosticsUpdatedParams.model_validate(self.params)
-        return None
-
-    def as_plan_mode_changed(self) -> PlanModeChangedParams | None:
-        if self.method == 'plan/modeChanged':
-            return PlanModeChangedParams.model_validate(self.params)
-        return None
-
-    def as_queue_state_changed(self) -> QueueStateChangedParams | None:
-        if self.method == 'queue/stateChanged':
-            return QueueStateChangedParams.model_validate(self.params)
-        return None
-
-    def as_queue_command_queued(self) -> QueueCommandQueuedParams | None:
-        if self.method == 'queue/commandQueued':
-            return QueueCommandQueuedParams.model_validate(self.params)
-        return None
-
-    def as_queue_command_dequeued(self) -> QueueCommandDequeuedParams | None:
-        if self.method == 'queue/commandDequeued':
-            return QueueCommandDequeuedParams.model_validate(self.params)
-        return None
-
-    def as_rewind_completed(self) -> RewindCompletedParams | None:
-        if self.method == 'rewind/completed':
-            return RewindCompletedParams.model_validate(self.params)
-        return None
-
-    def as_rewind_failed(self) -> RewindFailedParams | None:
-        if self.method == 'rewind/failed':
-            return RewindFailedParams.model_validate(self.params)
-        return None
-
-    def as_cost_warning(self) -> CostWarningParams | None:
-        if self.method == 'cost/warning':
-            return CostWarningParams.model_validate(self.params)
-        return None
-
-    def as_sandbox_state_changed(self) -> SandboxStateChangedParams | None:
-        if self.method == 'sandbox/stateChanged':
-            return SandboxStateChangedParams.model_validate(self.params)
-        return None
-
-    def as_sandbox_violations_detected(self) -> SandboxViolationsDetectedParams | None:
-        if self.method == 'sandbox/violationsDetected':
-            return SandboxViolationsDetectedParams.model_validate(self.params)
-        return None
-
-    def as_agents_registered(self) -> AgentsRegisteredParams | None:
-        if self.method == 'agents/registered':
-            return AgentsRegisteredParams.model_validate(self.params)
-        return None
-
-    def as_hook_started(self) -> HookStartedParams | None:
-        if self.method == 'hook/started':
-            return HookStartedParams.model_validate(self.params)
-        return None
-
-    def as_hook_progress(self) -> HookProgressParams | None:
-        if self.method == 'hook/progress':
-            return HookProgressParams.model_validate(self.params)
-        return None
-
-    def as_hook_response(self) -> HookResponseParams | None:
-        if self.method == 'hook/response':
-            return HookResponseParams.model_validate(self.params)
-        return None
-
-    def as_worktree_entered(self) -> WorktreeEnteredParams | None:
-        if self.method == 'worktree/entered':
-            return WorktreeEnteredParams.model_validate(self.params)
-        return None
-
-    def as_worktree_exited(self) -> WorktreeExitedParams | None:
-        if self.method == 'worktree/exited':
-            return WorktreeExitedParams.model_validate(self.params)
-        return None
-
-    def as_summarize_completed(self) -> SummarizeCompletedParams | None:
-        if self.method == 'summarize/completed':
-            return SummarizeCompletedParams.model_validate(self.params)
-        return None
-
-    def as_summarize_failed(self) -> SummarizeFailedParams | None:
-        if self.method == 'summarize/failed':
-            return SummarizeFailedParams.model_validate(self.params)
-        return None
-
-    def as_stream_stall_detected(self) -> StreamStallDetectedParams | None:
-        if self.method == 'stream/stallDetected':
-            return StreamStallDetectedParams.model_validate(self.params)
-        return None
-
-    def as_stream_watchdog_warning(self) -> StreamWatchdogWarningParams | None:
-        if self.method == 'stream/watchdogWarning':
-            return StreamWatchdogWarningParams.model_validate(self.params)
-        return None
-
-    def as_stream_request_end(self) -> StreamRequestEndParams | None:
-        if self.method == 'stream/requestEnd':
-            return StreamRequestEndParams.model_validate(self.params)
-        return None
-
-    def as_session_state_changed(self) -> SessionStateChangedParams | None:
-        if self.method == 'session/stateChanged':
-            return SessionStateChangedParams.model_validate(self.params)
-        return None
-
-    def as_turn_max_reached(self) -> TurnMaxReachedParams | None:
-        if self.method == 'turn/maxReached':
-            return TurnMaxReachedParams.model_validate(self.params)
-        return None
-
-    def as_local_command_output(self) -> LocalCommandOutputParams | None:
-        if self.method == 'localCommand/output':
-            return LocalCommandOutputParams.model_validate(self.params)
-        return None
-
-    def as_files_persisted(self) -> FilesPersistedParams | None:
-        if self.method == 'files/persisted':
-            return FilesPersistedParams.model_validate(self.params)
-        return None
-
-    def as_elicitation_complete(self) -> ElicitationCompleteParams | None:
-        if self.method == 'elicitation/complete':
-            return ElicitationCompleteParams.model_validate(self.params)
-        return None
-
-    def as_tool_use_summary(self) -> ToolUseSummaryParams | None:
-        if self.method == 'tool/useSummary':
-            return ToolUseSummaryParams.model_validate(self.params)
-        return None
-
-    def as_tool_progress(self) -> ToolProgressParams | None:
-        if self.method == 'tool/progress':
-            return ToolProgressParams.model_validate(self.params)
-        return None
-
-    def as_plugins_changed(self) -> PluginsChangedParams | None:
-        if self.method == 'plugins/changed':
-            return PluginsChangedParams.model_validate(self.params)
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Server requests (server -> client, require response)
+# Server request param types
 # ---------------------------------------------------------------------------
 
 class AskForApprovalParams(BaseModel):
@@ -1407,13 +2158,12 @@ class AskForApprovalParams(BaseModel):
 
 class HookCallbackParams(BaseModel):
     callback_id: str
-    input: Any
-    request_id: str
+    event_type: HookEventType
+    input: HookInput
     tool_use_id: str | None = None
 
 class McpRouteMessageParams(BaseModel):
     message: Any
-    request_id: str
     server_name: str
 
 class RequestElicitationParams(BaseModel):
@@ -1442,43 +2192,6 @@ class ServerRequestMethod(str, Enum):
     HOOK_CALLBACK = 'hook/callback'
     CONTROL_CANCEL_REQUEST = 'control/cancelRequest'
     MCP_REQUEST_ELICITATION = 'mcp/requestElicitation'
-
-
-class ServerRequest(BaseModel):
-    """A request from the server that requires a client response."""
-
-    method: str
-    params: dict[str, Any] = {}
-
-    def as_approval_ask_for_approval(self) -> AskForApprovalParams | None:
-        if self.method == 'approval/askForApproval':
-            return AskForApprovalParams.model_validate(self.params)
-        return None
-
-    def as_input_request_user_input(self) -> RequestUserInputParams | None:
-        if self.method == 'input/requestUserInput':
-            return RequestUserInputParams.model_validate(self.params)
-        return None
-
-    def as_mcp_route_message(self) -> McpRouteMessageParams | None:
-        if self.method == 'mcp/routeMessage':
-            return McpRouteMessageParams.model_validate(self.params)
-        return None
-
-    def as_hook_callback(self) -> HookCallbackParams | None:
-        if self.method == 'hook/callback':
-            return HookCallbackParams.model_validate(self.params)
-        return None
-
-    def as_control_cancel_request(self) -> ServerCancelRequestParams | None:
-        if self.method == 'control/cancelRequest':
-            return ServerCancelRequestParams.model_validate(self.params)
-        return None
-
-    def as_mcp_request_elicitation(self) -> RequestElicitationParams | None:
-        if self.method == 'mcp/requestElicitation':
-            return RequestElicitationParams.model_validate(self.params)
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1533,7 +2246,7 @@ class ApprovalResolveParams(BaseModel):
     content_blocks: list[Any] | None = None
     feedback: str | None = None
     permission_update: PermissionUpdate | None = None
-    updated_input: Any = None
+    updated_input: dict[str, Any] | None = None
 
 class CancelRequestParams(BaseModel):
     request_id: str
@@ -1553,13 +2266,9 @@ class ElicitationResolveParams(BaseModel):
     request_id: str
     values: dict[str, Any] = {}
 
-class HookCallbackResponseParams(BaseModel):
-    callback_id: str
-    output: Any
-
 class InitializeParams(BaseModel):
     agent_progress_summaries: bool | None = None
-    agents: dict[str, Any] | None = None
+    agents: dict[str, SdkAgentDefinition] | None = None
     append_system_prompt: str | None = None
     hooks: dict[str, list[HookCallbackMatcher]] | None = None
     json_schema: Any = None
@@ -1569,10 +2278,6 @@ class InitializeParams(BaseModel):
 
 class McpReconnectParams(BaseModel):
     server_name: str
-
-class McpRouteMessageResponseParams(BaseModel):
-    message: Any
-    request_id: str
 
 class McpSetServersParams(BaseModel):
     servers: dict[str, Any]
@@ -1660,8 +2365,6 @@ class ClientRequestMethod(str, Enum):
     AGENT_INTERRUPT_CURRENT_WORK = 'agent/interruptCurrentWork'
     CONFIG_READ = 'config/read'
     CONFIG_VALUE_WRITE = 'config/value/write'
-    HOOK_CALLBACK_RESPONSE = 'hook/callbackResponse'
-    MCP_ROUTE_MESSAGE_RESPONSE = 'mcp/routeMessageResponse'
     MCP_STATUS = 'mcp/status'
     CONTEXT_USAGE = 'context/usage'
     MCP_SET_SERVERS = 'mcp/setServers'
@@ -1672,11 +2375,12 @@ class ClientRequestMethod(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Client request wrappers
+# Client request wrappers (one Pydantic class per variant)
 # ---------------------------------------------------------------------------
 
 class InitializeRequest(BaseModel):
-    method: str = 'initialize'
+    model_config = {"populate_by_name": True}
+    method: Literal['initialize'] = Field(default='initialize')
     params: InitializeRequestParams
 
     class InitializeRequestParams(InitializeParams):
@@ -1685,7 +2389,8 @@ class InitializeRequest(BaseModel):
 InitializeRequestParams = InitializeRequest.InitializeRequestParams
 
 class SessionStartRequest(BaseModel):
-    method: str = 'session/start'
+    model_config = {"populate_by_name": True}
+    method: Literal['session/start'] = Field(default='session/start')
     params: SessionStartRequestParams
 
     class SessionStartRequestParams(SessionStartParams):
@@ -1694,7 +2399,8 @@ class SessionStartRequest(BaseModel):
 SessionStartRequestParams = SessionStartRequest.SessionStartRequestParams
 
 class SessionResumeRequest(BaseModel):
-    method: str = 'session/resume'
+    model_config = {"populate_by_name": True}
+    method: Literal['session/resume'] = Field(default='session/resume')
     params: SessionResumeRequestParams
 
     class SessionResumeRequestParams(SessionResumeParams):
@@ -1703,7 +2409,8 @@ class SessionResumeRequest(BaseModel):
 SessionResumeRequestParams = SessionResumeRequest.SessionResumeRequestParams
 
 class SessionListRequest(BaseModel):
-    method: str = 'session/list'
+    model_config = {"populate_by_name": True}
+    method: Literal['session/list'] = Field(default='session/list')
     params: SessionListRequestParams
 
     class SessionListRequestParams(BaseModel):
@@ -1712,7 +2419,8 @@ class SessionListRequest(BaseModel):
 SessionListRequestParams = SessionListRequest.SessionListRequestParams
 
 class SessionReadRequest(BaseModel):
-    method: str = 'session/read'
+    model_config = {"populate_by_name": True}
+    method: Literal['session/read'] = Field(default='session/read')
     params: SessionReadRequestParams
 
     class SessionReadRequestParams(SessionReadParams):
@@ -1721,7 +2429,8 @@ class SessionReadRequest(BaseModel):
 SessionReadRequestParams = SessionReadRequest.SessionReadRequestParams
 
 class SessionArchiveRequest(BaseModel):
-    method: str = 'session/archive'
+    model_config = {"populate_by_name": True}
+    method: Literal['session/archive'] = Field(default='session/archive')
     params: SessionArchiveRequestParams
 
     class SessionArchiveRequestParams(SessionArchiveParams):
@@ -1730,7 +2439,8 @@ class SessionArchiveRequest(BaseModel):
 SessionArchiveRequestParams = SessionArchiveRequest.SessionArchiveRequestParams
 
 class TurnStartRequest(BaseModel):
-    method: str = 'turn/start'
+    model_config = {"populate_by_name": True}
+    method: Literal['turn/start'] = Field(default='turn/start')
     params: TurnStartRequestParams
 
     class TurnStartRequestParams(TurnStartParams):
@@ -1739,7 +2449,8 @@ class TurnStartRequest(BaseModel):
 TurnStartRequestParams = TurnStartRequest.TurnStartRequestParams
 
 class TurnInterruptRequest(BaseModel):
-    method: str = 'turn/interrupt'
+    model_config = {"populate_by_name": True}
+    method: Literal['turn/interrupt'] = Field(default='turn/interrupt')
     params: TurnInterruptRequestParams
 
     class TurnInterruptRequestParams(BaseModel):
@@ -1748,7 +2459,8 @@ class TurnInterruptRequest(BaseModel):
 TurnInterruptRequestParams = TurnInterruptRequest.TurnInterruptRequestParams
 
 class ApprovalResolveRequest(BaseModel):
-    method: str = 'approval/resolve'
+    model_config = {"populate_by_name": True}
+    method: Literal['approval/resolve'] = Field(default='approval/resolve')
     params: ApprovalResolveRequestParams
 
     class ApprovalResolveRequestParams(ApprovalResolveParams):
@@ -1757,7 +2469,8 @@ class ApprovalResolveRequest(BaseModel):
 ApprovalResolveRequestParams = ApprovalResolveRequest.ApprovalResolveRequestParams
 
 class UserInputResolveRequest(BaseModel):
-    method: str = 'input/resolveUserInput'
+    model_config = {"populate_by_name": True}
+    method: Literal['input/resolveUserInput'] = Field(default='input/resolveUserInput')
     params: UserInputResolveRequestParams
 
     class UserInputResolveRequestParams(UserInputResolveParams):
@@ -1766,7 +2479,8 @@ class UserInputResolveRequest(BaseModel):
 UserInputResolveRequestParams = UserInputResolveRequest.UserInputResolveRequestParams
 
 class ElicitationResolveRequest(BaseModel):
-    method: str = 'elicitation/resolve'
+    model_config = {"populate_by_name": True}
+    method: Literal['elicitation/resolve'] = Field(default='elicitation/resolve')
     params: ElicitationResolveRequestParams
 
     class ElicitationResolveRequestParams(ElicitationResolveParams):
@@ -1775,7 +2489,8 @@ class ElicitationResolveRequest(BaseModel):
 ElicitationResolveRequestParams = ElicitationResolveRequest.ElicitationResolveRequestParams
 
 class SetModelRequest(BaseModel):
-    method: str = 'control/setModel'
+    model_config = {"populate_by_name": True}
+    method: Literal['control/setModel'] = Field(default='control/setModel')
     params: SetModelRequestParams
 
     class SetModelRequestParams(SetModelParams):
@@ -1784,7 +2499,8 @@ class SetModelRequest(BaseModel):
 SetModelRequestParams = SetModelRequest.SetModelRequestParams
 
 class SetPermissionModeRequest(BaseModel):
-    method: str = 'control/setPermissionMode'
+    model_config = {"populate_by_name": True}
+    method: Literal['control/setPermissionMode'] = Field(default='control/setPermissionMode')
     params: SetPermissionModeRequestParams
 
     class SetPermissionModeRequestParams(SetPermissionModeParams):
@@ -1793,7 +2509,8 @@ class SetPermissionModeRequest(BaseModel):
 SetPermissionModeRequestParams = SetPermissionModeRequest.SetPermissionModeRequestParams
 
 class SetThinkingRequest(BaseModel):
-    method: str = 'control/setThinking'
+    model_config = {"populate_by_name": True}
+    method: Literal['control/setThinking'] = Field(default='control/setThinking')
     params: SetThinkingRequestParams
 
     class SetThinkingRequestParams(SetThinkingParams):
@@ -1802,7 +2519,8 @@ class SetThinkingRequest(BaseModel):
 SetThinkingRequestParams = SetThinkingRequest.SetThinkingRequestParams
 
 class StopTaskRequest(BaseModel):
-    method: str = 'control/stopTask'
+    model_config = {"populate_by_name": True}
+    method: Literal['control/stopTask'] = Field(default='control/stopTask')
     params: StopTaskRequestParams
 
     class StopTaskRequestParams(StopTaskParams):
@@ -1811,7 +2529,8 @@ class StopTaskRequest(BaseModel):
 StopTaskRequestParams = StopTaskRequest.StopTaskRequestParams
 
 class RewindFilesRequest(BaseModel):
-    method: str = 'control/rewindFiles'
+    model_config = {"populate_by_name": True}
+    method: Literal['control/rewindFiles'] = Field(default='control/rewindFiles')
     params: RewindFilesRequestParams
 
     class RewindFilesRequestParams(RewindFilesParams):
@@ -1820,7 +2539,8 @@ class RewindFilesRequest(BaseModel):
 RewindFilesRequestParams = RewindFilesRequest.RewindFilesRequestParams
 
 class UpdateEnvRequest(BaseModel):
-    method: str = 'control/updateEnv'
+    model_config = {"populate_by_name": True}
+    method: Literal['control/updateEnv'] = Field(default='control/updateEnv')
     params: UpdateEnvRequestParams
 
     class UpdateEnvRequestParams(UpdateEnvParams):
@@ -1829,7 +2549,8 @@ class UpdateEnvRequest(BaseModel):
 UpdateEnvRequestParams = UpdateEnvRequest.UpdateEnvRequestParams
 
 class KeepAliveRequest(BaseModel):
-    method: str = 'control/keepAlive'
+    model_config = {"populate_by_name": True}
+    method: Literal['control/keepAlive'] = Field(default='control/keepAlive')
     params: KeepAliveRequestParams
 
     class KeepAliveRequestParams(BaseModel):
@@ -1838,7 +2559,8 @@ class KeepAliveRequest(BaseModel):
 KeepAliveRequestParams = KeepAliveRequest.KeepAliveRequestParams
 
 class CancelRequest(BaseModel):
-    method: str = 'control/cancelRequest'
+    model_config = {"populate_by_name": True}
+    method: Literal['control/cancelRequest'] = Field(default='control/cancelRequest')
     params: CancelRequestParams
 
     class CancelRequestParams(CancelRequestParams):
@@ -1847,7 +2569,8 @@ class CancelRequest(BaseModel):
 CancelRequestParams = CancelRequest.CancelRequestParams
 
 class AgentInterruptCurrentWorkRequest(BaseModel):
-    method: str = 'agent/interruptCurrentWork'
+    model_config = {"populate_by_name": True}
+    method: Literal['agent/interruptCurrentWork'] = Field(default='agent/interruptCurrentWork')
     params: AgentInterruptCurrentWorkRequestParams
 
     class AgentInterruptCurrentWorkRequestParams(AgentInterruptCurrentWorkParams):
@@ -1856,7 +2579,8 @@ class AgentInterruptCurrentWorkRequest(BaseModel):
 AgentInterruptCurrentWorkRequestParams = AgentInterruptCurrentWorkRequest.AgentInterruptCurrentWorkRequestParams
 
 class ConfigReadRequest(BaseModel):
-    method: str = 'config/read'
+    model_config = {"populate_by_name": True}
+    method: Literal['config/read'] = Field(default='config/read')
     params: ConfigReadRequestParams
 
     class ConfigReadRequestParams(BaseModel):
@@ -1865,7 +2589,8 @@ class ConfigReadRequest(BaseModel):
 ConfigReadRequestParams = ConfigReadRequest.ConfigReadRequestParams
 
 class ConfigWriteRequest(BaseModel):
-    method: str = 'config/value/write'
+    model_config = {"populate_by_name": True}
+    method: Literal['config/value/write'] = Field(default='config/value/write')
     params: ConfigWriteRequestParams
 
     class ConfigWriteRequestParams(ConfigWriteParams):
@@ -1873,26 +2598,9 @@ class ConfigWriteRequest(BaseModel):
 
 ConfigWriteRequestParams = ConfigWriteRequest.ConfigWriteRequestParams
 
-class HookCallbackResponseRequest(BaseModel):
-    method: str = 'hook/callbackResponse'
-    params: HookCallbackResponseRequestParams
-
-    class HookCallbackResponseRequestParams(HookCallbackResponseParams):
-        pass
-
-HookCallbackResponseRequestParams = HookCallbackResponseRequest.HookCallbackResponseRequestParams
-
-class McpRouteMessageResponseRequest(BaseModel):
-    method: str = 'mcp/routeMessageResponse'
-    params: McpRouteMessageResponseRequestParams
-
-    class McpRouteMessageResponseRequestParams(McpRouteMessageResponseParams):
-        pass
-
-McpRouteMessageResponseRequestParams = McpRouteMessageResponseRequest.McpRouteMessageResponseRequestParams
-
 class McpStatusRequest(BaseModel):
-    method: str = 'mcp/status'
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/status'] = Field(default='mcp/status')
     params: McpStatusRequestParams
 
     class McpStatusRequestParams(BaseModel):
@@ -1901,7 +2609,8 @@ class McpStatusRequest(BaseModel):
 McpStatusRequestParams = McpStatusRequest.McpStatusRequestParams
 
 class ContextUsageRequest(BaseModel):
-    method: str = 'context/usage'
+    model_config = {"populate_by_name": True}
+    method: Literal['context/usage'] = Field(default='context/usage')
     params: ContextUsageRequestParams
 
     class ContextUsageRequestParams(BaseModel):
@@ -1910,7 +2619,8 @@ class ContextUsageRequest(BaseModel):
 ContextUsageRequestParams = ContextUsageRequest.ContextUsageRequestParams
 
 class McpSetServersRequest(BaseModel):
-    method: str = 'mcp/setServers'
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/setServers'] = Field(default='mcp/setServers')
     params: McpSetServersRequestParams
 
     class McpSetServersRequestParams(McpSetServersParams):
@@ -1919,7 +2629,8 @@ class McpSetServersRequest(BaseModel):
 McpSetServersRequestParams = McpSetServersRequest.McpSetServersRequestParams
 
 class McpReconnectRequest(BaseModel):
-    method: str = 'mcp/reconnect'
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/reconnect'] = Field(default='mcp/reconnect')
     params: McpReconnectRequestParams
 
     class McpReconnectRequestParams(McpReconnectParams):
@@ -1928,7 +2639,8 @@ class McpReconnectRequest(BaseModel):
 McpReconnectRequestParams = McpReconnectRequest.McpReconnectRequestParams
 
 class McpToggleRequest(BaseModel):
-    method: str = 'mcp/toggle'
+    model_config = {"populate_by_name": True}
+    method: Literal['mcp/toggle'] = Field(default='mcp/toggle')
     params: McpToggleRequestParams
 
     class McpToggleRequestParams(McpToggleParams):
@@ -1937,7 +2649,8 @@ class McpToggleRequest(BaseModel):
 McpToggleRequestParams = McpToggleRequest.McpToggleRequestParams
 
 class PluginReloadRequest(BaseModel):
-    method: str = 'plugin/reload'
+    model_config = {"populate_by_name": True}
+    method: Literal['plugin/reload'] = Field(default='plugin/reload')
     params: PluginReloadRequestParams
 
     class PluginReloadRequestParams(BaseModel):
@@ -1946,7 +2659,8 @@ class PluginReloadRequest(BaseModel):
 PluginReloadRequestParams = PluginReloadRequest.PluginReloadRequestParams
 
 class ConfigApplyFlagsRequest(BaseModel):
-    method: str = 'config/applyFlags'
+    model_config = {"populate_by_name": True}
+    method: Literal['config/applyFlags'] = Field(default='config/applyFlags')
     params: ConfigApplyFlagsRequestParams
 
     class ConfigApplyFlagsRequestParams(ConfigApplyFlagsParams):
@@ -1954,6 +2668,10 @@ class ConfigApplyFlagsRequest(BaseModel):
 
 ConfigApplyFlagsRequestParams = ConfigApplyFlagsRequest.ConfigApplyFlagsRequestParams
 
+ClientRequest = Annotated[
+    Union[InitializeRequest, SessionStartRequest, SessionResumeRequest, SessionListRequest, SessionReadRequest, SessionArchiveRequest, TurnStartRequest, TurnInterruptRequest, ApprovalResolveRequest, UserInputResolveRequest, ElicitationResolveRequest, SetModelRequest, SetPermissionModeRequest, SetThinkingRequest, StopTaskRequest, RewindFilesRequest, UpdateEnvRequest, KeepAliveRequest, CancelRequest, AgentInterruptCurrentWorkRequest, ConfigReadRequest, ConfigWriteRequest, McpStatusRequest, ContextUsageRequest, McpSetServersRequest, McpReconnectRequest, McpToggleRequest, PluginReloadRequest, ConfigApplyFlagsRequest],
+    Field(discriminator='method'),
+]
 
 # ---------------------------------------------------------------------------
 # Additional types
@@ -1990,37 +2708,121 @@ class AttachmentMessage(BaseModel):
     extras: AttachmentExtras | None = None
 
 class CommandPermissionsPayload(BaseModel):
-    allowedTools: list[str]
+    allowed_tools: list[str] = Field(alias='allowedTools')
     model: str | None = None
+
+class ConfigChangeInput(BaseModel):
+    cwd: str
+    session_id: str
+    source: ConfigChangeSource
+    hook_event_name: Literal['ConfigChange']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    file_path: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class ConfigReadResult(BaseModel):
+    config: Any
+    sources: dict[str, Any] = {}
+
+class ContextUsageCategory(BaseModel):
+    name: str
+    tokens: int
+
+class ContextUsageResult(BaseModel):
+    categories: list[ContextUsageCategory]
+    is_auto_compact_enabled: bool
+    max_tokens: int
+    model: str
+    percentage: float
+    raw_max_tokens: int
+    total_tokens: int
+    auto_compact_threshold: int | None = None
+    message_breakdown: MessageBreakdown | None = None
 
 class CustomPart(BaseModel):
     kind: str
-    providerMetadata: ProviderMetadata | None = None
-    providerOptions: ProviderOptions | None = None
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
+    provider_options: ProviderOptions | None = Field(default=None, alias='providerOptions')
+
+class CwdChangedInput(BaseModel):
+    cwd: str
+    new_cwd: str
+    old_cwd: str
+    session_id: str
+    hook_event_name: Literal['CwdChanged']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
 
 class DynamicSkillPayload(BaseModel):
-    displayPath: str
-    skillDir: str
-    skillNames: list[str]
+    display_path: str = Field(alias='displayPath')
+    skill_dir: str = Field(alias='skillDir')
+    skill_names: list[str] = Field(alias='skillNames')
 
 class EditedImageFilePayload(BaseModel):
     display_path: str
     filename: str
 
+class ElicitationInput(BaseModel):
+    cwd: str
+    mcp_server_name: str
+    message: str
+    session_id: str
+    hook_event_name: Literal['Elicitation']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    elicitation_id: str | None = None
+    mode: ElicitationMode | None = None
+    permission_mode: str | None = None
+    requested_schema: Any = None
+    transcript_path: str = ''
+    url: str | None = None
+
+class ElicitationResultInput(BaseModel):
+    action: ElicitationAction
+    cwd: str
+    mcp_server_name: str
+    session_id: str
+    hook_event_name: Literal['ElicitationResult']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    content: dict[str, Any] | None = None
+    elicitation_id: str | None = None
+    mode: ElicitationMode | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
 class FileChangeInfo(BaseModel):
     kind: FileChangeKind
     path: str
 
+class FileChangedInput(BaseModel):
+    cwd: str
+    event: FileChangeEvent
+    file_path: str
+    session_id: str
+    hook_event_name: Literal['FileChanged']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
 class FilePart(BaseModel):
     data: SharedV4FileData
-    mediaType: str
+    media_type: str = Field(alias='mediaType')
     filename: str | None = None
-    providerMetadata: ProviderMetadata | None = None
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
 
 class HookCallbackMatcher(BaseModel):
     hook_callback_ids: list[str]
     matcher: str | None = None
     timeout: int | None = None
+
+class HookCallbackResult(BaseModel):
+    output: SdkHookOutput
 
 class HookCancelledPayload(BaseModel):
     hook_event: HookEventType
@@ -2052,10 +2854,37 @@ class HookSystemMessagePayload(BaseModel):
     hook_name: str
     tool_use_id: str
 
+class InitializeResult(BaseModel):
+    output_style: str
+    coco_rs_protocol_version: str = Field(default=None, alias='_cocoRsProtocolVersion')
+    coco_rs_version: str = Field(default=None, alias='_cocoRsVersion')
+    account: SdkAccountInfo = {}
+    agents: list[SdkAgentInfo] = []
+    available_output_styles: list[str] = []
+    commands: list[SdkSlashCommand] = []
+    fast_mode_state: FastModeState | None = None
+    models: list[SdkModelInfo] = []
+    pid: int | None = None
+
 class InputTokenDetails(BaseModel):
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     no_cache_tokens: int = 0
+
+class InstructionsLoadedInput(BaseModel):
+    cwd: str
+    file_path: str
+    load_reason: InstructionsLoadReason
+    memory_type: MemoryType
+    session_id: str
+    hook_event_name: Literal['InstructionsLoaded']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    globs: list[str] | None = None
+    parent_file_path: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+    trigger_file_path: str | None = None
 
 class JsonRpcError(BaseModel):
     code: int
@@ -2077,12 +2906,29 @@ class JsonRpcResponse(BaseModel):
     result: Any = None
 
 class MaxTurnsReachedPayload(BaseModel):
-    maxTurns: int
-    turnCount: int
+    max_turns: int = Field(alias='maxTurns')
+    turn_count: int = Field(alias='turnCount')
+
+class McpRouteMessageResult(BaseModel):
+    message: Any
 
 class McpServerInit(BaseModel):
     name: str
     status: McpConnectionStatus
+
+class McpServerStatus(BaseModel):
+    name: str
+    status: McpConnectionStatus
+    error: str | None = None
+    tool_count: int = 0
+
+class McpSetServersResult(BaseModel):
+    added: list[str]
+    errors: dict[str, str]
+    removed: list[str]
+
+class McpStatusResult(BaseModel):
+    mcp_servers: list[McpServerStatus] = Field(alias='mcpServers')
 
 class MemoryDialogEntry(BaseModel):
     label: str
@@ -2090,11 +2936,30 @@ class MemoryDialogEntry(BaseModel):
     scope: MemoryDialogScope
     row_kind: MemoryDialogRowKind = {}
 
+class MessageBreakdown(BaseModel):
+    assistant_message_tokens: int
+    attachment_tokens: int
+    tool_call_tokens: int
+    tool_result_tokens: int
+    user_message_tokens: int
+
 class ModelSpec(BaseModel):
     api: ProviderApi
     display_name: str
     model_id: str
     provider: str
+
+class NotificationInput(BaseModel):
+    cwd: str
+    message: str
+    notification_type: str
+    session_id: str
+    hook_event_name: Literal['Notification']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    title: str | None = None
+    transcript_path: str = ''
 
 class OutputTokenDetails(BaseModel):
     reasoning_tokens: int = 0
@@ -2109,6 +2974,31 @@ class PermissionDenialInfo(BaseModel):
     tool_input: Any
     tool_name: str
     tool_use_id: str
+
+class PermissionDeniedInput(BaseModel):
+    cwd: str
+    reason: str
+    session_id: str
+    tool_input: Any
+    tool_name: str
+    tool_use_id: str
+    hook_event_name: Literal['PermissionDenied']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class PermissionRequestInput(BaseModel):
+    cwd: str
+    session_id: str
+    tool_input: Any
+    tool_name: str
+    hook_event_name: Literal['PermissionRequest']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    permission_suggestions: Any = None
+    transcript_path: str = ''
 
 class PermissionRule(BaseModel):
     behavior: PermissionBehavior
@@ -2132,6 +3022,73 @@ class PluginInit(BaseModel):
     path: str
     source: str | None = None
 
+class PluginReloadResult(BaseModel):
+    agents: list[str]
+    commands: list[str]
+    error_count: int
+    plugins: list[str]
+
+class PostCompactInput(BaseModel):
+    compact_summary: str
+    cwd: str
+    session_id: str
+    trigger: CompactTrigger
+    hook_event_name: Literal['PostCompact']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class PostToolUseFailureInput(BaseModel):
+    cwd: str
+    error: str
+    session_id: str
+    tool_input: Any
+    tool_name: str
+    tool_use_id: str
+    hook_event_name: Literal['PostToolUseFailure']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    is_interrupt: bool | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class PostToolUseInput(BaseModel):
+    cwd: str
+    session_id: str
+    tool_input: Any
+    tool_name: str
+    tool_response: Any
+    tool_use_id: str
+    hook_event_name: Literal['PostToolUse']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class PreCompactInput(BaseModel):
+    cwd: str
+    session_id: str
+    trigger: CompactTrigger
+    hook_event_name: Literal['PreCompact']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    custom_instructions: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class PreToolUseInput(BaseModel):
+    cwd: str
+    session_id: str
+    tool_input: Any
+    tool_name: str
+    tool_use_id: str
+    hook_event_name: Literal['PreToolUse']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
 class PreservedSegment(BaseModel):
     anchor_uuid: str
     head_uuid: str
@@ -2150,21 +3107,77 @@ class ProviderOptions(BaseModel):
 
 class ReasoningFilePart(BaseModel):
     data: LanguageModelV4FileData
-    mediaType: str
-    providerMetadata: ProviderMetadata | None = None
+    media_type: str = Field(alias='mediaType')
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
 
 class ReasoningPart(BaseModel):
     text: str
-    providerMetadata: ProviderMetadata | None = None
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
 
 class RewindDiffStatsPayload(BaseModel):
     deletions: int
     file_paths: list[str]
     insertions: int
 
+class RewindFilesResult(BaseModel):
+    deletions: int = 0
+    dry_run: bool = False
+    files_changed: list[str] = []
+    insertions: int = 0
+
 class RewindRowMetadata(BaseModel):
     message_id: str
     metadata: RewindDiffStatsPayload | None = None
+
+class SdkAccountInfo(BaseModel):
+    api_key_source: str | None = Field(default=None, alias='apiKeySource')
+    api_provider: ApiProvider | None = Field(default=None, alias='apiProvider')
+    email: str | None = None
+    organization: str | None = None
+    subscription_type: str | None = Field(default=None, alias='subscriptionType')
+    token_source: str | None = Field(default=None, alias='tokenSource')
+
+class SdkAgentDefinition(BaseModel):
+    description: str
+    prompt: str
+    background: bool | None = None
+    critical_system_reminder_experimental: str | None = Field(default=None, alias='criticalSystemReminder_EXPERIMENTAL')
+    disallowed_tools: list[str] | None = None
+    effort: ReasoningEffort | None = None
+    initial_prompt: str | None = None
+    max_turns: int | None = None
+    mcp_servers: list[AgentMcpServerSpec] | None = None
+    memory: MemoryScope | None = None
+    model: str | None = None
+    permission_mode: PermissionMode | None = None
+    skills: list[str] | None = None
+    tools: list[str] | None = None
+
+class SdkAgentInfo(BaseModel):
+    description: str
+    name: str
+    model: str | None = None
+
+class SdkHookOutput(BaseModel):
+    async_: bool | None = Field(default=None, alias='async')
+    async_timeout: int | None = Field(default=None, alias='asyncTimeout')
+    continue_: bool | None = Field(default=None, alias='continue')
+    decision: HookDecision | None = None
+    hook_specific_output: HookSpecificOutput | None = Field(default=None, alias='hookSpecificOutput')
+    reason: str | None = None
+    stop_reason: str | None = Field(default=None, alias='stopReason')
+    suppress_output: bool | None = Field(default=None, alias='suppressOutput')
+    system_message: str | None = Field(default=None, alias='systemMessage')
+
+class SdkModelInfo(BaseModel):
+    description: str
+    display_name: str = Field(alias='displayName')
+    value: str
+    supported_effort_levels: list[EffortLevel] = Field(default=None, alias='supportedEffortLevels')
+    supports_adaptive_thinking: bool | None = Field(default=None, alias='supportsAdaptiveThinking')
+    supports_auto_mode: bool | None = Field(default=None, alias='supportsAutoMode')
+    supports_effort: bool | None = Field(default=None, alias='supportsEffort')
+    supports_fast_mode: bool | None = Field(default=None, alias='supportsFastMode')
 
 class SdkSessionSummary(BaseModel):
     created_at: str
@@ -2176,6 +3189,24 @@ class SdkSessionSummary(BaseModel):
     total_tokens: int = 0
     updated_at: str | None = None
 
+class SdkSlashCommand(BaseModel):
+    argument_hint: str = Field(alias='argumentHint')
+    description: str
+    name: str
+
+class SessionEndInput(BaseModel):
+    cwd: str
+    reason: ExitReason
+    session_id: str
+    hook_event_name: Literal['SessionEnd']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class SessionListResult(BaseModel):
+    sessions: list[SdkSessionSummary]
+
 class SessionModelUsage(BaseModel):
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
@@ -2186,6 +3217,39 @@ class SessionModelUsage(BaseModel):
     output_tokens: int
     web_search_requests: int
 
+class SessionReadResult(BaseModel):
+    session: SdkSessionSummary
+    has_more: bool = False
+    messages: list[Any] = []
+    next_cursor: str | None = None
+
+class SessionResumeResult(BaseModel):
+    session: SdkSessionSummary
+
+class SessionStartInput(BaseModel):
+    cwd: str
+    session_id: str
+    source: SessionStartSource
+    hook_event_name: Literal['SessionStart']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    model: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class SessionStartResult(BaseModel):
+    session_id: str
+
+class SetupInput(BaseModel):
+    cwd: str
+    session_id: str
+    trigger: SetupTrigger
+    hook_event_name: Literal['Setup']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
 class SkillDiscoveryPayload(BaseModel):
     signal: str
     skills: list[SkillDiscoverySkill]
@@ -2194,7 +3258,7 @@ class SkillDiscoveryPayload(BaseModel):
 class SkillDiscoverySkill(BaseModel):
     description: str
     name: str
-    shortId: str | None = None
+    short_id: str | None = Field(default=None, alias='shortId')
 
 class SlashCommandInfo(BaseModel):
     name: str
@@ -2204,15 +3268,59 @@ class SlashCommandInfo(BaseModel):
 
 class SourcePart(BaseModel):
     id: str
-    sourceType: SourceType
+    source_type: SourceType = Field(alias='sourceType')
     filename: str | None = None
-    mediaType: str | None = None
-    providerMetadata: ProviderMetadata | None = None
+    media_type: str | None = Field(default=None, alias='mediaType')
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
     title: str | None = None
     url: str | None = None
 
+class StopFailureInput(BaseModel):
+    cwd: str
+    error: str
+    session_id: str
+    hook_event_name: Literal['StopFailure']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    error_details: str | None = None
+    last_assistant_message: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class StopInput(BaseModel):
+    cwd: str
+    session_id: str
+    stop_hook_active: bool
+    hook_event_name: Literal['Stop']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    last_assistant_message: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
 class StructuredOutputPayload(BaseModel):
     data: Any
+
+class SubagentStartInput(BaseModel):
+    agent_id: str
+    agent_type: str
+    cwd: str
+    session_id: str
+    hook_event_name: Literal['SubagentStart']
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class SubagentStopInput(BaseModel):
+    agent_id: str
+    agent_transcript_path: str
+    agent_type: str
+    cwd: str
+    session_id: str
+    stop_hook_active: bool
+    hook_event_name: Literal['SubagentStop']
+    last_assistant_message: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
 
 class SystemAgentsKilledMessage(BaseModel):
     count: int
@@ -2294,12 +3402,40 @@ class TaskActivity(BaseModel):
     tool_name: str
     summary: str | None = None
 
+class TaskCompletedInput(BaseModel):
+    cwd: str
+    session_id: str
+    task_id: str
+    task_subject: str
+    hook_event_name: Literal['TaskCompleted']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    task_description: str | None = None
+    team_name: str | None = None
+    teammate_name: str | None = None
+    transcript_path: str = ''
+
+class TaskCreatedInput(BaseModel):
+    cwd: str
+    session_id: str
+    task_id: str
+    task_subject: str
+    hook_event_name: Literal['TaskCreated']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    task_description: str | None = None
+    team_name: str | None = None
+    teammate_name: str | None = None
+    transcript_path: str = ''
+
 class TaskRecord(BaseModel):
     id: str
     status: TaskListStatus
     subject: str
-    activeForm: str | None = None
-    blockedBy: list[str] = []
+    active_form: str | None = Field(default=None, alias='activeForm')
+    blocked_by: list[str] = Field(default=None, alias='blockedBy')
     blocks: list[str] = []
     description: str = ''
     metadata: dict[str, Any] | None = None
@@ -2310,9 +3446,20 @@ class TaskUsage(BaseModel):
     tool_uses: int
     total_tokens: int
 
+class TeammateIdleInput(BaseModel):
+    cwd: str
+    session_id: str
+    team_name: str
+    teammate_name: str
+    hook_event_name: Literal['TeammateIdle']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
 class TextPart(BaseModel):
     text: str
-    providerMetadata: ProviderMetadata | None = None
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
 
 class ThinkingLevel(BaseModel):
     effort: ReasoningEffort
@@ -2320,7 +3467,7 @@ class ThinkingLevel(BaseModel):
     options: dict[str, Any] | None = None
 
 class TodoRecord(BaseModel):
-    activeForm: str
+    active_form: str = Field(alias='activeForm')
     content: str
     status: str
 
@@ -2336,26 +3483,26 @@ class TombstoneMessage(BaseModel):
     uuid: str
 
 class ToolApprovalRequestPart(BaseModel):
-    approvalId: str
-    toolCallId: str
+    approval_id: str = Field(alias='approvalId')
+    tool_call_id: str = Field(alias='toolCallId')
     context: str | None = None
-    providerMetadata: ProviderMetadata | None = None
-    toolName: str | None = None
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
+    tool_name: str | None = Field(default=None, alias='toolName')
 
 class ToolApprovalResponsePart(BaseModel):
-    approvalId: str
+    approval_id: str = Field(alias='approvalId')
     approved: bool
-    providerMetadata: ProviderMetadata | None = None
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
     reason: str | None = None
 
 class ToolCallPart(BaseModel):
     input: Any
-    toolCallId: str
-    toolName: str
+    tool_call_id: str = Field(alias='toolCallId')
+    tool_name: str = Field(alias='toolName')
     invalid: bool = False
-    invalidReason: ToolInputInvalidReason | None = None
-    providerExecuted: bool | None = None
-    providerMetadata: ProviderMetadata | None = None
+    invalid_reason: ToolInputInvalidReason | None = Field(default=None, alias='invalidReason')
+    provider_executed: bool | None = Field(default=None, alias='providerExecuted')
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
 
 class ToolResultMessage(BaseModel):
     message: LanguageModelV4Message
@@ -2367,10 +3514,13 @@ class ToolResultMessage(BaseModel):
 
 class ToolResultPart(BaseModel):
     output: ToolResultContent
-    toolCallId: str
-    toolName: str
-    isError: bool = False
-    providerMetadata: ProviderMetadata | None = None
+    tool_call_id: str = Field(alias='toolCallId')
+    tool_name: str = Field(alias='toolName')
+    is_error: bool = Field(default=None, alias='isError')
+    provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
+
+class TurnStartResult(BaseModel):
+    turn_id: str
 
 class UserMessage(BaseModel):
     message: LanguageModelV4Message
@@ -2382,3 +3532,42 @@ class UserMessage(BaseModel):
     parent_tool_use_id: str | None = None
     permission_mode: PermissionMode | None = None
     timestamp: str = ''
+
+class UserPromptSubmitInput(BaseModel):
+    cwd: str
+    prompt: str
+    session_id: str
+    hook_event_name: Literal['UserPromptSubmit']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class WorktreeCreateInput(BaseModel):
+    cwd: str
+    name: str
+    session_id: str
+    hook_event_name: Literal['WorktreeCreate']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+class WorktreeRemoveInput(BaseModel):
+    cwd: str
+    session_id: str
+    worktree_path: str
+    hook_event_name: Literal['WorktreeRemove']
+    agent_id: str | None = None
+    agent_type: str | None = None
+    permission_mode: str | None = None
+    transcript_path: str = ''
+
+# ---------------------------------------------------------------------------
+# Tagged discriminated unions (ref-based)
+# ---------------------------------------------------------------------------
+
+HookInput = Annotated[
+    Union[PreToolUseInput, PostToolUseInput, PostToolUseFailureInput, SessionStartInput, SessionEndInput, SetupInput, StopInput, StopFailureInput, PreCompactInput, PostCompactInput, SubagentStartInput, SubagentStopInput, UserPromptSubmitInput, PermissionRequestInput, PermissionDeniedInput, NotificationInput, ElicitationInput, ElicitationResultInput, FileChangedInput, ConfigChangeInput, InstructionsLoadedInput, CwdChangedInput, WorktreeCreateInput, WorktreeRemoveInput, TaskCreatedInput, TaskCompletedInput, TeammateIdleInput],
+    Field(discriminator='hook_event_name'),
+]

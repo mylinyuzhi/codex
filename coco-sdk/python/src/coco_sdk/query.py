@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import AsyncIterator
 
+from coco_sdk._message_router import MessageRouter
 from coco_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 from coco_sdk.generated.protocol import (
     InitializeRequest,
+    NotificationMethod,
     PermissionMode,
     ServerNotification,
     SessionStartRequest,
@@ -68,9 +70,11 @@ async def query(
 
     try:
         await transport.start()
+        router = MessageRouter(transport)
+        router.start()
 
         # 1) initialize — capability negotiation handshake.
-        await transport.send_request(InitializeRequest(
+        await router.request(InitializeRequest(
             params=InitializeRequest.InitializeRequestParams()
         ))
 
@@ -78,7 +82,7 @@ async def query(
         #    on this request does NOT auto-run a turn (it's just a label
         #    for the first user message); turns are launched separately
         #    via `turn/start`.
-        await transport.send_request(SessionStartRequest(params=SessionStartRequest.SessionStartRequestParams(
+        await router.request(SessionStartRequest(params=SessionStartRequest.SessionStartRequestParams(
             model=model_str,
             max_turns=max_turns,
             cwd=cwd,
@@ -94,11 +98,17 @@ async def query(
 
         # 3) turn/start — actually runs the prompt and produces the
         #    notification stream.
-        await transport.send_request(TurnStartRequest(
+        await router.request(TurnStartRequest(
             params=TurnStartRequest.TurnStartRequestParams(prompt=prompt)
         ))
 
-        async for event in transport.read_events():
+        while True:
+            data = await router.next_event()
+            event = ServerNotification.model_validate(data)
             yield event
+            if event.method in (NotificationMethod.TURN_COMPLETED, NotificationMethod.TURN_FAILED):
+                break
     finally:
+        if "router" in locals():
+            await router.close()
         await transport.close()

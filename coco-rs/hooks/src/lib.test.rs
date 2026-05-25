@@ -336,6 +336,7 @@ fn test_prompt_handler() {
         HookExecutionResult::CommandOutput { .. } => {
             panic!("expected PromptText, got CommandOutput");
         }
+        HookExecutionResult::SdkOutput(_) => panic!("expected non-SDK variant"),
     }
 }
 
@@ -361,6 +362,7 @@ async fn test_command_hook_execution() {
         HookExecutionResult::PromptText(_) => {
             panic!("expected CommandOutput, got PromptText");
         }
+        HookExecutionResult::SdkOutput(_) => panic!("expected non-SDK variant"),
     }
 }
 
@@ -1128,6 +1130,7 @@ async fn test_command_hook_custom_shell() {
         HookExecutionResult::PromptText(_) => {
             panic!("expected CommandOutput, got PromptText");
         }
+        HookExecutionResult::SdkOutput(_) => panic!("expected non-SDK variant"),
     }
 }
 
