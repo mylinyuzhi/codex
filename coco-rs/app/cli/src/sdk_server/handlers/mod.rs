@@ -28,13 +28,11 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 use coco_types::ApprovalResolveParams;
-use coco_types::ClientHookCallbackResponseParams;
 use coco_types::ClientRequest;
 use coco_types::CoreEvent;
 use coco_types::ElicitationResolveParams;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcRequest;
-use coco_types::McpRouteMessageResponseParams;
 use coco_types::RequestId;
 use coco_types::UserInputResolveParams;
 use serde_json::Value;
@@ -46,6 +44,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::warn;
 
+use crate::sdk_server::outbound::OutboundMessage;
 use crate::sdk_server::pending_map::PendingMap;
 use crate::sdk_server::transport::SdkTransport;
 
@@ -253,12 +252,6 @@ pub struct SdkServerState {
     /// Pending `input/requestUserInput` ServerRequests awaiting a client
     /// `input/resolveUserInput`.
     pub pending_user_input: PendingMap<UserInputResolveParams>,
-    /// Pending `hook/callback` ServerRequests awaiting a client
-    /// `hook/callbackResponse`. Keyed by `callback_id`.
-    pub pending_hook_callbacks: PendingMap<ClientHookCallbackResponseParams>,
-    /// Pending `mcp/routeMessage` ServerRequests awaiting a client
-    /// `mcp/routeMessageResponse`.
-    pub pending_mcp_routes: PendingMap<McpRouteMessageResponseParams>,
     /// Pending elicitation ServerRequests awaiting a client
     /// `elicitation/resolve`.
     pub pending_elicitations: PendingMap<ElicitationResolveParams>,
@@ -279,6 +272,10 @@ pub struct SdkServerState {
     /// other ServerRequest-emitting code paths. `None` in tests that
     /// construct `SdkServerState` directly.
     pub transport: RwLock<Option<Arc<dyn SdkTransport>>>,
+    /// Ordered outbound queue owned by the running dispatcher. When set,
+    /// server requests use this queue instead of writing directly to the
+    /// transport so requests, replies, and notifications share one writer.
+    pub outbound_tx: RwLock<Option<mpsc::Sender<OutboundMessage>>>,
     /// Optional disk-backed [`coco_session::SessionManager`] used by
     /// the `session/list`, `session/read`, `session/resume` handlers
     /// to browse and resume historical sessions. When `None`, those
@@ -360,8 +357,6 @@ impl Default for SdkServerState {
             turn_runner: RwLock::new(Arc::new(NotImplementedRunner) as Arc<dyn TurnRunner>),
             pending_approvals: PendingMap::new(),
             pending_user_input: PendingMap::new(),
-            pending_hook_callbacks: PendingMap::new(),
-            pending_mcp_routes: PendingMap::new(),
             pending_elicitations: PendingMap::new(),
             pending_server_requests: Mutex::new(HashMap::new()),
             // Start at -1 and decrement. Keeps us out of the typical
@@ -369,6 +364,7 @@ impl Default for SdkServerState {
             // visually distinctive in logs.
             next_server_request_id: AtomicI64::new(-1),
             transport: RwLock::new(None),
+            outbound_tx: RwLock::new(None),
             session_manager: RwLock::new(None),
             file_history: RwLock::new(None),
             file_history_config_home: RwLock::new(None),
@@ -401,22 +397,6 @@ impl SdkServerState {
         request_id: String,
     ) -> oneshot::Receiver<UserInputResolveParams> {
         self.pending_user_input.register(request_id).await
-    }
-
-    /// Register an expected `hook/callbackResponse`.
-    pub async fn register_hook_callback(
-        &self,
-        callback_id: String,
-    ) -> oneshot::Receiver<ClientHookCallbackResponseParams> {
-        self.pending_hook_callbacks.register(callback_id).await
-    }
-
-    /// Register an expected `mcp/routeMessageResponse`.
-    pub async fn register_mcp_route(
-        &self,
-        request_id: String,
-    ) -> oneshot::Receiver<McpRouteMessageResponseParams> {
-        self.pending_mcp_routes.register(request_id).await
     }
 
     /// Register an expected `elicitation/resolve`. Used when an MCP server
@@ -477,17 +457,43 @@ impl SdkServerState {
             active: true,
         };
 
-        // Write the request onto the transport.
+        // Write the request through the dispatcher's ordered outbound
+        // queue. The fallback to `transport.send` that used to live
+        // here was removed — it bypassed the single-writer ordering
+        // guarantee for any call made between `SdkServer::new()` and
+        // `SdkServer::run()`. Callers must wait for `run()` to have
+        // populated `outbound_tx`; the only code path that hit the
+        // old fallback was tests, which now wait explicitly.
         let req = JsonRpcRequest {
             request_id: request_id.clone(),
             method: method.into(),
             params,
         };
         let msg = JsonRpcMessage::Request(req);
-        if let Err(e) = transport.send(msg).await {
-            // Guard will clean up on drop.
-            anyhow::bail!("failed to send server request: {e}");
-        }
+        // CRITICAL: scope the Sender clone tightly so it drops BEFORE
+        // we `rx.await`. Holding the Sender across the await keeps
+        // an extra reference on the outbound channel and **prevents
+        // writer-task shutdown** when the dispatcher's main loop
+        // exits — the writer would wait for all Senders to drop,
+        // but this spawned task holds one open while suspended on
+        // `rx.await`. Result: `server_task.await` hangs forever on
+        // clean shutdown. See test
+        // `sdk_mcp_status_reports_pending_while_connect_waits_for_route_response`.
+        let _ = transport;
+        {
+            let outbound_tx = {
+                let slot = self.outbound_tx.read().await;
+                slot.clone()
+            };
+            let Some(tx) = outbound_tx else {
+                anyhow::bail!(
+                    "send_server_request: outbound queue not initialized (server not yet running)"
+                );
+            };
+            if tx.send(OutboundMessage::JsonRpc(msg)).await.is_err() {
+                anyhow::bail!("failed to send server request: outbound queue closed");
+            }
+        } // `tx` dropped here; writer task can shut down independently.
 
         // Await the client's reply. If the sender is dropped
         // (e.g. transport closed), RecvError propagates.
@@ -548,14 +554,13 @@ impl std::fmt::Debug for SdkServerState {
             .field("turn_runner", &"RwLock<Arc<dyn TurnRunner>>")
             .field("pending_approvals", &"PendingMap<..>")
             .field("pending_user_input", &"PendingMap<..>")
-            .field("pending_hook_callbacks", &"PendingMap<..>")
-            .field("pending_mcp_routes", &"PendingMap<..>")
             .field("pending_elicitations", &"PendingMap<..>")
             .field("pending_server_requests", &"Mutex<HashMap<..>>")
             .field(
                 "next_server_request_id",
                 &self.next_server_request_id.load(Ordering::Relaxed),
             )
+            .field("outbound_tx", &"RwLock<Option<Sender<..>>>")
             .field("session_manager", &"RwLock<Option<Arc<SessionManager>>>")
             .field(
                 "file_history",
@@ -697,7 +702,7 @@ pub struct HandlerContext {
     /// Handlers that spawn a QueryEngine pass this as the engine's
     /// `event_tx`. Single-shot handlers (e.g., `initialize`) rarely use
     /// it; long-running handlers (e.g., `turn/start`) emit events here.
-    pub notif_tx: mpsc::Sender<CoreEvent>,
+    pub notif_tx: mpsc::Sender<OutboundMessage>,
 
     /// Shared server state across requests (session slot).
     pub state: Arc<SdkServerState>,
@@ -789,14 +794,6 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         // === Config ===
         ClientRequest::ConfigRead => config::handle_config_read(&ctx).await,
         ClientRequest::ConfigWrite(params) => config::handle_config_write(params, &ctx).await,
-
-        // === Hook + MCP routing responses ===
-        ClientRequest::HookCallbackResponse(params) => {
-            turn::handle_hook_callback_response(params, &ctx).await
-        }
-        ClientRequest::McpRouteMessageResponse(params) => {
-            turn::handle_mcp_route_message_response(params, &ctx).await
-        }
 
         // === TS P1 gap additions ===
         ClientRequest::McpStatus => mcp::handle_mcp_status(&ctx).await,

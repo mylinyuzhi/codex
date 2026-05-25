@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use coco_types::HookEventType;
@@ -39,6 +42,72 @@ fn make_registry(hooks: Vec<HookDefinition>) -> HookRegistry {
         registry.register(h);
     }
     registry
+}
+
+#[tokio::test]
+async fn sdk_callback_hook_routes_through_registered_runtime_callback() {
+    let registry = make_registry(vec![HookDefinition {
+        event: HookEventType::PreToolUse,
+        matcher: Some("Bash".to_string()),
+        handler: HookHandler::SdkCallback {
+            callback_id: "cb-1".to_string(),
+            timeout_ms: None,
+        },
+        priority: 0,
+        scope: HookScope::Session,
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+    }]);
+    let called = Arc::new(AtomicBool::new(false));
+    let called_for_callback = called.clone();
+    registry.set_sdk_hook_callback(Arc::new(move |request| {
+        assert_eq!(request.callback_id, "cb-1");
+        assert_eq!(request.event, HookEventType::PreToolUse);
+        assert_eq!(request.tool_use_id.as_deref(), Some("tool-1"));
+        called_for_callback.store(true, Ordering::SeqCst);
+        // Typed SdkHookOutput — no JSON round-trip. PreToolUse deny
+        // via hookSpecificOutput is the TS-canonical shape for "block
+        // this tool with a reason".
+        Box::pin(async {
+            Ok(coco_types::SdkHookOutput {
+                hook_specific_output: Some(coco_types::HookSpecificOutput::PreToolUse {
+                    permission_decision: Some(coco_types::HookPermissionDecision::Deny),
+                    permission_decision_reason: Some("sdk denied".into()),
+                    updated_input: None,
+                    additional_context: None,
+                }),
+                ..Default::default()
+            })
+        })
+    }));
+
+    let result = execute_pre_tool_use(
+        &registry,
+        &test_ctx(),
+        "Bash",
+        "tool-1",
+        &serde_json::json!({ "command": "rm -rf /tmp/x" }),
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert!(called.load(Ordering::SeqCst));
+    let err = result
+        .blocking_error
+        .as_ref()
+        .expect("SDK callback deny should produce blocking_error");
+    assert_eq!(err.blocking_error, "sdk denied");
+    // Regression guard: SDK callback denials carry `HookBlockingSource::Sdk`
+    // — not `Command(label)`. Telemetry and log filtering can distinguish
+    // SDK denials from shell-command denials without parsing the label.
+    match &err.source {
+        HookBlockingSource::Sdk { callback_id } => assert_eq!(callback_id, "cb-1"),
+        other => panic!("expected HookBlockingSource::Sdk, got {other:?}"),
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -112,6 +181,8 @@ fn test_aggregate_results_blocking() {
         outcome: HookOutcome::Blocking,
         status_message: None,
         async_rewake: false,
+        source: HookBlockingSource::Command(String::new()),
+        sdk_output: None,
     }];
     let agg = aggregate_results(&results);
     assert!(agg.is_blocked());
@@ -134,6 +205,8 @@ fn test_aggregate_results_json_permission_deny() {
         outcome: HookOutcome::Success,
         status_message: None,
         async_rewake: false,
+        source: HookBlockingSource::Command(String::new()),
+        sdk_output: None,
     }];
     let agg = aggregate_results(&results);
     assert!(agg.is_blocked());
@@ -155,6 +228,8 @@ fn test_aggregate_results_json_permission_allow() {
         outcome: HookOutcome::Success,
         status_message: None,
         async_rewake: false,
+        source: HookBlockingSource::Command(String::new()),
+        sdk_output: None,
     }];
     let agg = aggregate_results(&results);
     assert!(!agg.is_blocked());
@@ -172,6 +247,8 @@ fn test_aggregate_results_additional_context() {
             outcome: HookOutcome::Success,
             status_message: None,
             async_rewake: false,
+            source: HookBlockingSource::Command(String::new()),
+            sdk_output: None,
         },
         SingleHookResult {
             command: "ctx2.sh".to_string(),
@@ -181,6 +258,8 @@ fn test_aggregate_results_additional_context() {
             outcome: HookOutcome::Success,
             status_message: None,
             async_rewake: false,
+            source: HookBlockingSource::Command(String::new()),
+            sdk_output: None,
         },
     ];
     let agg = aggregate_results(&results);
@@ -1153,7 +1232,7 @@ fn test_parse_hook_specific_output_pre_tool_use() {
                     additional_context,
                     ..
                 } => {
-                    assert_eq!(permission_decision.as_deref(), Some("allow"));
+                    assert_eq!(*permission_decision, Some(HookPermissionDecision::Allow));
                     assert_eq!(additional_context.as_deref(), Some("safe command"));
                 }
                 other => panic!("expected PreToolUse, got {other:?}"),
@@ -1191,7 +1270,7 @@ fn test_parse_hook_specific_output_elicitation_decline() {
     match parsed {
         ParsedHookOutput::Json(j) => match j.hook_specific_output.as_ref().unwrap() {
             HookSpecificOutput::Elicitation { action, .. } => {
-                assert_eq!(action.as_deref(), Some("decline"));
+                assert_eq!(*action, Some(ElicitationAction::Decline));
             }
             other => panic!("expected Elicitation, got {other:?}"),
         },
@@ -1210,6 +1289,8 @@ fn test_aggregate_with_hook_specific_output() {
         outcome: HookOutcome::Success,
         status_message: None,
         async_rewake: false,
+        source: HookBlockingSource::Command(String::new()),
+        sdk_output: None,
     }];
     let agg = aggregate_results(&results);
     assert_eq!(agg.permission_behavior, Some(PermissionBehavior::Deny));
@@ -1233,11 +1314,16 @@ fn test_aggregate_elicitation_decline_blocks() {
         outcome: HookOutcome::Success,
         status_message: None,
         async_rewake: false,
+        source: HookBlockingSource::Command(String::new()),
+        sdk_output: None,
     }];
     let agg = aggregate_results(&results);
     assert!(agg.is_blocked());
     assert!(agg.elicitation_response.is_some());
-    assert_eq!(agg.elicitation_response.as_ref().unwrap().action, "decline");
+    assert_eq!(
+        agg.elicitation_response.as_ref().unwrap().action,
+        ElicitationAction::Decline,
+    );
 }
 
 // -----------------------------------------------------------------------

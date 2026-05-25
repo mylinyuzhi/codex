@@ -14,17 +14,6 @@ from coco_sdk import CocoClient, hook
 from coco_sdk.generated.protocol import NotificationMethod
 
 
-@pytest.mark.xfail(
-    reason=(
-        "coco-rs gap: `handle_initialize` (app/cli/src/sdk_server/handlers/"
-        "session.rs:41) reads `agent_progress_summaries` only and silently "
-        "drops `params.hooks`. Hooks registered via the Python `@hook()` "
-        "decorator never reach the dispatcher, so PreToolUse never fires "
-        "into our SDK callback. Re-enable when coco-rs's initialize handler "
-        "stores the hooks_map and the agent loop calls into it."
-    ),
-    strict=True,
-)
 async def test_pre_tool_use_hook_fires(live_deepseek, isolated_cwd) -> None:
     seen: list[dict] = []
 

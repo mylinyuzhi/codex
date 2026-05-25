@@ -49,7 +49,6 @@ fn request_user_input_wire_method() {
 #[test]
 fn mcp_route_message_wire_method() {
     let req = ServerRequest::McpRouteMessage(McpRouteMessageParams {
-        request_id: "req-3".into(),
         server_name: "github".into(),
         message: json!({ "jsonrpc": "2.0", "method": "tools/list" }),
     });
@@ -61,8 +60,8 @@ fn mcp_route_message_wire_method() {
 #[test]
 fn hook_callback_wire_method() {
     let req = ServerRequest::HookCallback(HookCallbackParams {
-        request_id: "req-4".into(),
         callback_id: "cb-1".into(),
+        event_type: crate::HookEventType::PreToolUse,
         input: json!({ "tool_name": "Bash" }),
         tool_use_id: Some("tu-1".into()),
     });

@@ -308,6 +308,41 @@ fn main() {
     bundle.add::<coco_types::WireApi>("WireApi");
     bundle.add::<coco_types::ApplyPatchToolType>("ApplyPatchToolType");
 
+    // SDK hook callback output — TS-canonical `hookJSONOutputSchema`.
+    // Not reachable from `ClientRequest`/`ServerRequest` (responses
+    // ride the synchronous JSON-RPC reply path, which isn't a typed
+    // union schema), so each TS-mirrored type is registered explicitly
+    // for cross-language SDK codegen. `HookSpecificOutput` is a tagged
+    // union; its variant payloads come through transitively.
+    bundle.add::<coco_types::SdkHookOutput>("SdkHookOutput");
+    bundle.add::<coco_types::HookSpecificOutput>("HookSpecificOutput");
+    bundle.add::<coco_types::HookDecision>("HookDecision");
+    // `HookPermissionDecision` is shared with the silent attachment
+    // payload (`messages::attachment_body::HookPermissionDecision`) —
+    // single source of truth, registered once for both call sites.
+    bundle.add::<coco_types::ElicitationAction>("ElicitationAction");
+    bundle.add::<coco_types::PermissionRequestDecision>("PermissionRequestDecision");
+    bundle.add::<coco_types::HookCallbackResult>("HookCallbackResult");
+    bundle.add::<coco_types::McpRouteMessageResult>("McpRouteMessageResult");
+
+    // SDK ClientRequest synchronous reply bodies — registered
+    // explicitly so the Python SDK can deserialize them as typed
+    // Pydantic models (`client.mcp_status() → McpStatusResult`, etc.).
+    // They're not reachable from any wire union because JSON-RPC
+    // results are method-keyed, not tagged-enum-discriminated.
+    bundle.add::<coco_types::ConfigReadResult>("ConfigReadResult");
+    bundle.add::<coco_types::ContextUsageResult>("ContextUsageResult");
+    bundle.add::<coco_types::InitializeResult>("InitializeResult");
+    bundle.add::<coco_types::McpStatusResult>("McpStatusResult");
+    bundle.add::<coco_types::McpSetServersResult>("McpSetServersResult");
+    bundle.add::<coco_types::PluginReloadResult>("PluginReloadResult");
+    bundle.add::<coco_types::SessionListResult>("SessionListResult");
+    bundle.add::<coco_types::SessionReadResult>("SessionReadResult");
+    bundle.add::<coco_types::SessionResumeResult>("SessionResumeResult");
+    bundle.add::<coco_types::SessionStartResult>("SessionStartResult");
+    bundle.add::<coco_types::TurnStartResult>("TurnStartResult");
+    bundle.add::<coco_types::RewindFilesResult>("RewindFilesResult");
+
     let (definitions, conflicts) = bundle.into_definitions();
 
     if !conflicts.is_empty() {

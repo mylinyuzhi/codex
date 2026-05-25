@@ -9,12 +9,20 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use coco_error::BoxedError;
+use coco_mcp_types::CallToolRequestParams;
 use coco_mcp_types::CallToolResult;
+use coco_mcp_types::InitializeResult;
+use coco_mcp_types::JSONRPC_VERSION;
+use coco_mcp_types::ListToolsResult;
 use coco_mcp_types::ReadResourceRequestParams;
 use coco_mcp_types::ReadResourceResult;
 use coco_rmcp_client::McpAuthStatus;
@@ -41,6 +49,11 @@ const DEFAULT_TOOL_TIMEOUT_MS: u64 = 100_000_000;
 /// Default MCP initialization timeout.
 const DEFAULT_INIT_TIMEOUT: Duration = Duration::from_secs(60);
 
+pub type SdkRouteFuture =
+    Pin<Box<dyn Future<Output = std::result::Result<serde_json::Value, String>> + Send>>;
+pub type SdkRouteMessage =
+    Arc<dyn Fn(String, serde_json::Value) -> SdkRouteFuture + Send + Sync + 'static>;
+
 /// MCP connection manager — manages lifecycle of all MCP server connections.
 ///
 /// Internally delegates to `coco_rmcp_client::RmcpClient` for actual MCP
@@ -51,6 +64,14 @@ pub struct McpConnectionManager {
     connections: Arc<RwLock<HashMap<String, McpConnectionState>>>,
     /// Holds the underlying rmcp clients, keyed by server name.
     rmcp_clients: Arc<RwLock<HashMap<String, Arc<RmcpClient>>>>,
+    sdk_route_message: Option<SdkRouteMessage>,
+    /// Monotonic counter for inner JSON-RPC `id` values used when
+    /// bridging messages through `mcp/routeMessage`. Per-manager so two
+    /// SDK MCP servers (or two concurrent `tools/call` invocations) get
+    /// distinct ids. Wrapped in `Arc` so `Clone` impl shares the counter
+    /// across cloned managers — they cooperate rather than restarting
+    /// from 0 each clone.
+    sdk_route_next_id: Arc<AtomicI64>,
     tool_timeout_ms: u64,
     config_home: PathBuf,
 }
@@ -61,6 +82,8 @@ impl McpConnectionManager {
             configs: HashMap::new(),
             connections: Arc::new(RwLock::new(HashMap::new())),
             rmcp_clients: Arc::new(RwLock::new(HashMap::new())),
+            sdk_route_message: None,
+            sdk_route_next_id: Arc::new(AtomicI64::new(0)),
             tool_timeout_ms: DEFAULT_TOOL_TIMEOUT_MS,
             config_home,
         }
@@ -78,9 +101,35 @@ impl McpConnectionManager {
     }
 
     /// Register a server configuration.
+    ///
+    /// Also seeds `connections[name] = Pending` so a concurrent
+    /// `mcp/status` query before `connect()` runs reports the server
+    /// as `pending` (TS-canonical) rather than `disconnected`.
+    /// `connect()` overwrites the entry on success / failure.
+    ///
+    /// Uses `try_write` because:
+    ///
+    /// 1. `register_server` may run inside an async context (e.g.
+    ///    the `mcp/setServers` handler) — `blocking_write` would
+    ///    panic the runtime.
+    /// 2. The only concurrent contender for the connections lock is
+    ///    `connect()`, which sets its own `Pending` state at the
+    ///    start of its critical section
+    ///    (`McpConnectionManager::connect`). If we lose the race for
+    ///    the lock, `connect()` is already writing `Pending` — the
+    ///    wire status is correct either way.
+    ///
+    /// So a missed `try_write` is **observably equivalent** to a
+    /// successful one. No silent regression.
     pub fn register_server(&mut self, config: ScopedMcpServerConfig) {
-        info!(server = %config.name, "registering MCP server");
-        self.configs.insert(config.name.clone(), config);
+        let name = config.name.clone();
+        info!(server = %name, "registering MCP server");
+        self.configs.insert(name.clone(), config);
+        if let Ok(mut conns) = self.connections.try_write() {
+            conns.entry(name).or_insert(McpConnectionState::Pending {
+                reconnect_attempts: 0,
+            });
+        }
     }
 
     /// Register multiple server configurations.
@@ -88,6 +137,16 @@ impl McpConnectionManager {
         for config in configs {
             self.register_server(config);
         }
+    }
+
+    /// Install the control-channel router used by SDK-hosted MCP servers.
+    ///
+    /// SDK MCP servers run in the SDK client process. The manager still owns
+    /// lifecycle and tool catalog state, but JSON-RPC messages are forwarded
+    /// through this callback instead of through a child process or HTTP
+    /// transport.
+    pub fn set_sdk_route_message(&mut self, route: SdkRouteMessage) {
+        self.sdk_route_message = Some(route);
     }
 
     /// Connect to a server by name using `rmcp` SDK.
@@ -196,6 +255,9 @@ impl McpConnectionManager {
             .map_err(|e| McpClientError::SpawnFailed {
                 message: format!("HTTP connect failed: {e}"),
             })?,
+            McpServerConfig::Sdk(sdk) => {
+                return self.do_connect_sdk(server_name, sdk).await;
+            }
             _ => {
                 return Err(McpClientError::UnsupportedTransport);
             }
@@ -281,6 +343,12 @@ impl McpConnectionManager {
         tool_name: &str,
         arguments: Option<serde_json::Value>,
     ) -> Result<CallToolResult, McpClientError> {
+        if let Some(config) = self.configs.get(server_name)
+            && matches!(config.config, McpServerConfig::Sdk(_))
+        {
+            return self.call_sdk_tool(server_name, tool_name, arguments).await;
+        }
+
         let clients = self.rmcp_clients.read().await;
         let client = clients
             .get(server_name)
@@ -295,6 +363,118 @@ impl McpConnectionManager {
             .map_err(|e| McpClientError::ToolCallFailed {
                 message: e.to_string(),
             })
+    }
+
+    async fn do_connect_sdk(
+        &self,
+        server_name: &str,
+        sdk: &crate::types::McpSdkConfig,
+    ) -> Result<ConnectedMcpServer, McpClientError> {
+        let route = self
+            .sdk_route_message
+            .as_ref()
+            .cloned()
+            .ok_or(McpClientError::UnsupportedTransport)?;
+
+        let init = route_sdk_jsonrpc(
+            &route,
+            server_name,
+            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "coco",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            }),
+        )
+        .await?;
+        let init_result: InitializeResult = parse_sdk_jsonrpc_result(init)?;
+
+        // MCP notifications have no result. Older SDK-side shims may still
+        // return an ack; either way the notification should not block connect.
+        let _ = route(
+            server_name.to_string(),
+            serde_json::json!({
+                "jsonrpc": JSONRPC_VERSION,
+                "method": "notifications/initialized",
+            }),
+        )
+        .await;
+
+        let tools_response = route_sdk_jsonrpc(
+            &route,
+            server_name,
+            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            "tools/list",
+            serde_json::json!({}),
+        )
+        .await?;
+        let tools_result: ListToolsResult = parse_sdk_jsonrpc_result(tools_response)?;
+        let tools = tools_result
+            .tools
+            .into_iter()
+            .map(|t| McpToolDefinition {
+                name: t.name,
+                description: t.description,
+                input_schema: serde_json::to_value(t.input_schema).unwrap_or_default(),
+            })
+            .collect::<Vec<_>>();
+
+        let caps = &init_result.capabilities;
+        let capabilities = McpCapabilities {
+            tools: !tools.is_empty(),
+            resources: caps.resources.is_some(),
+            prompts: caps.prompts.is_some(),
+            channel: false,
+            channel_permission: false,
+        };
+
+        info!(
+            server = %server_name,
+            sdk_name = %sdk.name,
+            tools = tools.len(),
+            "SDK MCP server connected and initialized"
+        );
+
+        Ok(ConnectedMcpServer {
+            name: server_name.to_string(),
+            capabilities,
+            instructions: init_result.instructions,
+            tools,
+            resources: Vec::new(),
+            commands: Vec::new(),
+        })
+    }
+
+    async fn call_sdk_tool(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<CallToolResult, McpClientError> {
+        let route = self
+            .sdk_route_message
+            .as_ref()
+            .cloned()
+            .ok_or(McpClientError::UnsupportedTransport)?;
+        let response = route_sdk_jsonrpc(
+            &route,
+            server_name,
+            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            "tools/call",
+            serde_json::to_value(CallToolRequestParams {
+                name: tool_name.to_string(),
+                arguments,
+            })
+            .map_err(|e| McpClientError::ToolCallFailed {
+                message: format!("serialize SDK MCP tools/call: {e}"),
+            })?,
+        )
+        .await?;
+        parse_sdk_jsonrpc_result(response)
     }
 
     /// Read an MCP resource from a connected server.
@@ -541,6 +721,46 @@ fn oauth_login_target(config: &McpServerConfig) -> Option<(String, HashMap<Strin
         | McpServerConfig::Sdk(_)
         | McpServerConfig::ClaudeAiProxy(_) => None,
     }
+}
+
+async fn route_sdk_jsonrpc(
+    route: &SdkRouteMessage,
+    server_name: &str,
+    id: i64,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, McpClientError> {
+    route(
+        server_name.to_string(),
+        serde_json::json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": id,
+            "method": method,
+            "params": params,
+        }),
+    )
+    .await
+    .map_err(|message| McpClientError::ToolCallFailed { message })
+}
+
+fn parse_sdk_jsonrpc_result<T>(message: serde_json::Value) -> Result<T, McpClientError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    if let Some(error) = message.get("error") {
+        return Err(McpClientError::ToolCallFailed {
+            message: format!("SDK MCP returned error: {error}"),
+        });
+    }
+    let result = message
+        .get("result")
+        .cloned()
+        .ok_or_else(|| McpClientError::ToolCallFailed {
+            message: format!("SDK MCP response missing result: {message}"),
+        })?;
+    serde_json::from_value(result).map_err(|e| McpClientError::ToolCallFailed {
+        message: format!("parse SDK MCP response: {e}"),
+    })
 }
 
 /// Truncate a tool description to the maximum length.

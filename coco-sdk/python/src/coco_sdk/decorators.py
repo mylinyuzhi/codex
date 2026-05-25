@@ -13,8 +13,13 @@ event, and sends the resulting map in the ``initialize`` request::
     @hook(event="PreToolUse", matcher="Bash")
     async def block_dangerous(callback_id, event_type, input):
         if "rm -rf" in input.get("tool_input", {}).get("command", ""):
-            return {"behavior": "deny", "message": "Blocked dangerous command"}
-        return {"behavior": "allow"}
+            return SdkHookOutput(
+                hook_specific_output=HookSpecificOutput.PreToolUse(
+                    permission_decision="deny",
+                    permission_decision_reason="Blocked dangerous command",
+                ),
+            )
+        return SdkHookOutput()
 
     async with CocoClient(prompt="...", hooks=[block_dangerous]) as client:
         async for event in client.events():
@@ -31,7 +36,14 @@ from __future__ import annotations
 import uuid
 from typing import Any, Awaitable, Callable
 
-HookFn = Callable[[str, str, dict[str, Any]], Awaitable[dict[str, Any]]]
+from coco_sdk.generated.protocol import SdkHookOutput
+
+# Hook handlers may return either a raw dict (TS-canonical
+# `hookJSONOutputSchema` shape, camelCase keys) or the typed
+# :class:`SdkHookOutput` Pydantic model. The client normalizer dumps
+# Pydantic models with `by_alias=True` so the wire stays camelCase.
+HookOutput = dict[str, Any] | SdkHookOutput
+HookFn = Callable[[str, str, dict[str, Any]], Awaitable[HookOutput]]
 
 
 class HookDefinition:
@@ -62,7 +74,7 @@ class HookDefinition:
 
     async def __call__(
         self, callback_id: str, event_type: str, input: dict[str, Any]
-    ) -> dict[str, Any]:
+    ) -> HookOutput:
         return await self.fn(callback_id, event_type, input)
 
 

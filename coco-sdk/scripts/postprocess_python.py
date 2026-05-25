@@ -87,6 +87,18 @@ def schema_to_python_type(prop: dict, required: bool, defs: dict) -> str:
     if isinstance(prop, bool):
         return "Any"
 
+    # Single-value `const` → `Literal[value]`. This preserves the
+    # discriminator constraint when the codegen renders an inner
+    # struct that participates in a tagged union (e.g. `HookInput`
+    # variants lifted out of schemars's tag+flatten emission by the
+    # merge step). Without this, `{type: string, const: "PreToolUse"}`
+    # would degrade to plain `str` and Pydantic would lose the
+    # variant-validation hint.
+    if "const" in prop:
+        const_val = prop["const"]
+        if isinstance(const_val, (str, int, bool)):
+            return f"Literal[{const_val!r}]"
+
     if "$ref" in prop:
         name = resolve_ref(prop["$ref"])
         name = TYPE_RENAMES.get(name, name)
@@ -223,23 +235,74 @@ def generate_model(name: str, schema: dict, all_defs: dict) -> str:
         lines.append("    pass")
         return "\n".join(lines)
 
-    # Fields that shadow BaseModel attributes and need aliases
-    # Python reserved / soft-keyword aliases: field_name -> python_name.
-    # Pydantic re-serializes via the `Field(alias=...)` round-trip so the
-    # wire name is preserved.
-    FIELD_ALIASES = {"schema": "schema_", "from": "from_"}
+    # Fields that shadow BaseModel attributes / Python keywords and
+    # need explicit aliases. Wire name is preserved through
+    # `Field(alias=...)` so serde round-tripping stays bidirectional.
+    FIELD_ALIASES = {
+        "schema": "schema_",
+        "from": "from_",
+        # Python reserved words that appear on the wire (TS hook output
+        # schema uses `async` and `continue`).
+        "async": "async_",
+        "continue": "continue_",
+    }
+
+    def py_field_for(name: str) -> str:
+        """Convert a wire field name to the idiomatic Python name.
+        Python is snake_case; the wire is camelCase (TS canonical) or
+        snake_case (legacy). Reserved-word table wins; otherwise
+        camelCase wire names are converted via the standard two-pass
+        regex transform — `asyncTimeout` → `async_timeout`,
+        `hookSpecificOutput` → `hook_specific_output`,
+        `updatedMCPToolOutput` → `updated_mcp_tool_output`.
+        Leading underscores (e.g. `_cocoRsProtocolVersion`) are
+        stripped because Pydantic forbids private-looking attribute
+        names; the wire-name alias preserves the underscore.
+        Already-snake_case names pass through unchanged.
+        """
+        if name in FIELD_ALIASES:
+            return FIELD_ALIASES[name]
+        stripped = name.lstrip("_")
+        # Two-pass camelCase → snake_case with acronym handling.
+        s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", stripped)
+        return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
     # Sort: required fields first, then optional
     req_props = [(k, v) for k, v in properties.items() if k in required_fields]
     opt_props = [(k, v) for k, v in properties.items() if k not in required_fields]
 
+    # Wire fields that schemars emits as `true` (any value) but that are
+    # always object-shaped on the wire — TS schemas use
+    # `z.record(z.string(), z.unknown())` for these. Tighten the Python
+    # type to `dict[str, Any] | None` so callers get autocomplete and
+    # can't accidentally pass a non-object. Names match Rust's
+    # `serde_json::Value` fields where the contract is object-only.
+    _OBJECT_SHAPED_FIELD_NAMES = {
+        "updated_input",
+        "updatedInput",
+        "updated_mcp_tool_output",
+        "updatedMCPToolOutput",
+        "original_input",
+        "originalInput",
+        "content",  # Elicitation.content / ElicitationResult.content
+    }
+
     for field_name, prop in req_props + opt_props:
         is_required = field_name in required_fields
         py_type = schema_to_python_type(prop, is_required, all_defs)
-        py_field_name = FIELD_ALIASES.get(field_name, field_name)
+        # Tighten `Any` to `dict[str, Any]` for object-shaped slots.
+        if py_type == "Any" and field_name in _OBJECT_SHAPED_FIELD_NAMES:
+            py_type = "dict[str, Any]"
+        py_field_name = py_field_for(field_name)
         alias_annotation = ""
         if py_field_name != field_name:
-            alias_annotation = f' = Field(alias={field_name!r})'
+            # Optional fields need an explicit `default=None`; required
+            # fields use `Field(alias=...)` without a default so pydantic
+            # still enforces the missing-field check.
+            if is_required:
+                alias_annotation = f' = Field(alias={field_name!r})'
+            else:
+                alias_annotation = f' = Field(default=None, alias={field_name!r})'
 
         # If the type already includes "| None" (from nullable schema),
         # it needs a default even if required
@@ -365,8 +428,15 @@ def is_union_alias_schema(schema: dict) -> bool:
     `{"anyOf": [{"type": "integer"}, {"type": "string"}]}` — no
     discriminator, no per-variant data. Python expresses this as a
     plain type alias: ``RequestId = int | str``.
+
+    Returns False for **tagged unions** (`oneOf` variants that share a
+    `const` discriminator field) — those flow through
+    `is_tagged_oneof_schema` / `generate_tagged_oneof` so Python gets
+    one Pydantic class per variant plus a discriminated `Annotated[Union[...]]`.
     """
     if schema.get("type") or is_enum_schema(schema):
+        return False
+    if is_tagged_oneof_schema(schema):
         return False
     variants = schema.get("anyOf") or schema.get("oneOf")
     if not variants:
@@ -374,6 +444,258 @@ def is_union_alias_schema(schema: dict) -> bool:
     return all(
         isinstance(v, dict) and not has_enum_or_const(v) for v in variants
     )
+
+
+def _sanitize_const_for_class_name(const: str) -> str:
+    """Convert a wire-protocol const value into a Python PascalCase
+    class-name suffix.
+
+    Examples:
+        `session/started` → `SessionStarted`
+        `mcp/setServers` → `McpSetServers`
+        `agentMessage/delta` → `AgentMessageDelta`
+        `add_rules` → `AddRules`
+        `tool-call` → `ToolCall`
+        `reasoning-file` → `ReasoningFile`
+    """
+    # Split on `/`, `-`, `_`, then PascalCase each piece. CamelCase
+    # pieces become PascalCase too (first letter upper, internals
+    # preserved).
+    pieces = re.split(r"[/_\-]+", const)
+    result = []
+    for piece in pieces:
+        if not piece:
+            continue
+        result.append(piece[0].upper() + piece[1:])
+    return "".join(result) or "Empty"
+
+
+def _variant_is_pure_ref(v: dict) -> bool:
+    """True when ``v`` carries nothing but a ``$ref`` (and an optional
+    sibling ``description``). These variants point at an existing
+    named def that already encodes everything about the variant
+    shape; the codegen reuses the referenced class instead of
+    synthesizing a new one."""
+    return (
+        isinstance(v, dict)
+        and "$ref" in v
+        and not (set(v.keys()) - {"$ref", "description"})
+    )
+
+
+def _tagged_oneof_discriminator(
+    schema: dict, all_defs: dict | None = None
+) -> str | None:
+    """Return the discriminator field name if ``schema`` is a tagged
+    `oneOf` worth promoting to a Pydantic discriminated union.
+
+    Two accepted shapes:
+
+    1. **Inline-variant** (e.g. ``ServerNotification`` /
+       ``PermissionUpdate`` / ``AssistantContentPart``): every
+       ``oneOf`` variant is an inline ``type: object`` schema with at
+       least one string-``const`` property; the single shared
+       property name is the discriminator. The codegen synthesizes
+       one Pydantic class per variant via ``generate_tagged_oneof``.
+
+    2. **Pure-``$ref`` variant** (e.g. ``HookInput`` after the
+       ``generate_schemas.sh`` merge step lifts schemars's
+       tag+flatten discriminator into the inner defs): every variant
+       is just ``{$ref: <T>}``, and every referenced def has a
+       shared string-``const`` property. The codegen emits a thin
+       ``Annotated[Union[<existing classes>], Field(discriminator=...)]``
+       and reuses the referenced classes — no synthetic wrappers.
+       Requires ``all_defs`` for ref resolution; without it this
+       branch is skipped and the function falls through to the
+       inline check.
+
+    The discriminator field name AND each const value can contain
+    `/`, `-`, or `_` — those are sanitized for Python identifier use
+    via [`_sanitize_const_for_class_name`]. The wire form is
+    preserved through `Field(alias=...)`.
+    """
+    variants = schema.get("oneOf")
+    if not variants or len(variants) < 2 or not all(isinstance(v, dict) for v in variants):
+        return None
+
+    # Shape 2: pure-$ref oneOf with shared const in the referenced defs.
+    if all_defs is not None and all(_variant_is_pure_ref(v) for v in variants):
+        const_keys_per_variant: list[set[str]] = []
+        const_vals: list[str] = []
+        for v in variants:
+            ref_name = v["$ref"].rsplit("/", 1)[-1]
+            target = all_defs.get(ref_name)
+            if not target or target.get("type") != "object":
+                return None
+            props = target.get("properties") or {}
+            keys = {
+                k for k, p in props.items()
+                if isinstance(p, dict) and isinstance(p.get("const"), str)
+            }
+            if not keys:
+                return None
+            const_keys_per_variant.append(keys)
+        shared = set.intersection(*const_keys_per_variant)
+        if len(shared) != 1:
+            return None
+        disc = next(iter(shared))
+        if not disc or any(c.isspace() or c == "." for c in disc):
+            return None
+        for v in variants:
+            ref_name = v["$ref"].rsplit("/", 1)[-1]
+            cv = all_defs[ref_name]["properties"][disc]["const"]
+            if not isinstance(cv, str) or cv in const_vals:
+                return None
+            const_vals.append(cv)
+        return disc
+
+    # Shape 1: inline variants carrying the const directly.
+    const_keys_per_variant: list[set[str]] = []
+    for v in variants:
+        if v.get("type") != "object":
+            return None
+        # Pure $ref without inline const — leave as a plain Union alias
+        # (the `AssistantContentPart` / `Message` / `AttachmentBody`
+        # pattern, when shape 2 above didn't fire because all_defs is
+        # absent or the refs lack a shared const).
+        if "$ref" in v:
+            return None
+        props = v.get("properties") or {}
+        keys = set()
+        for key, prop in props.items():
+            if isinstance(prop, dict) and isinstance(prop.get("const"), str):
+                keys.add(key)
+        if not keys:
+            return None
+        const_keys_per_variant.append(keys)
+    shared = set.intersection(*const_keys_per_variant)
+    if len(shared) != 1:
+        return None
+    disc = next(iter(shared))
+    if not disc or any(c.isspace() or c == "." for c in disc):
+        return None
+    sanitized = set()
+    for v in variants:
+        const_val = v["properties"][disc]["const"]
+        if not isinstance(const_val, str):
+            return None
+        sani = _sanitize_const_for_class_name(const_val)
+        if not sani or sani in sanitized:
+            return None
+        sanitized.add(sani)
+    return disc
+
+
+def is_tagged_oneof_schema(schema: dict, all_defs: dict | None = None) -> bool:
+    return _tagged_oneof_discriminator(schema, all_defs) is not None
+
+
+def _py_field_name_for_discriminator(disc: str) -> str:
+    """Translate a wire discriminator field name to its Python form.
+
+    - `type` shadows Python's builtin, so emit as `type_` with
+      `Field(alias='type')`. Pydantic discriminator accepts the
+      Python field name.
+    - `hookEventName` → `hook_event_name` (camelCase → snake_case).
+    - `method` stays `method`.
+    """
+    if disc == "type":
+        return "type_"
+    # camelCase → snake_case
+    s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", disc)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+
+def generate_tagged_oneof(name: str, schema: dict, all_defs: dict) -> str:
+    """Emit a discriminated union for ``schema``.
+
+    Two paths, mirroring [`_tagged_oneof_discriminator`]'s two shapes:
+
+    1. **Inline variants** — synthesize one Pydantic BaseModel per
+       variant (with a `Literal[const]` discriminator field) plus
+       the `Annotated[Union[...], Field(discriminator=...)]` alias.
+
+    2. **Pure-`$ref` variants** — reuse the referenced classes
+       directly (they already carry a `Literal[const]` discriminator
+       field, injected by the `generate_schemas.sh` merge step).
+       No new class blocks; just the `Annotated` alias. This avoids
+       duplicating types like `PreToolUseInput` as
+       `HookInputPreToolUse`.
+
+    Pydantic v2 enforces the discriminator at validation time, so
+    deserializing a wire object dispatches to the right variant
+    automatically.
+    """
+    disc = _tagged_oneof_discriminator(schema, all_defs)
+    assert disc is not None
+    py_disc = _py_field_name_for_discriminator(disc)
+    py_name = TYPE_RENAMES.get(name, name)
+    variants_raw = schema["oneOf"]
+
+    # Pure-$ref path: reuse referenced classes; the discriminator
+    # field is already a `Literal[...]` on each (see the schema
+    # normalization in `generate_schemas.sh`).
+    if all(_variant_is_pure_ref(v) for v in variants_raw):
+        members: list[str] = []
+        for v in variants_raw:
+            ref_name = v["$ref"].rsplit("/", 1)[-1]
+            members.append(TYPE_RENAMES.get(ref_name, ref_name))
+        union_body = ", ".join(members)
+        return (
+            f"{py_name} = Annotated[\n"
+            f"    Union[{union_body}],\n"
+            f"    Field(discriminator={py_disc!r}),\n"
+            f"]"
+        )
+
+    variant_classes: list[tuple[str, str]] = []
+    blocks: list[str] = []
+    for variant in variants_raw:
+        props = variant.get("properties") or {}
+        const_value = props[disc]["const"]
+        suffix = _sanitize_const_for_class_name(const_value)
+        variant_class = f"{py_name}{suffix}"
+        # Build a transient schema without the discriminator-const so
+        # `generate_model` doesn't try to render the const as a regular
+        # string field. Re-inject the discriminator below as a typed
+        # `Literal[...]` with proper alias.
+        non_disc_props = {k: v for k, v in props.items() if k != disc}
+        variant_schema = {
+            "type": "object",
+            "properties": non_disc_props,
+            "required": [k for k in variant.get("required", []) if k != disc],
+            "description": variant.get("description"),
+        }
+        body = generate_model(variant_class, variant_schema, all_defs)
+        # Discriminator field — always aliased so the Python name is
+        # idiomatic snake_case while the wire stays whatever the
+        # schema declared (camelCase / shadow-builtin / etc.).
+        disc_field_line = (
+            f"    {py_disc}: Literal[{const_value!r}] = "
+            f"Field(default={const_value!r}, alias={disc!r})"
+        )
+        if body.endswith("\n    pass"):
+            body = body[: -len("\n    pass")]
+            body += "\n" + disc_field_line
+        else:
+            header, _, rest = body.partition("\n")
+            body = f"{header}\n{disc_field_line}\n{rest}"
+        body = body.replace(
+            f"class {variant_class}(BaseModel):",
+            f"class {variant_class}(BaseModel):\n"
+            f'    model_config = {{"populate_by_name": True}}',
+            1,
+        )
+        blocks.append(body)
+        variant_classes.append((variant_class, const_value))
+    union_body = ", ".join(v for v, _ in variant_classes)
+    alias = (
+        f"{py_name} = Annotated[\n"
+        f"    Union[{union_body}],\n"
+        f"    Field(discriminator={py_disc!r}),\n"
+        f"]"
+    )
+    return "\n\n".join([*blocks, alias])
 
 
 _BUILTIN_PY_TYPES = {
@@ -756,23 +1078,38 @@ def main() -> None:
     # Collect all definitions
     all_defs = collect_definitions(schema_dir)
 
-    # Types handled explicitly (skip from generic generation)
+    # Types handled explicitly (skip from generic generation).
+    #
+    # `ServerNotification` / `ServerRequest` / `ClientRequest` USED to
+    # live here so we could emit a wrapper class with `as_X()` accessors
+    # and `params: dict[str, Any]`. They're now removed: each one is a
+    # tagged `oneOf` (discriminator `method`) and the auto-detection
+    # path emits them as proper Pydantic discriminated unions with one
+    # typed variant class per method. The wrapper-with-accessor codegen
+    # is deleted further down.
     explicitly_handled = {
         "ThreadItem", "ThreadItemDetails",
-        "ServerNotification", "ServerRequest", "ClientRequest",
         # MCP config types handled manually
         "McpServerConfig",
+        # Method enums emitted by the dedicated `generate_*_method_enum`
+        # helpers near the bottom of the file. Without this skip, the
+        # generic enum loop would also emit them — producing two `class X`
+        # definitions per method enum and silently shadowing the first.
+        "ClientRequestMethod", "ServerRequestMethod", "NotificationMethod",
     }
 
     # Classify types
     enum_names: set[str] = set()
     model_names: set[str] = set()
     union_alias_names: set[str] = set()
+    tagged_oneof_names: set[str] = set()
     for name, defn in all_defs.items():
         if name in SKIP_TYPES or name in explicitly_handled:
             continue
         if is_enum_schema(defn):
             enum_names.add(name)
+        elif is_tagged_oneof_schema(defn, all_defs):
+            tagged_oneof_names.add(name)
         elif is_union_alias_schema(defn):
             union_alias_names.add(name)
         elif defn.get("type") == "object":
@@ -799,7 +1136,7 @@ def main() -> None:
         from __future__ import annotations
 
         from enum import Enum
-        from typing import Any, Union
+        from typing import Annotated, Any, Literal, Union
 
         from pydantic import BaseModel, Field
     '''))
@@ -836,6 +1173,35 @@ def main() -> None:
         sections.append("")
         for name in sorted(union_alias_names):
             sections.append(generate_union_alias(name, all_defs[name], all_defs))
+            sections.append("")
+        sections.append("")
+
+    # ── Section: Tagged discriminated unions ──
+    # `oneOf` schemas whose variants share a `const`-discriminator
+    # field (e.g. `HookSpecificOutput` discriminating on
+    # `hookEventName`). Emitted as one Pydantic class per variant
+    # plus an `Annotated[Union[...], Field(discriminator=...)]` alias
+    # so deserialization dispatches typed automatically.
+    #
+    # Pure-`$ref` tagged unions (e.g. `HookInput`, whose variants
+    # point at existing top-level classes like `PreToolUseInput`)
+    # are emitted in a later section instead — the referenced
+    # classes must be defined first.
+    deferred_ref_tagged = {
+        name for name in tagged_oneof_names
+        if all(
+            _variant_is_pure_ref(v)
+            for v in (all_defs[name].get("oneOf") or [])
+        )
+    }
+    inline_tagged_oneof_names = tagged_oneof_names - deferred_ref_tagged
+    if inline_tagged_oneof_names:
+        sections.append("# " + "-" * 75)
+        sections.append("# Tagged discriminated unions")
+        sections.append("# " + "-" * 75)
+        sections.append("")
+        for name in sorted(inline_tagged_oneof_names):
+            sections.append(generate_tagged_oneof(name, all_defs[name], all_defs))
             sections.append("")
         sections.append("")
 
@@ -909,24 +1275,15 @@ def main() -> None:
     sections.append("")
     sections.append("")
 
-    # ── Section: ServerNotification (tagged union with auto-derived accessors) ──
-    sections.append("# " + "-" * 75)
-    sections.append("# Server notifications (tagged union)")
-    sections.append("# " + "-" * 75)
-    sections.append("")
-    sections.append(generate_tagged_union(
-        "ServerNotification",
-        "An event from the server. Use `method` to determine the event type.",
-        "method",
-        "params",
-        derive_accessors(notif_variants),
-    ))
-    sections.append("")
-    sections.append("")
+    # `ServerNotification` is now emitted by the **tagged discriminated
+    # union** section above (auto-detected from the `oneOf` schema with
+    # `method` as the const-discriminator). Each variant is a typed
+    # `ServerNotificationSessionStarted(method=Literal[...], params: SessionStartedParams)`
+    # — no more `params: dict[str, Any]`, no more `as_X()` accessors.
 
-    # ── Section: Server request params and ServerRequest ──
+    # ── Section: Server request params ──
     sections.append("# " + "-" * 75)
-    sections.append("# Server requests (server -> client, require response)")
+    sections.append("# Server request param types")
     sections.append("# " + "-" * 75)
     sections.append("")
     emit_ref_params(sr_param_types)
@@ -937,15 +1294,8 @@ def main() -> None:
     sections.append(generate_server_request_method_enum(schema_dir))
     sections.append("")
     sections.append("")
-    sections.append(generate_tagged_union(
-        "ServerRequest",
-        "A request from the server that requires a client response.",
-        "method",
-        "params",
-        derive_accessors(sr_variants),
-    ))
-    sections.append("")
-    sections.append("")
+    # `ServerRequest` is also emitted as a typed discriminated union by
+    # the auto-detection path above.
 
     # ── Section: MCP server config (special: tagged union with 'type' field) ──
     # These must come BEFORE client request params since SessionStartRequestParams
@@ -1019,6 +1369,7 @@ def main() -> None:
             and name not in model_names
             and name not in enum_names
             and name not in union_alias_names
+            and name not in tagged_oneof_names
         ):
             sections.append(f"# Union type: see Rust source for variants")
             sections.append(f"{name} = Any")
@@ -1072,18 +1423,27 @@ def main() -> None:
     sections.append("")
 
     # ── Section: Client request wrappers (auto-derived from schema) ──
+    #
+    # Each variant of `ClientRequest` gets its own typed BaseModel:
+    # `InitializeRequest`, `SessionStartRequest`, etc. The `method`
+    # field is `Literal['initialize']` (not bare `str`) so the union
+    # at the bottom can dispatch via Pydantic's discriminator. Params
+    # are typed via the dedicated params struct.
     sections.append("# " + "-" * 75)
-    sections.append("# Client request wrappers")
+    sections.append("# Client request wrappers (one Pydantic class per variant)")
     sections.append("# " + "-" * 75)
     sections.append("")
+    cr_variant_classes: list[str] = []
     for variant in cr_variants:
         method = variant["wire"]
         class_name = _derive_request_wrapper_name(variant)
+        cr_variant_classes.append(class_name)
         params_ref = variant.get("params_ref")
         py_params = TYPE_RENAMES.get(params_ref, params_ref) if params_ref else None
         lines = [
             f"class {class_name}(BaseModel):",
-            f"    method: str = {method!r}",
+            '    model_config = {"populate_by_name": True}',
+            f"    method: Literal[{method!r}] = Field(default={method!r})",
             f"    params: {class_name}Params",
             "",
         ]
@@ -1099,6 +1459,16 @@ def main() -> None:
         sections.append("")
         sections.append(f"{class_name}Params = {class_name}.{class_name}Params")
         sections.append("")
+
+    # `ClientRequest` discriminated union — inbound parsing dispatches
+    # to the typed wrapper above via the `method` field.
+    union_members = ", ".join(cr_variant_classes)
+    sections.append(
+        f"ClientRequest = Annotated[\n"
+        f"    Union[{union_members}],\n"
+        f"    Field(discriminator='method'),\n"
+        f"]"
+    )
     sections.append("")
 
     # ── Section: Remaining types (PermissionSuggestion, etc.) ──
@@ -1111,6 +1481,23 @@ def main() -> None:
             if name in all_defs:
                 sections.append(generate_model(name, all_defs[name], all_defs))
                 sections.append("")
+
+    # ── Section: Deferred ref-based tagged unions ──
+    # Pure-`$ref` tagged unions like `HookInput` must be emitted
+    # AFTER the model section so all referenced classes
+    # (`PreToolUseInput`, `PostToolUseInput`, …) are already in
+    # scope at evaluation time. `Annotated[Union[...], Field(...)]`
+    # evaluates its arguments eagerly, so forward-ref strings won't
+    # work here (Pydantic needs the real classes for discriminator
+    # dispatch setup).
+    if deferred_ref_tagged:
+        sections.append("# " + "-" * 75)
+        sections.append("# Tagged discriminated unions (ref-based)")
+        sections.append("# " + "-" * 75)
+        sections.append("")
+        for name in sorted(deferred_ref_tagged):
+            sections.append(generate_tagged_oneof(name, all_defs[name], all_defs))
+            sections.append("")
 
     # Schema-driven derivation is exhaustive by construction, so the prior
     # hand-maintained dicts no longer exist. Keep a lightweight summary

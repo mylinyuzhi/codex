@@ -100,10 +100,13 @@ pub struct RequestUserInputParams {
 }
 
 /// Route an MCP JSON-RPC message to an SDK-hosted server.
+///
+/// Correlation is via the outer JSON-RPC `request_id` on the envelope —
+/// no inner `request_id`. The SDK replies with a `McpRouteMessageResult`
+/// payload carrying the forwarded MCP server's JSON-RPC response.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpRouteMessageParams {
-    pub request_id: String,
     pub server_name: String,
     /// The raw JSON-RPC message to forward.
     pub message: serde_json::Value,
@@ -111,11 +114,15 @@ pub struct McpRouteMessageParams {
 
 /// Invoke an SDK-registered hook callback.
 /// Matches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).
+///
+/// Correlation is via the **outer** JSON-RPC `request_id` on the
+/// envelope — there is no inner `request_id` field. The SDK replies
+/// with a `HookCallbackResult` payload as the synchronous response.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookCallbackParams {
-    pub request_id: String,
     pub callback_id: String,
+    pub event_type: crate::HookEventType,
     /// Hook input payload (event-specific shape).
     pub input: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
 use coco_hooks::HookRegistry;
-use coco_hooks::orchestration::ElicitationAction as HookElicitationAction;
+use coco_hooks::orchestration::ElicitationAction;
 use coco_hooks::orchestration::ElicitationMode;
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_types::ElicitationGuard;
@@ -118,7 +118,7 @@ pub fn wrap_send_elicitation_with_hooks(
                             // TS: hook returned `action` ⇒ use it as the response.
                             if let Some(resp) = agg.elicitation_response {
                                 let response =
-                                    build_elicitation_response(&resp.action, resp.content);
+                                    build_elicitation_response(resp.action, resp.content);
                                 return run_result_hook_and(
                                     &registry,
                                     &ctx_factory,
@@ -194,7 +194,7 @@ async fn run_result_hook_and(
                     }
                 } else if let Some(override_resp) = agg.elicitation_result_response {
                     build_elicitation_response(
-                        &override_resp.action,
+                        override_resp.action,
                         override_resp.content.or(content),
                     )
                 } else {
@@ -233,22 +233,22 @@ async fn run_result_hook_and(
     }
 }
 
-fn action_from_rmcp(action: &coco_mcp::RmcpElicitationAction) -> HookElicitationAction {
+fn action_from_rmcp(action: &coco_mcp::RmcpElicitationAction) -> ElicitationAction {
     match action {
-        coco_mcp::RmcpElicitationAction::Accept => HookElicitationAction::Accept,
-        coco_mcp::RmcpElicitationAction::Decline => HookElicitationAction::Decline,
-        coco_mcp::RmcpElicitationAction::Cancel => HookElicitationAction::Cancel,
+        coco_mcp::RmcpElicitationAction::Accept => ElicitationAction::Accept,
+        coco_mcp::RmcpElicitationAction::Decline => ElicitationAction::Decline,
+        coco_mcp::RmcpElicitationAction::Cancel => ElicitationAction::Cancel,
     }
 }
 
 fn build_elicitation_response(
-    action: &str,
+    action: ElicitationAction,
     content: Option<serde_json::Value>,
 ) -> coco_mcp::ElicitationResponse {
     let action = match action {
-        "accept" => coco_mcp::RmcpElicitationAction::Accept,
-        "decline" => coco_mcp::RmcpElicitationAction::Decline,
-        _ => coco_mcp::RmcpElicitationAction::Cancel,
+        ElicitationAction::Accept => coco_mcp::RmcpElicitationAction::Accept,
+        ElicitationAction::Decline => coco_mcp::RmcpElicitationAction::Decline,
+        ElicitationAction::Cancel => coco_mcp::RmcpElicitationAction::Cancel,
     };
     coco_mcp::ElicitationResponse { action, content }
 }

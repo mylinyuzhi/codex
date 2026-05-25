@@ -44,8 +44,14 @@ def _find_coco_binary() -> str:
 class SubprocessCLITransport(Transport):
     """Transport that spawns ``coco sdk`` as a subprocess.
 
-    The Rust binary's ``sdk`` subcommand speaks JSON-RPC 2.0 over
-    NDJSON on stdin/stdout. Stderr is captured and logged.
+    The Rust binary's ``sdk`` subcommand speaks the **coco-rs SDK
+    control protocol** over NDJSON on stdin/stdout — a JSON-RPC-like
+    envelope (``{type, request_id, method, params}`` /
+    ``{type, request_id, result|error}``) but NOT strict JSON-RPC 2.0
+    (no ``jsonrpc: "2.0"`` field) and NOT identical to the TS SDK's
+    ``control_request``/``control_response`` envelope (coco-rs flattens
+    ``subtype``→``method``). See ``coco_types::jsonrpc`` for the
+    canonical envelope definition. Stderr is captured and logged.
 
     ``cli_args`` are appended verbatim after ``sdk`` so callers can
     pass model selection, system prompt, permission mode, etc. without

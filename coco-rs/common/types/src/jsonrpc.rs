@@ -1,12 +1,23 @@
-//! JSON-RPC 2.0-style wire envelope for the SDK control protocol.
+//! coco-rs SDK control protocol — wire envelope.
 //!
-//! TS reference: `src/entrypoints/sdk/controlSchemas.ts` — SDK uses a
-//! discriminated-union `type` field (`user`, `control_request`,
-//! `control_response`, `control_cancel_request`, `keep_alive`) rather than
-//! strict JSON-RPC. cocode-rs promotes this to a JSON-RPC-like envelope for
-//! clearer request/response correlation and schema-first codegen.
+//! **Not strict JSON-RPC 2.0** — there is no `jsonrpc: "2.0"` field
+//! on the wire. The shape is JSON-RPC-*like* (request_id / method /
+//! params / result), promoted from the TS SDK's `control_request` /
+//! `control_response` discriminated union for clearer correlation and
+//! cross-language codegen.
 //!
-//! See `event-system-design.md` §1.4 and cocode-rs `app-server-protocol/src/jsonrpc.rs`.
+//! **Not strictly TS-mirror** — TS uses
+//! `{type: "control_request", request_id, request: {subtype, ...}}` /
+//! `{type: "control_response", response: {subtype, request_id, response?, error?}}`
+//! with `subtype` as the method discriminator nested under
+//! `request`/`response`. coco-rs flattens that to
+//! `{type: "request"|"response"|"notification"|"error", request_id,
+//! method, params|result|error}` so the wire is one level shallower
+//! and JSON-RPC tooling Just Works. Functionally equivalent contract;
+//! different envelope tags. SDK clients targeting coco-rs follow this
+//! shape, not the TS one — see `coco-sdk/python/_message_router.py`.
+//!
+//! See `event-system-design.md` §1.4.
 
 use serde::Deserialize;
 use serde::Serialize;

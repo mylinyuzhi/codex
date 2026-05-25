@@ -342,38 +342,6 @@
       ]
     },
     {
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string",
-          "const": "hook/callbackResponse"
-        },
-        "params": {
-          "$ref": "#/$defs/HookCallbackResponseParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    {
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string",
-          "const": "mcp/routeMessageResponse"
-        },
-        "params": {
-          "$ref": "#/$defs/McpRouteMessageResponseParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    {
       "description": "Query MCP server connection status.\nTS: `SDKControlMcpStatusRequestSchema`",
       "type": "object",
       "properties": {
@@ -492,6 +460,20 @@
       },
       "required": [
         "agent_id"
+      ]
+    },
+    "AgentMcpServerSpec": {
+      "description": "One entry in `AgentDefinition.mcp_servers`. Mirrors the TS union:\neither a `string` (reference to an existing MCP server config) or\nan inline `{name: config}` mapping that stands up a dynamic\nserver scoped to this agent. Inline configs are stored as\n`serde_json::Value` because the underlying `McpServerConfig`\nshape lives in `coco-mcp` (a higher layer that depends on\n`coco-types`); keeping it as opaque JSON avoids a back-edge.\n\nTS: `tools/AgentTool/loadAgentsDir.ts:58 AgentMcpServerSpec`.",
+      "anyOf": [
+        {
+          "description": "Reference an existing MCP server by name (TS `string` arm).",
+          "type": "string"
+        },
+        {
+          "description": "Inline definition `{name: config}` (TS record arm). The map\nalways carries exactly one entry — the server name → its\n`McpServerConfig` JSON. TS validates this with Zod on load.",
+          "type": "object",
+          "additionalProperties": true
+        }
       ]
     },
     "ApprovalDecision": {
@@ -656,22 +638,6 @@
         "hook_callback_ids"
       ]
     },
-    "HookCallbackResponseParams": {
-      "description": "Matches TS `SDKHookCallbackRequestSchema` response direction flipped —\nclient→server reply to a prior `hook/callback` ServerRequest.",
-      "type": "object",
-      "properties": {
-        "callback_id": {
-          "type": "string"
-        },
-        "output": {
-          "description": "Hook output (stdout/stderr + optional behavior field)."
-        }
-      },
-      "required": [
-        "callback_id",
-        "output"
-      ]
-    },
     "InitializeParams": {
       "description": "Matches TS `SDKControlInitializeRequestSchema` (controlSchemas.ts:57-71).\n\nSent once at session start for capability negotiation. Carries hooks,\nSDK MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
       "type": "object",
@@ -689,7 +655,9 @@
             "object",
             "null"
           ],
-          "additionalProperties": true
+          "additionalProperties": {
+            "$ref": "#/$defs/SdkAgentDefinition"
+          }
         },
         "append_system_prompt": {
           "description": "Text appended to the default system prompt.",
@@ -911,22 +879,6 @@
         "server_name"
       ]
     },
-    "McpRouteMessageResponseParams": {
-      "description": "Matches TS `SDKControlMcpMessageRequestSchema` response direction —\nclient→server reply to a prior `mcp/routeMessage` ServerRequest.",
-      "type": "object",
-      "properties": {
-        "message": {
-          "description": "JSON-RPC message response from the SDK-hosted MCP server."
-        },
-        "request_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "request_id",
-        "message"
-      ]
-    },
     "McpSetServersParams": {
       "description": "Matches TS `SDKControlMcpSetServersRequestSchema` (controlSchemas.ts:387-390).",
       "type": "object",
@@ -955,6 +907,26 @@
       "required": [
         "server_name",
         "enabled"
+      ]
+    },
+    "MemoryScope": {
+      "description": "Scope for agent memory persistence.\n\nTS: MemoryScope — controls where MEMORY.md is stored/read.",
+      "oneOf": [
+        {
+          "description": "User-global memory (~/.coco/MEMORY.md).",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "Project-scoped memory (project root MEMORY.md).",
+          "type": "string",
+          "const": "project"
+        },
+        {
+          "description": "Local-only memory (not persisted across sessions).",
+          "type": "string",
+          "const": "local"
+        }
       ]
     },
     "PermissionBehavior": {
@@ -1239,6 +1211,133 @@
       },
       "required": [
         "user_message_id"
+      ]
+    },
+    "SdkAgentDefinition": {
+      "description": "SDK-supplied custom subagent spec carried on `InitializeParams.agents`.\n\nMirrors TS `AgentDefinitionSchema` (`entrypoints/sdk/coreSchemas.ts:1110-1183`).\n**Distinct** from the internal [`crate::AgentDefinition`] which is the\nresolved post-load representation merged from markdown / plugin /\nSDK sources. This type is the wire-level DTO only.",
+      "type": "object",
+      "properties": {
+        "background": {
+          "description": "Run as a fire-and-forget background task when invoked.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "criticalSystemReminder_EXPERIMENTAL": {
+          "description": "Experimental critical system reminder appended to the system prompt.\nWire field is `criticalSystemReminder_EXPERIMENTAL` per TS.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Natural-language description shown in the AgentTool prompt list.",
+          "type": "string"
+        },
+        "disallowed_tools": {
+          "description": "Explicit tool deny-list.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "effort": {
+          "description": "Reasoning effort selector.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "initial_prompt": {
+          "description": "Auto-submitted as the first user turn when this agent is the main thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_turns": {
+          "description": "Hard ceiling on agentic turns before the agent stops.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "mcp_servers": {
+          "description": "Per-agent MCP servers (`string` name-ref or inline `{name: config}` map).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/AgentMcpServerSpec"
+          }
+        },
+        "memory": {
+          "description": "Auto-loading scope for agent memory files (`user` / `project` / `local`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "description": "Model alias / full id / `\"inherit\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "description": "Permission mode override for tool executions.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prompt": {
+          "description": "Agent system prompt body.",
+          "type": "string"
+        },
+        "skills": {
+          "description": "Skill names auto-loaded into the agent context.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "description": "Allowed tool names. `None` inherits all parent tools (TS `tools: undefined`).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "description",
+        "prompt"
       ]
     },
     "SessionArchiveParams": {

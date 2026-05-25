@@ -36,6 +36,7 @@ mod plugin;
 mod provider;
 mod rate_limit;
 mod sandbox;
+mod sdk_hook_output;
 mod server_request;
 pub mod side_query;
 mod stream;
@@ -192,13 +193,12 @@ pub use client_request::ConfigApplyFlagsParams;
 pub use client_request::ConfigWriteParams;
 pub use client_request::ElicitationResolveParams;
 pub use client_request::HookCallbackMatcher;
-pub use client_request::HookCallbackResponseParams as ClientHookCallbackResponseParams;
 pub use client_request::InitializeParams;
 pub use client_request::McpReconnectParams;
-pub use client_request::McpRouteMessageResponseParams;
 pub use client_request::McpSetServersParams;
 pub use client_request::McpToggleParams;
 pub use client_request::RewindFilesParams;
+pub use client_request::SdkAgentDefinition;
 pub use client_request::SessionArchiveParams;
 pub use client_request::SessionReadParams;
 pub use client_request::SessionResumeParams;
@@ -210,6 +210,17 @@ pub use client_request::StopTaskParams;
 pub use client_request::TurnStartParams;
 pub use client_request::UpdateEnvParams;
 pub use client_request::UserInputResolveParams;
+
+// SDK hook callback output (TS-canonical wire shape; mirrors
+// `hookJSONOutputSchema`). Single source of truth for the SDK
+// boundary and for hook orchestration's stdout parser.
+pub use sdk_hook_output::ElicitationAction;
+pub use sdk_hook_output::HookCallbackResult;
+pub use sdk_hook_output::HookDecision;
+pub use sdk_hook_output::HookSpecificOutput;
+pub use sdk_hook_output::McpRouteMessageResult;
+pub use sdk_hook_output::PermissionRequestDecision;
+pub use sdk_hook_output::SdkHookOutput;
 
 // Server request types (Phase 2 — SDK control protocol, agent → SDK)
 pub use server_request::ApiProvider as SdkApiProvider;
