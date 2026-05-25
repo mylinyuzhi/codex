@@ -93,30 +93,21 @@ pub fn markdown_to_lines_with_syntax(
         // Headers
         if let Some(rest) = raw_line.strip_prefix("### ") {
             lines.push(Line::from(
-                Span::raw(format!("  {rest}"))
-                    .bold()
-                    .underlined()
-                    .fg(styles.primary()),
+                Span::raw(format!("  {rest}")).bold().fg(styles.primary()),
             ));
             idx += 1;
             continue;
         }
         if let Some(rest) = raw_line.strip_prefix("## ") {
             lines.push(Line::from(
-                Span::raw(format!("  {rest}"))
-                    .bold()
-                    .underlined()
-                    .fg(styles.primary()),
+                Span::raw(format!("  {rest}")).bold().fg(styles.primary()),
             ));
             idx += 1;
             continue;
         }
         if let Some(rest) = raw_line.strip_prefix("# ") {
             lines.push(Line::from(
-                Span::raw(format!("  {rest}"))
-                    .bold()
-                    .underlined()
-                    .fg(styles.primary()),
+                Span::raw(format!("  {rest}")).bold().fg(styles.primary()),
             ));
             idx += 1;
             continue;

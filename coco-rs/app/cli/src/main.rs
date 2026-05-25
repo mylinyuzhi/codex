@@ -321,15 +321,17 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
         provider_mode = mode,
         model_id = %outcome.model_id,
         turns = outcome.turns,
-        tokens_in = outcome.total_usage.input_tokens,
-        tokens_out = outcome.total_usage.output_tokens,
+        tokens_in = outcome.total_usage.input_tokens.total,
+        tokens_out = outcome.total_usage.output_tokens.total,
         "headless chat complete"
     );
     eprintln!("coco-rs ({mode} mode) — model: {}\n", outcome.model_id);
     println!("{}", outcome.response_text);
     eprintln!(
         "\n─── {} turn(s) | {} in / {} out tokens ───",
-        outcome.turns, outcome.total_usage.input_tokens, outcome.total_usage.output_tokens
+        outcome.turns,
+        outcome.total_usage.input_tokens.total,
+        outcome.total_usage.output_tokens.total
     );
     Ok(())
 }

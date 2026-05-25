@@ -8,11 +8,11 @@ expression: output
                                                                                                 
 ❯ hello                                                                                         
                                                                                                 
-⏺ Thinking · 1.6s · 22 reasoning tokens                                                         
+⏺ Thinking · 1.6s · 22 reasoning tokens · thinking hidden (F2)                                  
                                                                                                 
 ⏺ Hello! How can I help?                                                                        
                                                                                                 
 ────────────────────────────────────────────────────────────────────────────────────────────────
 ❯                                                                                               
 ────────────────────────────────────────────────────────────────────────────────────────────────
- opus-4 * auto | show thinking(F2):off | ↑0 ↓0 · cache 0% | ctx 0% | 3 msgs
+ opus-4 * auto | ↑0 ↓0 · cache 0/0% | ctx 0% | →1 ←2

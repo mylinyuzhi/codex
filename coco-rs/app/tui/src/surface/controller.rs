@@ -22,6 +22,15 @@ use crate::widgets::TranscriptLayoutIndex;
 pub(crate) struct NativeSurfaceController {
     history: SurfaceHistoryDriver,
     transcript_layout: TranscriptLayoutIndex,
+    history_display: Option<HistoryDisplayState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HistoryDisplayState {
+    show_system_reminders: bool,
+    show_thinking: bool,
+    syntax_highlighting: crate::display_settings::SyntaxHighlighting,
+    reasoning_metadata_revision: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +121,7 @@ impl NativeSurfaceController {
             .note_viewport(width, viewport.height, stream_active);
 
         let options = history_options(state, width);
+        let history_display = HistoryDisplayState::from(state);
         let session_header = || session_header_lines(state, width);
         // Feed the native history driver with the engine-authoritative
         // `&[RenderedCell]` slice directly. Engine-pushed content
@@ -121,9 +131,14 @@ impl NativeSurfaceController {
         let history = if !plan.native_history_enabled() {
             HistoryEmissionOutcome::Noop
         } else {
+            let history_display_changed = self
+                .history_display
+                .replace(history_display)
+                .is_some_and(|previous| previous != history_display);
             let needs_stream_finish_replay =
                 !stream_active && self.history.stream_finish_replay_needed();
-            if self.history.replay_due(now) || needs_stream_finish_replay {
+            if history_display_changed || self.history.replay_due(now) || needs_stream_finish_replay
+            {
                 self.history.replay_all_capped(
                     terminal,
                     session_header(),
@@ -170,6 +185,17 @@ impl NativeSurfaceController {
     pub(crate) fn reset(&mut self) {
         self.history.reset();
         self.transcript_layout.reset();
+    }
+}
+
+impl From<&AppState> for HistoryDisplayState {
+    fn from(state: &AppState) -> Self {
+        Self {
+            show_system_reminders: state.ui.show_system_reminders,
+            show_thinking: state.ui.show_thinking,
+            syntax_highlighting: state.ui.display_settings.syntax_highlighting,
+            reasoning_metadata_revision: state.session.reasoning_metadata_revision,
+        }
     }
 }
 

@@ -221,19 +221,19 @@ fn server_notification_item_started_embeds_thread_item() {
 fn server_notification_stream_request_end_carries_usage() {
     let notif = ServerNotification::StreamRequestEnd {
         usage: TokenUsage {
-            input_tokens: 100,
-            output_tokens: 50,
-            input_token_details: crate::InputTokenDetails {
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
+            input_tokens: crate::InputTokens {
+                total: 100,
                 ..Default::default()
             },
-            ..Default::default()
+            output_tokens: crate::OutputTokens {
+                total: 50,
+                ..Default::default()
+            },
         },
     };
     let json = serde_json::to_value(&notif).unwrap();
     assert_eq!(json["method"], "stream/requestEnd");
-    assert_eq!(json["params"]["usage"]["input_tokens"], 100);
+    assert_eq!(json["params"]["usage"]["input_tokens"]["total"], 100);
 }
 
 #[test]
@@ -439,14 +439,14 @@ fn session_result_has_model_usage_and_permission_denials() {
         stop_reason: "end_turn".into(),
         total_cost_usd: 0.01,
         usage: TokenUsage {
-            input_tokens: 100,
-            output_tokens: 50,
-            input_token_details: crate::InputTokenDetails {
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
+            input_tokens: crate::InputTokens {
+                total: 100,
                 ..Default::default()
             },
-            ..Default::default()
+            output_tokens: crate::OutputTokens {
+                total: 50,
+                ..Default::default()
+            },
         },
         model_usage: usage,
         permission_denials: vec![PermissionDenialInfo {

@@ -64,12 +64,12 @@ impl ScenarioUsage {
     fn add(&mut self, usage: &TokenUsage, llm_calls_delta: u64) {
         self.record_calls += 1;
         self.llm_calls += llm_calls_delta;
-        self.input_tokens += usage.input_tokens;
-        self.output_tokens += usage.output_tokens;
-        self.cache_read_tokens += usage.input_token_details.cache_read_tokens;
-        self.cache_creation_tokens += usage.input_token_details.cache_write_tokens;
-        self.reasoning_output_tokens += usage.output_token_details.reasoning_tokens;
-        self.text_output_tokens += usage.output_token_details.text_tokens;
+        self.input_tokens += usage.input_tokens.total;
+        self.output_tokens += usage.output_tokens.total;
+        self.cache_read_tokens += usage.input_tokens.cache_read;
+        self.cache_creation_tokens += usage.input_tokens.cache_write;
+        self.reasoning_output_tokens += usage.output_tokens.reasoning;
+        self.text_output_tokens += usage.output_tokens.text;
     }
 
     fn estimated_cost_usd(&self, model: &str) -> Option<f64> {

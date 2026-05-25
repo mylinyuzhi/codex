@@ -27,15 +27,13 @@ pub struct CompletionTokensDetails {
 }
 
 /// Convert OpenAI Chat usage to the SDK's unified `Usage` type.
+///
+/// OpenAI reports `prompt_tokens` inclusive of cached tokens, so `total`
+/// preserves the raw prompt total and `no_cache` subtracts `cached_tokens`.
 pub fn convert_openai_chat_usage(usage: Option<&OpenAIChatUsage>) -> Usage {
     let Some(usage) = usage else {
         return Usage {
-            input_tokens: InputTokens {
-                total: None,
-                no_cache: None,
-                cache_read: None,
-                cache_write: None,
-            },
+            input_tokens: InputTokens::default(),
             output_tokens: OutputTokens {
                 total: None,
                 text: None,
@@ -59,12 +57,11 @@ pub fn convert_openai_chat_usage(usage: Option<&OpenAIChatUsage>) -> Usage {
         .unwrap_or(0);
 
     Usage {
-        input_tokens: InputTokens {
-            total: Some(prompt_tokens),
-            no_cache: Some(prompt_tokens.saturating_sub(cached_tokens)),
-            cache_read: Some(cached_tokens),
-            cache_write: None,
-        },
+        input_tokens: InputTokens::from_inclusive_total(
+            Some(prompt_tokens),
+            Some(cached_tokens),
+            None,
+        ),
         output_tokens: OutputTokens {
             total: Some(completion_tokens),
             text: Some(completion_tokens.saturating_sub(reasoning_tokens)),

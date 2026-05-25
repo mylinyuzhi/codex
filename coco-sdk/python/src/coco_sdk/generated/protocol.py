@@ -2866,10 +2866,11 @@ class InitializeResult(BaseModel):
     models: list[SdkModelInfo] = []
     pid: int | None = None
 
-class InputTokenDetails(BaseModel):
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
-    no_cache_tokens: int = 0
+class InputTokens(BaseModel):
+    cache_read: int = 0
+    cache_write: int = 0
+    no_cache: int = 0
+    total: int = 0
 
 class InstructionsLoadedInput(BaseModel):
     cwd: str
@@ -2961,9 +2962,10 @@ class NotificationInput(BaseModel):
     title: str | None = None
     transcript_path: str = ''
 
-class OutputTokenDetails(BaseModel):
-    reasoning_tokens: int = 0
-    text_tokens: int = 0
+class OutputTokens(BaseModel):
+    reasoning: int = 0
+    text: int = 0
+    total: int = 0
 
 class PermissionAskChoice(BaseModel):
     label: str
@@ -3472,11 +3474,8 @@ class TodoRecord(BaseModel):
     status: str
 
 class TokenUsage(BaseModel):
-    input_tokens: int
-    output_tokens: int
-    input_token_details: InputTokenDetails = {}
-    output_token_details: OutputTokenDetails = {}
-    total_tokens: int = 0
+    input_tokens: InputTokens = {}
+    output_tokens: OutputTokens = {}
 
 class TombstoneMessage(BaseModel):
     original_kind: MessageKind

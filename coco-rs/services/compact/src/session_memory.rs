@@ -430,7 +430,7 @@ fn calculate_messages_to_keep_index(
     let mut total_tokens: i64 = 0;
     let mut text_block_count: i32 = 0;
     for msg in &messages[start_index..] {
-        total_tokens += tokens::estimate_message_tokens(msg.as_ref());
+        total_tokens = total_tokens.saturating_add(tokens::estimate_message_tokens(msg.as_ref()));
         if has_text_blocks(msg.as_ref()) {
             text_block_count += 1;
         }
@@ -448,7 +448,7 @@ fn calculate_messages_to_keep_index(
     while start_index > floor {
         let i = start_index - 1;
         let msg_tokens = tokens::estimate_message_tokens(messages[i].as_ref());
-        total_tokens += msg_tokens;
+        total_tokens = total_tokens.saturating_add(msg_tokens);
         if has_text_blocks(messages[i].as_ref()) {
             text_block_count += 1;
         }

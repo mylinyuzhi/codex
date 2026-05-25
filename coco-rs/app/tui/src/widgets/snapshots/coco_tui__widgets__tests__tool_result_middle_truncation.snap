@@ -8,7 +8,7 @@ expression: output
                                                                                                 
 ❯ find the CLAUDE.md                                                                            
                                                                                                 
-🔨  Glob(**/CLAUDE.md)                                                                           
+🔧  Glob(**/CLAUDE.md)                                                                           
   └ Found 8 files                                                                               
     coco-rs/app/tui/CLAUDE.md                                                                   
     … +5 lines (ctrl+o to expand)                                                               
@@ -18,4 +18,4 @@ expression: output
 ────────────────────────────────────────────────────────────────────────────────────────────────
 ❯                                                                                               
 ────────────────────────────────────────────────────────────────────────────────────────────────
- opus-4 * auto | show thinking(F2):off | ↑0 ↓0 · cache 0% | ctx 0% | 3 msgs
+ opus-4 * auto | ↑0 ↓0 · cache 0/0% | ctx 0% | →1 ←1 · tool 1

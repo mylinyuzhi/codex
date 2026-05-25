@@ -3,14 +3,14 @@ use super::*;
 #[test]
 fn test_format_usage() {
     let usage = TokenUsage {
-        input_tokens: 1000,
-        output_tokens: 500,
-        input_token_details: coco_types::InputTokenDetails {
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
+        input_tokens: coco_types::InputTokens {
+            total: 1000,
             ..Default::default()
         },
-        ..Default::default()
+        output_tokens: coco_types::OutputTokens {
+            total: 500,
+            ..Default::default()
+        },
     };
     let s = format_usage(&usage, 0.05);
     assert!(s.contains("1000↓"));

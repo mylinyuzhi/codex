@@ -616,7 +616,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     {
                         tracing::warn!(
                             stop_reason = ?stop,
-                            tokens_out = result.usage.output_tokens,
+                            tokens_out = result.usage.output_tokens.total,
                             chunks = chunks.len(),
                             stage = req.stage,
                             "auto-mode classifier unexpected outcome — \

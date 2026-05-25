@@ -529,8 +529,8 @@ impl TurnRunner for QueryEngineRunner {
                 Ok(result) => {
                     info!(
                         turns = result.turns,
-                        input_tokens = result.total_usage.input_tokens,
-                        output_tokens = result.total_usage.output_tokens,
+                        input_tokens = result.total_usage.input_tokens.total,
+                        output_tokens = result.total_usage.output_tokens.total,
                         history_len = result.final_messages.len(),
                         "QueryEngineRunner: turn complete"
                     );

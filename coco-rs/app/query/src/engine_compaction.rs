@@ -795,7 +795,7 @@ impl QueryEngine {
                 if stop_abnormal {
                     warn!(
                         stop_reason = ?stop,
-                        tokens_out = result.usage.output_tokens,
+                        tokens_out = result.usage.output_tokens.total,
                         "compaction aborted: non-normal stop_reason — \
                          dropping truncated summary to avoid contaminating future turns"
                     );
@@ -810,7 +810,7 @@ impl QueryEngine {
                 if summary_res.is_err() {
                     warn!(
                         stop_reason = ?stop,
-                        tokens_out = result.usage.output_tokens,
+                        tokens_out = result.usage.output_tokens.total,
                         "compaction summary parse failed — XML extractor rejected response"
                     );
                 }

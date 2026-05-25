@@ -187,7 +187,7 @@ impl GoogleGenerativeAIImageModel {
             vercel_ai_provider::image_model::v4::ImageModelV4Usage {
                 prompt_tokens: prompt,
                 output_tokens: candidates,
-                total_tokens: prompt + candidates,
+                total_tokens: prompt.saturating_add(candidates),
             }
         });
 

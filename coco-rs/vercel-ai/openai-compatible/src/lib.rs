@@ -41,6 +41,7 @@ pub mod openai_compatible_config;
 pub mod openai_compatible_error;
 pub mod openai_compatible_provider;
 pub mod openai_compatible_provider_settings;
+pub mod provider_options;
 pub mod provider_options_key;
 
 // Model implementations
@@ -57,6 +58,9 @@ pub use openai_compatible_config::SupportedUrlsFn;
 pub use openai_compatible_provider::OpenAICompatibleProvider;
 pub use openai_compatible_provider::create_openai_compatible;
 pub use openai_compatible_provider_settings::OpenAICompatibleProviderSettings;
+pub use provider_options::OpenAICompatibleProviderOptionsConfig;
+pub use provider_options::PromptTokensTotalSemantics;
+pub use provider_options::parse_provider_options;
 
 // Provider options key utilities
 pub use provider_options_key::effective_provider_options_key;

@@ -370,6 +370,15 @@ fn build_openai_compat(
     timeout_secs: i64,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
+    let knobs = vercel_ai_openai_compatible::parse_provider_options(&provider_cfg.provider_options)
+        .map_err(|e| {
+            crate::errors::ProviderBuildFailedSnafu {
+                provider: "openai-compat",
+                provider_name: provider_cfg.name.clone(),
+                message: format!("provider_options: {e}"),
+            }
+            .build()
+        })?;
     let settings = vercel_ai_openai_compatible::OpenAICompatibleProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
         api_key: provider_cfg.resolve_api_key(),
@@ -388,6 +397,7 @@ fn build_openai_compat(
         transform_request_body: None,
         metadata_extractor: None,
         error_handler: None,
+        prompt_tokens_total_semantics: knobs.prompt_tokens_total_semantics,
         full_url: Some(opts.full_url),
     };
     let provider = vercel_ai_openai_compatible::create_openai_compatible(settings);

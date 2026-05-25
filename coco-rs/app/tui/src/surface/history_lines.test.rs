@@ -69,7 +69,7 @@ fn finalized_history_lines_collapse_meta_by_default() {
 }
 
 #[test]
-fn finalized_history_lines_show_collapsed_thinking_without_per_item_toggle_hint() {
+fn finalized_history_lines_show_collapsed_thinking_with_toggle_hint() {
     let theme = Theme::default();
     let kb_handle = crate::keybinding_resolver::KeybindingHandle::from_defaults();
     // Phase 3d (§5): reasoning metadata now rides on
@@ -103,7 +103,10 @@ fn finalized_history_lines_show_collapsed_thinking_without_per_item_toggle_hint(
 
     assert_eq!(
         plain_lines(&lines),
-        vec!["⏺ Thinking · 1.3s · 15 reasoning tokens", "",]
+        vec![
+            "⏺ Thinking · 1.3s · 15 reasoning tokens · thinking hidden (F2)",
+            "",
+        ]
     );
 }
 

@@ -83,7 +83,7 @@ pub async fn single_turn_query(
     if text.is_empty() || stop.is_some_and(coco_messages::StopReason::is_abnormal) {
         tracing::warn!(
             stop_reason = ?stop,
-            tokens_out = result.usage.output_tokens,
+            tokens_out = result.usage.output_tokens.total,
             text_chars = text.len(),
             "single_turn unexpected outcome"
         );

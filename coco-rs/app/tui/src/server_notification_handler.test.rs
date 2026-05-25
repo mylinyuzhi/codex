@@ -639,9 +639,14 @@ fn test_live_status_tokens_start_fresh_and_follow_stream_deltas() {
             coco_types::TurnCompletedParams {
                 turn_id: None,
                 usage: coco_types::TokenUsage {
-                    input_tokens: 100,
-                    output_tokens: 50,
-                    ..Default::default()
+                    input_tokens: coco_types::InputTokens {
+                        total: 100,
+                        ..Default::default()
+                    },
+                    output_tokens: coco_types::OutputTokens {
+                        total: 50,
+                        ..Default::default()
+                    },
                 },
             },
         )),

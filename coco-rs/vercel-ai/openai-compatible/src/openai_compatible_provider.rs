@@ -21,6 +21,7 @@ use crate::image::OpenAICompatibleImageModel;
 use crate::openai_compatible_config::OpenAICompatibleConfig;
 use crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler;
 use crate::openai_compatible_provider_settings::OpenAICompatibleProviderSettings;
+use crate::provider_options::PromptTokensTotalSemantics;
 
 /// OpenAI-compatible multi-model provider.
 ///
@@ -38,6 +39,7 @@ pub struct OpenAICompatibleProvider {
         Option<Arc<dyn Fn(serde_json::Value) -> serde_json::Value + Send + Sync>>,
     metadata_extractor: Option<Arc<dyn crate::metadata_extractor::MetadataExtractor>>,
     error_handler: Option<Arc<dyn ResponseHandler<AISdkError>>>,
+    prompt_tokens_total_semantics: PromptTokensTotalSemantics,
     full_url: Option<bool>,
 }
 
@@ -100,6 +102,7 @@ impl OpenAICompatibleProvider {
             transform_request_body: settings.transform_request_body,
             metadata_extractor: settings.metadata_extractor,
             error_handler: settings.error_handler,
+            prompt_tokens_total_semantics: settings.prompt_tokens_total_semantics,
             full_url: settings.full_url,
         }
     }
@@ -124,6 +127,7 @@ impl OpenAICompatibleProvider {
             metadata_extractor: self.metadata_extractor.clone(),
             supported_urls: None,
             error_handler,
+            prompt_tokens_total_semantics: self.prompt_tokens_total_semantics,
             full_url: self.full_url,
         })
     }

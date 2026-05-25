@@ -31,7 +31,7 @@ use uuid::Uuid;
 /// One staged span awaiting commit.
 ///
 /// Same semantic fields as TS `staged[]` items inside
-/// `ContextCollapseSnapshotEntry`; wire is snake_case JSON.
+/// `ContextCollapseSnapshotEntry`; wire is snake_case JSON (Rust idiom).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StagedRange {
     /// First archived message UUID (inclusive).

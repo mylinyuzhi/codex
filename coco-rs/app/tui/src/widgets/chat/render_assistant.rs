@@ -89,6 +89,7 @@ pub(super) fn try_render(
                     content: text,
                     duration_ms: meta.and_then(|m| m.duration_ms),
                     reasoning_tokens: meta.map(|m| m.reasoning_tokens),
+                    toggle_hint: Some(&w.thinking_toggle_hint()),
                     display: if w.show_thinking {
                         ThinkingDisplay::Expanded {
                             max_body_lines: crate::constants::THINKING_PREVIEW_LINES,
@@ -137,7 +138,7 @@ pub(super) fn try_render(
                 .map(|t| format!(" ({})", format_duration_seconds(t.elapsed())))
                 .unwrap_or_default();
             let mut spans = vec![
-                Span::raw("🔨 ").fg(w.styles.dim()),
+                Span::raw("🔧 ").fg(w.styles.dim()),
                 Span::raw(tool_name.clone())
                     .fg(tool_tone_color(tool_name_tone(tool_name), w.styles))
                     .bold(),

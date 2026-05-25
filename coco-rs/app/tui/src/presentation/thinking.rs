@@ -24,6 +24,7 @@ pub(crate) struct ThinkingRenderInput<'a> {
     pub(crate) content: &'a str,
     pub(crate) duration_ms: Option<i64>,
     pub(crate) reasoning_tokens: Option<i64>,
+    pub(crate) toggle_hint: Option<&'a str>,
     pub(crate) display: ThinkingDisplay,
 }
 
@@ -44,6 +45,9 @@ pub(crate) fn render_thinking_block(
             )
             .to_string(),
         );
+    }
+    if let Some(hint) = input.toggle_hint.filter(|hint| !hint.is_empty()) {
+        parts.push(hint.to_string());
     }
     let mut lines = vec![Line::from(
         Span::raw(format!("⏺ {}", parts.join(" · ")))

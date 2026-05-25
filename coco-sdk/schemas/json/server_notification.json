@@ -2640,24 +2640,30 @@
         "end_line"
       ]
     },
-    "InputTokenDetails": {
-      "description": "Input-side token breakdown — mirrors `vercel_ai::InputTokenDetails`\n(which itself flattens `vercel_ai_provider::InputTokens`).",
+    "InputTokens": {
+      "description": "Input-side token breakdown.\n\nShape mirrors `vercel_ai_provider::InputTokens` — `total` is the\nnormalized count and equals `no_cache + cache_read + cache_write`\nwhen the provider reports every bucket. Provider converters in\n`services/inference` are responsible for normalizing per-provider\nraw shapes (Anthropic exclusive-bucket vs OpenAI inclusive-total)\nbefore populating this struct, so consumers can rely on `total`\nbeing the post-cache-aware true input count.\n\n`i64` is used in place of vercel-ai's `Option<u64>` to match the\nrest of coco-rs's token-count idiom; \"not reported\" surfaces as `0`.",
       "type": "object",
       "properties": {
-        "cache_read_tokens": {
-          "description": "Input tokens served from the prompt cache. Both OpenAI-compat\n(`prompt_tokens_details.cached_tokens`) and Anthropic\n(`cache_read_input_tokens`) expose this.",
+        "cache_read": {
+          "description": "Input tokens served from the prompt cache. Anthropic\n`cache_read_input_tokens` / OpenAI `prompt_tokens_details.cached_tokens`\n/ Google `cachedContentTokenCount` all map here.",
           "type": "integer",
           "format": "int64",
           "default": 0
         },
-        "cache_write_tokens": {
-          "description": "Input tokens written to the prompt cache. **Only** the\nAnthropic wire shape exposes this (`cache_creation_input_tokens`);\nOpenAI-compat responses (DeepSeek, xAI, Groq, …) have no\nequivalent field and the value stays 0 there. Matches upstream\n`@ai-sdk/openai-compatible`.",
+        "cache_write": {
+          "description": "Input tokens written to the prompt cache. Only Anthropic's\n`cache_creation_input_tokens` populates this; OpenAI-compatible\nproviders have no wire equivalent and the value stays 0.",
           "type": "integer",
           "format": "int64",
           "default": 0
         },
-        "no_cache_tokens": {
-          "description": "Input tokens that did NOT come from the prompt cache.\n`input_tokens = no_cache_tokens + cache_read_tokens` when the\nprovider reports both.",
+        "no_cache": {
+          "description": "Input tokens that did NOT come from the prompt cache.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "total": {
+          "description": "Total input tokens (includes cache reads + cache writes).",
           "type": "integer",
           "format": "int64",
           "default": 0
@@ -3195,18 +3201,24 @@
         "provider"
       ]
     },
-    "OutputTokenDetails": {
-      "description": "Output-side token breakdown — mirrors `vercel_ai::OutputTokenDetails`.",
+    "OutputTokens": {
+      "description": "Output-side token breakdown.\n\nShape mirrors `vercel_ai_provider::OutputTokens` — `total` is the\ntotal emitted, and `text + reasoning` decompose it when the provider\nreports the breakdown.",
       "type": "object",
       "properties": {
-        "reasoning_tokens": {
-          "description": "Output tokens spent on reasoning / thinking blocks. Already\ncounted inside `output_tokens` and billed at the output rate.\nSourced from OpenAI-compat's `completion_tokens_details.reasoning_tokens`\nor Anthropic's thinking-block usage where exposed.",
+        "reasoning": {
+          "description": "Output tokens spent on reasoning / thinking blocks. Already\ncounted inside `total` and billed at the output rate.",
           "type": "integer",
           "format": "int64",
           "default": 0
         },
-        "text_tokens": {
-          "description": "Output tokens spent on plain text (non-reasoning).\n`output_tokens = text_tokens + reasoning_tokens` when the\nprovider reports both.",
+        "text": {
+          "description": "Output tokens spent on plain text (non-reasoning).",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "total": {
+          "description": "Total output tokens.",
           "type": "integer",
           "format": "int64",
           "default": 0
@@ -5471,47 +5483,29 @@
       ]
     },
     "TokenUsage": {
-      "description": "Per-request token counts (returned by LLM API).\n\n**Shape mirrors `vercel_ai::LanguageModelUsage`** — the high-level\nSDK type at `vercel-ai/ai/src/types/usage.rs`. Field names and\nnesting are identical so a value can move across the seam without\ninformation loss. `i64` is used in place of vercel-ai's `Option<u64>`\nto match the rest of coco-rs's token-count idiom; \"not reported\"\nsurfaces as `0`.\n\nBackward-compat: every nested field is `#[serde(default)]`, so old\nsession JSON without the breakdown fields parses cleanly with\nbreakdown values defaulting to 0.",
+      "description": "Per-request token counts (returned by LLM API).\n\nShape mirrors `vercel_ai_provider::Usage` — nested input/output\nbreakdown with named cache buckets, so `usage.input_tokens.total`\nis unambiguously the normalized count and the implicit \"is this\nthe no-cache subset or the inclusive total?\" contract that the\nprevious flat shape carried is gone.",
       "type": "object",
       "properties": {
-        "input_token_details": {
-          "description": "Input-side breakdown.",
-          "$ref": "#/$defs/InputTokenDetails",
-          "default": {
-            "cache_read_tokens": 0,
-            "cache_write_tokens": 0,
-            "no_cache_tokens": 0
-          }
-        },
         "input_tokens": {
-          "description": "Total input tokens consumed (= `no_cache + cache_read + cache_write`\nwhen all three are reported).",
-          "type": "integer",
-          "format": "int64"
-        },
-        "output_token_details": {
-          "description": "Output-side breakdown.",
-          "$ref": "#/$defs/OutputTokenDetails",
+          "description": "Input-side breakdown.",
+          "$ref": "#/$defs/InputTokens",
           "default": {
-            "reasoning_tokens": 0,
-            "text_tokens": 0
+            "cache_read": 0,
+            "cache_write": 0,
+            "no_cache": 0,
+            "total": 0
           }
         },
         "output_tokens": {
-          "description": "Total output tokens consumed (= `text + reasoning` when both\nare reported).",
-          "type": "integer",
-          "format": "int64"
-        },
-        "total_tokens": {
-          "description": "`input_tokens + output_tokens`. Convenience aggregate matching\nvercel-ai's `LanguageModelUsage.total_tokens`. Default to 0\nwhen not provided; `Self::total()` recomputes if needed.",
-          "type": "integer",
-          "format": "int64",
-          "default": 0
+          "description": "Output-side breakdown.",
+          "$ref": "#/$defs/OutputTokens",
+          "default": {
+            "reasoning": 0,
+            "text": 0,
+            "total": 0
+          }
         }
-      },
-      "required": [
-        "input_tokens",
-        "output_tokens"
-      ]
+      }
     },
     "TombstoneMessage": {
       "type": "object",

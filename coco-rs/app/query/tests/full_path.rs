@@ -202,8 +202,8 @@ async fn test_full_path_write_then_read() {
     assert_eq!(file_content.lines().count(), 3);
 
     // Verify token usage accumulated
-    assert_eq!(result.total_usage.input_tokens, 450); // 100+150+200
-    assert_eq!(result.total_usage.output_tokens, 120); // 50+30+40
+    assert_eq!(result.total_usage.input_tokens.total, 450); // 100+150+200
+    assert_eq!(result.total_usage.output_tokens.total, 120); // 50+30+40
 }
 
 #[tokio::test]

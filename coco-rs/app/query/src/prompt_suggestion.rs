@@ -33,7 +33,7 @@
 use std::collections::HashSet;
 
 use coco_messages::Message;
-use coco_types::{PromptSuggestion, ToolAppState};
+use coco_types::{PromptSuggestion, TokenUsage, ToolAppState};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -44,7 +44,7 @@ use regex::Regex;
 /// TS: `services/PromptSuggestion/promptSuggestion.ts:239`
 /// `MAX_PARENT_UNCACHED_TOKENS = 10_000`. When the parent's last
 /// assistant message would force more than 10k uncached tokens
-/// (input + cache_creation + output), suppress the fork — the
+/// (normalized input minus cache read, plus output), suppress the fork — the
 /// re-warm cost dwarfs any suggestion benefit.
 pub const MAX_PARENT_UNCACHED_TOKENS: i64 = 10_000;
 
@@ -197,7 +197,7 @@ pub struct SuggestionContext {
     pub assistant_turn_count: u32,
     /// Whether the parent's last assistant turn was an API error.
     pub last_response_was_api_error: bool,
-    /// Parent's last turn `input + cache_creation + output` tokens.
+    /// Parent's last turn `input - cache_read + output` tokens.
     pub parent_uncached_tokens: i64,
     /// Promptsuggestion master switch (settings / env).
     pub disabled: bool,
@@ -556,17 +556,23 @@ pub fn should_filter_suggestion(text: &str) -> Option<SuggestionFilter> {
 
 // ── Cache-cold helper ──────────────────────────────────────────
 
-/// Compute parent's last-turn uncached token total per TS
+/// Compute parent's last-turn non-cache-read token total per TS
 /// `getParentCacheSuppressReason` (`promptSuggestion.ts:241-255`).
 ///
-/// `input + cache_creation_input + output` — caller compares
-/// against [`MAX_PARENT_UNCACHED_TOKENS`].
-pub fn parent_uncached_tokens(
-    input_tokens: i64,
-    cache_creation_input_tokens: i64,
-    output_tokens: i64,
-) -> i64 {
-    input_tokens + cache_creation_input_tokens + output_tokens
+/// TS formula is `input + cache_creation + output`, where TS `input` is
+/// the *no-cache* bucket (Anthropic-style). In coco-rs `TokenUsage::input_tokens`
+/// is the normalized total `no_cache + cache_read + cache_write`, so the
+/// algebraically-equivalent form `input - cache_read + output` recovers
+/// `no_cache + cache_write + output` — same value, expressed against our
+/// normalized representation. Caller compares against
+/// [`MAX_PARENT_UNCACHED_TOKENS`].
+pub fn parent_uncached_tokens(usage: &TokenUsage) -> i64 {
+    usage
+        .input_tokens
+        .total
+        .saturating_sub(usage.input_tokens.cache_read)
+        .max(0)
+        .saturating_add(usage.output_tokens.total)
 }
 
 // ── App-state mutators ────────────────────────────────────────

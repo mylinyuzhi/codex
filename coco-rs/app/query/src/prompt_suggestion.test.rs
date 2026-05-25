@@ -545,7 +545,46 @@ fn test_get_suggestion_suppress_reason_priority_order() {
 
 #[test]
 fn test_parent_uncached_tokens_helper() {
-    assert_eq!(parent_uncached_tokens(100, 200, 300), 600);
-    assert_eq!(parent_uncached_tokens(0, 0, 0), 0);
-    assert_eq!(parent_uncached_tokens(10_001, 0, 0), 10_001);
+    assert_eq!(
+        parent_uncached_tokens(&usage_with_cache_read(
+            /*input_tokens*/ 600, /*cache_read_tokens*/ 200, /*output_tokens*/ 300,
+        )),
+        700
+    );
+    assert_eq!(
+        parent_uncached_tokens(&usage_with_cache_read(
+            /*input_tokens*/ 0, /*cache_read_tokens*/ 0, /*output_tokens*/ 0,
+        )),
+        0
+    );
+    assert_eq!(
+        parent_uncached_tokens(&usage_with_cache_read(
+            /*input_tokens*/ 10_001, /*cache_read_tokens*/ 0, /*output_tokens*/ 0,
+        )),
+        10_001
+    );
+    assert_eq!(
+        parent_uncached_tokens(&usage_with_cache_read(
+            /*input_tokens*/ 100, /*cache_read_tokens*/ 200, /*output_tokens*/ 50,
+        )),
+        50
+    );
+}
+
+fn usage_with_cache_read(
+    input_tokens: i64,
+    cache_read_tokens: i64,
+    output_tokens: i64,
+) -> TokenUsage {
+    TokenUsage {
+        input_tokens: coco_types::InputTokens {
+            total: input_tokens,
+            cache_read: cache_read_tokens,
+            ..Default::default()
+        },
+        output_tokens: coco_types::OutputTokens {
+            total: output_tokens,
+            ..Default::default()
+        },
+    }
 }

@@ -203,6 +203,11 @@ pub struct SessionState {
     /// Keyed by the assistant message UUID. Cleared on session reset
     /// and pruned on `MessageTruncated`.
     pub reasoning_metadata: HashMap<uuid::Uuid, ReasoningMetadata>,
+    /// Monotonic revision for reasoning metadata side-cache changes.
+    ///
+    /// Native scrollback renders history append-only, so metadata that
+    /// arrives after the assistant message needs an explicit replay trigger.
+    pub reasoning_metadata_revision: u64,
     /// Subagent instances.
     pub subagents: Vec<SubagentInstance>,
     /// Token usage.
@@ -470,6 +475,31 @@ impl SessionState {
     pub fn connected_mcp_count(&self) -> i32 {
         self.mcp_servers.iter().filter(|s| s.connected).count() as i32
     }
+
+    pub fn insert_reasoning_metadata(&mut self, uuid: uuid::Uuid, metadata: ReasoningMetadata) {
+        if self.reasoning_metadata.insert(uuid, metadata) != Some(metadata) {
+            self.reasoning_metadata_revision = self.reasoning_metadata_revision.wrapping_add(1);
+        }
+    }
+
+    pub fn retain_reasoning_metadata_for_messages(
+        &mut self,
+        surviving_uuids: &std::collections::HashSet<uuid::Uuid>,
+    ) {
+        let before = self.reasoning_metadata.len();
+        self.reasoning_metadata
+            .retain(|uuid, _| surviving_uuids.contains(uuid));
+        if self.reasoning_metadata.len() != before {
+            self.reasoning_metadata_revision = self.reasoning_metadata_revision.wrapping_add(1);
+        }
+    }
+
+    pub fn clear_reasoning_metadata(&mut self) {
+        if !self.reasoning_metadata.is_empty() {
+            self.reasoning_metadata_revision = self.reasoning_metadata_revision.wrapping_add(1);
+        }
+        self.reasoning_metadata.clear();
+    }
 }
 
 impl Default for SessionState {
@@ -487,6 +517,7 @@ impl Default for SessionState {
             tool_executions: Vec::new(),
             tool_group_summaries: HashMap::new(),
             reasoning_metadata: HashMap::new(),
+            reasoning_metadata_revision: 0,
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
             session_id: None,
@@ -691,7 +722,7 @@ pub enum SubagentKind {
 /// message UUID so the renderer can surface
 /// `Thinking · <duration> · <reasoning_tokens>` without mutating
 /// the derived `RenderedCell` — preserves I-2.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReasoningMetadata {
     pub duration_ms: Option<i64>,
     pub reasoning_tokens: i64,

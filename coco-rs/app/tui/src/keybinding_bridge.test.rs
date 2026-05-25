@@ -10,6 +10,7 @@ use crate::events::TuiCommand;
 use crate::keybinding_bridge::KeybindingContext;
 use crate::keybinding_bridge::active_context;
 use crate::keybinding_bridge::map_key;
+use crate::keybinding_bridge::should_log_key_command;
 use crate::state::AppState;
 use crate::state::PanePromptState;
 
@@ -148,6 +149,14 @@ fn test_transcript_modal_uses_pager_controls() {
         map_key(&state, press(KeyCode::Esc)),
         Some(TuiCommand::Cancel)
     ));
+    assert!(matches!(
+        map_key(&state, ctrl(KeyCode::Char('c'))),
+        Some(TuiCommand::Interrupt)
+    ));
+    assert!(matches!(
+        map_key(&state, ctrl(KeyCode::Char('d'))),
+        Some(TuiCommand::RequestExit)
+    ));
 }
 
 #[test]
@@ -212,6 +221,23 @@ fn test_ctrl_c_interrupts() {
 }
 
 #[test]
+fn test_ctrl_d_requests_exit() {
+    let state = AppState::new();
+    let cmd = map_key(&state, ctrl(KeyCode::Char('d')));
+    assert!(matches!(cmd, Some(TuiCommand::RequestExit)));
+}
+
+#[test]
+fn test_reserved_ctrl_d_wins_in_confirmation_context() {
+    let mut state = AppState::new();
+    install_permission_prompt(&mut state);
+
+    let cmd = map_key(&state, ctrl(KeyCode::Char('d')));
+
+    assert!(matches!(cmd, Some(TuiCommand::RequestExit)));
+}
+
+#[test]
 fn test_ctrl_q_quits() {
     let state = AppState::new();
     let cmd = map_key(&state, ctrl(KeyCode::Char('q')));
@@ -257,6 +283,13 @@ fn test_char_inserts() {
     let state = AppState::new();
     let cmd = map_key(&state, press(KeyCode::Char('x')));
     assert!(matches!(cmd, Some(TuiCommand::InsertChar('x'))));
+}
+
+#[test]
+fn test_plain_character_input_is_not_logged_as_key_operation() {
+    assert!(!should_log_key_command(&TuiCommand::InsertChar('x')));
+    assert!(should_log_key_command(&TuiCommand::SubmitInput));
+    assert!(should_log_key_command(&TuiCommand::Cancel));
 }
 
 #[test]

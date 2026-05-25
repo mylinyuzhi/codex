@@ -26,4 +26,4 @@ expression: output
 ────────────│cursor                                                │────────────
 ❯           │Shift+Enter        Insert a newline (multi-line input)│            
 ────────────└──────────────────────────────────────────────────────┘────────────
- opus-4 * auto | show thinking(F2):off | ↑0 ↓0 · cache 0% | ctx 0% | 0 msgs
+ opus-4 * auto | ↑0 ↓0 · cache 0% | ctx 0% | 0 msgs

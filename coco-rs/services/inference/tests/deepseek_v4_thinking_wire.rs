@@ -30,6 +30,7 @@ use vercel_ai_anthropic::AnthropicModelCapabilities;
 use vercel_ai_anthropic::ProviderTopology;
 use vercel_ai_openai_compatible::OpenAICompatibleChatLanguageModel;
 use vercel_ai_openai_compatible::OpenAICompatibleConfig;
+use vercel_ai_openai_compatible::PromptTokensTotalSemantics;
 use vercel_ai_openai_compatible::openai_compatible_error::OpenAICompatibleFailedResponseHandler;
 use vercel_ai_provider::LanguageModelV4Message;
 
@@ -122,6 +123,7 @@ fn make_openai_compat_config() -> Arc<OpenAICompatibleConfig> {
         error_handler: Arc::new(OpenAICompatibleFailedResponseHandler::new(
             "deepseek-openai",
         )),
+        prompt_tokens_total_semantics: PromptTokensTotalSemantics::Inclusive,
         full_url: None,
     })
 }

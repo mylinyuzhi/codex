@@ -413,6 +413,23 @@ async fn double_ctrl_c_shutdown_carries_reason() {
 }
 
 #[tokio::test]
+async fn double_ctrl_d_shutdown_carries_reason() {
+    let mut state = AppState::new();
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::RequestExit, &tx).await;
+    handle_command(&mut state, TuiCommand::RequestExit, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::Shutdown { reason }) => {
+            assert_eq!(reason, ShutdownReason::DoublePressCtrlD);
+        }
+        other => panic!("expected Shutdown(DoublePressCtrlD), got {other:?}"),
+    }
+    assert!(state.should_exit());
+}
+
+#[tokio::test]
 async fn clear_screen_preserves_active_surface() {
     // Defensive: ClearScreen should be safe to invoke with a surface open;
     // the surface is user-owned and unrelated to chat content.

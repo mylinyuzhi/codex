@@ -1714,10 +1714,10 @@ impl QueryEngine {
                             turn_id = %turn_id,
                             stop_reason = %stop_reason,
                             raw_stop_reason = ?raw_stop_reason,
-                            tokens_in = usage.input_tokens,
-                            tokens_out = usage.output_tokens,
-                            cache_read = usage.cache_read_input_tokens(),
-                            cache_creation = usage.cache_creation_input_tokens(),
+                            tokens_in = usage.input_tokens.total,
+                            tokens_out = usage.output_tokens.total,
+                            cache_read = usage.input_tokens.cache_read,
+                            cache_creation = usage.input_tokens.cache_write,
                             text_chars = response_text.len(),
                             reasoning_chars = reasoning_text.len(),
                             tool_call_count = tool_order.len(),
@@ -2246,13 +2246,13 @@ impl QueryEngine {
             // Collect ToolUseCompleted events to emit AFTER
             // commit_flush returns — the on_outcome callback is
             // synchronous (FnMut) and can't `.await`.
-            let mut streaming_completed_events: Vec<(String, String, String, bool)> = Vec::new();
+            let mut streaming_commits: Vec<(Vec<Message>, String, String, String, bool)> =
+                Vec::new();
             if let Some(handle) = streaming_handle.take()
                 && streaming_executed
             {
-                let history_ref = &mut *history;
                 let prevent_slot = &mut streaming_control_prevent;
-                let events_ref = &mut streaming_completed_events;
+                let commits_ref = &mut streaming_commits;
                 let structured_slot = &mut run_artifacts.structured_output;
                 let attempts_slot = &mut run_artifacts.structured_output_attempts;
                 handle
@@ -2261,7 +2261,6 @@ impl QueryEngine {
                         let tool_name_str = outcome.tool_id().to_string();
                         let is_error = outcome.error_kind().is_some();
                         let output_text = extract_streaming_result_text(outcome.ordered_messages());
-                        events_ref.push((call_id, tool_name_str, output_text, is_error));
                         if let Some(reason) = outcome.prevent_continuation()
                             && prevent_slot.is_none()
                         {
@@ -2277,13 +2276,20 @@ impl QueryEngine {
                         if let Some(data) = parts.structured_output.clone() {
                             *structured_slot = Some(data);
                         }
-                        for msg in parts.ordered_messages {
-                            history_ref.push(msg);
-                        }
+                        commits_ref.push((
+                            parts.ordered_messages,
+                            call_id,
+                            tool_name_str,
+                            output_text,
+                            is_error,
+                        ));
                     })
                     .await;
             }
-            for (call_id, tool_name, output, is_error) in streaming_completed_events {
+            for (ordered_messages, call_id, tool_name, output, is_error) in streaming_commits {
+                for msg in ordered_messages {
+                    crate::history_sync::history_push_and_emit(history, msg, &event_tx).await;
+                }
                 let _ = emit_stream(
                     &event_tx,
                     crate::AgentStreamEvent::ToolUseCompleted {
@@ -2328,7 +2334,7 @@ impl QueryEngine {
                             attempts = run_artifacts.structured_output_attempts,
                             max_retries, "structured output retry cap exceeded"
                         );
-                        self.emit_turn_completed(&event_tx, turn_id, usage, history.len())
+                        self.emit_successful_turn_completed(&event_tx, history, turn_id, usage)
                             .await;
                         return Ok(make_query_result(
                             response_text,
@@ -2382,7 +2388,7 @@ impl QueryEngine {
                         Ok(agg) if agg.prevent_continuation => {
                             info!("Stop hook prevented continuation");
                             self.flush_successful_turn_state(&mut *history).await;
-                            self.emit_turn_completed(&event_tx, turn_id, usage, history.len())
+                            self.emit_successful_turn_completed(&event_tx, history, turn_id, usage)
                                 .await;
                             return Ok(make_query_result(
                                 response_text,
@@ -2446,11 +2452,11 @@ impl QueryEngine {
                 info!(
                     turn,
                     response_chars = response_text.len(),
-                    tokens_in = usage.input_tokens,
-                    tokens_out = usage.output_tokens,
+                    tokens_in = usage.input_tokens.total,
+                    tokens_out = usage.output_tokens.total,
                     "no tool calls, conversation complete"
                 );
-                self.emit_turn_completed(&event_tx, turn_id, usage, history.len())
+                self.emit_successful_turn_completed(&event_tx, history, turn_id, usage)
                     .await;
                 return Ok(make_query_result(
                     response_text,

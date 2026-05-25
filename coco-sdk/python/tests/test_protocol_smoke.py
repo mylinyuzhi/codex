@@ -287,13 +287,13 @@ def test_server_notification_typed_dispatch() -> None:
             "method": NotificationMethod.TURN_COMPLETED.value,
             "params": {
                 "turn_id": "t1",
-                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "usage": {"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
             },
         }
     )
     assert isinstance(notif, ServerNotificationTurnCompleted)
     assert notif.params.turn_id == "t1"
-    assert notif.params.usage.input_tokens == 1
+    assert notif.params.usage.input_tokens.total == 1
 
     # Different method → different concrete variant class.
     other = adapter.validate_python(

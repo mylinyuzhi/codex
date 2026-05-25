@@ -30,6 +30,10 @@ use super::transcript_view::SystemCellKind;
 /// yield multiple cells when its content interleaves text / thinking /
 /// tool_use blocks. `Message::Tombstone` yields zero (filtered).
 pub fn message_to_cells(msg: Arc<Message>) -> Vec<RenderedCell> {
+    if matches!(msg.as_ref(), Message::Attachment(_)) && !msg.visibility().ui {
+        return Vec::new();
+    }
+
     match &*msg {
         Message::User(user) => {
             let text = extract_user_text(&user.message);
@@ -125,7 +129,7 @@ fn assistant_cells(
 }
 
 /// Extract a compact textual preview of the tool call's input JSON for
-/// the row labelled `🔨 <tool>(<preview>)`. Walks the wrapping assistant
+/// the row labelled `🔧 <tool>(<preview>)`. Walks the wrapping assistant
 /// message's content parts for the `ToolCallPart` whose `tool_call_id`
 /// matches and renders its JSON input as a single-line string. Returns
 /// an empty string when the cell source isn't an assistant message or
@@ -142,7 +146,7 @@ pub(crate) fn extract_tool_call_input_preview(msg: &Message, call_id: &str) -> S
         .find_map(|part| match part {
             AssistantContent::ToolCall(tc) if tc.tool_call_id == call_id => {
                 // Render JSON-string inputs unwrapped so the
-                // `🔨 Bash(ls -la)` row reads naturally — the JSON
+                // `🔧 Bash(ls -la)` row reads naturally — the JSON
                 // representation would surface as `"ls -la"` with
                 // literal quotes, which is noise for the user.
                 Some(match &tc.input {
@@ -418,7 +422,7 @@ pub(crate) mod test_helpers {
             _ => unreachable!("create_assistant_message yields Assistant"),
         };
         push(state, msg);
-        state.reasoning_metadata.insert(
+        state.insert_reasoning_metadata(
             uuid,
             super::super::session::ReasoningMetadata {
                 duration_ms: Some(duration_ms),
@@ -479,5 +483,27 @@ pub(crate) mod test_helpers {
     pub fn push_info(state: &mut SessionState, title: &str, message: &str) {
         let msg = coco_messages::create_info_message(title, message);
         push(state, msg);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use coco_messages::AttachmentMessage;
+    use coco_messages::LlmMessage;
+    use coco_messages::Message;
+    use coco_types::AttachmentKind;
+
+    use super::message_to_cells;
+
+    #[test]
+    fn ui_hidden_attachment_derives_no_cells() {
+        let msg = Message::Attachment(AttachmentMessage::api(
+            AttachmentKind::DeferredToolsDelta,
+            LlmMessage::user_text("deferred tool reminder"),
+        ));
+
+        assert!(message_to_cells(Arc::new(msg)).is_empty());
     }
 }

@@ -79,12 +79,12 @@ pub fn get_model_pricing(model: &str) -> Option<ModelPricing> {
 pub fn calculate_cost_usd(model: &str, usage: &TokenUsage) -> f64 {
     let pricing = get_model_pricing(model).unwrap_or(PRICING_TIER_5_25);
 
-    let input_cost = usage.input_tokens as f64 * pricing.input_per_mtok / 1_000_000.0;
-    let output_cost = usage.output_tokens as f64 * pricing.output_per_mtok / 1_000_000.0;
+    let input_cost = usage.input_tokens.total as f64 * pricing.input_per_mtok / 1_000_000.0;
+    let output_cost = usage.output_tokens.total as f64 * pricing.output_per_mtok / 1_000_000.0;
     let cache_write_cost =
-        usage.cache_creation_input_tokens() as f64 * pricing.cache_write_per_mtok / 1_000_000.0;
+        usage.input_tokens.cache_write as f64 * pricing.cache_write_per_mtok / 1_000_000.0;
     let cache_read_cost =
-        usage.cache_read_input_tokens() as f64 * pricing.cache_read_per_mtok / 1_000_000.0;
+        usage.input_tokens.cache_read as f64 * pricing.cache_read_per_mtok / 1_000_000.0;
 
     input_cost + output_cost + cache_write_cost + cache_read_cost
 }
@@ -160,14 +160,14 @@ mod cost_tests {
     #[test]
     fn test_calculate_cost() {
         let usage = TokenUsage {
-            input_tokens: 1_000_000,
-            output_tokens: 100_000,
-            input_token_details: coco_types::InputTokenDetails {
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
+            input_tokens: coco_types::InputTokens {
+                total: 1_000_000,
                 ..Default::default()
             },
-            ..Default::default()
+            output_tokens: coco_types::OutputTokens {
+                total: 100_000,
+                ..Default::default()
+            },
         };
         let cost = calculate_cost_usd("claude-sonnet-4-6", &usage);
         // 1M input at $3/Mtok = $3.00, 100K output at $15/Mtok = $1.50

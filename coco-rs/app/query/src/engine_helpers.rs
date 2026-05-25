@@ -267,11 +267,9 @@ pub(crate) fn compute_tools_delta(
 /// for their configured plan-role model (set via
 /// `PlanModeSettings.plan_model_fallback_threshold_tokens`).
 ///
-/// The "total context" is the sum of `input_tokens` (all input tokens,
-/// not just non-cached), `cache_read`, `cache_creation`, and
-/// `output_tokens` — matching TS's `inputTokens + cacheRead +
-/// cacheCreation + outputTokens` shape. Returns `false` when the
-/// history has no assistant message yet (cold start).
+/// The "total context" is the sum of normalized `input_tokens` (all input
+/// buckets, including cache read/write) and `output_tokens`. Returns `false`
+/// when the history has no assistant message yet (cold start).
 pub(crate) fn most_recent_assistant_exceeds<M: std::borrow::Borrow<Message>>(
     messages: &[M],
     threshold: i64,
@@ -280,10 +278,10 @@ pub(crate) fn most_recent_assistant_exceeds<M: std::borrow::Borrow<Message>>(
         if let Message::Assistant(a) = msg.borrow()
             && let Some(usage) = &a.usage
         {
-            let total = usage.input_tokens
-                + usage.cache_read_input_tokens()
-                + usage.cache_creation_input_tokens()
-                + usage.output_tokens;
+            let total = usage
+                .input_tokens
+                .total
+                .saturating_add(usage.output_tokens.total);
             return total > threshold;
         }
     }

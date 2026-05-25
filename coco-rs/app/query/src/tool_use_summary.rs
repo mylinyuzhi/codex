@@ -302,7 +302,7 @@ pub async fn generate_tool_use_summary(
     if summary_empty || stop_abnormal {
         tracing::warn!(
             stop_reason = ?stop,
-            tokens_out = query_result.usage.output_tokens,
+            tokens_out = query_result.usage.output_tokens.total,
             summary_chars = summary.len(),
             empty = summary_empty,
             "tool_use_summary unexpected outcome; check Fast role \
