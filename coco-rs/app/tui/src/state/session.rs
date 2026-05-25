@@ -335,7 +335,7 @@ pub struct SessionState {
     /// Available plugins for picker (set by PluginDataReady).
     pub available_plugins: Vec<serde_json::Value>,
     /// Raw markdown of the most recent completed agent response. Populated on
-    /// `TurnCompleted` and consumed by the `/copy` flow. Cleared when
+    /// `TurnCompleted` and consumed by the `/copy` / Ctrl+O flow. Cleared when
     /// a new session is configured. See `record_agent_markdown()`.
     pub last_agent_markdown: Option<String>,
     /// Latest IDE selection (set by IdeSelectionChanged, replaces prior value).
@@ -370,8 +370,8 @@ impl SessionState {
         self.busy = busy;
     }
 
-    /// Record the raw markdown of the current agent turn for `/copy`.
-    /// Mirrors codex-rs `record_agent_markdown()`.
+    /// Record the raw markdown of the current agent turn for the `/copy`
+    /// / Ctrl+O flow. Mirrors codex-rs `record_agent_markdown()`.
     pub fn record_agent_markdown(&mut self, text: &str) {
         if text.is_empty() {
             return;

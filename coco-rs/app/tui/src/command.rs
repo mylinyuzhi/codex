@@ -256,14 +256,11 @@ pub enum UserCommand {
     },
     /// Request selected-message restore diff stats.
     /// TS: fileHistoryGetDiffStats() before showing restore options.
-    ///
-    /// In-process mpsc — strongly typed `Uuid` end-to-end; stringified
-    /// only when re-emitted on the wire via `TuiOnlyEvent`.
-    RequestDiffStats { message_id: uuid::Uuid },
+    RequestDiffStats { message_id: String },
     /// Request file-history availability for every real rewind row on
     /// picker open. Keeps TS's per-candidate async load semantics
     /// without dropping rows on the bounded command channel.
-    RequestDiffStatsBatch { message_ids: Vec<uuid::Uuid> },
+    RequestDiffStatsBatch { message_ids: Vec<String> },
     /// Team lead responding to a teammate's plan-approval request.
     /// The engine routes this to the teammate's mailbox as a
     /// `plan_approval_response` envelope. TS: the response side of

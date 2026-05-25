@@ -5,7 +5,6 @@
 
 use pretty_assertions::assert_eq;
 
-use coco_types::RewindDiffStatsPayload;
 use coco_types::SdkSessionSummary;
 use coco_types::SlashCommandInfo;
 use coco_types::TuiOnlyEvent;
@@ -198,7 +197,7 @@ fn open_rewind_picker_no_preselect_empty_session_opens_modal_with_inline_empty_s
         panic!("expected Rewind modal even on empty session");
     };
     assert_eq!(r.messages.len(), 1, "only the synthetic current-prompt row");
-    assert!(r.messages[0].is_synthetic());
+    assert!(r.messages[0].is_current_prompt);
     assert!(state.ui.toasts.is_empty(), "no toast on bare empty open");
 }
 
@@ -230,7 +229,7 @@ fn open_rewind_picker_batches_all_real_diff_stat_requests() {
     let mut expected = Vec::new();
     for i in 0..45 {
         let id = test_helpers::push_user_text(&mut state.session, &format!("u{i}"), "prompt");
-        expected.push(id);
+        expected.push(id.to_string());
     }
     let (tx, mut rx) = channel();
 
@@ -254,7 +253,6 @@ fn open_rewind_picker_batches_all_real_diff_stat_requests() {
 }
 
 fn diff_payload(
-    _files_changed: i32,
     insertions: i64,
     deletions: i64,
     file_paths: Vec<&str>,
@@ -289,7 +287,7 @@ fn preselected_rewind_options_wait_for_restore_preview_before_code_choices() {
         &mut state,
         TuiOnlyEvent::RewindRestorePreviewReady {
             message_id: target.to_string(),
-            stats: Some(diff_payload(2, 4, 1, vec!["src/a.rs", "src/b.rs"])),
+            stats: Some(diff_payload(4, 1, vec!["src/a.rs", "src/b.rs"])),
         },
         &tx,
     );
@@ -322,7 +320,7 @@ fn preselected_rewind_options_keep_code_choices_hidden_for_no_changes() {
         &mut state,
         TuiOnlyEvent::RewindRestorePreviewReady {
             message_id: target.to_string(),
-            stats: Some(diff_payload(0, 0, 0, vec![])),
+            stats: Some(diff_payload(0, 0, vec![])),
         },
         &tx,
     );
@@ -364,7 +362,7 @@ fn row_metadata_ready_marks_no_code_restore_when_snapshot_missing() {
     let row = r
         .messages
         .iter()
-        .find(|m| m.message_id == Some(target))
+        .find(|m| m.message_id == target)
         .expect("target row present");
     assert_eq!(row.can_restore_code, Some(false));
     assert!(row.diff_stats.is_none());
@@ -384,7 +382,7 @@ fn row_metadata_ready_populates_per_row_stats() {
         TuiOnlyEvent::RewindRowMetadataReady {
             rows: vec![coco_types::RewindRowMetadata {
                 message_id: target.to_string(),
-                metadata: Some(diff_payload(1, 3, 1, vec!["src/local.rs"])),
+                metadata: Some(diff_payload(3, 1, vec!["src/local.rs"])),
             }],
         },
         &tx,
@@ -397,7 +395,7 @@ fn row_metadata_ready_populates_per_row_stats() {
     let row = r
         .messages
         .iter()
-        .find(|m| m.message_id == Some(target))
+        .find(|m| m.message_id == target)
         .expect("target row present");
     let stats = row.diff_stats.as_ref().expect("row metadata populated");
     assert_eq!(row.can_restore_code, Some(true));
@@ -424,7 +422,7 @@ fn restore_preview_ready_updates_selected_state_and_rebuilds_options() {
         &mut state,
         TuiOnlyEvent::RewindRestorePreviewReady {
             message_id: target.to_string(),
-            stats: Some(diff_payload(2, 7, 4, vec!["src/a.rs", "src/b.rs"])),
+            stats: Some(diff_payload(7, 4, vec!["src/a.rs", "src/b.rs"])),
         },
         &tx,
     );
@@ -437,7 +435,7 @@ fn restore_preview_ready_updates_selected_state_and_rebuilds_options() {
     assert_eq!(
         r.diff_stats
             .as_ref()
-            .map(RewindDiffStatsPayload::files_changed),
+            .map(crate::state::rewind::DiffStatsPreview::files_changed),
         Some(2)
     );
     assert!(r.has_file_changes);
@@ -462,7 +460,7 @@ fn restore_preview_repositions_option_selected_after_rebuild() {
         &mut state,
         TuiOnlyEvent::RewindRestorePreviewReady {
             message_id: target.to_string(),
-            stats: Some(diff_payload(1, 3, 0, vec!["src/a.rs"])),
+            stats: Some(diff_payload(3, 0, vec!["src/a.rs"])),
         },
         &tx,
     );

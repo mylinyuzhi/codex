@@ -65,6 +65,7 @@ pub struct DisplaySettings {
     pub syntax_highlighting: SyntaxHighlighting,
     pub syntax_highlighting_editability: DisplaySettingEditability,
     pub show_thinking: bool,
+    pub copy_full_response: bool,
 }
 
 impl DisplaySettings {
@@ -75,6 +76,7 @@ impl DisplaySettings {
             ),
             syntax_highlighting_editability: DisplaySettingEditability::Editable,
             show_thinking: settings.show_thinking,
+            copy_full_response: settings.copy_full_response,
         }
     }
 
@@ -85,6 +87,7 @@ impl DisplaySettings {
             ),
             syntax_highlighting_editability: syntax_highlighting_editability(settings),
             show_thinking: settings.merged.show_thinking,
+            copy_full_response: settings.merged.copy_full_response,
         }
     }
 
@@ -95,6 +98,13 @@ impl DisplaySettings {
     pub fn with_syntax_highlighting(self, syntax_highlighting: SyntaxHighlighting) -> Self {
         Self {
             syntax_highlighting,
+            ..self
+        }
+    }
+
+    pub fn with_copy_full_response(self, copy_full_response: bool) -> Self {
+        Self {
+            copy_full_response,
             ..self
         }
     }

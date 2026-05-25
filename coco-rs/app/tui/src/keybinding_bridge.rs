@@ -53,6 +53,7 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             | ModalState::Export(_)
             | ModalState::Feedback(_)
             | ModalState::McpServerSelect(_)
+            | ModalState::CopyPicker(_)
             | ModalState::Rewind(_) => KeybindingContext::Picker,
 
             // Scrollable read-only modals
@@ -183,6 +184,13 @@ fn resolve_key(
         if let Some(cmd) = map_transcript_key(key) {
             return (Some(cmd), "transcript");
         }
+    }
+
+    if matches!(state.ui.modal, Some(ModalState::CopyPicker(_)))
+        && key.modifiers == KeyModifiers::NONE
+        && matches!(key.code, KeyCode::Char('w' | 'W'))
+    {
+        return (Some(TuiCommand::CopyPickerWriteToFile), "copy_picker");
     }
 
     // Layer 1: TS-defined bindings via the resolver.

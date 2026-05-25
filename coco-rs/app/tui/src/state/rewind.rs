@@ -8,7 +8,6 @@
 //! Confirming (shown while rewind executes).
 
 use coco_types::PermissionMode;
-use coco_types::RewindDiffStatsPayload;
 
 /// Phase of the rewind state flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,19 +80,14 @@ impl RestoreType {
 /// relative timestamps, and file change counts.
 #[derive(Debug, Clone)]
 pub struct RewindableMessage {
-    /// UUID of the user message. `None` for the synthetic `(current)`
-    /// row appended by `build_rewind_state` — `is_synthetic()` derives
-    /// the "is this the current-prompt anchor?" check, so there is no
-    /// separate boolean flag to keep in sync. Stored as `Uuid` (not
-    /// `String`) so preselect comparison is case-insensitive on input
-    /// — `Uuid::parse_str` accepts both cases, `Uuid` equality is
-    /// structural.
-    ///
-    /// TS uses a fresh random UUID + `messages.includes(picked)` to
-    /// distinguish synthetic from real (`MessageSelector.tsx:60-66`,
-    /// :165). Rust uses `Option` for the same effect with one fewer
-    /// field.
-    pub message_id: Option<uuid::Uuid>,
+    /// UUID of the user message. `Uuid::nil()` for the synthetic
+    /// `(current)` row appended by `build_rewind_state` — the
+    /// `is_current_prompt` flag is the canonical "is synthetic?"
+    /// gate; this field is never compared against for the synthetic
+    /// row. Stored as `Uuid` (not `String`) so preselect comparison
+    /// is case-insensitive on input — `Uuid::parse_str` accepts both
+    /// cases, `Uuid` equality is structural.
+    pub message_id: uuid::Uuid,
     /// Index in the full messages vec (for display ordering). `-1`
     /// for the synthetic `(current)` row.
     pub message_index: i32,
@@ -112,22 +106,17 @@ pub struct RewindableMessage {
     /// It renders only after async `can_restore_code` confirms that a
     /// restorable snapshot exists. TS: `computeDiffStatsBetweenMessages`
     /// inside the `fileHistoryMetadata` map (`MessageSelector.tsx:285-312`).
-    pub diff_stats: Option<RewindDiffStatsPayload>,
+    pub diff_stats: Option<DiffStatsPreview>,
     /// Whether file-history can restore this message at all (snapshot
     /// exists). TS: `fileHistoryCanRestore` returning false renders
     /// "⚠ No code restore". `None` = unknown / still loading.
     pub can_restore_code: Option<bool>,
-}
-
-impl RewindableMessage {
     /// True for the synthetic last row that anchors the default
-    /// selection to "now". Selecting it dispatches no rewind —
-    /// equivalent to pressing Esc. TS: virtual `currentUUID`
-    /// user-message in `MessageSelector.tsx:60-66`, rendered as
-    /// `(current)` italic at line 591-601.
-    pub fn is_synthetic(&self) -> bool {
-        self.message_id.is_none()
-    }
+    /// selection to "now". Selecting it dispatches no rewind — equivalent
+    /// to pressing Esc. TS: virtual `currentUUID` user-message in
+    /// `MessageSelector.tsx:60-66`, rendered as `(current)` italic at
+    /// line 591-601.
+    pub is_current_prompt: bool,
 }
 
 /// Rewind state.
@@ -147,7 +136,7 @@ pub struct RewindState {
     /// Available restore options for the selected message.
     pub available_options: Vec<RestoreType>,
     /// Diff stats preview for the selected message.
-    pub diff_stats: Option<RewindDiffStatsPayload>,
+    pub diff_stats: Option<DiffStatsPreview>,
     /// Message UUID that [`Self::diff_stats`] belongs to. Row metadata
     /// and restore preview intentionally have different lifetimes:
     /// TS computes per-row metadata between adjacent user turns, then
@@ -183,6 +172,28 @@ pub struct RewindState {
 pub enum SummarizeDirection {
     From,
     UpTo,
+}
+
+/// Preview of what file rewind would change.
+///
+/// TS: `DiffStats` from `utils/fileHistory.ts:55-61`. `file_paths`
+/// contains the changed-file paths in display order — used by the
+/// pick-list to render `basename +X -Y` for single-file rows and by
+/// the confirm screen to assemble "a and b" / "a and N other files"
+/// labels (`MessageSelector.tsx:481-523`).
+#[derive(Debug, Clone, Default)]
+pub struct DiffStatsPreview {
+    pub insertions: i64,
+    pub deletions: i64,
+    pub file_paths: Vec<String>,
+}
+
+impl DiffStatsPreview {
+    /// Number of files in `file_paths`. Single source of truth — derived
+    /// rather than stored so the count cannot drift from the array.
+    pub fn files_changed(&self) -> usize {
+        self.file_paths.len()
+    }
 }
 
 /// Build available restore options based on file history state.

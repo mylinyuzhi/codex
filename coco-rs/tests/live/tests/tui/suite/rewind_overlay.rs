@@ -74,7 +74,7 @@ pub async fn run() -> Result<()> {
         overlay
             .messages
             .iter()
-            .filter(|m| !m.is_synthetic())
+            .filter(|m| !m.is_current_prompt)
             .count()
             == 3,
         "rewind_overlay: expected 3 non-anchor rows",
@@ -82,7 +82,7 @@ pub async fn run() -> Result<()> {
     let anchor_idx = overlay
         .messages
         .iter()
-        .position(|m| m.is_synthetic())
+        .position(|m| m.is_current_prompt)
         .expect("rewind_overlay: synthetic anchor row missing");
     assert_eq!(
         anchor_idx, 3,
@@ -91,7 +91,7 @@ pub async fn run() -> Result<()> {
     let real_texts: Vec<&str> = overlay
         .messages
         .iter()
-        .filter(|m| !m.is_synthetic())
+        .filter(|m| !m.is_current_prompt)
         .map(|m| m.display_text.as_str())
         .collect();
     assert_eq!(

@@ -65,6 +65,22 @@ fn model_picker_state() -> AppState {
     state
 }
 
+fn copy_picker_state() -> AppState {
+    let mut state = AppState::new();
+    state.ui.show_modal(crate::state::ModalState::CopyPicker(
+        crate::state::CopyPickerState {
+            full_text: "full".into(),
+            code_blocks: vec![crate::state::CopyPickerCodeBlock {
+                code: "code".into(),
+                lang: Some("rust".into()),
+            }],
+            message_age: 0,
+            selected: crate::state::CopyPickerSelection::Full,
+        },
+    ));
+    state
+}
+
 fn install_permission_prompt(state: &mut AppState) {
     state.ui.push_prompt(PanePromptState::Permission(
         crate::state::PermissionPromptState {
@@ -211,6 +227,13 @@ fn test_model_picker_tab_cycles_role() {
     let state = model_picker_state();
     let cmd = map_key(&state, press(KeyCode::Tab));
     assert!(matches!(cmd, Some(TuiCommand::SettingsNextTab)));
+}
+
+#[test]
+fn test_copy_picker_w_writes_to_file() {
+    let state = copy_picker_state();
+    let cmd = map_key(&state, press(KeyCode::Char('w')));
+    assert!(matches!(cmd, Some(TuiCommand::CopyPickerWriteToFile)));
 }
 
 #[test]

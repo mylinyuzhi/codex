@@ -1588,6 +1588,11 @@ class TuiOnlyEventOpenMemoryDialog(BaseModel):
     type_: Literal['open_memory_dialog'] = Field(default='open_memory_dialog', alias='type')
     entries: list[MemoryDialogEntry]
 
+class TuiOnlyEventCopyCommandRequested(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['copy_command_requested'] = Field(default='copy_command_requested', alias='type')
+    args: str
+
 class TuiOnlyEventMemoryFileOpened(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['memory_file_opened'] = Field(default='memory_file_opened', alias='type')
@@ -1638,7 +1643,7 @@ class TuiOnlyEventOpenModelPicker(BaseModel):
     type_: Literal['open_model_picker'] = Field(default='open_model_picker', alias='type')
 
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker],
     Field(discriminator='type_'),
 ]
 

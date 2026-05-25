@@ -20,6 +20,7 @@ use crate::state::PanePromptState;
 use exit::ExitEffect;
 
 mod clipboard;
+pub(crate) mod copy;
 mod edit;
 mod exit;
 mod expanded_view;
@@ -335,6 +336,9 @@ pub async fn handle_command(
                 let text = crate::i18n::t!("toast.memory_cancelled").to_string();
                 state.ui.add_toast(crate::state::ui::Toast::info(text));
             }
+            if matches!(state.ui.modal, Some(ModalState::CopyPicker(_))) {
+                copy::enqueue_copy_output(t!("toast.copy_cancelled").to_string(), command_tx);
+            }
             if state.has_active_surface() {
                 if state.ui.modal.is_some() {
                     state.ui.dismiss_modal();
@@ -576,6 +580,19 @@ pub async fn handle_command(
         }
         TuiCommand::SurfaceConfirm => {
             interaction::confirm(state, command_tx).await;
+            true
+        }
+        TuiCommand::CopyPickerWriteToFile => {
+            match state.ui.take_modal() {
+                Some(ModalState::CopyPicker(cp)) => {
+                    if let Some(message) = copy::write_picker_selection_to_file(state, cp) {
+                        copy::enqueue_copy_output(message, command_tx);
+                    }
+                    state.ui.finish_taken_modal();
+                }
+                Some(other) => state.ui.restore_modal(other),
+                None => {}
+            }
             true
         }
 
