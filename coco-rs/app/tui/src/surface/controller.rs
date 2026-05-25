@@ -137,8 +137,27 @@ impl NativeSurfaceController {
                 .is_some_and(|previous| previous != history_display);
             let needs_stream_finish_replay =
                 !stream_active && self.history.stream_finish_replay_needed();
-            if history_display_changed || self.history.replay_due(now) || needs_stream_finish_replay
-            {
+            let needs_reflow_replay = self.history.replay_due(now);
+            if history_display_changed || needs_reflow_replay || needs_stream_finish_replay {
+                let cause = if needs_stream_finish_replay {
+                    "stream_finish_pending_replay"
+                } else if history_display_changed {
+                    "history_display_changed"
+                } else {
+                    "reflow_debounce_due"
+                };
+                tracing::debug!(
+                    target: "tui::surface::replay",
+                    cause,
+                    reflow_due = needs_reflow_replay,
+                    stream_finish = needs_stream_finish_replay,
+                    history_display_changed,
+                    cells = cells.len(),
+                    width = viewport.width,
+                    height = viewport.height,
+                    stream_active,
+                    "history full replay",
+                );
                 self.history.replay_all_capped(
                     terminal,
                     session_header(),

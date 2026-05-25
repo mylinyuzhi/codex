@@ -532,6 +532,75 @@ pub struct QuickOpenState {
     pub selected: i32,
 }
 
+/// `/copy` picker state. The picker is mounted when the chosen
+/// assistant message contains code blocks AND the user has not opted
+/// into "always copy full response" via config — TS mirror at
+/// `commands/copy/copy.tsx::CopyPicker`.
+#[derive(Debug, Clone)]
+pub struct CopyPickerState {
+    /// The full markdown source of the picked assistant message.
+    pub full_text: String,
+    /// Fenced code blocks extracted from `full_text`. Empty when the
+    /// user opens the picker via the "always" path; otherwise at least
+    /// one entry (the no-blocks case skips the picker entirely).
+    pub code_blocks: Vec<CopyPickerCodeBlock>,
+    /// 0 = latest, 1 = second-to-latest, …  Surfaced in the picker
+    /// header so the user knows which turn they're copying.
+    pub message_age: usize,
+    /// Currently highlighted option.
+    pub selected: CopyPickerSelection,
+}
+
+/// Identity of a code block inside the picker — owned copy so the
+/// picker survives transcript mutation while it's open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyPickerCodeBlock {
+    pub code: String,
+    pub lang: Option<String>,
+}
+
+/// What the picker currently has selected. `Always` is the trailing
+/// "Always copy full response" option that flips the
+/// `copy_full_response` setting on confirm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyPickerSelection {
+    Full,
+    CodeBlock(usize),
+    Always,
+}
+
+impl CopyPickerState {
+    pub fn option_count(&self) -> usize {
+        // Full + each code block + Always
+        2 + self.code_blocks.len()
+    }
+
+    pub fn move_up(&mut self) {
+        self.selected = match self.selected {
+            CopyPickerSelection::Full if self.code_blocks.is_empty() => CopyPickerSelection::Always,
+            CopyPickerSelection::Full => CopyPickerSelection::Always,
+            CopyPickerSelection::CodeBlock(0) => CopyPickerSelection::Full,
+            CopyPickerSelection::CodeBlock(n) => CopyPickerSelection::CodeBlock(n - 1),
+            CopyPickerSelection::Always if self.code_blocks.is_empty() => CopyPickerSelection::Full,
+            CopyPickerSelection::Always => {
+                CopyPickerSelection::CodeBlock(self.code_blocks.len() - 1)
+            }
+        };
+    }
+
+    pub fn move_down(&mut self) {
+        self.selected = match self.selected {
+            CopyPickerSelection::Full if self.code_blocks.is_empty() => CopyPickerSelection::Always,
+            CopyPickerSelection::Full => CopyPickerSelection::CodeBlock(0),
+            CopyPickerSelection::CodeBlock(n) if n + 1 < self.code_blocks.len() => {
+                CopyPickerSelection::CodeBlock(n + 1)
+            }
+            CopyPickerSelection::CodeBlock(_) => CopyPickerSelection::Always,
+            CopyPickerSelection::Always => CopyPickerSelection::Full,
+        };
+    }
+}
+
 /// Export dialog state.
 #[derive(Debug, Clone)]
 pub struct ExportState {

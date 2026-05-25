@@ -5,6 +5,7 @@ use ratatui::prelude::*;
 use crate::presentation::model_picker;
 use crate::presentation::picker;
 use crate::presentation::styles::UiStyles;
+use crate::state::CopyPickerState;
 use crate::state::ExportState;
 use crate::state::McpServerSelectState;
 use crate::state::MemoryDialogState;
@@ -49,4 +50,11 @@ pub(super) fn mcp_server_select_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::mcp_server_select_content(ms, styles)
+}
+
+pub(super) fn copy_picker_content(
+    cp: &CopyPickerState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    picker::copy_picker_content(cp, styles)
 }

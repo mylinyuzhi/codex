@@ -64,6 +64,25 @@ pub(crate) fn settings_surface_content(
                 "{marker}{active}{}: {status}",
                 t!("settings.syntax_highlighting")
             ));
+            let marker = if s.is_copy_full_response_selected() {
+                "▸ "
+            } else {
+                "  "
+            };
+            let active = if s.display_settings.copy_full_response {
+                "✓ "
+            } else {
+                "  "
+            };
+            let status = if s.display_settings.copy_full_response {
+                t!("settings.enabled")
+            } else {
+                t!("settings.disabled")
+            };
+            items.push(format!(
+                "{marker}{active}{}: {status}",
+                t!("settings.copy_full_response")
+            ));
             items
         }
         SettingsTab::OutputStyle => {

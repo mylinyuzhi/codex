@@ -217,6 +217,7 @@ fn toggle_syntax_highlighting_does_not_mutate_when_higher_priority_setting_wins(
             coco_config::SettingSource::Project,
         ),
         show_thinking: false,
+        copy_full_response: false,
     };
 
     super::interaction::toggle_syntax_highlighting(&mut state);

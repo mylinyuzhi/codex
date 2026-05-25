@@ -636,17 +636,6 @@ impl FileHistoryState {
     }
 
     /// Preview what `rewind` would change without actually modifying files.
-    ///
-    /// **Direction is rewind-perspective** to mirror TS
-    /// `fileHistory.ts:705` `diffLines(originalContent, backupContent)`:
-    /// - `insertions` = lines that exist in the snapshot but not on disk
-    ///   today → lines that rewind would **add back**.
-    /// - `deletions` = lines that exist on disk today but not in the
-    ///   snapshot → lines that rewind would **remove**.
-    ///
-    /// Compare with [`Self::get_diff_stats_between`], which is
-    /// forward-time (`insertions` = edits added between two
-    /// checkpoints).
     pub async fn get_diff_stats(
         &self,
         message_id: &str,
@@ -674,10 +663,7 @@ impl FileHistoryState {
 
             let current = fs::read_to_string(file_path).await.ok();
             let backed_up = read_backup_content(config_home, session_id, &from_backup).await;
-            // TS calls `diffLines(originalContent, backupContent)` —
-            // old=live, new=snapshot — so `added` chunks (the lines
-            // rewind would write) become `insertions`.
-            accumulate_diff(&mut stats, file_path, &current, &backed_up);
+            accumulate_diff(&mut stats, file_path, &backed_up, &current);
         }
         Ok(stats)
     }

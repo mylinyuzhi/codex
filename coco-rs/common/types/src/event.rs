@@ -305,8 +305,8 @@ pub struct RewindDiffStatsPayload {
 }
 
 impl RewindDiffStatsPayload {
-    /// Number of files in `file_paths`. Convenience for renderers that
-    /// previously read a redundant `files_changed: i32` field.
+    /// Number of files in `file_paths`. Single source of truth — derived
+    /// rather than stored so the count cannot drift from the array.
     pub fn files_changed(&self) -> usize {
         self.file_paths.len()
     }
@@ -1575,7 +1575,7 @@ pub enum TuiOnlyEvent {
     /// next_user_message_or_now)`. `metadata == None` means
     /// `fileHistoryCanRestore(...)` was false (no snapshot) — the
     /// picker renders "⚠ No code restore" for that row.
-    /// `metadata == Some { files_changed: 0, .. }` means the snapshot
+    /// `metadata == Some { file_paths: [], .. }` means the snapshot
     /// exists but nothing changed — picker renders "No code changes".
     ///
     /// TS: the per-row `Promise.all(messageOptions.map(...))` walk in
@@ -1699,6 +1699,19 @@ pub enum TuiOnlyEvent {
     /// visible event. On cancel the TUI emits "Cancelled memory editing".
     /// TS parity: `commands/memory/memory.tsx`.
     OpenMemoryDialog { entries: Vec<MemoryDialogEntry> },
+    /// `/copy [N]` slash command — the TUI walks its transcript, picks
+    /// the Nth-latest assistant message, and either directly copies it
+    /// (when there are no code blocks or `copy_full_response` is on) or
+    /// opens the [`ModalState::CopyPicker`] surface. The CLI runner
+    /// emits this through `dispatch_slash_command`'s `/copy` intercept;
+    /// only the TUI has the transcript in a render-ready shape.
+    /// TS parity: `commands/copy/copy.tsx`.
+    CopyCommandRequested {
+        /// Raw arg string after `/copy`; empty when the user typed
+        /// `/copy` with no argument. The TUI parses it as `usize` and
+        /// surfaces a usage toast on invalid input.
+        args: String,
+    },
     /// `/memory` editor launch completed successfully.
     MemoryFileOpened {
         /// Path of the file passed to the editor.

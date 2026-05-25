@@ -177,6 +177,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::SlashCommandResult { .. } => "SlashCommandResult",
         E::OpenRewindPicker => "OpenRewindPicker",
         E::OpenMemoryDialog { .. } => "OpenMemoryDialog",
+        E::CopyCommandRequested { .. } => "CopyCommandRequested",
         E::MemoryFileOpened { .. } => "MemoryFileOpened",
         E::MemoryFileOpenFailed { .. } => "MemoryFileOpenFailed",
         E::PlanFileOpened { .. } => "PlanFileOpened",

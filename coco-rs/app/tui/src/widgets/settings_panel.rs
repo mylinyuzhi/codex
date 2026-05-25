@@ -76,12 +76,20 @@ impl SettingsPanelState {
         self.selected == self.syntax_highlighting_index()
     }
 
+    pub fn is_copy_full_response_selected(&self) -> bool {
+        self.selected == self.copy_full_response_index()
+    }
+
     pub fn theme_item_count(&self) -> usize {
-        self.themes.len() + 1
+        self.themes.len() + 2
     }
 
     fn syntax_highlighting_index(&self) -> i32 {
         self.themes.len() as i32
+    }
+
+    fn copy_full_response_index(&self) -> i32 {
+        self.themes.len() as i32 + 1
     }
 
     pub fn next_tab(&mut self) {

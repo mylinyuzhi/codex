@@ -18,7 +18,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
-use crate::keybinding_bridge::KeybindingContext;
+use crate::keybinding_bridge::KeybindingContext as TuiContext;
 use crate::presentation::layout::text_width;
 use crate::presentation::streaming::StreamingTailBlock;
 use crate::presentation::styles::UiStyles;
@@ -226,10 +226,7 @@ impl TranscriptStateWidget<'_> {
             .state
             .ui
             .kb_handle
-            .display_for(
-                &KeybindingAction::AppToggleTranscript,
-                KeybindingContext::Chat,
-            )
+            .display_for(&KeybindingAction::AppToggleTranscript, TuiContext::Chat)
             .unwrap_or_else(|| "ctrl+o".to_string());
         let nav = t!("transcript.hint_footer_nav", toggle = toggle_chord.as_str()).to_string();
         Line::from(Span::raw(nav).fg(self.styles.dim())).render(Rect { height: 1, ..area }, buf);
@@ -1107,10 +1104,7 @@ fn compact_boundary_shortcut(state: &AppState) -> String {
     state
         .ui
         .kb_handle
-        .display_for(
-            &KeybindingAction::AppToggleTranscript,
-            KeybindingContext::Chat,
-        )
+        .display_for(&KeybindingAction::AppToggleTranscript, TuiContext::Chat)
         .unwrap_or_else(|| "ctrl+o".to_string())
 }
 
@@ -1118,10 +1112,7 @@ fn thinking_toggle_hint(state: &AppState) -> String {
     let shortcut = state
         .ui
         .kb_handle
-        .display_for(
-            &KeybindingAction::ChatThinkingToggle,
-            KeybindingContext::Chat,
-        )
+        .display_for(&KeybindingAction::ChatThinkingToggle, TuiContext::Chat)
         .unwrap_or_else(|| "F2".to_string());
     let thinking_state = if state.ui.show_thinking {
         t!("status.show_thinking_visible")

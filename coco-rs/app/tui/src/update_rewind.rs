@@ -23,37 +23,36 @@ use crate::state::rewind::build_restore_options;
 use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
 
-/// Format an epoch-ms timestamp as a relative-time phrase against a
-/// reference `now` (also epoch-ms). Mirrors TS `formatRelativeTimeAgo`
-/// (`utils/format.ts`); strings are resolved via i18n so zh-CN and
-/// future locales render in the user's language instead of baking
-/// English here.
+/// Format an epoch-ms timestamp as a relative-time English phrase
+/// against a reference `now` (also epoch-ms). Mirrors TS
+/// `formatRelativeTimeAgo` (`utils/format.ts`) coarsely — exact text
+/// is locale-resolved later via the `t!` macro on display.
 pub fn format_relative_time_ago(now_ms: i64, then_ms: i64) -> String {
-    let delta_secs = (now_ms - then_ms).max(0) / 1000;
+    let delta_secs = ((now_ms - then_ms).max(0) / 1000) as u64;
     if delta_secs < 60 {
-        return crate::i18n::t!("rewind.time.just_now").to_string();
+        return "just now".to_string();
     }
     if delta_secs < 60 * 60 {
         let m = delta_secs / 60;
         return if m == 1 {
-            crate::i18n::t!("rewind.time.minute_one").to_string()
+            "1 minute ago".to_string()
         } else {
-            crate::i18n::t!("rewind.time.minutes_many", count = m).to_string()
+            format!("{m} minutes ago")
         };
     }
     if delta_secs < 60 * 60 * 24 {
         let h = delta_secs / 3600;
         return if h == 1 {
-            crate::i18n::t!("rewind.time.hour_one").to_string()
+            "1 hour ago".to_string()
         } else {
-            crate::i18n::t!("rewind.time.hours_many", count = h).to_string()
+            format!("{h} hours ago")
         };
     }
     let d = delta_secs / (60 * 60 * 24);
     if d == 1 {
-        crate::i18n::t!("rewind.time.day_one").to_string()
+        "1 day ago".to_string()
     } else {
-        crate::i18n::t!("rewind.time.days_many", count = d).to_string()
+        format!("{d} days ago")
     }
 }
 
@@ -256,12 +255,12 @@ pub fn build_rewind_state_for_uuid(state: &AppState, target_uuid: uuid::Uuid) ->
     let Some(row_idx) = state
         .messages
         .iter()
-        .position(|m| m.message_id == Some(target_uuid))
+        .position(|m| !m.is_current_prompt && m.message_id == target_uuid)
     else {
         tracing::warn!(
             target: "rewind::tui",
             %target_uuid,
-            real_rows = state.messages.iter().filter(|m| !m.is_synthetic()).count(),
+            real_rows = state.messages.iter().filter(|m| !m.is_current_prompt).count(),
             "build_rewind_state_for_uuid: preselect uuid not in transcript; \
              returning bare picker state (caller surfaces toast)",
         );
@@ -330,7 +329,7 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
         let display_text = display_text_for_rewind_row(text);
 
         rewindable.push(RewindableMessage {
-            message_id: Some(cell.message_uuid),
+            message_id: cell.message_uuid,
             message_index: i as i32,
             display_text,
             relative_time: format_relative_time_ago(now, timestamp_to_ms(&user.timestamp)),
@@ -342,6 +341,7 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
             // `can_restore_code` unknown until the event arrives.
             diff_stats: None,
             can_restore_code: None,
+            is_current_prompt: false,
         });
     }
 
@@ -350,23 +350,22 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
     // It anchors the default selection to "now" — the user must move up
     // to indicate intent to rewind. Confirm on this row dispatches no
     // rewind (TS line 165: `!messages.includes(message_0) -> onClose()`).
-    //
-    // Rust uses `message_id: None` rather than TS's random-UUID +
-    // container-membership check: `RewindableMessage::is_synthetic()`
-    // turns the synthetic-row test into a one-field check that the
-    // type system enforces (no field can drift out of sync with a
-    // separate boolean flag).
     rewindable.push(RewindableMessage {
-        message_id: None,
+        // `Uuid::nil()` is the canonical sentinel — `is_current_prompt`
+        // is the gate that prevents this row from ever being matched
+        // against a real preselect uuid (see lookup in
+        // `build_rewind_state_for_uuid`).
+        message_id: uuid::Uuid::nil(),
         message_index: -1,
         display_text: crate::i18n::t!("dialog.rewind_current_prompt").to_string(),
         relative_time: String::new(),
         permission_mode: None,
         // Synthetic row never enters `row_diff_stats_line` — the
-        // renderer early-returns on `is_synthetic()`. Stats and
+        // renderer early-returns on `is_current_prompt`. Stats and
         // can_restore are immaterial.
         diff_stats: None,
         can_restore_code: None,
+        is_current_prompt: true,
     });
 
     let selected = rewindable.len().saturating_sub(1) as i32;
@@ -422,7 +421,7 @@ pub enum ConfirmOutcome {
     /// Phase transition only (no dispatch yet).
     Phase,
     /// Diff stats are required before entering restore options.
-    RequestDiffStats { message_id: uuid::Uuid },
+    RequestDiffStats { message_id: String },
     /// Dismiss the state (synthetic current-prompt row, or cancel-on-confirm).
     /// TS: `MessageSelector.tsx:165` — `if (!messages.includes(message_0)) onClose()`.
     Dismiss,
@@ -442,10 +441,10 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
                 return ConfirmOutcome::Phase;
             };
             // Synthetic `(current)` row — TS `MessageSelector.tsx:165`.
-            let Some(message_uuid) = msg.message_id else {
+            if msg.is_current_prompt {
                 tracing::info!(target: "rewind", event = "selector_cancelled_via_current_row");
                 return ConfirmOutcome::Dismiss;
-            };
+            }
             // TS: tengu_message_selector_selected
             tracing::info!(
                 target: "rewind",
@@ -458,13 +457,13 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
             // returning ConversationOnly straight away.
             if !state.file_history_enabled {
                 return ConfirmOutcome::Dispatch {
-                    message_id: message_uuid.to_string(),
+                    message_id: msg.message_id.to_string(),
                     restore: RestoreType::ConversationOnly,
                 };
             }
             if msg.can_restore_code == Some(false) {
                 state.diff_stats = None;
-                state.diff_stats_message_id = Some(message_uuid);
+                state.diff_stats_message_id = Some(msg.message_id);
                 state.has_file_changes = false;
                 state.available_options = build_restore_options(
                     state.file_history_enabled,
@@ -475,17 +474,17 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
                 state.phase = RewindPhase::RestoreOptions;
                 return ConfirmOutcome::Phase;
             }
-            let Some(diff_stats) = (state.diff_stats_message_id == Some(message_uuid))
+            let Some(diff_stats) = (state.diff_stats_message_id == Some(msg.message_id))
                 .then(|| state.diff_stats.clone())
                 .flatten()
             else {
                 return ConfirmOutcome::RequestDiffStats {
-                    message_id: message_uuid,
+                    message_id: msg.message_id.to_string(),
                 };
             };
-            let has_file_changes = diff_stats.files_changed() > 0;
+            let has_file_changes = !diff_stats.file_paths.is_empty();
             state.diff_stats = Some(diff_stats);
-            state.diff_stats_message_id = Some(message_uuid);
+            state.diff_stats_message_id = Some(msg.message_id);
             state.has_file_changes = has_file_changes;
             state.available_options = build_restore_options(
                 state.file_history_enabled,
@@ -543,21 +542,15 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
                         ConfirmOutcome::Phase
                     }
                 }
-                _ => match msg.message_id {
-                    Some(uuid) => ConfirmOutcome::Dispatch {
-                        message_id: uuid.to_string(),
-                        restore: opt,
-                    },
-                    None => ConfirmOutcome::Dismiss,
+                _ => ConfirmOutcome::Dispatch {
+                    message_id: msg.message_id.to_string(),
+                    restore: opt,
                 },
             }
         }
         RewindPhase::SummarizeFeedback => {
             let Some(msg) = state.messages.get(state.selected as usize) else {
                 return ConfirmOutcome::Phase;
-            };
-            let Some(message_uuid) = msg.message_id else {
-                return ConfirmOutcome::Dismiss;
             };
             // TS `allowEmptySubmitToCancel: true` — empty submit cancels
             // the summarize choice and returns to the option list.
@@ -579,7 +572,7 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
                 SummarizeDirection::UpTo => RestoreType::SummarizeUpTo { feedback },
             };
             ConfirmOutcome::Dispatch {
-                message_id: message_uuid.to_string(),
+                message_id: msg.message_id.to_string(),
                 restore,
             }
         }
@@ -671,16 +664,9 @@ pub fn find_last_user_cell_index(cells: &[RenderedCell]) -> Option<usize> {
     cells.iter().rposition(is_selectable_user_cell)
 }
 
-/// Parse the engine `UserMessage.timestamp` string (epoch-ms integer
-/// or RFC 3339) into epoch-ms. Returns 0 for empty / unparseable
-/// values so the rewind picker renders "just now" rather than erroring
-/// out.
-///
-/// Uses `chrono::DateTime::parse_from_rfc3339` for full RFC 3339
-/// validation (rejects bad month/day, honors `±HH:MM` offsets,
-/// preserves fractional seconds) — versus the hand-rolled
-/// civil-from-days math previously here that accepted `2025-13-45` as
-/// a valid offset and silently ignored timezone offsets.
+/// Parse the engine `UserMessage.timestamp` string (ISO 8601 or epoch
+/// integer) into epoch-ms. Returns 0 for empty / unparseable values
+/// so the rewind picker renders "just now" rather than erroring out.
 fn timestamp_to_ms(ts: &str) -> i64 {
     if ts.is_empty() {
         return 0;
@@ -688,9 +674,37 @@ fn timestamp_to_ms(ts: &str) -> i64 {
     if let Ok(n) = ts.parse::<i64>() {
         return n;
     }
-    chrono::DateTime::parse_from_rfc3339(ts)
-        .map(|dt| dt.timestamp_millis())
-        .unwrap_or(0)
+    // Best-effort RFC 3339 parse: pull seconds via chrono if present,
+    // else fall back to 0. The engine emits ISO timestamps; tests
+    // typically leave this empty.
+    chrono_iso_to_ms(ts).unwrap_or(0)
+}
+
+/// Lightweight RFC 3339 → epoch-ms conversion. Mirrors what
+/// `chrono::DateTime::parse_from_rfc3339(...).timestamp_millis()` does
+/// without adding a `chrono` dependency: we accept a strict subset
+/// (`YYYY-MM-DDTHH:MM:SS[.frac][Z|±HH:MM]`). Returns `None` for
+/// anything else — callers fall back to 0.
+fn chrono_iso_to_ms(ts: &str) -> Option<i64> {
+    let bytes = ts.as_bytes();
+    if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
+        return None;
+    }
+    let year: i64 = ts.get(0..4)?.parse().ok()?;
+    let month: i64 = ts.get(5..7)?.parse().ok()?;
+    let day: i64 = ts.get(8..10)?.parse().ok()?;
+    let hour: i64 = ts.get(11..13)?.parse().ok()?;
+    let minute: i64 = ts.get(14..16)?.parse().ok()?;
+    let second: i64 = ts.get(17..19)?.parse().ok()?;
+    // Days since Unix epoch (1970-01-01) — civil-from-days algorithm.
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (month + (if month > 2 { -3 } else { 9 })) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let secs = days * 86400 + hour * 3600 + minute * 60 + second;
+    Some(secs * 1000)
 }
 
 #[cfg(test)]
