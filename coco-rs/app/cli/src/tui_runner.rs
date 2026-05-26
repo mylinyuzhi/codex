@@ -1484,6 +1484,7 @@ async fn run_agent_driver(
             warn!(error = %e, "shutdown re-append task join failed");
         }
     }
+    runtime.flush_session_usage_snapshot().await;
     info!("Agent driver stopped");
 }
 
@@ -1680,6 +1681,13 @@ async fn hydrate_resume_plan(
                 session_id: plan.session_id.clone(),
                 agent_id: None,
             },
+        ))
+        .await;
+    let _ = event_tx
+        .send(CoreEvent::Protocol(
+            coco_types::ServerNotification::SessionUsageUpdated(Box::new(
+                runtime.session_usage_snapshot().await,
+            )),
         ))
         .await;
 }

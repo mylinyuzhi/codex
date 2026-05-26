@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use coco_context::FileHistoryState;
 use coco_hooks::HookRegistry;
 use coco_inference::ApiClient;
+use coco_messages::CostTracker;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::ToolAppState;
@@ -123,6 +124,8 @@ impl QueryEngine {
             pending_reactive_context_management: Arc::new(tokio::sync::Mutex::new(None)),
             pending_just_compacted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             transcript_store: None,
+            session_usage_tracker: None,
+            session_usage_write_lock: None,
             transcript_session_id: None,
             transcript_dedup: None,
             pending_nested_memory: Arc::new(tokio::sync::Mutex::new(Vec::new())),
@@ -190,6 +193,75 @@ impl QueryEngine {
         self.transcript_store = Some(store);
         self.transcript_session_id = Some(session_id);
         self
+    }
+
+    pub fn with_session_usage_tracker(
+        mut self,
+        tracker: Arc<tokio::sync::Mutex<CostTracker>>,
+    ) -> Self {
+        self.session_usage_tracker = Some(tracker);
+        if self.session_usage_write_lock.is_none() {
+            self.session_usage_write_lock = Some(Arc::new(tokio::sync::Mutex::new(())));
+        }
+        self
+    }
+
+    pub fn with_session_usage_write_lock(mut self, lock: Arc<tokio::sync::Mutex<()>>) -> Self {
+        self.session_usage_write_lock = Some(lock);
+        self
+    }
+
+    pub(crate) async fn record_session_usage(
+        &self,
+        event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+        provider: &str,
+        model_id: &str,
+        usage: coco_types::TokenUsage,
+        duration_ms: i64,
+    ) {
+        let Some(tracker) = &self.session_usage_tracker else {
+            return;
+        };
+        let _write_guard = match &self.session_usage_write_lock {
+            Some(lock) => Some(lock.lock().await),
+            None => None,
+        };
+        let snapshot = {
+            let mut guard = tracker.lock().await;
+            guard.record_usage(provider, model_id, usage, duration_ms);
+            guard.snapshot(&self.config.session_id)
+        };
+        let _ = crate::emit::emit_protocol(
+            event_tx,
+            crate::ServerNotification::SessionUsageUpdated(Box::new(snapshot.clone())),
+        )
+        .await;
+        if let Some(store) = &self.transcript_store {
+            let store = Arc::clone(store);
+            let session_id = self.config.session_id.clone();
+            let snapshot = snapshot.clone();
+            match tokio::task::spawn_blocking(move || {
+                store.write_usage_snapshot(&session_id, &snapshot)
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        error = %e,
+                        session_id = %self.config.session_id,
+                        "failed to write session usage snapshot"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        session_id = %self.config.session_id,
+                        "usage snapshot write task failed"
+                    );
+                }
+            }
+        }
     }
 
     pub fn with_tool_result_replacement_state(

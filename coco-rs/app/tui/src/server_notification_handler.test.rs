@@ -678,6 +678,36 @@ fn test_live_status_tokens_start_fresh_and_follow_stream_deltas() {
     );
 }
 
+#[test]
+fn test_session_usage_updated_replaces_footer_usage() {
+    let mut state = AppState::new();
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::SessionUsageUpdated(Box::new(
+            coco_types::SessionUsageSnapshot {
+                session_id: "s1".into(),
+                totals: coco_types::SessionUsageTotals {
+                    input_tokens: 150,
+                    output_tokens: 40,
+                    cache_read_input_tokens: 50,
+                    total_cost_usd: 0.01,
+                    request_count: 2,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ))),
+    );
+
+    assert_eq!(state.session.token_usage.input_tokens, 150);
+    assert_eq!(state.session.token_usage.output_tokens, 40);
+    assert_eq!(state.session.token_usage.cache_read_tokens, 50);
+    assert_eq!(
+        state.session.session_usage.as_ref().unwrap().session_id,
+        "s1"
+    );
+}
+
 fn subagent(
     agent_id: &str,
     kind: SubagentKind,

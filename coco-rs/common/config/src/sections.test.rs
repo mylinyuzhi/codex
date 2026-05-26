@@ -39,7 +39,7 @@ fn test_agent_teams_config_resolves_role_overrides() {
 fn test_agent_teams_config_resolves_concrete_default_model() {
     let config = AgentTeamsConfig::resolve(&Settings {
         agent_teams: PartialAgentTeamsSettings {
-            default_model: Some(crate::ModelSelection {
+            default_model: Some(coco_types::ProviderModelSelection {
                 provider: "openai".into(),
                 model_id: "gpt-5-5".into(),
             }),
@@ -50,7 +50,7 @@ fn test_agent_teams_config_resolves_concrete_default_model() {
     .unwrap();
     assert_eq!(
         config.default_model,
-        Some(crate::ModelSelection {
+        Some(coco_types::ProviderModelSelection {
             provider: "openai".into(),
             model_id: "gpt-5-5".into(),
         })

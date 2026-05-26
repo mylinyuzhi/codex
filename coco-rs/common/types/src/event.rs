@@ -313,7 +313,7 @@ impl RewindDiffStatsPayload {
 }
 
 // ---------------------------------------------------------------------------
-// NotificationMethod + ServerNotification — protocol-layer notifications (62 variants)
+// NotificationMethod + ServerNotification — protocol-layer notifications
 // ---------------------------------------------------------------------------
 
 wire_tagged_enum! {
@@ -327,7 +327,7 @@ reference `NotificationMethod::SessionStarted` rather than compare against \
 raw wire strings.",
     tagged_doc = "\
 Protocol-level notifications visible to all consumers.\n\n\
-62 variants across 20 categories. Subagent lifecycle (spawn / progress / \
+Protocol notifications across 20 categories. Subagent lifecycle (spawn / progress / \
 completion / background transition) rides on `task/started`, `task/progress`, \
 and `task/completed` with `task_type` discriminating (`local_agent` / \
 `in_process_teammate`), matching TS — no dedicated `subagent/*` family. \
@@ -344,6 +344,8 @@ matching `NotificationMethod` discriminant.",
     "session/result" => SessionResult(Box<SessionResultParams>),
     /// Session ended.
     "session/ended" => SessionEnded(SessionEndedParams),
+    /// Session usage snapshot updated.
+    "session/usageUpdated" => SessionUsageUpdated(Box<crate::SessionUsageSnapshot>),
 
     // === History lifecycle (4) ===
     //

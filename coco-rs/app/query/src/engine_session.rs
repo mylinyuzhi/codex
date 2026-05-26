@@ -375,18 +375,17 @@ impl QueryEngine {
         // Per-model usage aggregated from CostTracker.
         let model_usage = qr
             .cost_tracker
-            .per_model
-            .iter()
-            .map(|(model, usage)| {
+            .model_entries()
+            .map(|(key, usage)| {
                 (
-                    model.clone(),
+                    key.display(),
                     coco_types::SessionModelUsage {
                         input_tokens: usage.input_tokens,
                         output_tokens: usage.output_tokens,
                         cache_read_input_tokens: usage.cache_read_input_tokens,
                         cache_creation_input_tokens: usage.cache_creation_input_tokens,
                         web_search_requests: usage.web_search_requests,
-                        cost_usd: usage.cost_usd,
+                        cost_usd: usage.total_cost_usd,
                         context_window: self.config.context_window,
                         max_output_tokens: self.config.max_output_tokens,
                     },

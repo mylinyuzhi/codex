@@ -39,6 +39,7 @@ use coco_context::FileReadState;
 use coco_hooks::HookRegistry;
 use coco_inference::ApiClient;
 use coco_memory::SessionMemoryService;
+use coco_messages::CostTracker;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_query::CommandQueue;
@@ -617,6 +618,11 @@ pub struct SessionRuntime {
     /// every per-turn engine via [`Self::wire_engine`]. TS parity:
     /// `Project` from `utils/sessionStorage.ts`.
     transcript_store: Arc<TranscriptStore>,
+    /// Shared cumulative token/cost tracker for the current session id.
+    session_usage_tracker: Arc<tokio::sync::Mutex<CostTracker>>,
+    /// Serializes session usage updates and durable writes across all
+    /// per-turn engines in this runtime.
+    session_usage_write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Cross-engine dedup set of message UUIDs already persisted to
     /// the JSONL transcript. Lives on the runtime (not the engine)
     /// so a fresh per-turn engine doesn't re-write history. Reset to
@@ -1203,7 +1209,16 @@ impl SessionRuntime {
         // `engine_finalize_turn`, and the agent-transcript persistence
         // path all share the same `TranscriptStore` instance keyed at
         // `<memory_base>/projects/<slug>/` for this cwd.
-        let transcript_store = Arc::new(TranscriptStore::new(crate::paths::project_paths(&cwd)));
+        let transcript_store = Arc::new(TranscriptStore::new(project_paths.clone()));
+        let session_usage_tracker = Arc::new(tokio::sync::Mutex::new(
+            transcript_store
+                .load_usage_snapshot(&session_id)
+                .ok()
+                .flatten()
+                .map(CostTracker::from_snapshot)
+                .unwrap_or_default(),
+        ));
+        let session_usage_write_lock = Arc::new(tokio::sync::Mutex::new(()));
         let transcript_dedup = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::<
             uuid::Uuid,
         >::new()));
@@ -1343,6 +1358,8 @@ impl SessionRuntime {
             session_attachment_tx,
             session_attachment_rx,
             transcript_store,
+            session_usage_tracker,
+            session_usage_write_lock,
             transcript_dedup,
             tool_result_replacement_state,
             command_queue: CommandQueue::new(),
@@ -1491,6 +1508,56 @@ impl SessionRuntime {
     /// Snapshot the current session id (cheap clone of the inner String).
     pub async fn current_session_id(&self) -> String {
         self.session_id.read().await.clone()
+    }
+
+    pub async fn flush_session_usage_snapshot(&self) {
+        let session_id = self.current_session_id().await;
+        let _write_guard = self.session_usage_write_lock.lock().await;
+        let snapshot = self
+            .session_usage_tracker
+            .lock()
+            .await
+            .snapshot(&session_id);
+        let store = Arc::clone(&self.transcript_store);
+        let session_id_for_write = session_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            store.write_usage_snapshot(&session_id_for_write, &snapshot)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                warn!(error = %e, session_id, "failed to flush session usage snapshot");
+            }
+            Err(e) => {
+                warn!(error = %e, session_id, "session usage flush task failed");
+            }
+        }
+    }
+
+    pub async fn session_usage_snapshot(&self) -> coco_types::SessionUsageSnapshot {
+        let session_id = self.current_session_id().await;
+        self.session_usage_tracker.lock().await.snapshot(session_id)
+    }
+
+    async fn load_usage_tracker_for_session(&self, session_id: &str) -> CostTracker {
+        let store = Arc::clone(&self.transcript_store);
+        let session_id_for_load = session_id.to_string();
+        let session_id_for_log = session_id_for_load.clone();
+        match tokio::task::spawn_blocking(move || store.load_usage_snapshot(&session_id_for_load))
+            .await
+        {
+            Ok(Ok(Some(snapshot))) => CostTracker::from_snapshot(snapshot),
+            Ok(Ok(None)) => CostTracker::new(),
+            Ok(Err(e)) => {
+                warn!(error = %e, session_id = %session_id_for_log, "failed to load session usage snapshot");
+                CostTracker::new()
+            }
+            Err(e) => {
+                warn!(error = %e, session_id = %session_id_for_log, "session usage load task failed");
+                CostTracker::new()
+            }
+        }
     }
 
     pub fn side_query(&self) -> coco_tool_runtime::SideQueryHandle {
@@ -2127,6 +2194,8 @@ impl SessionRuntime {
         // session id and skips already-persisted uuids.
         let live_session_id = self.session_id.read().await.clone();
         engine = engine.with_transcript_store(self.transcript_store.clone(), live_session_id);
+        engine = engine.with_session_usage_tracker(self.session_usage_tracker.clone());
+        engine = engine.with_session_usage_write_lock(self.session_usage_write_lock.clone());
         engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
         engine =
             engine.with_tool_result_replacement_state(self.tool_result_replacement_state.clone());
@@ -2663,7 +2732,10 @@ impl SessionRuntime {
     /// This method skips both — SDK `session/archive` is the hook
     /// boundary on its own, not the new session's start.
     pub async fn start_new_session(&self, new_session_id: String) {
+        self.flush_session_usage_snapshot().await;
         self.adopt_session_id(&new_session_id).await;
+        let usage_tracker = self.load_usage_tracker_for_session(&new_session_id).await;
+        *self.session_usage_tracker.lock().await = usage_tracker;
         {
             let mut frs = self.file_read_state.write().await;
             frs.clear();
@@ -2924,8 +2996,10 @@ impl SessionRuntime {
         // clear writes would land in the OLD session's directory and
         // surface as "extra memory" / "phantom file-history snapshots"
         // on the next `--resume` of the pre-clear session.
+        self.flush_session_usage_snapshot().await;
         let new_session_id = uuid::Uuid::new_v4().to_string();
         self.adopt_session_id(&new_session_id).await;
+        *self.session_usage_tracker.lock().await = CostTracker::new();
         // Reset the transcript dedup set so the new session writes a
         // fresh JSONL from message #1 — without this, the post-clear
         // turn would skip persisting any UUID that happened to match

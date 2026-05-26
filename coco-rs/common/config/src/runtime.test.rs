@@ -4,13 +4,13 @@ use std::collections::HashMap;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::ProviderApi;
+use coco_types::ProviderModelSelection;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 use super::*;
 use crate::EnvKey;
 use crate::EnvSnapshot;
-use crate::ModelSelection;
 use crate::PartialProviderConfig;
 use crate::RuntimeOverrides;
 use crate::Settings;
@@ -52,12 +52,12 @@ fn model_spec(provider: &str, api: ProviderApi, model_id: &str) -> ModelSpec {
     }
 }
 
-fn role_slots_of(provider: &str, model_id: &str) -> crate::RoleSlots<ModelSelection> {
+fn role_slots_of(provider: &str, model_id: &str) -> crate::RoleSlots<ProviderModelSelection> {
     crate::RoleSlots::new(model_selection(provider, model_id))
 }
 
-fn model_selection(provider: &str, model_id: &str) -> ModelSelection {
-    ModelSelection {
+fn model_selection(provider: &str, model_id: &str) -> ProviderModelSelection {
+    ProviderModelSelection {
         provider: provider.to_string(),
         model_id: model_id.to_string(),
     }
@@ -280,11 +280,11 @@ fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![
-            ModelSelection {
+            ProviderModelSelection {
                 provider: "anthropic".into(),
                 model_id: "claude-opus-4-7".into(),
             },
-            ModelSelection {
+            ProviderModelSelection {
                 provider: "openai".into(),
                 model_id: "gpt-5-5".into(),
             },
@@ -311,7 +311,7 @@ fn test_cli_fallback_model_rejects_duplicate_of_primary() {
     });
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
-        fallback_model_overrides: vec![ModelSelection {
+        fallback_model_overrides: vec![ProviderModelSelection {
             provider: "anthropic".into(),
             model_id: "claude-opus-4-7".into(),
         }],
@@ -336,11 +336,11 @@ fn test_cli_fallback_model_rejects_duplicate_within_chain() {
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![
-            ModelSelection {
+            ProviderModelSelection {
                 provider: "anthropic".into(),
                 model_id: "claude-sonnet-4-6".into(),
             },
-            ModelSelection {
+            ProviderModelSelection {
                 provider: "anthropic".into(),
                 model_id: "claude-sonnet-4-6".into(),
             },
@@ -366,7 +366,7 @@ fn test_cli_fallback_model_with_unknown_provider_fails_startup() {
     });
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
-        fallback_model_overrides: vec![ModelSelection {
+        fallback_model_overrides: vec![ProviderModelSelection {
             provider: "nonexistent".into(),
             model_id: "some-model".into(),
         }],
@@ -557,16 +557,16 @@ fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
     // When settings.models.main has fallbacks AND --fallback-model
     // is supplied, CLI wins. Ensures users can override a config
     // they can't edit (project/policy level) from the command line.
-    use crate::model::ModelSelection;
     use crate::model::RoleSlots;
+    use coco_types::ProviderModelSelection;
     let settings = settings_with(Settings {
         models: crate::ModelSelectionSettings {
             main: Some(
-                RoleSlots::new(ModelSelection {
+                RoleSlots::new(ProviderModelSelection {
                     provider: "anthropic".into(),
                     model_id: "claude-opus-4-7".into(),
                 })
-                .with_fallback(ModelSelection {
+                .with_fallback(ProviderModelSelection {
                     provider: "anthropic".into(),
                     model_id: "claude-sonnet-4-6".into(),
                 }),
@@ -576,7 +576,7 @@ fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
         ..Default::default()
     });
     let overrides = RuntimeOverrides {
-        fallback_model_overrides: vec![ModelSelection {
+        fallback_model_overrides: vec![ProviderModelSelection {
             provider: "openai".into(),
             model_id: "gpt-5-5".into(),
         }],
@@ -636,12 +636,12 @@ fn test_unconfigured_roles_default_to_main() {
 fn test_explicit_role_overrides_main_default() {
     // settings.models.memory present → keep that, do NOT overwrite
     // with Main.
-    use crate::model::ModelSelection;
     use crate::model::RoleSlots;
+    use coco_types::ProviderModelSelection;
     let settings = settings_with(Settings {
         model: Some("anthropic/claude-opus-4-7".into()),
         models: crate::ModelSelectionSettings {
-            memory: Some(RoleSlots::new(ModelSelection {
+            memory: Some(RoleSlots::new(ProviderModelSelection {
                 provider: "anthropic".into(),
                 model_id: "claude-haiku-4-5".into(),
             })),
@@ -667,12 +667,12 @@ fn test_subagent_role_resolves_from_settings() {
     // settings.models.subagent → ModelRole::Subagent. Env-only
     // overrides for this role have been removed; settings.json is
     // the single source.
-    use crate::model::ModelSelection;
     use crate::model::RoleSlots;
+    use coco_types::ProviderModelSelection;
     let settings = settings_with(Settings {
         model: Some("anthropic/claude-opus-4-7".into()),
         models: crate::ModelSelectionSettings {
-            subagent: Some(RoleSlots::new(ModelSelection {
+            subagent: Some(RoleSlots::new(ProviderModelSelection {
                 provider: "anthropic".into(),
                 model_id: "claude-haiku-4-5".into(),
             })),

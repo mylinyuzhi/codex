@@ -447,6 +447,13 @@ pub struct QueryEngine {
     /// persistence (in-memory ledger only). Caller wires this via
     /// `with_transcript_store`.
     pub(crate) transcript_store: Option<Arc<coco_session::TranscriptStore>>,
+    /// Shared session-level usage tracker. QueryEngine is rebuilt per
+    /// user message, so the runtime owns this and wires it into every
+    /// engine instance.
+    pub(crate) session_usage_tracker: Option<Arc<tokio::sync::Mutex<CostTracker>>>,
+    /// Serializes update/snapshot/write for session usage so concurrent
+    /// engines cannot overwrite a newer snapshot with an older one.
+    pub(crate) session_usage_write_lock: Option<Arc<tokio::sync::Mutex<()>>>,
     /// Session id (string form) used for transcript path resolution.
     /// Distinct from `staged_session_id` because TranscriptStore keys
     /// off the session id string used by the rest of the system.
@@ -1988,10 +1995,15 @@ impl QueryEngine {
             let usage = stream_usage.unwrap_or_default();
             total_usage += usage;
             budget.record_usage(&usage);
-            // Record usage against the currently-active model id
-            // (post-fallback value if a switch has happened).
-            let model_id = model_runtime.current_model_id().to_string();
-            cost_tracker.record(&model_id, usage, /*cost_usd*/ 0.0, api_elapsed_ms);
+            // Record usage against the currently-active logical model
+            // identity (post-fallback value if a switch has happened),
+            // not the provider wire alias after `api_model_name`.
+            let identity = active_client.model_identity();
+            let provider = identity.provider.clone();
+            let model_id = identity.model_id.clone();
+            cost_tracker.record_usage(&provider, &model_id, usage, api_elapsed_ms);
+            self.record_session_usage(&event_tx, &provider, &model_id, usage, api_elapsed_ms)
+                .await;
 
             // Reconstruct assistant content from the per-turn snapshot
             // accumulated inside `coco-inference::process_stream_with_config`.

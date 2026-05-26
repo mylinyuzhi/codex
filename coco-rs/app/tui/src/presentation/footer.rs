@@ -111,13 +111,41 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
     }
 
     let tokens = &state.session.token_usage;
+    let usage_costs = state.session.session_usage.as_ref().map(|snapshot| {
+        let input_cost = snapshot.totals.input_cost_usd
+            + snapshot.totals.cache_read_cost_usd
+            + snapshot.totals.cache_creation_cost_usd;
+        let output_cost = snapshot.totals.output_cost_usd;
+        let all_unpriced = snapshot.totals.request_count > 0
+            && snapshot.totals.unpriced_request_count == snapshot.totals.request_count;
+        (
+            input_cost,
+            output_cost,
+            all_unpriced,
+            snapshot.unpriced_models.len(),
+        )
+    });
     separator(&mut spans);
     spans.push(FooterSpan::new(
-        format!(
-            "↑{} ↓{}",
-            format_token_count(tokens.input_tokens),
-            format_token_count(tokens.output_tokens)
-        ),
+        match usage_costs {
+            Some((_, _, true, _)) => format!(
+                "↑{}/$? ↓{}/$?",
+                format_token_count(tokens.input_tokens),
+                format_token_count(tokens.output_tokens)
+            ),
+            Some((input_cost, output_cost, false, _)) => format!(
+                "↑{}/{} ↓{}/{}",
+                format_token_count(tokens.input_tokens),
+                format_cost(input_cost),
+                format_token_count(tokens.output_tokens),
+                format_cost(output_cost)
+            ),
+            None => format!(
+                "↑{} ↓{}",
+                format_token_count(tokens.input_tokens),
+                format_token_count(tokens.output_tokens)
+            ),
+        },
         FooterTone::Dim,
     ));
     let cache_pct = if tokens.input_tokens > 0 {
@@ -133,6 +161,14 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
         ),
         FooterTone::Dim,
     ));
+    if let Some((_, _, false, unpriced_count)) = usage_costs
+        && unpriced_count > 0
+    {
+        spans.push(FooterSpan::new(
+            format!(" · unpriced {unpriced_count}"),
+            FooterTone::Warning,
+        ));
+    }
 
     let ctx_pct = if state.session.context_window_total > 0 {
         let used = state.session.context_window_used as i64;
@@ -247,6 +283,10 @@ pub(crate) fn format_token_count(count: i64) -> String {
     } else {
         format!("{count}")
     }
+}
+
+pub(crate) fn format_cost(cost_usd: f64) -> String {
+    coco_messages::format_cost(cost_usd)
 }
 
 #[cfg(test)]

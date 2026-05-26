@@ -62,7 +62,6 @@ pub use model::FallbackRecoveryPolicy;
 pub use model::ModelInfo;
 pub use model::ModelRegistry;
 pub use model::ModelRoles;
-pub use model::ModelSelection;
 pub use model::ModelSelectionSettings;
 pub use model::PartialModelInfo;
 pub use model::ResolvedModel;

@@ -4101,6 +4101,7 @@
         "session/started",
         "session/result",
         "session/ended",
+        "session/usageUpdated",
         "history/messageAppended",
         "history/messageTruncated",
         "history/resetForResume",
@@ -4808,6 +4809,22 @@
     "ProviderMetadata": {
       "additionalProperties": true,
       "description": "Provider-specific metadata attached to responses or stream events.\n\nSimilar to ProviderOptions but used for data returned from providers.",
+      "type": "object"
+    },
+    "ProviderModelSelection": {
+      "description": "Unresolved provider/model selection from user-facing config.\n\nThis intentionally does not include [`ProviderApi`]: config surfaces\nwrite `provider/model_id`, and the runtime resolves `provider` through\nthe live provider catalog before constructing an `ApiClient`.",
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model_id"
+      ],
       "type": "object"
     },
     "ProviderOptions": {
@@ -5607,7 +5624,7 @@
       "type": "object"
     },
     "ServerNotification": {
-      "description": "Protocol-level notifications visible to all consumers.\n\n62 variants across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`), matching TS \u2014 no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` \u00a74.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
+      "description": "Protocol-level notifications visible to all consumers.\n\nProtocol notifications across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`), matching TS \u2014 no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` \u00a74.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
       "oneOf": [
         {
           "description": "New session started.",
@@ -5652,6 +5669,23 @@
             },
             "params": {
               "$ref": "#/$defs/SessionEndedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Session usage snapshot updated.",
+          "properties": {
+            "method": {
+              "const": "session/usageUpdated",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionUsageSnapshot"
             }
           },
           "required": [
@@ -7258,6 +7292,97 @@
       ],
       "type": "object"
     },
+    "SessionModelUsageEntry": {
+      "description": "Cumulative usage for a single `(provider, model_id)` bucket.",
+      "properties": {
+        "cache_creation_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "cache_creation_input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "cache_read_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "cache_read_input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "input_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "output_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "output_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "priced": {
+          "description": "True only when every request in this bucket had known pricing.",
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "request_count": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "total_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "unpriced_input_tokens": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "unpriced_output_tokens": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "unpriced_request_count": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "web_search_requests": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "provider",
+        "model_id",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "input_cost_usd",
+        "output_cost_usd",
+        "cache_read_cost_usd",
+        "cache_creation_cost_usd",
+        "total_cost_usd",
+        "request_count",
+        "priced"
+      ],
+      "type": "object"
+    },
     "SessionReadParams": {
       "description": "Params for `session/read`.",
       "properties": {
@@ -7637,6 +7762,122 @@
           "type": "string"
         }
       ]
+    },
+    "SessionUsageSnapshot": {
+      "description": "Persisted and protocol-visible cumulative usage for one session.",
+      "properties": {
+        "models": {
+          "items": {
+            "$ref": "#/$defs/SessionModelUsageEntry"
+          },
+          "type": "array"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "totals": {
+          "$ref": "#/$defs/SessionUsageTotals"
+        },
+        "unpriced_models": {
+          "items": {
+            "$ref": "#/$defs/ProviderModelSelection"
+          },
+          "type": "array"
+        },
+        "updated_at_ms": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "version": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "session_id",
+        "updated_at_ms",
+        "totals"
+      ],
+      "type": "object"
+    },
+    "SessionUsageTotals": {
+      "description": "Session-level token and cost totals.",
+      "properties": {
+        "cache_creation_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "cache_creation_input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "cache_read_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "cache_read_input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "input_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "output_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "output_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "request_count": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "total_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "unpriced_input_tokens": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "unpriced_output_tokens": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "unpriced_request_count": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "web_search_requests": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "input_cost_usd",
+        "output_cost_usd",
+        "cache_read_cost_usd",
+        "cache_creation_cost_usd",
+        "total_cost_usd",
+        "request_count"
+      ],
+      "type": "object"
     },
     "SetModelParams": {
       "description": "Matches TS `SDKControlSetModelRequestSchema` (controlSchemas.ts:140-143).",

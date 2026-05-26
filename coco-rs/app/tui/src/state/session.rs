@@ -212,6 +212,8 @@ pub struct SessionState {
     pub subagents: Vec<SubagentInstance>,
     /// Token usage.
     pub token_usage: TokenUsage,
+    /// Cumulative session usage and cost snapshot.
+    pub session_usage: Option<coco_types::SessionUsageSnapshot>,
     /// Session identifier.
     pub session_id: Option<String>,
     /// Conversation identifier — rotated on rewind so cache breaks
@@ -520,6 +522,7 @@ impl Default for SessionState {
             reasoning_metadata_revision: 0,
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
+            session_usage: None,
             session_id: None,
             conversation_id: None,
             working_dir: None,

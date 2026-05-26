@@ -2669,8 +2669,63 @@ async fn test_session_result_emitted_with_full_metadata() {
     assert_eq!(p.stop_reason, "end_turn");
     assert!(!p.is_error);
     assert_eq!(p.result.as_deref(), Some("final"));
-    // CostTracker should have recorded the mock API call under the model name.
-    assert!(p.model_usage.contains_key("mock-text"));
+    // CostTracker records by provider/model so same model ids do not collide.
+    assert!(p.model_usage.contains_key("mock/mock-text"));
+}
+
+#[tokio::test]
+async fn test_session_usage_updated_emits_cumulative_snapshot() {
+    let model = Arc::new(TextMock {
+        text: "final".into(),
+    });
+    let tools = Arc::new(ToolRegistry::new());
+    let config = QueryEngineConfig {
+        model_id: "test-model".into(),
+        session_id: "s-usage".into(),
+        ..Default::default()
+    };
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+    let tracker = Arc::new(tokio::sync::Mutex::new(coco_messages::CostTracker::new()));
+    let engine = QueryEngine::new(config, client, tools, CancellationToken::new(), None)
+        .with_session_usage_tracker(tracker.clone());
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(ev) = event_rx.recv().await {
+            events.push(ev);
+        }
+        events
+    });
+    let _ = engine
+        .run_with_events("hi", event_tx)
+        .await
+        .expect("engine run should succeed");
+    let events = collector.await.unwrap();
+
+    let snapshot = events.iter().find_map(|event| match event {
+        CoreEvent::Protocol(ServerNotification::SessionUsageUpdated(snapshot)) => {
+            Some(snapshot.as_ref())
+        }
+        _ => None,
+    });
+    let snapshot = snapshot.expect("SessionUsageUpdated should be emitted");
+    assert_eq!(snapshot.session_id, "s-usage");
+    assert_eq!(snapshot.totals.input_tokens, 10);
+    assert_eq!(snapshot.totals.output_tokens, 5);
+    assert_eq!(snapshot.totals.request_count, 1);
+    assert_eq!(
+        tracker
+            .lock()
+            .await
+            .snapshot("s-usage")
+            .totals
+            .request_count,
+        1
+    );
 }
 
 #[tokio::test]

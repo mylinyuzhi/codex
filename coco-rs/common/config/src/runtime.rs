@@ -6,6 +6,7 @@ use std::sync::Arc;
 use coco_types::Features;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
+use coco_types::ProviderModelSelection;
 use coco_types::ToolOverrides;
 
 use crate::builtin::builtin_providers;
@@ -15,7 +16,6 @@ use crate::env::EnvSnapshot;
 use crate::error::ConfigError;
 use crate::model::ModelRegistry;
 use crate::model::ModelRoles;
-use crate::model::ModelSelection;
 use crate::model::PartialModelInfo;
 use crate::model::RoleSlots;
 use crate::model::build_model_registry;
@@ -541,7 +541,7 @@ fn resolve_model_roles(
 fn set_role_from_json(
     roles: &mut ModelRoles,
     role: ModelRole,
-    slots: Option<&RoleSlots<ModelSelection>>,
+    slots: Option<&RoleSlots<ProviderModelSelection>>,
     providers: &BTreeMap<String, ProviderConfig>,
 ) -> crate::Result<()> {
     if let Some(slots) = slots {
@@ -554,7 +554,7 @@ fn set_role_from_json(
 
 fn resolve_role_slots(
     role: ModelRole,
-    slots: RoleSlots<ModelSelection>,
+    slots: RoleSlots<ProviderModelSelection>,
     providers: &BTreeMap<String, ProviderConfig>,
 ) -> crate::Result<RoleSlots<ModelSpec>> {
     let resolved: RoleSlots<ModelSpec> =
@@ -614,7 +614,7 @@ fn model_spec_from_selection(
 }
 
 fn resolve_model_selection(
-    selection: ModelSelection,
+    selection: ProviderModelSelection,
     providers: &BTreeMap<String, ProviderConfig>,
 ) -> crate::Result<ModelSpec> {
     if selection.provider.is_empty() || selection.model_id.is_empty() {
@@ -628,7 +628,12 @@ fn resolve_model_selection(
             selection.model_id, selection.provider
         ))
     })?;
-    Ok(selection.into_model_spec(provider.api))
+    Ok(ModelSpec {
+        provider: selection.provider,
+        api: provider.api,
+        display_name: selection.model_id.clone(),
+        model_id: selection.model_id,
+    })
 }
 
 /// Hot-reload publisher.

@@ -83,6 +83,14 @@ fn session_memory_summary_path() {
 }
 
 #[test]
+fn session_usage_path() {
+    assert_eq!(
+        paths().session_usage("sid-1"),
+        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/sid-1/usage.json"),
+    );
+}
+
+#[test]
 fn memory_paths() {
     let p = paths();
     assert_eq!(
