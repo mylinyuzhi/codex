@@ -5,23 +5,23 @@
 //!
 //! # Shapes
 //!
-//! Both `T = ModelSelection` (JSON config side) and `T = ModelSpec`
+//! Both `T = ProviderModelSelection` (JSON config side) and `T = ModelSpec`
 //! (runtime-resolved side) reuse this one generic, avoiding a parallel
-//! type pair. Only the `ModelSelection` instantiation has a custom
+//! type pair. Only the `ProviderModelSelection` instantiation has a custom
 //! deserializer — the runtime side is only ever built programmatically
 //! by the runtime-config resolver.
 //!
-//! # JSON shapes accepted for `RoleSlots<ModelSelection>`
+//! # JSON shapes accepted for `RoleSlots<ProviderModelSelection>`
 //!
 //! 1. Bare string: `"anthropic/claude-opus-4-6"` — splits on `/` into
 //!    `(provider, model_id)`.
-//! 2. Legacy flat: `{ "provider": "x", "model_id": "y" }` —
-//!    same as existing `ModelSelection`.
-//! 3. Single fallback: `{ "primary": …, "fallback": …, "recovery": …? }`.
-//! 4. Plural fallbacks: `{ "primary": …, "fallbacks": [ … ], "recovery": …? }`.
+//! 2. Single fallback:
+//!    `{ "primary": { "provider": …, "model_id": … }, "fallback": …, "recovery": …? }`.
+//! 3. Plural fallbacks:
+//!    `{ "primary": { "provider": …, "model_id": … }, "fallbacks": [ … ], "recovery": …? }`.
 //!
-//! Shapes (1) and (2) produce `RoleSlots { primary, fallbacks: vec![], recovery: None }`.
-//! Shapes (3) and (4) cannot be combined in the same entry — specifying
+//! Shape (1) produces `RoleSlots { primary, fallbacks: vec![], recovery: None }`.
+//! Shapes (2) and (3) cannot be combined in the same entry — specifying
 //! both `fallback` and `fallbacks` is a hard deserialization error. The
 //! nested form uses `deny_unknown_fields` so typos in field names
 //! surface immediately with actionable messages instead of silently
@@ -34,12 +34,14 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 use serde::de::Error;
+use serde_json::Map;
+use serde_json::Value;
 
-use super::ModelSelection;
+use coco_types::ProviderModelSelection;
 
 /// Per-role primary + ordered fallback chain + optional recovery policy.
 ///
-/// Generic over `T` so the config-facing (`ModelSelection`) and
+/// Generic over `T` so the config-facing (`ProviderModelSelection`) and
 /// runtime-facing (`ModelSpec`) instantiations share code. Keeping a
 /// single type avoids drift between the two sides and mirrors the
 /// existing `ModelResult<T>`-style generics in the codebase.
@@ -79,7 +81,7 @@ impl<T> RoleSlots<T> {
     /// Map both primary and fallbacks with a single closure.
     ///
     /// Used by the runtime-config resolver to lift
-    /// `RoleSlots<ModelSelection>` (config-side) into
+    /// `RoleSlots<ProviderModelSelection>` (config-side) into
     /// `RoleSlots<ModelSpec>` (runtime-side) by resolving each
     /// selection against the provider catalog.
     pub fn try_map<U, E, F>(self, mut f: F) -> Result<RoleSlots<U>, E>
@@ -138,28 +140,23 @@ impl FallbackRecoveryPolicy {
     }
 }
 
-// ─── Deserializer for RoleSlots<ModelSelection> ─────────────────────────────
+// ─── Deserializer for RoleSlots<ProviderModelSelection> ─────────────────────
 
-impl<'de> Deserialize<'de> for RoleSlots<ModelSelection> {
+impl<'de> Deserialize<'de> for RoleSlots<ProviderModelSelection> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // Dispatch explicitly on the observed JSON shape instead of
-        // relying on serde's untagged fallthrough. `ModelSelection`
-        // has `#[serde(default)]`, which makes every object a
-        // "legal" legacy shape — including objects with typo'd
-        // keys — so an untagged-union approach would silently
-        // accept typos as empty legacy selections and surface a
-        // misleading "non-empty" error. Routing on presence of
+        // relying on serde's untagged fallthrough. Routing on presence of
         // `primary`/`fallback`/`fallbacks`/`recovery` keys is
         // deterministic and yields actionable error messages.
-        let value = serde_json::Value::deserialize(d)?;
+        let value = Value::deserialize(d)?;
 
         if let Some(s) = value.as_str() {
             return parse_bare_string(s).map_err(D::Error::custom);
         }
 
-        let obj = value.as_object().ok_or_else(|| {
-            D::Error::custom("role selection must be a string, flat object, or nested object")
-        })?;
+        let obj = value
+            .as_object()
+            .ok_or_else(|| D::Error::custom("role selection must be a string or nested object"))?;
 
         let has_nested_keys = obj.contains_key("primary")
             || obj.contains_key("fallback")
@@ -167,19 +164,28 @@ impl<'de> Deserialize<'de> for RoleSlots<ModelSelection> {
             || obj.contains_key("recovery");
 
         if has_nested_keys {
-            #[derive(Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Nested {
-                primary: ModelSelection,
-                #[serde(default)]
-                fallback: Option<ModelSelection>,
-                #[serde(default)]
-                fallbacks: Option<Vec<ModelSelection>>,
-                #[serde(default)]
-                recovery: Option<FallbackRecoveryPolicy>,
-            }
-            let n: Nested = serde_json::from_value(value).map_err(D::Error::custom)?;
-            let fallbacks = match (n.fallback, n.fallbacks) {
+            reject_unknown_fields::<D::Error>(
+                obj,
+                &["primary", "fallback", "fallbacks", "recovery"],
+                "nested role selection",
+            )?;
+            let primary = obj
+                .get("primary")
+                .ok_or_else(|| D::Error::custom("nested role selection requires `primary`"))
+                .and_then(|v| parse_selection_value::<D::Error>(v, "primary"))?;
+            let fallback = obj
+                .get("fallback")
+                .map(|v| parse_selection_value::<D::Error>(v, "fallback"))
+                .transpose()?;
+            let fallback_list = obj
+                .get("fallbacks")
+                .map(parse_fallbacks::<D::Error>)
+                .transpose()?;
+            let recovery = obj
+                .get("recovery")
+                .map(|v| serde_json::from_value(v.clone()).map_err(D::Error::custom))
+                .transpose()?;
+            let fallbacks = match (fallback, fallback_list) {
                 (Some(_), Some(_)) => {
                     return Err(D::Error::custom(
                         "use either `fallback` (single) or `fallbacks` (list), not both",
@@ -190,32 +196,14 @@ impl<'de> Deserialize<'de> for RoleSlots<ModelSelection> {
                 (None, None) => Vec::new(),
             };
             Ok(RoleSlots {
-                primary: n.primary,
+                primary,
                 fallbacks,
-                recovery: n.recovery,
+                recovery,
             })
         } else {
-            // Legacy flat form: {"provider": ..., "model_id": ...}.
-            // Reject any unknown keys so typos like "modle_id" don't
-            // silently become empty selections.
-            #[derive(Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Flat {
-                #[serde(default)]
-                provider: String,
-                #[serde(default)]
-                model_id: String,
-            }
-            let f: Flat = serde_json::from_value(value).map_err(D::Error::custom)?;
-            if f.provider.is_empty() || f.model_id.is_empty() {
-                return Err(D::Error::custom(
-                    "role selection must include non-empty `provider` and `model_id`",
-                ));
-            }
-            Ok(RoleSlots::new(ModelSelection {
-                provider: f.provider,
-                model_id: f.model_id,
-            }))
+            Err(D::Error::custom(
+                "role selection object must use nested form with `primary`",
+            ))
         }
     }
 }
@@ -223,7 +211,7 @@ impl<'de> Deserialize<'de> for RoleSlots<ModelSelection> {
 /// Emit the compact nested form on serialize. Round-tripping a
 /// bare-string-form config through serde produces the nested form —
 /// acceptable because the nested form is always valid input.
-impl Serialize for RoleSlots<ModelSelection> {
+impl Serialize for RoleSlots<ProviderModelSelection> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut st = s.serialize_struct("RoleSlots", 3)?;
@@ -242,19 +230,69 @@ impl Serialize for RoleSlots<ModelSelection> {
     }
 }
 
-fn parse_bare_string(s: &str) -> Result<RoleSlots<ModelSelection>, String> {
-    let (provider, model_id) = s.split_once('/').ok_or_else(|| {
-        format!("model selection `{s}` must use explicit `provider/model_id` format")
-    })?;
-    if provider.is_empty() || model_id.is_empty() {
-        return Err(format!(
-            "model selection `{s}` must use explicit `provider/model_id` format"
-        ));
+fn parse_bare_string(s: &str) -> Result<RoleSlots<ProviderModelSelection>, String> {
+    ProviderModelSelection::from_slash_str(s).map(RoleSlots::new)
+}
+
+fn parse_fallbacks<E: Error>(value: &Value) -> Result<Vec<ProviderModelSelection>, E> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| E::custom("`fallbacks` must be an array"))?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(idx, v)| parse_selection_value(v, &format!("fallbacks[{idx}]")))
+        .collect()
+}
+
+fn parse_selection_value<E: Error>(
+    value: &Value,
+    label: &str,
+) -> Result<ProviderModelSelection, E> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| E::custom(format!("`{label}` must be an object")))?;
+    parse_selection_object(obj, label)
+}
+
+fn parse_selection_object<E: Error>(
+    obj: &Map<String, Value>,
+    label: &str,
+) -> Result<ProviderModelSelection, E> {
+    reject_unknown_fields::<E>(obj, &["provider", "model_id"], label)?;
+    let provider = required_non_empty_string::<E>(obj, "provider", label)?;
+    let model_id = required_non_empty_string::<E>(obj, "model_id", label)?;
+    Ok(ProviderModelSelection { provider, model_id })
+}
+
+fn required_non_empty_string<E: Error>(
+    obj: &Map<String, Value>,
+    field: &str,
+    label: &str,
+) -> Result<String, E> {
+    let value = obj
+        .get(field)
+        .ok_or_else(|| E::custom(format!("{label} must include `{field}`")))?;
+    let s = value
+        .as_str()
+        .ok_or_else(|| E::custom(format!("{label}.{field} must be a string")))?;
+    if s.is_empty() {
+        return Err(E::custom(format!("{label}.{field} must be non-empty")));
     }
-    Ok(RoleSlots::new(ModelSelection {
-        provider: provider.to_string(),
-        model_id: model_id.to_string(),
-    }))
+    Ok(s.to_string())
+}
+
+fn reject_unknown_fields<E: Error>(
+    obj: &Map<String, Value>,
+    allowed: &[&str],
+    label: &str,
+) -> Result<(), E> {
+    if let Some(field) = obj.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(E::custom(format!(
+            "{label} contains unknown field `{field}`"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

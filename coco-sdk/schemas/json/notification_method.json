@@ -7,6 +7,7 @@
     "session/started",
     "session/result",
     "session/ended",
+    "session/usageUpdated",
     "history/messageAppended",
     "history/messageTruncated",
     "history/resetForResume",

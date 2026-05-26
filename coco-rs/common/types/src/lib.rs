@@ -423,6 +423,9 @@ pub use thinking::ThinkingLevel;
 pub use token::InputTokens;
 pub use token::ModelUsage;
 pub use token::OutputTokens;
+pub use token::SessionModelUsageEntry;
+pub use token::SessionUsageSnapshot;
+pub use token::SessionUsageTotals;
 pub use token::TokenUsage;
 
 // Tool types (ToolResult moved to coco-messages because new_messages: Vec<Message>)

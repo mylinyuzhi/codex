@@ -132,22 +132,15 @@ fn curated_cutoff_covers_active_builtin_models() {
 }
 
 #[test]
-fn official_pricing_wins_for_anthropic_models() {
-    let p = pricing(Some("anthropic"), "claude-sonnet-4-5").expect("pricing should resolve");
-    assert_eq!(p.input_per_million_usd, 3.0);
-    assert_eq!(p.output_per_million_usd, 15.0);
-    assert!(matches!(
-        p.source,
-        PricingSource::OfficialProvider { provider, .. } if provider == "anthropic"
-    ));
-}
+fn openrouter_pricing_resolves_for_known_models() {
+    let anthropic =
+        pricing(Some("anthropic"), "claude-sonnet-4-5").expect("anthropic pricing should resolve");
+    assert_eq!(anthropic.input_per_million_usd, 3.0);
+    assert_eq!(anthropic.output_per_million_usd, 15.0);
 
-#[test]
-fn openrouter_pricing_fallback_for_non_official_models() {
-    let p = pricing(Some("openai"), "gpt-5-codex").expect("pricing should resolve");
-    assert_eq!(p.input_per_million_usd, 1.25);
-    assert_eq!(p.output_per_million_usd, 10.0);
-    assert_eq!(p.source, PricingSource::OpenRouterFallback);
+    let openai = pricing(Some("openai"), "gpt-5-codex").expect("openai pricing should resolve");
+    assert_eq!(openai.input_per_million_usd, 1.25);
+    assert_eq!(openai.output_per_million_usd, 10.0);
 }
 
 #[test]

@@ -31,7 +31,7 @@ fn test_resolve_teammate_model_inherit() {
 #[test]
 fn test_resolve_teammate_model_config_default() {
     let config = coco_config::AgentTeamsConfig {
-        default_model: Some(coco_config::ModelSelection {
+        default_model: Some(coco_types::ProviderModelSelection {
             provider: "openai".into(),
             model_id: "config-default".into(),
         }),

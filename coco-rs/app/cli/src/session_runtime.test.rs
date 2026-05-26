@@ -83,3 +83,41 @@ async fn orchestration_ctx_factory_can_run_inside_runtime_thread() {
     let updated_session = factory();
     assert_eq!(updated_session.session_id, "next-session");
 }
+
+#[tokio::test]
+async fn start_new_session_loads_existing_usage_snapshot() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    let snapshot = coco_types::SessionUsageSnapshot {
+        session_id: "resume-session".into(),
+        totals: coco_types::SessionUsageTotals {
+            input_tokens: 123,
+            output_tokens: 45,
+            request_count: 1,
+            ..Default::default()
+        },
+        models: vec![coco_types::SessionModelUsageEntry {
+            provider: "anthropic".into(),
+            model_id: "claude-sonnet-4-5".into(),
+            input_tokens: 123,
+            output_tokens: 45,
+            request_count: 1,
+            priced: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    runtime
+        .transcript_store
+        .write_usage_snapshot("resume-session", &snapshot)
+        .expect("usage snapshot should write");
+
+    runtime
+        .start_new_session("resume-session".to_string())
+        .await;
+
+    assert_eq!(
+        runtime.session_usage_snapshot().await.totals.input_tokens,
+        123
+    );
+}

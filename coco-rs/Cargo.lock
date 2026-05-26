@@ -1560,6 +1560,7 @@ name = "coco-messages"
 version = "0.0.0"
 dependencies = [
  "coco-llm-types",
+ "coco-model-card",
  "coco-types",
  "pretty_assertions",
  "serde",
