@@ -103,13 +103,6 @@ pub(crate) fn lookup_key_tiers(provider: Option<&str>, model_id: &str) -> Vec<BT
     vec![exact, providerless_tier, stripped]
 }
 
-pub(crate) fn lookup_keys(provider: Option<&str>, model_id: &str) -> BTreeSet<String> {
-    lookup_key_tiers(provider, model_id)
-        .into_iter()
-        .flatten()
-        .collect()
-}
-
 pub(crate) fn normalize_id(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut prev_dash = false;

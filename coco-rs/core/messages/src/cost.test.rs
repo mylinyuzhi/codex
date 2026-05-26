@@ -16,14 +16,14 @@ fn usage(input: i64, output: i64) -> TokenUsage {
 }
 
 #[test]
-fn official_pricing_wins_for_anthropic() {
+fn pricing_resolves_for_anthropic() {
     let pricing = get_model_pricing(Some("anthropic"), "claude-sonnet-4-5").unwrap();
     assert_eq!(pricing.input_per_mtok, 3.0);
     assert_eq!(pricing.output_per_mtok, 15.0);
 }
 
 #[test]
-fn openrouter_pricing_fallback_for_non_official_model() {
+fn pricing_resolves_for_openai() {
     let pricing = get_model_pricing(Some("openai"), "gpt-5-codex").unwrap();
     assert_eq!(pricing.input_per_mtok, 1.25);
     assert_eq!(pricing.output_per_mtok, 10.0);
