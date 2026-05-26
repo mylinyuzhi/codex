@@ -103,6 +103,7 @@ fn core_event_variant(notif: &coco_types::ServerNotification) -> &'static str {
         N::SessionStarted(_) => "SessionStarted",
         N::SessionResult(_) => "SessionResult",
         N::SessionEnded(_) => "SessionEnded",
+        N::SessionUsageUpdated(_) => "SessionUsageUpdated",
         N::TurnStarted(_) => "TurnStarted",
         N::TurnCompleted(_) => "TurnCompleted",
         N::TurnFailed(_) => "TurnFailed",

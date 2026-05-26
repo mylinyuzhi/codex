@@ -903,6 +903,11 @@ class ServerNotificationSessionEnded(BaseModel):
     method: Literal['session/ended'] = Field(default='session/ended', alias='method')
     params: SessionEndedParams
 
+class ServerNotificationSessionUsageUpdated(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['session/usageUpdated'] = Field(default='session/usageUpdated', alias='method')
+    params: SessionUsageSnapshot
+
 class ServerNotificationHistoryMessageAppended(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal['history/messageAppended'] = Field(default='history/messageAppended', alias='method')
@@ -1242,7 +1247,7 @@ class ServerNotificationPluginsChanged(BaseModel):
     params: dict[str, Any]
 
 ServerNotification = Annotated[
-    Union[ServerNotificationSessionStarted, ServerNotificationSessionResult, ServerNotificationSessionEnded, ServerNotificationHistoryMessageAppended, ServerNotificationHistoryMessageTruncated, ServerNotificationHistoryResetForResume, ServerNotificationHistoryReplaced, ServerNotificationHistoryReasoningMetadataAttached, ServerNotificationTurnStarted, ServerNotificationTurnCompleted, ServerNotificationTurnFailed, ServerNotificationTurnInterrupted, ServerNotificationItemStarted, ServerNotificationItemUpdated, ServerNotificationItemCompleted, ServerNotificationAgentMessageDelta, ServerNotificationReasoningDelta, ServerNotificationMcpStartupStatus, ServerNotificationMcpStartupComplete, ServerNotificationLspPrewarmComplete, ServerNotificationContextCompacted, ServerNotificationContextUsageWarning, ServerNotificationContextCompactionStarted, ServerNotificationContextCompactionPhase, ServerNotificationContextCompactionFailed, ServerNotificationContextCleared, ServerNotificationTaskStarted, ServerNotificationTaskCompleted, ServerNotificationTaskProgress, ServerNotificationTaskPanelChanged, ServerNotificationPlanApprovalRequested, ServerNotificationAgentsKilled, ServerNotificationModelFallbackStarted, ServerNotificationModelFallbackCompleted, ServerNotificationModelFastModeChanged, ServerNotificationModelRoleChanged, ServerNotificationPermissionModeChanged, ServerNotificationPromptSuggestion, ServerNotificationError, ServerNotificationRateLimit, ServerNotificationKeepAlive, ServerNotificationIdeSelectionChanged, ServerNotificationIdeDiagnosticsUpdated, ServerNotificationPlanModeChanged, ServerNotificationQueueStateChanged, ServerNotificationQueueCommandQueued, ServerNotificationQueueCommandDequeued, ServerNotificationRewindCompleted, ServerNotificationRewindFailed, ServerNotificationCostWarning, ServerNotificationSandboxStateChanged, ServerNotificationSandboxViolationsDetected, ServerNotificationAgentsRegistered, ServerNotificationHookStarted, ServerNotificationHookProgress, ServerNotificationHookResponse, ServerNotificationWorktreeEntered, ServerNotificationWorktreeExited, ServerNotificationSummarizeCompleted, ServerNotificationSummarizeFailed, ServerNotificationStreamStallDetected, ServerNotificationStreamWatchdogWarning, ServerNotificationStreamRequestEnd, ServerNotificationSessionStateChanged, ServerNotificationTurnMaxReached, ServerNotificationLocalCommandOutput, ServerNotificationFilesPersisted, ServerNotificationElicitationComplete, ServerNotificationToolUseSummary, ServerNotificationToolProgress, ServerNotificationPluginsChanged],
+    Union[ServerNotificationSessionStarted, ServerNotificationSessionResult, ServerNotificationSessionEnded, ServerNotificationSessionUsageUpdated, ServerNotificationHistoryMessageAppended, ServerNotificationHistoryMessageTruncated, ServerNotificationHistoryResetForResume, ServerNotificationHistoryReplaced, ServerNotificationHistoryReasoningMetadataAttached, ServerNotificationTurnStarted, ServerNotificationTurnCompleted, ServerNotificationTurnFailed, ServerNotificationTurnInterrupted, ServerNotificationItemStarted, ServerNotificationItemUpdated, ServerNotificationItemCompleted, ServerNotificationAgentMessageDelta, ServerNotificationReasoningDelta, ServerNotificationMcpStartupStatus, ServerNotificationMcpStartupComplete, ServerNotificationLspPrewarmComplete, ServerNotificationContextCompacted, ServerNotificationContextUsageWarning, ServerNotificationContextCompactionStarted, ServerNotificationContextCompactionPhase, ServerNotificationContextCompactionFailed, ServerNotificationContextCleared, ServerNotificationTaskStarted, ServerNotificationTaskCompleted, ServerNotificationTaskProgress, ServerNotificationTaskPanelChanged, ServerNotificationPlanApprovalRequested, ServerNotificationAgentsKilled, ServerNotificationModelFallbackStarted, ServerNotificationModelFallbackCompleted, ServerNotificationModelFastModeChanged, ServerNotificationModelRoleChanged, ServerNotificationPermissionModeChanged, ServerNotificationPromptSuggestion, ServerNotificationError, ServerNotificationRateLimit, ServerNotificationKeepAlive, ServerNotificationIdeSelectionChanged, ServerNotificationIdeDiagnosticsUpdated, ServerNotificationPlanModeChanged, ServerNotificationQueueStateChanged, ServerNotificationQueueCommandQueued, ServerNotificationQueueCommandDequeued, ServerNotificationRewindCompleted, ServerNotificationRewindFailed, ServerNotificationCostWarning, ServerNotificationSandboxStateChanged, ServerNotificationSandboxViolationsDetected, ServerNotificationAgentsRegistered, ServerNotificationHookStarted, ServerNotificationHookProgress, ServerNotificationHookResponse, ServerNotificationWorktreeEntered, ServerNotificationWorktreeExited, ServerNotificationSummarizeCompleted, ServerNotificationSummarizeFailed, ServerNotificationStreamStallDetected, ServerNotificationStreamWatchdogWarning, ServerNotificationStreamRequestEnd, ServerNotificationSessionStateChanged, ServerNotificationTurnMaxReached, ServerNotificationLocalCommandOutput, ServerNotificationFilesPersisted, ServerNotificationElicitationComplete, ServerNotificationToolUseSummary, ServerNotificationToolProgress, ServerNotificationPluginsChanged],
     Field(discriminator='method'),
 ]
 
@@ -1902,6 +1907,14 @@ class SessionStartedParams(BaseModel):
     slash_commands: list[str] = []
     tools: list[str] = []
 
+class SessionUsageSnapshot(BaseModel):
+    session_id: str
+    totals: SessionUsageTotals
+    updated_at_ms: int
+    version: int
+    models: list[SessionModelUsageEntry] | None = None
+    unpriced_models: list[ProviderModelSelection] | None = None
+
 class SummarizeCompletedParams(BaseModel):
     from_turn: int
     summary_tokens: int
@@ -2074,6 +2087,7 @@ class NotificationMethod(str, Enum):
     SESSION_STARTED = 'session/started'
     SESSION_RESULT = 'session/result'
     SESSION_ENDED = 'session/ended'
+    SESSION_USAGE_UPDATED = 'session/usageUpdated'
     HISTORY_MESSAGE_APPENDED = 'history/messageAppended'
     HISTORY_MESSAGE_TRUNCATED = 'history/messageTruncated'
     HISTORY_RESET_FOR_RESUME = 'history/resetForResume'
@@ -3109,6 +3123,10 @@ class ProgressMessage(BaseModel):
 class ProviderMetadata(BaseModel):
     pass
 
+class ProviderModelSelection(BaseModel):
+    model_id: str
+    provider: str
+
 class ProviderOptions(BaseModel):
     pass
 
@@ -3224,6 +3242,25 @@ class SessionModelUsage(BaseModel):
     output_tokens: int
     web_search_requests: int
 
+class SessionModelUsageEntry(BaseModel):
+    cache_creation_cost_usd: float
+    cache_creation_input_tokens: int
+    cache_read_cost_usd: float
+    cache_read_input_tokens: int
+    input_cost_usd: float
+    input_tokens: int
+    model_id: str
+    output_cost_usd: float
+    output_tokens: int
+    priced: bool
+    provider: str
+    request_count: int
+    total_cost_usd: float
+    unpriced_input_tokens: int = 0
+    unpriced_output_tokens: int = 0
+    unpriced_request_count: int = 0
+    web_search_requests: int = 0
+
 class SessionReadResult(BaseModel):
     session: SdkSessionSummary
     has_more: bool = False
@@ -3246,6 +3283,22 @@ class SessionStartInput(BaseModel):
 
 class SessionStartResult(BaseModel):
     session_id: str
+
+class SessionUsageTotals(BaseModel):
+    cache_creation_cost_usd: float
+    cache_creation_input_tokens: int
+    cache_read_cost_usd: float
+    cache_read_input_tokens: int
+    input_cost_usd: float
+    input_tokens: int
+    output_cost_usd: float
+    output_tokens: int
+    request_count: int
+    total_cost_usd: float
+    unpriced_input_tokens: int = 0
+    unpriced_output_tokens: int = 0
+    unpriced_request_count: int = 0
+    web_search_requests: int = 0
 
 class SetupInput(BaseModel):
     cwd: str

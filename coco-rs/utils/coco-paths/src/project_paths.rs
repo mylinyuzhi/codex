@@ -14,6 +14,7 @@
 //! | `<slug>/<sid>/remote-agents/remote-agent-<tid>.meta.json` | `sessionStorage.ts:305-318` | CCR remote task sidecar |
 //! | `<slug>/<sid>/tool-results/`                        | `toolResultStorage.ts:104-106` | persisted tool blobs |
 //! | `<slug>/<sid>/session-memory/summary.md`            | `services/SessionMemory/sessionMemory.ts` | per-session notes |
+//! | `<slug>/<sid>/usage.json`                            | (coco-rs) | per-session usage snapshot |
 //! | `<slug>/memory/`                                    | `memdir/paths.ts:231` | personal auto-memory |
 //! | `<slug>/memory/MEMORY.md`                           | `memdir/paths.ts:257-259` | personal index |
 //! | `<slug>/memory/team/`                               | `memdir/teamMemPaths.ts:84-94` | team auto-memory root |
@@ -136,6 +137,10 @@ impl ProjectPaths {
 
     pub fn session_memory_summary(&self, session_id: &str) -> PathBuf {
         self.session_memory_dir(session_id).join("summary.md")
+    }
+
+    pub fn session_usage(&self, session_id: &str) -> PathBuf {
+        self.session_dir(session_id).join("usage.json")
     }
 
     // ---- memory paths -------------------------------------------

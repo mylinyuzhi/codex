@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use coco_types::ModelRole;
 use coco_types::PermissionMode;
+use coco_types::ProviderModelSelection;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::env::EnvKey;
 use crate::env::EnvSnapshot;
-use crate::model::ModelSelection;
 use crate::settings::Settings;
 
 const DEFAULT_MAX_TOOL_CONCURRENCY: i32 = 10;
@@ -65,7 +65,7 @@ pub struct PartialAgentTeamsSettings {
     pub teammate_mode: Option<TeammateMode>,
     pub default_model_role: Option<ModelRole>,
     pub agent_type_model_roles: Option<HashMap<String, ModelRole>>,
-    pub default_model: Option<ModelSelection>,
+    pub default_model: Option<ProviderModelSelection>,
     pub show_spinner_tree: Option<bool>,
     pub max_agents: Option<i32>,
 }
@@ -76,7 +76,7 @@ pub struct AgentTeamsConfig {
     pub default_model_role: ModelRole,
     pub agent_type_model_roles: HashMap<String, ModelRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_model: Option<ModelSelection>,
+    pub default_model: Option<ProviderModelSelection>,
     pub show_spinner_tree: bool,
     pub max_agents: i32,
 }

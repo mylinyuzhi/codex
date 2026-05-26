@@ -332,4 +332,9 @@ fn build_api_client_resolves_api_model_name_override() {
         "ep-internal-v3-prod",
         "api_model_name override flows into the fingerprint",
     );
+    assert_eq!(
+        client.model_identity().model_id,
+        "internal/coder-v3",
+        "usage and session accounting keep the configured model identity",
+    );
 }

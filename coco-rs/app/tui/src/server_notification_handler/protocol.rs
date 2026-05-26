@@ -48,6 +48,8 @@ pub(super) fn handle(
         // === Session lifecycle ===
         ServerNotification::SessionStarted(p) => {
             state.session.session_id = Some(p.session_id);
+            state.session.session_usage = None;
+            state.session.token_usage = crate::state::session::TokenUsage::default();
             // Initialise thinking_effort from the model's registered
             // default so the status bar reflects the starting state
             // before any Ctrl+T cycle. Falls back to Auto when the
@@ -78,6 +80,12 @@ pub(super) fn handle(
         }
         ServerNotification::SessionResult(p) => {
             state.session.estimated_cost_cents = (p.total_cost_usd * 100.0) as i32;
+            true
+        }
+        ServerNotification::SessionUsageUpdated(snapshot) => {
+            let snapshot = *snapshot;
+            state.session.token_usage = token_usage_from_session_snapshot(&snapshot);
+            state.session.session_usage = Some(snapshot);
             true
         }
         ServerNotification::SessionEnded(p) => {
@@ -1098,6 +1106,8 @@ fn clear_session_boundary_state(state: &mut AppState) {
     state.session.tool_executions.clear();
     state.session.tool_group_summaries.clear();
     state.session.clear_reasoning_metadata();
+    state.session.session_usage = None;
+    state.session.token_usage = crate::state::session::TokenUsage::default();
     state.session.queued_commands.clear();
     state.session.active_hooks.clear();
     state.session.prompt_suggestions.clear();
@@ -1134,13 +1144,15 @@ fn on_turn_completed(
     state.session.last_query_completion_at = Some(now);
     state.session.last_user_interaction_at = now;
     state.session.idle_prompt_fired = false;
-    state.session.update_tokens(TokenUsage {
-        input_tokens: p.usage.input_tokens.total,
-        output_tokens: p.usage.output_tokens.total,
-        reasoning_tokens: p.usage.output_tokens.reasoning,
-        cache_read_tokens: p.usage.input_tokens.cache_read,
-        cache_creation_tokens: p.usage.input_tokens.cache_write,
-    });
+    if state.session.session_usage.is_none() {
+        state.session.update_tokens(TokenUsage {
+            input_tokens: p.usage.input_tokens.total,
+            output_tokens: p.usage.output_tokens.total,
+            reasoning_tokens: p.usage.output_tokens.reasoning,
+            cache_read_tokens: p.usage.input_tokens.cache_read,
+            cache_creation_tokens: p.usage.input_tokens.cache_write,
+        });
+    }
     // Emit a terminal notification when the user has switched away — they
     // typically want a ping when a long turn finishes in the background.
     // Skips when the terminal is focused to avoid pointless noise.
@@ -1180,6 +1192,18 @@ fn on_turn_completed(
         )
     });
     true
+}
+
+fn token_usage_from_session_snapshot(
+    snapshot: &coco_types::SessionUsageSnapshot,
+) -> crate::state::session::TokenUsage {
+    crate::state::session::TokenUsage {
+        input_tokens: snapshot.totals.input_tokens,
+        output_tokens: snapshot.totals.output_tokens,
+        reasoning_tokens: 0,
+        cache_read_tokens: snapshot.totals.cache_read_input_tokens,
+        cache_creation_tokens: snapshot.totals.cache_creation_input_tokens,
+    }
 }
 
 /// Handle `TurnInterrupted`: clear streaming state, surface the banner,
