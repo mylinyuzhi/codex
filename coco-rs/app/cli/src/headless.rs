@@ -148,12 +148,14 @@ impl LanguageModel for MockModel {
 /// trigger immediate "budget exhausted" and short-circuit every LLM
 /// call to an empty response).
 pub fn cli_runtime_overrides(cli: &Cli) -> Result<coco_config::RuntimeOverrides> {
-    use coco_config::ModelSelection;
+    use coco_types::ProviderModelSelection;
 
     let mut overrides = coco_config::RuntimeOverrides::default();
     if let Some(raw) = cli.model.as_deref() {
-        overrides.model_override =
-            Some(ModelSelection::from_slash_str(raw).map_err(|e| anyhow::anyhow!("--model: {e}"))?);
+        overrides.model_override = Some(
+            ProviderModelSelection::from_slash_str(raw)
+                .map_err(|e| anyhow::anyhow!("--model: {e}"))?,
+        );
     }
     if let Some(mode) = cli.permission_mode.as_deref()
         && let Ok(pm) = serde_json::from_value::<coco_types::PermissionMode>(
@@ -166,7 +168,7 @@ pub fn cli_runtime_overrides(cli: &Cli) -> Result<coco_config::RuntimeOverrides>
         .fallback_model
         .iter()
         .map(|raw| {
-            ModelSelection::from_slash_str(raw)
+            ProviderModelSelection::from_slash_str(raw)
                 .map_err(|e| anyhow::anyhow!("--fallback-model: {e}"))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -815,6 +817,7 @@ pub async fn run_chat_with_options(
     let mut engine = QueryEngine::new(config, client, tools, cancel, Some(hook_registry))
         .with_fallback_clients(fallback_clients)
         .with_file_read_state(file_read_state.clone());
+    let mut session_usage_flush = None;
     if let Some(policy) = recovery_policy {
         engine = engine.with_recovery_policy(policy);
     }
@@ -827,6 +830,19 @@ pub async fn run_chat_with_options(
         let store = Arc::new(coco_session::TranscriptStore::new(
             crate::paths::project_paths(&cwd),
         ));
+        let store_for_load = Arc::clone(&store);
+        let usage_session_id = session_id_for_engine.clone();
+        let loaded_usage = tokio::task::spawn_blocking(move || {
+            store_for_load.load_usage_snapshot(&usage_session_id)
+        })
+        .await
+        .ok()
+        .and_then(std::result::Result::ok)
+        .flatten()
+        .map(CostTracker::from_snapshot)
+        .unwrap_or_default();
+        let session_usage_tracker = Arc::new(tokio::sync::Mutex::new(loaded_usage));
+        let session_usage_write_lock = Arc::new(tokio::sync::Mutex::new(()));
         let mut seen: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
         for msg in &opts.prior_messages {
             if let Some(uuid) = msg.uuid() {
@@ -857,11 +873,19 @@ pub async fn run_chat_with_options(
             );
         }
         engine = engine
-            .with_transcript_store(store, session_id_for_engine)
+            .with_transcript_store(store.clone(), session_id_for_engine.clone())
+            .with_session_usage_tracker(session_usage_tracker.clone())
+            .with_session_usage_write_lock(session_usage_write_lock.clone())
             .with_transcript_dedup(dedup)
             .with_tool_result_replacement_state(Arc::new(tokio::sync::RwLock::new(
                 replacement_state,
             )));
+        session_usage_flush = Some((
+            store,
+            session_id_for_engine.clone(),
+            session_usage_tracker,
+            session_usage_write_lock,
+        ));
     }
 
     // Resolve `@`-mentions in the prompt to file-content system-reminder
@@ -896,6 +920,25 @@ pub async fn run_chat_with_options(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     drainer.abort();
+
+    if let Some((store, session_id, tracker, write_lock)) = session_usage_flush {
+        let _write_guard = write_lock.lock().await;
+        let snapshot = tracker.lock().await.snapshot(&session_id);
+        let session_id_for_write = session_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            store.write_usage_snapshot(&session_id_for_write, &snapshot)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, session_id, "failed to flush headless session usage");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, session_id, "headless session usage flush task failed");
+            }
+        }
+    }
 
     // Wait for any in-flight auto-memory extraction + session-memory
     // fork to complete before we return so partial writes aren't

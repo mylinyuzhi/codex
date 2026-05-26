@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ServerNotification",
-  "description": "Protocol-level notifications visible to all consumers.\n\n62 variants across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`), matching TS — no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
+  "description": "Protocol-level notifications visible to all consumers.\n\nProtocol notifications across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`), matching TS — no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
   "oneOf": [
     {
       "description": "New session started.",
@@ -47,6 +47,23 @@
         },
         "params": {
           "$ref": "#/$defs/SessionEndedParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Session usage snapshot updated.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/usageUpdated"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionUsageSnapshot"
         }
       },
       "required": [
@@ -3439,6 +3456,22 @@
       "type": "object",
       "additionalProperties": true
     },
+    "ProviderModelSelection": {
+      "description": "Unresolved provider/model selection from user-facing config.\n\nThis intentionally does not include [`ProviderApi`]: config surfaces\nwrite `provider/model_id`, and the runtime resolves `provider` through\nthe live provider catalog before constructing an `ApiClient`.",
+      "type": "object",
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model_id"
+      ]
+    },
     "ProviderOptions": {
       "description": "Provider-specific options that can be passed to various API calls.\n\nThis is a map of provider names to their specific options.\nFor example: `{ \"anthropic\": { \"thinking\": { \"type\": \"enabled\" } } }`",
       "type": "object",
@@ -3711,6 +3744,97 @@
         "max_output_tokens"
       ]
     },
+    "SessionModelUsageEntry": {
+      "description": "Cumulative usage for a single `(provider, model_id)` bucket.",
+      "type": "object",
+      "properties": {
+        "cache_creation_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "cache_read_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "input_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "output_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "priced": {
+          "description": "True only when every request in this bucket had known pricing.",
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "request_count": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "total_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "unpriced_input_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "unpriced_output_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "unpriced_request_count": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "web_search_requests": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        }
+      },
+      "required": [
+        "provider",
+        "model_id",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "input_cost_usd",
+        "output_cost_usd",
+        "cache_read_cost_usd",
+        "cache_creation_cost_usd",
+        "total_cost_usd",
+        "request_count",
+        "priced"
+      ]
+    },
     "SessionResultParams": {
       "description": "Matches TS `SDKResultMessageSchema` (coreSchemas.ts:1407-1451).\nTS has two subtype variants (success/error) unified here with `is_error` flag.",
       "type": "object",
@@ -3935,6 +4059,122 @@
           "type": "string",
           "const": "requires_action"
         }
+      ]
+    },
+    "SessionUsageSnapshot": {
+      "description": "Persisted and protocol-visible cumulative usage for one session.",
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionModelUsageEntry"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "totals": {
+          "$ref": "#/$defs/SessionUsageTotals"
+        },
+        "unpriced_models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderModelSelection"
+          }
+        },
+        "updated_at_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "version": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "version",
+        "session_id",
+        "updated_at_ms",
+        "totals"
+      ]
+    },
+    "SessionUsageTotals": {
+      "description": "Session-level token and cost totals.",
+      "type": "object",
+      "properties": {
+        "cache_creation_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "cache_read_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "input_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "output_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "request_count": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "total_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "unpriced_input_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "unpriced_output_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "unpriced_request_count": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "web_search_requests": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "input_cost_usd",
+        "output_cost_usd",
+        "cache_read_cost_usd",
+        "cache_creation_cost_usd",
+        "total_cost_usd",
+        "request_count"
       ]
     },
     "SharedV4FileData": {

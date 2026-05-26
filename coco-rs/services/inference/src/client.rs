@@ -19,6 +19,7 @@ use coco_llm_types::LlmPrompt;
 use coco_llm_types::UserContentPart;
 use coco_types::Capability;
 use coco_types::PromptCacheConfig;
+use coco_types::ProviderModelSelection;
 use coco_types::ThinkingLevel;
 use coco_types::TokenUsage;
 use serde::Deserialize;
@@ -170,6 +171,9 @@ pub struct ApiClient {
     /// Layer-2 typed sampling + `extra_body` namespace wrap. `None`
     /// for test/mock paths that bypass the runtime registry.
     model_info: Option<ModelInfo>,
+    /// Logical provider/model identity from config, before any
+    /// provider-specific `api_model_name` rewrite.
+    model_identity: ProviderModelSelection,
     pub retry: RetryConfig,
     pub usage: Arc<Mutex<UsageAccumulator>>,
     /// Optional prompt cache-break detector. When present,
@@ -199,12 +203,14 @@ impl ApiClient {
         model: Arc<dyn LanguageModelV4>,
         fingerprint: ProviderClientFingerprint,
         model_info: Option<ModelInfo>,
+        model_identity: ProviderModelSelection,
         retry: RetryConfig,
     ) -> Self {
         Self {
             model,
             fingerprint,
             model_info,
+            model_identity,
             retry,
             usage: Arc::new(Mutex::new(UsageAccumulator::new())),
             cache_break_detector: None,
@@ -282,7 +288,17 @@ impl ApiClient {
             api_key_origin_digest: [0u8; 32],
             runtime_state_digest: [0u8; 32],
         };
-        Self::new(model, fingerprint, /*model_info*/ None, retry)
+        let model_identity = ProviderModelSelection {
+            provider: model.provider().to_string(),
+            model_id: model.model_id().to_string(),
+        };
+        Self::new(
+            model,
+            fingerprint,
+            /*model_info*/ None,
+            model_identity,
+            retry,
+        )
     }
 
     /// Identity of the underlying client.
@@ -298,6 +314,11 @@ impl ApiClient {
     /// The model ID.
     pub fn model_id(&self) -> &str {
         self.model.model_id()
+    }
+
+    /// Logical provider/model identity from config.
+    pub fn model_identity(&self) -> &ProviderModelSelection {
+        &self.model_identity
     }
 
     /// Resolved [`ModelInfo`] for the underlying client. `None` for

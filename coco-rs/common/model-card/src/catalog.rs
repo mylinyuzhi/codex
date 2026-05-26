@@ -4,8 +4,6 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 
-use crate::pricing::OfficialPricingIndex;
-use crate::pricing::load_official_pricing;
 use crate::resolver::aliases_for_openrouter_model;
 use crate::resolver::family_for_model;
 use crate::resolver::lookup_key_tiers;
@@ -41,11 +39,7 @@ impl ModelCardCatalog {
         if response.data.is_empty() {
             return Err(ModelCardError::EmptyCatalog);
         }
-        let official_pricing = load_official_pricing()?;
-        Ok(Self::from_openrouter_models(
-            response.data,
-            &official_pricing,
-        ))
+        Ok(Self::from_openrouter_models(response.data))
     }
 
     pub fn lookup(&self, model_id: &str) -> LookupResult {
@@ -99,10 +93,7 @@ impl ModelCardCatalog {
         self.cards.is_empty()
     }
 
-    fn from_openrouter_models(
-        models: Vec<OpenRouterModel>,
-        official_pricing: &OfficialPricingIndex,
-    ) -> Self {
+    fn from_openrouter_models(models: Vec<OpenRouterModel>) -> Self {
         let mut cards = Vec::new();
         for model in models {
             let provider = provider_from_id(&model.id);
@@ -110,15 +101,7 @@ impl ModelCardCatalog {
             let family =
                 family_for_model(provider.as_deref(), &model.id, canonical_slug.as_deref());
             let aliases = aliases_for_openrouter_model(&model);
-            let openrouter_pricing = model.pricing.as_ref().and_then(Pricing::from_openrouter);
-            let pricing = official_pricing
-                .lookup(
-                    provider.as_deref(),
-                    &model.id,
-                    canonical_slug.as_deref(),
-                    &aliases,
-                )
-                .or(openrouter_pricing);
+            let pricing = model.pricing.as_ref().and_then(Pricing::from_openrouter);
             let knowledge_cutoff = curated_knowledge_cutoff(&model.id)
                 .or_else(|| canonical_slug.as_deref().and_then(curated_knowledge_cutoff))
                 .or_else(|| {
@@ -243,6 +226,11 @@ pub fn pricing(provider: Option<&str>, model_id: &str) -> Option<Pricing> {
 
 /// Atomically replaces the current in-memory catalog with a parsed
 /// OpenRouter snapshot. Intended for startup background refresh.
+///
+/// Pricing in the supplied JSON is taken verbatim — OpenRouter is the
+/// sole source of truth, and there is no vendor-side override layer.
+/// Callers must trust the snapshot's numbers; install only sources you
+/// would accept for cost reporting.
 pub fn install_openrouter_snapshot(json: &str) -> Result<(), ModelCardError> {
     let catalog = Arc::new(ModelCardCatalog::from_openrouter_json(json)?);
     let lock = catalog_cell();

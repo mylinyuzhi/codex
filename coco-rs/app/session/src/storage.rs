@@ -17,6 +17,8 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use uuid::Uuid;
 
 #[path = "storage/preview.rs"]
@@ -28,6 +30,7 @@ use preview::is_synthetic_first_prompt_candidate;
 #[cfg(test)]
 use preview::truncate_prompt;
 pub use wire::TranscriptEntryOptions;
+
 use wire::is_compact_boundary_message;
 pub use wire::messages_from_transcript_entry;
 use wire::remember_assistant_tool_calls;
@@ -594,6 +597,55 @@ impl TranscriptStore {
     /// `tool-results/` themselves.
     pub fn session_artifact_dir(&self, session_id: &str) -> PathBuf {
         self.paths.session_dir(session_id)
+    }
+
+    /// `<project>/<session_id>/usage.json` — cumulative session usage snapshot.
+    pub fn usage_snapshot_path(&self, session_id: &str) -> PathBuf {
+        self.paths.session_usage(session_id)
+    }
+
+    /// Atomically overwrite the cumulative usage snapshot for a session.
+    pub fn write_usage_snapshot(
+        &self,
+        session_id: &str,
+        snapshot: &coco_types::SessionUsageSnapshot,
+    ) -> crate::Result<()> {
+        let path = self.usage_snapshot_path(session_id);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let tmp = path.with_file_name(format!(
+            "usage.json.{}.{}.{}.tmp",
+            std::process::id(),
+            timestamp_ms,
+            Uuid::new_v4()
+        ));
+        let body = serde_json::to_vec_pretty(snapshot)?;
+        {
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(&body)?;
+            file.write_all(b"\n")?;
+            file.sync_all()?;
+        }
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    /// Load a cumulative usage snapshot. Returns `Ok(None)` when absent.
+    pub fn load_usage_snapshot(
+        &self,
+        session_id: &str,
+    ) -> crate::Result<Option<coco_types::SessionUsageSnapshot>> {
+        let path = self.usage_snapshot_path(session_id);
+        match std::fs::read_to_string(&path) {
+            Ok(body) => Ok(Some(serde_json::from_str(&body)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Append typed `Arc<Message>` entries to a background agent's

@@ -72,6 +72,72 @@ pub struct TokenUsage {
     pub output_tokens: OutputTokens,
 }
 
+/// Persisted and protocol-visible cumulative usage for one session.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionUsageSnapshot {
+    pub version: i32,
+    pub session_id: String,
+    pub updated_at_ms: i64,
+    pub totals: SessionUsageTotals,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<SessionModelUsageEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unpriced_models: Vec<crate::ProviderModelSelection>,
+}
+
+/// Session-level token and cost totals.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionUsageTotals {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
+    #[serde(default)]
+    pub web_search_requests: i64,
+    pub input_cost_usd: f64,
+    pub output_cost_usd: f64,
+    pub cache_read_cost_usd: f64,
+    pub cache_creation_cost_usd: f64,
+    pub total_cost_usd: f64,
+    pub request_count: i64,
+    #[serde(default)]
+    pub unpriced_request_count: i64,
+    #[serde(default)]
+    pub unpriced_input_tokens: i64,
+    #[serde(default)]
+    pub unpriced_output_tokens: i64,
+}
+
+/// Cumulative usage for a single `(provider, model_id)` bucket.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionModelUsageEntry {
+    pub provider: String,
+    pub model_id: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
+    #[serde(default)]
+    pub web_search_requests: i64,
+    pub input_cost_usd: f64,
+    pub output_cost_usd: f64,
+    pub cache_read_cost_usd: f64,
+    pub cache_creation_cost_usd: f64,
+    pub total_cost_usd: f64,
+    pub request_count: i64,
+    #[serde(default)]
+    pub unpriced_request_count: i64,
+    #[serde(default)]
+    pub unpriced_input_tokens: i64,
+    #[serde(default)]
+    pub unpriced_output_tokens: i64,
+    /// True only when every request in this bucket had known pricing.
+    pub priced: bool,
+}
+
 impl TokenUsage {
     /// `input_tokens.total + output_tokens.total`. Use this when totalling
     /// across calls.

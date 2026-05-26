@@ -20,6 +20,86 @@ fn test_store() -> (tempfile::TempDir, TranscriptStore, PathBuf) {
     (dir, store, project_dir)
 }
 
+#[test]
+fn usage_snapshot_writes_under_session_artifact_dir() {
+    let (_dir, store, project_dir) = test_store();
+    let snapshot = coco_types::SessionUsageSnapshot {
+        version: 1,
+        session_id: "sid-usage".into(),
+        updated_at_ms: 42,
+        totals: coco_types::SessionUsageTotals {
+            input_tokens: 100,
+            output_tokens: 25,
+            total_cost_usd: 0.0042,
+            request_count: 1,
+            ..Default::default()
+        },
+        models: vec![coco_types::SessionModelUsageEntry {
+            provider: "anthropic".into(),
+            model_id: "claude-sonnet-4-5".into(),
+            input_tokens: 100,
+            output_tokens: 25,
+            total_cost_usd: 0.0042,
+            request_count: 1,
+            priced: true,
+            ..Default::default()
+        }],
+        unpriced_models: Vec::new(),
+    };
+
+    store
+        .write_usage_snapshot("sid-usage", &snapshot)
+        .expect("usage snapshot should write");
+
+    let path = project_dir.join("sid-usage").join("usage.json");
+    assert!(path.exists());
+    let loaded = store
+        .load_usage_snapshot("sid-usage")
+        .expect("usage snapshot should load")
+        .expect("usage snapshot should exist");
+    assert_eq!(loaded, snapshot);
+}
+
+#[test]
+fn missing_usage_snapshot_loads_as_none() {
+    let (_dir, store, _project_dir) = test_store();
+    assert!(store.load_usage_snapshot("missing").unwrap().is_none());
+}
+
+#[test]
+fn usage_snapshot_concurrent_writes_use_distinct_temp_files() {
+    let (_dir, store, project_dir) = test_store();
+    let store = Arc::new(store);
+    let mut handles = Vec::new();
+    for request_count in 1..=2 {
+        let store = Arc::clone(&store);
+        handles.push(std::thread::spawn(move || {
+            let snapshot = coco_types::SessionUsageSnapshot {
+                version: 1,
+                session_id: "sid-race".into(),
+                totals: coco_types::SessionUsageTotals {
+                    request_count,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            store.write_usage_snapshot("sid-race", &snapshot)
+        }));
+    }
+
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+    let loaded = store.load_usage_snapshot("sid-race").unwrap().unwrap();
+    assert!((1..=2).contains(&loaded.totals.request_count));
+    let session_dir = project_dir.join("sid-race");
+    let leftover_tmp = std::fs::read_dir(session_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"));
+    assert!(!leftover_tmp);
+}
+
 fn make_user_entry(uuid: &str, session_id: &str, text: &str) -> TranscriptEntry {
     TranscriptEntry {
         entry_type: "user".to_string(),

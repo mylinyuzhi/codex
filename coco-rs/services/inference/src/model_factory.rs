@@ -35,6 +35,7 @@ use coco_types::Capability;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::ProviderApi;
+use coco_types::ProviderModelSelection;
 use coco_types::WireApi;
 use tracing::warn;
 
@@ -172,8 +173,12 @@ pub fn build_api_client(
     let detector = std::sync::Arc::new(tokio::sync::Mutex::new(
         crate::cache_detection::CacheBreakDetector::new(),
     ));
-    let client =
-        ApiClient::new(model, fingerprint, model_info, retry).with_cache_break_detector(detector);
+    let model_identity = ProviderModelSelection {
+        provider: spec.provider.clone(),
+        model_id: spec.model_id.clone(),
+    };
+    let client = ApiClient::new(model, fingerprint, model_info, model_identity, retry)
+        .with_cache_break_detector(detector);
     Ok(Arc::new(client))
 }
 

@@ -56,23 +56,32 @@ impl KnowledgeCutoff {
     }
 }
 
-/// USD per million tokens.
+/// USD per million tokens. Sourced from the bundled OpenRouter snapshot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pricing {
     pub input_per_million_usd: f64,
     pub output_per_million_usd: f64,
     pub cache_read_per_million_usd: Option<f64>,
     pub cache_write_per_million_usd: Option<f64>,
-    pub source: PricingSource,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PricingSource {
-    OfficialProvider {
-        provider: String,
-        source_url: String,
-    },
-    OpenRouterFallback,
+impl Pricing {
+    pub(crate) fn from_openrouter(pricing: &OpenRouterPricing) -> Option<Self> {
+        let input = parse_usd_per_token(pricing.prompt.as_deref())? * 1_000_000.0;
+        let output = parse_usd_per_token(pricing.completion.as_deref())? * 1_000_000.0;
+        Some(Self {
+            input_per_million_usd: input,
+            output_per_million_usd: output,
+            cache_read_per_million_usd: parse_usd_per_token(pricing.input_cache_read.as_deref())
+                .map(|v| v * 1_000_000.0),
+            cache_write_per_million_usd: parse_usd_per_token(pricing.input_cache_write.as_deref())
+                .map(|v| v * 1_000_000.0),
+        })
+    }
+}
+
+fn parse_usd_per_token(value: Option<&str>) -> Option<f64> {
+    value?.parse::<f64>().ok()
 }
 
 /// Error returned when a model-card catalog cannot be parsed.
@@ -139,26 +148,6 @@ pub(crate) struct OpenRouterPricing {
     pub(crate) input_cache_read: Option<String>,
     #[serde(default)]
     pub(crate) input_cache_write: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub(crate) struct OfficialPricingFile {
-    pub(crate) provider: String,
-    pub(crate) source_url: String,
-    pub(crate) models: Vec<OfficialPricingRecord>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub(crate) struct OfficialPricingRecord {
-    pub(crate) id: String,
-    #[serde(default)]
-    pub(crate) aliases: Vec<String>,
-    pub(crate) input_per_million_usd: f64,
-    pub(crate) output_per_million_usd: f64,
-    #[serde(default)]
-    pub(crate) cache_read_per_million_usd: Option<f64>,
-    #[serde(default)]
-    pub(crate) cache_write_per_million_usd: Option<f64>,
 }
 
 fn month_name(month: u8) -> &'static str {

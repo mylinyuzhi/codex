@@ -17,12 +17,11 @@ use coco_types::ApplyPatchToolType;
 use coco_types::Capability;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
-use coco_types::ProviderApi;
+use coco_types::ProviderModelSelection;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 use coco_types::ToolOverrides;
 use serde::Deserialize;
-use serde::Deserializer;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -234,7 +233,7 @@ impl PartialEq for ModelInfo {
 
 /// Role -> (primary + fallback chain + recovery policy).
 ///
-/// The JSON-facing side uses `RoleSlots<ModelSelection>` (see
+/// The JSON-facing side uses `RoleSlots<ProviderModelSelection>` (see
 /// `ModelSelectionSettings`); this runtime-facing side stores the
 /// already-resolved `RoleSlots<ModelSpec>`, produced by
 /// `RuntimeConfigBuilder`.
@@ -272,73 +271,21 @@ impl ModelRoles {
     }
 }
 
-/// JSON-facing role model selection.
-#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
-pub struct ModelSelection {
-    pub provider: String,
-    pub model_id: String,
-}
-
-impl ModelSelection {
-    /// Parse `"provider/model_id"` into a `ModelSelection`.
-    /// Both parts must be non-empty; any other format is an error.
-    pub fn from_slash_str(s: &str) -> Result<Self, String> {
-        let (provider, model_id) = s
-            .split_once('/')
-            .ok_or_else(|| format!("`{s}` must use `provider/model_id` format"))?;
-        if provider.is_empty() || model_id.is_empty() {
-            return Err(format!("`{s}` must use `provider/model_id` format"));
-        }
-        Ok(Self {
-            provider: provider.to_string(),
-            model_id: model_id.to_string(),
-        })
-    }
-
-    pub fn into_model_spec(self, api: ProviderApi) -> ModelSpec {
-        ModelSpec {
-            provider: self.provider,
-            api,
-            display_name: self.model_id.clone(),
-            model_id: self.model_id,
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for ModelSelection {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Wire {
-            Slash(String),
-            Object { provider: String, model_id: String },
-        }
-
-        match Wire::deserialize(deserializer)? {
-            Wire::Slash(s) => Self::from_slash_str(&s).map_err(serde::de::Error::custom),
-            Wire::Object { provider, model_id } => Ok(Self { provider, model_id }),
-        }
-    }
-}
-
 /// JSON-facing role model selections.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelSelectionSettings {
-    pub main: Option<RoleSlots<ModelSelection>>,
-    pub fast: Option<RoleSlots<ModelSelection>>,
-    pub plan: Option<RoleSlots<ModelSelection>>,
-    pub explore: Option<RoleSlots<ModelSelection>>,
-    pub review: Option<RoleSlots<ModelSelection>>,
-    pub hook_agent: Option<RoleSlots<ModelSelection>>,
-    pub memory: Option<RoleSlots<ModelSelection>>,
+    pub main: Option<RoleSlots<ProviderModelSelection>>,
+    pub fast: Option<RoleSlots<ProviderModelSelection>>,
+    pub plan: Option<RoleSlots<ProviderModelSelection>>,
+    pub explore: Option<RoleSlots<ProviderModelSelection>>,
+    pub review: Option<RoleSlots<ProviderModelSelection>>,
+    pub hook_agent: Option<RoleSlots<ProviderModelSelection>>,
+    pub memory: Option<RoleSlots<ProviderModelSelection>>,
     /// Forked-agent spawn model (TS `tools/AgentTool/`). Generic role
     /// for agent/skill subagent dispatch — distinct from `explore`,
     /// which is the investigative subagent type.
-    pub subagent: Option<RoleSlots<ModelSelection>>,
+    pub subagent: Option<RoleSlots<ProviderModelSelection>>,
 }
 
 #[cfg(test)]

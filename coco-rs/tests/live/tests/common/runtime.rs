@@ -99,7 +99,7 @@ pub fn shared_runtime() -> &'static Arc<RuntimeConfig> {
         // builtin so this passes even when the host has no
         // `~/.coco/settings.json`.
         let overrides = coco_config::RuntimeOverrides {
-            model_override: Some(coco_config::ModelSelection {
+            model_override: Some(coco_types::ProviderModelSelection {
                 provider: "anthropic".into(),
                 model_id: "claude-opus-4-7".into(),
             }),
