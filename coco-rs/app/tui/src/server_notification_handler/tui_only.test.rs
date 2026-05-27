@@ -51,9 +51,7 @@ fn dispatched_system_push_contains(
 fn slash(name: &str) -> SlashCommandInfo {
     SlashCommandInfo {
         name: name.into(),
-        description: None,
-        aliases: Vec::new(),
-        argument_hint: None,
+        ..SlashCommandInfo::default()
     }
 }
 

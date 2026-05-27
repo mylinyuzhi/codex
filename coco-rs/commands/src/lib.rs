@@ -292,24 +292,42 @@ impl CommandRegistry {
     /// Used by `coco-cli::tui_runner` to seed the TUI's
     /// `available_commands` slot at session start and to push a fresh
     /// list after `/reload-plugins` swaps the active registry. The
-    /// projection keeps only the four fields the popup actually renders
-    /// or ranks against — the heavy `RegisteredCommand` stays here.
+    /// projection keeps only the fields the popup actually renders or
+    /// ranks against — the heavy `RegisteredCommand` stays here.
     ///
     /// Sorted alphabetically by name so the empty-query popup view (and
     /// the rank-tail tiebreak in `coco-tui::autocomplete::slash`) are
     /// stable across sessions — `HashMap::values()` iteration order is
     /// otherwise random and would shuffle the popup each launch.
+    ///
+    /// The per-command `usage_score` is filled by a single `load_all`
+    /// disk read up front; the TUI ranker reads from the snapshot
+    /// without touching the filesystem on the popup hot path.
     pub fn snapshot_for_ui(&self) -> Vec<SlashCommandInfo> {
+        let config_home = coco_config::global_config::config_home();
+        let usage = coco_skills::usage::load_all(&config_home);
         let mut out: Vec<SlashCommandInfo> = self
             .commands
             .values()
             .filter(|c| !c.base.is_hidden && c.is_active())
-            .map(|cmd| SlashCommandInfo {
-                name: cmd.base.name.clone(),
-                description: (!cmd.base.description.is_empty())
-                    .then(|| cmd.base.description.clone()),
-                aliases: cmd.base.aliases.clone(),
-                argument_hint: cmd.base.argument_hint.clone(),
+            .map(|cmd| {
+                let usage_score = usage
+                    .get(&cmd.base.name)
+                    .map(coco_skills::usage::score_for)
+                    .unwrap_or(0.0);
+                SlashCommandInfo {
+                    name: cmd.base.name.clone(),
+                    description: (!cmd.base.description.is_empty())
+                        .then(|| cmd.base.description.clone()),
+                    aliases: cmd.base.aliases.clone(),
+                    argument_hint: cmd.base.argument_hint.clone(),
+                    source: cmd.base.loaded_from.clone(),
+                    // CommandType::tag() is the single projection point —
+                    // any future variant in CommandType forces an update
+                    // there, not here.
+                    kind: cmd.command_type.tag(),
+                    usage_score,
+                }
             })
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -377,12 +395,35 @@ impl CommandRegistry {
                 let result = handler.execute_command(args).await;
                 let duration_ms = start.elapsed().as_millis() as i64;
                 match &result {
-                    Ok(cr) => tracing::info!(
-                        command = %cmd.base.name,
-                        duration_ms,
-                        result_kind = command_result_kind(cr),
-                        "slash command ok"
-                    ),
+                    Ok(cr) => {
+                        tracing::info!(
+                            command = %cmd.base.name,
+                            duration_ms,
+                            result_kind = command_result_kind(cr),
+                            "slash command ok"
+                        );
+                        // TS parity: `processSlashCommand.tsx:530` calls
+                        // `recordSkillUsage(commandName)` after a successful
+                        // dispatch so the `/` autocomplete can surface
+                        // frequently-used skills in the "recently used"
+                        // section. We track only prompt-kind commands
+                        // (skills) — builtin local commands are always
+                        // in the builtin bucket and never ranked by use.
+                        //
+                        // `record` does blocking `std::fs` I/O. Fire-and-
+                        // forget on a blocking thread keeps the async
+                        // dispatcher non-blocking; the 60-second debounce
+                        // already makes most calls no-op so this is rarely
+                        // exercised, but we don't want a slow disk to
+                        // stall the executor when it is.
+                        if matches!(cmd.command_type, CommandType::Prompt(_)) {
+                            let skill_name = cmd.base.name.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let config_home = coco_config::global_config::config_home();
+                                coco_skills::usage::record(&config_home, &skill_name);
+                            });
+                        }
+                    }
                     Err(e) => tracing::warn!(
                         command = %cmd.base.name,
                         duration_ms,
@@ -482,13 +523,21 @@ fn register_skills_as_commands(
         if !skill.user_invocable {
             continue;
         }
+        // Skill source maps directly to the payload-carrying
+        // `CommandSource`. Plugin attribution rides on the
+        // `Plugin { name }` variant; previously this required a
+        // parallel `plugin_name` field which the refactor eliminated.
         let source = match &skill.source {
             coco_skills::SkillSource::Bundled => CommandSource::Bundled,
             coco_skills::SkillSource::User { .. } => CommandSource::User,
             coco_skills::SkillSource::Project { .. } => CommandSource::Project,
-            coco_skills::SkillSource::Plugin { .. } => CommandSource::Plugin,
+            coco_skills::SkillSource::Plugin { plugin_name } => CommandSource::Plugin {
+                name: plugin_name.clone(),
+            },
             coco_skills::SkillSource::Managed { .. } => CommandSource::Managed,
-            coco_skills::SkillSource::Mcp { .. } => CommandSource::Mcp,
+            coco_skills::SkillSource::Mcp { server_name } => CommandSource::Mcp {
+                server_name: server_name.clone(),
+            },
         };
         let mut base = builtin_base(&skill.name, &skill.description, &[]);
         base.loaded_from = Some(source);
@@ -528,20 +577,28 @@ fn register_plugin_contributions(
     manager: &coco_plugins::PluginManager,
 ) {
     use coco_types::CommandSource;
-    let total = coco_plugins::collect_all_contributions(manager);
-    for cmd_name in total.commands {
-        let mut base = builtin_base(&cmd_name, &format!("Plugin command: {cmd_name}"), &[]);
-        base.loaded_from = Some(CommandSource::Plugin);
-        registry.register(RegisteredCommand {
-            base,
-            command_type: CommandType::Local(LocalCommandData {
-                handler: cmd_name.clone(),
-            }),
-            handler: Some(std::sync::Arc::new(PluginCommandStub {
-                name: cmd_name.clone(),
-            })),
-            is_enabled: None,
-        });
+    // Iterate plugins individually instead of going through
+    // `collect_all_contributions` — that aggregate flattens out which
+    // plugin contributed each command, and the `/` popup needs the
+    // plugin name to render the `(plugin-name)` description prefix.
+    for plugin in manager.enabled() {
+        let contributions = plugin.contributions();
+        for cmd_name in contributions.commands {
+            let mut base = builtin_base(&cmd_name, &format!("Plugin command: {cmd_name}"), &[]);
+            base.loaded_from = Some(CommandSource::Plugin {
+                name: plugin.name.clone(),
+            });
+            registry.register(RegisteredCommand {
+                base,
+                command_type: CommandType::Local(LocalCommandData {
+                    handler: cmd_name.clone(),
+                }),
+                handler: Some(std::sync::Arc::new(PluginCommandStub {
+                    name: cmd_name.clone(),
+                })),
+                is_enabled: None,
+            });
+        }
     }
 }
 

@@ -11,8 +11,7 @@ fn slash(name: &str, description: Option<&str>) -> SlashCommandInfo {
     SlashCommandInfo {
         name: name.to_string(),
         description: description.map(ToString::to_string),
-        aliases: Vec::new(),
-        argument_hint: None,
+        ..SlashCommandInfo::default()
     }
 }
 

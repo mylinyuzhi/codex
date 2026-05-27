@@ -9,6 +9,7 @@ pub mod mcp_builders;
 pub mod prompt_render;
 pub mod reminder_source;
 pub mod shell_exec;
+pub mod usage;
 pub mod watcher;
 
 pub use error::SkillsError;
@@ -1379,11 +1380,17 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     parts
 }
 
-/// Estimate the token count for a skill's frontmatter (name + description).
+/// Estimate the token count for a skill's frontmatter (name +
+/// description + `when_to_use`).
 ///
-/// TS: estimateSkillFrontmatterTokens() — rough estimate based on char count.
+/// TS source: `loadSkillsDir.ts:101-104` — sums `skill.name`,
+/// `skill.description`, and `skill.whenToUse` after a `.filter(Boolean)`
+/// (drops null/undefined) and a `.join(' ')`. We approximate the join
+/// with a small overhead constant since char/token ratio swamps the
+/// space-character difference.
 pub fn estimate_skill_tokens(skill: &SkillDefinition) -> i64 {
-    let chars = skill.name.len() + skill.description.len() + 20; // overhead
+    let when_to_use = skill.when_to_use.as_deref().unwrap_or("").len();
+    let chars = skill.name.len() + skill.description.len() + when_to_use + 20;
     (chars / 4) as i64
 }
 

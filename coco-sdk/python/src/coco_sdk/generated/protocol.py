@@ -126,6 +126,11 @@ class Capability(str, Enum):
     server_side_tool_reference = 'server_side_tool_reference'
     client_side_tool_search = 'client_side_tool_search'
 
+class CommandTypeTag(str, Enum):
+    prompt = 'prompt'
+    local = 'local'
+    local_overlay = 'local_overlay'
+
 class CompactTrigger(str, Enum):
     manual = 'manual'
     auto = 'auto'
@@ -375,6 +380,13 @@ class SkillDiscoverySource(str, Enum):
     native = 'native'
     aki = 'aki'
     both = 'both'
+
+class SkillsDialogSource(str, Enum):
+    project = 'project'
+    user = 'user'
+    policy = 'policy'
+    plugin = 'plugin'
+    mcp = 'mcp'
 
 class SourceType(str, Enum):
     url = 'url'
@@ -647,6 +659,49 @@ class ClientRequestConfigApplyFlags(BaseModel):
 ClientRequest = Annotated[
     Union[ClientRequestInitialize, ClientRequestSessionStart, ClientRequestSessionResume, ClientRequestSessionList, ClientRequestSessionRead, ClientRequestSessionArchive, ClientRequestTurnStart, ClientRequestTurnInterrupt, ClientRequestApprovalResolve, ClientRequestInputResolveUserInput, ClientRequestElicitationResolve, ClientRequestControlSetModel, ClientRequestControlSetPermissionMode, ClientRequestControlSetThinking, ClientRequestControlStopTask, ClientRequestControlRewindFiles, ClientRequestControlUpdateEnv, ClientRequestControlKeepAlive, ClientRequestControlCancelRequest, ClientRequestAgentInterruptCurrentWork, ClientRequestConfigRead, ClientRequestConfigValueWrite, ClientRequestMcpStatus, ClientRequestContextUsage, ClientRequestMcpSetServers, ClientRequestMcpReconnect, ClientRequestMcpToggle, ClientRequestPluginReload, ClientRequestConfigApplyFlags],
     Field(discriminator='method'),
+]
+
+class CommandSourceBuiltin(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['builtin'] = Field(default='builtin', alias='kind')
+
+class CommandSourceBundled(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['bundled'] = Field(default='bundled', alias='kind')
+
+class CommandSourceUser(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['user'] = Field(default='user', alias='kind')
+
+class CommandSourceProject(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['project'] = Field(default='project', alias='kind')
+
+class CommandSourceManaged(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['managed'] = Field(default='managed', alias='kind')
+
+class CommandSourceSkills(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['skills'] = Field(default='skills', alias='kind')
+
+class CommandSourceCommandsDeprecated(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['commands_deprecated'] = Field(default='commands_deprecated', alias='kind')
+
+class CommandSourcePlugin(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['plugin'] = Field(default='plugin', alias='kind')
+    name: str
+
+class CommandSourceMcp(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['mcp'] = Field(default='mcp', alias='kind')
+    server_name: str
+
+CommandSource = Annotated[
+    Union[CommandSourceBuiltin, CommandSourceBundled, CommandSourceUser, CommandSourceProject, CommandSourceManaged, CommandSourceSkills, CommandSourceCommandsDeprecated, CommandSourcePlugin, CommandSourceMcp],
+    Field(discriminator='kind'),
 ]
 
 class HookSpecificOutputPreToolUse(BaseModel):
@@ -1647,8 +1702,13 @@ class TuiOnlyEventOpenModelPicker(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['open_model_picker'] = Field(default='open_model_picker', alias='type')
 
+class TuiOnlyEventOpenSkillsDialog(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_skills_dialog'] = Field(default='open_skills_dialog', alias='type')
+    payload: SkillsDialogPayload
+
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSkillsDialog],
     Field(discriminator='type_'),
 ]
 
@@ -3320,11 +3380,28 @@ class SkillDiscoverySkill(BaseModel):
     name: str
     short_id: str | None = Field(default=None, alias='shortId')
 
+class SkillsDialogEntry(BaseModel):
+    name: str
+    source: SkillsDialogSource
+    token_estimate: int
+    plugin_name: str | None = None
+
+class SkillsDialogGroupSubtitle(BaseModel):
+    source: SkillsDialogSource
+    subtitle: str
+
+class SkillsDialogPayload(BaseModel):
+    entries: list[SkillsDialogEntry]
+    group_subtitles: list[SkillsDialogGroupSubtitle]
+
 class SlashCommandInfo(BaseModel):
     name: str
     aliases: list[str] | None = None
     argument_hint: str | None = None
     description: str | None = None
+    kind: CommandTypeTag = 'local'
+    source: CommandSource | None = None
+    usage_score: float = 0.0
 
 class SourcePart(BaseModel):
     id: str

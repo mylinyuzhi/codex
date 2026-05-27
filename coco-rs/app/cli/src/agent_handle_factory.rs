@@ -384,7 +384,7 @@ async fn install_coco_guide_context_builder(
                     };
                     if matches!(
                         cmd.base.loaded_from,
-                        Some(coco_types::CommandSource::Plugin)
+                        Some(coco_types::CommandSource::Plugin { .. })
                     ) {
                         plugin_commands.push(entry);
                     } else {

@@ -490,20 +490,17 @@ fn test_snapshot_autocomplete_popup() {
         crate::state::SlashCommandInfo {
             name: "help".into(),
             description: Some("Show help".into()),
-            aliases: Vec::new(),
-            argument_hint: None,
+            ..Default::default()
         },
         crate::state::SlashCommandInfo {
             name: "clear".into(),
             description: Some("Clear chat".into()),
-            aliases: Vec::new(),
-            argument_hint: None,
+            ..Default::default()
         },
         crate::state::SlashCommandInfo {
             name: "config".into(),
             description: Some("Settings".into()),
-            aliases: Vec::new(),
-            argument_hint: None,
+            ..Default::default()
         },
     ];
     state.ui.input.textarea.set_text("/c");
