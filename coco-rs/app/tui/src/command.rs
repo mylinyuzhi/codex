@@ -213,9 +213,12 @@ pub enum UserCommand {
     /// Persist a `skill_overrides` patch to
     /// `<cwd>/.claude/settings.local.json` and republish
     /// `RuntimeConfig`. Emitted by the `/skills` dialog's Enter
-    /// handler. `total_edits` drives the toast ("Updated N
-    /// override(s)" vs "No changes"); ship `0` to render the
-    /// no-op toast.
+    /// handler when the diff actually changes disk state.
+    ///
+    /// **No display metadata here.** TUI stashes `total_edits` on
+    /// `UiState.pending_skills_save_edits` before dispatch and
+    /// reads it back when [`coco_types::TuiOnlyEvent::SkillOverridesSaved`]
+    /// arrives. The CLI bridge only reports Ok / typed Err.
     ///
     /// The CLI bridge in `tui_runner` owns the
     /// [`coco_config::SettingsWriter`] handle — keeping the writer
@@ -226,9 +229,6 @@ pub enum UserCommand {
         /// [`coco_config::SettingsWriter::write_local`] (the
         /// `Value::Null` entries delete keys).
         patch: serde_json::Value,
-        /// Number of rows whose effective override changed from
-        /// the at-open-time value. Used for the post-save toast.
-        total_edits: usize,
     },
     /// Execute a registered slash command without echoing the raw slash
     /// invocation into chat history.

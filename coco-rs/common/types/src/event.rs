@@ -1792,22 +1792,42 @@ pub enum TuiOnlyEvent {
 }
 
 /// Outcome of a `/skills` dialog save dispatch. CLI bridge populates
-/// this after `SettingsWriter::write_local`. TUI is the sole owner of
-/// the toast text rendered from it (`coco_tui`'s `t!` macro can't
-/// reach into `coco-cli`).
+/// this after `SettingsWriter::write_local`.
+///
+/// Carries **no display data** — TUI owns toast text generation and
+/// stashes the pre-write `total_edits` count on its own state
+/// before dispatching. CLI only reports success vs typed failure.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum SkillOverridesSaveResult {
-    /// Write succeeded. `total_edits` is the count of rows whose
-    /// effective state changed from open-time; `0` ⇒ the user toggled
-    /// rows and reverted them in the same session (no observable
-    /// change, render the "No changes" toast).
-    Ok { total_edits: i64 },
-    /// Write failed at some step (filesystem, runtime rebuild). The
-    /// TUI renders this as the "Failed to save skill overrides: <error>"
-    /// toast.
-    Err { message: String },
+    /// Write succeeded.
+    Ok,
+    /// Write failed at some step. `kind` lets the TUI pick toast
+    /// severity / wording; `message` is the underlying error's
+    /// display text for inclusion in the toast body.
+    Err {
+        kind: SkillOverridesSaveErrorKind,
+        message: String,
+    },
+}
+
+/// Categorical save-failure source. Mirrors the
+/// [`coco_config::SettingsWriteError`] variants + a runtime tier
+/// for "settings hot-reload was disabled at session start so we
+/// can't republish".
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillOverridesSaveErrorKind {
+    /// Filesystem I/O failed.
+    Io,
+    /// Settings JSON parse / serialize failed.
+    Parse,
+    /// `RuntimeConfig` rebuild failed after the write.
+    Rebuild,
+    /// Hot-reload publisher is absent (one-shot build path).
+    NoPublisher,
 }
 
 /// One row in the `/memory` file-picker overlay. Built by the slash

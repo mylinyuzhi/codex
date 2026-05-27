@@ -1468,12 +1468,11 @@ async fn run_agent_driver(
                 coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
             }
 
-            UserCommand::WriteSkillOverrides { patch, total_edits } => {
+            UserCommand::WriteSkillOverrides { patch } => {
                 handle_write_skill_overrides(
                     &runtime,
                     &event_tx,
                     patch,
-                    total_edits,
                     runtime_publisher.as_ref(),
                     &cwd,
                     flag_settings.as_deref(),
@@ -2557,7 +2556,25 @@ async fn dispatch_slash_command(
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenModelPicker))
                         .await;
                 }
-                DialogSpec::SkillsList { payload } => {
+                DialogSpec::SkillsList { mut payload } => {
+                    // The `SkillsHandler` runs through the
+                    // `CommandHandler` trait, which doesn't carry a
+                    // `RuntimeConfig` ref — so it ships every entry
+                    // with empty-tier defaults (`baseline=On`, no
+                    // lock, no `current_local`). Reach into the live
+                    // engine_config here to populate the real
+                    // override / lock state before forwarding to
+                    // the TUI; otherwise the dialog renders every
+                    // row as if no overrides existed and the user's
+                    // edits would silently overwrite policy-locked
+                    // or already-persisted state.
+                    let cfg = runtime.current_engine_config().await;
+                    let skills = runtime.skill_manager();
+                    coco_commands::handlers::skills::enrich_payload_with_tiers(
+                        &mut payload,
+                        &cfg.skill_overrides,
+                        &skills,
+                    );
                     let _ = event_tx
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenSkillsDialog { payload }))
                         .await;
@@ -3965,7 +3982,6 @@ async fn handle_write_skill_overrides(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     event_tx: &mpsc::Sender<CoreEvent>,
     patch: serde_json::Value,
-    total_edits: usize,
     runtime_publisher: Option<&Arc<coco_config::RuntimePublisher>>,
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
@@ -3973,19 +3989,34 @@ async fn handle_write_skill_overrides(
     let result = match runtime_publisher {
         Some(publisher) => {
             let catalogs = coco_config::CatalogPaths::default();
-            let writer = coco_config::LocalSettingsWriter::new(
+            let write_result = coco_config::write_local_settings(
                 cwd.to_path_buf(),
+                flag_settings.map(std::path::Path::to_path_buf),
                 catalogs,
                 Arc::clone(publisher),
+                patch,
             )
-            .with_flag_settings(flag_settings.map(std::path::Path::to_path_buf));
-            match coco_config::SettingsWriter::write_local(&writer, patch).await {
+            .await;
+            match write_result {
                 Ok(()) => {
                     // Use the freshly-republished RuntimeConfig so
                     // the rebuilt registry sees the new tiers — the
                     // snapshot bound to SessionRuntime at startup
                     // would silently drop the changes.
                     let fresh = publisher.current();
+                    // Sync the per-session engine_config too. Per-
+                    // turn QueryEngine builds clone from
+                    // `engine_config.skill_overrides`; without
+                    // this update, every PR2 runtime gate
+                    // (SkillTool / listing budget / reminder source)
+                    // keeps reading the stale snapshot and the
+                    // override silently fails to take effect.
+                    let fresh_tiers = Arc::new(fresh.skill_overrides.clone());
+                    runtime
+                        .update_engine_config(move |cfg| {
+                            cfg.skill_overrides = fresh_tiers;
+                        })
+                        .await;
                     let _ = runtime.reload_plugins_with(cwd, &fresh).await;
                     let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
                     let _ = event_tx
@@ -3993,16 +4024,16 @@ async fn handle_write_skill_overrides(
                             commands: snapshot,
                         }))
                         .await;
-                    coco_types::SkillOverridesSaveResult::Ok {
-                        total_edits: total_edits as i64,
-                    }
+                    coco_types::SkillOverridesSaveResult::Ok
                 }
                 Err(e) => coco_types::SkillOverridesSaveResult::Err {
+                    kind: save_error_kind(&e),
                     message: e.to_string(),
                 },
             }
         }
         None => coco_types::SkillOverridesSaveResult::Err {
+            kind: coco_types::SkillOverridesSaveErrorKind::NoPublisher,
             message: "settings hot-reload disabled; restart the process to pick up changes"
                 .to_string(),
         },
@@ -4011,6 +4042,19 @@ async fn handle_write_skill_overrides(
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::SkillOverridesSaved { result }))
         .await;
+}
+
+/// Map a [`coco_config::SettingsWriteError`] to its wire-categorical
+/// kind for the TUI to dispatch by category (toast severity / future
+/// retry affordance) rather than rely on string parsing.
+fn save_error_kind(e: &coco_config::SettingsWriteError) -> coco_types::SkillOverridesSaveErrorKind {
+    use coco_config::SettingsWriteError as E;
+    use coco_types::SkillOverridesSaveErrorKind as K;
+    match e {
+        E::Io { .. } => K::Io,
+        E::Parse { .. } => K::Parse,
+        E::Rebuild { .. } => K::Rebuild,
+    }
 }
 
 /// Encode TUI paste-pill image bytes as base64 [`QueuedImage`]s for

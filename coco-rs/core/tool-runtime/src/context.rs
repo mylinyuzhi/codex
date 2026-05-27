@@ -732,29 +732,25 @@ impl ToolUseContext {
         self
     }
 
-    /// Whether the user typed `/<skill_name>` in any user message of
-    /// the current turn.
+    /// All `/<word>` tokens the user typed in the current turn —
+    /// indexed for O(1) gate lookup against canonical skill names
+    /// AND aliases. Lines like `/fix-issue 42` contribute
+    /// `"fix-issue"`; mid-line slashes are NOT counted (TS Am7 is
+    /// line-anchored).
     ///
-    /// TS mirror: `Am7` (`isUserTypedSlashCommandInTurn`) at
-    /// `cli_inner_pretty.js:??`. Used by the Skill tool gate to bypass
-    /// the `disable_model_invocation` and `skill_overrides ==
-    /// user-invocable-only` blocks when the user explicitly invoked
-    /// the skill via slash.
-    ///
-    /// Implementation walks the messages backwards looking for user
-    /// messages tagged with the triggering [`Self::user_message_id`].
-    /// Multi-line prompts count — a slash on any line of any
-    /// matching user message qualifies. Match is anchored at the
-    /// start of a line and requires the next char (if any) be
-    /// whitespace, so `/foo` matches but `/foobar` does not.
-    pub fn user_typed_slash_in_turn(&self, skill_name: &str) -> bool {
+    /// TS mirror: `Am7` (`isUserTypedSlashCommandInTurn`). Used by
+    /// the Skill tool gate to bypass the
+    /// `disable_model_invocation` and `skill_overrides ==
+    /// user-invocable-only` blocks when the user explicitly
+    /// invoked the skill via slash.
+    pub fn typed_slashes_in_turn(&self) -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
         let Some(uid) = self.user_message_id.as_deref() else {
-            return false;
+            return out;
         };
         let Ok(uid_uuid) = uuid::Uuid::parse_str(uid) else {
-            return false;
+            return out;
         };
-        let prefix = format!("/{skill_name}");
         for arc in self.messages.iter().rev() {
             let Message::User(user) = arc.as_ref() else {
                 continue;
@@ -762,11 +758,9 @@ impl ToolUseContext {
             if user.uuid != uid_uuid {
                 continue;
             }
-            if user_message_contains_slash(&user.message, &prefix) {
-                return true;
-            }
+            extract_slash_tokens(&user.message, &mut out);
         }
-        false
+        out
     }
 
     /// Builder: install the current model's `ToolSearch`-related
@@ -918,30 +912,37 @@ impl ToolUseContext {
     }
 }
 
-/// True when any text content part of `msg` contains a line that
-/// starts with `prefix` followed by whitespace or end-of-line.
-/// Helper for [`ToolUseContext::user_typed_slash_in_turn`].
-fn user_message_contains_slash(msg: &coco_messages::LlmMessage, prefix: &str) -> bool {
+/// Extract every `/<word>` token that begins a line of any text
+/// content part of `msg`, normalised to the bare name (no leading
+/// `/`). Mid-line slashes are skipped to match TS Am7's
+/// line-anchored intent.
+///
+/// `<word>` extends until the first whitespace; the token can
+/// contain any non-whitespace character so kebab-case (`/fix-issue`),
+/// colon-separated MCP names (`/server:resource`), and digits all
+/// surface unchanged.
+fn extract_slash_tokens(
+    msg: &coco_messages::LlmMessage,
+    out: &mut std::collections::HashSet<String>,
+) {
     let coco_messages::LlmMessage::User { content, .. } = msg else {
-        return false;
+        return;
     };
-    content.iter().any(|part| match part {
-        coco_messages::UserContent::Text(text) => text
-            .text
-            .lines()
-            .any(|line| line_starts_with_slash_token(line, prefix)),
-        coco_messages::UserContent::File(_) => false,
-    })
-}
-
-fn line_starts_with_slash_token(line: &str, prefix: &str) -> bool {
-    let trimmed = line.trim_start();
-    let Some(rest) = trimmed.strip_prefix(prefix) else {
-        return false;
-    };
-    // Boundary: nothing after, or the next char is whitespace. Avoids
-    // matching `/foobar` when `prefix` is `/foo`.
-    rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace())
+    for part in content {
+        let coco_messages::UserContent::Text(text) = part else {
+            continue;
+        };
+        for line in text.text.lines() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed.strip_prefix('/') else {
+                continue;
+            };
+            let token: String = rest.chars().take_while(|c| !c.is_whitespace()).collect();
+            if !token.is_empty() {
+                out.insert(token);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -974,57 +975,64 @@ mod user_typed_slash_tests {
     }
 
     #[test]
-    fn returns_false_when_user_message_id_unset() {
+    fn empty_set_when_user_message_id_unset() {
         let uid = Uuid::new_v4();
         let ctx = ctx_with(vec![make_user("/foo", uid)], None);
-        assert!(!ctx.user_typed_slash_in_turn("foo"));
+        assert!(ctx.typed_slashes_in_turn().is_empty());
     }
 
     #[test]
-    fn matches_exact_slash_on_a_line() {
+    fn captures_exact_slash_on_a_line() {
         let uid = Uuid::new_v4();
         let ctx = ctx_with(vec![make_user("/foo", uid)], Some(uid.to_string()));
-        assert!(ctx.user_typed_slash_in_turn("foo"));
+        let set = ctx.typed_slashes_in_turn();
+        assert!(set.contains("foo"));
     }
 
     #[test]
-    fn matches_slash_then_args() {
+    fn captures_slash_then_args() {
         let uid = Uuid::new_v4();
         let ctx = ctx_with(
             vec![make_user("/fix-issue 42 please", uid)],
             Some(uid.to_string()),
         );
-        assert!(ctx.user_typed_slash_in_turn("fix-issue"));
+        let set = ctx.typed_slashes_in_turn();
+        assert!(set.contains("fix-issue"));
+        // Args after the first whitespace must NOT be captured as tokens.
+        assert!(!set.contains("42"));
+        assert!(!set.contains("please"));
     }
 
     #[test]
-    fn matches_slash_on_first_line_of_multi_line_prompt() {
+    fn captures_slash_on_first_line_of_multi_line_prompt() {
         let uid = Uuid::new_v4();
         let ctx = ctx_with(
             vec![make_user("/deploy\nplease verify after", uid)],
             Some(uid.to_string()),
         );
-        assert!(ctx.user_typed_slash_in_turn("deploy"));
+        assert!(ctx.typed_slashes_in_turn().contains("deploy"));
     }
 
     #[test]
-    fn rejects_prefix_collision() {
+    fn distinguishes_prefix_from_longer_token() {
         let uid = Uuid::new_v4();
-        // `/foobar` must NOT match prefix `/foo` — boundary check
+        // `/foobar` becomes token "foobar"; lookup for "foo" must miss.
         let ctx = ctx_with(vec![make_user("/foobar", uid)], Some(uid.to_string()));
-        assert!(!ctx.user_typed_slash_in_turn("foo"));
+        let set = ctx.typed_slashes_in_turn();
+        assert!(set.contains("foobar"));
+        assert!(!set.contains("foo"));
     }
 
     #[test]
-    fn does_not_match_when_skill_name_only_appears_in_body() {
+    fn ignores_mid_line_slashes() {
         let uid = Uuid::new_v4();
         let ctx = ctx_with(
             vec![make_user("please run the /foo command for me", uid)],
             Some(uid.to_string()),
         );
-        // Mid-line slash is not a user-initiated invocation per TS Am7
+        // Mid-line `/foo` is not a user-initiated invocation per TS Am7
         // (anchored at line start).
-        assert!(!ctx.user_typed_slash_in_turn("foo"));
+        assert!(!ctx.typed_slashes_in_turn().contains("foo"));
     }
 
     #[test]
@@ -1040,6 +1048,23 @@ mod user_typed_slash_tests {
         );
         // The `/foo` line came from a different turn (different uuid) —
         // doesn't count.
-        assert!(!ctx.user_typed_slash_in_turn("foo"));
+        assert!(!ctx.typed_slashes_in_turn().contains("foo"));
+    }
+
+    #[test]
+    fn captures_multiple_slashes_in_one_turn_for_alias_lookup() {
+        let uid = Uuid::new_v4();
+        let ctx = ctx_with(
+            vec![make_user("/alpha\n/beta arg", uid)],
+            Some(uid.to_string()),
+        );
+        let set = ctx.typed_slashes_in_turn();
+        // Both `/alpha` and `/beta` are line-anchored → captured.
+        // The alias-aware Skill tool gate checks each candidate name
+        // against this set, so a skill with `aliases: [alpha]` can
+        // bypass the gate when the user typed `/alpha` even though
+        // the model invokes the canonical name.
+        assert!(set.contains("alpha"));
+        assert!(set.contains("beta"));
     }
 }

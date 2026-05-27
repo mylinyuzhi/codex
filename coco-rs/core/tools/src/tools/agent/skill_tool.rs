@@ -136,9 +136,15 @@ impl Tool for SkillTool {
         // (`cli_inner_pretty.js:353567-353590`). With default-empty
         // `skill_overrides` tiers the gate short-circuits to `On` so
         // PR2 introduces no observable behavior change.
+        //
+        // The handle resolves the skill (canonical name + aliases)
+        // and tests every candidate against `typed_slashes_in_turn`
+        // — `commit-fast → commit` aliases bypass the gate
+        // correctly even though the SkillTool only sees the
+        // canonical name.
         let gate = SkillGateContext {
             overrides: ctx.skill_overrides.clone(),
-            user_typed_slash: ctx.user_typed_slash_in_turn(skill_name),
+            typed_slashes_in_turn: ctx.typed_slashes_in_turn(),
         };
         let result = ctx
             .skill

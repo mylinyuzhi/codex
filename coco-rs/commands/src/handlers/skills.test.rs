@@ -369,3 +369,121 @@ async fn skills_handler_with_args_returns_text() {
         other => panic!("expected Text, got: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn dialog_payload_roundtrip_reflects_persisted_overrides() {
+    // Regression for Review Bug 1 + Bug 2: open dialog → user has
+    // existing local override + project baseline → enrich payload
+    // → assert fields reflect saved state. Without
+    // `enrich_payload_with_tiers` being called somewhere, the
+    // handler would ship every row with default empty tiers and
+    // the dialog would silently render lock-less / baseline=On
+    // for skills that actually have overrides on disk.
+    use coco_config::SkillOverrideTiers;
+    use coco_skills::SkillManager;
+    use coco_skills::bundled::register_bundled_default;
+    use coco_types::SkillLockSource;
+    use coco_types::SkillOverrideState;
+    use std::collections::BTreeMap;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().join("project");
+    fs::create_dir_all(&cwd).unwrap();
+    let config_home = tmp.path().join("home");
+    fs::create_dir_all(&config_home).unwrap();
+
+    // Pick an arbitrary bundled skill name so we don't depend on
+    // disk fixtures — `register_bundled_default` populates a known
+    // set. Use the first one that exists.
+    let bundled_target = {
+        let mgr = SkillManager::new();
+        register_bundled_default(&mgr);
+        mgr.all_including_conditional()
+            .first()
+            .map(|s| s.name.clone())
+            .expect("bundled skills should not be empty")
+    };
+
+    // Simulate: user previously saved `<target>: off` to localSettings
+    // AND project pinned it to `name-only`. (We don't actually write
+    // settings.local.json here — just construct the tiers that the
+    // RuntimeConfig would expose.)
+    let mut local = BTreeMap::new();
+    local.insert(bundled_target.clone(), SkillOverrideState::Off);
+    let mut project = BTreeMap::new();
+    project.insert(bundled_target.clone(), SkillOverrideState::NameOnly);
+    let tiers = SkillOverrideTiers {
+        local,
+        project,
+        ..SkillOverrideTiers::default()
+    };
+
+    let payload = tokio::task::spawn_blocking({
+        let config_home = config_home.clone();
+        let cwd = cwd.clone();
+        let tiers = tiers.clone();
+        move || build_dialog_payload(&config_home, &cwd, &tiers)
+    })
+    .await
+    .unwrap();
+
+    let row = payload
+        .entries
+        .iter()
+        .find(|e| e.name == bundled_target)
+        .expect("target skill missing from payload");
+    assert_eq!(
+        row.current_local,
+        Some(SkillOverrideState::Off),
+        "current_local must round-trip from tiers.local"
+    );
+    assert_eq!(
+        row.baseline,
+        SkillOverrideState::NameOnly,
+        "baseline must resolve project ?? user ?? On"
+    );
+    assert!(row.lock.is_none(), "no policy/flag/author/plugin lock");
+
+    // Now add a policy lock and re-enrich. The CLI bridge always
+    // calls `enrich_payload_with_tiers` after `build_dialog_payload`
+    // — verify it overwrites stale lock/current_local/baseline.
+    let mut policy = BTreeMap::new();
+    policy.insert(bundled_target.clone(), SkillOverrideState::Off);
+    let locked_tiers = SkillOverrideTiers { policy, ..tiers };
+    let mut payload2 = tokio::task::spawn_blocking({
+        let config_home = config_home.clone();
+        let cwd = cwd.clone();
+        let tiers = SkillOverrideTiers::default();
+        move || build_dialog_payload(&config_home, &cwd, &tiers)
+    })
+    .await
+    .unwrap();
+    // The handler shipped defaults — payload2.entries all have no lock.
+    let pre_enrich = payload2
+        .entries
+        .iter()
+        .find(|e| e.name == bundled_target)
+        .unwrap();
+    assert!(pre_enrich.lock.is_none(), "before enrich: no lock");
+
+    // The CLI bridge step (mirrors tui_runner.rs around the
+    // OpenSkillsDialog dispatch).
+    let mgr = SkillManager::new();
+    register_bundled_default(&mgr);
+    enrich_payload_with_tiers(&mut payload2, &locked_tiers, &mgr);
+    let post_enrich = payload2
+        .entries
+        .iter()
+        .find(|e| e.name == bundled_target)
+        .unwrap();
+    assert_eq!(
+        post_enrich.lock.map(|l| l.source),
+        Some(SkillLockSource::Policy),
+        "enrich_payload_with_tiers must surface the policy lock"
+    );
+    assert_eq!(
+        post_enrich.current_local,
+        Some(SkillOverrideState::Off),
+        "enrich must populate current_local from tiers"
+    );
+}

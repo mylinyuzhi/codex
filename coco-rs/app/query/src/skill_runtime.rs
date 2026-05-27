@@ -118,7 +118,7 @@ impl SkillHandle for QuerySkillRuntime {
         // fires when `Am7(name, ctx)` returned false. The previous
         // coco-rs behavior unconditionally rejected — that was a
         // pre-existing parity bug fixed here.
-        if skill.disable_model_invocation && !gate.user_typed_slash {
+        if skill.disable_model_invocation && !user_invoked_via_slash(&skill, &gate) {
             tracing::warn!(
                 skill_name = %skill.name,
                 "skill hidden from model (author lock); no user-typed slash this turn"
@@ -142,7 +142,7 @@ impl SkillHandle for QuerySkillRuntime {
                     name: skill.name.clone(),
                 });
             }
-            SkillOverrideState::UserInvocableOnly if !gate.user_typed_slash => {
+            SkillOverrideState::UserInvocableOnly if !user_invoked_via_slash(&skill, &gate) => {
                 tracing::warn!(
                     skill_name = %skill.name,
                     "skill rejected: user-invocable-only without user-typed slash"
@@ -403,6 +403,22 @@ fn build_command_allow_rules(allowed_tools: &[String]) -> Vec<PermissionRule> {
             value: coco_permissions::parse_rule_string(raw),
         })
         .collect()
+}
+
+/// Whether the resolved skill matches *any* `/<word>` token the
+/// user typed in the current turn, including aliases. Mirrors TS
+/// `Am7(name, ctx)` but with alias-aware lookup — TS's loader
+/// canonicalises the slash before dispatch, so its single-name
+/// check is equivalent. coco-rs's SkillTool always receives the
+/// canonical name; this is where the alias bypass actually lives.
+fn user_invoked_via_slash(skill: &coco_skills::SkillDefinition, gate: &SkillGateContext) -> bool {
+    if gate.typed_slashes_in_turn.contains(skill.name.as_str()) {
+        return true;
+    }
+    skill
+        .aliases
+        .iter()
+        .any(|alias| gate.typed_slashes_in_turn.contains(alias.as_str()))
 }
 
 #[cfg(test)]

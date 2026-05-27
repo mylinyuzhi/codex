@@ -165,6 +165,7 @@ pub use event::SessionState;
 pub use event::SkillLock;
 pub use event::SkillLockSource;
 pub use event::SkillOverrideState;
+pub use event::SkillOverridesSaveErrorKind;
 pub use event::SkillOverridesSaveResult;
 pub use event::SkillsDialogEntry;
 pub use event::SkillsDialogPayload;
