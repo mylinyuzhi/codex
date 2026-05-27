@@ -2575,6 +2575,13 @@ async fn dispatch_slash_command(
                         &cfg.skill_overrides,
                         &skills,
                     );
+                    // Stamp the live main-model bytes/token ratio so
+                    // the dialog's `~N tok` column tracks the model
+                    // the user is actually talking to. Handler can't
+                    // do this — it has no `QueryEngineConfig` in
+                    // scope.
+                    payload.bytes_per_token =
+                        coco_model_card::bytes_per_token_for_model(&cfg.model_id);
                     let _ = event_tx
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenSkillsDialog { payload }))
                         .await;
