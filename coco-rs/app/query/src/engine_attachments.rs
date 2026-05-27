@@ -143,21 +143,25 @@ impl QueryEngine {
         history: &mut coco_messages::MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
     ) {
-        // Check source FIRST. Without it we can't produce attachments —
-        // draining the trigger set unconditionally would lose paths
-        // (HashSet de-dupes future tool calls to the same SKILL.md
-        // ancestry, so they'd never be re-tracked).
+        // Check source FIRST. Without it we can't dispatch — draining
+        // the trigger sets unconditionally would lose paths (HashSets
+        // de-dupe future tool calls to the same files/ancestry).
         let Some(source) = self.reminder_sources.skills.as_ref().cloned() else {
             return;
         };
 
         let triggered_dirs: Vec<PathBuf> = {
             let mut triggers = ctx.dynamic_skill_dir_triggers.write().await;
-            if triggers.is_empty() {
-                return;
-            }
             triggers.drain().map(PathBuf::from).collect()
         };
+        let triggered_paths: Vec<PathBuf> = {
+            let mut triggers = ctx.dynamic_skill_path_triggers.write().await;
+            triggers.drain().map(PathBuf::from).collect()
+        };
+
+        if triggered_dirs.is_empty() && triggered_paths.is_empty() {
+            return;
+        }
 
         let cwd = ctx
             .cwd_override
@@ -165,6 +169,9 @@ impl QueryEngine {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
 
+        // (1) Nested-dir discovery: each new `.claude/skills/` dir
+        // surfaces a model-visible dynamic_skill attachment listing
+        // the newly-loaded skill names. TS `addSkillDirectories`.
         for dir in triggered_dirs {
             if let Some(payload) = source.load_dynamic_skill_dir(&dir, &cwd).await {
                 crate::history_sync::history_push_and_emit(
@@ -173,6 +180,25 @@ impl QueryEngine {
                     event_tx,
                 )
                 .await;
+            }
+        }
+
+        // (2) Conditional-skill activation: promote any path-gated
+        // skills whose `paths` patterns match a file the batch touched.
+        // TS `activateConditionalSkillsForPaths`. Promotion alone is
+        // enough — the next `skill_listing` reminder turn will surface
+        // newly-visible names via `take_unannounced_skills` delta, so
+        // we don't emit a separate attachment here (TS only logs an
+        // analytics event at activation time, not a model message).
+        if !triggered_paths.is_empty() {
+            let activated = source
+                .activate_skills_for_paths(&triggered_paths, &cwd)
+                .await;
+            if !activated.is_empty() {
+                tracing::debug!(
+                    activated = ?activated,
+                    "activated conditional skills via path triggers"
+                );
             }
         }
     }

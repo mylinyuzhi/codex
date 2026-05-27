@@ -602,10 +602,11 @@ impl Tool for ReadTool {
         )
         .await;
         // Fire-and-forget skill discovery: walk up from the file path to
-        // the cwd boundary and queue any `.claude/skills/` ancestor dirs
-        // for the app/query layer to load. TS `FileReadTool.ts:578-591`
-        // calls this same routine on every successful Read.
-        crate::track_skill_discovery(ctx, path).await;
+        // Walk up to the cwd boundary and queue any `.claude/skills/`
+        // ancestor dirs for the app/query layer to load; also queue
+        // the file path for conditional-skill activation. TS
+        // `FileReadTool.ts:578-591` does both on every successful Read.
+        crate::track_skill_triggers(ctx, path).await;
         // TS `FileReadTool.ts:848,870,1038`: every successful Read
         // pushes the path into nestedMemoryAttachmentTriggers so the
         // next-turn message builder can attach any nested CLAUDE.md

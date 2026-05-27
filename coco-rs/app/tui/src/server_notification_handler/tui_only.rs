@@ -332,6 +332,18 @@ pub(super) fn handle(
             }
             true
         }
+        // /skills — read-only overlay showing the skill catalog grouped
+        // by source. Empty payload still opens the dialog so the user
+        // sees the "no skills" hint instead of nothing happening.
+        // TS parity: `components/skills/SkillsMenu.tsx` (Esc to close;
+        // no selection). The slash dispatcher pre-groups + sorts +
+        // computes token estimates so the TUI is a pure projection.
+        TuiOnlyEvent::OpenSkillsDialog { payload } => {
+            state.ui.show_modal(ModalState::SkillsDialog(
+                crate::state::SkillsDialogState::from_wire(payload),
+            ));
+            true
+        }
         // /copy [N] — branch into either direct clipboard write or the
         // CopyPicker modal based on `copy_full_response` + presence of
         // code blocks. TS parity: `commands/copy/copy.tsx::call`.

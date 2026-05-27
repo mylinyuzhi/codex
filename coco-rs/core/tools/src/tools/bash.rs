@@ -1305,9 +1305,9 @@ async fn apply_sed_edit(
     // Refresh the cache so the next Edit/Write doesn't fail its mtime
     // check against a stale entry left by the earlier Read.
     crate::record_file_edit(ctx, path, new_content.to_string()).await;
-    // Fire skill auto-discovery — TS `BashTool.ts` does this too when a
-    // sed pipeline touches a path inside a `.claude/skills/` ancestor.
-    crate::track_skill_discovery(ctx, path).await;
+    // Fire skill auto-discovery + conditional-skill activation — TS
+    // `BashTool.ts` does this too when a sed pipeline touches a path.
+    crate::track_skill_triggers(ctx, path).await;
 
     Ok(ToolResult {
         data: serde_json::json!({

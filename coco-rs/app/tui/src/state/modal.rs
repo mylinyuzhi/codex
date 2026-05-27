@@ -11,6 +11,7 @@ use crate::state::surface_payloads::MemoryDialogState;
 use crate::state::surface_payloads::ModelPickerState;
 use crate::state::surface_payloads::QuickOpenState;
 use crate::state::surface_payloads::SessionBrowserState;
+use crate::state::surface_payloads::SkillsDialogState;
 use crate::state::surface_payloads::TaskDetailState;
 use crate::state::surface_payloads::{self};
 
@@ -27,6 +28,7 @@ pub enum ModalState {
     Rewind(crate::state::rewind::RewindState),
     Settings(crate::widgets::settings_panel::SettingsPanelState),
     MemoryDialog(MemoryDialogState),
+    SkillsDialog(SkillsDialogState),
     Transcript(crate::state::transcript::TranscriptState),
     Doctor(DoctorState),
     ContextVisualization,
@@ -65,6 +67,7 @@ impl ModalState {
             | Self::Settings(_)
             | Self::Transcript(_)
             | Self::MemoryDialog(_)
+            | Self::SkillsDialog(_)
             | Self::CopyPicker(_)
             | Self::IdleReturn(_) => 7,
             Self::Help => 8,

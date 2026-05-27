@@ -398,36 +398,53 @@ pub(crate) async fn track_nested_memory_attachment(
     triggers.insert(canonical.display().to_string());
 }
 
-/// Discover any `.claude/skills` directories in the file's ancestry and
-/// push them into `ctx.dynamic_skill_dir_triggers` for the app/query
-/// layer to pick up after the tool batch.
+/// Record a file touched by Read/Write/Edit/Bash for two end-of-batch
+/// follow-ups:
 ///
-/// TS: `FileReadTool.ts:578-591`, `FileWriteTool.ts`, `FileEditTool.ts`
-/// (same pattern in all three) — fire-and-forget call to
-/// `discoverSkillDirsForPaths` followed by adding the results to
-/// `context.dynamicSkillDirTriggers` and `addSkillDirectories`.
+/// 1. **Nested-dir discovery** — walk up the file's ancestry to find
+///    any `.claude/skills/` directories not yet loaded; push them into
+///    `ctx.dynamic_skill_dir_triggers`. TS:
+///    `FileReadTool.ts:578-591` (`discoverSkillDirsForPaths` +
+///    `addSkillDirectories`).
+/// 2. **Conditional-skill activation** — push the file path itself
+///    into `ctx.dynamic_skill_path_triggers` so the app/query drain
+///    can match it against any skill's `paths` frontmatter via
+///    `SkillsSource::activate_skills_for_paths`. TS:
+///    `activateConditionalSkillsForPaths(filePaths, cwd)` from the
+///    same Read/Write/Edit/Bash post-success hook.
 ///
-/// In coco-rs the actual skill loading happens at the app/query layer
-/// when it drains the trigger set after the tool batch — this helper
-/// is just the discovery + record half. Cwd resolution falls back to
-/// `ctx.cwd_override` (worktree-isolated subagents) then the process
-/// cwd; if neither is available, the call is a no-op.
-pub(crate) async fn track_skill_discovery(ctx: &coco_tool_runtime::ToolUseContext, path: &Path) {
+/// Both are deferred to the app/query post-batch drain so concurrent
+/// safe-tool execution can share one activation pass. Cwd resolution
+/// falls back to `ctx.cwd_override` (worktree-isolated subagents)
+/// then the process cwd; if neither is available, the call is a no-op
+/// (no path-relative gitignore matching possible).
+pub(crate) async fn track_skill_triggers(ctx: &coco_tool_runtime::ToolUseContext, path: &Path) {
     let cwd = ctx
         .cwd_override
         .clone()
         .or_else(|| std::env::current_dir().ok());
     let Some(cwd) = cwd else { return };
 
+    // (2) Conditional activation runs against the **raw** file path
+    // (TS parity: `activateConditionalSkillsForPaths` uses the input
+    // path as-is). Canonicalization is wrong here — if cwd is itself a
+    // symlink, the canonical file path won't have cwd as a prefix and
+    // the activation pass would silently skip the file.
+    {
+        let mut path_triggers = ctx.dynamic_skill_path_triggers.write().await;
+        path_triggers.insert(path.display().to_string());
+    }
+
+    // (1) Nested-dir discovery walks the file's filesystem ancestry to
+    // find `.claude/skills/` dirs — canonicalization is fine here
+    // because the dir-walk needs the real filesystem layout.
     let canonical = tokio::fs::canonicalize(path)
         .await
         .unwrap_or_else(|_| path.to_path_buf());
     let dirs = coco_skills::discover_skill_dirs_for_paths(&[canonical.as_path()], &cwd);
-
     if dirs.is_empty() {
         return;
     }
-
     let mut triggers = ctx.dynamic_skill_dir_triggers.write().await;
     for dir in dirs {
         triggers.insert(dir.display().to_string());

@@ -19,6 +19,8 @@ use crate::state::MemoryDialogScope;
 use crate::state::MemoryDialogState;
 use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
+use crate::state::SkillsDialogSource;
+use crate::state::SkillsDialogState;
 
 #[derive(Debug)]
 #[cfg(test)]
@@ -368,6 +370,79 @@ pub(crate) fn memory_dialog_content(
         body,
         styles.primary(),
     )
+}
+
+/// Render the read-only `/skills` overlay. TS parity:
+/// `components/skills/SkillsMenu.tsx` — five source groups
+/// (project / user / policy / plugin / mcp), each row shows skill
+/// name + optional plugin name + token estimate. Esc closes; the
+/// dialog has no selection state.
+pub(crate) fn skills_dialog_content(
+    s: &SkillsDialogState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    let title = t!("dialog.title_skills").to_string();
+
+    if s.groups.is_empty() {
+        return (
+            title,
+            t!("dialog.skills_empty").to_string(),
+            styles.primary(),
+        );
+    }
+
+    let total = s.total();
+    let noun = if total == 1 {
+        t!("dialog.skills_noun_singular")
+    } else {
+        t!("dialog.skills_noun_plural")
+    };
+    let subtitle = t!(
+        "dialog.skills_subtitle",
+        count = total.to_string().as_str(),
+        noun = noun.as_ref()
+    )
+    .to_string();
+
+    let mut body = String::new();
+    body.push_str(&subtitle);
+    body.push('\n');
+    for (idx, group) in s.groups.iter().enumerate() {
+        if idx > 0 {
+            body.push('\n');
+        }
+        body.push('\n');
+        body.push_str(&skills_group_title(group.source));
+        if !group.subtitle.is_empty() {
+            body.push_str(&format!(" ({})", group.subtitle));
+        }
+        for entry in &group.entries {
+            body.push('\n');
+            body.push_str(&format!("  /{}", entry.name));
+            if let Some(plugin) = &entry.plugin_name {
+                body.push_str(&format!(" · {plugin}"));
+            }
+            body.push_str(" · ");
+            body.push_str(&t!(
+                "dialog.skills_token_suffix",
+                tokens = entry.token_estimate.to_string().as_str()
+            ));
+        }
+    }
+    body.push_str("\n\n");
+    body.push_str(&t!("dialog.hints_close"));
+
+    (title, body, styles.primary())
+}
+
+fn skills_group_title(source: SkillsDialogSource) -> String {
+    match source {
+        SkillsDialogSource::Project => t!("dialog.skills_group_project").to_string(),
+        SkillsDialogSource::User => t!("dialog.skills_group_user").to_string(),
+        SkillsDialogSource::Policy => t!("dialog.skills_group_policy").to_string(),
+        SkillsDialogSource::Plugin => t!("dialog.skills_group_plugin").to_string(),
+        SkillsDialogSource::Mcp => t!("dialog.skills_group_mcp").to_string(),
+    }
 }
 
 pub(crate) fn mcp_server_select_content(
