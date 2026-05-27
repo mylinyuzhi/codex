@@ -25,7 +25,6 @@
 use coco_config::AutoCompactConfig;
 use coco_messages::Message;
 
-use crate::tokens;
 use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
 use crate::types::MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES;
 
@@ -175,7 +174,7 @@ pub fn peel_head_for_ptl_retry(
     for g in &groups {
         // `estimate_tokens` is also generic — feed it the &[&Message] slice
         // directly, no clone.
-        acc += crate::tokens::estimate_tokens(g.as_slice());
+        acc += coco_messages::estimate_tokens_for_messages(g.as_slice());
         drop_count += 1;
         if acc >= tokens_to_free {
             break;
@@ -213,7 +212,7 @@ pub fn api_microcompact(messages: &mut [Message], tokens_to_free: i64) {
             break;
         }
         if let Message::ToolResult(tr) = msg {
-            let est = tokens::estimate_tool_result_tokens(tr);
+            let est = coco_messages::estimate_tool_result_message_tokens(tr);
             if est > 50 {
                 tr.message = coco_messages::LlmMessage::Tool {
                     content: vec![coco_messages::ToolContent::ToolResult(

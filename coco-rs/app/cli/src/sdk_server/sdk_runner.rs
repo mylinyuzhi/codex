@@ -301,7 +301,7 @@ impl TurnRunner for QueryEngineRunner {
                         let h = history_handle.lock().await;
                         h.clone()
                     };
-                    let tokens = coco_compact::estimate_tokens(&combined);
+                    let tokens = coco_messages::estimate_tokens_for_messages(&combined);
                     // TS parity: walk history for the orphan-safe
                     // cursor signals (`sessionMemory.ts:441-442`).
                     let last_msg_id = combined

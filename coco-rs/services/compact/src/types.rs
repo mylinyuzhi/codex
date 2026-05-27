@@ -56,9 +56,6 @@ pub const POST_COMPACT_MAX_TOKENS_PER_SKILL: i64 = 5_000;
 /// Total token budget for all skill re-injections.
 pub const POST_COMPACT_SKILLS_TOKEN_BUDGET: i64 = 25_000;
 
-/// Token estimate for images/documents stripped before compaction.
-pub const IMAGE_MAX_TOKEN_SIZE: i64 = 2_000;
-
 // ── Cleared-content markers (must match TS exactly) ─────────────────
 
 /// Placeholder inserted when old tool result content is cleared.

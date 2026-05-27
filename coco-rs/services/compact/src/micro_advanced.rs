@@ -19,7 +19,6 @@ use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_types::ToolName;
 
-use crate::tokens;
 use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
 use crate::types::MicrocompactResult;
 
@@ -76,7 +75,7 @@ pub fn micro_compact_with_budget(
             continue;
         }
 
-        let est_tokens = tokens::estimate_tool_result_tokens(tr);
+        let est_tokens = coco_messages::estimate_tool_result_message_tokens(tr);
         if est_tokens <= 10 {
             // Already tiny, not worth clearing
             continue;
@@ -128,7 +127,7 @@ pub fn clear_file_unchanged_stubs(messages: &mut [Message]) -> MicrocompactResul
             continue;
         }
 
-        let est_tokens = tokens::estimate_tool_result_tokens(tr);
+        let est_tokens = coco_messages::estimate_tool_result_message_tokens(tr);
         tr.message = coco_messages::LlmMessage::Tool {
             content: vec![coco_messages::ToolContent::ToolResult(
                 coco_messages::ToolResultContent {

@@ -486,7 +486,12 @@ impl ApiClient {
                     }
 
                     let mut usage = self.usage.lock().await;
-                    usage.record(&result.model, result.usage);
+                    // Aggregate per the (provider, model_id) identity
+                    // cached on ApiClient — not the raw `result.model`
+                    // string, which lacks the provider qualifier and
+                    // would conflate cross-provider models of the same
+                    // name. See `UsageAccumulator` doc for wire format.
+                    usage.record(&self.model_identity, result.usage);
                     drop(usage);
 
                     // Phase 2: post-call cache-break check.
@@ -580,12 +585,18 @@ impl ApiClient {
         // provider-adapter seam (see `vercel-ai-anthropic` etc).
         let stop_reason = Some(result.finish_reason.unified);
 
+        // Provider response.id (Anthropic message.id / OpenAI response.id
+        // / OpenAI-compatible response.id) flows through to QueryResult so
+        // the engine can stamp it onto the committed AssistantMessage.
+        // Google adapter leaves this None — see plan §P1.5.
+        let request_id = result.response.as_ref().and_then(|r| r.id.clone());
+
         Ok(QueryResult {
             content: result.content,
             usage,
             model: model_id,
             stop_reason,
-            request_id: None,
+            request_id,
             retries: 0,
             total_duration_ms: 0,
         })

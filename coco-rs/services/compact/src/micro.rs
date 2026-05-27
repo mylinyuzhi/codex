@@ -10,7 +10,6 @@ use coco_messages::Message;
 use coco_types::ToolId;
 use coco_types::ToolName;
 
-use crate::tokens;
 use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
 use crate::types::MicrocompactResult;
 
@@ -93,7 +92,7 @@ pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> Microcompa
             continue;
         }
 
-        let est_tokens = tokens::estimate_tool_result_tokens(tr);
+        let est_tokens = coco_messages::estimate_tool_result_message_tokens(tr);
         if est_tokens <= 10 {
             continue;
         }

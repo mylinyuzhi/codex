@@ -105,7 +105,7 @@ impl QueryEngine {
             }
         }
 
-        let pre_tokens = coco_compact::estimate_tokens(history.as_slice());
+        let pre_tokens = coco_messages::estimate_tokens_for_messages(history.as_slice());
         let pre_count = history.len() as i32;
         let drop_target = coco_compact::reactive::calculate_drop_target(
             pre_tokens,
@@ -201,7 +201,7 @@ impl QueryEngine {
             history.with_owned_messages(|msgs| {
                 coco_compact::reactive::api_microcompact(msgs, drop_target);
             });
-            let post_micro_tokens = coco_compact::estimate_tokens(history.as_slice());
+            let post_micro_tokens = coco_messages::estimate_tokens_for_messages(history.as_slice());
             let freed = (pre_tokens - post_micro_tokens).max(0);
 
             // Escalate when api_microcompact couldn't free enough — most
@@ -225,7 +225,7 @@ impl QueryEngine {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        let post_tokens = coco_compact::estimate_tokens(history.as_slice());
+        let post_tokens = coco_messages::estimate_tokens_for_messages(history.as_slice());
         let actually_freed = (pre_tokens - post_tokens).max(0);
         {
             let mut state = self.reactive_state.lock().await;
@@ -432,7 +432,7 @@ impl QueryEngine {
             if let Some(trigger) = coco_compact::evaluate_time_based_trigger(
                 tb_cfg, now_ms, last_opt, /*is_main_thread*/ true,
             ) {
-                let pre_tb_tokens = coco_compact::estimate_tokens(history.as_slice());
+                let pre_tb_tokens = coco_messages::estimate_tokens_for_messages(history.as_slice());
                 if let Some(res) = history.with_owned_messages(|msgs| {
                     coco_compact::time_based_microcompact(msgs, &trigger)
                 }) {
@@ -441,7 +441,8 @@ impl QueryEngine {
                         gap_min = trigger.gap_minutes,
                         "time-based micro-compaction triggered",
                     );
-                    let post_tb_tokens = coco_compact::estimate_tokens(history.as_slice());
+                    let post_tb_tokens =
+                        coco_messages::estimate_tokens_for_messages(history.as_slice());
                     // TS does not emit a CompactBoundary for time-based MC —
                     // it logs an analytics event (`tengu_time_based_microcompact`)
                     // and leaves the trigger label to the surrounding flow.
@@ -488,7 +489,14 @@ impl QueryEngine {
         // Compute message-level stats once and share across the
         // auto-memory fan-out and the auto-compact threshold check
         // below — both read the same post-Step-0.5 history.
-        let estimated_tokens = coco_compact::estimate_tokens(history.as_slice());
+        //
+        // Precision: `MessageHistory::tokens_with_last_usage` is the
+        // cohesive method on the history itself — uses the
+        // `LastUsageMarker` set in the previous successful turn as
+        // baseline + chars/4 estimate of the tail. When the marker is
+        // unset (resume / post-compact / first turn) it falls back to
+        // a full walk — same accuracy as the previous chars/4-only path.
+        let estimated_tokens = history.tokens_with_last_usage();
         let tool_calls_last_turn =
             coco_messages::count_tool_calls_in_last_assistant_turn(history.as_slice());
 
@@ -579,7 +587,12 @@ impl QueryEngine {
                 info!("auto micro-compaction triggered (keep_recent={micro_keep})");
             }
             let removed = (pre_count - history.len() as i32).max(0);
-            let post_micro_tokens = coco_compact::estimate_tokens(history.as_slice());
+            // After `with_owned_messages` (above), the marker is
+            // cleared — `tokens_with_last_usage` falls back to a full
+            // walk via the unified content-kind estimator. Same result
+            // as the previous `coco_compact::estimate_tokens` call,
+            // but keeps the single canonical entry point.
+            let post_micro_tokens = history.tokens_with_last_usage();
             let _ = emit_protocol(
                 event_tx,
                 ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
