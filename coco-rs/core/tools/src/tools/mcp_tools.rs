@@ -343,6 +343,15 @@ pub struct McpTool {
     info: McpToolInfo,
     tool_description: String,
     schema: ToolInputSchema,
+    /// Full JSON Schema document as advertised by the MCP server.
+    ///
+    /// Why: the blanket [`Tool::input_json_schema`] default derives from
+    /// `Self::Input`, but our `Input = serde_json::Value` produces a
+    /// permissive schemars schema (`{"type":"null"}`-shaped) that
+    /// providers like DeepSeek reject with HTTP 400. Storing the raw
+    /// wire envelope lets us hand back the exact `{"type":"object",
+    /// "properties":{…},"required":[…],…}` document the server sent.
+    raw_schema: Value,
     annotations: coco_tool_runtime::McpToolAnnotations,
 }
 
@@ -359,6 +368,28 @@ impl McpTool {
             .and_then(|p| p.as_object())
             .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
+        let required = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let raw_schema = if let Value::Object(mut obj) = schema {
+            // Some MCP servers omit the top-level `type: object` (it's
+            // implicit for tools/list). Strict providers (DeepSeek and
+            // similar OpenAI-compatible APIs) reject schemas without an
+            // explicit type, so fold it in here.
+            obj.entry("type".to_string())
+                .or_insert_with(|| Value::String("object".into()));
+            Value::Object(obj)
+        } else {
+            // Non-object payload (or absent schema) — fabricate the
+            // canonical empty-params envelope.
+            serde_json::json!({ "type": "object", "properties": {} })
+        };
 
         Self {
             info: McpToolInfo {
@@ -368,8 +399,9 @@ impl McpTool {
             tool_description: description,
             schema: ToolInputSchema {
                 properties,
-                required: Vec::new(),
+                required,
             },
+            raw_schema,
             annotations,
         }
     }
@@ -405,6 +437,16 @@ impl Tool for McpTool {
 
     fn input_schema(&self) -> ToolInputSchema {
         self.schema.clone()
+    }
+
+    /// Return the full JSON Schema document captured from the MCP
+    /// server's `tools/list` response. Overrides the blanket default
+    /// (`derive_input_schema_value::<Self::Input>()` = derive from
+    /// `serde_json::Value`), which produces a permissive schema that
+    /// strict OpenAI-compatible providers reject. Mirrors `input_schema`
+    /// in always sourcing from the wire, not from a compile-time type.
+    fn input_json_schema(&self) -> Option<Value> {
+        Some(self.raw_schema.clone())
     }
 
     fn mcp_info(&self) -> Option<&McpToolInfo> {
