@@ -153,6 +153,16 @@ impl Tool for StructuredOutputTool {
         }
     }
 
+    /// Returns the user-supplied JSON Schema verbatim. The blanket default
+    /// (`derive_input_schema_value::<Self::Input>()`) would derive from
+    /// `Self::Input = Value`, producing a permissive schema that strict
+    /// OpenAI-compatible providers (DeepSeek) reject with `type: null`.
+    /// Mirrors the [`crate::tools::mcp_tools::McpTool::input_json_schema`]
+    /// fix: stash the wire schema at construction, return it on demand.
+    fn input_json_schema(&self) -> Option<Value> {
+        Some(self.schema.clone())
+    }
+
     fn is_read_only(&self, _input: &Value) -> bool {
         true
     }
