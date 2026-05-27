@@ -451,15 +451,11 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             Some("[allow|deny] [tool]"),
         ),
-        (
-            names::AGENTS,
-            "List, show, validate, or reload agent definitions",
-            &[],
-            handlers::agents::handler,
-            true,
-            LocalOnly,
-            Some("[list|show <name>|paths|validate|reload]"),
-        ),
+        // /agents registered via `register_ts_parity_handlers` so the
+        // no-arg invocation can open the 2-tab TUI overlay. Sub-commands
+        // (`list` / `show <name>` / `paths` / `validate` / `reload`)
+        // still produce text via `AgentsHandler` for SDK / headless
+        // consumers.
         // /skills registered via `register_ts_parity_handlers` so the
         // no-arg invocation can open the TUI dialog. Sub-commands
         // (`list` / `show <name>` / `paths`) still produce text.
@@ -1476,6 +1472,29 @@ pub fn register_ts_parity_handlers(
                 handler: names::SKILLS.to_string(),
             }),
             handler: Some(Arc::new(handlers::skills::SkillsHandler)),
+            is_enabled: None,
+        });
+    }
+
+    // /agents — TS: bundled 2.1.142 E24.js (2-tab overlay).
+    // No-args opens the Running/Library overlay; with-args
+    // (`list` / `show <name>` / `paths` / `validate` / `reload`)
+    // falls back to text output.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::AGENTS,
+            "List, show, validate, or reload agent definitions",
+            &[],
+            CommandSafety::LocalOnly,
+            Some("[list|show <name>|paths|validate|reload]"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::AGENTS.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::agents::AgentsHandler)),
             is_enabled: None,
         });
     }

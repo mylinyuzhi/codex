@@ -69,5 +69,6 @@ tracing.workspace = true
 shlex.workspace = true
 
 [dev-dependencies]
+coco-frontmatter.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true

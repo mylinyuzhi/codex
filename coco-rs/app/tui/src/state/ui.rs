@@ -14,9 +14,8 @@ use crate::constants;
 use crate::display_settings::DisplaySettings;
 use crate::double_press::DoublePressTracker;
 use crate::keybinding_resolver::KeybindingHandle;
-use crate::state::interaction::AgentPopupState;
+use crate::state::interaction::AtPopupState;
 use crate::state::interaction::ComposerPopupState;
-use crate::state::interaction::FilePopupState;
 use crate::state::interaction::InteractionPaneState;
 use crate::state::interaction::PanePromptState;
 use crate::state::interaction::SlashPopupState;
@@ -367,9 +366,8 @@ impl UiState {
                 .as_ref()
                 .map(|suggestions| match suggestions.kind {
                     SuggestionKind::SlashCommand => ComposerPopupState::Slash(SlashPopupState),
-                    SuggestionKind::File => ComposerPopupState::File(FilePopupState),
+                    SuggestionKind::At => ComposerPopupState::At(AtPopupState),
                     SuggestionKind::Symbol => ComposerPopupState::Symbol(SymbolPopupState),
-                    SuggestionKind::Agent => ComposerPopupState::Agent(AgentPopupState),
                 })
         };
     }
@@ -489,16 +487,23 @@ pub enum FocusTarget {
 /// Which autocomplete trigger produced the active suggestions.
 ///
 /// Determines the popup title, the source of suggestion items, and how the
-/// accepted item is substituted back into the input. Kinds map to TS's four
-/// mention triggers plus the leading `/` slash-command trigger.
+/// accepted item is substituted back into the input. Kinds map to TS's
+/// unified `@` mention trigger plus the leading `/` slash-command trigger.
+///
+/// TS parity: `src/hooks/unifiedSuggestions.ts` produces a single ranked
+/// list for `@` containing agents + file paths + MCP resources. There is no
+/// `@agent-` sub-prefix in TS — agents fall out of the unified pool by
+/// fuzzy-matching the bare query. The popup distinguishes kinds visually
+/// (icon prefix + per-row metadata) rather than by trigger string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SuggestionKind {
     /// Leading `/` — populated from `session.available_commands`.
     SlashCommand,
-    /// `@path` — populated asynchronously by `FileSearchManager`.
-    File,
-    /// `@agent-name` — populated from the session's agent registry.
-    Agent,
+    /// `@query` — unified popup combining agents (synchronous, from
+    /// `session.available_agents`), file paths (async via
+    /// `FileSearchManager`), and MCP resources. Per-row kind is carried
+    /// on `SuggestionItem::metadata`.
+    At,
     /// `@#symbol` — populated asynchronously by `SymbolSearchManager` (LSP).
     Symbol,
 }

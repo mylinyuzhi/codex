@@ -422,7 +422,7 @@ fn test_autocomplete_context_not_activated_with_empty_items() {
     // user can navigate history while search runs.
     let mut state = AppState::new();
     state.ui.active_suggestions = Some(crate::state::ActiveSuggestions {
-        kind: crate::state::SuggestionKind::File,
+        kind: crate::state::SuggestionKind::At,
         items: Vec::new(),
         selected: 0,
         query: "src".into(),

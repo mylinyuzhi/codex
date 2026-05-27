@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 
+use crate::state::agents_dialog::AgentsDialogState;
 use crate::state::surface_payloads::CopyPickerState;
 use crate::state::surface_payloads::DiffViewState;
 use crate::state::surface_payloads::DoctorState;
@@ -29,6 +30,7 @@ pub enum ModalState {
     Settings(crate::widgets::settings_panel::SettingsPanelState),
     MemoryDialog(MemoryDialogState),
     SkillsDialog(SkillsDialogState),
+    AgentsDialog(AgentsDialogState),
     Transcript(crate::state::transcript::TranscriptState),
     Doctor(DoctorState),
     ContextVisualization,
@@ -68,6 +70,7 @@ impl ModalState {
             | Self::Transcript(_)
             | Self::MemoryDialog(_)
             | Self::SkillsDialog(_)
+            | Self::AgentsDialog(_)
             | Self::CopyPicker(_)
             | Self::IdleReturn(_) => 7,
             Self::Help => 8,

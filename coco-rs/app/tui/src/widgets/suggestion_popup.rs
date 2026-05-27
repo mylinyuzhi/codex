@@ -4,13 +4,18 @@
 //! Renders an inline, borderless list directly above the input area —
 //! mirrors the TS Claude Code style from
 //! `components/PromptInput/PromptInputFooterSuggestions.tsx`. Each row is
-//! a single text line: a leading `▸ ` / `  ` marker, then a fixed-width
-//! name column padded with spaces, then a single-line description
-//! truncated to the remaining width. Selected rows use the theme's
-//! primary color (bold); unselected rows are rendered with `text_dim`.
+//! a single text line: a leading kind icon (`▸` selected marker, `*` for
+//! agents, `+` for files / paths, `◇` for MCP resources, blank for slash
+//! commands), then a fixed-width name column, then a single-line
+//! description. Selected rows use the theme's primary color (bold);
+//! unselected rows are rendered with `text_dim`. Agent rows pick up the
+//! agent's configured color (Red/Blue/Green/…) when present, matching
+//! TS `PromptInputFooterSuggestions.tsx`.
 
+use coco_types::AgentColorName;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -26,24 +31,53 @@ use crate::presentation::styles::UiStyles;
 #[derive(Debug, Clone)]
 pub struct SuggestionItem {
     /// Display text — for slash commands this already includes the
-    /// leading `/`. The widget renders it verbatim.
+    /// leading `/`; for agents in the unified popup it already includes
+    /// the `" (agent)"` suffix (see `super::unified::seed_agent_items`).
+    /// The widget renders it verbatim.
     pub label: String,
     /// Optional single-line description; whitespace runs are collapsed
     /// to a single space before truncation.
     pub description: Option<String>,
-    /// Optional kind-specific metadata (e.g. directory flag for path
-    /// completions). `None` for legacy / context-free items.
+    /// Optional kind-specific metadata. `None` for slash commands and
+    /// context-free items.
     pub metadata: Option<SuggestionMeta>,
 }
 
-/// Per-kind metadata carried alongside a suggestion. Used by the input
-/// handler to format insertion correctly (directory `/` suffix vs file
-/// trailing-space, MCP resource server prefix, etc.).
+/// Per-kind metadata carried alongside a suggestion. The renderer uses
+/// the discriminant to pick an icon prefix and color, and the insertion
+/// path uses it to format the splice (directory `/` suffix, agent name
+/// stripping, MCP `server:uri` form).
 #[derive(Debug, Clone)]
 pub enum SuggestionMeta {
     /// Path completion (file or directory). `is_directory` lets the
     /// insertion path append `/` and keep the popup open for drilling.
     Path { is_directory: bool },
+    /// Agent suggestion. Carries the optional badge color so the
+    /// renderer can tint the row.
+    Agent { color: Option<AgentColorName> },
+    /// MCP resource — `server` carries the binding name, `uri` the
+    /// resource path. Insertion produces `@<server>:<uri>`.
+    McpResource { server: String, uri: String },
+}
+
+impl SuggestionMeta {
+    /// Single-character icon glyph rendered before the label. Mirrors
+    /// TS `PromptInputFooterSuggestions.tsx:getIcon` (24-29):
+    ///
+    /// - agents      → `*`
+    /// - mcp         → `◇`
+    /// - file / path → `+`
+    ///
+    /// Returns a space when the metadata doesn't request an icon
+    /// (slash commands; symbol search results that intentionally
+    /// render undecorated).
+    pub fn icon(&self) -> char {
+        match self {
+            Self::Agent { .. } => '*',
+            Self::McpResource { .. } => '◇',
+            Self::Path { .. } => '+',
+        }
+    }
 }
 
 /// Suggestion popup widget.
@@ -82,8 +116,10 @@ impl<'a> SuggestionPopup<'a> {
     }
 }
 
-/// Width of the leading marker (`▸ ` / `  `).
-const MARKER_WIDTH: usize = 2;
+/// Width of the leading marker. Layout: `▸ X ` when selected with kind
+/// icon, `  X ` when unselected — three columns for the marker + icon +
+/// trailing space.
+const MARKER_WIDTH: usize = 4;
 /// Trailing padding between the name column and the description so the
 /// description never abuts the longest name in the list.
 const NAME_COLUMN_PADDING: usize = 2;
@@ -162,8 +198,25 @@ fn build_row(
     popup_width: usize,
     styles: UiStyles<'_>,
 ) -> Line<'static> {
-    let marker = if is_selected { "▸ " } else { "  " };
-    let label_style = if is_selected {
+    let selection_marker = if is_selected { '▸' } else { ' ' };
+    let kind_icon = item
+        .metadata
+        .as_ref()
+        .map(SuggestionMeta::icon)
+        .unwrap_or(' ');
+    let marker_text = format!("{selection_marker} {kind_icon} ");
+
+    let label_color = match item.metadata.as_ref() {
+        Some(SuggestionMeta::Agent { color: Some(c) }) => Some(agent_color_to_ratatui(*c)),
+        _ => None,
+    };
+    let label_style = match (is_selected, label_color) {
+        (true, Some(c)) => Style::default().fg(c).bold(),
+        (true, None) => Style::default().fg(styles.primary()).bold(),
+        (false, Some(c)) => Style::default().fg(c),
+        (false, None) => Style::default().fg(styles.dim()),
+    };
+    let marker_style = if is_selected {
         Style::default().fg(styles.primary()).bold()
     } else {
         Style::default().fg(styles.dim())
@@ -174,9 +227,6 @@ fn build_row(
         Style::default().fg(styles.dim())
     };
 
-    // Truncate label to fit the column (minus the inter-column padding)
-    // so even the longest label leaves at least one space before the
-    // description starts.
     let label_target = name_col_width.saturating_sub(NAME_COLUMN_PADDING);
     let label_text = if UnicodeWidthStr::width(item.label.as_str()) > label_target {
         truncate_to_width(&item.label, label_target)
@@ -187,7 +237,7 @@ fn build_row(
     let pad = " ".repeat(name_col_width.saturating_sub(label_used));
 
     let mut spans: Vec<Span<'static>> = vec![
-        Span::styled(marker, label_style),
+        Span::styled(marker_text, marker_style),
         Span::styled(label_text, label_style),
         Span::raw(pad),
     ];
@@ -202,6 +252,33 @@ fn build_row(
     }
 
     Line::from(spans)
+}
+
+/// Map the validated TS palette names (`AgentColorName`) onto ratatui's
+/// indexed terminal colors. Indexed colors keep the agent badge readable
+/// across both light and dark themes; we deliberately avoid RGB so the
+/// user's terminal palette decides the exact shade.
+fn agent_color_to_ratatui(color: AgentColorName) -> Color {
+    match color {
+        AgentColorName::Red => Color::Red,
+        AgentColorName::Blue => Color::Blue,
+        AgentColorName::Green => Color::Green,
+        AgentColorName::Yellow => Color::Yellow,
+        AgentColorName::Purple => Color::Magenta,
+        // ratatui has no `Orange`; map to ANSI 208 (xterm orange) via
+        // `Indexed` so themes that remap it stay consistent.
+        // ratatui has no `Orange` / `Pink` ANSI named variants. Fall
+        // back to the closest perceptual ANSI 16-color match
+        // (LightRed and Magenta) so theme remapping behaves the same
+        // way as the other agent badges. The TS 2.1.142 palette uses
+        // xterm 256-color indices here; coco-rs deliberately diverges
+        // — `Color::Indexed` is blocked by the project's
+        // `disallowed_methods` lint (terminals with custom palettes
+        // render the indices unpredictably).
+        AgentColorName::Orange => Color::LightRed,
+        AgentColorName::Pink => Color::Magenta,
+        AgentColorName::Cyan => Color::Cyan,
+    }
 }
 
 /// Collapse runs of whitespace in a description down to a single space

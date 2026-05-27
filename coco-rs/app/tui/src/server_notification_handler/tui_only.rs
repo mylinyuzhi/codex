@@ -344,6 +344,27 @@ pub(super) fn handle(
             ));
             true
         }
+        // /agents — 2-tab overlay (Running + Library). Running tab
+        // reads `SessionState.subagents` directly so the payload
+        // only carries the Library list. The dialog renderer
+        // groups by source at draw time.
+        //
+        // A repeated emit while the dialog is open (post-CRUD
+        // refresh) updates the row list in place rather than
+        // queueing a duplicate modal — that would land an invisible
+        // refresh behind the visible (and now-stale) one.
+        TuiOnlyEvent::OpenAgentsDialog { payload } => {
+            let library = build_library_rows(payload);
+            if let Some(ModalState::AgentsDialog(existing)) = state.ui.modal.as_mut() {
+                existing.library = library;
+                existing.snap_library_cursor();
+            } else {
+                state.ui.show_modal(ModalState::AgentsDialog(
+                    crate::state::AgentsDialogState::new(library),
+                ));
+            }
+            true
+        }
         // `/skills` dialog Enter result — CLI bridge has finished
         // (or failed) the SettingsWriter round-trip + RuntimeConfig
         // republish + CommandRegistry rebuild. Toast generation
@@ -882,4 +903,63 @@ fn format_skill_overrides_save_toast(
             t!("dialog.skills_save_failed", error = message.as_str()).to_string()
         }
     }
+}
+
+/// Translate an [`coco_types::AgentsDialogPayload`] into the flat
+/// row list rendered by the Library tab.
+///
+/// Source ordering follows TS `bW4.js` / `Gp6.js`: User → Project →
+/// Local (collapsed into Project until coco-rs distinguishes
+/// worktree-local from repo-root project) → Managed → Plugin →
+/// Flag → Built-in. Empty groups are omitted; built-in always renders
+/// last.
+fn build_library_rows(payload: coco_types::AgentsDialogPayload) -> Vec<crate::state::LibraryRow> {
+    use crate::state::LibraryRow;
+    use coco_types::AgentSource;
+    let mut rows = vec![LibraryRow::CreateNew];
+
+    // Group label + ordering matches TS Gp6.js. Local is intentionally
+    // grouped with Project until the loader gains worktree-local
+    // distinction (see `state/agents_dialog.rs` doc).
+    let group_order: &[(AgentSource, &str)] = &[
+        (AgentSource::UserSettings, "dialog.agents_group_user"),
+        (AgentSource::ProjectSettings, "dialog.agents_group_project"),
+        (AgentSource::PolicySettings, "dialog.agents_group_policy"),
+        (AgentSource::Plugin, "dialog.agents_group_plugin"),
+        (AgentSource::FlagSettings, "dialog.agents_group_flag"),
+        (AgentSource::BuiltIn, "dialog.agents_group_builtin"),
+    ];
+    for (source, label_key) in group_order {
+        let group_entries: Vec<&coco_types::AgentsDialogEntry> = payload
+            .entries
+            .iter()
+            .filter(|e| e.source == *source)
+            .collect();
+        if group_entries.is_empty() {
+            continue;
+        }
+        let label = t!(*label_key).to_string();
+        rows.push(LibraryRow::SourceHeader { label });
+        let is_builtin = matches!(*source, AgentSource::BuiltIn);
+        for entry in group_entries {
+            rows.push(LibraryRow::Agent {
+                name: entry.name.clone(),
+                description: if entry.description.is_empty() {
+                    None
+                } else {
+                    Some(entry.description.clone())
+                },
+                source: entry.source,
+                color: entry.color,
+                is_builtin,
+                is_overridden: entry.is_overridden,
+                // Running count comes from the live `SessionState.subagents`
+                // at render time, not the wire — TUI computes it per
+                // frame so reloads stay cheap.
+                running_count: 0,
+                source_path: entry.source_path.clone(),
+            });
+        }
+    }
+    rows
 }

@@ -56,6 +56,7 @@ pub(crate) enum TextSurfaceContent<'a> {
     PlanApproval(&'a crate::state::PlanApprovalPromptState),
     MemoryDialog(&'a crate::state::MemoryDialogState),
     SkillsDialog(&'a crate::state::SkillsDialogState),
+    AgentsDialog(&'a crate::state::AgentsDialogState),
     CopyPicker(&'a crate::state::CopyPickerState),
 }
 
@@ -86,6 +87,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::Settings(s) => TextSurfaceContent::Settings(s),
         ModalState::MemoryDialog(m) => TextSurfaceContent::MemoryDialog(m),
         ModalState::SkillsDialog(s) => TextSurfaceContent::SkillsDialog(s),
+        ModalState::AgentsDialog(a) => TextSurfaceContent::AgentsDialog(a),
         ModalState::Doctor(d) => TextSurfaceContent::Doctor(d),
         ModalState::ContextVisualization => TextSurfaceContent::ContextVisualization,
         ModalState::WorktreeExit(w) => TextSurfaceContent::WorktreeExit(w),
@@ -150,6 +152,9 @@ pub(crate) fn surface_content(
         TextSurfaceContent::PlanApproval(p) => confirm::plan_approval_content(p, styles),
         TextSurfaceContent::MemoryDialog(m) => pickers::memory_dialog_content(m, styles),
         TextSurfaceContent::SkillsDialog(s) => pickers::skills_dialog_content(s, styles),
+        TextSurfaceContent::AgentsDialog(a) => {
+            pickers::agents_dialog_content(a, &state.session.subagents, styles)
+        }
         TextSurfaceContent::CopyPicker(cp) => pickers::copy_picker_content(cp, styles),
     }
 }
