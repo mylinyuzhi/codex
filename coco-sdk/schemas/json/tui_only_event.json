@@ -778,6 +778,23 @@
       ]
     },
     {
+      "description": "`/agents` overlay — opens the 2-tab `<AgentsDialog>` with the\nLibrary entries pre-grouped. The Running tab is sourced\ndirectly from `SessionState.subagents` on the TUI side.",
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AgentsDialogPayload"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_agents_dialog"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
       "description": "Notify the TUI that a `/skills` dialog Enter has finished\npersisting (or failed). TUI renders the localized\n`Updated N / No changes / Failed: …` toast — keeping all\nuser-visible text generation on the UI side.",
       "type": "object",
       "properties": {
@@ -796,6 +813,116 @@
     }
   ],
   "$defs": {
+    "AgentColorName": {
+      "description": "TS `AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
+      "type": "string",
+      "enum": [
+        "red",
+        "blue",
+        "green",
+        "yellow",
+        "purple",
+        "orange",
+        "pink",
+        "cyan"
+      ]
+    },
+    "AgentSource": {
+      "description": "Where an agent definition came from. Drives precedence when the same\n`agent_type` is defined in multiple places: later source wins.\n\nTS: source field on `BaseAgentDefinition` (`loadAgentsDir.ts:105-165`),\nresolution order in `getActiveAgentsFromList` (`loadAgentsDir.ts:193-221`).",
+      "oneOf": [
+        {
+          "description": "Bundled built-in agents.",
+          "type": "string",
+          "const": "built-in"
+        },
+        {
+          "description": "Plugin contribution.",
+          "type": "string",
+          "const": "plugin"
+        },
+        {
+          "description": "User-level agents (`~/.coco/agents/*.md`).",
+          "type": "string",
+          "const": "userSettings"
+        },
+        {
+          "description": "Project-level agents (`<project>/.coco/agents/*.md`).",
+          "type": "string",
+          "const": "projectSettings"
+        },
+        {
+          "description": "JSON/CLI flag supplied agents.",
+          "type": "string",
+          "const": "flagSettings"
+        },
+        {
+          "description": "Managed/policy agents (highest priority).",
+          "type": "string",
+          "const": "policySettings"
+        }
+      ]
+    },
+    "AgentsDialogEntry": {
+      "description": "One row in the `/agents` Library tab.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "description": "Optional badge color from frontmatter.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentColorName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "`whenToUse` description (single line). Empty when frontmatter\nomitted it — the renderer falls back to a placeholder.",
+          "type": "string"
+        },
+        "is_overridden": {
+          "description": "`true` when this `agent_type` is shadowed by a higher-priority\nsource (still loadable, but the active resolution picks the\noverride). TS: `is_overridden` flag in `loadAgentsDir.ts`.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Canonical `agent_type` identifier.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Which source loaded this entry.",
+          "$ref": "#/$defs/AgentSource"
+        },
+        "source_path": {
+          "description": "Absolute markdown source path. `None` for built-in / plugin /\nin-memory entries that aren't editable via `$EDITOR`. Drives\nthe Library tab's `Enter` (edit) and `d` (delete) actions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "source"
+      ]
+    },
+    "AgentsDialogPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the\n`/agents` slash handler with everything the 2-tab dialog needs\n(Running tab reads `SessionState.subagents` directly, so the\npayload only carries Library data).\n\nTS parity: bundled-only `cli_unpack_pretty/decls/functions/bW4.js`\n(Library tab). The open-source `<AgentsMenu>` exposes the same\nper-row data but routes through a different state machine.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "description": "All visible agents, source-grouped at dialog-build time so the\nTUI doesn't recompute precedence. Order: User → Project →\nLocal → Managed → Plugin → Flag → Built-in. Empty groups are\nomitted.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentsDialogEntry"
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ]
+    },
     "CommandSource": {
       "description": "How a command was loaded.\n\nTS: `Command.source` field union (`SettingSource | 'plugin' | 'mcp'`).\nRust port tags the payload-carrying variants (`Plugin { name }`,\n`Mcp { server_name }`) so the source and its attribution can never\ndisagree. This replaces the older `loaded_from + plugin_name` dual-\nfield layout, which allowed nonsensical states (e.g. `loaded_from =\nBuiltin` paired with `plugin_name = Some(...)`).",
       "oneOf": [

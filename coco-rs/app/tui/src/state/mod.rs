@@ -4,6 +4,7 @@
 //! - [`SessionState`]: agent-synchronized data (model, messages, tools, subagents)
 //! - [`UiState`]: local TUI state (input, scroll, surfaces, streaming, theme)
 
+pub mod agents_dialog;
 pub mod derive;
 pub mod interaction;
 pub mod modal;
@@ -17,10 +18,22 @@ pub(crate) mod ui_ephemeral;
 
 pub use crate::display_settings::DisplaySettings;
 pub use crate::display_settings::SyntaxHighlighting;
-pub use interaction::AgentPopupState;
+pub use agents_dialog::AgentsDialogState;
+pub use agents_dialog::AgentsDialogTab;
+pub use agents_dialog::CreateWizardState;
+pub use agents_dialog::CreateWizardStep;
+pub use agents_dialog::LibraryRow;
+pub use agents_dialog::LibraryToastKind;
+pub use agents_dialog::WizardError;
+pub use agents_dialog::WizardSource;
+pub use agents_dialog::WizardTextField;
+pub use agents_dialog::is_valid_desc_char;
+pub use agents_dialog::is_valid_name_char;
+pub use agents_dialog::resolve_create_target;
+pub use agents_dialog::validate_agent_name;
+pub use interaction::AtPopupState;
 pub use interaction::ComposerPopupState;
 pub use interaction::ComposerState;
-pub use interaction::FilePopupState;
 pub use interaction::InteractionPaneState;
 pub use interaction::InvalidSlashCommandName;
 pub use interaction::PanePromptState;

@@ -1373,6 +1373,21 @@ impl SessionRuntime {
     /// via [`Self::wire_engine`] pick up the new snapshot; engines
     /// already in flight keep the snapshot they captured at wire time.
     ///
+    /// Borrow a stable pointer to the active agent catalog snapshot.
+    ///
+    /// The returned `Arc` is a pointer clone — readers continue to
+    /// observe the snapshot they cloned even if [`reload_agent_catalog`]
+    /// swaps in a new one mid-read. Callers (TUI bootstrap, `/agents`
+    /// renderer) should re-call this for each fresh read rather than
+    /// caching the result long-term.
+    ///
+    /// TS parity: open-source TS caches via `memoize(getAgentDefinitionsWithOverrides)`;
+    /// coco-rs uses the `RwLock<Arc<...>>` pattern to make
+    /// `reload_agent_catalog` an atomic swap with no observer drift.
+    pub async fn agent_catalog_snapshot(&self) -> Arc<coco_subagent::AgentCatalogSnapshot> {
+        self.agent_catalog.read().await.clone()
+    }
+
     /// Triggered by `/agents reload`, `/reload-plugins`, and the
     /// future agent-dir file watcher. TS parity:
     /// `loadAgentsDir.ts::reloadAgents`.

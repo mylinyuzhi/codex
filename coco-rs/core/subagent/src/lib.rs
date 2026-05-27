@@ -24,6 +24,7 @@ pub mod subagent_role;
 pub mod summary;
 pub mod transcript;
 pub mod validation;
+pub mod writable;
 
 pub use builtin_prompts::{
     CocoGuideDynamicContext, GuideAgentEntry, GuideCommandEntry, coco_guide_dynamic_block,
@@ -66,6 +67,7 @@ pub use subagent_role::{resolve_subagent_role, role_for_builtin};
 pub use summary::{build_summary_prompts, sanitize_summary, should_summarize};
 pub use transcript::{AgentResumeState, filter_transcript};
 pub use validation::{AgentDefinitionValidator, ValidationDiagnostic, ValidationError};
+pub use writable::{next_unused_color, resolve_writable_agent_dir};
 
 /// One-shot built-in agent types — TS `ONE_SHOT_BUILTIN_AGENT_TYPES`
 /// (`constants.ts:9-12`). **Case-sensitive** — `"explore"`/`"plan"` do not

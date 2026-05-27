@@ -1,5 +1,19 @@
 {
   "$defs": {
+    "AgentColorName": {
+      "description": "TS `AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
+      "enum": [
+        "red",
+        "blue",
+        "green",
+        "yellow",
+        "purple",
+        "orange",
+        "pink",
+        "cyan"
+      ],
+      "type": "string"
+    },
     "AgentInfo": {
       "properties": {
         "description": {
@@ -42,6 +56,41 @@
         }
       ],
       "description": "One entry in `AgentDefinition.mcp_servers`. Mirrors the TS union:\neither a `string` (reference to an existing MCP server config) or\nan inline `{name: config}` mapping that stands up a dynamic\nserver scoped to this agent. Inline configs are stored as\n`serde_json::Value` because the underlying `McpServerConfig`\nshape lives in `coco-mcp` (a higher layer that depends on\n`coco-types`); keeping it as opaque JSON avoids a back-edge.\n\nTS: `tools/AgentTool/loadAgentsDir.ts:58 AgentMcpServerSpec`."
+    },
+    "AgentSource": {
+      "description": "Where an agent definition came from. Drives precedence when the same\n`agent_type` is defined in multiple places: later source wins.\n\nTS: source field on `BaseAgentDefinition` (`loadAgentsDir.ts:105-165`),\nresolution order in `getActiveAgentsFromList` (`loadAgentsDir.ts:193-221`).",
+      "oneOf": [
+        {
+          "const": "built-in",
+          "description": "Bundled built-in agents.",
+          "type": "string"
+        },
+        {
+          "const": "plugin",
+          "description": "Plugin contribution.",
+          "type": "string"
+        },
+        {
+          "const": "userSettings",
+          "description": "User-level agents (`~/.coco/agents/*.md`).",
+          "type": "string"
+        },
+        {
+          "const": "projectSettings",
+          "description": "Project-level agents (`<project>/.coco/agents/*.md`).",
+          "type": "string"
+        },
+        {
+          "const": "flagSettings",
+          "description": "JSON/CLI flag supplied agents.",
+          "type": "string"
+        },
+        {
+          "const": "policySettings",
+          "description": "Managed/policy agents (highest priority).",
+          "type": "string"
+        }
+      ]
     },
     "AgentStreamEvent": {
       "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued \u2192 Started \u2192 Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\n\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
@@ -223,6 +272,67 @@
         }
       ],
       "title": "AgentStreamEvent"
+    },
+    "AgentsDialogEntry": {
+      "description": "One row in the `/agents` Library tab.",
+      "properties": {
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentColorName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional badge color from frontmatter."
+        },
+        "description": {
+          "description": "`whenToUse` description (single line). Empty when frontmatter\nomitted it \u2014 the renderer falls back to a placeholder.",
+          "type": "string"
+        },
+        "is_overridden": {
+          "description": "`true` when this `agent_type` is shadowed by a higher-priority\nsource (still loadable, but the active resolution picks the\noverride). TS: `is_overridden` flag in `loadAgentsDir.ts`.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Canonical `agent_type` identifier.",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/AgentSource",
+          "description": "Which source loaded this entry."
+        },
+        "source_path": {
+          "description": "Absolute markdown source path. `None` for built-in / plugin /\nin-memory entries that aren't editable via `$EDITOR`. Drives\nthe Library tab's `Enter` (edit) and `d` (delete) actions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "source"
+      ],
+      "type": "object"
+    },
+    "AgentsDialogPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the\n`/agents` slash handler with everything the 2-tab dialog needs\n(Running tab reads `SessionState.subagents` directly, so the\npayload only carries Library data).\n\nTS parity: bundled-only `cli_unpack_pretty/decls/functions/bW4.js`\n(Library tab). The open-source `<AgentsMenu>` exposes the same\nper-row data but routes through a different state machine.",
+      "properties": {
+        "entries": {
+          "description": "All visible agents, source-grouped at dialog-build time so the\nTUI doesn't recompute precedence. Order: User \u2192 Project \u2192\nLocal \u2192 Managed \u2192 Plugin \u2192 Flag \u2192 Built-in. Empty groups are\nomitted.",
+          "items": {
+            "$ref": "#/$defs/AgentsDialogEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
     },
     "AgentsKilledParams": {
       "properties": {
@@ -11564,6 +11674,23 @@
             },
             "type": {
               "const": "open_skills_dialog",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`/agents` overlay \u2014 opens the 2-tab `<AgentsDialog>` with the\nLibrary entries pre-grouped. The Running tab is sourced\ndirectly from `SessionState.subagents` on the TUI side.",
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AgentsDialogPayload"
+            },
+            "type": {
+              "const": "open_agents_dialog",
               "type": "string"
             }
           },

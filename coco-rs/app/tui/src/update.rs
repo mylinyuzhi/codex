@@ -19,6 +19,7 @@ use crate::state::PanePromptState;
 
 use exit::ExitEffect;
 
+mod agents_dialog;
 mod clipboard;
 pub(crate) mod copy;
 mod edit;
@@ -77,6 +78,15 @@ pub async fn handle_command(
     // free of dialog-specific logic.
     if let skills_dialog::Handled::Yes(changed) =
         skills_dialog::intercept(state, &cmd, command_tx).await
+    {
+        return changed;
+    }
+
+    // The `/agents` 2-tab dialog has its own ←/→ tab cycle + `x`
+    // cancel-task path that the generic modal dispatch doesn't model.
+    // Same fall-through contract as the skills dialog.
+    if let agents_dialog::Handled::Yes(changed) =
+        agents_dialog::intercept(state, &cmd, command_tx).await
     {
         return changed;
     }

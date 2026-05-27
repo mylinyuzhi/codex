@@ -8,31 +8,99 @@
 //! discovered under `~/.coco/agents` (user) and `<cwd>/.claude/agents`
 //! (project). Source precedence is applied by the store; we only render
 //! the snapshot here.
+//!
+//! Two execution paths:
+//!   - **Interactive (`/agents` with no args)** — returns
+//!     [`crate::CommandResult::OpenDialog`] carrying an
+//!     [`coco_types::AgentsDialogPayload`] so the TUI mounts the 2-tab
+//!     overlay. The CLI bridge (`tui_runner.rs`) enriches the payload
+//!     with running counts at the moment the overlay opens.
+//!   - **Sub-commands** (`list` / `show <name>` / `paths` / `validate`
+//!     / `reload`) — fall back to text output so SDK + headless +
+//!     scripted callers get a flat enumeration they can parse.
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::pin::Pin;
 
+use async_trait::async_trait;
 use coco_subagent::AgentDefinitionStore;
 use coco_subagent::BuiltinAgentCatalog;
 use coco_subagent::definition_store::AgentSearchPaths;
+use coco_types::AgentsDialogEntry;
+use coco_types::AgentsDialogPayload;
 
-/// Async handler for `/agents [list|show|validate|reload|paths]`.
-pub fn handler(
-    args: String,
-) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
-    Box::pin(async move {
+use crate::CommandHandler;
+use crate::CommandResult;
+use crate::DialogSpec;
+
+/// `CommandHandler` impl for `/agents`. No args → open the TUI
+/// dialog; sub-commands → reuse the existing text renderers.
+pub struct AgentsHandler;
+
+#[async_trait]
+impl CommandHandler for AgentsHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        let trimmed = args.trim().to_string();
         let cwd = std::env::current_dir().unwrap_or_default();
         let config_home = coco_config::global_config::config_home();
         let paths = standard_search_paths(&config_home, &cwd);
 
-        // Disk reads via std::fs in the store — push to the blocking pool
-        // so a slow filesystem doesn't stall the TUI event loop.
-        let trimmed = args.trim().to_string();
-        tokio::task::spawn_blocking(move || render(&trimmed, paths))
-            .await
-            .map_err(|e| crate::CommandsError::generic(format!("agents handler join error: {e}")))?
-    })
+        tokio::task::spawn_blocking(move || -> crate::Result<CommandResult> {
+            if trimmed.is_empty() {
+                let payload = build_dialog_payload(paths);
+                Ok(CommandResult::OpenDialog(DialogSpec::AgentsList {
+                    payload,
+                }))
+            } else {
+                Ok(CommandResult::Text(render(&trimmed, paths)?))
+            }
+        })
+        .await
+        .map_err(|e| crate::CommandsError::generic(format!("agents handler join error: {e}")))?
+    }
+
+    fn handler_name(&self) -> &str {
+        "agents"
+    }
+}
+
+/// Build the Library payload for the `/agents` overlay.
+///
+/// `is_overridden` is set per row by walking
+/// `AgentCatalogSnapshot::all()` for entries whose `agent_type`
+/// matches but whose source priority is lower than the active one.
+fn build_dialog_payload(paths: AgentSearchPaths) -> AgentsDialogPayload {
+    let mut store = AgentDefinitionStore::new(BuiltinAgentCatalog::interactive(), paths);
+    store.load();
+    let snapshot = store.snapshot();
+
+    // Map active name → its winning source so we can flag overridden
+    // entries when walking `all()`.
+    let active_source: std::collections::BTreeMap<String, coco_types::AgentSource> = snapshot
+        .active()
+        .map(|d| (d.name.clone(), d.source))
+        .collect();
+
+    let entries: Vec<AgentsDialogEntry> = snapshot
+        .all()
+        .iter()
+        .map(|loaded| {
+            let def = &loaded.definition;
+            let is_overridden = active_source
+                .get(&def.name)
+                .map(|winning| *winning != def.source)
+                .unwrap_or(false);
+            AgentsDialogEntry {
+                name: def.name.clone(),
+                description: def.description.clone().unwrap_or_default(),
+                source: def.source,
+                color: def.color,
+                is_overridden,
+                source_path: loaded.path.clone(),
+            }
+        })
+        .collect();
+    AgentsDialogPayload { entries }
 }
 
 fn render(args: &str, paths: AgentSearchPaths) -> crate::Result<String> {

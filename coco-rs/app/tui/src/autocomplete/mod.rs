@@ -1,12 +1,16 @@
 //! Autocomplete systems for input suggestions.
 //!
-//! Four parallel autocomplete systems, each with:
-//! - Trigger character detection (@, /, @agent-, @#)
-//! - Debounced async search (100ms)
-//! - Cancel-on-change (previous search aborted)
-//! - Results delivered via mpsc channel
+//! Three trigger families:
+//! - `/` (slash command) — synchronous, ranked from session command list
+//! - `@` (unified mention) — agents (sync) + file paths (async) + MCP
+//!   resources (planned). See [`unified`] for the merge order.
+//! - `@#` (LSP symbol) — debounced async (100 ms), cancel-on-change.
 //!
-//! TS: src/hooks/useTypeahead.ts, file_search.rs, skill_search.rs, agent_search.rs, symbol_search.rs
+//! Removed in this refactor: the legacy `@agent-<name>` sub-prefix. TS
+//! never had one — agents fall out of the unified `@` pool.
+//!
+//! TS: `src/hooks/useTypeahead.ts`, `src/hooks/unifiedSuggestions.ts`,
+//! `src/hooks/fileSuggestions.ts`.
 
 pub mod agent_search;
 pub mod file_search;
@@ -14,6 +18,7 @@ pub mod skill_search;
 pub mod slash;
 pub mod symbol_search;
 pub mod trigger;
+pub mod unified;
 
 pub use agent_search::AgentInfo;
 pub use agent_search::AgentSearchManager;

@@ -79,30 +79,27 @@ pub struct ComposerState;
 #[derive(Debug, Clone)]
 pub enum ComposerPopupState {
     Slash(SlashPopupState),
-    File(FilePopupState),
+    /// Unified `@` popup: agents + file paths + MCP resources in a
+    /// single ranked list. Per-row kind lives on the suggestion item.
+    At(AtPopupState),
     Symbol(SymbolPopupState),
-    Agent(AgentPopupState),
 }
 
 #[derive(Debug, Clone)]
 pub struct SlashPopupState;
 
 #[derive(Debug, Clone)]
-pub struct FilePopupState;
+pub struct AtPopupState;
 
 #[derive(Debug, Clone)]
 pub struct SymbolPopupState;
-
-#[derive(Debug, Clone)]
-pub struct AgentPopupState;
 
 impl ComposerPopupState {
     pub fn kind(&self) -> SuggestionKind {
         match self {
             Self::Slash(_) => SuggestionKind::SlashCommand,
-            Self::File(_) => SuggestionKind::File,
+            Self::At(_) => SuggestionKind::At,
             Self::Symbol(_) => SuggestionKind::Symbol,
-            Self::Agent(_) => SuggestionKind::Agent,
         }
     }
 }

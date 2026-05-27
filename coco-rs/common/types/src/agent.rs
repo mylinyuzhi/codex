@@ -149,6 +149,7 @@ impl From<SubagentType> for AgentTypeId {
 ///
 /// TS: source field on `BaseAgentDefinition` (`loadAgentsDir.ts:105-165`),
 /// resolution order in `getActiveAgentsFromList` (`loadAgentsDir.ts:193-221`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum AgentSource {
     /// Bundled built-in agents.
@@ -208,7 +209,8 @@ impl fmt::Display for AgentSource {
 
 /// TS `AgentColorName`. Validated set; unknown values are dropped at parse
 /// time with a warning so the runtime never sees an invalid color.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentColorName {
     Red,

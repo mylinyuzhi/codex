@@ -144,6 +144,17 @@ pub enum DialogSpec {
     SkillsList {
         payload: coco_types::SkillsDialogPayload,
     },
+    /// `/agents` — 2-tab overlay (Running + Library). Payload only
+    /// carries the Library entries; the Running tab reads
+    /// `SessionState.subagents` at render time.
+    ///
+    /// TS parity: 2.1.142 bundled `E24.js` (tab shell) → `bW4.js`
+    /// (Library) + `V24.js` (Running). The open-source `<AgentsMenu>`
+    /// is a single-pane state machine; the 2-tab bundle variant is
+    /// what coco-rs mirrors.
+    AgentsList {
+        payload: coco_types::AgentsDialogPayload,
+    },
 }
 
 /// One row in the memory-file selector.

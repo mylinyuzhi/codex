@@ -106,6 +106,8 @@ pub use agent_ipc::TeammateProtocolMessage;
 // Event types (three-layer CoreEvent system; see event-system-design.md)
 pub use event::AgentInfo;
 pub use event::AgentStreamEvent;
+pub use event::AgentsDialogEntry;
+pub use event::AgentsDialogPayload;
 pub use event::AgentsKilledParams;
 pub use event::CancelReason;
 pub use event::CompactionFailedParams;

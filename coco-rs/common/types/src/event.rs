@@ -1784,6 +1784,10 @@ pub enum TuiOnlyEvent {
     /// TS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog
     /// is read-only — Esc to close; selection has no side effects.
     OpenSkillsDialog { payload: SkillsDialogPayload },
+    /// `/agents` overlay — opens the 2-tab `<AgentsDialog>` with the
+    /// Library entries pre-grouped. The Running tab is sourced
+    /// directly from `SessionState.subagents` on the TUI side.
+    OpenAgentsDialog { payload: AgentsDialogPayload },
     /// Notify the TUI that a `/skills` dialog Enter has finished
     /// persisting (or failed). TUI renders the localized
     /// `Updated N / No changes / Failed: …` toast — keeping all
@@ -2088,6 +2092,50 @@ pub enum SkillsDialogSource {
     Plugin,
     /// Skills published by a connected MCP server.
     Mcp,
+}
+
+/// Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the
+/// `/agents` slash handler with everything the 2-tab dialog needs
+/// (Running tab reads `SessionState.subagents` directly, so the
+/// payload only carries Library data).
+///
+/// TS parity: bundled-only `cli_unpack_pretty/decls/functions/bW4.js`
+/// (Library tab). The open-source `<AgentsMenu>` exposes the same
+/// per-row data but routes through a different state machine.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentsDialogPayload {
+    /// All visible agents, source-grouped at dialog-build time so the
+    /// TUI doesn't recompute precedence. Order: User → Project →
+    /// Local → Managed → Plugin → Flag → Built-in. Empty groups are
+    /// omitted.
+    pub entries: Vec<AgentsDialogEntry>,
+}
+
+/// One row in the `/agents` Library tab.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentsDialogEntry {
+    /// Canonical `agent_type` identifier.
+    pub name: String,
+    /// `whenToUse` description (single line). Empty when frontmatter
+    /// omitted it — the renderer falls back to a placeholder.
+    pub description: String,
+    /// Which source loaded this entry.
+    pub source: crate::AgentSource,
+    /// Optional badge color from frontmatter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<crate::AgentColorName>,
+    /// `true` when this `agent_type` is shadowed by a higher-priority
+    /// source (still loadable, but the active resolution picks the
+    /// override). TS: `is_overridden` flag in `loadAgentsDir.ts`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_overridden: bool,
+    /// Absolute markdown source path. `None` for built-in / plugin /
+    /// in-memory entries that aren't editable via `$EDITOR`. Drives
+    /// the Library tab's `Enter` (edit) and `d` (delete) actions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<std::path::PathBuf>,
 }
 
 /// Categorization of a `SlashCommandStatus` payload. Each variant maps to
