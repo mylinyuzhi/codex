@@ -16,6 +16,7 @@ coco-system-reminder.workspace = true
 async-trait.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "process", "time", "rt", "macros", "fs", "io-util"] }
@@ -29,4 +30,5 @@ regex.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+pretty_assertions.workspace = true
 tempfile.workspace = true
