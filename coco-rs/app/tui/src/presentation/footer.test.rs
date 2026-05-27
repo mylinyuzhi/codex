@@ -47,7 +47,7 @@ fn footer_view_renders_model_tokens_context_and_messages() {
     assert!(text.contains(" openai/gpt-5.2"));
     assert!(text.contains("↑1.5K/$0.0042 ↓250/$0.0030"));
     assert!(text.contains("cache 750/50%"));
-    assert!(!text.contains("thinking hidden (F2)"));
+    assert!(!text.contains("F2 to expand"));
     assert!(text.contains("ctx 80%"));
     assert!(text.contains("→0 ←0"));
     assert!(
@@ -208,5 +208,5 @@ fn footer_view_omits_show_thinking_on_state() {
         .map(|span| span.text.as_str())
         .collect::<String>();
 
-    assert!(!text.contains("thinking visible (F2)"));
+    assert!(!text.contains("F2 to collapse"));
 }
