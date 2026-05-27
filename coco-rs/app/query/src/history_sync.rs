@@ -22,7 +22,9 @@ use coco_messages::MessageHistory;
 use coco_messages::SystemMessage;
 use coco_messages::create_user_interruption_system_message;
 use coco_types::CoreEvent;
+use coco_types::ProviderModelSelection;
 use coco_types::ServerNotification;
+use coco_types::TokenUsage;
 use tokio::sync::mpsc::Sender;
 
 use crate::emit::emit_protocol;
@@ -84,6 +86,42 @@ pub async fn history_push_arc_and_emit(
         history_len = history.len(),
         has_tx = event_tx.is_some(),
         "history append",
+    );
+    let _delivered = emit_protocol(
+        event_tx,
+        ServerNotification::MessageAppended {
+            message: arc,
+            session_id,
+            agent_id,
+        },
+    )
+    .await;
+}
+
+/// Atomic push + LastUsageMarker anchor for the success path of an
+/// API call. The combined call site eliminates the prior two-step
+/// "push then anchor" sequence — there is no window between the wire
+/// `MessageAppended` event and marker installation. `msg` MUST be a
+/// `Message::Assistant`; `usage` and `model` come from the
+/// `QueryResult` / `StreamEvent::Finish` of the same successful call.
+pub async fn history_push_assistant_with_usage_and_emit(
+    history: &mut MessageHistory,
+    msg: Message,
+    usage: TokenUsage,
+    model: ProviderModelSelection,
+    event_tx: &Option<Sender<CoreEvent>>,
+) {
+    let (session_id, agent_id) = envelope_from(history);
+    let arc = history.push_arc_assistant_with_usage(Arc::new(msg), usage, model);
+    let uuid = arc.uuid().copied();
+    let kind = arc.kind();
+    tracing::debug!(
+        target: HISTORY_SYNC_TARGET,
+        ?uuid,
+        ?kind,
+        history_len = history.len(),
+        has_tx = event_tx.is_some(),
+        "history append (with usage anchor)",
     );
     let _delivered = emit_protocol(
         event_tx,

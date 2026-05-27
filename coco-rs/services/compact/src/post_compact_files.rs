@@ -25,7 +25,6 @@ use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_types::ToolName;
 
-use crate::tokens;
 use crate::types::POST_COMPACT_MAX_FILES_TO_RESTORE;
 use crate::types::POST_COMPACT_MAX_TOKENS_PER_FILE;
 use crate::types::POST_COMPACT_TOKEN_BUDGET;
@@ -126,7 +125,7 @@ pub fn create_post_compact_file_attachments_with_priority<M: std::borrow::Borrow
 
         // TS: roughTokenCountEstimation(jsonStringify(result)) — estimates on
         // the full formatted message, not just file content.
-        let att_tokens = tokens::estimate_text_tokens(&text);
+        let att_tokens = coco_messages::estimate_text_tokens(&text);
         if used_tokens + att_tokens > POST_COMPACT_TOKEN_BUDGET {
             break;
         }

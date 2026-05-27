@@ -190,7 +190,7 @@ fn peel_head_drops_oldest_groups() {
         .into_iter()
         .map(std::sync::Arc::new)
         .collect();
-    let total_tokens = coco_compact::estimate_tokens(&messages);
+    let total_tokens = coco_messages::estimate_tokens_for_messages(&messages);
     let target = total_tokens / 2;
     let peeled = peel_head_for_ptl_retry(&messages, target).expect("should peel some groups");
     assert!(
@@ -198,7 +198,7 @@ fn peel_head_drops_oldest_groups() {
         "must drop at least one group"
     );
     // After peeling, total tokens are lower.
-    assert!(coco_compact::estimate_tokens(&peeled) <= total_tokens);
+    assert!(coco_messages::estimate_tokens_for_messages(&peeled) <= total_tokens);
 }
 
 #[test]
@@ -242,15 +242,15 @@ fn build_partial_post_compact_messages_newest_keeps_prefix_before_summary() {
         Message::System(SystemMessage::CompactBoundary(_))
     );
     assert_eq!(
-        coco_compact::tokens::extract_message_text(&assembled[1]).as_deref(),
+        coco_compact::summary_text::extract_message_text(&assembled[1]).as_deref(),
         Some("kept prefix")
     );
     assert_eq!(
-        coco_compact::tokens::extract_message_text(&assembled[2]).as_deref(),
+        coco_compact::summary_text::extract_message_text(&assembled[2]).as_deref(),
         Some("summary")
     );
     assert_eq!(
-        coco_compact::tokens::extract_message_text(&assembled[3]).as_deref(),
+        coco_compact::summary_text::extract_message_text(&assembled[3]).as_deref(),
         Some("hook")
     );
 }

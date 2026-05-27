@@ -3139,7 +3139,7 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
         return;
     };
     let history_msgs = runtime.history.lock().await.as_slice().to_vec();
-    let tokens = coco_compact::estimate_tokens(&history_msgs);
+    let tokens = coco_messages::estimate_tokens_for_messages(&history_msgs);
     // TS parity (`sessionMemory.ts:441-442`): manual /summary still
     // walks history to decide whether to advance the safely-summarized
     // cursor. last_message_id is the latest history uuid; the cursor

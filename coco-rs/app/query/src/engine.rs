@@ -2046,6 +2046,11 @@ impl QueryEngine {
                 stop_reason: parsed_stop_reason,
                 usage: Some(usage),
                 cost_usd: None,
+                // Streaming-path response.id is not currently plumbed
+                // through `StreamEvent::Finish`. The marker uses the
+                // anchor index (set by `MessageHistory::anchor_api_response`
+                // after this push), so `request_id` is purely for trace
+                // diagnostics today — `None` here is non-load-bearing.
                 request_id: None,
                 api_error: None,
             });
@@ -2221,7 +2226,21 @@ impl QueryEngine {
                 )
                 .await;
             } else {
-                crate::history_sync::history_push_and_emit(history, assistant_msg, &event_tx).await;
+                // Atomic push + marker anchor: the assistant message
+                // came from a clean API response, so we commit and
+                // anchor in one operation. Abnormal stop_reason
+                // branches above (ContentFilter, ContextWindowExceeded,
+                // MaxTokens) intentionally use the plain
+                // `history_push_and_emit` so partial responses do not
+                // anchor the marker.
+                crate::history_sync::history_push_assistant_with_usage_and_emit(
+                    history,
+                    assistant_msg,
+                    usage,
+                    identity.clone(),
+                    &event_tx,
+                )
+                .await;
             }
 
             // Backward-compat: the ContentFilter branch above already pushed

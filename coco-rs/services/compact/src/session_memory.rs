@@ -19,7 +19,6 @@ use coco_messages::SystemMessage;
 use coco_types::CompactTrigger;
 
 use crate::compact::annotate_boundary_with_preserved_segment;
-use crate::tokens;
 use crate::types::CompactError;
 use crate::types::CompactResult;
 use crate::types::extract_discovered_tool_names;
@@ -176,9 +175,9 @@ pub fn compact_session_memory(
     // Use the non-conservative estimator to stay consistent with
     // `compact_conversation` — both produce the same scale of token
     // counts so callers can compare pre/post values across paths.
-    let pre_tokens = tokens::estimate_tokens(messages);
-    let post_tokens =
-        tokens::estimate_tokens(&messages_to_keep) + tokens::estimate_text_tokens(&summary);
+    let pre_tokens = coco_messages::estimate_tokens_for_messages(messages);
+    let post_tokens = coco_messages::estimate_tokens_for_messages(&messages_to_keep)
+        + coco_messages::estimate_text_tokens(&summary);
 
     // Threshold guard: if compaction wouldn't actually shrink below the
     // autocompact line, skip and let LLM compact handle it.
@@ -430,7 +429,8 @@ fn calculate_messages_to_keep_index(
     let mut total_tokens: i64 = 0;
     let mut text_block_count: i32 = 0;
     for msg in &messages[start_index..] {
-        total_tokens = total_tokens.saturating_add(tokens::estimate_message_tokens(msg.as_ref()));
+        total_tokens =
+            total_tokens.saturating_add(coco_messages::estimate_message_tokens(msg.as_ref()));
         if has_text_blocks(msg.as_ref()) {
             text_block_count += 1;
         }
@@ -447,7 +447,7 @@ fn calculate_messages_to_keep_index(
     // hit the boundary floor.
     while start_index > floor {
         let i = start_index - 1;
-        let msg_tokens = tokens::estimate_message_tokens(messages[i].as_ref());
+        let msg_tokens = coco_messages::estimate_message_tokens(messages[i].as_ref());
         total_tokens = total_tokens.saturating_add(msg_tokens);
         if has_text_blocks(messages[i].as_ref()) {
             text_block_count += 1;

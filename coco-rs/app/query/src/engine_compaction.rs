@@ -197,7 +197,7 @@ impl QueryEngine {
                 let fallback_summary = result
                     .summary_messages
                     .iter()
-                    .filter_map(coco_compact::tokens::extract_message_text)
+                    .filter_map(coco_compact::summary_text::extract_message_text)
                     .collect::<Vec<_>>()
                     .join("\n");
                 let summary_text = result.raw_summary.as_deref().unwrap_or(&fallback_summary);
@@ -1447,7 +1447,7 @@ impl QueryEngine {
                 let fallback_summary = result
                     .summary_messages
                     .iter()
-                    .filter_map(coco_compact::tokens::extract_message_text)
+                    .filter_map(coco_compact::summary_text::extract_message_text)
                     .collect::<Vec<_>>()
                     .join("\n");
                 let summary_text = result.raw_summary.as_deref().unwrap_or(&fallback_summary);

@@ -42,7 +42,7 @@ pub fn build_compact_summary_message(summary: &str) -> Message {
 }
 
 use crate::grouping::group_messages_by_api_round;
-use crate::tokens;
+use crate::summary_text;
 use crate::types::CompactError;
 use crate::types::CompactResult;
 use crate::types::CompactSummaryAttempt;
@@ -183,7 +183,7 @@ where
     let old_rounds = &rounds[..split_point];
     let recent_rounds = &rounds[split_point..];
 
-    let pre_tokens = tokens::estimate_tokens(messages);
+    let pre_tokens = coco_messages::estimate_tokens_for_messages(messages);
     tracing::debug!(
         rounds_total = rounds.len(),
         rounds_old = old_rounds.len(),
@@ -243,8 +243,8 @@ where
         parent_tool_use_id: None,
     });
 
-    let post_tokens = tokens::estimate_text_tokens(&summary_user_msg)
-        + tokens::estimate_tokens(&messages_to_keep);
+    let post_tokens = coco_messages::estimate_text_tokens(&summary_user_msg)
+        + coco_messages::estimate_tokens_for_messages(&messages_to_keep);
 
     let messages_summarized = old_rounds.iter().map(Vec::len).sum::<usize>() as i32;
     tracing::info!(
@@ -403,7 +403,7 @@ where
         })
         .collect();
 
-    let pre_tokens = tokens::estimate_tokens(all_messages);
+    let pre_tokens = coco_messages::estimate_tokens_for_messages(all_messages);
 
     // Merge user feedback with custom instructions.
     let merged = match (custom_instructions, user_feedback) {
@@ -465,8 +465,8 @@ where
         parent_tool_use_id: None,
     });
 
-    let post_tokens =
-        tokens::estimate_text_tokens(&summary_user_msg) + tokens::estimate_tokens(&to_keep);
+    let post_tokens = coco_messages::estimate_text_tokens(&summary_user_msg)
+        + coco_messages::estimate_tokens_for_messages(&to_keep);
 
     let mut boundary_struct = SystemCompactBoundaryMessage {
         uuid: Uuid::new_v4(),
@@ -919,7 +919,7 @@ pub fn truncate_head_for_ptl_retry(
             // `g: Vec<&Message>` from `group_messages_by_api_round`.
             // `estimate_tokens` is generic over `Borrow<Message>` — feed
             // the &[&Message] slice directly, zero clone.
-            acc += tokens::estimate_tokens(g.as_slice());
+            acc += coco_messages::estimate_tokens_for_messages(g.as_slice());
             count += 1;
             if acc >= gap {
                 break;
@@ -1156,7 +1156,7 @@ pub fn render_summary_prompt_for_debug(
                 Message::ToolResult(_) => "ToolResult",
                 _ => "System",
             };
-            if let Some(text) = tokens::extract_message_text(msg) {
+            if let Some(text) = summary_text::extract_message_text(msg) {
                 // Truncate very large messages to keep prompt manageable
                 let max_chars = 4000;
                 let truncated = if text.len() > max_chars {

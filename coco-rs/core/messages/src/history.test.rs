@@ -1,4 +1,8 @@
 use crate::*;
+use coco_types::InputTokens;
+use coco_types::OutputTokens;
+use coco_types::ProviderModelSelection;
+use coco_types::TokenUsage;
 use pretty_assertions::assert_eq;
 use uuid::Uuid;
 
@@ -178,4 +182,178 @@ fn test_find_by_uuid() {
     history.push(msg);
     assert!(history.find_by_uuid(&uuid).is_some());
     assert!(history.find_by_uuid(&Uuid::new_v4()).is_none());
+}
+
+// ── LastUsageMarker invariants ───────────────────────────────────────
+
+fn sample_usage(input: i64, output: i64) -> TokenUsage {
+    TokenUsage {
+        input_tokens: InputTokens {
+            total: input,
+            no_cache: input,
+            cache_read: 0,
+            cache_write: 0,
+        },
+        output_tokens: OutputTokens {
+            total: output,
+            text: output,
+            reasoning: 0,
+        },
+    }
+}
+
+fn sample_model() -> ProviderModelSelection {
+    ProviderModelSelection {
+        provider: "anthropic".into(),
+        model_id: "claude-opus-4-7".into(),
+    }
+}
+
+#[test]
+fn last_usage_is_none_initially() {
+    let history = MessageHistory::new();
+    assert!(history.last_usage().is_none());
+    assert!(history.messages_since_last_usage().is_empty());
+}
+
+#[test]
+fn push_assistant_with_usage_captures_anchor_at_current_length() {
+    let mut history = MessageHistory::new();
+    history.push(user_msg("hi"));
+    history.push_assistant_with_usage(
+        assistant_msg("hello"),
+        sample_usage(1000, 200),
+        sample_model(),
+    );
+
+    let marker = history.last_usage().expect("marker set");
+    assert_eq!(marker.usage.input_tokens.total, 1000);
+    assert_eq!(marker.usage.output_tokens.total, 200);
+    // Tail is empty because anchor count = current len.
+    assert!(history.messages_since_last_usage().is_empty());
+}
+
+#[test]
+fn append_does_not_invalidate_marker() {
+    let mut history = MessageHistory::new();
+    history.push(user_msg("hi"));
+    history.push_assistant_with_usage(
+        assistant_msg("hello"),
+        sample_usage(1000, 200),
+        sample_model(),
+    );
+
+    // Append a tool_result-shaped message and a new user input.
+    history.push(user_msg("tool result blob"));
+    history.push(user_msg("follow-up"));
+
+    assert!(
+        history.last_usage().is_some(),
+        "marker must survive appends"
+    );
+    assert_eq!(history.messages_since_last_usage().len(), 2);
+}
+
+#[test]
+fn clear_invalidates_marker() {
+    let mut history = MessageHistory::new();
+    history.push_assistant_with_usage(assistant_msg("hi"), sample_usage(500, 100), sample_model());
+
+    history.clear();
+    assert!(history.last_usage().is_none());
+}
+
+#[test]
+fn truncate_keep_last_invalidates_marker() {
+    let mut history = MessageHistory::new();
+    history.push(user_msg("a"));
+    history.push_assistant_with_usage(assistant_msg("b"), sample_usage(500, 100), sample_model());
+    history.push(user_msg("c"));
+
+    history.truncate_keep_last(1);
+    assert!(
+        history.last_usage().is_none(),
+        "truncate_keep_last must invalidate"
+    );
+}
+
+#[test]
+fn truncate_preserves_marker_when_anchor_within_keep_count() {
+    let mut history = MessageHistory::new();
+    history.push(user_msg("a"));
+    // anchor at count = 2 after the assistant push
+    history.push_assistant_with_usage(assistant_msg("b"), sample_usage(500, 100), sample_model());
+    history.push(user_msg("c"));
+    history.push(user_msg("d"));
+
+    // Truncate to keep 3 — anchor count (2) <= 3, marker stays valid.
+    history.truncate(3);
+    assert!(history.last_usage().is_some(), "anchor in retained range");
+    assert_eq!(history.messages_since_last_usage().len(), 1);
+}
+
+#[test]
+fn truncate_invalidates_marker_when_anchor_outside_keep_count() {
+    let mut history = MessageHistory::new();
+    history.push(user_msg("a"));
+    history.push(assistant_msg("b"));
+    history.push(user_msg("c"));
+    // anchor at count = 4 after the assistant push
+    history.push_assistant_with_usage(assistant_msg("d"), sample_usage(500, 100), sample_model());
+
+    // Truncate to keep 2 — anchor count (4) > 2.
+    history.truncate(2);
+    assert!(history.last_usage().is_none());
+}
+
+#[test]
+fn with_owned_messages_invalidates_marker() {
+    let mut history = MessageHistory::new();
+    history.push_assistant_with_usage(assistant_msg("hi"), sample_usage(500, 100), sample_model());
+
+    // Even a no-op closure invalidates — body could have been rewritten.
+    history.with_owned_messages(|_msgs| {});
+    assert!(history.last_usage().is_none());
+}
+
+#[test]
+fn messages_mut_invalidates_marker() {
+    let mut history = MessageHistory::new();
+    history.push_assistant_with_usage(assistant_msg("hi"), sample_usage(500, 100), sample_model());
+
+    let _ = history.messages_mut();
+    assert!(history.last_usage().is_none());
+}
+
+#[test]
+fn drain_pushed_since_invalidates_marker() {
+    let mut history = MessageHistory::new();
+    history.push(user_msg("a"));
+    history.push_assistant_with_usage(assistant_msg("b"), sample_usage(500, 100), sample_model());
+    history.push(user_msg("c"));
+    history.push(user_msg("d"));
+
+    let _drained = history.drain_pushed_since(2);
+    assert!(history.last_usage().is_none());
+}
+
+#[test]
+fn re_anchoring_overwrites_previous_marker() {
+    let mut history = MessageHistory::new();
+    history.push_assistant_with_usage(
+        assistant_msg("first"),
+        sample_usage(100, 50),
+        sample_model(),
+    );
+
+    history.push(user_msg("more"));
+    history.push_assistant_with_usage(
+        assistant_msg("second"),
+        sample_usage(2000, 400),
+        sample_model(),
+    );
+
+    let marker = history.last_usage().expect("marker");
+    assert_eq!(marker.usage.input_tokens.total, 2000);
+    assert!(history.messages_since_last_usage().is_empty());
 }

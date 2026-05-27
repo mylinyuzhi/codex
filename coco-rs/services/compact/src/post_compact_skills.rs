@@ -18,7 +18,6 @@
 use coco_messages::AttachmentMessage;
 use coco_messages::LlmMessage;
 
-use crate::tokens;
 use crate::types::POST_COMPACT_MAX_TOKENS_PER_SKILL;
 use crate::types::POST_COMPACT_SKILLS_TOKEN_BUDGET;
 
@@ -54,7 +53,7 @@ pub fn create_post_compact_skill_attachments(
             path = skill.path,
             body = body,
         );
-        let cost = tokens::estimate_text_tokens(&text);
+        let cost = coco_messages::estimate_text_tokens(&text);
         if used_tokens + cost > POST_COMPACT_SKILLS_TOKEN_BUDGET {
             break;
         }
@@ -74,7 +73,7 @@ fn truncate_to_tokens(s: &str, max_tokens: i64) -> String {
     if max_tokens <= 0 {
         return String::new();
     }
-    let estimated = tokens::estimate_text_tokens(s);
+    let estimated = coco_messages::estimate_text_tokens(s);
     if estimated <= max_tokens {
         return s.to_string();
     }

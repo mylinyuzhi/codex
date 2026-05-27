@@ -303,7 +303,7 @@ fn test_reactive_api_microcompact() {
         ..Default::default()
     };
 
-    let current_tokens = coco_compact::estimate_tokens(&messages);
+    let current_tokens = coco_messages::estimate_tokens_for_messages(&messages);
     let drop_target = reactive::calculate_drop_target(
         current_tokens,
         &config,
