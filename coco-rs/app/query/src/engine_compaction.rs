@@ -1375,7 +1375,9 @@ impl QueryEngine {
             self.config.max_output_tokens,
             &self.config.compact.auto,
         );
-        let current_turn = self.turn_counter.load(std::sync::atomic::Ordering::Relaxed);
+        // TS parity: `RecompactionInfo.turns_since_previous` reads
+        // `tracking.turnCounter` directly — counter was reset to 0 on the
+        // previous compact and bumped per turn since.
         let recompaction_info = self
             .last_compact_state
             .lock()
@@ -1383,7 +1385,7 @@ impl QueryEngine {
             .and_then(|g| g.clone())
             .map(|prev| coco_compact::types::RecompactionInfo {
                 is_recompaction: true,
-                turns_since_previous: (current_turn - prev.turn_id).max(0) as i32,
+                turns_since_previous: prev.turn_counter as i32,
                 auto_compact_threshold: auto_threshold,
             });
         let compact_run_options = coco_compact::CompactRunOptions {
@@ -1535,13 +1537,21 @@ impl QueryEngine {
                 }
 
                 // Record the successful compaction for the next turn's
-                // `RecompactionInfo`. TS: `compact.ts:317` chain
-                // tracking. Run id = boundary uuid for transcript-aligned
-                // observability.
+                // `RecompactionInfo`. TS: `query.ts:521` resets
+                // `tracking.turnCounter = 0` and freshens `turnId` — Rust
+                // mirrors that exactly here. The tracing log at
+                // `coco_query::compact_track` is Rust's substitute for
+                // `tengu_post_autocompact_turn`.
                 let run_id = result.boundary_marker.uuid().copied().unwrap_or_default();
+                tracing::info!(
+                    target: "coco_query::compact_track",
+                    run_id = %run_id,
+                    trigger = ?trigger,
+                    "autocompact boundary recorded (turn_counter reset to 0)"
+                );
                 if let Ok(mut guard) = self.last_compact_state.lock() {
                     *guard = Some(crate::engine::LastCompactState {
-                        turn_id: self.turn_counter.load(std::sync::atomic::Ordering::Relaxed),
+                        turn_counter: 0,
                         run_id: run_id.to_string(),
                     });
                 }

@@ -11,9 +11,16 @@ pub fn map_openai_responses_finish_reason(
     has_function_call: bool,
 ) -> FinishReason {
     let raw = finish_reason.map(String::from);
+    // OpenAI Responses API terminal `status` values, cross-validated against
+    // codex-rs/codex-api/src/sse/responses.rs: `completed` is the normal
+    // end-of-turn marker, `incomplete` carries its real reason in
+    // `incomplete_details.reason` (which is what gets passed in here), and
+    // `failed` surfaces as an error before reaching this mapper.
     let unified = match finish_reason {
         None if has_function_call => UnifiedFinishReason::ToolUse,
         None => UnifiedFinishReason::EndTurn,
+        Some("completed") if has_function_call => UnifiedFinishReason::ToolUse,
+        Some("completed") => UnifiedFinishReason::EndTurn,
         Some("max_output_tokens") => UnifiedFinishReason::MaxTokens,
         Some("content_filter") => UnifiedFinishReason::ContentFilter,
         _ if has_function_call => UnifiedFinishReason::ToolUse,

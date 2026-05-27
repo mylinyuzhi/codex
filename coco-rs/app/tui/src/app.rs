@@ -710,7 +710,7 @@ impl App {
                 true
             }
             TuiEvent::FocusChanged { focused } => {
-                tracing::debug!(
+                tracing::trace!(
                     target: "coco_tui::app",
                     focused,
                     "terminal focus changed",

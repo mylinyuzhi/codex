@@ -128,8 +128,10 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
 pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctx = active_context(state);
     let (cmd, source) = resolve_key(state, key, ctx);
-    match cmd.as_ref() {
-        Some(c) if should_log_key_command(c) => tracing::debug!(
+    if let Some(c) = cmd.as_ref()
+        && should_log_key_command(ctx, c)
+    {
+        tracing::debug!(
             target: "coco_tui::keybinding",
             key = ?key.code,
             mods = ?key.modifiers,
@@ -137,21 +139,35 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
             source,
             cmd = ?c,
             "key → TuiCommand",
-        ),
-        Some(_) => {}
-        None => tracing::trace!(
-            target: "coco_tui::keybinding",
-            key = ?key.code,
-            mods = ?key.modifiers,
-            ctx = ?ctx,
-            source,
-            "key swallowed (no TuiCommand)",
-        ),
+        );
     }
     cmd
 }
 
-fn should_log_key_command(cmd: &TuiCommand) -> bool {
+// In the `Chat` context the user is typing into the input editor — Backspace,
+// arrows, char inserts, Enter-to-submit happen many times per message and
+// drown out everything else at DEBUG. Suppress those; keep every command in
+// modals / overlays / autocomplete where the same keys carry control intent.
+fn should_log_key_command(ctx: KeybindingContext, cmd: &TuiCommand) -> bool {
+    if ctx == KeybindingContext::Chat {
+        return !matches!(
+            cmd,
+            TuiCommand::InsertChar(_)
+                | TuiCommand::InsertNewline
+                | TuiCommand::DeleteBackward
+                | TuiCommand::DeleteForward
+                | TuiCommand::DeleteWordBackward
+                | TuiCommand::DeleteWordForward
+                | TuiCommand::CursorLeft
+                | TuiCommand::CursorRight
+                | TuiCommand::CursorUp
+                | TuiCommand::CursorDown
+                | TuiCommand::CursorHome
+                | TuiCommand::CursorEnd
+                | TuiCommand::WordLeft
+                | TuiCommand::WordRight
+        );
+    }
     !matches!(cmd, TuiCommand::InsertChar(_))
 }
 

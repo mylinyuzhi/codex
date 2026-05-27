@@ -113,7 +113,6 @@ impl QueryEngine {
             )),
             running_tasks: None,
             last_compact_state: Arc::new(std::sync::Mutex::new(None)),
-            turn_counter: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             post_compact_skills: Arc::new(std::sync::RwLock::new(Vec::new())),
             session_start_hook_side_effect_sink: None,
             staged_ledger: None,

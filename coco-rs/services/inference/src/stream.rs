@@ -693,7 +693,25 @@ fn stream_event_from_part(
         LanguageModelV4StreamPart::ToolInputDelta { id, delta, .. } => {
             Some(StreamEvent::ToolCallDelta { id, delta })
         }
-        LanguageModelV4StreamPart::ToolInputEnd { id, .. } => Some(StreamEvent::ToolCallEnd { id }),
+        LanguageModelV4StreamPart::ToolInputEnd { id, .. } => {
+            // Surface the (truncated) tool arguments so operators can debug
+            // approval prompts, pattern errors, and unexpected paths without
+            // a TRACE-level filter. The accumulated `input_json` is fully
+            // populated by `turn_state.update` before this branch runs.
+            if let Some(&idx) = turn_state.active_tool.get(&id)
+                && let Some(TurnPart::ToolCall(seg)) = turn_state.snapshot.parts.get(idx)
+            {
+                debug!(
+                    event = "tool_input_complete",
+                    id = %id,
+                    tool_name = %seg.tool_name,
+                    input_chars = seg.input_json.len(),
+                    input_preview = %truncate_input_preview(&seg.input_json),
+                    "stream event"
+                );
+            }
+            Some(StreamEvent::ToolCallEnd { id })
+        }
         LanguageModelV4StreamPart::Finish {
             usage,
             finish_reason,
@@ -925,6 +943,18 @@ pub fn synthetic_stream_from_content(
 
     let stream = futures::stream::iter(parts);
     LanguageModelV4StreamResult::new(Box::pin(stream))
+}
+
+/// Truncate accumulated tool-call JSON to a single-line debug preview.
+/// UTF-8 safe; replaces interior newlines with spaces so the preview
+/// doesn't break compact log formatters.
+fn truncate_input_preview(input: &str) -> String {
+    const MAX: usize = 160;
+    let mut s: String = input.chars().take(MAX).collect();
+    if input.chars().count() > MAX {
+        s.push_str("...");
+    }
+    s.replace('\n', " ")
 }
 
 #[cfg(test)]
