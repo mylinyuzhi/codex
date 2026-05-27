@@ -63,6 +63,103 @@ fn always_load_propagates_from_meta_opt_out() {
     assert!(tool.should_defer());
 }
 
+// ---------------------------------------------------------------------------
+// Schema wire-envelope preservation — guards against the DeepSeek
+// `type: null` regression. McpTool::input_json_schema must hand back
+// the server's wire schema verbatim (with `type: object` folded in if
+// omitted) so strict OpenAI-compatible providers accept it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn input_json_schema_returns_wire_envelope_verbatim() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "param": { "type": "string", "description": "demo" }
+        },
+        "required": ["param"],
+        "additionalProperties": false
+    });
+    let tool = McpTool::new(
+        "server".into(),
+        "tool".into(),
+        "desc".into(),
+        schema.clone(),
+        McpToolAnnotations::default(),
+    );
+    let tool: &dyn DynTool = &tool;
+    assert_eq!(tool.input_json_schema(), Some(schema));
+}
+
+#[test]
+fn input_json_schema_folds_in_type_object_when_omitted() {
+    // MCP `tools/list` implicitly assumes `type: object`; some servers
+    // (and tests above) omit it. Strict providers reject — fold it in
+    // at construction time.
+    let schema = json!({
+        "properties": { "param": { "type": "string" } }
+    });
+    let tool = McpTool::new(
+        "server".into(),
+        "tool".into(),
+        "desc".into(),
+        schema,
+        McpToolAnnotations::default(),
+    );
+    let tool: &dyn DynTool = &tool;
+    let envelope = tool.input_json_schema().expect("schema present");
+    assert_eq!(
+        envelope.get("type").and_then(|v| v.as_str()),
+        Some("object")
+    );
+}
+
+#[test]
+fn required_array_preserved_from_wire() {
+    // McpTool::new used to hardcode `required: Vec::new()`, silently
+    // dropping the server's required-field list. Schema views must
+    // surface the wire value.
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "age": { "type": "integer" }
+        },
+        "required": ["name"]
+    });
+    let tool = McpTool::new(
+        "server".into(),
+        "tool".into(),
+        "desc".into(),
+        schema,
+        McpToolAnnotations::default(),
+    );
+    let tool: &dyn DynTool = &tool;
+    let view = tool.input_schema();
+    assert_eq!(view.required, vec!["name".to_string()]);
+}
+
+#[test]
+fn non_object_schema_falls_back_to_empty_envelope() {
+    // Defensive: a misbehaving server that sends a bare string or
+    // array as the schema must not crash the tool — fall back to the
+    // canonical empty-params envelope.
+    let tool = McpTool::new(
+        "server".into(),
+        "tool".into(),
+        "desc".into(),
+        json!("bogus"),
+        McpToolAnnotations::default(),
+    );
+    let tool: &dyn DynTool = &tool;
+    let envelope = tool.input_json_schema().expect("schema present");
+    assert_eq!(
+        envelope.get("type").and_then(|v| v.as_str()),
+        Some("object")
+    );
+    assert!(envelope.get("properties").is_some());
+}
+
 #[test]
 fn always_load_meta_extractor_ignores_non_bool_values() {
     // Defensive: arbitrary `_meta["anthropic/alwaysLoad"]` payloads

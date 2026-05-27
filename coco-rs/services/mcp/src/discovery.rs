@@ -392,42 +392,6 @@ fn convert_server_tools(server_name: &str, tools: &[McpToolDefinition]) -> Vec<D
         .collect()
 }
 
-/// Convert an MCP tool definition into a `ToolInputSchema` suitable for the LLM.
-///
-/// Extracts the `properties` map from the JSON Schema `input_schema` and wraps
-/// it in the crate-agnostic `ToolInputSchema`. Fields that are not plain
-/// `properties` (e.g. `_meta`, `annotations`) are stripped so the model only
-/// sees parameter definitions.
-///
-/// TS: convertMcpToolToToolDef() in client.ts
-pub fn convert_mcp_tool_to_tool_def(
-    server_name: &str,
-    tool: &McpToolDefinition,
-) -> (String, coco_types::ToolInputSchema) {
-    let fq_name = mcp_tool_id(server_name, &tool.name);
-    let properties = tool
-        .input_schema
-        .get("properties")
-        .cloned()
-        .and_then(|v| {
-            if let serde_json::Value::Object(map) = v {
-                Some(
-                    map.into_iter()
-                        .collect::<std::collections::HashMap<String, serde_json::Value>>(),
-                )
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default();
-
-    let schema = coco_types::ToolInputSchema {
-        properties,
-        required: Vec::new(),
-    };
-    (fq_name, schema)
-}
-
 /// Extract tool annotations from the input schema.
 ///
 /// TS: tool.annotations?.readOnlyHint, destructiveHint, openWorldHint, title

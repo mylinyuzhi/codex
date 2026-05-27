@@ -468,8 +468,26 @@ pub trait Tool: Send + Sync + 'static {
     /// LLM-facing schema are still legal at the wire (TS parity:
     /// `lazySchema().omit()` only narrows the model's view, the
     /// runtime still accepts the field).
+    ///
+    /// **Tools whose `Input = serde_json::Value` MUST override this**
+    /// — schemars' permissive derive for `Value` produces a schema
+    /// strict OpenAI-compatible providers (DeepSeek etc.) reject with
+    /// `type: null`. The debug-assert below catches the missing-
+    /// override case during testing. Production callers fall through
+    /// to whatever schemars produced (preserves the existing
+    /// behaviour; the assert exists only to flag dev-time regressions
+    /// faster than waiting for a wire-level 400).
     fn input_json_schema(&self) -> Option<Value> {
-        Some(crate::derive::derive_input_schema_value::<Self::Input>())
+        let schema = crate::derive::derive_input_schema_value::<Self::Input>();
+        debug_assert!(
+            schema.get("type") == Some(&Value::String("object".into())),
+            "Tool `{}` has `Self::Input` that doesn't derive to a JSON object schema \
+             (got `type = {:?}`). Override `input_json_schema()` to return the dynamic \
+             wire envelope — see `McpTool` for the pattern.",
+            std::any::type_name::<Self>(),
+            schema.get("type"),
+        );
+        Some(schema)
     }
 
     /// Session-aware JSON Schema for the model-facing tool listing.

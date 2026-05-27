@@ -32,6 +32,30 @@ use crate::emit::emit_protocol;
 use crate::engine::QueryEngine;
 use crate::helpers::drain_command_queue_into_history;
 
+/// Whether the session loop will continue with another LLM round or
+/// return immediately after this finalize call.
+///
+/// Gates `TurnCompleted` wire emission inside
+/// [`QueryEngine::finalize_turn_post_tools`] / [`QueryEngine::finalize_successful_turn_tail`].
+/// Per-turn bookkeeping (queue drain, compaction, transcript flush,
+/// reasoning-metadata side-cache) runs in both modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnContinuation {
+    /// Another LLM round will fire for the same user-prompt cycle.
+    /// Do *not* emit `TurnCompleted` — the SDK iterator and TUI state
+    /// machine treat that event as "user-prompt cycle done".
+    Continuing,
+    /// The session loop is about to return: this is the last LLM round
+    /// for the current user prompt. Emit `TurnCompleted`.
+    Terminal,
+}
+
+impl TurnContinuation {
+    pub(crate) fn is_terminal(self) -> bool {
+        matches!(self, TurnContinuation::Terminal)
+    }
+}
+
 impl QueryEngine {
     /// Unified handler for "input + output won't fit in the model's context
     /// window." Three distinct signals route here:
@@ -314,31 +338,31 @@ impl QueryEngine {
     }
 
     /// Finalize a turn after tools have executed: drain queued commands + inbox,
-    /// auto-compact if over threshold, then either emit `TurnCompleted` (when
-    /// the session loop is about to exit) or just stamp reasoning metadata
-    /// (when another LLM round will follow).
+    /// auto-compact if over threshold, stamp reasoning metadata, and — when
+    /// the session loop is about to return — emit `TurnCompleted`.
     ///
-    /// `is_terminal` controls the wire-event side: TS treats `turn` as the
-    /// whole user-prompt cycle, so `TurnCompleted` must fire exactly once per
-    /// prompt — at the LLM round whose `stop_reason` ends the agentic loop
-    /// (typically `EndTurn` / `StopSequence`, or an abnormal-terminal stop).
-    /// Intermediate rounds (after a `ToolUse` stop_reason where the engine
-    /// continues with another LLM call) still need the per-turn bookkeeping
-    /// (queue drain, compaction, transcript flush, reasoning metadata) but
-    /// must *not* emit `TurnCompleted` — otherwise consumers like the Python
-    /// SDK that break their event iterator on `TurnCompleted` exit before the
-    /// next round runs.
+    /// `continuation` reflects what the session loop will do **next** (not what
+    /// the LLM's `stop_reason` was): the loop may continue after a `ToolUse`
+    /// stop, or terminate after a `ToolUse` if a tool called
+    /// `prevent_continuation()` / the tool runner reported
+    /// `continue_after_tools = false`. The wire-event invariant — exactly one
+    /// `TurnCompleted` per user-prompt cycle — is keyed on "is the loop about
+    /// to exit", not on `stop_reason`. Per-turn bookkeeping (queue drain,
+    /// compaction, transcript flush, reasoning metadata) runs unconditionally;
+    /// the protocol event is gated.
     ///
-    /// Mirrors the TS tail-of-turn sequence in `query.ts` where
-    /// messageQueueManager flush + compactConversation happen on every loop
-    /// iteration; TS doesn't emit a per-round wire event at all.
+    /// `TurnCompleted` is wire-protocol-load-bearing for Rust consumers (no
+    /// async-generator-return equivalent in NDJSON RPC) — the Python SDK
+    /// iterator, the TUI state machine, and the SDK dispatcher's
+    /// `StreamAccumulator` flush all key on it. The TS reference `query.ts`
+    /// has no analogous wire event; turn-end is signalled by generator return.
     pub(crate) async fn finalize_turn_post_tools(
         &self,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         turn_id: String,
         usage: TokenUsage,
-        is_terminal: bool,
+        continuation: TurnContinuation,
     ) {
         // Periodic terminal-task eviction. Fires every turn,
         // regardless of success / failure / cancellation outcome —
@@ -685,30 +709,28 @@ impl QueryEngine {
             }
         }
 
-        self.finalize_successful_turn_tail(history, event_tx, turn_id, usage, is_terminal)
+        self.finalize_successful_turn_tail(history, event_tx, turn_id, usage, continuation)
             .await;
     }
 
-    /// Shared successful model-turn tail. Branch-specific work (tool
-    /// execution, queue drain, auto-compaction, stop hooks) happens before
-    /// this point; every successful turn still needs the cache snapshot,
-    /// transcript flush, and reasoning-metadata side-cache update. The
-    /// `TurnCompleted` protocol event is gated on `is_terminal` — see
-    /// [`Self::finalize_turn_post_tools`] for the rationale.
+    /// Shared successful-turn tail. Persistence (cache snapshot, transcript
+    /// flush) and reasoning-metadata side-cache update always run; the
+    /// `TurnCompleted` protocol event fires only on
+    /// [`TurnContinuation::Terminal`]. See [`Self::finalize_turn_post_tools`]
+    /// for the wire-protocol rationale.
     pub(crate) async fn finalize_successful_turn_tail(
         &self,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         turn_id: String,
         usage: TokenUsage,
-        is_terminal: bool,
+        continuation: TurnContinuation,
     ) {
         self.flush_successful_turn_state(history).await;
-        if is_terminal {
-            self.emit_successful_turn_completed(event_tx, history, turn_id, usage)
-                .await;
-        } else {
-            self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
+        self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
+            .await;
+        if continuation.is_terminal() {
+            self.emit_turn_completed(event_tx, turn_id, usage, history.len())
                 .await;
         }
     }
