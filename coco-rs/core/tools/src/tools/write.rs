@@ -290,10 +290,11 @@ impl Tool for WriteTool {
 
         crate::record_file_edit(ctx, path, content.to_string()).await;
         // TS `FileWriteTool.ts` mirrors `FileReadTool.ts:578-591` skill
-        // auto-discovery — when a write touches a path under a nested
-        // `.claude/skills/` ancestor, the manager picks up the new
-        // skill on the next batch boundary.
-        crate::track_skill_discovery(ctx, path).await;
+        // auto-discovery + conditional-skill activation — when a
+        // write touches a path under a nested `.claude/skills/`
+        // ancestor or matches a `paths`-gated skill, the next batch
+        // boundary picks both up.
+        crate::track_skill_triggers(ctx, path).await;
         // TS `FileWriteTool.ts` calls `clearDeliveredDiagnosticsForFile`
         // + `lspManager.saveFile(path)` after every successful write so
         // the language server re-indexes and emits fresh diagnostics.

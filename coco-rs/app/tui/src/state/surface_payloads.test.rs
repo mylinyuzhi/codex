@@ -189,3 +189,82 @@ Questions asked and answers provided:\n\
         assert_eq!(OTHER_OPTION_DISPLAY, "Other");
     }
 }
+
+mod skills_dialog_from_wire {
+    use crate::state::SkillsDialogSource;
+    use crate::state::SkillsDialogState;
+
+    fn entry(
+        name: &str,
+        source: coco_types::SkillsDialogSource,
+        tokens: i64,
+    ) -> coco_types::SkillsDialogEntry {
+        coco_types::SkillsDialogEntry {
+            name: name.to_string(),
+            source,
+            plugin_name: None,
+            token_estimate: tokens,
+        }
+    }
+
+    #[test]
+    fn from_wire_groups_in_render_order_and_sorts_each_group() {
+        // Two project + one user + one MCP, intentionally out of order
+        // in the wire payload so the grouping + sort steps are visible.
+        let payload = coco_types::SkillsDialogPayload {
+            entries: vec![
+                entry("zeta", coco_types::SkillsDialogSource::User, 10),
+                entry("alpha", coco_types::SkillsDialogSource::Project, 20),
+                entry("acme:resource", coco_types::SkillsDialogSource::Mcp, 5),
+                entry("beta", coco_types::SkillsDialogSource::Project, 30),
+            ],
+            group_subtitles: vec![
+                coco_types::SkillsDialogGroupSubtitle {
+                    source: coco_types::SkillsDialogSource::Project,
+                    subtitle: "/proj/.claude/skills".to_string(),
+                },
+                coco_types::SkillsDialogGroupSubtitle {
+                    source: coco_types::SkillsDialogSource::Mcp,
+                    subtitle: "acme".to_string(),
+                },
+            ],
+        };
+
+        let state = SkillsDialogState::from_wire(payload);
+
+        // Render order: Project before User before Mcp; Policy/Plugin
+        // missing → dropped.
+        let sources: Vec<_> = state.groups.iter().map(|g| g.source).collect();
+        assert_eq!(
+            sources,
+            vec![
+                SkillsDialogSource::Project,
+                SkillsDialogSource::User,
+                SkillsDialogSource::Mcp,
+            ]
+        );
+
+        // Project group: alphabetical sort within group.
+        let project = &state.groups[0];
+        assert_eq!(project.subtitle, "/proj/.claude/skills");
+        let project_names: Vec<_> = project.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(project_names, vec!["alpha", "beta"]);
+
+        // User group has no subtitle in payload → empty string.
+        assert_eq!(state.groups[1].subtitle, "");
+
+        // Total across groups matches input count.
+        assert_eq!(state.total(), 4);
+    }
+
+    #[test]
+    fn from_wire_drops_empty_groups_silently() {
+        let payload = coco_types::SkillsDialogPayload {
+            entries: vec![entry("a", coco_types::SkillsDialogSource::User, 1)],
+            group_subtitles: vec![],
+        };
+        let state = SkillsDialogState::from_wire(payload);
+        assert_eq!(state.groups.len(), 1);
+        assert_eq!(state.groups[0].source, SkillsDialogSource::User);
+    }
+}

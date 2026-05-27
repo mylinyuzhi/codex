@@ -883,3 +883,122 @@ impl MemoryDialogState {
         }
     }
 }
+
+/// `/skills` read-only overlay state. Built from the
+/// `TuiOnlyEvent::OpenSkillsDialog` payload; the dialog is informational
+/// (no selection action) so we only store the pre-grouped entries and
+/// per-group subtitle text.
+///
+/// TS parity: `components/skills/SkillsMenu.tsx`. The TS dialog has
+/// no selection state — neither does ours.
+#[derive(Debug, Clone)]
+pub struct SkillsDialogState {
+    /// Source-group order in the rendered output. Mirrors TS's
+    /// hard-coded render order in `SkillsMenu`:
+    /// `projectSettings`, `userSettings`, `policySettings`, `plugin`, `mcp`.
+    pub groups: Vec<SkillsDialogGroup>,
+}
+
+/// One source group in the skills dialog (e.g. all project skills).
+#[derive(Debug, Clone)]
+pub struct SkillsDialogGroup {
+    pub source: SkillsDialogSource,
+    /// Optional secondary text shown next to the group title (e.g. the
+    /// skills directory path). Empty string ⇒ no subtitle.
+    pub subtitle: String,
+    /// Rows in this group, already sorted by skill name (TS
+    /// `localeCompare`). Empty groups are not emitted.
+    pub entries: Vec<SkillsDialogEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillsDialogEntry {
+    pub name: String,
+    pub plugin_name: Option<String>,
+    pub token_estimate: i64,
+}
+
+/// TUI-side mirror of `coco_types::SkillsDialogSource`. Pinned to the
+/// state crate so [`crate::state::ModalState`] doesn't import
+/// `coco-types` directly for this field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SkillsDialogSource {
+    Project,
+    User,
+    Policy,
+    Plugin,
+    Mcp,
+}
+
+impl SkillsDialogSource {
+    pub fn from_wire(s: coco_types::SkillsDialogSource) -> Self {
+        match s {
+            coco_types::SkillsDialogSource::Project => Self::Project,
+            coco_types::SkillsDialogSource::User => Self::User,
+            coco_types::SkillsDialogSource::Policy => Self::Policy,
+            coco_types::SkillsDialogSource::Plugin => Self::Plugin,
+            coco_types::SkillsDialogSource::Mcp => Self::Mcp,
+        }
+    }
+}
+
+impl SkillsDialogState {
+    /// Build from the wire payload (`TuiOnlyEvent::OpenSkillsDialog`).
+    /// Performs the TS render-order grouping + per-group sort here so
+    /// the renderer is a pure projection.
+    pub fn from_wire(payload: coco_types::SkillsDialogPayload) -> Self {
+        // TS `SkillsMenu` render order — drives group placement in the
+        // overlay. Keeping this in the state-builder (not the renderer)
+        // makes the order deterministic and snapshot-testable.
+        let order = [
+            SkillsDialogSource::Project,
+            SkillsDialogSource::User,
+            SkillsDialogSource::Policy,
+            SkillsDialogSource::Plugin,
+            SkillsDialogSource::Mcp,
+        ];
+
+        let mut by_source: std::collections::HashMap<SkillsDialogSource, Vec<SkillsDialogEntry>> =
+            std::collections::HashMap::new();
+        for e in payload.entries {
+            by_source
+                .entry(SkillsDialogSource::from_wire(e.source))
+                .or_default()
+                .push(SkillsDialogEntry {
+                    name: e.name,
+                    plugin_name: e.plugin_name,
+                    token_estimate: e.token_estimate,
+                });
+        }
+
+        let subtitle_lookup: std::collections::HashMap<SkillsDialogSource, String> = payload
+            .group_subtitles
+            .into_iter()
+            .map(|gs| (SkillsDialogSource::from_wire(gs.source), gs.subtitle))
+            .collect();
+
+        let mut groups = Vec::new();
+        for source in order {
+            let Some(mut entries) = by_source.remove(&source) else {
+                continue;
+            };
+            if entries.is_empty() {
+                continue;
+            }
+            entries.sort_by(|a, b| a.name.cmp(&b.name));
+            let subtitle = subtitle_lookup.get(&source).cloned().unwrap_or_default();
+            groups.push(SkillsDialogGroup {
+                source,
+                subtitle,
+                entries,
+            });
+        }
+        Self { groups }
+    }
+
+    /// Total entry count across all groups — matches the TS dialog
+    /// subtitle "{N} skills".
+    pub fn total(&self) -> usize {
+        self.groups.iter().map(|g| g.entries.len()).sum()
+    }
+}

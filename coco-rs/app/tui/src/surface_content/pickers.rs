@@ -12,6 +12,7 @@ use crate::state::MemoryDialogState;
 use crate::state::ModelPickerState;
 use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
+use crate::state::SkillsDialogState;
 
 pub(super) fn model_picker_content(
     m: &ModelPickerState,
@@ -43,6 +44,13 @@ pub(super) fn memory_dialog_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::memory_dialog_content(m, styles)
+}
+
+pub(super) fn skills_dialog_content(
+    s: &SkillsDialogState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    picker::skills_dialog_content(s, styles)
 }
 
 pub(super) fn mcp_server_select_content(

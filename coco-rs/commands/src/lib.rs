@@ -135,6 +135,15 @@ pub enum DialogSpec {
     /// a role pill so multi-provider users can address any
     /// [`coco_types::ModelRole`] from the same surface.
     ModelPicker,
+    /// `/skills` — read-only skill catalog overlay. Payload carries the
+    /// fully-grouped entry list plus per-group subtitle text so the
+    /// TUI doesn't recompute paths or token estimates.
+    ///
+    /// TS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog
+    /// has no toggle / search / sort — only Esc to close.
+    SkillsList {
+        payload: coco_types::SkillsDialogPayload,
+    },
 }
 
 /// One row in the memory-file selector.

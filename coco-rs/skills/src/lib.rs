@@ -255,14 +255,38 @@ pub struct SkillManager {
 /// Internal storage for the skill catalog. Held behind one `RwLock`
 /// inside [`SkillManager`] so both halves are read-consistent under a
 /// single lock acquisition.
+///
+/// **Conditional split.** Disk skills land in one of two maps based on
+/// their frontmatter `paths` field (TS `loadSkillsDir.ts:771-790`):
+///
+/// - `disk` — unconditional + activated-conditional skills. These are
+///   visible to the model (`listing()`, `visible()`, `get()`).
+/// - `disk_conditional` — skills with non-empty `paths` that have NOT
+///   yet been activated by a matching file operation. Hidden until
+///   [`SkillManager::activate_for_paths`] promotes them.
+///
+/// Promotion is one-way and session-persistent via
+/// [`Self::activated_conditional_names`] — once activated, a skill
+/// survives reloads and stays in `disk` for the rest of the session,
+/// matching TS `activatedConditionalSkillNames` in
+/// `loadSkillsDir.ts:829`.
 #[derive(Default, Debug)]
 struct SkillCatalog {
-    /// On-disk / bundled skills, keyed by skill name.
+    /// Visible disk / bundled skills, keyed by skill name.
     disk: HashMap<String, Arc<SkillDefinition>>,
+    /// Path-gated disk skills awaiting activation. Hidden from
+    /// `listing()` / `visible()` / `get()` until promoted.
+    disk_conditional: HashMap<String, Arc<SkillDefinition>>,
+    /// Names of conditional skills that have been activated this
+    /// session. Survives reloads (TS parity:
+    /// `activatedConditionalSkillNames` survives cache clears within
+    /// a session per `loadSkillsDir.ts:810`).
+    activated_conditional_names: HashSet<String>,
     /// MCP-sourced skills, keyed by `(server_name, skill_name)` so a
     /// per-server unregister can drop a slice without touching the
     /// rest. TS: server-scoped skill maps managed by the MCP
-    /// connection manager (`services/mcp/client.ts`).
+    /// connection manager (`services/mcp/client.ts`). MCP skills have
+    /// no on-disk `paths` semantics (see `mcp_builders.rs`).
     mcp: HashMap<(String, String), Arc<SkillDefinition>>,
 }
 
@@ -272,6 +296,25 @@ impl SkillCatalog {
     }
     fn len(&self) -> usize {
         self.disk.len() + self.mcp.len()
+    }
+    /// Whether `skill` should be routed to the conditional bucket on
+    /// register. TS: `loadSkillsDir.ts:776-779` predicate.
+    fn is_conditional(&self, skill: &SkillDefinition) -> bool {
+        !skill.paths.is_empty() && !self.activated_conditional_names.contains(&skill.name)
+    }
+    /// Insert `skill` into the right bucket per [`Self::is_conditional`].
+    /// Removes any stale entry under the same name from BOTH buckets so
+    /// register-on-reload is idempotent regardless of the prior bucket.
+    fn insert_disk(&mut self, skill: SkillDefinition) {
+        let name = skill.name.clone();
+        self.disk.remove(&name);
+        self.disk_conditional.remove(&name);
+        let target = if self.is_conditional(&skill) {
+            &mut self.disk_conditional
+        } else {
+            &mut self.disk
+        };
+        target.insert(name, Arc::new(skill));
     }
 }
 
@@ -307,10 +350,14 @@ impl SkillManager {
 
     /// Register (or replace) an on-disk / bundled skill. Interior-mut,
     /// safe to call on a shared `Arc<SkillManager>`.
+    ///
+    /// Skills with non-empty `paths` and no prior activation are routed
+    /// to the hidden conditional bucket (TS `loadSkillsDir.ts:771-790`).
+    /// They surface only after [`Self::activate_for_paths`] matches a
+    /// file the model touched this session.
     pub fn register(&self, skill: SkillDefinition) {
-        let name = skill.name.clone();
         let mut guard = self.write_catalog();
-        guard.disk.insert(name, Arc::new(skill));
+        guard.insert_disk(skill);
     }
 
     /// Register (or replace) an MCP-sourced skill.
@@ -344,14 +391,97 @@ impl SkillManager {
     /// Replace the entire disk-skill catalog with a fresh set. Used by
     /// the watcher's reload path; MCP-sourced skills are preserved.
     ///
+    /// `activated_conditional_names` survives the reload — TS parity:
+    /// once a conditional skill is activated this session it stays
+    /// activated even if the disk catalog is rebuilt
+    /// (`loadSkillsDir.ts:810` — `activatedConditionalSkillNames`
+    /// outlives `clearSkillCaches`).
+    ///
     /// `&self`: interior-mut via the shared `RwLock`.
     pub fn reload_disk_skills(&self, fresh: impl IntoIterator<Item = SkillDefinition>) {
         let mut guard = self.write_catalog();
         guard.disk.clear();
+        guard.disk_conditional.clear();
         for skill in fresh {
-            let name = skill.name.clone();
-            guard.disk.insert(name, Arc::new(skill));
+            guard.insert_disk(skill);
         }
+    }
+
+    /// Activate path-gated skills whose `paths` patterns match any of
+    /// the given files, moving them from the conditional bucket into
+    /// the visible `disk` bucket. Returns the names of newly-activated
+    /// skills (in stable sorted order) so callers can log / emit
+    /// telemetry.
+    ///
+    /// Mirrors TS `activateConditionalSkillsForPaths`
+    /// (`loadSkillsDir.ts:997-1058`):
+    /// - patterns interpret as gitignore-style globs anchored at `cwd`
+    ///   (TS uses the `ignore` library; we use the Rust `ignore` crate)
+    /// - file paths outside `cwd`, empty, or escaping via `..` are
+    ///   skipped (TS lines 1014-1027)
+    /// - activation is one-way and persistent for the session via
+    ///   [`SkillCatalog::activated_conditional_names`]
+    ///
+    /// The reminder pipeline's `skill_listing` generator picks up the
+    /// newly-visible names on the next turn via
+    /// [`Self::take_unannounced_skills`] — no separate notification is
+    /// emitted here (TS `dynamic_skills_changed` is analytics-only).
+    pub fn activate_for_paths(&self, file_paths: &[PathBuf], cwd: &Path) -> Vec<String> {
+        let mut guard = self.write_catalog();
+        if guard.disk_conditional.is_empty() {
+            return Vec::new();
+        }
+
+        // Normalize files to absolute cwd-rooted paths, skipping
+        // anything outside cwd (TS: `relativePath.startsWith('..')` /
+        // absolute check). We need ABSOLUTE paths under `cwd` because
+        // `matched_path_or_any_parents` (the TS-parity matcher — walks
+        // parent dirs so a bare-dir pattern like `build` matches
+        // `build/foo.rs`) requires its input to be a descendant of the
+        // matcher's root.
+        let absolute_files: Vec<PathBuf> = file_paths
+            .iter()
+            .filter_map(|p| relative_to_cwd(p, cwd).map(|rel| cwd.join(rel)))
+            .collect();
+        if absolute_files.is_empty() {
+            return Vec::new();
+        }
+
+        let mut activated: Vec<String> = Vec::new();
+        let conditional_names: Vec<String> = guard.disk_conditional.keys().cloned().collect();
+        for name in conditional_names {
+            let skill = match guard.disk_conditional.get(&name) {
+                Some(s) => s.clone(),
+                None => continue,
+            };
+            let matcher = match build_skill_path_matcher(cwd, &skill.paths) {
+                Some(m) => m,
+                None => continue,
+            };
+            let hit = absolute_files.iter().any(|abs| {
+                matches!(
+                    matcher.matched_path_or_any_parents(abs, /*is_dir*/ false),
+                    ignore::Match::Ignore(_)
+                )
+            });
+            if !hit {
+                continue;
+            }
+            if let Some(skill_arc) = guard.disk_conditional.remove(&name) {
+                guard.disk.insert(name.clone(), skill_arc);
+                guard.activated_conditional_names.insert(name.clone());
+                activated.push(name);
+            }
+        }
+        activated.sort();
+        activated
+    }
+
+    /// Number of conditional (hidden) skills currently awaiting
+    /// activation. TS parity: `getConditionalSkillCount()`
+    /// (`loadSkillsDir.ts:1063`). Test/diagnostic surface only.
+    pub fn conditional_skill_count(&self) -> usize {
+        self.read_catalog().disk_conditional.len()
     }
 
     /// Look up a skill by canonical name or alias.
@@ -1255,6 +1385,55 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
 pub fn estimate_skill_tokens(skill: &SkillDefinition) -> i64 {
     let chars = skill.name.len() + skill.description.len() + 20; // overhead
     (chars / 4) as i64
+}
+
+/// Normalize `file_path` to a cwd-relative path suitable for gitignore
+/// matching. Returns `None` for paths outside `cwd` (or any other
+/// shape TS's `activateConditionalSkillsForPaths` skips):
+/// - empty after normalization
+/// - escapes via `..`
+/// - absolute after relativization (Windows cross-drive case in TS)
+///
+/// TS source: `loadSkillsDir.ts:1014-1027`.
+fn relative_to_cwd(file_path: &Path, cwd: &Path) -> Option<PathBuf> {
+    let rel: PathBuf = if file_path.is_absolute() {
+        file_path.strip_prefix(cwd).ok()?.to_path_buf()
+    } else {
+        file_path.to_path_buf()
+    };
+    if rel.as_os_str().is_empty() || rel.is_absolute() {
+        return None;
+    }
+    if rel
+        .components()
+        .next()
+        .map(|c| matches!(c, std::path::Component::ParentDir))
+        .unwrap_or(true)
+    {
+        return None;
+    }
+    Some(rel)
+}
+
+/// Build a `Gitignore` matcher anchored at `cwd` from a skill's
+/// `paths` list. Returns `None` if the pattern set is empty or every
+/// `add_line` call errored (the latter shouldn't happen in practice —
+/// `paths` is sanitized at parse time, see `parse_skill_markdown`).
+fn build_skill_path_matcher(cwd: &Path, paths: &[String]) -> Option<ignore::gitignore::Gitignore> {
+    if paths.is_empty() {
+        return None;
+    }
+    let mut builder = ignore::gitignore::GitignoreBuilder::new(cwd);
+    let mut any_ok = false;
+    for pattern in paths {
+        if builder.add_line(None, pattern).is_ok() {
+            any_ok = true;
+        }
+    }
+    if !any_ok {
+        return None;
+    }
+    builder.build().ok()
 }
 
 #[cfg(test)]

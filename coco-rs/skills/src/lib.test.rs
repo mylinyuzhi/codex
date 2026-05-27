@@ -1064,3 +1064,246 @@ python3 financial-analyst/scripts/dcf_valuation.py --help
     assert!(s.allowed_tools.is_none());
     assert!(s.argument_names.is_empty());
 }
+
+// ── Conditional activation (paths frontmatter) ──
+//
+// TS source: `loadSkillsDir.ts:771-790` (split into conditional bucket
+// on register) + `loadSkillsDir.ts:997-1058`
+// (`activateConditionalSkillsForPaths`). Skills with non-empty `paths`
+// are hidden from `visible()` / `get()` / `listing()` until a file the
+// model touches matches one of their gitignore-style patterns.
+
+fn conditional_skill(name: &str, paths: Vec<&str>) -> SkillDefinition {
+    let mut s = test_skill(
+        name,
+        "conditional skill",
+        "do conditional work",
+        SkillSource::Project {
+            path: format!("/proj/.claude/skills/{name}/SKILL.md").into(),
+        },
+    );
+    s.paths = paths.into_iter().map(str::to_string).collect();
+    s
+}
+
+#[test]
+fn test_conditional_skill_hidden_before_activation() {
+    let mgr = SkillManager::new();
+    mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
+    mgr.register(test_skill("always-on", "always", "x", SkillSource::Bundled));
+
+    // visible() and len() / all() exclude conditional skills until
+    // activated. `conditional_skill_count` reports them separately.
+    assert_eq!(mgr.len(), 1, "only the unconditional skill is in disk");
+    assert_eq!(mgr.conditional_skill_count(), 1);
+    assert!(mgr.get("rust-lint").is_none(), "hidden from get() too");
+    assert!(mgr.get("always-on").is_some());
+    let visible = mgr.visible(&coco_types::Features::with_defaults());
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].name, "always-on");
+}
+
+#[test]
+fn test_conditional_skill_activates_on_matching_path() {
+    let mgr = SkillManager::new();
+    mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
+    assert_eq!(mgr.conditional_skill_count(), 1);
+
+    // Matching cwd-relative file path → activation.
+    let cwd = PathBuf::from("/proj");
+    let activated = mgr.activate_for_paths(&[cwd.join("src/lib.rs")], &cwd);
+    assert_eq!(activated, vec!["rust-lint"]);
+
+    // Now visible.
+    assert!(mgr.get("rust-lint").is_some());
+    assert_eq!(mgr.conditional_skill_count(), 0);
+    let visible = mgr.visible(&coco_types::Features::with_defaults());
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].name, "rust-lint");
+}
+
+#[test]
+fn test_conditional_skill_not_activated_by_non_matching_path() {
+    let mgr = SkillManager::new();
+    mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
+
+    let cwd = PathBuf::from("/proj");
+    let activated = mgr.activate_for_paths(&[cwd.join("docs/README.md")], &cwd);
+    assert!(activated.is_empty());
+    assert!(mgr.get("rust-lint").is_none(), "still hidden");
+    assert_eq!(mgr.conditional_skill_count(), 1);
+}
+
+#[test]
+fn test_activation_idempotent_returns_only_new_names() {
+    let mgr = SkillManager::new();
+    mgr.register(conditional_skill("a", vec!["src/**/*.rs"]));
+    mgr.register(conditional_skill("b", vec!["docs/**"]));
+
+    let cwd = PathBuf::from("/proj");
+    let first = mgr.activate_for_paths(&[cwd.join("src/lib.rs")], &cwd);
+    assert_eq!(first, vec!["a"]);
+
+    // Second call with the same path: nothing new to activate.
+    let second = mgr.activate_for_paths(&[cwd.join("src/lib.rs")], &cwd);
+    assert!(second.is_empty());
+
+    // A third call with a path matching `b` activates only `b`.
+    let third = mgr.activate_for_paths(&[cwd.join("docs/intro.md")], &cwd);
+    assert_eq!(third, vec!["b"]);
+}
+
+#[test]
+fn test_activation_persists_across_reload() {
+    // TS `loadSkillsDir.ts:810` parity — `activatedConditionalSkillNames`
+    // survives `clearSkillCaches`. On reload, an already-activated
+    // skill is re-categorized as unconditional.
+    let mgr = SkillManager::new();
+    mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
+
+    let cwd = PathBuf::from("/proj");
+    mgr.activate_for_paths(&[cwd.join("src/lib.rs")], &cwd);
+    assert!(mgr.get("rust-lint").is_some());
+
+    // Reload (e.g. file-watcher fires after the SKILL.md is touched).
+    mgr.reload_disk_skills(vec![conditional_skill("rust-lint", vec!["src/**/*.rs"])]);
+    assert!(mgr.get("rust-lint").is_some(), "activation survives reload");
+    assert_eq!(mgr.conditional_skill_count(), 0);
+}
+
+#[test]
+fn test_activation_skips_paths_outside_cwd() {
+    // TS lines 1014-1027: relative paths starting with `..` and
+    // absolute paths outside cwd are skipped silently.
+    let mgr = SkillManager::new();
+    mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
+
+    let cwd = PathBuf::from("/proj");
+    // Absolute path NOT under cwd → skipped.
+    let activated = mgr.activate_for_paths(&[PathBuf::from("/other/src/lib.rs")], &cwd);
+    assert!(activated.is_empty());
+    // Relative escaping path → skipped.
+    let activated = mgr.activate_for_paths(&[PathBuf::from("../src/lib.rs")], &cwd);
+    assert!(activated.is_empty());
+    // Still hidden.
+    assert!(mgr.get("rust-lint").is_none());
+}
+
+#[test]
+fn test_activation_relative_path_works() {
+    // Cwd-relative file paths are gitignore-matched as-is (TS uses the
+    // raw `relativePath` string when it's already relative).
+    let mgr = SkillManager::new();
+    mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
+
+    let cwd = PathBuf::from("/proj");
+    let activated = mgr.activate_for_paths(&[PathBuf::from("src/lib.rs")], &cwd);
+    assert_eq!(activated, vec!["rust-lint"]);
+}
+
+#[test]
+fn test_activation_brace_expanded_pattern_matches() {
+    // After `expand_braces`, `*.{ts,tsx}` produces two patterns. Either
+    // file extension activates the skill.
+    let mgr = SkillManager::new();
+    let content = "\
+---
+description: TS skill
+paths: '*.{ts,tsx}'
+---
+body
+";
+    let skill =
+        parse_skill_markdown(content, Path::new("/proj/.claude/skills/ts/SKILL.md")).unwrap();
+    mgr.register(skill);
+
+    let cwd = PathBuf::from("/proj");
+    let activated = mgr.activate_for_paths(&[cwd.join("foo.tsx")], &cwd);
+    assert_eq!(activated, vec!["ts"]);
+}
+
+#[test]
+fn test_listing_delta_surfaces_newly_activated_skill() {
+    // The reminder pipeline surfaces newly-visible skills via
+    // `take_unannounced_skills` delta. A conditional skill activated
+    // mid-session shows up in the next call's delta.
+    let mgr = SkillManager::new();
+    mgr.register(test_skill("always", "x", "y", SkillSource::Bundled));
+    mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
+
+    // First listing call: only the unconditional skill announces.
+    let names: Vec<&str> = vec!["always"];
+    let (delta, is_initial) = mgr.take_unannounced_skills(None, &names);
+    assert!(is_initial);
+    assert_eq!(delta, vec!["always".to_string()]);
+
+    // Activate the conditional skill — now `visible()` returns both.
+    let cwd = PathBuf::from("/proj");
+    let activated = mgr.activate_for_paths(&[cwd.join("src/lib.rs")], &cwd);
+    assert_eq!(activated, vec!["rust-lint"]);
+
+    // Second listing: only the newly-visible name is in the delta.
+    let names: Vec<&str> = vec!["always", "rust-lint"];
+    let (delta, is_initial) = mgr.take_unannounced_skills(None, &names);
+    assert!(!is_initial);
+    assert_eq!(delta, vec!["rust-lint".to_string()]);
+}
+
+#[test]
+fn probe_bare_dir_pattern_matches_files_inside() {
+    // TS `ignore` library walks parents: `ignore().add(['build']).ignores('build/foo.rs')`
+    // returns true. This proves whether my Rust impl mirrors TS for the
+    // common `paths: build/**` → stripped to `build` case.
+    let mgr = SkillManager::new();
+    let mut skill = conditional_skill("build-skill", vec![]);
+    skill.paths = vec!["build".to_string()];
+    mgr.register(skill);
+    let cwd = PathBuf::from("/proj");
+    let activated = mgr.activate_for_paths(&[cwd.join("build/foo.rs")], &cwd);
+    assert_eq!(
+        activated,
+        vec!["build-skill"],
+        "TS parity: bare-dir pattern `build` must match `build/foo.rs`"
+    );
+}
+
+#[test]
+fn probe_paths_slash_double_star_stripped_then_matches_inside() {
+    // End-to-end: `paths: build/**` parses to `["build"]` (the `/**`
+    // suffix is stripped per `parseSkillPaths`). Activation against
+    // `build/foo.rs` should fire.
+    let mgr = SkillManager::new();
+    let content = "\
+---
+description: x
+paths: build/**
+---
+body
+";
+    let skill = parse_skill_markdown(
+        content,
+        Path::new("/proj/.claude/skills/buildskill/SKILL.md"),
+    )
+    .unwrap();
+    assert_eq!(skill.paths, vec!["build".to_string()]);
+    mgr.register(skill);
+
+    let cwd = PathBuf::from("/proj");
+    let activated = mgr.activate_for_paths(&[cwd.join("build/foo.rs")], &cwd);
+    assert_eq!(activated, vec!["buildskill"]);
+}
+
+#[test]
+fn test_register_with_empty_paths_is_unconditional() {
+    // A skill that explicitly serializes `paths: []` after frontmatter
+    // parse (e.g. all-`**` patterns stripped to empty) should land in
+    // the visible bucket, not the conditional one.
+    let mgr = SkillManager::new();
+    let mut s = conditional_skill("regular", vec!["**"]);
+    // Parse-time invariant: all-`**` collapses to empty. Reproduce that
+    // post-condition directly.
+    s.paths = vec![];
+    mgr.register(s);
+    assert_eq!(mgr.conditional_skill_count(), 0);
+    assert!(mgr.get("regular").is_some());
+}

@@ -335,10 +335,11 @@ impl Tool for EditTool {
 
         crate::record_file_edit(ctx, path, new_content).await;
         // TS `FileEditTool.ts` mirrors `FileReadTool.ts:578-591` skill
-        // auto-discovery — when an edit touches a path under a nested
-        // `.claude/skills/` ancestor, the manager picks up the change
-        // on the next batch boundary.
-        crate::track_skill_discovery(ctx, path).await;
+        // auto-discovery + conditional-skill activation — when an
+        // edit touches a path under a nested `.claude/skills/`
+        // ancestor or matches a `paths`-gated skill, the next batch
+        // boundary picks both up.
+        crate::track_skill_triggers(ctx, path).await;
         // TS `FileEditTool.ts` notifies the LSP server of the save so
         // diagnostics refresh after every edit. Best-effort.
         ctx.lsp.notify_save(path).await;

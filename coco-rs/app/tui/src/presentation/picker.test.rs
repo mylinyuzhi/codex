@@ -14,6 +14,10 @@ use crate::state::QuickOpenState;
 use crate::state::SearchResult;
 use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
+use crate::state::SkillsDialogEntry;
+use crate::state::SkillsDialogGroup;
+use crate::state::SkillsDialogSource;
+use crate::state::SkillsDialogState;
 use crate::theme::Theme;
 
 #[test]
@@ -217,6 +221,67 @@ fn memory_dialog_content_renders_scope_tags_and_empty_state() {
     assert!(body.contains("Select a memory file to edit:"));
     assert!(body.contains("  [file:exists] [project] Project memory"));
     assert!(body.contains("▸ [file:new] [project-local] Local memory"));
+}
+
+#[test]
+fn skills_dialog_content_renders_groups_and_token_estimates() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+
+    // Empty catalog → "no skills" hint, border stays primary.
+    let empty = SkillsDialogState { groups: Vec::new() };
+    let (title, body, border) = skills_dialog_content(&empty, UiStyles::new(&theme));
+    assert_eq!(title, " Skills ");
+    assert_eq!(border, theme.primary);
+    assert!(body.contains("No skills found."));
+
+    // Two project skills + one plugin skill (covers grouping order +
+    // optional plugin-name suffix + token-estimate suffix).
+    let populated = SkillsDialogState {
+        groups: vec![
+            SkillsDialogGroup {
+                source: SkillsDialogSource::Project,
+                subtitle: "/proj/.claude/skills".to_string(),
+                entries: vec![
+                    SkillsDialogEntry {
+                        name: "deploy".to_string(),
+                        plugin_name: None,
+                        token_estimate: 42,
+                    },
+                    SkillsDialogEntry {
+                        name: "review-pr".to_string(),
+                        plugin_name: None,
+                        token_estimate: 80,
+                    },
+                ],
+            },
+            SkillsDialogGroup {
+                source: SkillsDialogSource::Plugin,
+                subtitle: String::new(),
+                entries: vec![SkillsDialogEntry {
+                    name: "skill-creator".to_string(),
+                    plugin_name: Some("claude-plugins-official".to_string()),
+                    token_estimate: 120,
+                }],
+            },
+        ],
+    };
+    let (_, body, _) = skills_dialog_content(&populated, UiStyles::new(&theme));
+
+    // Subtitle: total count + plural.
+    assert!(body.contains("3 skills"));
+
+    // Project group header + subtitle in parens.
+    assert!(body.contains("Project skills (/proj/.claude/skills)"));
+    assert!(body.contains("  /deploy · ~42 description tokens"));
+    assert!(body.contains("  /review-pr · ~80 description tokens"));
+
+    // Plugin group header without subtitle parens; plugin name inline.
+    assert!(body.contains("Plugin skills\n"));
+    assert!(body.contains("  /skill-creator · claude-plugins-official · ~120 description tokens"));
+
+    // Close hint at the bottom.
+    assert!(body.contains("Esc close"));
 }
 
 #[test]
