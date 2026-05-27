@@ -128,7 +128,7 @@ pub use settings::watcher::SettingsWatcher;
 pub use settings::watcher::WatchedKind;
 pub use settings::writer::LocalSettingsWriter;
 pub use settings::writer::SettingsWriteError;
-pub use settings::writer::SettingsWriter;
+pub use settings::writer::write_local_settings;
 pub use skill_overrides::SkillOverrideTiers;
 pub use system_reminder::AttachmentSettings as SystemReminderAttachmentSettings;
 pub use system_reminder::DEFAULT_TIMEOUT_MS as SYSTEM_REMINDER_DEFAULT_TIMEOUT_MS;

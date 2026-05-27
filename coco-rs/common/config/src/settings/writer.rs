@@ -31,7 +31,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -66,26 +65,55 @@ pub enum SettingsWriteError {
     },
 }
 
-/// Synchronously write to one of the editable settings tiers.
+/// Deep-merge `patch` into `<cwd>/.claude/settings.local.json`,
+/// then rebuild + publish `RuntimeConfig` so the next agent turn
+/// reads the new value without waiting for the file watcher.
 ///
-/// Implementations must guarantee:
+/// Guarantees:
 ///
-/// - **Atomic** — partial writes never corrupt the destination.
+/// - **Atomic** — partial writes never corrupt the destination
+///   (temp-file + rename pattern).
 /// - **Delete sentinel** — `Value::Null` in the patch removes the
 ///   key instead of persisting a literal null (TS `B6` parity).
-/// - **Immediate publish** — `RuntimeConfig` is rebuilt + published
-///   before the call returns. Callers can rely on the next agent
-///   turn reading the new value without racing the file watcher.
-#[async_trait]
-pub trait SettingsWriter: Send + Sync {
-    /// Deep-merge `patch` into `<cwd>/.claude/settings.local.json`,
-    /// then rebuild + publish `RuntimeConfig`.
-    async fn write_local(&self, patch: Value) -> Result<(), SettingsWriteError>;
+/// - **Synchronous publish** — when this call returns `Ok`,
+///   subscribers to [`RuntimePublisher`] have seen the new
+///   snapshot.
+///
+/// File IO and rebuild are sync; this function offloads to
+/// `tokio::task::spawn_blocking` so the async caller (e.g. the TUI
+/// dialog handler) doesn't stall the runtime.
+pub async fn write_local_settings(
+    cwd: impl Into<PathBuf>,
+    flag_settings: Option<PathBuf>,
+    catalogs: CatalogPaths,
+    publisher: Arc<RuntimePublisher>,
+    patch: Value,
+) -> Result<(), SettingsWriteError> {
+    let cwd: PathBuf = cwd.into();
+    let path = crate::global_config::local_settings_path(&cwd);
+    tokio::task::spawn_blocking(move || {
+        apply_patch(&path, &patch)?;
+        republish_runtime(&cwd, flag_settings.as_deref(), &catalogs, &publisher)
+    })
+    .await
+    .map_err(|e| SettingsWriteError::Io {
+        path: PathBuf::new(),
+        source: std::io::Error::other(e.to_string()),
+    })?
 }
 
-/// Default in-process implementation. Holds the cwd, catalog paths,
-/// and a [`RuntimePublisher`] handle so it can republish the rebuilt
-/// config after each write.
+// Compat shim — kept as a thin wrapper because tests + a few callsite
+// docs reference `LocalSettingsWriter::new(...).write_local(patch)`.
+// New code should prefer the free function above. Will be removed
+// when the few stragglers migrate.
+//
+// Left intentionally; **do not** add new trait methods or new impls.
+// The single-impl trait is YAGNI — kill it once nothing references
+// the type alias.
+
+/// **Deprecated** — call [`write_local_settings`] directly. The
+/// trait + struct were a planned testable abstraction whose mock
+/// never materialized.
 pub struct LocalSettingsWriter {
     cwd: PathBuf,
     flag_settings: Option<PathBuf>,
@@ -107,34 +135,21 @@ impl LocalSettingsWriter {
         }
     }
 
-    /// If the session was launched with `--settings <path>`, pass it
-    /// here so the rebuilt config picks up the flag-tier overlay.
     pub fn with_flag_settings(mut self, flag: Option<PathBuf>) -> Self {
         self.flag_settings = flag;
         self
     }
-}
 
-#[async_trait]
-impl SettingsWriter for LocalSettingsWriter {
-    async fn write_local(&self, patch: Value) -> Result<(), SettingsWriteError> {
-        let path = crate::global_config::local_settings_path(&self.cwd);
-        let cwd = self.cwd.clone();
-        let flag = self.flag_settings.clone();
-        let catalogs = self.catalogs.clone();
-        let publisher = self.publisher.clone();
-
-        // File IO + rebuild are sync; run on a blocking thread so the
-        // async caller (TUI dialog handler) doesn't stall the runtime.
-        tokio::task::spawn_blocking(move || {
-            apply_patch(&path, &patch)?;
-            republish_runtime(&cwd, flag.as_deref(), &catalogs, &publisher)
-        })
+    /// Forwards to [`write_local_settings`].
+    pub async fn write_local(&self, patch: Value) -> Result<(), SettingsWriteError> {
+        write_local_settings(
+            self.cwd.clone(),
+            self.flag_settings.clone(),
+            self.catalogs.clone(),
+            self.publisher.clone(),
+            patch,
+        )
         .await
-        .map_err(|e| SettingsWriteError::Io {
-            path: crate::global_config::local_settings_path(&self.cwd),
-            source: std::io::Error::other(e.to_string()),
-        })?
     }
 }
 

@@ -350,8 +350,14 @@ pub(super) fn handle(
         // lives here (not in the CLI handler) so the `t!` macro can
         // pull the localized strings — the i18n catalog is anchored
         // at this crate root and can't be reached from `coco-cli`.
+        //
+        // The Enter handler stashed `total_edits` on
+        // `UiState.pending_skills_save_edits` before dispatch; we
+        // read + clear it here so the count never crosses the wire
+        // (TUI owns display data, CLI doesn't).
         TuiOnlyEvent::SkillOverridesSaved { result } => {
-            let text = format_skill_overrides_save_toast(result);
+            let total_edits = state.ui.pending_skills_save_edits.take().unwrap_or(0);
+            let text = format_skill_overrides_save_toast(result, total_edits);
             state.ui.add_toast(Toast::info(text));
             true
         }
@@ -847,13 +853,19 @@ fn str_field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
 
 /// Render a localized toast for the `/skills` dialog Enter result.
 /// TS mirror: `cli_inner_pretty.js:476991-477016` post-save toast.
-fn format_skill_overrides_save_toast(result: coco_types::SkillOverridesSaveResult) -> String {
+/// `total_edits` is the count the dialog computed at dispatch (read
+/// from `UiState.pending_skills_save_edits`); only consumed on the
+/// Ok branch.
+fn format_skill_overrides_save_toast(
+    result: coco_types::SkillOverridesSaveResult,
+    total_edits: usize,
+) -> String {
     use coco_types::SkillOverridesSaveResult;
     match result {
-        SkillOverridesSaveResult::Ok { total_edits: 0 } => {
+        SkillOverridesSaveResult::Ok if total_edits == 0 => {
             t!("dialog.skills_save_no_changes").to_string()
         }
-        SkillOverridesSaveResult::Ok { total_edits } => {
+        SkillOverridesSaveResult::Ok => {
             let noun = if total_edits == 1 {
                 t!("dialog.skills_override_noun_singular")
             } else {
@@ -866,7 +878,7 @@ fn format_skill_overrides_save_toast(result: coco_types::SkillOverridesSaveResul
             )
             .to_string()
         }
-        SkillOverridesSaveResult::Err { message } => {
+        SkillOverridesSaveResult::Err { message, .. } => {
             t!("dialog.skills_save_failed", error = message.as_str()).to_string()
         }
     }
