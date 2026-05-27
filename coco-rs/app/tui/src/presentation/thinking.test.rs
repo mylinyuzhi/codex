@@ -31,7 +31,7 @@ fn collapsed_thinking_appends_toggle_hint() {
             content: "inspect files",
             duration_ms: Some(1234),
             reasoning_tokens: Some(220),
-            toggle_hint: Some("thinking hidden (F2)"),
+            toggle_hint: Some("F2 to expand"),
             display: ThinkingDisplay::Collapsed,
         },
         UiStyles::new(&theme),
@@ -39,7 +39,7 @@ fn collapsed_thinking_appends_toggle_hint() {
 
     assert_eq!(
         lines[0].spans[0].content.as_ref(),
-        "⏺ Thinking · 1.2s · 220 reasoning tokens · thinking hidden (F2)"
+        "⏺ Thinking · 1.2s · 220 reasoning tokens · F2 to expand"
     );
 }
 
