@@ -35,14 +35,13 @@ use crate::CommandHandler;
 use crate::CommandResult;
 use crate::DialogSpec;
 
-/// Fallback bytes-per-token ratio. TS `sG(mainLoopModel)` returns
-/// the per-model value via its tokenizer SDK; coco-rs doesn't ship
-/// a tokenizer per provider so the dialog falls back to the
-/// English-text rule-of-thumb (~4 bytes/token). The dialog uses
-/// this only for the visual `~N tok` column — the listing budget
-/// itself is computed against the live model context window via
-/// `generate_skill_tool_prompt`, not this constant.
-const DEFAULT_BYTES_PER_TOKEN: i64 = 4;
+/// Placeholder bytes-per-token ratio shipped by the handler before
+/// the CLI bridge knows which model is active. The real value is
+/// stamped in by `apply_model_token_density` in `tui_runner.rs` once
+/// the live `QueryEngineConfig.model_id` is in scope. `4` is the
+/// Claude-family default — see
+/// [`coco_model_card::bytes_per_token_for_model`].
+const PLACEHOLDER_BYTES_PER_TOKEN: i64 = 4;
 
 /// `CommandHandler` impl for `/skills`. No args → open the TUI
 /// dialog; `list` / `show` / `paths` → reuse the text path.
@@ -129,7 +128,7 @@ pub fn build_dialog_payload(
 
     SkillsDialogPayload {
         entries,
-        bytes_per_token: DEFAULT_BYTES_PER_TOKEN,
+        bytes_per_token: PLACEHOLDER_BYTES_PER_TOKEN,
     }
 }
 
