@@ -19,9 +19,7 @@ async def _drain_until_turn_completed(client: CocoClient) -> str:
     async with asyncio.timeout(120):
         async for event in client.events():
             if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
-                delta = event.as_agent_message_delta()
-                if delta:
-                    parts.append(delta.delta)
+                parts.append(event.params.delta)
             elif event.method == NotificationMethod.TURN_COMPLETED:
                 break
             elif event.method == NotificationMethod.TURN_FAILED:
@@ -44,9 +42,7 @@ async def test_client_two_turns(live_deepseek, isolated_cwd) -> None:
         async with asyncio.timeout(120):
             async for event in client.send("What number did I ask you to remember? Reply with just the digits."):
                 if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
-                    delta = event.as_agent_message_delta()
-                    if delta:
-                        second_parts.append(delta.delta)
+                    second_parts.append(event.params.delta)
                 elif event.method == NotificationMethod.TURN_COMPLETED:
                     break
                 elif event.method == NotificationMethod.TURN_FAILED:

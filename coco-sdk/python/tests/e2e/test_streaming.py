@@ -35,10 +35,9 @@ async def test_text_arrives_incrementally(live_deepseek, isolated_cwd) -> None:
             ):
                 method = event.method
                 if method == NotificationMethod.AGENT_MESSAGE_DELTA:
-                    delta = event.as_agent_message_delta()
-                    if delta and delta.delta:
+                    if event.params.delta:
                         delta_arrival_times.append(time.monotonic() - started)
-                        accumulated.append(delta.delta)
+                        accumulated.append(event.params.delta)
                 elif method == NotificationMethod.TURN_COMPLETED:
                     turn_completed_at = time.monotonic() - started
                     break
