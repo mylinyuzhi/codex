@@ -148,7 +148,7 @@ impl SkillHandle for QuerySkillRuntime {
             .map(build_command_allow_rules)
             .unwrap_or_default();
 
-        match skill.context {
+        let result = match skill.context {
             SkillContext::Inline => {
                 // Inline: surface the expanded prompt as a new user
                 // message the next turn will see. The SkillTool
@@ -300,7 +300,22 @@ impl SkillHandle for QuerySkillRuntime {
                 );
                 Ok(SkillInvocationResult::Forked { agent_id, output })
             }
+        };
+
+        // TS parity (`SkillTool.ts:619, 1059`): record usage at the
+        // model-invoked path so frequently-used skills surface in the
+        // `/` autocomplete's "recently used" section. Mirrors TS by
+        // recording on success only — a failed fork doesn't count.
+        // `spawn_blocking` keeps the async dispatcher unblocked when
+        // `record` hits its slow path (read + atomic rename).
+        if result.is_ok() {
+            let recorded_name = skill.name.clone();
+            tokio::task::spawn_blocking(move || {
+                let config_home = coco_config::global_config::config_home();
+                coco_skills::usage::record(&config_home, &recorded_name);
+            });
         }
+        result
     }
 }
 

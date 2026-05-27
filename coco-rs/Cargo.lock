@@ -1946,6 +1946,7 @@ dependencies = [
  "dirs",
  "ignore",
  "libc",
+ "pretty_assertions",
  "rand 0.9.4",
  "regex",
  "serde",

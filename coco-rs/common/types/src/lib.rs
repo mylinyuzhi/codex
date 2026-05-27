@@ -275,6 +275,7 @@ pub use command::CommandContext;
 pub use command::CommandSafety;
 pub use command::CommandSource;
 pub use command::CommandType;
+pub use command::CommandTypeTag;
 pub use command::LocalCommandData;
 pub use command::PromptCommandData;
 pub use command::SlashCommandInfo;

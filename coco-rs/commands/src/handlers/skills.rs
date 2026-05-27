@@ -151,26 +151,53 @@ fn build_group_subtitles(
         });
     }
     if present.contains(&SkillsDialogSource::User) {
+        // TS `getSourceSubtitle`: append the legacy `commands/` path
+        // only when a user-scope skill actually came from the
+        // `commands_DEPRECATED` flat-`.md` layout. Otherwise users see
+        // an extra path that has no skills behind it.
+        let user_commands_dir = config_home.join("commands");
+        let mut parts = vec![config_home.join("skills").display().to_string()];
+        if has_legacy_commands_skills(skills, SkillsDialogSource::User, &user_commands_dir) {
+            parts.push(user_commands_dir.display().to_string());
+        }
         out.push(SkillsDialogGroupSubtitle {
             source: SkillsDialogSource::User,
-            subtitle: config_home.join("skills").display().to_string(),
+            subtitle: parts.join(", "),
         });
     }
     if present.contains(&SkillsDialogSource::Project) {
         // coco-rs supports two project skill roots — the canonical
         // `.coco/skills/` and TS-compat `.claude/skills/`. Comma-join
         // both so users can locate any project skill from the dialog.
-        let subtitle = [
+        // TS-parity addition: if any project skill came from the legacy
+        // `.claude/commands/` directory, append it too.
+        let project_commands_dir = cwd.join(".claude").join("commands");
+        let mut parts: Vec<String> = [
             cwd.join(".coco").join("skills"),
             cwd.join(".claude").join("skills"),
         ]
         .iter()
         .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
+        if has_legacy_commands_skills(skills, SkillsDialogSource::Project, &project_commands_dir) {
+            parts.push(project_commands_dir.display().to_string());
+        }
         out.push(SkillsDialogGroupSubtitle {
             source: SkillsDialogSource::Project,
-            subtitle,
+            subtitle: parts.join(", "),
+        });
+    }
+
+    if present.contains(&SkillsDialogSource::Plugin) {
+        // TS-parity: `getSkillsPath('plugin', 'skills')` returns the
+        // literal string `"plugin"` and the dialog renders it as the
+        // group subtitle (`SkillsMenu.tsx:135`). We mirror that here
+        // — see [[project_coco_rs_phase2_skills_dialog]]. The plugin
+        // *name* still appears inline on each row, so the subtitle is
+        // a low-information group label, not a precise data point.
+        out.push(SkillsDialogGroupSubtitle {
+            source: SkillsDialogSource::Plugin,
+            subtitle: "plugin".to_string(),
         });
     }
 
@@ -194,11 +221,29 @@ fn build_group_subtitles(
         }
     }
 
-    // Plugin: TS shows the literal string "plugin" as the subtitle
-    // (`getSkillsPath('plugin', 'skills')` returns `'plugin'`).
-    // That's useless noise — we intentionally omit it. The plugin name
-    // is already shown inline on each row.
     out
+}
+
+/// Whether any visible skill in `scope` was loaded from the legacy
+/// `.claude/commands/` directory layout (TS `loadedFrom ===
+/// 'commands_DEPRECATED'`). Used to gate the commands-dir entry in the
+/// User/Project subtitle.
+///
+/// The `SkillSource::User { path } | Project { path }` field carries
+/// the **skill file path** (set in `SkillManager::load_with_source`),
+/// so `starts_with(commands_dir)` reliably distinguishes the two.
+fn has_legacy_commands_skills(
+    skills: &[Arc<SkillDefinition>],
+    scope: SkillsDialogSource,
+    commands_dir: &Path,
+) -> bool {
+    skills.iter().any(|s| match (&s.source, scope) {
+        (SkillSource::User { path }, SkillsDialogSource::User)
+        | (SkillSource::Project { path }, SkillsDialogSource::Project) => {
+            path.starts_with(commands_dir)
+        }
+        _ => false,
+    })
 }
 
 fn render(args: &str, config_home: &Path, cwd: &Path) -> crate::Result<String> {

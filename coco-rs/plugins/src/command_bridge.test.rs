@@ -45,7 +45,12 @@ fn test_load_commands_from_md_files() {
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].base.name, "my-plugin:deploy");
     assert_eq!(commands[0].base.description, "Deploy the app");
-    assert_eq!(commands[0].base.loaded_from, Some(CommandSource::Plugin));
+    assert_eq!(
+        commands[0].base.loaded_from,
+        Some(CommandSource::Plugin {
+            name: "my-plugin".to_string()
+        })
+    );
     assert_eq!(commands[0].prompt, "Run deployment steps.");
 }
 

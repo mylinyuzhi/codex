@@ -139,6 +139,7 @@ fn load_command_from_file(
             let namespaced = format!("{plugin_name}:{command_name}");
             out.push(build_plugin_command(
                 &namespaced,
+                plugin_name,
                 &skill.description,
                 &skill.prompt,
                 skill.argument_hint.as_deref(),
@@ -230,6 +231,7 @@ fn load_manifest_object_entry(
             Ok(skill) => {
                 out.push(build_plugin_command(
                     &namespaced,
+                    plugin_name,
                     meta.description.as_deref().unwrap_or(&skill.description),
                     &skill.prompt,
                     meta.argument_hint
@@ -253,6 +255,7 @@ fn load_manifest_object_entry(
     } else if let Some(ref content) = meta.content {
         out.push(build_plugin_command(
             &namespaced,
+            plugin_name,
             meta.description.as_deref().unwrap_or("Plugin command"),
             content,
             meta.argument_hint.as_deref(),
@@ -275,6 +278,7 @@ fn load_manifest_object_entry(
 /// Build a `PluginCommand` from parsed data.
 fn build_plugin_command(
     namespaced_name: &str,
+    plugin_name: &str,
     description: &str,
     prompt: &str,
     argument_hint: Option<&str>,
@@ -292,7 +296,9 @@ fn build_plugin_command(
             when_to_use: None,
             user_invocable: true,
             is_sensitive: false,
-            loaded_from: Some(CommandSource::Plugin),
+            loaded_from: Some(CommandSource::Plugin {
+                name: plugin_name.to_string(),
+            }),
             safety: CommandSafety::default(),
             supports_non_interactive: false,
         },

@@ -1406,6 +1406,156 @@
       ],
       "type": "object"
     },
+    "CommandSource": {
+      "description": "How a command was loaded.\n\nTS: `Command.source` field union (`SettingSource | 'plugin' | 'mcp'`).\nRust port tags the payload-carrying variants (`Plugin { name }`,\n`Mcp { server_name }`) so the source and its attribution can never\ndisagree. This replaces the older `loaded_from + plugin_name` dual-\nfield layout, which allowed nonsensical states (e.g. `loaded_from =\nBuiltin` paired with `plugin_name = Some(...)`).",
+      "oneOf": [
+        {
+          "description": "Hardcoded built-in slash command (e.g. `/help`, `/clear`).\nTS: `source: 'builtin'`.",
+          "properties": {
+            "kind": {
+              "const": "builtin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Compiled-in bundled skill.",
+          "properties": {
+            "kind": {
+              "const": "bundled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "User-scope on-disk skill (`~/.coco/skills/`). TS: `userSettings`.",
+          "properties": {
+            "kind": {
+              "const": "user",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Project-scope on-disk skill (`.claude/skills/`). TS: `projectSettings`.",
+          "properties": {
+            "kind": {
+              "const": "project",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Enterprise/policy-managed skill. TS: `policySettings`.",
+          "properties": {
+            "kind": {
+              "const": "managed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "On-disk skill directory (general SKILL.md catch-all). TS: `skills`.",
+          "properties": {
+            "kind": {
+              "const": "skills",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Legacy `.claude/commands/` flat-`.md` path. TS: `commands_DEPRECATED`.",
+          "properties": {
+            "kind": {
+              "const": "commands_deprecated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Plugin-provided skill or command. Carries the contributing\nplugin's manifest name so the UI can render\n`(plugin-name) text` annotations without a parallel field.",
+          "properties": {
+            "kind": {
+              "const": "plugin",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "MCP-server-provided skill. Carries the originating server name\nso `/skills` can list contributing servers without a parallel\nlookup table.",
+          "properties": {
+            "kind": {
+              "const": "mcp",
+              "type": "string"
+            },
+            "server_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "server_name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CommandTypeTag": {
+      "description": "Tag-only projection of [`CommandType`]. Implements [`Copy`] so the\nUI snapshot ([`SlashCommandInfo`]) and the autocomplete ranker can\npass it around without cloning. Mirrors TS `Command.type`.",
+      "oneOf": [
+        {
+          "const": "prompt",
+          "description": "Expands into a model prompt. TS `type: 'prompt'`.",
+          "type": "string"
+        },
+        {
+          "const": "local",
+          "description": "Executes locally and returns text. TS `type: 'local'`.",
+          "type": "string"
+        },
+        {
+          "const": "local_overlay",
+          "description": "Opens a TUI overlay. TS `type: 'local-jsx'`.",
+          "type": "string"
+        }
+      ]
+    },
     "CompactTrigger": {
       "description": "How compaction was triggered.\n\nStays in `coco-types` (rather than `coco-messages`) because\n`event::CompactionPhaseParams` references it; the rest of the message\nfamily lives in `coco-messages`.\n\nMirrors the TS taxonomy: manual `/compact`, threshold-based auto, PTL-413\nreactive recovery, gap-based time-based microcompact, session-memory\nshort-circuit (no LLM), and staged context-collapse commit.",
       "enum": [
@@ -8200,6 +8350,107 @@
       ],
       "type": "string"
     },
+    "SkillsDialogEntry": {
+      "description": "One row in the `/skills` dialog. Mirrors `SkillCommand` from TS\n`components/skills/SkillsMenu.tsx`.",
+      "properties": {
+        "name": {
+          "description": "Canonical skill name \u2014 what `/<name>` invokes. TS\n`getCommandName(skill)`.",
+          "type": "string"
+        },
+        "plugin_name": {
+          "description": "Plugin name shown inline when `source == Plugin`. None\notherwise. TS: `skill.pluginInfo?.pluginManifest.name`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/SkillsDialogSource",
+          "description": "Source group this entry belongs to (drives ordering + group\nheader label)."
+        },
+        "token_estimate": {
+          "description": "Rough token-count estimate of the skill's frontmatter\n(name + description + when-to-use). TS\n`estimateSkillFrontmatterTokens`. Displayed as\n`~{token_estimate} description tokens`.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "token_estimate"
+      ],
+      "type": "object"
+    },
+    "SkillsDialogGroupSubtitle": {
+      "description": "Subtitle text for one source group in the skills dialog. Keyed by\nthe group so the renderer can look it up without index gymnastics.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/SkillsDialogSource"
+        },
+        "subtitle": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "subtitle"
+      ],
+      "type": "object"
+    },
+    "SkillsDialogPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n\nTS parity: `components/skills/SkillsMenu.tsx`. The TS dialog is\nread-only \u2014 five source groups (project / user / policy / plugin /\nmcp), each row shows skill name + optional plugin name + token\nestimate (\"~N description tokens\"), Esc to close. No toggle, no\nsearch, no sort.",
+      "properties": {
+        "entries": {
+          "description": "All skills, in arbitrary order. The renderer groups by\n[`SkillsDialogEntry::source`] and sorts within each group by\nname. Total count is `entries.len()` (matches TS dialog\nsubtitle \"{N} skills\").",
+          "items": {
+            "$ref": "#/$defs/SkillsDialogEntry"
+          },
+          "type": "array"
+        },
+        "group_subtitles": {
+          "description": "Per-source secondary text shown next to the group title (TS\n`getSourceSubtitle`). For file-based groups this is the\ndisplay path of the skills directory (e.g. `~/.coco/skills`);\nfor `Mcp` it's a comma-joined server-name list. `None` when\nthe subtitle is uninteresting (e.g. an empty group).",
+          "items": {
+            "$ref": "#/$defs/SkillsDialogGroupSubtitle"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries",
+        "group_subtitles"
+      ],
+      "type": "object"
+    },
+    "SkillsDialogSource": {
+      "description": "Source group for a skill dialog entry. Mirrors TS `SkillSource`\nunion (`SettingSource | 'plugin' | 'mcp'`) collapsed to a closed\nenum so the wire shape is statically typed.",
+      "oneOf": [
+        {
+          "const": "project",
+          "description": "`<cwd>/.claude/skills/` \u2014 TS `projectSettings`.",
+          "type": "string"
+        },
+        {
+          "const": "user",
+          "description": "`~/.coco/skills/` \u2014 TS `userSettings`.",
+          "type": "string"
+        },
+        {
+          "const": "policy",
+          "description": "Managed enterprise dir \u2014 TS `policySettings`.",
+          "type": "string"
+        },
+        {
+          "const": "plugin",
+          "description": "Skills contributed by a loaded plugin.",
+          "type": "string"
+        },
+        {
+          "const": "mcp",
+          "description": "Skills published by a connected MCP server.",
+          "type": "string"
+        }
+      ]
+    },
     "SlashCommandInfo": {
       "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of\nthese at startup (and again after `/reload-plugins`) so the\nautocomplete popup and command palette can render and rank without\nreaching into [`CommandBase`] every time.\n\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a\n[`crate::TuiOnlyEvent`] variant \u2014 events are the only path between\nthe agent driver and the TUI, and event payload types must be\nfoundation-layer.",
       "properties": {
@@ -8224,9 +8475,31 @@
             "null"
           ]
         },
+        "kind": {
+          "$ref": "#/$defs/CommandTypeTag",
+          "default": "local",
+          "description": "Execution kind. The empty-query ranker treats only\n[`CommandTypeTag::Prompt`] entries as skills eligible for the\n\"recently used\" section \u2014 builtin local commands always sit in\nthe builtin bucket. Mirrors TS `cmd.type === 'prompt'` filtering\nin `commandSuggestions.ts`.\n\nDerived from the source [`CommandType`] via\n[`CommandType::tag`] at snapshot time; the projection is\ncentralised there so the enum can't drift."
+        },
         "name": {
           "description": "Canonical command name without the leading `/`.",
           "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommandSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where this command came from. Drives empty-query source grouping\nin the `/` popup and the `(user)` / `(project)` / `(plugin)`\nsuffix on descriptions. Mirrors TS `Command.source` consumed by\n`formatDescriptionWithSource` and the empty-input grouping in\n`generateCommandSuggestions`. Plugin / MCP attribution rides on\nthe `Plugin { name }` / `Mcp { server_name }` variants."
+        },
+        "usage_score": {
+          "default": 0.0,
+          "description": "Recency-decayed usage score precomputed at snapshot time.\nHigher means \"used more recently and/or more often\". TS parity:\n`getSkillUsageScore` in `utils/suggestions/skillUsageTracking.ts`\n\u2014 same 7-day half-life with a 0.1 recency floor.\n\nEmbedded in the snapshot so the TUI ranker never touches disk\non the hot popup path. Updated naturally at the existing\nsnapshot-refresh moments (session start, `/reload-plugins`).\nIntra-session staleness is acceptable \u2014 the rank only governs\nwhich skills float to the top of the empty-query view; users\npick by name regardless.",
+          "format": "double",
+          "type": "number"
         }
       },
       "required": [
@@ -11131,6 +11404,23 @@
           },
           "required": [
             "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n\nTS parity: `commands/skills/skills.tsx` \u2192 `<SkillsMenu>`. Dialog\nis read-only \u2014 Esc to close; selection has no side effects.",
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SkillsDialogPayload"
+            },
+            "type": {
+              "const": "open_skills_dialog",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
           ],
           "type": "object"
         }
