@@ -421,17 +421,12 @@ impl<'a> ChatWidget<'a> {
                 )
             })
             .unwrap_or_else(|| "F2".to_string());
-        let state = if self.show_thinking_internal {
-            t!("status.show_thinking_visible")
+        let key = if self.show_thinking_internal {
+            "status.thinking_toggle_collapse"
         } else {
-            t!("status.show_thinking_hidden")
+            "status.thinking_toggle_expand"
         };
-        t!(
-            "status.show_thinking",
-            shortcut = chord.as_str(),
-            state = state.as_ref()
-        )
-        .to_string()
+        t!(key, shortcut = chord.as_str()).to_string()
     }
 
     /// Render a single-line collapsed preview for a meta (system reminder)

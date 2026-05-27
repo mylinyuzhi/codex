@@ -1114,17 +1114,12 @@ fn thinking_toggle_hint(state: &AppState) -> String {
         .kb_handle
         .display_for(&KeybindingAction::ChatThinkingToggle, TuiContext::Chat)
         .unwrap_or_else(|| "F2".to_string());
-    let thinking_state = if state.ui.show_thinking {
-        t!("status.show_thinking_visible")
+    let key = if state.ui.show_thinking {
+        "status.thinking_toggle_collapse"
     } else {
-        t!("status.show_thinking_hidden")
+        "status.thinking_toggle_expand"
     };
-    t!(
-        "status.show_thinking",
-        shortcut = shortcut.as_str(),
-        state = thinking_state.as_ref()
-    )
-    .to_string()
+    t!(key, shortcut = shortcut.as_str()).to_string()
 }
 
 fn mix_str(mut hash: u64, value: &str) -> u64 {

@@ -207,7 +207,7 @@ fn native_draw_replays_history_when_reasoning_metadata_changes() {
     let mut controller = NativeSurfaceController::new();
     controller.draw(&mut terminal, &state).expect("first draw");
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
-    assert!(text.contains("thinking hidden (F2)"));
+    assert!(text.contains("F2 to expand"));
     assert!(!text.contains("reasoning tokens"));
 
     state.session.insert_reasoning_metadata(
@@ -230,7 +230,7 @@ fn native_draw_replays_history_when_reasoning_metadata_changes() {
     ));
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
     assert!(text.contains("22 reasoning tokens"), "{text}");
-    assert!(text.contains("thinking hidden (F2)"), "{text}");
+    assert!(text.contains("F2 to expand"), "{text}");
 }
 
 #[test]
