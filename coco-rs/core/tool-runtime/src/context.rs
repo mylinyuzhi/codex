@@ -267,6 +267,19 @@ pub struct ToolUseContext {
     /// cloned context all push into the same set, and so the app/query
     /// drain sees everything from the just-completed batch.
     pub dynamic_skill_dir_triggers: Arc<RwLock<HashSet<String>>>,
+    /// Files that triggered a conditional-skill activation check.
+    ///
+    /// TS `activateConditionalSkillsForPaths(filePaths, cwd)` runs
+    /// against every file touched by Read/Write/Edit/Bash. Path-gated
+    /// skills (`paths` frontmatter) whose patterns match get promoted
+    /// into the visible pool. We collect the raw file paths here and
+    /// let the app/query drain dispatch them to
+    /// `SkillsSource::activate_skills_for_paths` at turn boundary.
+    ///
+    /// Sibling of [`Self::dynamic_skill_dir_triggers`]: same shared
+    /// `Arc<RwLock<>>` rationale (concurrent siblings push into one
+    /// set; one drain per batch).
+    pub dynamic_skill_path_triggers: Arc<RwLock<HashSet<String>>>,
     /// Skill names discovered during this session.
     pub discovered_skill_names: HashSet<String>,
 
@@ -626,6 +639,7 @@ impl ToolUseContext {
             nested_memory_attachment_triggers: self.nested_memory_attachment_triggers.clone(),
             loaded_nested_memory_paths: HashSet::new(),
             dynamic_skill_dir_triggers: self.dynamic_skill_dir_triggers.clone(),
+            dynamic_skill_path_triggers: self.dynamic_skill_path_triggers.clone(),
             discovered_skill_names: HashSet::new(),
             tool_decisions: HashMap::new(),
             is_teammate: self.is_teammate,
@@ -810,6 +824,7 @@ impl ToolUseContext {
             nested_memory_attachment_triggers: Arc::new(RwLock::new(HashSet::new())),
             loaded_nested_memory_paths: HashSet::new(),
             dynamic_skill_dir_triggers: Arc::new(RwLock::new(HashSet::new())),
+            dynamic_skill_path_triggers: Arc::new(RwLock::new(HashSet::new())),
             discovered_skill_names: HashSet::new(),
             tool_decisions: HashMap::new(),
             is_teammate: false,

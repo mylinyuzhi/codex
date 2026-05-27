@@ -137,6 +137,14 @@ impl SkillsSource for SkillManager {
         })
     }
 
+    async fn activate_skills_for_paths(
+        &self,
+        file_paths: &[std::path::PathBuf],
+        cwd: &std::path::Path,
+    ) -> Vec<String> {
+        self.activate_for_paths(file_paths, cwd)
+    }
+
     async fn load_dynamic_skill_dir(
         &self,
         skill_dir: &std::path::Path,

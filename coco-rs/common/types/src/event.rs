@@ -1777,6 +1777,13 @@ pub enum TuiOnlyEvent {
     /// `/model` from input bar). The TUI consumes the current
     /// `state.session.model` to mark the "current" entry.
     OpenModelPicker,
+    /// Tell the TUI to open the `/skills` read-only overlay. The slash
+    /// dispatcher pre-builds the entry list + per-group subtitles so
+    /// the TUI doesn't recompute paths or token estimates.
+    ///
+    /// TS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog
+    /// is read-only — Esc to close; selection has no side effects.
+    OpenSkillsDialog { payload: SkillsDialogPayload },
 }
 
 /// One row in the `/memory` file-picker overlay. Built by the slash
@@ -1857,6 +1864,81 @@ pub enum MemoryDialogScope {
     TeamMemFolder,
     /// Per-agent memory directory entry.
     AgentMemFolder,
+}
+
+/// Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the
+/// `/skills` slash handler so the TUI doesn't recompute paths, token
+/// estimates, or grouping.
+///
+/// TS parity: `components/skills/SkillsMenu.tsx`. The TS dialog is
+/// read-only — five source groups (project / user / policy / plugin /
+/// mcp), each row shows skill name + optional plugin name + token
+/// estimate ("~N description tokens"), Esc to close. No toggle, no
+/// search, no sort.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillsDialogPayload {
+    /// All skills, in arbitrary order. The renderer groups by
+    /// [`SkillsDialogEntry::source`] and sorts within each group by
+    /// name. Total count is `entries.len()` (matches TS dialog
+    /// subtitle "{N} skills").
+    pub entries: Vec<SkillsDialogEntry>,
+    /// Per-source secondary text shown next to the group title (TS
+    /// `getSourceSubtitle`). For file-based groups this is the
+    /// display path of the skills directory (e.g. `~/.coco/skills`);
+    /// for `Mcp` it's a comma-joined server-name list. `None` when
+    /// the subtitle is uninteresting (e.g. an empty group).
+    pub group_subtitles: Vec<SkillsDialogGroupSubtitle>,
+}
+
+/// Subtitle text for one source group in the skills dialog. Keyed by
+/// the group so the renderer can look it up without index gymnastics.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillsDialogGroupSubtitle {
+    pub source: SkillsDialogSource,
+    pub subtitle: String,
+}
+
+/// One row in the `/skills` dialog. Mirrors `SkillCommand` from TS
+/// `components/skills/SkillsMenu.tsx`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillsDialogEntry {
+    /// Canonical skill name — what `/<name>` invokes. TS
+    /// `getCommandName(skill)`.
+    pub name: String,
+    /// Source group this entry belongs to (drives ordering + group
+    /// header label).
+    pub source: SkillsDialogSource,
+    /// Plugin name shown inline when `source == Plugin`. None
+    /// otherwise. TS: `skill.pluginInfo?.pluginManifest.name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_name: Option<String>,
+    /// Rough token-count estimate of the skill's frontmatter
+    /// (name + description + when-to-use). TS
+    /// `estimateSkillFrontmatterTokens`. Displayed as
+    /// `~{token_estimate} description tokens`.
+    pub token_estimate: i64,
+}
+
+/// Source group for a skill dialog entry. Mirrors TS `SkillSource`
+/// union (`SettingSource | 'plugin' | 'mcp'`) collapsed to a closed
+/// enum so the wire shape is statically typed.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillsDialogSource {
+    /// `<cwd>/.claude/skills/` — TS `projectSettings`.
+    Project,
+    /// `~/.coco/skills/` — TS `userSettings`.
+    User,
+    /// Managed enterprise dir — TS `policySettings`.
+    Policy,
+    /// Skills contributed by a loaded plugin.
+    Plugin,
+    /// Skills published by a connected MCP server.
+    Mcp,
 }
 
 /// Categorization of a `SlashCommandStatus` payload. Each variant maps to

@@ -460,15 +460,9 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             Some("[list|show <name>|paths|validate|reload]"),
         ),
-        (
-            names::SKILLS,
-            "List discovered skills (bundled + user + project)",
-            &[],
-            handlers::skills::handler,
-            true,
-            LocalOnly,
-            Some("[list|show <name>|paths]"),
-        ),
+        // /skills registered via `register_ts_parity_handlers` so the
+        // no-arg invocation can open the TUI dialog. Sub-commands
+        // (`list` / `show <name>` / `paths`) still produce text.
         (
             names::SESSION,
             "Manage sessions (list, resume, delete)",
@@ -1460,6 +1454,28 @@ pub fn register_ts_parity_handlers(
                 handler: names::MODEL.to_string(),
             }),
             handler: Some(Arc::new(handlers::model::ModelHandler)),
+            is_enabled: None,
+        });
+    }
+
+    // /skills — TS: commands/skills/skills.tsx (local-jsx SkillsMenu).
+    // No-args opens the read-only catalog overlay; with-args
+    // (`list` / `show <name>` / `paths`) falls back to text output.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::SKILLS,
+            "List discovered skills (opens dialog with no arg)",
+            &[],
+            CommandSafety::LocalOnly,
+            Some("[list|show <name>|paths]"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::SKILLS.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::skills::SkillsHandler)),
             is_enabled: None,
         });
     }

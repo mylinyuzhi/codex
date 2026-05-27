@@ -184,14 +184,23 @@ async fn test_memory_handler() {
 
 #[tokio::test]
 async fn test_skills_handler() {
-    // Real enumeration via SkillManager — bundled skills are always present
-    // so the count line and the [bundled] source tag prove the handler
-    // exercised the real loader rather than a static stub.
-    let output = super::handlers::skills::handler(String::new())
+    // Real enumeration via SkillManager — bundled skills are always
+    // present so the count line and the [bundled] source tag prove the
+    // handler exercised the real loader rather than a static stub.
+    // (`list` exercises the text path; the no-arg path opens the TUI
+    // dialog which is covered by skills.test.rs.)
+    use crate::CommandHandler;
+    let output = crate::handlers::skills::SkillsHandler
+        .execute_command("list")
         .await
         .unwrap();
-    assert!(output.contains("skill(s) loaded"));
-    assert!(output.contains("[bundled]"));
+    match output {
+        crate::CommandResult::Text(out) => {
+            assert!(out.contains("skill(s) loaded"));
+            assert!(out.contains("[bundled]"));
+        }
+        other => panic!("expected Text, got {other:?}"),
+    }
 }
 
 #[tokio::test]

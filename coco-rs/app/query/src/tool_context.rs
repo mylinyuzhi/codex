@@ -445,6 +445,7 @@ impl ToolContextFactory {
             nested_memory_attachment_triggers: Arc::new(RwLock::new(Default::default())),
             loaded_nested_memory_paths: Default::default(),
             dynamic_skill_dir_triggers: Arc::new(RwLock::new(Default::default())),
+            dynamic_skill_path_triggers: Arc::new(RwLock::new(Default::default())),
             discovered_skill_names: Default::default(),
             tool_decisions: Default::default(),
             user_modified: false,

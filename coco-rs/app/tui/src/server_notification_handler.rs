@@ -188,6 +188,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::PromptEditorFailed { .. } => "PromptEditorFailed",
         E::BashCommandCompleted { .. } => "BashCommandCompleted",
         E::OpenModelPicker => "OpenModelPicker",
+        E::OpenSkillsDialog { .. } => "OpenSkillsDialog",
         E::SlashCommandStatus { .. } => "SlashCommandStatus",
     }
 }

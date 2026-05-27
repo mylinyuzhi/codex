@@ -76,6 +76,13 @@ impl SkillsSource for NoOpSkillsSource {
     async fn invoked(&self, _agent_id: Option<&str>) -> Vec<InvokedSkillEntry> {
         Vec::new()
     }
+    async fn activate_skills_for_paths(
+        &self,
+        _file_paths: &[std::path::PathBuf],
+        _cwd: &std::path::Path,
+    ) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Default)]

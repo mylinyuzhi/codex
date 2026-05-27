@@ -21,6 +21,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "process", "time", "rt", "macros", "fs", "io-util"] }
 walkdir.workspace = true
 dirs.workspace = true
+ignore.workspace = true
 rand.workspace = true
 regex.workspace = true
 

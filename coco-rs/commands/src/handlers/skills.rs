@@ -1,38 +1,204 @@
 //! `/skills` — list discovered skills (bundled + user + project + plugin).
 //!
 //! TS: `commands/skills/skills.tsx` opens a `<SkillsMenu>` overlay listing
-//! every loaded skill with metadata. Rust does the flat-text equivalent so
-//! both SDK and TUI palette get a real enumeration. The TUI dispatcher may
-//! later surface a richer overlay, but the underlying enumeration must
-//! be honest — anything else lies to the user about what's loaded.
+//! every loaded skill with metadata. The no-arg invocation routes through
+//! [`SkillsHandler`] which returns
+//! [`crate::CommandResult::OpenDialog`] carrying a fully-built
+//! [`coco_types::SkillsDialogPayload`] — the TUI consumer renders the
+//! same shape as the TS `<SkillsMenu>` (5 source groups, token estimate
+//! per row, Esc to close).
+//!
+//! The sub-commands (`list` / `show <name>` / `paths`) stay text-only
+//! via the legacy [`handler`] function so SDK / headless / scripted
+//! callers get a flat enumeration they can parse.
 //!
 //! Mirrors the same load order used by `tui_runner` when it builds the
 //! command registry (`SkillManager::load_from_dirs(&[user, project])`),
 //! plus the bundled in-binary set.
 
 use std::path::Path;
-use std::pin::Pin;
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use coco_skills::SkillDefinition;
 use coco_skills::SkillManager;
+use coco_skills::SkillScopes;
 use coco_skills::SkillSource;
 use coco_skills::bundled::register_bundled_default;
+use coco_skills::estimate_skill_tokens;
+use coco_skills::get_managed_skills_path;
+use coco_types::SkillsDialogEntry;
+use coco_types::SkillsDialogGroupSubtitle;
+use coco_types::SkillsDialogPayload;
+use coco_types::SkillsDialogSource;
 
-/// Async handler for `/skills [list|show <name>]`.
-pub fn handler(
-    args: String,
-) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
-    Box::pin(async move {
+use crate::CommandHandler;
+use crate::CommandResult;
+use crate::DialogSpec;
+
+/// `CommandHandler` impl for `/skills`. No args → open the TUI dialog;
+/// `list` / `show` / `paths` → reuse the text path.
+///
+/// TS parity: `commands/skills/skills.tsx::call` (no args opens
+/// `<SkillsMenu>`). coco-rs adds sub-commands for non-TUI surfaces.
+pub struct SkillsHandler;
+
+#[async_trait]
+impl CommandHandler for SkillsHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        let trimmed = args.trim().to_string();
         let cwd = std::env::current_dir().unwrap_or_default();
         let config_home = coco_config::global_config::config_home();
 
-        // Filesystem walk under `spawn_blocking` — std::fs is sync inside
-        // the discovery routines, and a slow project tree shouldn't stall
-        // the TUI event loop.
-        let trimmed = args.trim().to_string();
-        tokio::task::spawn_blocking(move || render(&trimmed, &config_home, &cwd))
-            .await
-            .map_err(|e| crate::CommandsError::generic(format!("skills handler join error: {e}")))?
+        // Discovery is sync (`std::fs`) — keep the TUI event loop
+        // unblocked.
+        tokio::task::spawn_blocking(move || -> crate::Result<CommandResult> {
+            if trimmed.is_empty() {
+                let payload = build_dialog_payload(&config_home, &cwd);
+                Ok(CommandResult::OpenDialog(DialogSpec::SkillsList {
+                    payload,
+                }))
+            } else {
+                Ok(CommandResult::Text(render(&trimmed, &config_home, &cwd)?))
+            }
+        })
+        .await
+        .map_err(|e| crate::CommandsError::generic(format!("skills handler join error: {e}")))?
+    }
+
+    fn handler_name(&self) -> &str {
+        "skills"
+    }
+}
+
+/// Build the dialog payload from the freshly-discovered skill catalog.
+/// Grouping + per-group subtitle resolution happens here so the TUI is
+/// a pure projection.
+///
+/// TS: `SkillsMenu` does the same grouping + subtitle work inline; we
+/// hoist it here so the slash dispatcher owns it and the TUI doesn't
+/// need access to `SkillManager` / `get_skill_paths` directly.
+fn build_dialog_payload(config_home: &Path, cwd: &Path) -> SkillsDialogPayload {
+    let manager = build_manager(config_home, cwd);
+    let skills = manager.all();
+
+    // TS-parity filter: drop disabled skills, then drop anything whose
+    // source the dialog excludes (`Bundled`). `source_to_dialog`
+    // returns `None` for excluded sources so `filter_map` drops them.
+    let entries: Vec<SkillsDialogEntry> = skills
+        .iter()
+        .filter(|s| !s.disabled)
+        .filter_map(|s| {
+            Some(SkillsDialogEntry {
+                name: s.name.clone(),
+                source: source_to_dialog(&s.source)?,
+                plugin_name: plugin_name_for(s),
+                token_estimate: estimate_skill_tokens(s),
+            })
+        })
+        .collect();
+
+    SkillsDialogPayload {
+        group_subtitles: build_group_subtitles(config_home, cwd, &entries, &skills),
+        entries,
+    }
+}
+
+/// Map a `SkillSource` to the dialog's source discriminant. Returns
+/// `None` for sources the TS dialog filters out — currently just
+/// `Bundled` (TS `SkillsMenu` filters
+/// `loadedFrom in ['skills', 'commands_DEPRECATED', 'plugin', 'mcp']`,
+/// explicitly excluding `bundled`). Caller drops the entry on `None`.
+fn source_to_dialog(source: &SkillSource) -> Option<SkillsDialogSource> {
+    Some(match source {
+        SkillSource::Project { .. } => SkillsDialogSource::Project,
+        SkillSource::User { .. } => SkillsDialogSource::User,
+        SkillSource::Managed { .. } => SkillsDialogSource::Policy,
+        SkillSource::Plugin { .. } => SkillsDialogSource::Plugin,
+        SkillSource::Mcp { .. } => SkillsDialogSource::Mcp,
+        // TS-parity exclusion: bundled skills don't appear in the dialog.
+        SkillSource::Bundled => return None,
     })
+}
+
+fn plugin_name_for(s: &SkillDefinition) -> Option<String> {
+    match &s.source {
+        SkillSource::Plugin { plugin_name } => Some(plugin_name.clone()),
+        _ => None,
+    }
+}
+
+/// TS `getSourceSubtitle`: file-based groups get the skills directory
+/// display path; MCP gets a comma-joined unique server-name list.
+///
+/// **Only emit subtitles for groups that have visible entries** — TS
+/// computes subtitle per-group inside the render loop, so empty groups
+/// never get a subtitle. We keep the wire payload tight at the source.
+fn build_group_subtitles(
+    config_home: &Path,
+    cwd: &Path,
+    entries: &[SkillsDialogEntry],
+    skills: &[Arc<SkillDefinition>],
+) -> Vec<SkillsDialogGroupSubtitle> {
+    let present: std::collections::HashSet<SkillsDialogSource> =
+        entries.iter().map(|e| e.source).collect();
+    let mut out = Vec::new();
+
+    if present.contains(&SkillsDialogSource::Policy) {
+        out.push(SkillsDialogGroupSubtitle {
+            source: SkillsDialogSource::Policy,
+            subtitle: get_managed_skills_path().display().to_string(),
+        });
+    }
+    if present.contains(&SkillsDialogSource::User) {
+        out.push(SkillsDialogGroupSubtitle {
+            source: SkillsDialogSource::User,
+            subtitle: config_home.join("skills").display().to_string(),
+        });
+    }
+    if present.contains(&SkillsDialogSource::Project) {
+        // coco-rs supports two project skill roots — the canonical
+        // `.coco/skills/` and TS-compat `.claude/skills/`. Comma-join
+        // both so users can locate any project skill from the dialog.
+        let subtitle = [
+            cwd.join(".coco").join("skills"),
+            cwd.join(".claude").join("skills"),
+        ]
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+        out.push(SkillsDialogGroupSubtitle {
+            source: SkillsDialogSource::Project,
+            subtitle,
+        });
+    }
+
+    if present.contains(&SkillsDialogSource::Mcp) {
+        // Matches TS `getSourceSubtitle` for `mcp`: joined unique
+        // server-name list.
+        let mut mcp_servers: Vec<String> = skills
+            .iter()
+            .filter_map(|s| match &s.source {
+                SkillSource::Mcp { server_name } => Some(server_name.clone()),
+                _ => None,
+            })
+            .collect();
+        mcp_servers.sort();
+        mcp_servers.dedup();
+        if !mcp_servers.is_empty() {
+            out.push(SkillsDialogGroupSubtitle {
+                source: SkillsDialogSource::Mcp,
+                subtitle: mcp_servers.join(", "),
+            });
+        }
+    }
+
+    // Plugin: TS shows the literal string "plugin" as the subtitle
+    // (`getSkillsPath('plugin', 'skills')` returns `'plugin'`).
+    // That's useless noise — we intentionally omit it. The plugin name
+    // is already shown inline on each row.
+    out
 }
 
 fn render(args: &str, config_home: &Path, cwd: &Path) -> crate::Result<String> {
@@ -59,18 +225,41 @@ fn render(args: &str, config_home: &Path, cwd: &Path) -> crate::Result<String> {
     })
 }
 
-/// Build a `SkillManager` from the same set of dirs `tui_runner` uses.
+/// Build a `SkillManager` with **source-correct tagging** so both the
+/// dialog (which groups by source) and the text `list` output (which
+/// labels each row by source) get the right `[user]` / `[project]` /
+/// `[managed]` attribution.
+///
 /// Built fresh per invocation so newly-added skills surface without a
 /// session restart — the engine's live registry still loads only at
 /// startup, but `/skills` reflects current disk truth.
+///
+/// **Two project paths.** coco-rs supports BOTH the canonical
+/// `.coco/skills/` and the TS-compat `.claude/skills/` as project
+/// skill roots. We invoke `load_scoped` twice: once for the standard
+/// scopes (managed / user / `.claude/skills` / `.claude/commands`)
+/// and once again with only `project_skills = .coco/skills` so those
+/// also get `SkillSource::Project { path }`. Last-write-wins on name
+/// collisions, with `.coco/skills` winning since it's loaded second
+/// (the newer convention is preferred).
 fn build_manager(config_home: &Path, cwd: &Path) -> SkillManager {
     let manager = SkillManager::new();
     register_bundled_default(&manager);
-    manager.load_from_dirs(&[
-        config_home.join("skills"),
-        cwd.join(".coco").join("skills"),
-        cwd.join(".claude").join("skills"),
-    ]);
+
+    // Standard scopes: managed / user / `.claude/skills` / `.claude/commands`.
+    manager.load_scoped(&SkillScopes {
+        managed: Some(get_managed_skills_path()),
+        user_skills: Some(config_home.join("skills")),
+        project_skills: Some(cwd.join(".claude").join("skills")),
+        user_commands: Some(config_home.join("commands")),
+        project_commands: Some(cwd.join(".claude").join("commands")),
+    });
+    // coco-rs extension: `.coco/skills/` as an additional project path.
+    manager.load_scoped(&SkillScopes {
+        project_skills: Some(cwd.join(".coco").join("skills")),
+        ..SkillScopes::default()
+    });
+
     manager
 }
 

@@ -2528,6 +2528,11 @@ async fn dispatch_slash_command(
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenModelPicker))
                         .await;
                 }
+                DialogSpec::SkillsList { payload } => {
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenSkillsDialog { payload }))
+                        .await;
+                }
                 DialogSpec::PluginPicker
                 | DialogSpec::McpbConfig { .. }
                 | DialogSpec::Confirm { .. } => {
@@ -2537,6 +2542,7 @@ async fn dispatch_slash_command(
                         DialogSpec::Confirm { .. } => "confirm dialog",
                         DialogSpec::MessageSelector
                         | DialogSpec::MemoryFileSelector { .. }
+                        | DialogSpec::SkillsList { .. }
                         | DialogSpec::ModelPicker => unreachable!(),
                     }
                     .to_string();

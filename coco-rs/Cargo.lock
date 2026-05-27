@@ -1944,6 +1944,7 @@ dependencies = [
  "coco-system-reminder",
  "coco-types",
  "dirs",
+ "ignore",
  "libc",
  "rand 0.9.4",
  "regex",

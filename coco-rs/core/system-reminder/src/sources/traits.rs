@@ -98,6 +98,21 @@ pub trait SkillsSource: Send + Sync + Debug {
     ) -> Option<coco_types::DynamicSkillPayload> {
         None
     }
+
+    /// Activate path-gated skills whose `paths` frontmatter matches
+    /// any of the given files (cwd-relative gitignore semantics).
+    /// Returns names of newly-activated skills so callers can log.
+    ///
+    /// TS: `activateConditionalSkillsForPaths(filePaths, cwd)` in
+    /// `loadSkillsDir.ts:997`. No default impl — every implementor
+    /// must explicitly decide whether to support conditional
+    /// activation; silently returning `Vec::new()` from a forgotten
+    /// override would mask broken wiring.
+    async fn activate_skills_for_paths(
+        &self,
+        file_paths: &[std::path::PathBuf],
+        cwd: &std::path::Path,
+    ) -> Vec<String>;
 }
 
 /// Source of MCP server state.
