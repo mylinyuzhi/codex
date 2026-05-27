@@ -751,6 +751,20 @@ impl QueryEngine {
                     history, /*in_flight_tool_calls*/ false, &event_tx,
                 )
                 .await;
+                // Wire-protocol terminator. SDK iterators and TUI state
+                // machines key on a terminal `Turn*` notification — without
+                // this, Python `events()` would block on cancellation.
+                // `turn_id` is unavailable here because the cancel check
+                // fires at the top of the loop, before the per-round
+                // `turn-{n}` id is computed.
+                let _ = emit_protocol(
+                    &event_tx,
+                    crate::ServerNotification::TurnInterrupted(coco_types::TurnInterruptedParams {
+                        turn_id: None,
+                        reason: Some(coco_types::CancelReason::UserCancel),
+                    }),
+                )
+                .await;
                 return Ok(make_query_result(
                     String::new(),
                     turn,
@@ -780,7 +794,8 @@ impl QueryEngine {
             match budget.check(turn) {
                 BudgetDecision::Stop { reason } => {
                     warn!(%reason, "budget stop");
-                    if self.config.max_turns > 0 && turn >= self.config.max_turns {
+                    let hit_max_turns = self.config.max_turns > 0 && turn >= self.config.max_turns;
+                    if hit_max_turns {
                         let payload = coco_messages::MaxTurnsReachedPayload {
                             max_turns: self.config.max_turns,
                             turn_count: turn,
@@ -795,6 +810,21 @@ impl QueryEngine {
                         )
                         .await;
                     }
+                    // Wire-protocol terminator. `MaxTurnsReached` carries
+                    // the max-turns hint for SDK consumers; the generic
+                    // budget-exhausted case maps to the same event without
+                    // a hint (TS doesn't distinguish either).
+                    let _ = emit_protocol(
+                        &event_tx,
+                        crate::ServerNotification::MaxTurnsReached {
+                            max_turns: if hit_max_turns {
+                                Some(self.config.max_turns)
+                            } else {
+                                None
+                            },
+                        },
+                    )
+                    .await;
                     let last_text = extract_last_assistant_text(history);
                     return Ok(make_query_result(
                         last_text,
@@ -2564,13 +2594,17 @@ impl QueryEngine {
                 if let Some(ref c) = streaming_ctx {
                     self.drain_nested_memory_triggers(c).await;
                 }
-                let is_terminal = streaming_control_prevent.is_some();
+                let continuation = if streaming_control_prevent.is_some() {
+                    crate::engine_finalize_turn::TurnContinuation::Terminal
+                } else {
+                    crate::engine_finalize_turn::TurnContinuation::Continuing
+                };
                 self.finalize_turn_post_tools(
                     &mut *history,
                     &event_tx,
                     turn_id,
                     usage,
-                    is_terminal,
+                    continuation,
                 )
                 .await;
                 if let Some(ref c) = streaming_ctx {
@@ -2665,8 +2699,12 @@ impl QueryEngine {
             run_artifacts.structured_output_attempts = run_artifacts
                 .structured_output_attempts
                 .saturating_add(tool_run_outcome.structured_output_attempts);
-            let is_terminal = !tool_run_outcome.continue_after_tools;
-            self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage, is_terminal)
+            let continuation = if tool_run_outcome.continue_after_tools {
+                crate::engine_finalize_turn::TurnContinuation::Continuing
+            } else {
+                crate::engine_finalize_turn::TurnContinuation::Terminal
+            };
+            self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage, continuation)
                 .await;
             self.drain_dynamic_skill_triggers(&ctx, &mut *history, &event_tx)
                 .await;

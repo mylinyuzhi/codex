@@ -20,7 +20,7 @@ MCP server lifecycle, config, auth, discovery, naming, channel permissions. Dele
 
 - Connections: `McpConnectionManager`, `McpConnectionState`, `McpClientError`, `ConnectedMcpServer`
 - Config: `McpConfigLoader`, `McpServerConfig`, `ScopedMcpServerConfig`, `ConfigScope`, `McpTransport`, `McpConfigChanged`, `watch_mcp_configs`
-- Discovery: `DiscoveryCache`, `DiscoveredTool`, `DiscoveredResource`, `DynamicResourceQuery`, `ServerCapabilities`, `McpCapabilities`, `McpResource`, `McpToolDefinition`, `ToolAnnotations`, `discover_all`, `discover_tools_from_server`, `discover_resources`, `discover_resources_matching`, `refresh_server_capabilities`, `convert_mcp_tool_to_tool_def`
+- Discovery: `DiscoveryCache`, `DiscoveredTool`, `DiscoveredResource`, `DynamicResourceQuery`, `ServerCapabilities`, `McpCapabilities`, `McpResource`, `McpToolDefinition`, `ToolAnnotations`, `discover_all`, `discover_tools_from_server`, `discover_resources`, `discover_resources_matching`, `refresh_server_capabilities`
 - Auth: `OAuthConfig`, `OAuthTokens`, `OAuthTokenStore`
 - Channels: `ChannelPermission`, `ChannelPermissionRelay`, `DenyAllRelay`, `StaticPermissionRelay`
 - Elicitation: `ElicitationRequest`, `ElicitationResult`, `ElicitationField`, `ElicitationFieldType`, `ElicitationMode`, `ElicitationType`, `ElicitResult`
