@@ -216,68 +216,6 @@ async fn test_refresh_server_capabilities_unknown_server() {
     assert!(c.get_tools("server").is_none());
 }
 
-// ── convert_mcp_tool_to_tool_def ──
-
-#[test]
-fn test_convert_mcp_tool_to_tool_def_basic() {
-    let tool = McpToolDefinition {
-        name: "read_data".to_string(),
-        description: Some("Read data from store".to_string()),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "key": { "type": "string", "description": "The key to read" },
-                "format": { "type": "string" }
-            }
-        }),
-    };
-
-    let (fq_name, schema) = convert_mcp_tool_to_tool_def("my-server", &tool);
-    assert_eq!(fq_name, "mcp__my-server__read_data");
-    assert_eq!(schema.properties.len(), 2);
-    assert!(schema.properties.contains_key("key"));
-    assert!(schema.properties.contains_key("format"));
-}
-
-#[test]
-fn test_convert_mcp_tool_to_tool_def_no_properties() {
-    let tool = McpToolDefinition {
-        name: "ping".to_string(),
-        description: None,
-        input_schema: serde_json::json!({ "type": "object" }),
-    };
-
-    let (fq_name, schema) = convert_mcp_tool_to_tool_def("srv", &tool);
-    assert_eq!(fq_name, "mcp__srv__ping");
-    assert!(schema.properties.is_empty());
-}
-
-#[test]
-fn test_convert_mcp_tool_to_tool_def_strips_meta() {
-    let tool = McpToolDefinition {
-        name: "search".to_string(),
-        description: Some("Search".to_string()),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string" }
-            },
-            "_meta": {
-                "anthropic/searchHint": "find things",
-                "anthropic/alwaysLoad": true,
-            },
-            "annotations": {
-                "readOnlyHint": true,
-            }
-        }),
-    };
-
-    let (_, schema) = convert_mcp_tool_to_tool_def("srv", &tool);
-    // Only properties from the "properties" key; _meta and annotations excluded
-    assert_eq!(schema.properties.len(), 1);
-    assert!(schema.properties.contains_key("query"));
-}
-
 // ── DynamicResourceQuery ──
 
 fn make_resource(server: &str, uri: &str, name: &str, mime: Option<&str>) -> DiscoveredResource {

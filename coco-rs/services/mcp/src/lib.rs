@@ -39,7 +39,6 @@ pub use discovery::DiscoveryCache;
 pub use discovery::DynamicResourceQuery;
 pub use discovery::ServerCapabilities;
 pub use discovery::ToolAnnotations;
-pub use discovery::convert_mcp_tool_to_tool_def;
 pub use discovery::discover_all;
 pub use discovery::discover_resources;
 pub use discovery::discover_resources_matching;

@@ -215,6 +215,20 @@ impl QueryEngine {
             self.client.cache_break_cleanup_agent(agent_id).await;
         }
 
+        // TurnFailed — wire-protocol terminator on the error path so SDK
+        // iterators / TUI state machines don't block on `events()` waiting
+        // for a `Turn*` notification. Fires before `SessionResult` so
+        // turn-level consumers see the turn-end signal first.
+        if let Err(e) = &result {
+            let _ = emit_protocol(
+                &event_tx,
+                ServerNotification::TurnFailed(coco_types::TurnFailedParams {
+                    error: e.to_string(),
+                }),
+            )
+            .await;
+        }
+
         // StopFailure — fire-and-forget hooks when the turn ended in an
         // API / runtime error rather than a clean stop. TS:
         // `executeStopFailureHooks()` (`utils/hooks.ts:3594`). Output

@@ -49,6 +49,8 @@ from coco_sdk.generated.protocol import (
     ServerNotification,
     ServerNotificationTurnCompleted,
     ServerNotificationTurnFailed,
+    ServerNotificationTurnInterrupted,
+    ServerNotificationTurnMaxReached,
     ServerRequestMethod,
     SessionArchiveRequest,
     SessionListRequest,
@@ -378,7 +380,20 @@ class CocoClient:
                 # Unknown method or malformed payload — already logged.
                 continue
             yield event
-            if isinstance(event, (ServerNotificationTurnCompleted, ServerNotificationTurnFailed)):
+            # Break on any wire-protocol turn terminator: `TurnCompleted`
+            # (clean end), `TurnFailed` (engine error), `TurnInterrupted`
+            # (cancellation), `TurnMaxReached` (budget / max-turns).
+            # Without all four, `events()` would block forever on the
+            # non-success paths since the transport stays open.
+            if isinstance(
+                event,
+                (
+                    ServerNotificationTurnCompleted,
+                    ServerNotificationTurnFailed,
+                    ServerNotificationTurnInterrupted,
+                    ServerNotificationTurnMaxReached,
+                ),
+            ):
                 break
 
     async def send(self, text: str) -> AsyncIterator[ServerNotification]:
