@@ -1,34 +1,33 @@
-//! `/skills` — list discovered skills (bundled + user + project + plugin).
+//! `/skills` — open the editable 4-state override dialog or run the
+//! text subcommand variants.
 //!
-//! TS: `commands/skills/skills.tsx` opens a `<SkillsMenu>` overlay listing
-//! every loaded skill with metadata. The no-arg invocation routes through
-//! [`SkillsHandler`] which returns
+//! TS parity: 2.1.142 `eT5` slash entry → `uJ4` dialog
+//! (`cli_inner_pretty.js:476909`). The no-arg invocation returns a
 //! [`crate::CommandResult::OpenDialog`] carrying a fully-built
-//! [`coco_types::SkillsDialogPayload`] — the TUI consumer renders the
-//! same shape as the TS `<SkillsMenu>` (5 source groups, token estimate
-//! per row, Esc to close).
+//! [`coco_types::SkillsDialogPayload`] with every row pre-populated:
+//! `description`, `frontmatter_bytes`, `current_local`, `baseline`,
+//! and `lock` — the TUI consumer renders without recomputing.
 //!
-//! The sub-commands (`list` / `show <name>` / `paths`) stay text-only
-//! via the legacy [`handler`] function so SDK / headless / scripted
-//! callers get a flat enumeration they can parse.
-//!
-//! Mirrors the same load order used by `tui_runner` when it builds the
-//! command registry (`SkillManager::load_from_dirs(&[user, project])`),
-//! plus the bundled in-binary set.
+//! Sub-commands (`list` / `show <name>` / `paths`) stay text-only
+//! so SDK / headless / scripted callers get a flat enumeration they
+//! can parse.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use coco_config::SkillOverrideTiers;
 use coco_skills::SkillDefinition;
 use coco_skills::SkillManager;
 use coco_skills::SkillScopes;
 use coco_skills::SkillSource;
 use coco_skills::bundled::register_bundled_default;
-use coco_skills::estimate_skill_tokens;
+use coco_skills::estimate_skill_frontmatter_bytes;
 use coco_skills::get_managed_skills_path;
+use coco_skills::resolve_skill_baseline;
+use coco_skills::resolve_skill_override_lock;
+use coco_types::SkillOverrideState;
 use coco_types::SkillsDialogEntry;
-use coco_types::SkillsDialogGroupSubtitle;
 use coco_types::SkillsDialogPayload;
 use coco_types::SkillsDialogSource;
 
@@ -36,11 +35,17 @@ use crate::CommandHandler;
 use crate::CommandResult;
 use crate::DialogSpec;
 
-/// `CommandHandler` impl for `/skills`. No args → open the TUI dialog;
-/// `list` / `show` / `paths` → reuse the text path.
-///
-/// TS parity: `commands/skills/skills.tsx::call` (no args opens
-/// `<SkillsMenu>`). coco-rs adds sub-commands for non-TUI surfaces.
+/// Fallback bytes-per-token ratio. TS `sG(mainLoopModel)` returns
+/// the per-model value via its tokenizer SDK; coco-rs doesn't ship
+/// a tokenizer per provider so the dialog falls back to the
+/// English-text rule-of-thumb (~4 bytes/token). The dialog uses
+/// this only for the visual `~N tok` column — the listing budget
+/// itself is computed against the live model context window via
+/// `generate_skill_tool_prompt`, not this constant.
+const DEFAULT_BYTES_PER_TOKEN: i64 = 4;
+
+/// `CommandHandler` impl for `/skills`. No args → open the TUI
+/// dialog; `list` / `show` / `paths` → reuse the text path.
 pub struct SkillsHandler;
 
 #[async_trait]
@@ -52,9 +57,18 @@ impl CommandHandler for SkillsHandler {
 
         // Discovery is sync (`std::fs`) — keep the TUI event loop
         // unblocked.
+        //
+        // PR3 limitation: the payload is built without a
+        // `SkillOverrideTiers` because the command handler trait
+        // does not carry `RuntimeConfig`. The caller (TUI overlay
+        // owner) merges the live tiers into the payload before
+        // rendering. See `app/tui/src/state/surface_payloads.rs`
+        // for the `SkillsDialogPayload::from_wire` + `with_tiers`
+        // composition.
         tokio::task::spawn_blocking(move || -> crate::Result<CommandResult> {
             if trimmed.is_empty() {
-                let payload = build_dialog_payload(&config_home, &cwd);
+                let payload =
+                    build_dialog_payload(&config_home, &cwd, &SkillOverrideTiers::default());
                 Ok(CommandResult::OpenDialog(DialogSpec::SkillsList {
                     payload,
                 }))
@@ -71,54 +85,67 @@ impl CommandHandler for SkillsHandler {
     }
 }
 
-/// Build the dialog payload from the freshly-discovered skill catalog.
-/// Grouping + per-group subtitle resolution happens here so the TUI is
-/// a pure projection.
+/// Build the dialog payload from the freshly-discovered skill
+/// catalog, populating every per-row override field so the dialog
+/// can render + save without round-tripping to the handler.
 ///
-/// TS: `SkillsMenu` does the same grouping + subtitle work inline; we
-/// hoist it here so the slash dispatcher owns it and the TUI doesn't
-/// need access to `SkillManager` / `get_skill_paths` directly.
-fn build_dialog_payload(config_home: &Path, cwd: &Path) -> SkillsDialogPayload {
+/// **Bundled skills appear in the dialog** — TS 2.1.142 `xJ4` shows
+/// them with the `built-in` source label and they're not locked, so
+/// the user can disable a noisy bundled skill via `/skills`.
+///
+/// **Conditional (`paths`-gated) skills appear too** — they sit in
+/// `SkillManager.disk_conditional` until activated by a matching
+/// file touch, but the dialog uses
+/// [`SkillManager::all_including_conditional`] so a user can
+/// override them ahead of activation.
+pub fn build_dialog_payload(
+    config_home: &Path,
+    cwd: &Path,
+    tiers: &SkillOverrideTiers,
+) -> SkillsDialogPayload {
     let manager = build_manager(config_home, cwd);
-    let skills = manager.all();
+    let skills = manager.all_including_conditional();
 
-    // TS-parity filter: drop disabled skills, then drop anything whose
-    // source the dialog excludes (`Bundled`). `source_to_dialog`
-    // returns `None` for excluded sources so `filter_map` drops them.
     let entries: Vec<SkillsDialogEntry> = skills
         .iter()
         .filter(|s| !s.disabled)
-        .filter_map(|s| {
-            Some(SkillsDialogEntry {
+        .map(|s| {
+            let source = source_to_dialog(&s.source);
+            let baseline = resolve_skill_baseline(&s.name, tiers);
+            let current_local = tiers.local.get(&s.name).copied();
+            let lock = resolve_skill_override_lock(s, tiers);
+            SkillsDialogEntry {
                 name: s.name.clone(),
-                source: source_to_dialog(&s.source)?,
+                source,
+                description: s.description.clone(),
                 plugin_name: plugin_name_for(s),
-                token_estimate: estimate_skill_tokens(s),
-            })
+                frontmatter_bytes: estimate_skill_frontmatter_bytes(s) as i64,
+                current_local,
+                baseline,
+                lock,
+            }
         })
         .collect();
 
     SkillsDialogPayload {
-        group_subtitles: build_group_subtitles(config_home, cwd, &entries, &skills),
         entries,
+        bytes_per_token: DEFAULT_BYTES_PER_TOKEN,
     }
 }
 
-/// Map a `SkillSource` to the dialog's source discriminant. Returns
-/// `None` for sources the TS dialog filters out — currently just
-/// `Bundled` (TS `SkillsMenu` filters
-/// `loadedFrom in ['skills', 'commands_DEPRECATED', 'plugin', 'mcp']`,
-/// explicitly excluding `bundled`). Caller drops the entry on `None`.
-fn source_to_dialog(source: &SkillSource) -> Option<SkillsDialogSource> {
-    Some(match source {
+/// Map a [`SkillSource`] to the dialog's source discriminant.
+/// **Bundled and Managed both surface** — the former under
+/// `BuiltIn`, the latter under `Policy`. There are no longer any
+/// dialog-excluded sources.
+fn source_to_dialog(source: &SkillSource) -> SkillsDialogSource {
+    match source {
+        SkillSource::Bundled => SkillsDialogSource::BuiltIn,
         SkillSource::Project { .. } => SkillsDialogSource::Project,
         SkillSource::User { .. } => SkillsDialogSource::User,
         SkillSource::Managed { .. } => SkillsDialogSource::Policy,
         SkillSource::Plugin { .. } => SkillsDialogSource::Plugin,
         SkillSource::Mcp { .. } => SkillsDialogSource::Mcp,
-        // TS-parity exclusion: bundled skills don't appear in the dialog.
-        SkillSource::Bundled => return None,
-    })
+    }
 }
 
 fn plugin_name_for(s: &SkillDefinition) -> Option<String> {
@@ -128,122 +155,69 @@ fn plugin_name_for(s: &SkillDefinition) -> Option<String> {
     }
 }
 
-/// TS `getSourceSubtitle`: file-based groups get the skills directory
-/// display path; MCP gets a comma-joined unique server-name list.
-///
-/// **Only emit subtitles for groups that have visible entries** — TS
-/// computes subtitle per-group inside the render loop, so empty groups
-/// never get a subtitle. We keep the wire payload tight at the source.
-fn build_group_subtitles(
-    config_home: &Path,
-    cwd: &Path,
-    entries: &[SkillsDialogEntry],
-    skills: &[Arc<SkillDefinition>],
-) -> Vec<SkillsDialogGroupSubtitle> {
-    let present: std::collections::HashSet<SkillsDialogSource> =
-        entries.iter().map(|e| e.source).collect();
-    let mut out = Vec::new();
-
-    if present.contains(&SkillsDialogSource::Policy) {
-        out.push(SkillsDialogGroupSubtitle {
-            source: SkillsDialogSource::Policy,
-            subtitle: get_managed_skills_path().display().to_string(),
-        });
-    }
-    if present.contains(&SkillsDialogSource::User) {
-        // TS `getSourceSubtitle`: append the legacy `commands/` path
-        // only when a user-scope skill actually came from the
-        // `commands_DEPRECATED` flat-`.md` layout. Otherwise users see
-        // an extra path that has no skills behind it.
-        let user_commands_dir = config_home.join("commands");
-        let mut parts = vec![config_home.join("skills").display().to_string()];
-        if has_legacy_commands_skills(skills, SkillsDialogSource::User, &user_commands_dir) {
-            parts.push(user_commands_dir.display().to_string());
-        }
-        out.push(SkillsDialogGroupSubtitle {
-            source: SkillsDialogSource::User,
-            subtitle: parts.join(", "),
-        });
-    }
-    if present.contains(&SkillsDialogSource::Project) {
-        // coco-rs supports two project skill roots — the canonical
-        // `.coco/skills/` and TS-compat `.claude/skills/`. Comma-join
-        // both so users can locate any project skill from the dialog.
-        // TS-parity addition: if any project skill came from the legacy
-        // `.claude/commands/` directory, append it too.
-        let project_commands_dir = cwd.join(".claude").join("commands");
-        let mut parts: Vec<String> = [
-            cwd.join(".coco").join("skills"),
-            cwd.join(".claude").join("skills"),
-        ]
+/// Pin one MCP-server name → `SkillsDialogSource::Mcp` for any
+/// caller that still wants the per-source MCP server list (the
+/// dialog itself no longer groups, but external SDK clients that
+/// build their own view can scan `entries` for `Mcp` sources).
+#[allow(dead_code)]
+fn mcp_servers(skills: &[Arc<SkillDefinition>]) -> Vec<String> {
+    let mut servers: Vec<String> = skills
         .iter()
-        .map(|p| p.display().to_string())
+        .filter_map(|s| match &s.source {
+            SkillSource::Mcp { server_name } => Some(server_name.clone()),
+            _ => None,
+        })
         .collect();
-        if has_legacy_commands_skills(skills, SkillsDialogSource::Project, &project_commands_dir) {
-            parts.push(project_commands_dir.display().to_string());
-        }
-        out.push(SkillsDialogGroupSubtitle {
-            source: SkillsDialogSource::Project,
-            subtitle: parts.join(", "),
-        });
-    }
-
-    if present.contains(&SkillsDialogSource::Plugin) {
-        // TS-parity: `getSkillsPath('plugin', 'skills')` returns the
-        // literal string `"plugin"` and the dialog renders it as the
-        // group subtitle (`SkillsMenu.tsx:135`). We mirror that here
-        // — see [[project_coco_rs_phase2_skills_dialog]]. The plugin
-        // *name* still appears inline on each row, so the subtitle is
-        // a low-information group label, not a precise data point.
-        out.push(SkillsDialogGroupSubtitle {
-            source: SkillsDialogSource::Plugin,
-            subtitle: "plugin".to_string(),
-        });
-    }
-
-    if present.contains(&SkillsDialogSource::Mcp) {
-        // Matches TS `getSourceSubtitle` for `mcp`: joined unique
-        // server-name list.
-        let mut mcp_servers: Vec<String> = skills
-            .iter()
-            .filter_map(|s| match &s.source {
-                SkillSource::Mcp { server_name } => Some(server_name.clone()),
-                _ => None,
-            })
-            .collect();
-        mcp_servers.sort();
-        mcp_servers.dedup();
-        if !mcp_servers.is_empty() {
-            out.push(SkillsDialogGroupSubtitle {
-                source: SkillsDialogSource::Mcp,
-                subtitle: mcp_servers.join(", "),
-            });
-        }
-    }
-
-    out
+    servers.sort();
+    servers.dedup();
+    servers
 }
 
-/// Whether any visible skill in `scope` was loaded from the legacy
-/// `.claude/commands/` directory layout (TS `loadedFrom ===
-/// 'commands_DEPRECATED'`). Used to gate the commands-dir entry in the
-/// User/Project subtitle.
-///
-/// The `SkillSource::User { path } | Project { path }` field carries
-/// the **skill file path** (set in `SkillManager::load_with_source`),
-/// so `starts_with(commands_dir)` reliably distinguishes the two.
-fn has_legacy_commands_skills(
-    skills: &[Arc<SkillDefinition>],
-    scope: SkillsDialogSource,
-    commands_dir: &Path,
-) -> bool {
-    skills.iter().any(|s| match (&s.source, scope) {
-        (SkillSource::User { path }, SkillsDialogSource::User)
-        | (SkillSource::Project { path }, SkillsDialogSource::Project) => {
-            path.starts_with(commands_dir)
-        }
-        _ => false,
-    })
+#[allow(dead_code)]
+fn managed_skills_path_display() -> String {
+    get_managed_skills_path().display().to_string()
+}
+
+#[allow(dead_code)]
+fn project_skills_paths(cwd: &Path) -> Vec<String> {
+    vec![
+        cwd.join(".coco").join("skills").display().to_string(),
+        cwd.join(".claude").join("skills").display().to_string(),
+    ]
+}
+
+/// Drop-in helper that lets a downstream consumer (TUI overlay
+/// builder) re-resolve overrides against the live `RuntimeConfig`
+/// tiers when the handler couldn't (the handler runs without a
+/// `RuntimeConfig` in scope today).
+pub fn enrich_payload_with_tiers(
+    payload: &mut SkillsDialogPayload,
+    tiers: &SkillOverrideTiers,
+    skills: &SkillManager,
+) {
+    for entry in payload.entries.iter_mut() {
+        let Some(skill) = skills.get(&entry.name) else {
+            continue;
+        };
+        entry.baseline = resolve_skill_baseline(&entry.name, tiers);
+        entry.current_local = tiers.local.get(&entry.name).copied();
+        entry.lock = resolve_skill_override_lock(&skill, tiers);
+    }
+}
+
+/// Synthesize a single SkillOverrideEdit for the diff-against-baseline
+/// save algorithm. Used by tests + the dialog wiring to keep the
+/// override-diff logic in one place.
+#[allow(dead_code)]
+pub fn compute_save_value(
+    baseline: SkillOverrideState,
+    pending: SkillOverrideState,
+) -> Option<SkillOverrideState> {
+    if pending == baseline {
+        None
+    } else {
+        Some(pending)
+    }
 }
 
 fn render(args: &str, config_home: &Path, cwd: &Path) -> crate::Result<String> {

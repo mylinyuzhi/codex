@@ -521,7 +521,7 @@ fn test_expand_braces_unclosed() {
 
 #[test]
 fn test_inject_skill_listing_empty() {
-    let result = inject_skill_listing(&[], 8000);
+    let result = inject_skill_listing(&[], 8000, &coco_config::SkillOverrideTiers::default());
     assert!(result.listing.is_empty());
     assert_eq!(result.included, 0);
     assert_eq!(result.total, 0);
@@ -531,7 +531,7 @@ fn test_inject_skill_listing_empty() {
 fn test_inject_skill_listing_includes_bundled() {
     let skill = test_skill("commit", "Create a commit", "prompt", SkillSource::Bundled);
     let refs: Vec<&SkillDefinition> = vec![&skill];
-    let result = inject_skill_listing(&refs, 8000);
+    let result = inject_skill_listing(&refs, 8000, &coco_config::SkillOverrideTiers::default());
 
     assert!(result.listing.contains("/commit"));
     assert!(result.listing.contains("Create a commit"));
@@ -552,7 +552,7 @@ fn test_inject_skill_listing_budget_enforced() {
     );
     let refs: Vec<&SkillDefinition> = vec![&bundled, &user];
     // Budget too small for user skill
-    let result = inject_skill_listing(&refs, 100);
+    let result = inject_skill_listing(&refs, 100, &coco_config::SkillOverrideTiers::default());
     assert_eq!(result.included, 1); // only bundled
     assert_eq!(result.total, 2);
 }
@@ -562,7 +562,7 @@ fn test_inject_skill_listing_with_when_to_use() {
     let mut skill = test_skill("test", "Description", "p", SkillSource::Bundled);
     skill.when_to_use = Some("When doing X".to_string());
     let refs: Vec<&SkillDefinition> = vec![&skill];
-    let result = inject_skill_listing(&refs, 8000);
+    let result = inject_skill_listing(&refs, 8000, &coco_config::SkillOverrideTiers::default());
 
     assert!(result.listing.contains("When doing X"));
 }
@@ -1101,6 +1101,28 @@ fn test_conditional_skill_hidden_before_activation() {
     let visible = mgr.visible(&coco_types::Features::with_defaults());
     assert_eq!(visible.len(), 1);
     assert_eq!(visible[0].name, "always-on");
+}
+
+#[test]
+fn test_all_including_conditional_covers_unactivated_skills() {
+    let mgr = SkillManager::new();
+    mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
+    mgr.register(test_skill("always-on", "always", "x", SkillSource::Bundled));
+
+    // all() excludes the un-activated conditional skill — that's the
+    // model-listing contract. all_including_conditional() reveals it
+    // for the `/skills` dialog so users can override before
+    // activation.
+    let visible_to_model: Vec<String> = mgr.all().iter().map(|s| s.name.clone()).collect();
+    assert_eq!(visible_to_model, vec!["always-on"]);
+
+    let mut full: Vec<String> = mgr
+        .all_including_conditional()
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    full.sort();
+    assert_eq!(full, vec!["always-on", "rust-lint"]);
 }
 
 #[test]

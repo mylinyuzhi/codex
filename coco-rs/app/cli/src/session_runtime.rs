@@ -1177,6 +1177,7 @@ impl SessionRuntime {
             lsp_config: runtime_config.lsp.clone(),
             compact: runtime_config.compact.clone(),
             features: Arc::new(runtime_config.features.clone()),
+            skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             include_hook_events: cli.include_hook_events,
             ..Default::default()
@@ -2813,9 +2814,28 @@ impl SessionRuntime {
     /// fresh each call; resolution order matches the original
     /// bootstrap (`commands::build_command_registry`).
     ///
+    /// Uses the frozen [`Self::runtime_config`] snapshot — fine for
+    /// the user-initiated `/reload-plugins` path where settings
+    /// haven't been mutated. Callers that just wrote to
+    /// `settings.local.json` must use [`Self::reload_plugins_with`]
+    /// to pass the freshly-republished `RuntimeConfig` (otherwise
+    /// the registry rebuild reads stale `skill_overrides` tiers).
+    ///
     /// Returns the count of registered commands in the new registry
     /// so the caller can show the user a confirmation.
     pub async fn reload_plugins(&self, cwd: &std::path::Path) -> usize {
+        self.reload_plugins_with(cwd, &self.runtime_config).await
+    }
+
+    /// Variant of [`Self::reload_plugins`] that takes an explicit
+    /// `RuntimeConfig`. Use this when the caller has just mutated
+    /// settings (e.g. `/skills` dialog save) and the publisher's
+    /// `current()` snapshot is fresher than [`Self::runtime_config`].
+    pub async fn reload_plugins_with(
+        &self,
+        cwd: &std::path::Path,
+        runtime_config: &coco_config::RuntimeConfig,
+    ) -> usize {
         let skill_manager = coco_skills::SkillManager::new();
         skill_manager.load_from_dirs(&[
             self.config_home.join("skills"),
@@ -2827,10 +2847,11 @@ impl SessionRuntime {
             &skill_manager,
             &plugin_manager,
             coco_types::UserType::from_env(),
-            self.runtime_config.features.clone(),
+            runtime_config.features.clone(),
             cwd.to_path_buf(),
             dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
             None,
+            &runtime_config.skill_overrides,
         );
         let count = registry.len();
         let new_registry = Arc::new(registry);

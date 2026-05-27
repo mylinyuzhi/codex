@@ -70,7 +70,11 @@ pub struct NoOpSkillsSource;
 
 #[async_trait]
 impl SkillsSource for NoOpSkillsSource {
-    async fn listing(&self, _agent_id: Option<&str>) -> Option<String> {
+    async fn listing(
+        &self,
+        _agent_id: Option<&str>,
+        _tiers: &coco_config::SkillOverrideTiers,
+    ) -> Option<String> {
         None
     }
     async fn invoked(&self, _agent_id: Option<&str>) -> Vec<InvokedSkillEntry> {

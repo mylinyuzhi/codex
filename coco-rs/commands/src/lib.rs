@@ -478,6 +478,10 @@ fn command_result_kind(r: &CommandResult) -> &'static str {
 /// This function is a thin wrapper that performs the in-order registration —
 /// callers pass the constructed `SkillManager` and `PluginManager` along with
 /// user / feature context.
+// PR2 took the arg count to 8 (added `skill_overrides`). Bundling into
+// a struct is the cleaner fix but touches every caller; left for a
+// follow-up refactor.
+#[allow(clippy::too_many_arguments)]
 pub fn build_command_registry(
     skill_manager: &coco_skills::SkillManager,
     plugin_manager: &coco_plugins::PluginManager,
@@ -486,6 +490,7 @@ pub fn build_command_registry(
     project_root: std::path::PathBuf,
     user_home: std::path::PathBuf,
     managed_root: Option<std::path::PathBuf>,
+    skill_overrides: &coco_config::SkillOverrideTiers,
 ) -> CommandRegistry {
     let mut registry = CommandRegistry::new();
 
@@ -493,8 +498,10 @@ pub fn build_command_registry(
     register_builtins(&mut registry);
     implementations::register_extended_builtins(&mut registry);
 
-    // 2-5. Skill-derived commands (filtered by feature gates).
-    register_skills_as_commands(&mut registry, skill_manager, &features);
+    // 2-5. Skill-derived commands (filtered by feature gates + the
+    // `off` override; the dialog's gate keeps the `name-only` /
+    // `user-invocable-only` rows discoverable via `/`).
+    register_skills_as_commands(&mut registry, skill_manager, &features, skill_overrides);
     register_plugin_contributions(&mut registry, plugin_manager);
 
     // 6. TS-parity P1 handlers — last so they win over any name collisions
@@ -516,11 +523,21 @@ fn register_skills_as_commands(
     registry: &mut CommandRegistry,
     manager: &coco_skills::SkillManager,
     features: &coco_types::Features,
+    tiers: &coco_config::SkillOverrideTiers,
 ) {
     use coco_types::CommandSource;
     use coco_types::PromptCommandData;
+    use coco_types::SkillOverrideState;
     for skill in manager.visible(features) {
         if !skill.user_invocable {
+            continue;
+        }
+        // `off`-overridden skills are hidden from `/` autocomplete
+        // entirely. TS parity: `iP8(skill)` filter
+        // (`cli_inner_pretty.js:513855-513857`). `name-only` and
+        // `user-invocable-only` keep their slash-command entries —
+        // they only restrict model invocation.
+        if coco_skills::effective_skill_state(&skill, tiers) == SkillOverrideState::Off {
             continue;
         }
         // Skill source maps directly to the payload-carrying
@@ -652,6 +669,7 @@ mod seam_tests {
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
+            &coco_config::SkillOverrideTiers::default(),
         );
         // TS-parity handlers are present. Canonical names only — no
         // aliases for /rewind or /resume.
@@ -694,6 +712,7 @@ mod seam_tests {
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
+            &coco_config::SkillOverrideTiers::default(),
         );
         // Gated skills/commands MUST NOT appear when features are off.
         // `/dream` and `/summary` are gated on Feature::AutoMemory in
@@ -730,6 +749,7 @@ mod seam_tests {
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
+            &coco_config::SkillOverrideTiers::default(),
         );
         assert!(reg2.get("loop").is_some());
         assert!(reg2.get("schedule").is_some());
@@ -751,6 +771,7 @@ mod seam_tests {
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
+            &coco_config::SkillOverrideTiers::default(),
         );
         match reg.execute_command("rewind", "").await.unwrap() {
             CommandResult::OpenDialog(DialogSpec::MessageSelector) => {}

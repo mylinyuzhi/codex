@@ -6,6 +6,7 @@ pub mod bundled;
 pub mod error;
 pub mod extraction;
 pub mod mcp_builders;
+pub mod overrides;
 pub mod prompt_render;
 pub mod reminder_source;
 pub mod shell_exec;
@@ -13,6 +14,12 @@ pub mod usage;
 pub mod watcher;
 
 pub use error::SkillsError;
+pub use overrides::effective_skill_state;
+pub use overrides::resolve_skill_baseline;
+pub use overrides::resolve_skill_override_lock;
+// `estimate_skill_frontmatter_bytes` is defined at the crate root
+// further down; just listed here as a reminder it is part of the
+// public surface used by the `/skills` dialog payload builder.
 
 /// Crate-local Result alias. Default error type is `SkillsError` but the
 /// generic stays open so `Result::ok` / 2-arg `Result<T, E>` callsites
@@ -513,9 +520,31 @@ impl SkillManager {
     /// `SkillDefinition` is heap-heavy (HashMap + multiple Vecs), so
     /// returning `Arc<SkillDefinition>` avoids the per-call deep clone
     /// while keeping `&s.field` access seamless via `Deref`.
+    ///
+    /// **Excludes un-activated conditional (`paths`-gated) skills** —
+    /// they live in `disk_conditional` until a touched file matches.
+    /// Consumers that need to enumerate every known skill regardless
+    /// of activation (e.g. the `/skills` dialog so a `paths`-gated
+    /// skill is visible before activation) should use
+    /// [`Self::all_including_conditional`].
     pub fn all(&self) -> Vec<Arc<SkillDefinition>> {
         let guard = self.read_catalog();
         let mut out: Vec<Arc<SkillDefinition>> = guard.disk.values().cloned().collect();
+        out.extend(guard.mcp.values().cloned());
+        out
+    }
+
+    /// Iterate every known skill — `disk ∪ disk_conditional ∪ mcp` —
+    /// as shared `Arc`s.
+    ///
+    /// Used by the `/skills` dialog so users can toggle `paths`-gated
+    /// skills before they activate. The model-facing listing path
+    /// continues to use [`Self::all`] / [`Self::visible`] which
+    /// honour the activation gate.
+    pub fn all_including_conditional(&self) -> Vec<Arc<SkillDefinition>> {
+        let guard = self.read_catalog();
+        let mut out: Vec<Arc<SkillDefinition>> = guard.disk.values().cloned().collect();
+        out.extend(guard.disk_conditional.values().cloned());
         out.extend(guard.mcp.values().cloned());
         out
     }
@@ -1198,9 +1227,23 @@ pub struct SkillListingResult {
 ///
 /// TS: `formatCommandsWithinBudget()` in `prompt.ts` — caps at 1% of context
 /// window, max 250 chars per entry, bundled skills never truncated.
+///
+/// The 4-state `skill_overrides` resolution layer applies three filters
+/// (TS mirror: `cli_inner_pretty.js:513858-513869` + listing-budget loop):
+///
+/// 1. `effective == Off` → skip the row entirely.
+/// 2. `effective == NameOnly` → emit `- /name` with no description
+///    (saves description tokens but keeps the name reachable).
+/// 3. `XG$` — `disable_model_invocation && effective != On` → skip
+///    (author intent + non-default state ⇒ hide from model).
+///
+/// With the default-empty [`coco_config::SkillOverrideTiers`] every
+/// skill resolves to `On` so the filters are no-ops — PR2 callers
+/// observe identical output to the pre-gate baseline.
 pub fn inject_skill_listing(
     skills: &[&SkillDefinition],
     max_budget_chars: usize,
+    tiers: &coco_config::SkillOverrideTiers,
 ) -> SkillListingResult {
     if skills.is_empty() {
         return SkillListingResult {
@@ -1214,12 +1257,17 @@ pub fn inject_skill_listing(
     let mut listing = String::from("Available slash commands (skills):\n");
     let mut included = 0;
 
-    // Bundled skills are always included (never truncated)
+    // Bundled skills are always included (never truncated). Filters
+    // still apply — a bundled skill explicitly `off`-overridden by
+    // the user must drop out of the model listing.
     for skill in skills
         .iter()
         .filter(|s| matches!(s.source, SkillSource::Bundled))
     {
-        listing.push_str(&format_skill_entry(skill));
+        let Some(mode) = skill_listing_mode(skill, tiers) else {
+            continue;
+        };
+        listing.push_str(&format_skill_entry(skill, mode));
         included += 1;
     }
 
@@ -1228,7 +1276,10 @@ pub fn inject_skill_listing(
         .iter()
         .filter(|s| !matches!(s.source, SkillSource::Bundled))
     {
-        let entry = format_skill_entry(skill);
+        let Some(mode) = skill_listing_mode(skill, tiers) else {
+            continue;
+        };
+        let entry = format_skill_entry(skill, mode);
         if listing.len() + entry.len() > max_budget_chars {
             break;
         }
@@ -1243,26 +1294,60 @@ pub fn inject_skill_listing(
     }
 }
 
-/// Format a single skill entry for the listing, capping description length.
-fn format_skill_entry(skill: &SkillDefinition) -> String {
-    let mut entry = format!("- /{}", skill.name);
-    if !skill.description.is_empty() {
-        let desc = if skill.description.len() > MAX_LISTING_DESC_CHARS {
-            format!("{}...", &skill.description[..MAX_LISTING_DESC_CHARS - 3])
-        } else {
-            skill.description.clone()
-        };
-        entry.push_str(&format!(": {desc}"));
+/// Per-skill listing mode after applying the 3-filter gate.
+///
+/// `None` ⇒ skip this skill entirely. `Some(Full)` ⇒ emit name +
+/// description. `Some(NameOnly)` ⇒ emit just the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListingMode {
+    Full,
+    NameOnly,
+}
+
+fn skill_listing_mode(
+    skill: &SkillDefinition,
+    tiers: &coco_config::SkillOverrideTiers,
+) -> Option<ListingMode> {
+    let effective = crate::overrides::effective_skill_state(skill, tiers);
+    // Filter 3 (XG$): author-DMI + non-default state → skip.
+    if skill.disable_model_invocation && effective != coco_types::SkillOverrideState::On {
+        return None;
     }
-    if let Some(when) = &skill.when_to_use {
-        let remaining = MAX_LISTING_DESC_CHARS.saturating_sub(entry.len());
-        if remaining > 20 {
-            let when_text = if when.len() > remaining - 5 {
-                format!("{}...", &when[..remaining - 8])
+    match effective {
+        coco_types::SkillOverrideState::Off => None,
+        coco_types::SkillOverrideState::NameOnly => Some(ListingMode::NameOnly),
+        // `user-invocable-only` still appears in the listing — the
+        // Skill tool gate rejects model invocation, but the name
+        // stays visible so the user-typed-slash bypass remains
+        // discoverable.
+        coco_types::SkillOverrideState::UserInvocableOnly | coco_types::SkillOverrideState::On => {
+            Some(ListingMode::Full)
+        }
+    }
+}
+
+/// Format a single skill entry for the listing, capping description length.
+fn format_skill_entry(skill: &SkillDefinition, mode: ListingMode) -> String {
+    let mut entry = format!("- /{}", skill.name);
+    if matches!(mode, ListingMode::Full) {
+        if !skill.description.is_empty() {
+            let desc = if skill.description.len() > MAX_LISTING_DESC_CHARS {
+                format!("{}...", &skill.description[..MAX_LISTING_DESC_CHARS - 3])
             } else {
-                when.clone()
+                skill.description.clone()
             };
-            entry.push_str(&format!(" - {when_text}"));
+            entry.push_str(&format!(": {desc}"));
+        }
+        if let Some(when) = &skill.when_to_use {
+            let remaining = MAX_LISTING_DESC_CHARS.saturating_sub(entry.len());
+            if remaining > 20 {
+                let when_text = if when.len() > remaining - 5 {
+                    format!("{}...", &when[..remaining - 8])
+                } else {
+                    when.clone()
+                };
+                entry.push_str(&format!(" - {when_text}"));
+            }
         }
     }
     entry.push('\n');
@@ -1282,14 +1367,20 @@ pub fn get_invocable_skills(manager: &SkillManager) -> Vec<Arc<SkillDefinition>>
 ///
 /// TS: `getPrompt()` in `tools/SkillTool/prompt.ts` — generates instruction
 /// text explaining how to invoke skills, plus the formatted skill listing.
+///
+/// `tiers` drives the 4-state override filters applied inside
+/// [`inject_skill_listing`]. Pass [`coco_config::SkillOverrideTiers::default()`]
+/// when no override configuration is available — the default-empty
+/// tiers preserve the pre-gate listing output.
 pub fn generate_skill_tool_prompt(
     skills: &[&SkillDefinition],
     context_window_tokens: i64,
+    tiers: &coco_config::SkillOverrideTiers,
 ) -> SkillListingResult {
     // Budget: 1% of context window × 4 chars/token (TS: default 8000 chars)
     let budget = ((context_window_tokens as f64 * 0.01 * 4.0) as usize).max(2000);
 
-    let mut result = inject_skill_listing(skills, budget);
+    let mut result = inject_skill_listing(skills, budget, tiers);
 
     if !result.listing.is_empty() {
         // Prepend instruction text (TS: getPrompt() static text)
@@ -1389,9 +1480,18 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
 /// with a small overhead constant since char/token ratio swamps the
 /// space-character difference.
 pub fn estimate_skill_tokens(skill: &SkillDefinition) -> i64 {
+    (estimate_skill_frontmatter_bytes(skill) / 4) as i64
+}
+
+/// Estimate of a skill's frontmatter character length (TS
+/// `estimateSkillFrontmatterChars`). The 2.1.142 `/skills` dialog
+/// divides this by the current model's bytes-per-token ratio to
+/// render the token column, so the byte count is more useful than
+/// the pre-divided token estimate when the model is mutable mid-
+/// session.
+pub fn estimate_skill_frontmatter_bytes(skill: &SkillDefinition) -> usize {
     let when_to_use = skill.when_to_use.as_deref().unwrap_or("").len();
-    let chars = skill.name.len() + skill.description.len() + when_to_use + 20;
-    (chars / 4) as i64
+    skill.name.len() + skill.description.len() + when_to_use + 20
 }
 
 /// Normalize `file_path` to a cwd-relative path suitable for gitignore

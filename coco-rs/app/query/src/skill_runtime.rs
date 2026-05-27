@@ -39,8 +39,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use coco_skills::SkillContext;
 use coco_skills::SkillManager;
+use coco_skills::effective_skill_state;
 use coco_tool_runtime::AgentQueryConfig;
 use coco_tool_runtime::AgentQueryEngineRef;
+use coco_tool_runtime::SkillGateContext;
 use coco_tool_runtime::SkillHandle;
 use coco_tool_runtime::SkillInvocationError;
 use coco_tool_runtime::SkillInvocationResult;
@@ -50,6 +52,7 @@ use coco_types::PermissionRule;
 use coco_types::PermissionRuleSource;
 use coco_types::PermissionUpdate;
 use coco_types::PermissionUpdateDestination;
+use coco_types::SkillOverrideState;
 
 /// Real skill-runtime implementation.
 ///
@@ -92,6 +95,7 @@ impl SkillHandle for QuerySkillRuntime {
         name: &str,
         args: &str,
         inherit: SubagentInheritance,
+        gate: SkillGateContext,
     ) -> Result<SkillInvocationResult, SkillInvocationError> {
         let name = coco_tools::tools::skill_advanced::normalize_skill_name(name);
         tracing::info!(skill_name = %name, args_len = args.len(), "skill invoke");
@@ -108,14 +112,52 @@ impl SkillHandle for QuerySkillRuntime {
                 name: skill.name.clone(),
             });
         }
-        if skill.disable_model_invocation {
+        // Author lock: `disable-model-invocation: true` requires the
+        // user to have typed `/<name>` in the current turn. TS parity
+        // (`cli_inner_pretty.js:353567-353574`): the rejection only
+        // fires when `Am7(name, ctx)` returned false. The previous
+        // coco-rs behavior unconditionally rejected — that was a
+        // pre-existing parity bug fixed here.
+        if skill.disable_model_invocation && !gate.user_typed_slash {
             tracing::warn!(
                 skill_name = %skill.name,
-                "skill hidden from model"
+                "skill hidden from model (author lock); no user-typed slash this turn"
             );
             return Err(SkillInvocationError::HiddenFromModel {
                 name: skill.name.clone(),
             });
+        }
+        // `skill_overrides` gate (TS `cli_inner_pretty.js:353581-353590`).
+        // Resolves to `On` for every skill when tiers are empty (the
+        // PR2 default) — so this short-circuits to no-op until users
+        // configure `skill_overrides` in their settings.json.
+        let effective = effective_skill_state(&skill, &gate.overrides);
+        match effective {
+            SkillOverrideState::Off => {
+                tracing::warn!(
+                    skill_name = %skill.name,
+                    "skill rejected: skill_overrides=off"
+                );
+                return Err(SkillInvocationError::OverrideOff {
+                    name: skill.name.clone(),
+                });
+            }
+            SkillOverrideState::UserInvocableOnly if !gate.user_typed_slash => {
+                tracing::warn!(
+                    skill_name = %skill.name,
+                    "skill rejected: user-invocable-only without user-typed slash"
+                );
+                return Err(SkillInvocationError::OverrideUserOnlyNoTrigger {
+                    name: skill.name.clone(),
+                });
+            }
+            SkillOverrideState::On
+            | SkillOverrideState::NameOnly
+            | SkillOverrideState::UserInvocableOnly => {
+                // Pass: `on`/`name-only` always allow invocation;
+                // `user-invocable-only` was permitted by the
+                // user-typed-slash guard above.
+            }
         }
         tracing::debug!(
             skill_name = %skill.name,
@@ -227,6 +269,9 @@ impl SkillHandle for QuerySkillRuntime {
                     live_permission_mode: None,
                     tool_overrides: inherit.tool_overrides.clone(),
                     features: inherit.features.clone(),
+                    // Fork-mode skill subagents inherit the gate map
+                    // from the dispatch's `SkillGateContext`.
+                    skill_overrides: Some(gate.overrides.clone()),
                     parent_tool_filter: inherit.parent_tool_filter.clone(),
                     preserve_tool_use_results: false,
                     permission_mode: None,
@@ -316,6 +361,31 @@ impl SkillHandle for QuerySkillRuntime {
             });
         }
         result
+    }
+
+    async fn read_skill_body(
+        &self,
+        name: &str,
+        tiers: &coco_config::SkillOverrideTiers,
+    ) -> Option<String> {
+        let name = coco_tools::tools::skill_advanced::normalize_skill_name(name);
+        let skill = self.manager.get(name)?;
+        // Mirror the listing-budget XG$ gate so a frontmatter
+        // `skills: [foo]` cannot smuggle a disable-model-invocation
+        // skill into the subagent's preloaded prompt. TS parity:
+        // `getSkillToolCommands()` filters via the same predicate
+        // (`cli_inner_pretty.js:513858-513869`).
+        if skill.disabled || skill.disable_model_invocation {
+            return None;
+        }
+        if coco_skills::effective_skill_state(&skill, tiers) == SkillOverrideState::Off {
+            return None;
+        }
+        let body = skill.prompt.trim();
+        if body.is_empty() {
+            return None;
+        }
+        Some(body.to_string())
     }
 }
 

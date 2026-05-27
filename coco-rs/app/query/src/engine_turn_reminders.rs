@@ -412,6 +412,7 @@ impl QueryEngine {
                 recent_tools: &reminder_recent_tools,
                 just_compacted,
                 per_source_timeout: reminder_source_timeout,
+                skill_overrides: &self.config.skill_overrides,
             })
             .await;
 

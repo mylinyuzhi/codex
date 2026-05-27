@@ -13,14 +13,17 @@
 //! is wired via a separate subsystem (follow-up work).
 
 use async_trait::async_trait;
+use coco_config::SkillOverrideTiers;
 use coco_system_reminder::InvokedSkillEntry;
 use coco_system_reminder::SkillsSource;
 use coco_types::DynamicSkillPayload;
 use coco_types::SkillDiscoveryPayload;
 use coco_types::SkillDiscoverySkill;
 use coco_types::SkillDiscoverySource;
+use coco_types::SkillOverrideState;
 
 use crate::SkillManager;
+use crate::overrides::effective_skill_state;
 
 const MAX_SKILL_DISCOVERY_DESCRIPTION_CHARS: usize = 500;
 
@@ -35,20 +38,42 @@ fn truncate_chars(s: &str, max: usize) -> String {
 
 #[async_trait]
 impl SkillsSource for SkillManager {
-    async fn listing(&self, agent_id: Option<&str>) -> Option<String> {
+    async fn listing(&self, agent_id: Option<&str>, tiers: &SkillOverrideTiers) -> Option<String> {
         if self.is_empty() {
             return None;
         }
         // Build the canonical sorted list once for stable order.
-        // Bind the owned Vec first — `SkillManager::all()` returns owned
-        // values (MCP-sourced skills live behind a Mutex), so any `&str`
-        // borrows must live no longer than this binding.
+        // `SkillManager::all()` returns owned `Arc<SkillDefinition>`
+        // so we keep the `Arc`s alive for the borrow.
         let owned_skills = self.all();
-        let mut entries: Vec<(&str, &str)> = owned_skills
+
+        // Apply the 4-state override gates per TS `XG$` +
+        // `cli_inner_pretty.js:513858-513869`:
+        // - Off → skip entirely
+        // - NameOnly → emit `- name` (no description)
+        // - DMI && effective != On → skip (XG$)
+        // - On / UserInvocableOnly → emit `- name[: desc]`
+        let entries: Vec<(&str, Option<&str>)> = owned_skills
             .iter()
-            .map(|s| (s.name.as_str(), s.description.as_str()))
-            .collect();
+            .filter_map(|s| {
+                let effective = effective_skill_state(s, tiers);
+                if s.disable_model_invocation && effective != SkillOverrideState::On {
+                    return None;
+                }
+                match effective {
+                    SkillOverrideState::Off => None,
+                    SkillOverrideState::NameOnly => Some((s.name.as_str(), None)),
+                    SkillOverrideState::On | SkillOverrideState::UserInvocableOnly => {
+                        Some((s.name.as_str(), Some(s.description.as_str())))
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut entries = entries;
         entries.sort_by(|a, b| a.0.cmp(b.0));
+        if entries.is_empty() {
+            return None;
+        }
         let names: Vec<&str> = entries.iter().map(|(n, _)| *n).collect();
 
         // TS `attachments.ts:2718-2730`: only announce skills the agent
@@ -62,12 +87,9 @@ impl SkillsSource for SkillManager {
         let body = entries
             .iter()
             .filter(|(name, _)| delta_set.contains(*name))
-            .map(|(name, desc)| {
-                if desc.is_empty() {
-                    format!("- {name}")
-                } else {
-                    format!("- {name}: {desc}")
-                }
+            .map(|(name, desc)| match desc {
+                Some(d) if !d.is_empty() => format!("- {name}: {d}"),
+                _ => format!("- {name}"),
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -92,12 +114,19 @@ impl SkillsSource for SkillManager {
     /// enum value from TS) so downstream telemetry can tell the heuristic
     /// from a future LLM-backed producer. When the LLM-backed path lands,
     /// swap this implementation and update the signal value.
-    async fn skill_discovery(&self, user_input: &str) -> Option<SkillDiscoveryPayload> {
+    async fn skill_discovery(
+        &self,
+        user_input: &str,
+        tiers: &SkillOverrideTiers,
+    ) -> Option<SkillDiscoveryPayload> {
         let needle = user_input.to_lowercase();
         let mut matches: Vec<_> = self
             .all()
             .into_iter()
             .filter(|s| !s.disabled)
+            // `off`-overridden skills must not surface as
+            // recommendations — the user explicitly hid them.
+            .filter(|s| effective_skill_state(s, tiers) != SkillOverrideState::Off)
             .filter(|s| {
                 let name = s.name.to_lowercase();
                 let desc = s.description.to_lowercase();

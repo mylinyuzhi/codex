@@ -520,12 +520,25 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // stops the hot-reload background task.
     let _kb_watcher_guard = kb_setup.watcher;
 
+    // Capture the runtime-config publisher so the agent driver can
+    // republish after `/skills` writes `settings.local.json`. `None`
+    // when hot-reload is disabled (one-shot build); writes still
+    // touch the filesystem but the in-process snapshot stays stale
+    // until the next process restart.
+    let runtime_publisher = _reloader
+        .as_ref()
+        .map(coco_config_reload::RuntimeReloader::publisher);
+
     // Spawn agent driver — owns the SessionRuntime + transports.
+    let flag_settings_path = cli.settings.as_deref().map(std::path::PathBuf::from);
     let driver_handle = tokio::spawn(run_agent_driver(
         command_rx,
         notification_tx,
         runtime,
         pending_approvals,
+        runtime_publisher,
+        cwd.clone(),
+        flag_settings_path,
     ));
 
     // Run TUI (blocks until exit)
@@ -604,6 +617,9 @@ async fn run_agent_driver(
     event_tx: mpsc::Sender<CoreEvent>,
     runtime: Arc<crate::session_runtime::SessionRuntime>,
     pending_approvals: coco_cli::tui_permission_bridge::PendingApprovals,
+    runtime_publisher: Option<Arc<coco_config::RuntimePublisher>>,
+    cwd: std::path::PathBuf,
+    flag_settings: Option<std::path::PathBuf>,
 ) {
     // Per-session one-shot gate: title gen runs at most once per
     // session id, never the process. After `/resume` or `/clear` the
@@ -1450,6 +1466,19 @@ async fn run_agent_driver(
                 let mut h = runtime.history.lock().await;
                 let event_tx_opt = Some(event_tx.clone());
                 coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
+            }
+
+            UserCommand::WriteSkillOverrides { patch, total_edits } => {
+                handle_write_skill_overrides(
+                    &runtime,
+                    &event_tx,
+                    patch,
+                    total_edits,
+                    runtime_publisher.as_ref(),
+                    &cwd,
+                    flag_settings.as_deref(),
+                )
+                .await;
             }
 
             // Other commands: log and skip for now
@@ -3905,6 +3934,83 @@ fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, p
         }
         let _ = coco_cli::session_rename::persist_rename(&runtime, name).await;
     });
+}
+
+/// Persist a `skill_overrides` JSON patch to
+/// `<cwd>/.claude/settings.local.json`, refresh the in-process
+/// registry, and notify the TUI so the dialog's toast + `/`
+/// autocomplete pick up the change.
+///
+/// **No user-visible string generation here** — the localized
+/// "Updated N / No changes / Failed: …" toast is rendered by the
+/// TUI from the `SkillOverridesSaved` event payload (the i18n
+/// catalog is anchored at `coco-tui` and can't be reached from
+/// `coco-cli`).
+///
+/// Steps (mirror TS `cli_inner_pretty.js:476991-477016` save flow):
+///
+/// - Atomic write to `.claude/settings.local.json` via
+///   [`coco_config::LocalSettingsWriter::write_local`] — the writer
+///   also republishes `RuntimeConfig` synchronously so the next
+///   agent turn reads the new tiers.
+/// - Rebuild the command registry against the freshly-published
+///   `RuntimeConfig` (NOT the stale snapshot in
+///   `runtime.runtime_config`) so the `off`-overridden skills drop
+///   out of the visible command set.
+/// - Push `AvailableCommandsRefreshed` so the TUI's `/`
+///   autocomplete updates in the same frame.
+/// - Emit `SkillOverridesSaved` so the TUI renders the localized
+///   toast.
+async fn handle_write_skill_overrides(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    patch: serde_json::Value,
+    total_edits: usize,
+    runtime_publisher: Option<&Arc<coco_config::RuntimePublisher>>,
+    cwd: &std::path::Path,
+    flag_settings: Option<&std::path::Path>,
+) {
+    let result = match runtime_publisher {
+        Some(publisher) => {
+            let catalogs = coco_config::CatalogPaths::default();
+            let writer = coco_config::LocalSettingsWriter::new(
+                cwd.to_path_buf(),
+                catalogs,
+                Arc::clone(publisher),
+            )
+            .with_flag_settings(flag_settings.map(std::path::Path::to_path_buf));
+            match coco_config::SettingsWriter::write_local(&writer, patch).await {
+                Ok(()) => {
+                    // Use the freshly-republished RuntimeConfig so
+                    // the rebuilt registry sees the new tiers — the
+                    // snapshot bound to SessionRuntime at startup
+                    // would silently drop the changes.
+                    let fresh = publisher.current();
+                    let _ = runtime.reload_plugins_with(cwd, &fresh).await;
+                    let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::AvailableCommandsRefreshed {
+                            commands: snapshot,
+                        }))
+                        .await;
+                    coco_types::SkillOverridesSaveResult::Ok {
+                        total_edits: total_edits as i64,
+                    }
+                }
+                Err(e) => coco_types::SkillOverridesSaveResult::Err {
+                    message: e.to_string(),
+                },
+            }
+        }
+        None => coco_types::SkillOverridesSaveResult::Err {
+            message: "settings hot-reload disabled; restart the process to pick up changes"
+                .to_string(),
+        },
+    };
+
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::SkillOverridesSaved { result }))
+        .await;
 }
 
 /// Encode TUI paste-pill image bytes as base64 [`QueuedImage`]s for

@@ -853,6 +853,7 @@ impl QueryEngine {
                 recent_tools: &[],
                 just_compacted: true,
                 per_source_timeout: source_timeout,
+                skill_overrides: &self.config.skill_overrides,
             })
             .await;
         let current_mcp_instructions = materialized.mcp_instructions_current;

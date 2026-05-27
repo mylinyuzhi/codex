@@ -15,6 +15,7 @@ async fn empty_sources_materializes_all_defaults() {
             recent_tools: &[],
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
+            skill_overrides: &coco_config::SkillOverrideTiers::default(),
         })
         .await;
     assert!(out.hook_events.is_empty());
@@ -46,6 +47,7 @@ async fn noop_bundle_also_materializes_defaults_through_trait_dispatch() {
             recent_tools: &[],
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
+            skill_overrides: &coco_config::SkillOverrideTiers::default(),
         })
         .await;
     // Every field should still be default — NoOps return empty/None.
@@ -98,6 +100,7 @@ async fn disabled_config_skips_sources_even_when_present() {
             recent_tools: &[],
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
+            skill_overrides: &coco_config::SkillOverrideTiers::default(),
         })
         .await;
 

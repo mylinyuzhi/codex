@@ -793,6 +793,7 @@ pub async fn run_chat_with_options(
         lsp_config: runtime_config.lsp.clone(),
         compact: runtime_config.compact.clone(),
         features: Arc::new(runtime_config.features.clone()),
+        skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
         tool_overrides: runtime_config.tool_overrides.clone(),
         ..Default::default()
     };

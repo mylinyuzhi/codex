@@ -4,6 +4,7 @@
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::SkillGateContext;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -130,9 +131,18 @@ impl Tool for SkillTool {
             tool_overrides: Some(ctx.tool_overrides.clone()),
             parent_tool_filter: Some(ctx.tool_filter.clone()),
         };
+        // `gate` carries the inputs `QuerySkillRuntime` needs to
+        // enforce the TS 4-state Skill tool gate
+        // (`cli_inner_pretty.js:353567-353590`). With default-empty
+        // `skill_overrides` tiers the gate short-circuits to `On` so
+        // PR2 introduces no observable behavior change.
+        let gate = SkillGateContext {
+            overrides: ctx.skill_overrides.clone(),
+            user_typed_slash: ctx.user_typed_slash_in_turn(skill_name),
+        };
         let result = ctx
             .skill
-            .invoke_skill(skill_name, args, inherit)
+            .invoke_skill(skill_name, args, inherit, gate)
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to resolve skill '{skill_name}': {e}"),

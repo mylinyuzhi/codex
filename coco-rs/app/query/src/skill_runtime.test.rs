@@ -74,7 +74,12 @@ fn runtime_with(skills: Vec<SkillDefinition>) -> QuerySkillRuntime {
 async fn test_not_found_returns_not_found_error() {
     let rt = runtime_with(vec![]);
     let err = rt
-        .invoke_skill("nope", "", SubagentInheritance::default())
+        .invoke_skill(
+            "nope",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, SkillInvocationError::NotFound { .. }));
@@ -85,7 +90,12 @@ async fn test_disabled_skill_returns_disabled_error() {
     let skill = sample_skill("foo", "body", SkillContext::Inline, true, false);
     let rt = runtime_with(vec![skill]);
     let err = rt
-        .invoke_skill("foo", "", SubagentInheritance::default())
+        .invoke_skill(
+            "foo",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, SkillInvocationError::Disabled { .. }));
@@ -96,7 +106,12 @@ async fn test_disable_model_invocation_returns_hidden_error() {
     let skill = sample_skill("foo", "body", SkillContext::Inline, false, true);
     let rt = runtime_with(vec![skill]);
     let err = rt
-        .invoke_skill("foo", "", SubagentInheritance::default())
+        .invoke_skill(
+            "foo",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, SkillInvocationError::HiddenFromModel { .. }));
@@ -113,7 +128,12 @@ async fn test_inline_skill_expands_prompt_into_new_messages() {
     );
     let rt = runtime_with(vec![skill]);
     let result = rt
-        .invoke_skill("greet", "", SubagentInheritance::default())
+        .invoke_skill(
+            "greet",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await
         .expect("ok");
     match result {
@@ -149,7 +169,12 @@ async fn test_inline_skill_expands_arguments() {
     );
     let rt = runtime_with(vec![skill]);
     let result = rt
-        .invoke_skill("echo", "hello world", SubagentInheritance::default())
+        .invoke_skill(
+            "echo",
+            "hello world",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await
         .expect("ok");
     let json = match result {
@@ -168,7 +193,12 @@ async fn test_fork_skill_without_engine_fails_forked() {
     let skill = sample_skill("run", "Run something", SkillContext::Fork, false, false);
     let rt = runtime_with(vec![skill]);
     let err = rt
-        .invoke_skill("run", "", SubagentInheritance::default())
+        .invoke_skill(
+            "run",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await
         .unwrap_err();
     match err {
@@ -215,7 +245,12 @@ async fn test_fork_skill_with_engine_routes_through_agent_query() {
     let rt = runtime_with(vec![skill]).with_agent_engine(Arc::new(StubEngine));
 
     let result = rt
-        .invoke_skill("analyze", "a signal", SubagentInheritance::default())
+        .invoke_skill(
+            "analyze",
+            "a signal",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await
         .expect("ok");
     match result {
@@ -237,7 +272,12 @@ async fn test_name_normalization_strips_leading_slash() {
     let skill = sample_skill("greet", "Hi!", SkillContext::Inline, false, false);
     let rt = runtime_with(vec![skill]);
     let ok = rt
-        .invoke_skill("/greet", "", SubagentInheritance::default())
+        .invoke_skill(
+            "/greet",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await;
     assert!(ok.is_ok(), "leading slash should normalize away");
 }
@@ -250,7 +290,12 @@ async fn test_inline_skill_without_allowed_tools_has_no_updates() {
     let skill = sample_skill("plain", "Hi!", SkillContext::Inline, false, false);
     let rt = runtime_with(vec![skill]);
     let result = rt
-        .invoke_skill("plain", "", SubagentInheritance::default())
+        .invoke_skill(
+            "plain",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await
         .expect("ok");
     match result {
@@ -279,7 +324,12 @@ async fn test_inline_skill_with_allowed_tools_emits_command_rules() {
     skill.allowed_tools = Some(vec!["Read".to_string(), "Edit(*.md)".to_string()]);
     let rt = runtime_with(vec![skill]);
     let result = rt
-        .invoke_skill("editor", "", SubagentInheritance::default())
+        .invoke_skill(
+            "editor",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
         .await
         .expect("ok");
     let permission_updates = match result {
@@ -356,9 +406,14 @@ async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
         captured: captured.clone(),
     });
     let rt = runtime_with(vec![skill]).with_agent_engine(engine);
-    rt.invoke_skill("scan", "", SubagentInheritance::default())
-        .await
-        .expect("ok");
+    rt.invoke_skill(
+        "scan",
+        "",
+        SubagentInheritance::default(),
+        coco_tool_runtime::SkillGateContext::default(),
+    )
+    .await
+    .expect("ok");
 
     let config = captured.lock().unwrap().take().expect("captured config");
     // Registry filter MUST be empty — TS doesn't narrow tools[] for skills.

@@ -189,6 +189,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::BashCommandCompleted { .. } => "BashCommandCompleted",
         E::OpenModelPicker => "OpenModelPicker",
         E::OpenSkillsDialog { .. } => "OpenSkillsDialog",
+        E::SkillOverridesSaved { .. } => "SkillOverridesSaved",
         E::SlashCommandStatus { .. } => "SlashCommandStatus",
     }
 }
