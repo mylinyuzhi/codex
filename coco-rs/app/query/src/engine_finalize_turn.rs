@@ -314,18 +314,31 @@ impl QueryEngine {
     }
 
     /// Finalize a turn after tools have executed: drain queued commands + inbox,
-    /// auto-compact if over threshold, then emit `TurnCompleted`.
+    /// auto-compact if over threshold, then either emit `TurnCompleted` (when
+    /// the session loop is about to exit) or just stamp reasoning metadata
+    /// (when another LLM round will follow).
     ///
-    /// Extracted from `run_session_loop` to keep that function focused on the
-    /// decision/transition logic. Mirrors the TS tail-of-turn sequence in
-    /// `query.ts` where messageQueueManager flush + compactConversation +
-    /// turn-complete emission all happen together.
+    /// `is_terminal` controls the wire-event side: TS treats `turn` as the
+    /// whole user-prompt cycle, so `TurnCompleted` must fire exactly once per
+    /// prompt — at the LLM round whose `stop_reason` ends the agentic loop
+    /// (typically `EndTurn` / `StopSequence`, or an abnormal-terminal stop).
+    /// Intermediate rounds (after a `ToolUse` stop_reason where the engine
+    /// continues with another LLM call) still need the per-turn bookkeeping
+    /// (queue drain, compaction, transcript flush, reasoning metadata) but
+    /// must *not* emit `TurnCompleted` — otherwise consumers like the Python
+    /// SDK that break their event iterator on `TurnCompleted` exit before the
+    /// next round runs.
+    ///
+    /// Mirrors the TS tail-of-turn sequence in `query.ts` where
+    /// messageQueueManager flush + compactConversation happen on every loop
+    /// iteration; TS doesn't emit a per-round wire event at all.
     pub(crate) async fn finalize_turn_post_tools(
         &self,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         turn_id: String,
         usage: TokenUsage,
+        is_terminal: bool,
     ) {
         // Periodic terminal-task eviction. Fires every turn,
         // regardless of success / failure / cancellation outcome —
@@ -672,24 +685,32 @@ impl QueryEngine {
             }
         }
 
-        self.finalize_successful_turn_tail(history, event_tx, turn_id, usage)
+        self.finalize_successful_turn_tail(history, event_tx, turn_id, usage, is_terminal)
             .await;
     }
 
     /// Shared successful model-turn tail. Branch-specific work (tool
     /// execution, queue drain, auto-compaction, stop hooks) happens before
-    /// this point; every successful turn still needs the same cache snapshot,
-    /// transcript flush, and protocol completion event.
+    /// this point; every successful turn still needs the cache snapshot,
+    /// transcript flush, and reasoning-metadata side-cache update. The
+    /// `TurnCompleted` protocol event is gated on `is_terminal` — see
+    /// [`Self::finalize_turn_post_tools`] for the rationale.
     pub(crate) async fn finalize_successful_turn_tail(
         &self,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         turn_id: String,
         usage: TokenUsage,
+        is_terminal: bool,
     ) {
         self.flush_successful_turn_state(history).await;
-        self.emit_successful_turn_completed(event_tx, history, turn_id, usage)
-            .await;
+        if is_terminal {
+            self.emit_successful_turn_completed(event_tx, history, turn_id, usage)
+                .await;
+        } else {
+            self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
+                .await;
+        }
     }
 
     /// Emit the protocol completion events for a successful model turn.

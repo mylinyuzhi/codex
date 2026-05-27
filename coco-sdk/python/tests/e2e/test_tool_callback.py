@@ -17,13 +17,15 @@ from coco_sdk.generated.protocol import NotificationMethod
 
 @pytest.mark.xfail(
     reason=(
-        "Engine emits TurnCompleted after every agentic round (one LLM call + "
-        "its tool batch). SDK `events()` breaks on the first TurnCompleted, so "
-        "deferred-tool flows like `ToolSearch → lucky_number` (two LLM rounds) "
-        "exit before the actual tool invocation. Fix: only emit TurnCompleted "
-        "on stop_reason in {EndTurn, StopSequence, abnormal-terminal}, mirroring "
-        "TS where turn = whole user-prompt cycle. Tracked separately from the "
-        "discriminated-wire-protocol refactor."
+        "After the X2 TurnCompleted refactor the SDK iterator reaches the "
+        "second LLM round (ToolSearch → lucky_number). The model now correctly "
+        "tries to invoke the SDK-hosted tool, but DeepSeek rejects the request "
+        "with HTTP 400: `Invalid schema for function 'lucky_number': schema "
+        "must be a JSON Schema of 'type: \"object\"', got 'type: null'`. The "
+        "Python SDK serialises the tool schema as `{type: object, properties: "
+        "{}}` (correct), so something on the Rust side mangles the schema "
+        "when a deferred MCP tool is activated by ToolSearch. Pre-existing bug "
+        "in coco-rs deferred-MCP-activation, not in X2 itself."
     ),
     strict=True,
 )
