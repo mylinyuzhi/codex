@@ -146,7 +146,7 @@ async fn test_full_compact_summary_attempt_is_structured() {
     );
     assert_eq!(
         attempt.pre_compact_tokens,
-        coco_compact::estimate_tokens(&messages)
+        coco_messages::estimate_tokens_for_messages(&messages)
     );
     assert_eq!(attempt.max_summary_tokens, config.max_summary_tokens);
     assert!(

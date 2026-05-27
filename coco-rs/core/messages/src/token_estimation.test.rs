@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn test_estimate_tokens() {
+fn test_estimate_text_tokens() {
     // 100 chars ≈ 25 tokens (at 4 chars/token)
-    assert_eq!(estimate_tokens("a".repeat(100).as_str()), 25);
-    assert_eq!(estimate_tokens(""), 0);
+    assert_eq!(estimate_text_tokens("a".repeat(100).as_str()), 25);
+    assert_eq!(estimate_text_tokens(""), 0);
 }
 
 #[test]

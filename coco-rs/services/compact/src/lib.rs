@@ -20,7 +20,7 @@ pub mod reactive;
 pub mod serialize;
 pub mod session_memory;
 pub mod staged;
-pub mod tokens;
+pub mod summary_text;
 pub mod types;
 
 // ── Re-exports for ergonomic use ────────────────────────────────────
@@ -106,9 +106,6 @@ pub use staged::StagedCompactLedger;
 pub use staged::StagedRange;
 pub use staged::apply_collapses_if_needed;
 pub use staged::placeholder_text as staged_placeholder_text;
-pub use tokens::estimate_message_tokens;
-pub use tokens::estimate_tokens;
-pub use tokens::estimate_tokens_conservative;
 pub use types::ClearToolInputs;
 pub use types::CompactError;
 pub use types::CompactOutcome;

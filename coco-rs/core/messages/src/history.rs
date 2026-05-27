@@ -2,11 +2,52 @@ use crate::AssistantContent;
 use crate::LlmMessage;
 use crate::Message;
 use crate::MessageKind;
+use coco_types::ProviderModelSelection;
+use coco_types::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// Anchor for the last successful API call.
+///
+/// Stored on [`MessageHistory`] so messages and their last-usage state
+/// share a single source of truth. The walk-back formula is
+/// `usage.total() + estimate(messages_since_anchor)` — see
+/// [`MessageHistory::tokens_with_last_usage`].
+///
+/// Lifecycle: in-memory only; recreated on every successful API call
+/// via [`MessageHistory::push_assistant_with_usage`]. Resume / `/clear`
+/// / compaction / rewind / micro-compact / drain all invalidate via
+/// the mutation methods on `MessageHistory`.
+///
+/// The internal anchor index is **not exposed** — callers consume the
+/// marker only via [`MessageHistory::last_usage`] (for the typed
+/// usage/model data) and [`MessageHistory::tokens_with_last_usage`]
+/// (for the precision estimate). The marker has no public constructor;
+/// the only path to create one is via the cohesive push method above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastUsageMarker {
+    /// Total billed usage from the API call that produced the assistant
+    /// message at the marker boundary (input + output + cache buckets).
+    pub usage: TokenUsage,
+    /// `(provider, model_id)` that produced this usage. Multi-model
+    /// sessions: a `/model switch` after this marker overwrites it on
+    /// the next successful call. Identity only — `ProviderApi` and
+    /// `display_name` intentionally not carried.
+    ///
+    /// Currently read by `/context` overlay (P3 plan). Carried on the
+    /// marker rather than re-derived because multi-model sessions may
+    /// switch model after the anchor, and the historical model is what
+    /// produced the historical usage.
+    pub model: ProviderModelSelection,
+    /// `messages.len()` at the moment the marker was anchored — the
+    /// first index of the post-call tail. Private: callers cannot
+    /// observe the raw index, only its effect via
+    /// [`MessageHistory::tokens_with_last_usage`].
+    anchor_count: usize,
+}
 
 /// In-memory message history with turn tracking.
 ///
@@ -46,6 +87,14 @@ pub struct MessageHistory {
     /// Active agent id — `None` for the main agent, `Some` for
     /// teammate / subagent emits. Forward-compat field for AgentTeams.
     agent_id: Option<String>,
+    /// Last-usage anchor — see [`LastUsageMarker`] and
+    /// [`Self::push_assistant_with_usage`]. `None` initially; populated
+    /// after every successful API call; cleared by any mutation that
+    /// invalidates the "base = previous total" invariant (compaction,
+    /// clear, rewind, in-place body rewrite, drain, raw escape hatch).
+    /// The internal `anchor_count` lives inside [`LastUsageMarker`] so
+    /// invalidate is one field reset, not two.
+    last_usage: Option<LastUsageMarker>,
 }
 
 impl MessageHistory {
@@ -85,6 +134,10 @@ impl MessageHistory {
     /// Push an already-constructed [`Arc<Message>`] into the history
     /// and return it. Used by resume hydration paths that built the
     /// Arc upstream (e.g. JSONL load).
+    ///
+    /// **Last-usage invariant**: pure appends do NOT invalidate
+    /// [`Self::last_usage`] — the anchor count stays < new len, and the
+    /// tail slice grows naturally.
     pub fn push_arc(&mut self, arc: Arc<Message>) -> Arc<Message> {
         if let Some(uuid) = arc.uuid() {
             self.index.insert(*uuid, self.messages.len());
@@ -109,7 +162,13 @@ impl MessageHistory {
     /// prefer [`push`](Self::push), [`truncate`](Self::truncate),
     /// [`clear`](Self::clear), or
     /// `coco_query::history_sync::history_push_and_emit`.
+    ///
+    /// **Last-usage invariant**: this is an escape hatch — the caller
+    /// may rewrite bodies, reorder, or remove messages, any of which
+    /// would invalidate the [`LastUsageMarker`]. The marker is cleared
+    /// here unconditionally.
     pub fn messages_mut(&mut self) -> &mut Vec<Arc<Message>> {
+        self.invalidate_last_usage();
         &mut self.messages
     }
 
@@ -161,6 +220,11 @@ impl MessageHistory {
         if since_len >= self.messages.len() {
             return Vec::new();
         }
+        // Conservatively invalidate the marker — drain re-orders the
+        // vec and the anchor may have been at index > since_len.
+        // Streaming-error path runs rarely; precision loss for one
+        // turn is acceptable.
+        self.invalidate_last_usage();
         // The drained Arcs are typically uniquely held (just popped out
         // of storage); try_unwrap returns the Message without cloning
         // when refcount is 1 and falls back to a deep clone otherwise.
@@ -242,6 +306,7 @@ impl MessageHistory {
     pub fn clear(&mut self) {
         self.messages.clear();
         self.index.clear();
+        self.invalidate_last_usage();
     }
 
     /// Truncate the history to the first `keep_count` messages.
@@ -259,6 +324,16 @@ impl MessageHistory {
         if keep_count >= self.messages.len() {
             return;
         }
+        // Partial preservation: if the anchor sits in the retained
+        // prefix (anchor_count <= keep_count), the marker stays valid —
+        // base + estimate(messages[anchor_count..keep_count]) still
+        // matches the new history's "next API call" estimate. Only
+        // invalidate when the anchor would land outside the kept range.
+        if let Some(marker) = &self.last_usage
+            && marker.anchor_count > keep_count
+        {
+            self.invalidate_last_usage();
+        }
         self.messages.truncate(keep_count);
         self.rebuild_index();
     }
@@ -270,6 +345,9 @@ impl MessageHistory {
         if n >= self.messages.len() {
             return;
         }
+        // Drains the head, shifting every retained index down by `start`.
+        // The anchor's coordinate system is invalidated wholesale.
+        self.invalidate_last_usage();
         let start = self.messages.len() - n;
         self.messages.drain(..start);
         self.rebuild_index();
@@ -296,11 +374,130 @@ impl MessageHistory {
     /// per-emit hot path is unaffected — only mutating compaction passes
     /// (rare: every ~50 turns) pay the bridge cost. See plan §11 F8.
     pub fn with_owned_messages<R>(&mut self, f: impl FnOnce(&mut Vec<Message>) -> R) -> R {
+        // The closure may rewrite content bodies (micro-compact replaces
+        // tool_result text with placeholders) — base usage no longer
+        // reflects the new byte sizes. Clear marker unconditionally;
+        // the next successful API call will rebuild it.
+        self.invalidate_last_usage();
         let mut owned: Vec<Message> = self.messages.iter().map(|a| (**a).clone()).collect();
         let result = f(&mut owned);
         self.messages = owned.into_iter().map(Arc::new).collect();
         self.rebuild_index();
         result
+    }
+
+    // ── Last-usage marker API ────────────────────────────────────────
+
+    /// Push an assistant message produced by a successful API call,
+    /// atomically anchoring the [`LastUsageMarker`] in one operation.
+    ///
+    /// **The ONLY way to set the marker.** Replaces what would otherwise
+    /// be a two-step "push then set" sequence — eliminating the
+    /// possibility of a stale push without an anchor or vice versa.
+    /// The standalone setter is intentionally absent.
+    ///
+    /// **Caller contract** — `msg` must be a `Message::Assistant`
+    /// (debug-asserted). `usage` must be the real API-returned
+    /// `TokenUsage` for the response that produced this message — not
+    /// a partial / refusal / context-window-exceeded number. `model`
+    /// is the `(provider, model_id)` that produced the response
+    /// (post-fallback for multi-model sessions).
+    ///
+    /// Engine call site: `app/query::engine::run_session_loop` invokes
+    /// this only on the normal-stop-reason path. Abnormal branches
+    /// (ContentFilter / ContextWindowExceeded / MaxTokens recovery)
+    /// must use plain [`Self::push`] / [`Self::push_arc`] so partial
+    /// responses do not anchor the marker.
+    ///
+    /// Cleared automatically by every structural mutation (clear /
+    /// truncate beyond anchor / truncate_keep_last / `with_owned_messages`
+    /// / `messages_mut` / `drain_pushed_since`) so stale anchors cannot
+    /// outlive a body rewrite.
+    pub fn push_assistant_with_usage(
+        &mut self,
+        msg: Message,
+        usage: TokenUsage,
+        model: ProviderModelSelection,
+    ) -> Arc<Message> {
+        self.push_arc_assistant_with_usage(Arc::new(msg), usage, model)
+    }
+
+    /// Pre-Arc-wrapped variant of [`Self::push_assistant_with_usage`].
+    /// Used by paths that already hold an `Arc<Message>` (resume
+    /// hydration, replay) and want to avoid the implicit `Arc::new`.
+    pub fn push_arc_assistant_with_usage(
+        &mut self,
+        arc: Arc<Message>,
+        usage: TokenUsage,
+        model: ProviderModelSelection,
+    ) -> Arc<Message> {
+        debug_assert!(
+            matches!(arc.as_ref(), Message::Assistant(_)),
+            "push_assistant_with_usage must receive a Message::Assistant \
+             (got: {:?})",
+            arc.kind(),
+        );
+        let result = self.push_arc(arc);
+        // Anchor at the post-push length so the tail (messages added
+        // later) starts at `anchor_count`.
+        self.last_usage = Some(LastUsageMarker {
+            usage,
+            model,
+            anchor_count: self.messages.len(),
+        });
+        result
+    }
+
+    /// Borrow the current marker, if any.
+    ///
+    /// Returns `None` initially, after every invalidating mutation
+    /// (compaction / clear / rewind beyond anchor / in-place rewrite /
+    /// drain / raw mutate), and until the next successful API call
+    /// commits via [`Self::push_assistant_with_usage`].
+    pub fn last_usage(&self) -> Option<&LastUsageMarker> {
+        self.last_usage.as_ref()
+    }
+
+    /// Messages added since the last [`LastUsageMarker`] was anchored.
+    /// Empty when no marker is set OR when no append has happened
+    /// since. Read-only observability — production callers normally
+    /// want [`Self::tokens_with_last_usage`] (folds in the base) or
+    /// [`Self::last_usage`] (for the marker fields). Useful for
+    /// `/context` overlay and tests that verify tail invariants.
+    pub fn messages_since_last_usage(&self) -> &[Arc<Message>] {
+        match &self.last_usage {
+            None => &[],
+            Some(marker) => {
+                let start = marker.anchor_count.min(self.messages.len());
+                &self.messages[start..]
+            }
+        }
+    }
+
+    /// Precision walk-back: `last_usage.usage.total() + estimate(tail)`.
+    ///
+    /// When the marker is set, the previous API call's billed total is
+    /// the baseline and only messages added since are char-estimated.
+    /// Marker unset (initial / post-compact / post-clear / post-rewind
+    /// / post-`with_owned_messages`) → falls back to a full walk via
+    /// [`crate::token_estimation::estimate_tokens_for_messages`].
+    ///
+    /// This is the canonical entry point for auto-compaction triggers,
+    /// `/context` displays, and any caller that needs the best
+    /// "current input tokens" estimate available without an API
+    /// round-trip — fully cohesive with the marker state on this type.
+    pub fn tokens_with_last_usage(&self) -> i64 {
+        if let Some(marker) = &self.last_usage {
+            let start = marker.anchor_count.min(self.messages.len());
+            marker.usage.total()
+                + crate::token_estimation::estimate_tokens_for_messages(&self.messages[start..])
+        } else {
+            crate::token_estimation::estimate_tokens_for_messages(&self.messages)
+        }
+    }
+
+    fn invalidate_last_usage(&mut self) {
+        self.last_usage = None;
     }
 }
 

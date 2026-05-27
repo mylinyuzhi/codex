@@ -2,6 +2,7 @@
 //!
 //! TS: utils/messages.ts (~193K LOC), history.ts, cost-tracker.ts
 
+pub mod content_kind;
 pub mod cost;
 pub mod creation;
 pub mod history;
@@ -9,6 +10,7 @@ pub mod lookups;
 pub mod normalize;
 pub mod pipeline;
 pub mod predicates;
+pub mod token_estimation;
 pub mod wrapping;
 
 // Message-family types live in `coco-types` (the wire-protocol crate
@@ -17,6 +19,12 @@ pub mod wrapping;
 // the operations layer that does normalization / history.
 pub use coco_types::messages::*;
 
+pub use content_kind::ContentKind;
+pub use content_kind::IMAGE_MAX_TOKEN_SIZE;
+pub use content_kind::classify_assistant;
+pub use content_kind::classify_tool_result;
+pub use content_kind::classify_user;
+pub use content_kind::estimate_part;
 pub use cost::CostTracker;
 pub use cost::calculate_cost_usd;
 pub use cost::format_cost;
@@ -39,6 +47,7 @@ pub use creation::create_user_message;
 pub use creation::create_user_message_with_parts;
 pub use creation::create_user_message_with_parts_and_uuid;
 pub use creation::create_user_message_with_uuid;
+pub use history::LastUsageMarker;
 pub use history::MessageHistory;
 pub use lookups::MessageLookups;
 pub use lookups::build_message_lookups;
@@ -53,3 +62,9 @@ pub use normalize::strip_signature_blocks;
 pub use normalize::to_llm_prompt;
 pub use predicates::count_tool_calls_in_last_assistant_turn;
 pub use predicates::messages_after_compact_boundary;
+pub use token_estimation::estimate_message_tokens;
+pub use token_estimation::estimate_text_tokens;
+pub use token_estimation::estimate_tokens_for_messages;
+pub use token_estimation::estimate_tokens_for_messages_conservative;
+pub use token_estimation::estimate_tool_result_message_tokens;
+pub use token_estimation::is_over_threshold;

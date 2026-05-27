@@ -41,7 +41,7 @@ fn test_estimate_tokens_text() {
 #[test]
 fn test_estimate_tokens_empty() {
     let msgs: Vec<Message> = vec![];
-    assert_eq!(estimate_tokens(&msgs), 0);
+    assert_eq!(estimate_tokens_for_messages(&msgs), 0);
 }
 
 #[test]
@@ -61,8 +61,8 @@ fn test_extract_message_text_assistant() {
 #[test]
 fn test_conservative_estimate_padded() {
     let msgs = vec![make_user(&"x".repeat(300))];
-    let base = estimate_tokens(&msgs);
-    let conservative = estimate_tokens_conservative(&msgs);
+    let base = estimate_tokens_for_messages(&msgs);
+    let conservative = coco_messages::estimate_tokens_for_messages_conservative(&msgs);
     assert!(conservative > base, "conservative should be larger");
     // 300/4 = 75, * 4/3 = 100
     assert_eq!(base, 75);

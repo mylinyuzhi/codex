@@ -18,7 +18,7 @@ use coco_types::PermissionBehavior;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::token_estimation::estimate_tokens;
+use coco_messages::estimate_text_tokens as estimate_tokens;
 
 // ---------------------------------------------------------------------------
 // Constants
