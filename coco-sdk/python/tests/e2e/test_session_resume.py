@@ -30,6 +30,7 @@ from coco_sdk import CocoClient
 from coco_sdk.generated.protocol import (
     NotificationMethod,
     SessionResumeRequest,
+    SessionResumeResult,
 )
 
 
@@ -50,15 +51,11 @@ async def test_list_then_resume(live_deepseek, isolated_cwd) -> None:
 
         # 1) list_sessions surfaces the just-saved session.
         listing = await client.list_sessions(limit=20)
-        sessions = listing.get("sessions") or listing.get("items") or []
-        assert sessions, (
+        assert listing.sessions, (
             f"expected list_sessions to report at least one saved session "
             f"after a completed turn; got: {listing!r}"
         )
-        target = sessions[0].get("session_id") or sessions[0].get("id")
-        assert isinstance(target, str) and target, (
-            f"session entry missing an id: {sessions[0]!r}"
-        )
+        target = listing.sessions[0].session_id
 
         # 2) session/resume responds with session metadata. Use the
         # lower-level send-and-await pattern because the high-level
@@ -69,14 +66,10 @@ async def test_list_then_resume(live_deepseek, isolated_cwd) -> None:
                 session_id=target,
             )
         )
-        resume_result = await client._send_and_await_response(resume_request)
+        raw = await client._send_and_await_response(resume_request)
+        resume_result = SessionResumeResult.model_validate(raw)
 
-    session_meta = resume_result.get("session") or resume_result
-    assert isinstance(session_meta, dict), (
-        f"expected resume response to carry a session dict, got: {resume_result!r}"
-    )
-    returned_id = session_meta.get("session_id") or session_meta.get("id")
-    assert returned_id == target, (
+    assert resume_result.session.session_id == target, (
         f"resume returned mismatched session_id: asked {target!r}, "
-        f"got {returned_id!r}"
+        f"got {resume_result.session.session_id!r}"
     )

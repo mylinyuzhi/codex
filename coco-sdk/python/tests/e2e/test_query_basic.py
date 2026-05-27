@@ -24,7 +24,7 @@ async def test_query_basic_completes(live_deepseek, isolated_cwd) -> None:
     saw_turn_started = False
     saw_text_delta = False
     saw_turn_completed = False
-    final_usage: dict | None = None
+    output_total: int = 0
 
     try:
         async with asyncio.timeout(120):
@@ -41,13 +41,7 @@ async def test_query_basic_completes(live_deepseek, isolated_cwd) -> None:
                     saw_text_delta = True
                 elif method == NotificationMethod.TURN_COMPLETED:
                     saw_turn_completed = True
-                    completed = event.as_turn_completed()
-                    if completed and completed.usage:
-                        final_usage = (
-                            completed.usage.model_dump()
-                            if hasattr(completed.usage, "model_dump")
-                            else dict(completed.usage)
-                        )
+                    output_total = event.params.usage.output_tokens.total
                     break
                 elif method == NotificationMethod.TURN_FAILED:
                     pytest.fail(f"turn failed: {event.params}")
@@ -57,6 +51,4 @@ async def test_query_basic_completes(live_deepseek, isolated_cwd) -> None:
     assert saw_turn_started, "expected turn/started after sending turn/start"
     assert saw_text_delta, "expected at least one assistant text delta"
     assert saw_turn_completed, "expected turn/completed terminator"
-    assert (
-        final_usage and final_usage.get("output_tokens", {}).get("total", 0) > 0
-    ), f"expected non-zero output tokens, got {final_usage!r}"
+    assert output_total > 0, f"expected non-zero output tokens, got {output_total}"
