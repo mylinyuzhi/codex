@@ -91,6 +91,14 @@ pub struct UiState {
     pub display_settings: DisplaySettings,
     /// Active toast notifications.
     pub toasts: VecDeque<Toast>,
+    /// `/skills` dialog Enter → CLI write-local round-trip is in
+    /// flight; the `total_edits` count the dialog computed at
+    /// dispatch lives here so the [`TuiOnlyEvent::SkillOverridesSaved`]
+    /// handler can render the localized "Updated N override(s)"
+    /// toast without the count crossing the wire. `None` when no
+    /// dialog save is pending. TS mirror: TS keeps the count in
+    /// React state on the same component for the same reason.
+    pub pending_skills_save_edits: Option<usize>,
     /// Status-bar warning for terminal compatibility downgrades.
     pub terminal_compatibility_warning: Option<String>,
     /// IDs of collapsed tool calls.
@@ -209,6 +217,7 @@ impl UiState {
             theme_state,
             display_settings: DisplaySettings::default(),
             toasts: VecDeque::new(),
+            pending_skills_save_edits: None,
             terminal_compatibility_warning: None,
             collapsed_tools: HashSet::new(),
             help_scroll: 0,

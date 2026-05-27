@@ -140,9 +140,14 @@ async fn handle_submit(state: &mut AppState, command_tx: &mpsc::Sender<UserComma
         state.ui.add_toast(crate::state::ui::Toast::info(text));
         return;
     }
+    // Stash the count locally so the `SkillOverridesSaved` event
+    // handler can render the localized toast without `total_edits`
+    // round-tripping through the CLI bridge. CLI only reports
+    // success / typed failure.
+    state.ui.pending_skills_save_edits = Some(total_edits);
     let patch = diff.to_settings_patch();
     let _ = command_tx
-        .send(UserCommand::WriteSkillOverrides { patch, total_edits })
+        .send(UserCommand::WriteSkillOverrides { patch })
         .await;
 }
 

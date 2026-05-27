@@ -138,10 +138,11 @@ async fn enter_in_select_emits_write_command_and_dismisses_modal() {
     let _ = intercept(&mut state, &TuiCommand::SubmitInput, &tx).await;
 
     assert!(state.ui.modal.is_none(), "save dismisses the modal");
+    // `total_edits` should be stashed on UiState, NOT shipped on the wire.
+    assert_eq!(state.ui.pending_skills_save_edits, Some(1));
     let sent = rx.try_recv().expect("should send a command");
     match sent {
-        UserCommand::WriteSkillOverrides { patch, total_edits } => {
-            assert_eq!(total_edits, 1);
+        UserCommand::WriteSkillOverrides { patch } => {
             assert_eq!(
                 patch.get("skill_overrides").and_then(|v| v.get("foo")),
                 Some(&serde_json::json!("off"))

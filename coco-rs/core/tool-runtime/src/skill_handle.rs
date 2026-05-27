@@ -58,16 +58,16 @@ pub struct SubagentInheritance {
 /// - [`Self::overrides`] — per-tier `skill_overrides` maps used by
 ///   `coco_skills::effective_skill_state` to compute the effective
 ///   state for this skill.
-/// - [`Self::user_typed_slash`] — whether the user typed `/<name>` in
-///   the current turn. The caller (typically `SkillTool::execute`)
-///   evaluates this via
-///   [`crate::ToolUseContext::user_typed_slash_in_turn`] before
-///   handing off. Bypasses the `disable_model_invocation` author lock
-///   and the `user-invocable-only` override.
+/// - [`Self::typed_slashes_in_turn`] — every `/<word>` token the user
+///   typed in the current turn. The handle membership-checks
+///   `(canonical_name, alias_1, alias_2, …)` so an aliased skill
+///   like `commit-fast → commit` still bypasses the
+///   `disable_model_invocation` author lock and the
+///   `user-invocable-only` override.
 #[derive(Debug, Clone, Default)]
 pub struct SkillGateContext {
     pub overrides: Arc<SkillOverrideTiers>,
-    pub user_typed_slash: bool,
+    pub typed_slashes_in_turn: std::collections::HashSet<String>,
 }
 
 /// Outcome of a skill invocation.
