@@ -34,17 +34,9 @@ async def test_mcp_status_returns_empty_roster(live_deepseek, isolated_cwd) -> N
 
         result = await client.mcp_status()
 
-    # The wire shape is `{mcpServers: [...]}`. Be permissive about the
-    # exact key but require some kind of empty container.
-    assert isinstance(result, dict), f"expected dict, got {type(result).__name__}"
-    servers = (
-        result.get("mcpServers")
-        or result.get("mcp_servers")
-        or result.get("servers")
-        or []
-    )
-    assert isinstance(servers, (list, dict)), (
-        f"expected mcpServers to be list/dict, got {type(servers).__name__}"
+    # `mcp_status` returns a typed `McpStatusResult` with `.mcp_servers`.
+    assert isinstance(result.mcp_servers, list), (
+        f"expected mcp_servers to be a list, got {type(result.mcp_servers).__name__}"
     )
 
 
@@ -67,23 +59,8 @@ async def test_context_usage_returns_token_breakdown(live_deepseek, isolated_cwd
 
         result = await client.context_usage()
 
-    assert isinstance(result, dict), (
-        f"context_usage should return a dict, got {type(result).__name__}"
-    )
-    # The exact field name has shifted across coco-rs versions
-    # (`total_tokens` vs `tokens` vs nested in `breakdown`). Be lenient
-    # on the key but require at least one numeric value > 0 somewhere
-    # in the response — that's the universal invariant.
-    def _flatten_numbers(obj):
-        if isinstance(obj, (int, float)):
-            return [obj]
-        if isinstance(obj, dict):
-            return [n for v in obj.values() for n in _flatten_numbers(v)]
-        if isinstance(obj, list):
-            return [n for v in obj for n in _flatten_numbers(v)]
-        return []
-
-    numbers = _flatten_numbers(result)
-    assert any(n > 0 for n in numbers), (
-        f"context_usage should report at least one non-zero token count; got: {result!r}"
+    # `context_usage` returns a typed `ContextUsageResult`. The universal
+    # invariant after a real turn is `total_tokens > 0`.
+    assert result.total_tokens > 0, (
+        f"context_usage should report non-zero total_tokens; got: {result!r}"
     )

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import AsyncIterator
 
+from pydantic import TypeAdapter
+
 from coco_sdk._message_router import MessageRouter
 from coco_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 from coco_sdk.generated.protocol import (
@@ -15,6 +17,13 @@ from coco_sdk.generated.protocol import (
     TurnStartRequest,
 )
 from coco_sdk.types import ModelSpec
+
+# `ServerNotification` is an `Annotated[Union[...], Field(discriminator=...)]`
+# type alias, not a `BaseModel` subclass — pydantic v2 dispatches it via
+# `TypeAdapter.validate_python`, not `Model.model_validate`.
+_SERVER_NOTIFICATION_ADAPTER: TypeAdapter[ServerNotification] = TypeAdapter(
+    ServerNotification
+)
 
 
 async def query(
@@ -104,7 +113,7 @@ async def query(
 
         while True:
             data = await router.next_event()
-            event = ServerNotification.model_validate(data)
+            event = _SERVER_NOTIFICATION_ADAPTER.validate_python(data)
             yield event
             if event.method in (NotificationMethod.TURN_COMPLETED, NotificationMethod.TURN_FAILED):
                 break
