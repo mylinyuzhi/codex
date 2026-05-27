@@ -7,3 +7,4 @@ pub mod cross_protocol;
 pub mod inference_smoke;
 pub mod streaming;
 pub mod tools;
+pub mod vision;

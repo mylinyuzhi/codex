@@ -116,6 +116,18 @@ pub fn create_tool_result_message(
     output: &str,
     is_error: bool,
 ) -> Message {
+    // Surface result size + a one-line preview so operators can tell at a
+    // glance whether a tool returned data, an error, or got truncated.
+    // Span context (session_id / agent_id / turn_id) comes from the caller.
+    tracing::debug!(
+        target: "coco_messages::tool_result",
+        tool_name = %tool_name,
+        tool_call_id = %tool_call_id,
+        result_bytes = output.len(),
+        is_error,
+        preview = %tool_result_preview(output),
+        "tool result built"
+    );
     let result_content = if is_error {
         ToolResultContent::error_text(output)
     } else {
@@ -304,6 +316,17 @@ pub fn create_assistant_error_message(error: &str, request_id: Option<&str>) -> 
             status_code: None,
         }),
     })
+}
+
+/// One-line preview of a tool result for `debug!` logging. UTF-8 safe,
+/// strips interior newlines, capped at 160 chars.
+fn tool_result_preview(output: &str) -> String {
+    const MAX: usize = 160;
+    let mut s: String = output.chars().take(MAX).collect();
+    if output.chars().count() > MAX {
+        s.push_str("...");
+    }
+    s.replace('\n', " ")
 }
 
 #[cfg(test)]

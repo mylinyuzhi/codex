@@ -18,6 +18,7 @@ uuid = { workspace = true, features = ["v4"] }
 # `attachment_emitter` uses `tokio::sync::mpsc::UnboundedSender` for its
 # cross-crate AttachmentMessage channel — no other tokio surface is needed.
 tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

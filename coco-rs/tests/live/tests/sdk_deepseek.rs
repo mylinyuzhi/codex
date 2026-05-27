@@ -31,6 +31,10 @@
 //! cargo test -p coco-tests-live --test sdk_deepseek tools
 //! ```
 
+// `vision` suite is openai-only and not exercised here; silence the
+// per-binary `dead_code` warnings the shared module would otherwise emit.
+#![allow(dead_code, unused_imports)]
+
 mod common;
 
 #[path = "sdk/suite/mod.rs"]

@@ -15,7 +15,14 @@ const FALLBACK_ENV_FILE: &str = ".env";
 
 /// Capability gates honored by suites — keep in sync with what the suite
 /// modules actually check.
-pub const ALL_CAPABILITIES: &[&str] = &["text", "streaming", "tools", "compact", "cross_protocol"];
+pub const ALL_CAPABILITIES: &[&str] = &[
+    "text",
+    "streaming",
+    "tools",
+    "vision",
+    "compact",
+    "cross_protocol",
+];
 
 const CAPABILITIES_VAR: &str = "COCO_LIVE_TEST_CAPABILITIES";
 const PROVIDERS_VAR: &str = "COCO_LIVE_TEST_PROVIDERS";

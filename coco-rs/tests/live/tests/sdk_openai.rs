@@ -89,6 +89,12 @@ async fn test_inference_smoke_openai() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_vision_image_url_openai() -> Result<()> {
+    let target = require_live!(PROVIDER, "vision");
+    suite::vision::run(&target).await
+}
+
+#[tokio::test]
 async fn zzz_emit_token_usage_report() -> Result<()> {
     common::usage_report::flush("sdk_openai")?;
     Ok(())
