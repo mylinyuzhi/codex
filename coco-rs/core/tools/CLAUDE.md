@@ -1,6 +1,6 @@
 # coco-tools
 
-43 static built-in tools plus the dynamic `McpTool` wrapper. Each implements `coco_tool_runtime::Tool`; `coco-tool-runtime` defines the trait.
+41 statically-typed built-in tools (`type Input = SomeStruct`) plus two `type Input = Value` tools whose schema is runtime-supplied: `McpTool` (wire schema from MCP server / SDK in-process transport) and `StructuredOutputTool` (user JSON Schema via `--json-schema`). Each implements `coco_tool_runtime::Tool`; `coco-tool-runtime` defines the trait.
 
 ## TS Source
 `tools/` (40 tool directories — one per tool, plus `shared/` and `testing/`). Notable:
@@ -35,7 +35,10 @@ Also: `tools/shared/`, `tools/utils.ts`, and supporting utils (`utils/worktree.t
 
 ## Architecture
 
-- MCPTool is the only dynamic tool — schema comes from the connected server at runtime. Re-connection is idempotent: the registry deregisters prior tools for that server first.
+- **Two dynamic-schema tools** (both `type Input = serde_json::Value`):
+  - `McpTool` — schema from MCP server (external stdio/SSE or SDK in-process transport via `McpServerConfig::Sdk`). Re-connection is idempotent: the registry deregisters prior tools for that server first.
+  - `StructuredOutputTool` — schema from `--json-schema` CLI flag. Registered only when `register_structured_output_tool()` is called (headless print / SDK NDJSON paths).
+  - Both **MUST** override `input_json_schema()` — the blanket default derives from `Self::Input = Value` which produces schemas that strict OpenAI-compatible providers (DeepSeek etc.) reject as `type: null`. Any future `type Input = Value` tool inherits the same obligation. See [docs/coco-rs/tool-schema-validated-newtype-plan.md](../../../docs/coco-rs/tool-schema-validated-newtype-plan.md) for the long-term refactor.
 - All file-mutation tools (Edit/Write/NotebookEdit/Bash) invoke the team-mem secret guard + file-history tracking helpers before touching disk.
 - One file per tool. Utility tools live in their own modules: `ask_user_question.rs`, `tool_search.rs`, `config.rs`, `brief.rs`, `lsp_tool.rs`, `notebook_edit.rs`. (`lsp_tool.rs` is suffixed because `lsp.rs` holds the shared DTOs + formatters that the tool consumes.)
 

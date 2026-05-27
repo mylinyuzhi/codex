@@ -10,6 +10,10 @@ use coco_types::ToolId;
 use coco_types::ToolName;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+// `DynTool` is imported per-test where needed — pulling it into module
+// scope would create method-resolution ambiguity between `Tool::execute`
+// (typed) and `DynTool::execute` (Value) for the `Self::Input = Value`
+// case below.
 
 fn person_schema() -> serde_json::Value {
     json!({
@@ -44,6 +48,65 @@ fn input_schema_forwards_user_supplied_properties_and_required() {
     assert!(schema.properties.contains_key("name"));
     assert!(schema.properties.contains_key("age"));
     assert_eq!(schema.required, vec!["name".to_string()]);
+}
+
+// ---------------------------------------------------------------------------
+// Schema wire-envelope preservation — guards against the DeepSeek
+// `type: null` regression. `input_json_schema()` must return the
+// user-supplied schema verbatim instead of falling through to the
+// blanket `derive_input_schema_value::<Value>()` default. Mirrors the
+// equivalent `McpTool` regression tests.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn input_json_schema_returns_user_supplied_schema_verbatim() {
+    use coco_tool_runtime::DynTool;
+    let schema = person_schema();
+    let tool = StructuredOutputTool::new(schema.clone()).unwrap();
+    let tool: &dyn DynTool = &tool;
+    assert_eq!(tool.input_json_schema(), Some(schema));
+}
+
+#[test]
+fn input_json_schema_preserves_top_level_fields_beyond_properties_and_required() {
+    // `input_schema()` only forwards `properties` + `required`; the full
+    // JSON Schema envelope (additionalProperties, $schema, descriptions,
+    // etc.) must round-trip through `input_json_schema()` so strict
+    // providers see exactly what the user wrote.
+    use coco_tool_runtime::DynTool;
+    let schema = json!({
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Person",
+        "description": "A person record",
+        "properties": {
+            "name": { "type": "string" }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+    });
+    let tool = StructuredOutputTool::new(schema.clone()).unwrap();
+    let tool: &dyn DynTool = &tool;
+    let echoed = tool.input_json_schema().expect("schema must be present");
+    assert_eq!(echoed, schema);
+}
+
+#[test]
+fn input_json_schema_does_not_emit_type_null_for_value_input() {
+    // Regression: with `type Input = Value` and no override, the blanket
+    // default produces a schema whose top-level `type` is absent or
+    // non-string — strict OpenAI-compatible providers reject it as
+    // `type: null`. With the override in place, the top-level `type`
+    // must be a string equal to "object" (whatever the user wrote).
+    use coco_tool_runtime::DynTool;
+    let tool = StructuredOutputTool::new(person_schema()).unwrap();
+    let tool: &dyn DynTool = &tool;
+    let schema = tool.input_json_schema().expect("schema must be present");
+    assert_eq!(
+        schema.get("type").and_then(|v| v.as_str()),
+        Some("object"),
+        "top-level `type` must round-trip from user schema; got: {schema}"
+    );
 }
 
 #[tokio::test]
