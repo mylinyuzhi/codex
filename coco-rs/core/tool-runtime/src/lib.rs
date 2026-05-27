@@ -138,6 +138,7 @@ pub use side_query::SideQueryRequest;
 pub use side_query::SideQueryResponse;
 pub use side_query::side_query_to_text_callback;
 pub use skill_handle::NoOpSkillHandle;
+pub use skill_handle::SkillGateContext;
 pub use skill_handle::SkillHandle;
 pub use skill_handle::SkillHandleRef;
 pub use skill_handle::SkillInvocationError;

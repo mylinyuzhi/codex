@@ -74,9 +74,14 @@ impl ReminderSources {
             recent_tools,
             just_compacted,
             per_source_timeout,
+            skill_overrides,
         } = mctx;
         let a = agent_id;
         let t = per_source_timeout;
+        // Clone into an Arc so the per-source async tasks can move
+        // their own handle without borrowing back into the
+        // `MaterializeContext` lifetime.
+        let so = std::sync::Arc::new(skill_overrides.clone());
 
         // Hook events — gated on ANY hook reminder being enabled (all
         // five share one source call and the generators filter
@@ -112,15 +117,18 @@ impl ReminderSources {
             },
         );
 
-        let skill_listing_fut = gate(
-            self.skills.as_ref(),
-            config.attachments.skill_listing,
-            t,
-            |s| {
-                let s = s.clone();
-                async move { s.listing(a).await }
-            },
-        );
+        let skill_listing_fut = {
+            let so = so.clone();
+            gate(
+                self.skills.as_ref(),
+                config.attachments.skill_listing,
+                t,
+                move |s| {
+                    let s = s.clone();
+                    async move { s.listing(a, &so).await }
+                },
+            )
+        };
 
         let invoked_skills_fut = gate(
             self.skills.as_ref(),
@@ -138,11 +146,13 @@ impl ReminderSources {
                 .filter(|_| config.attachments.skill_discovery)
                 .filter(|_| user_input.is_some());
             let input_owned = user_input.unwrap_or("").to_string();
+            let so = so.clone();
             async move {
                 match s {
                     Some(s) => {
                         let s = s.clone();
-                        match timeout(t, async move { s.skill_discovery(&input_owned).await }).await
+                        match timeout(t, async move { s.skill_discovery(&input_owned, &so).await })
+                            .await
                         {
                             Ok(v) => v,
                             Err(_) => {

@@ -409,6 +409,11 @@ impl SwarmAgentHandle {
     /// `<preloaded-skill name="...">` XML blocks. Missing skills /
     /// missing handle / read errors are logged at debug and silently
     /// dropped — the spawn proceeds with whatever loaded.
+    ///
+    /// `read_skill_body` enforces the author / runtime gates so
+    /// `disable_model_invocation: true` skills and `off`-overridden
+    /// skills are filtered out automatically. TS parity:
+    /// `runAgent.ts:577-645` runs the same `XG$` predicate.
     pub(super) async fn preload_frontmatter_skills(
         &self,
         definition: Option<&coco_types::AgentDefinition>,
@@ -429,9 +434,11 @@ impl SwarmAgentHandle {
             return prompt.to_string();
         };
 
+        let runtime = self.runtime_config();
+        let tiers = &runtime.skill_overrides;
         let mut blocks = Vec::with_capacity(def.skills.len());
         for name in &def.skills {
-            match handle.read_skill_body(name).await {
+            match handle.read_skill_body(name, tiers).await {
                 Some(body) if !body.trim().is_empty() => blocks.push(format!(
                     "<preloaded-skill name=\"{name}\">\n{body}\n</preloaded-skill>"
                 )),
@@ -439,7 +446,7 @@ impl SwarmAgentHandle {
                     tracing::debug!(
                         agent_type = %def.agent_type,
                         skill = %name,
-                        "frontmatter skill not found / empty body; skipping preload"
+                        "frontmatter skill not found / gated out / empty body; skipping preload"
                     );
                 }
             }
@@ -1145,6 +1152,7 @@ impl SwarmAgentHandle {
             live_permission_mode: None,
             tool_overrides: request.tool_overrides.clone(),
             features: request.features.clone(),
+            skill_overrides: request.skill_overrides.clone(),
             parent_tool_filter: request.parent_tool_filter.clone(),
             preserve_tool_use_results,
             permission_mode: request.mode.clone(),

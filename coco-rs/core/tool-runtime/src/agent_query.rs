@@ -108,6 +108,11 @@ pub struct AgentQueryConfig {
     /// for the same reason as `tool_overrides`.
     #[serde(skip)]
     pub features: Option<std::sync::Arc<coco_types::Features>>,
+    /// Parent's `skill_overrides` tiers, threaded so subagents apply
+    /// the same listing + Skill tool gates. Falls back to
+    /// default-empty tiers (every skill on) when not threaded.
+    #[serde(skip)]
+    pub skill_overrides: Option<std::sync::Arc<coco_config::SkillOverrideTiers>>,
     /// Parent's Layer 4 tool filter. The adapter intersects this with
     /// the subagent's own `allowed_tools` / `disallowed_tools` via
     /// [`coco_types::ToolFilter::narrow_with`] so the child can never

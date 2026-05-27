@@ -261,6 +261,12 @@ pub struct AgentSpawnRequest {
     /// Subagents only narrow this — never widen.
     #[serde(skip)]
     pub features: Option<Arc<Features>>,
+    /// Parent's resolved `skill_overrides` tiers. Subagents apply the
+    /// same Skill tool gate + listing filters as the parent. Skipped
+    /// at the JSON boundary; falls back to default-empty tiers (every
+    /// skill on) when not threaded.
+    #[serde(skip)]
+    pub skill_overrides: Option<Arc<coco_config::SkillOverrideTiers>>,
     /// Parent's resolved Layer 2 tool overrides. Same in-process-only
     /// inheritance as `features`. Falling back to `ToolOverrides::none()`
     /// would expose tools the active model rejects, so callers must

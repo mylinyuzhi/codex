@@ -179,6 +179,15 @@ define_status_codes! {
     InvalidConfig = 10_000 => { retryable: false, log_error: false, category: Config },
     /// Config file error.
     ConfigFileError = 10_001 => { retryable: false, log_error: false, category: Config },
+    /// Skill is disabled by the resolved `skill_overrides` state (`off`).
+    /// TS parity: errorCode 7 from the Skill tool `validateInput`
+    /// (`cli_inner_pretty.js:353581-353590`).
+    SkillOverrideOff = 10_002 => { retryable: false, log_error: false, category: Config },
+    /// Skill is gated to `user-invocable-only` (either via
+    /// `skill_overrides` or `disable-model-invocation: true`) and the
+    /// user did not type `/<name>` in the current turn. The model
+    /// cannot auto-invoke; the user must initiate.
+    SkillOverrideUserOnlyNoTrigger = 10_003 => { retryable: false, log_error: false, category: Config },
 
     // ====== Provider/Model errors (11_xxx) ======
     /// Provider not found or not configured.

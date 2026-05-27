@@ -355,6 +355,7 @@ impl ToolContextFactory {
             plan_mode_settings: self.config.plan_mode_settings.clone(),
             lsp_config: self.config.lsp_config.clone(),
             features: self.config.features.clone(),
+            skill_overrides: self.config.skill_overrides.clone(),
             tool_overrides: self.config.tool_overrides.clone(),
             tool_filter: self.config.tool_filter.clone(),
             discovered_tool_names: live_discovered_tool_names,

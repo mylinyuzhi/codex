@@ -28,6 +28,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
 
+use coco_config::SkillOverrideTiers;
 use coco_types::Features;
 use coco_types::PermissionUpdate;
 use coco_types::ToolFilter;
@@ -47,6 +48,26 @@ pub struct SubagentInheritance {
     /// `disallowed_tools` is intersected with this via
     /// [`ToolFilter::narrow_with`].
     pub parent_tool_filter: Option<ToolFilter>,
+}
+
+/// Per-invocation gate inputs for [`SkillHandle::invoke_skill`].
+///
+/// Two pieces the runtime needs to enforce the TS 4-state Skill tool
+/// gate (`cli_inner_pretty.js:353567-353590`):
+///
+/// - [`Self::overrides`] — per-tier `skill_overrides` maps used by
+///   `coco_skills::effective_skill_state` to compute the effective
+///   state for this skill.
+/// - [`Self::user_typed_slash`] — whether the user typed `/<name>` in
+///   the current turn. The caller (typically `SkillTool::execute`)
+///   evaluates this via
+///   [`crate::ToolUseContext::user_typed_slash_in_turn`] before
+///   handing off. Bypasses the `disable_model_invocation` author lock
+///   and the `user-invocable-only` override.
+#[derive(Debug, Clone, Default)]
+pub struct SkillGateContext {
+    pub overrides: Arc<SkillOverrideTiers>,
+    pub user_typed_slash: bool,
 }
 
 /// Outcome of a skill invocation.
@@ -119,6 +140,7 @@ pub trait SkillHandle: Send + Sync {
         name: &str,
         args: &str,
         inherit: SubagentInheritance,
+        gate: SkillGateContext,
     ) -> Result<SkillInvocationResult, SkillInvocationError>;
 
     /// Read a skill's prompt body without invoking it. Used by
@@ -129,10 +151,17 @@ pub trait SkillHandle: Send + Sync {
     /// `runAgent.ts:577-645` preloads frontmatter skills via
     /// `getSkillToolCommands()` + `skill.getPromptForCommand('')`.
     ///
+    /// **Skill-override gates apply.** Implementations must apply
+    /// the same author / runtime gates as `invoke_skill` so a skill
+    /// the user has hidden (`disable_model_invocation: true` or
+    /// `skill_overrides == "off"`) cannot sneak into a subagent's
+    /// preloaded prompt. TS parity: the same `XG$` predicate that
+    /// gates the listing also gates `getSkillToolCommands()`.
+    ///
     /// Default implementation returns `None` — handles that don't
     /// support preload (test fixtures / minimal embeddings) leave
     /// the skill body unloaded; the spawn proceeds with no preload.
-    async fn read_skill_body(&self, _name: &str) -> Option<String> {
+    async fn read_skill_body(&self, _name: &str, _tiers: &SkillOverrideTiers) -> Option<String> {
         None
     }
 }
@@ -153,6 +182,15 @@ pub enum SkillInvocationError {
     Disabled { name: String },
     #[error("skill is hidden from model: {name}")]
     HiddenFromModel { name: String },
+    /// `skill_overrides` resolved to `off` — the model cannot invoke
+    /// this skill at all. TS errorCode 7 (off branch).
+    #[error("skill {name} is disabled for model invocation in skill_overrides settings")]
+    OverrideOff { name: String },
+    /// `skill_overrides` resolved to `user-invocable-only` and the
+    /// user did not type `/<name>` in the current turn. TS errorCode
+    /// 7 (user-invocable-only branch).
+    #[error("skill {name} is user-invocable-only; type /{name} in the current turn to enable")]
+    OverrideUserOnlyNoTrigger { name: String },
     #[error("argument expansion failed for {name}: {reason}")]
     Expansion { name: String, reason: String },
     #[error("forked skill execution failed: {reason}")]
@@ -176,6 +214,7 @@ impl SkillHandle for NoOpSkillHandle {
         _name: &str,
         _args: &str,
         _inherit: SubagentInheritance,
+        _gate: SkillGateContext,
     ) -> Result<SkillInvocationResult, SkillInvocationError> {
         Err(SkillInvocationError::Unavailable {
             reason: "no skill runtime installed".into(),

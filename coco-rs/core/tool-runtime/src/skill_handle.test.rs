@@ -4,7 +4,12 @@ use super::*;
 async fn test_noop_handle_returns_unavailable_error() {
     let h = NoOpSkillHandle;
     let err = h
-        .invoke_skill("any_skill", "", SubagentInheritance::default())
+        .invoke_skill(
+            "any_skill",
+            "",
+            SubagentInheritance::default(),
+            SkillGateContext::default(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, SkillInvocationError::Unavailable { .. }));
@@ -19,6 +24,8 @@ fn test_error_variants_all_format_cleanly() {
         SkillInvocationError::NotFound { name: "foo".into() },
         SkillInvocationError::Disabled { name: "foo".into() },
         SkillInvocationError::HiddenFromModel { name: "foo".into() },
+        SkillInvocationError::OverrideOff { name: "foo".into() },
+        SkillInvocationError::OverrideUserOnlyNoTrigger { name: "foo".into() },
         SkillInvocationError::Expansion {
             name: "foo".into(),
             reason: "bad arg".into(),

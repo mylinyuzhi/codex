@@ -30,6 +30,7 @@ mod interaction;
 // when `TuiOnlyEvent::OpenModelPicker` arrives. The other `show::*`
 // constructors remain crate-internal helpers.
 pub(crate) mod show;
+mod skills_dialog;
 mod stash;
 mod transcript;
 
@@ -68,6 +69,17 @@ pub async fn handle_command(
     // threading a refresh call through every editing arm.
     let text_before = state.ui.input.text().to_string();
     let cursor_before = state.ui.input.textarea.cursor();
+
+    // Intercept editable-dialog keys before the main dispatch.
+    // The skills dialog has a richer state machine (select / filter
+    // modes) than the generic modal cancel/submit path; deferring to
+    // it here keeps the per-arm InsertChar/Backspace/etc. branches
+    // free of dialog-specific logic.
+    if let skills_dialog::Handled::Yes(changed) =
+        skills_dialog::intercept(state, &cmd, command_tx).await
+    {
+        return changed;
+    }
 
     let changed = match cmd {
         TuiCommand::Noop => false,

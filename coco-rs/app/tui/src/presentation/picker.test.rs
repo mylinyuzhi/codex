@@ -14,9 +14,6 @@ use crate::state::QuickOpenState;
 use crate::state::SearchResult;
 use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
-use crate::state::SkillsDialogEntry;
-use crate::state::SkillsDialogGroup;
-use crate::state::SkillsDialogSource;
 use crate::state::SkillsDialogState;
 use crate::theme::Theme;
 
@@ -224,64 +221,76 @@ fn memory_dialog_content_renders_scope_tags_and_empty_state() {
 }
 
 #[test]
-fn skills_dialog_content_renders_groups_and_token_estimates() {
+fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
 
     // Empty catalog → "no skills" hint, border stays primary.
-    let empty = SkillsDialogState { groups: Vec::new() };
+    let empty = SkillsDialogState::from_wire(coco_types::SkillsDialogPayload {
+        entries: Vec::new(),
+        bytes_per_token: 4,
+    });
     let (title, body, border) = skills_dialog_content(&empty, UiStyles::new(&theme));
     assert_eq!(title, " Skills ");
     assert_eq!(border, theme.primary);
     assert!(body.contains("No skills found."));
 
-    // Two project skills + one plugin skill (covers grouping order +
-    // optional plugin-name suffix + token-estimate suffix).
-    let populated = SkillsDialogState {
-        groups: vec![
-            SkillsDialogGroup {
-                source: SkillsDialogSource::Project,
-                subtitle: "/proj/.claude/skills".to_string(),
-                entries: vec![
-                    SkillsDialogEntry {
-                        name: "deploy".to_string(),
-                        plugin_name: None,
-                        token_estimate: 42,
-                    },
-                    SkillsDialogEntry {
-                        name: "review-pr".to_string(),
-                        plugin_name: None,
-                        token_estimate: 80,
-                    },
-                ],
+    // Mixed catalog: free user skill, plugin-locked skill, off-overridden
+    // skill — covers 4-state glyph + lock annotation + plugin footer.
+    let payload = coco_types::SkillsDialogPayload {
+        entries: vec![
+            coco_types::SkillsDialogEntry {
+                name: "deploy".into(),
+                source: coco_types::SkillsDialogSource::Project,
+                description: "Run cargo deploy".into(),
+                plugin_name: None,
+                frontmatter_bytes: 168,
+                current_local: None,
+                baseline: coco_types::SkillOverrideState::On,
+                lock: None,
             },
-            SkillsDialogGroup {
-                source: SkillsDialogSource::Plugin,
-                subtitle: String::new(),
-                entries: vec![SkillsDialogEntry {
-                    name: "skill-creator".to_string(),
-                    plugin_name: Some("claude-plugins-official".to_string()),
-                    token_estimate: 120,
-                }],
+            coco_types::SkillsDialogEntry {
+                name: "claude-api".into(),
+                source: coco_types::SkillsDialogSource::Plugin,
+                description: "Anthropic SDK helper".into(),
+                plugin_name: Some("claude-plugins-official".into()),
+                frontmatter_bytes: 120,
+                current_local: None,
+                baseline: coco_types::SkillOverrideState::On,
+                lock: Some(coco_types::SkillLock {
+                    source: coco_types::SkillLockSource::Plugin,
+                    forced_value: coco_types::SkillOverrideState::On,
+                }),
+            },
+            coco_types::SkillsDialogEntry {
+                name: "noisy".into(),
+                source: coco_types::SkillsDialogSource::User,
+                description: "loud".into(),
+                plugin_name: None,
+                frontmatter_bytes: 400,
+                current_local: Some(coco_types::SkillOverrideState::Off),
+                baseline: coco_types::SkillOverrideState::On,
+                lock: None,
             },
         ],
+        bytes_per_token: 4,
     };
-    let (_, body, _) = skills_dialog_content(&populated, UiStyles::new(&theme));
+    let state = SkillsDialogState::from_wire(payload);
+    let (_, body, _) = skills_dialog_content(&state, UiStyles::new(&theme));
 
-    // Subtitle: total count + plural.
+    // Subtitle includes total + hint.
     assert!(body.contains("3 skills"));
-
-    // Project group header + subtitle in parens.
-    assert!(body.contains("Project skills (/proj/.claude/skills)"));
-    assert!(body.contains("  /deploy · ~42 description tokens"));
-    assert!(body.contains("  /review-pr · ~80 description tokens"));
-
-    // Plugin group header without subtitle parens; plugin name inline.
-    assert!(body.contains("Plugin skills\n"));
-    assert!(body.contains("  /skill-creator · claude-plugins-official · ~120 description tokens"));
-
-    // Close hint at the bottom.
-    assert!(body.contains("Esc close"));
+    // Filter placeholder.
+    assert!(body.contains("Search skills"));
+    // Free row shows state + source + token suffix.
+    assert!(body.contains("deploy"));
+    // Plugin row carries lock annotation in the locked-by suffix.
+    assert!(body.contains("claude-api"));
+    assert!(body.contains("locked by plugin"));
+    // The off-row shows the "off" label (mirrors `rT5`).
+    assert!(body.contains("off"));
+    // Plugin footer.
+    assert!(body.contains("Plugin skills are managed via /plugin"));
 }
 
 #[test]

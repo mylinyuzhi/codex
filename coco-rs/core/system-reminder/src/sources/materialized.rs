@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use coco_config::SkillOverrideTiers;
 use coco_config::SystemReminderConfig;
 
 use crate::generator::AgentPendingMessage;
@@ -57,6 +58,16 @@ pub struct MaterializeContext<'a> {
     /// Per-source timeout (mirrors `SystemReminderConfig::timeout_ms`).
     /// Sources exceeding this time yield defaults.
     pub per_source_timeout: Duration,
+
+    /// Per-tier `skill_overrides` map. Threaded into
+    /// [`super::SkillsSource::listing`] and `skill_discovery` so the
+    /// per-turn skill reminders honour the 4-state override gates
+    /// (`off` skip / `name-only` collapse / XG$).
+    ///
+    /// Default-empty tiers ⇒ every skill resolves to `On` ⇒ filters
+    /// are no-ops. PR2 ships the plumbing with this defaulted shape
+    /// so observable behavior is unchanged.
+    pub skill_overrides: &'a SkillOverrideTiers,
 }
 
 /// Output of [`super::ReminderSources::materialize`] — flat data,
