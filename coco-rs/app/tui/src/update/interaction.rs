@@ -30,14 +30,16 @@ use crate::widgets::suggestion_popup::SuggestionMeta;
 ///
 /// Replaces everything from `trigger_pos` to the cursor with a formatted
 /// rendering of the selection. Mirrors TS `formatReplacementValue` +
-/// `applyDirectorySuggestion` (`useTypeahead.tsx:148,237`):
-///   - directories → `@<path>/` and **leave the popup open** so the user
-///     can keep narrowing
-///   - files       → `@<path> ` (trailing space, popup dismisses)
-///   - paths with whitespace → auto-quoted: `@"<path>" `
-///   - agents      → `@agent-<type> `
-///   - symbols     → `@#<sym> `
-///   - slash       → `<label> ` (label already has `/` prefix)
+/// `applyDirectorySuggestion` (`useTypeahead.tsx:148,237`) and the
+/// unified popup's per-kind insertion (`unifiedSuggestions.ts`):
+///   - slash command → `<label> ` (label already has `/` prefix)
+///   - symbol        → `@#<sym> `
+///   - At + Path (file) → `@<path> ` (auto-quoted if whitespace)
+///   - At + Path (directory) → `@<path>/` and **leave the popup open**
+///   - At + Agent    → `@<name> (agent) ` (suffix form; submit-side
+///     parser at `coco_context::user_input::extract_mentions:152`
+///     accepts the suffix and strips it via `strip_agent_suffix`)
+///   - At + McpResource → `@<server>:<uri> `
 fn accept_suggestion(state: &mut AppState) {
     let Some(sug) = state.ui.active_suggestions.take() else {
         return;
@@ -48,29 +50,10 @@ fn accept_suggestion(state: &mut AppState) {
         return;
     };
 
-    let is_directory = matches!(
-        item.metadata,
-        Some(SuggestionMeta::Path { is_directory: true })
-    );
-
     let (insertion, keep_popup) = match sug.kind {
         SuggestionKind::SlashCommand => (format!("{} ", item.label), false),
-        SuggestionKind::File => {
-            let body = if item.label.contains(char::is_whitespace) {
-                format!("@\"{}\"", item.label)
-            } else {
-                format!("@{}", item.label)
-            };
-            if is_directory {
-                // Append `/` and re-detect the trigger so the popup
-                // keeps showing entries inside the chosen directory.
-                (format!("{body}/"), true)
-            } else {
-                (format!("{body} "), false)
-            }
-        }
-        SuggestionKind::Agent => (format!("@agent-{} ", item.label), false),
         SuggestionKind::Symbol => (format!("@#{} ", item.label), false),
+        SuggestionKind::At => format_at_insertion(&item),
     };
 
     // Byte-offset splice via TextArea so multi-byte text before the
@@ -95,6 +78,48 @@ fn accept_suggestion(state: &mut AppState) {
         crate::autocomplete::refresh_suggestions(state);
     } else {
         state.ui.sync_popup_from_active_suggestions();
+    }
+}
+
+/// Format the splice text for an item from the unified `@` popup.
+///
+/// Returns `(insertion, keep_popup)` — directory completions keep the
+/// popup open so the user can drill in. All other kinds dismiss.
+fn format_at_insertion(item: &crate::widgets::suggestion_popup::SuggestionItem) -> (String, bool) {
+    match item.metadata.as_ref() {
+        Some(SuggestionMeta::Path { is_directory: true }) => {
+            let body = quote_if_whitespace(&item.label);
+            (format!("@{body}/"), true)
+        }
+        Some(SuggestionMeta::Path {
+            is_directory: false,
+        }) => {
+            let body = quote_if_whitespace(&item.label);
+            (format!("@{body} "), false)
+        }
+        Some(SuggestionMeta::Agent { .. }) => {
+            // Label already carries the `" (agent)"` suffix from
+            // `unified::seed_agent_items`, so a direct splice produces
+            // the canonical `@<name> (agent) ` form the submit parser
+            // recognises.
+            (format!("@{} ", item.label), false)
+        }
+        Some(SuggestionMeta::McpResource { server, uri }) => (format!("@{server}:{uri} "), false),
+        // No metadata: treat as a bare file path for backwards-safe
+        // splicing — preserves the legacy `@<text>` behaviour while
+        // surfacing a callsite to inspect should it ever fire.
+        None => {
+            let body = quote_if_whitespace(&item.label);
+            (format!("@{body} "), false)
+        }
+    }
+}
+
+fn quote_if_whitespace(s: &str) -> String {
+    if s.contains(char::is_whitespace) {
+        format!("\"{s}\"")
+    } else {
+        s.to_string()
     }
 }
 

@@ -540,7 +540,7 @@ impl App {
     /// trigger is active.
     fn dispatch_pending_search(&mut self) {
         let next = match self.state.ui.active_suggestions {
-            Some(ref sug) if matches!(sug.kind, SuggestionKind::File | SuggestionKind::Symbol) => {
+            Some(ref sug) if matches!(sug.kind, SuggestionKind::At | SuggestionKind::Symbol) => {
                 Some((sug.kind, sug.query.clone(), sug.trigger_pos))
             }
             _ => None,
@@ -564,7 +564,11 @@ impl App {
             return;
         }
         match kind {
-            SuggestionKind::File => {
+            SuggestionKind::At => {
+                // Unified `@` popup dispatches a file search; agent
+                // matches are already seeded synchronously into the
+                // popup by `unified::seed_agent_items`. MCP resource
+                // search would also dispatch here once wired.
                 self.symbol_search.cancel();
                 self.file_search.search(query.clone(), pos);
             }
@@ -835,7 +839,7 @@ fn handle_file_search_event(state: &mut AppState, evt: FileSearchEvent) -> bool 
     match evt {
         FileSearchEvent::SearchResult {
             query, suggestions, ..
-        } => apply_async_result(state, SuggestionKind::File, &query, suggestions),
+        } => apply_async_result(state, SuggestionKind::At, &query, suggestions),
     }
 }
 

@@ -5,6 +5,7 @@ use ratatui::prelude::*;
 use crate::presentation::model_picker;
 use crate::presentation::picker;
 use crate::presentation::styles::UiStyles;
+use crate::state::AgentsDialogState;
 use crate::state::CopyPickerState;
 use crate::state::ExportState;
 use crate::state::McpServerSelectState;
@@ -13,6 +14,7 @@ use crate::state::ModelPickerState;
 use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
 use crate::state::SkillsDialogState;
+use crate::state::SubagentInstance;
 
 pub(super) fn model_picker_content(
     m: &ModelPickerState,
@@ -51,6 +53,14 @@ pub(super) fn skills_dialog_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::skills_dialog_content(s, styles)
+}
+
+pub(super) fn agents_dialog_content(
+    a: &AgentsDialogState,
+    subagents: &[SubagentInstance],
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    picker::agents_dialog_content(a, subagents, styles)
 }
 
 pub(super) fn mcp_server_select_content(

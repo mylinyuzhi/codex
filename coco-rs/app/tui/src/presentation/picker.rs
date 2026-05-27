@@ -613,6 +613,14 @@ fn filter_line(filter: &str, empty_text: &str, prefix: FilterPrefix) -> String {
     }
 }
 
+/// Re-export of the dedicated `/agents` overlay renderer. The
+/// canonical implementation lives in
+/// [`super::agents_dialog::agents_dialog_content`]; surfacing it from
+/// `picker::` keeps the `surface_content/pickers.rs` delegate using
+/// the same one-step indirection style as `skills_dialog_content` /
+/// `memory_dialog_content`.
+pub(crate) use super::agents_dialog::agents_dialog_content;
+
 #[cfg(test)]
 #[path = "picker.test.rs"]
 mod tests;

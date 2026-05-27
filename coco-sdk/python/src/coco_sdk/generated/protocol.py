@@ -24,6 +24,24 @@ from pydantic import BaseModel, Field
 # Enums
 # ---------------------------------------------------------------------------
 
+class AgentColorName(str, Enum):
+    red = 'red'
+    blue = 'blue'
+    green = 'green'
+    yellow = 'yellow'
+    purple = 'purple'
+    orange = 'orange'
+    pink = 'pink'
+    cyan = 'cyan'
+
+class AgentSource(str, Enum):
+    built_in = 'built-in'
+    plugin = 'plugin'
+    userSettings = 'userSettings'
+    projectSettings = 'projectSettings'
+    flagSettings = 'flagSettings'
+    policySettings = 'policySettings'
+
 class ApiProvider(str, Enum):
     firstParty = 'firstParty'
     bedrock = 'bedrock'
@@ -1741,13 +1759,18 @@ class TuiOnlyEventOpenSkillsDialog(BaseModel):
     type_: Literal['open_skills_dialog'] = Field(default='open_skills_dialog', alias='type')
     payload: SkillsDialogPayload
 
+class TuiOnlyEventOpenAgentsDialog(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_agents_dialog'] = Field(default='open_agents_dialog', alias='type')
+    payload: AgentsDialogPayload
+
 class TuiOnlyEventSkillOverridesSaved(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['skill_overrides_saved'] = Field(default='skill_overrides_saved', alias='type')
     result: SkillOverridesSaveResult
 
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventSkillOverridesSaved],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventSkillOverridesSaved],
     Field(discriminator='type_'),
 ]
 
@@ -2798,6 +2821,17 @@ ClientRequest = Annotated[
 class AgentInfo(BaseModel):
     name: str
     description: str | None = None
+
+class AgentsDialogEntry(BaseModel):
+    description: str
+    name: str
+    source: AgentSource
+    color: AgentColorName | None = None
+    is_overridden: bool = False
+    source_path: str | None = None
+
+class AgentsDialogPayload(BaseModel):
+    entries: list[AgentsDialogEntry]
 
 class AlreadyReadFilePayload(BaseModel):
     display_path: str

@@ -455,6 +455,24 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         app.state_mut().session.available_commands = snapshot;
     }
 
+    // Seed `available_agents` so the unified `@` autocomplete popup
+    // surfaces agents (Plan / Explore / general-purpose / ...) inline
+    // alongside file matches. Without this seed the popup only ever
+    // shows file paths because the agent half of `unified::seed_agent_items`
+    // iterates an empty slice. The catalog hot-reload path
+    // (`session_runtime::reload_agent_catalog`) keeps the wire warm —
+    // each `/agents reload` (and, once stage 5 lands, each CRUD edit)
+    // re-pushes the updated set via the same notification used for
+    // `available_commands`.
+    {
+        let snapshot = runtime.agent_catalog_snapshot().await;
+        let agents: Vec<coco_tui::autocomplete::AgentInfo> = snapshot
+            .active()
+            .map(coco_tui::autocomplete::AgentInfo::from_definition)
+            .collect();
+        app.state_mut().session.available_agents = agents;
+    }
+
     // Surface the startup downgrade notification (if any) as a toast
     // so interactive users see it. Headless paths eprintln it; the
     // TUI swallows stderr.
@@ -822,6 +840,9 @@ async fn run_agent_driver(
                     PendingEditorRequest::Prompt { initial_content } => {
                         run_prompt_editor(initial_content, event_tx.clone()).await;
                     }
+                    PendingEditorRequest::Agent { path } => {
+                        run_open_agent_file(runtime.clone(), path, event_tx.clone()).await;
+                    }
                 }
             }
 
@@ -1067,6 +1088,95 @@ async fn run_agent_driver(
                     }
                     Err(error) => {
                         tracing::warn!(%agent_id, %error, "Interrupt: teammate current turn failed");
+                    }
+                }
+            }
+
+            UserCommand::OpenAgentEditor { path } => {
+                prepare_external_editor_request(
+                    &mut pending_editor_requests,
+                    PendingEditorRequest::Agent { path },
+                    &event_tx,
+                )
+                .await;
+            }
+
+            UserCommand::CreateAgent {
+                name,
+                description,
+                source,
+            } => {
+                // The TUI wizard pre-flights the writable-source +
+                // file-exists checks before dispatching, so by the
+                // time we reach here only rare I/O races land in the
+                // error arm. Toast the failure and move on — the
+                // wizard is already closed.
+                match prepare_agent_create(&runtime, &name, &description, source).await {
+                    Ok(path) => {
+                        prepare_external_editor_request(
+                            &mut pending_editor_requests,
+                            PendingEditorRequest::Agent { path },
+                            &event_tx,
+                        )
+                        .await;
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "coco::agents",
+                            error = %err.to_user_string(),
+                            %name,
+                            ?source,
+                            "CreateAgent: prepare failed"
+                        );
+                        let _ = event_tx
+                            .send(CoreEvent::Tui(TuiOnlyEvent::PromptEditorFailed {
+                                error: err.to_user_string(),
+                            }))
+                            .await;
+                    }
+                }
+            }
+
+            UserCommand::DeleteAgentFile { path } => {
+                let runtime_t = runtime.clone();
+                let event_tx_t = event_tx.clone();
+                let path_display = path.display().to_string();
+                tokio::spawn(async move {
+                    if let Err(err) = std::fs::remove_file(&path) {
+                        tracing::warn!(
+                            target: "coco::agents",
+                            %path_display,
+                            error = %err,
+                            "DeleteAgentFile: remove failed"
+                        );
+                        return;
+                    }
+                    // After delete, rebuild the payload and re-push so
+                    // the dialog refreshes without the deleted row.
+                    runtime_t.reload_agent_catalog().await;
+                    refresh_agents_dialog(&runtime_t, &event_tx_t).await;
+                });
+            }
+
+            UserCommand::CancelSubagent { task_id } => {
+                // Fire the cancel token on the running task. The
+                // existing task-driver pipeline emits
+                // `CoreEvent::Protocol(TaskCompleted { status: Stopped })`
+                // when the cancel takes effect, which the TUI handler
+                // folds into `SessionState.subagents` so the Running
+                // tab refreshes on the next frame. No additional event
+                // wiring needed here.
+                let Some(task_runtime) = runtime.current_task_runtime().await else {
+                    tracing::warn!(%task_id, "CancelSubagent: task runtime unavailable");
+                    continue;
+                };
+                match task_runtime.manager().kill_running(&task_id).await {
+                    Ok(()) => info!(%task_id, "CancelSubagent: cancel token fired"),
+                    Err(coco_tasks::KillTaskError::NotFound) => {
+                        tracing::warn!(%task_id, "CancelSubagent: task id not found")
+                    }
+                    Err(coco_tasks::KillTaskError::NotRunning) => {
+                        tracing::debug!(%task_id, "CancelSubagent: task already terminal")
                     }
                 }
             }
@@ -2586,6 +2696,18 @@ async fn dispatch_slash_command(
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenSkillsDialog { payload }))
                         .await;
                 }
+                DialogSpec::AgentsList { payload } => {
+                    // The handler ships the agent catalog as it
+                    // looks on disk; running counts are derived TUI-
+                    // side from the live `SessionState.subagents`
+                    // mirror, so no enrichment is needed here. Mid-
+                    // session edits via stage-5 CRUD trigger a
+                    // `reload_agent_catalog()` and a fresh payload
+                    // round-trip rather than mutating in place.
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenAgentsDialog { payload }))
+                        .await;
+                }
                 DialogSpec::PluginPicker
                 | DialogSpec::McpbConfig { .. }
                 | DialogSpec::Confirm { .. } => {
@@ -2596,6 +2718,7 @@ async fn dispatch_slash_command(
                         DialogSpec::MessageSelector
                         | DialogSpec::MemoryFileSelector { .. }
                         | DialogSpec::SkillsList { .. }
+                        | DialogSpec::AgentsList { .. }
                         | DialogSpec::ModelPicker => unreachable!(),
                     }
                     .to_string();
@@ -2834,9 +2957,22 @@ enum ActiveTurnDrain {
 }
 
 enum PendingEditorRequest {
-    Memory { path: std::path::PathBuf },
-    Plan { path: std::path::PathBuf },
-    Prompt { initial_content: String },
+    Memory {
+        path: std::path::PathBuf,
+    },
+    Plan {
+        path: std::path::PathBuf,
+    },
+    Prompt {
+        initial_content: String,
+    },
+    /// `/agents` Library tab Enter on an editable agent row → fork
+    /// `$EDITOR` against the markdown source path. On editor exit the
+    /// runner re-reads the agent catalog and re-emits the dialog
+    /// payload so the dialog refreshes against the new on-disk state.
+    Agent {
+        path: std::path::PathBuf,
+    },
 }
 
 /// Cancel the in-flight turn (if any) and drain its task.
@@ -4249,8 +4385,241 @@ async fn emit_editor_prepare_failed(
             error: message,
         },
         PendingEditorRequest::Prompt { .. } => TuiOnlyEvent::PromptEditorFailed { error: message },
+        // Agent editor preparation failure is surfaced via the
+        // generic prompt-editor channel (no dedicated wire event).
+        // The user still sees a toast and the dialog stays mounted.
+        PendingEditorRequest::Agent { .. } => TuiOnlyEvent::PromptEditorFailed { error: message },
     };
     let _ = event_tx.send(CoreEvent::Tui(event)).await;
+}
+
+/// Typed error from `prepare_agent_create`. Variants map 1:1 to
+/// `coco_tui::state::WizardError`; the CLI bridge produces them so
+/// the TUI side can stamp the wizard's `error` slot with a typed
+/// payload instead of trying to parse a stringly error.
+#[derive(Debug)]
+enum CreateAgentError {
+    NonWritableSource(coco_types::AgentSource),
+    AlreadyExists(std::path::PathBuf),
+    Io(String),
+}
+
+impl CreateAgentError {
+    fn to_user_string(&self) -> String {
+        match self {
+            Self::NonWritableSource(s) => {
+                format!("source {s:?} is not writable from the wizard")
+            }
+            Self::AlreadyExists(p) => {
+                format!("agent file already exists at {}", p.display())
+            }
+            Self::Io(m) => m.clone(),
+        }
+    }
+}
+
+/// Stage the new-agent markdown file ahead of the `$EDITOR` fork.
+///
+/// 1. Resolves the target directory via
+///    [`coco_subagent::resolve_writable_agent_dir`].
+/// 2. Pulls the live catalog snapshot **once** so the colour picker
+///    and the post-write reload share the same view.
+/// 3. Wraps `create_dir_all` + `write` in `spawn_blocking` so a slow
+///    disk doesn't stall the async runtime.
+/// 4. Refuses to overwrite an existing file.
+///
+/// The caller then hands off to the standard editor flow.
+async fn prepare_agent_create(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    name: &str,
+    description: &str,
+    source: coco_types::AgentSource,
+) -> Result<std::path::PathBuf, CreateAgentError> {
+    // Snapshot the catalog ONCE — the colour picker reads it, and
+    // the post-write reload supersedes it on its own. Repeated
+    // `agent_catalog_snapshot().await` calls add lock churn for no
+    // benefit since the data is immutable per snapshot.
+    let snapshot = runtime.agent_catalog_snapshot().await;
+    let color = coco_subagent::next_unused_color(&snapshot);
+
+    let name_owned = name.to_string();
+    let description_owned = description.to_string();
+    let blocking =
+        tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf, CreateAgentError> {
+            let cwd =
+                std::env::current_dir().map_err(|err| CreateAgentError::Io(err.to_string()))?;
+            let config_home = coco_config::global_config::config_home();
+            let dir = coco_subagent::resolve_writable_agent_dir(source, &config_home, &cwd)
+                .ok_or(CreateAgentError::NonWritableSource(source))?;
+            std::fs::create_dir_all(&dir).map_err(|err| CreateAgentError::Io(err.to_string()))?;
+            let path = dir.join(format!("{name_owned}.md"));
+            if path.exists() {
+                return Err(CreateAgentError::AlreadyExists(path));
+            }
+            let template = build_agent_template(&name_owned, &description_owned, color);
+            std::fs::write(&path, template).map_err(|err| CreateAgentError::Io(err.to_string()))?;
+            Ok(path)
+        })
+        .await
+        .map_err(|join_err| CreateAgentError::Io(format!("write task panicked: {join_err}")))??;
+
+    // Pre-warm the catalog so observers see the new file without
+    // waiting on the editor to exit — handy for SDK consumers that
+    // listen to `agents/refreshed` between the create and the edit.
+    runtime.reload_agent_catalog().await;
+    Ok(blocking)
+}
+
+/// Build the markdown body written by the create wizard. Mirrors the
+/// minimal TS template — frontmatter carries the wizard inputs plus
+/// an auto-assigned color from the eight-color palette so new agents
+/// land with visual distinction in the Library list.
+fn build_agent_template(
+    name: &str,
+    description: &str,
+    color: Option<coco_types::AgentColorName>,
+) -> String {
+    let description_yaml = yaml_single_quote(description);
+    let color_line = match color {
+        Some(c) => format!("color: {}\n", c.as_str()),
+        None => String::new(),
+    };
+    format!(
+        "---\n\
+         name: {name}\n\
+         description: {description_yaml}\n\
+         {color_line}\
+         ---\n\
+         \n\
+         # {name}\n\
+         \n\
+         <!-- Describe how this agent should behave. Frontmatter \
+         fields you can add: tools, model, memory, isolation, \
+         background, maxTurns, initialPrompt. -->\n",
+    )
+}
+
+/// Encode a single-line string as a YAML single-quoted scalar. YAML
+/// single-quoted form is the simplest robust escape: the only
+/// in-string syntax is the single quote itself, which doubles to
+/// `''`. Control characters and backslashes pass through literally,
+/// dodging the double-quote escape surface entirely.
+///
+/// The wizard's `wizard_input_char` already rejects literal newlines
+/// (`InsertNewline` is unbound) and control characters on the
+/// description step, so by the time text reaches here it's a single
+/// physical line — exactly what the YAML single-quoted format
+/// requires.
+fn yaml_single_quote(s: &str) -> String {
+    let escaped = s.replace('\'', "''");
+    format!("'{escaped}'")
+}
+
+/// Fork `$EDITOR` against the agent markdown file. On clean exit
+/// the runner triggers a `reload_agent_catalog()` **only when the
+/// file actually changed** so an editor session that quit without
+/// saving doesn't churn the catalog. Falls back to reload on any
+/// mtime-read error so a missing-stat doesn't strand the dialog.
+async fn run_open_agent_file(
+    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    path: std::path::PathBuf,
+    event_tx: mpsc::Sender<CoreEvent>,
+) {
+    let path_display = path.display().to_string();
+    let mtime_before = file_mtime(&path);
+    let editor_path = path.clone();
+    let result = tokio::task::spawn_blocking(move || run_editor_on_file(&editor_path)).await;
+
+    match result {
+        Ok(Ok(())) => {
+            let mtime_after = file_mtime(&path);
+            // Skip the reload when mtime is known on both sides and
+            // unchanged — common case for "opened, looked, quit
+            // without writing". Either side missing falls back to
+            // reload so a transient stat() failure doesn't desync
+            // the dialog.
+            let unchanged = matches!((mtime_before, mtime_after), (Some(a), Some(b)) if a == b);
+            if unchanged {
+                tracing::debug!(
+                    target: "coco::agents",
+                    %path_display,
+                    "agent editor exited with no file changes; skipping reload"
+                );
+                refresh_agents_dialog(&runtime, &event_tx).await;
+                return;
+            }
+            // Reload + republish the dialog payload so the user sees
+            // their edits immediately. Live registry refresh + dialog
+            // refresh both go through the existing wire so observers
+            // (subagent dispatch, dialog renderer) stay coherent.
+            runtime.reload_agent_catalog().await;
+            refresh_agents_dialog(&runtime, &event_tx).await;
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(
+                target: "coco::agents",
+                %path_display,
+                %error,
+                "agent editor failed"
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "coco::agents",
+                %path_display,
+                error = %err,
+                "agent editor task panicked"
+            );
+        }
+    }
+}
+
+/// Read the file's modification time, dropping any error to `None`.
+/// Used as a cheap change-detection signal for the post-edit reload
+/// short-circuit; any stat hiccup falls back to the safe "reload"
+/// path so we never serve a stale dialog.
+fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+/// Build a fresh `AgentsDialogPayload` from the live catalog snapshot
+/// and push it to the TUI via `OpenAgentsDialog`. Used after CRUD
+/// (`OpenAgentEditor` exit, `DeleteAgentFile`) so the dialog refreshes
+/// in place rather than waiting for the user to re-issue `/agents`.
+async fn refresh_agents_dialog(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    let snapshot = runtime.agent_catalog_snapshot().await;
+
+    let active_source: std::collections::BTreeMap<String, coco_types::AgentSource> = snapshot
+        .active()
+        .map(|d| (d.name.clone(), d.source))
+        .collect();
+
+    let entries: Vec<coco_types::AgentsDialogEntry> = snapshot
+        .all()
+        .iter()
+        .map(|loaded| {
+            let def = &loaded.definition;
+            let is_overridden = active_source
+                .get(&def.name)
+                .map(|winning| *winning != def.source)
+                .unwrap_or(false);
+            coco_types::AgentsDialogEntry {
+                name: def.name.clone(),
+                description: def.description.clone().unwrap_or_default(),
+                source: def.source,
+                color: def.color,
+                is_overridden,
+                source_path: loaded.path.clone(),
+            }
+        })
+        .collect();
+    let payload = coco_types::AgentsDialogPayload { entries };
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::OpenAgentsDialog { payload }))
+        .await;
 }
 
 fn open_memory_file_blocking(path: &std::path::Path) -> Result<(), String> {

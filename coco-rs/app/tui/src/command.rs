@@ -161,6 +161,64 @@ pub enum UserCommand {
     Interrupt,
     /// Interrupt a teammate's active turn without killing the teammate.
     InterruptAgentCurrentWork { agent_id: String },
+    /// Cancel a running subagent / background task. Fires the task's
+    /// cancellation token via `TaskManager::kill_running`; the engine's
+    /// existing `TaskCompleted` event then folds the row out of the UI.
+    ///
+    /// Wired from the `/agents` dialog's Running tab when the user
+    /// presses `X` on the highlighted row (TS parity: `V24.js:59-82` —
+    /// `X` triggers `V.abortController?.abort()`).
+    CancelSubagent {
+        /// `TaskStateBase.id` of the running subagent invocation.
+        task_id: String,
+    },
+    /// Open an agent markdown file in `$EDITOR` / `$VISUAL`. The CLI
+    /// bridge suspends the TUI, spawns the editor, and emits
+    /// `TuiOnlyEvent::AgentFileSaved` on exit so the dialog refreshes
+    /// against the live catalog.
+    ///
+    /// Wired from the `/agents` Library tab when the user presses
+    /// Enter on an agent row (edit) or on the `Create new agent` row
+    /// (create — `path` points at a freshly-created template).
+    OpenAgentEditor {
+        /// Absolute markdown path. The bridge calls `run_editor_on_file`
+        /// directly; no special creation logic — callers stage any
+        /// new-file template content into `path` before dispatch.
+        path: std::path::PathBuf,
+    },
+    /// Delete an agent markdown file and trigger a catalog reload so
+    /// the dialog re-renders without the deleted row.
+    ///
+    /// Wired from the `/agents` Library tab `d` keystroke after the
+    /// user confirms the delete overlay.
+    DeleteAgentFile {
+        /// Absolute markdown path. Bridge `fs::remove_file`s and then
+        /// `reload_agent_catalog()`s.
+        path: std::path::PathBuf,
+    },
+    /// Finalize the `/agents` Library inline create wizard. The CLI
+    /// bridge:
+    ///   1. resolves the target directory (`~/.coco/agents` or
+    ///      `<cwd>/.claude/agents`),
+    ///   2. writes a TS-aligned markdown template with the wizard
+    ///      inputs in the frontmatter,
+    ///   3. dispatches the existing `$EDITOR` flow on the new file so
+    ///      the user can fine-tune body / tools / model / color,
+    ///   4. on editor exit, reloads the agent catalog and refreshes
+    ///      the dialog payload.
+    ///
+    /// Mirrors TS `CreateAgentWizard` confirmation (`screens/agents/
+    /// new-agent-creation/ConfirmStepWrapper.tsx:140-160`).
+    CreateAgent {
+        /// Canonical agent identifier (validated by
+        /// `coco_tui::state::validate_agent_name`).
+        name: String,
+        /// `whenToUse` description body. Required.
+        description: String,
+        /// Selected source — narrows TS `BaseAgentSource` to the two
+        /// scopes coco-rs writes to directly (user / project).
+        source: coco_types::AgentSource,
+    },
     /// Set permission mode. Replaces the legacy `SetPlanMode { bool }`
     /// — plan-mode activation is just `SetPermissionMode { mode: Plan }`.
     SetPermissionMode { mode: PermissionMode },

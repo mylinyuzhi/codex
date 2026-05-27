@@ -110,3 +110,45 @@ fn empty_items_renders_nothing() {
     // Widget early-returns; the buffer stays as default cells (spaces).
     assert!(out.chars().all(|c| c == ' ' || c == '\n'));
 }
+
+#[test]
+fn snapshot_unified_mixed_icons() {
+    use super::SuggestionMeta;
+    use coco_types::AgentColorName;
+    // Mirrors the TS unified `@` popup: agents (`*`) listed before files
+    // (`+`), each row prefixed by its kind icon. Verifies icon dispatch
+    // off `SuggestionMeta` and that agent + file rows share the column
+    // grid.
+    let items = vec![
+        SuggestionItem {
+            label: "Plan (agent)".into(),
+            description: Some("Software architect agent".into()),
+            metadata: Some(SuggestionMeta::Agent {
+                color: Some(AgentColorName::Blue),
+            }),
+        },
+        SuggestionItem {
+            label: "Explore (agent)".into(),
+            description: Some("Fast read-only search".into()),
+            metadata: Some(SuggestionMeta::Agent {
+                color: Some(AgentColorName::Green),
+            }),
+        },
+        SuggestionItem {
+            label: "src/lib.rs".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path {
+                is_directory: false,
+            }),
+        },
+        SuggestionItem {
+            label: "docs/".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path { is_directory: true }),
+        },
+    ];
+    insta::assert_snapshot!(
+        "suggestion_popup_unified_mixed",
+        render_popup(&items, 0, 60, 6)
+    );
+}

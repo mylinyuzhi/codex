@@ -280,9 +280,11 @@ pub struct SessionState {
     /// (see `app/cli/src/tui_runner.rs`). Filtered + ranked by
     /// [`crate::autocomplete::slash`] when the user types `/`.
     pub available_commands: Vec<SlashCommandInfo>,
-    /// Available agents for `@agent-*` autocomplete. Populated by the
-    /// session handler when the agent registry is loaded; used synchronously
-    /// by `autocomplete::refresh_suggestions` for the Agent trigger.
+    /// Available agents for the unified `@` autocomplete popup. Populated
+    /// by the session handler when the agent registry is loaded; used
+    /// synchronously by `autocomplete::unified::seed_agent_items` whenever
+    /// the user types `@<query>` so agents appear inline before async
+    /// file-search results arrive.
     pub available_agents: Vec<crate::autocomplete::AgentInfo>,
     /// Saved sessions for session browser.
     pub saved_sessions: Vec<SavedSession>,
