@@ -776,6 +776,23 @@
         "type",
         "payload"
       ]
+    },
+    {
+      "description": "Notify the TUI that a `/skills` dialog Enter has finished\npersisting (or failed). TUI renders the localized\n`Updated N / No changes / Failed: …` toast — keeping all\nuser-visible text generation on the UI side.",
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/SkillOverridesSaveResult"
+        },
+        "type": {
+          "type": "string",
+          "const": "skill_overrides_saved"
+        }
+      },
+      "required": [
+        "type",
+        "result"
+      ]
     }
   ],
   "$defs": {
@@ -1506,10 +1523,175 @@
         "created_at"
       ]
     },
-    "SkillsDialogEntry": {
-      "description": "One row in the `/skills` dialog. Mirrors `SkillCommand` from TS\n`components/skills/SkillsMenu.tsx`.",
+    "SkillLock": {
+      "description": "A non-overridable lock on a skill row in the `/skills` dialog.\nCarries both the originating tier ([`Self::source`]) and the\nforced 4-state value ([`Self::forced_value`]) so downstream\nrenderers don't need to re-derive the value from per-tier maps.\n\nTS mirror: `oT5` returns `{ value, source }` —\n`cli_inner_pretty.js:476885-476893`.",
       "type": "object",
       "properties": {
+        "forced_value": {
+          "$ref": "#/$defs/SkillOverrideState"
+        },
+        "source": {
+          "$ref": "#/$defs/SkillLockSource"
+        }
+      },
+      "required": [
+        "source",
+        "forced_value"
+      ]
+    },
+    "SkillLockSource": {
+      "description": "Which precedence layer originated a non-overridable lock on a\nskill's `skill_overrides` state. Mirrors the four `lock.source`\nvalues returned by TS `oT5` (`cli_inner_pretty.js:476885-476893`).\n\nIn precedence order (highest first): [`Self::Policy`] →\n[`Self::Flag`] → [`Self::Author`] → [`Self::Plugin`]. A lock means\nthe `/skills` dialog renders `🔒 <label>` for the row and refuses\nto cycle it (Space is a no-op).",
+      "oneOf": [
+        {
+          "description": "`policySettings.skill_overrides[name]` — enterprise-managed.",
+          "type": "string",
+          "const": "policy"
+        },
+        {
+          "description": "`flagSettings.skill_overrides[name]` — `--settings <path>`\ninvocation override.",
+          "type": "string",
+          "const": "flag"
+        },
+        {
+          "description": "Skill frontmatter `disable-model-invocation: true` — author\nforced to `user-invocable-only`.",
+          "type": "string",
+          "const": "author"
+        },
+        {
+          "description": "`skill.source == Plugin` — plugin-contributed skills are\nforced to `on` (manage via `/plugin` instead).",
+          "type": "string",
+          "const": "plugin"
+        }
+      ]
+    },
+    "SkillOverrideState": {
+      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Mirrors TS `skillOverrides` values\n(`cli_inner_pretty.js:477208-477214` `kB6 = [\"on\",\"name-only\",\n\"user-invocable-only\",\"off\"]`). Drives the `/skills` 4-state\neditor ladder.\n\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) — exact match to TS so JSON\nsettings files round-trip without translation.",
+      "oneOf": [
+        {
+          "description": "Default — full description in model listing, both user `/` and\nmodel Skill-tool invocation allowed.",
+          "type": "string",
+          "const": "on"
+        },
+        {
+          "description": "Name-only listing (model sees `- name` without description);\n**model can still invoke**. Saves description tokens.",
+          "type": "string",
+          "const": "name-only"
+        },
+        {
+          "description": "Hidden from model listing; Skill tool rejects model invocation\n**unless** the user typed `/<name>` in the current turn. Slash\ndispatcher still works.",
+          "type": "string",
+          "const": "user-invocable-only"
+        },
+        {
+          "description": "Fully disabled — hidden from listing AND `/` autocomplete;\nSkill tool rejects every invocation attempt.",
+          "type": "string",
+          "const": "off"
+        }
+      ]
+    },
+    "SkillOverridesSaveErrorKind": {
+      "description": "Categorical save-failure source. Mirrors the\n[`coco_config::SettingsWriteError`] variants + a runtime tier\nfor \"settings hot-reload was disabled at session start so we\ncan't republish\".",
+      "oneOf": [
+        {
+          "description": "Filesystem I/O failed.",
+          "type": "string",
+          "const": "io"
+        },
+        {
+          "description": "Settings JSON parse / serialize failed.",
+          "type": "string",
+          "const": "parse"
+        },
+        {
+          "description": "`RuntimeConfig` rebuild failed after the write.",
+          "type": "string",
+          "const": "rebuild"
+        },
+        {
+          "description": "Hot-reload publisher is absent (one-shot build path).",
+          "type": "string",
+          "const": "no_publisher"
+        }
+      ]
+    },
+    "SkillOverridesSaveResult": {
+      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\n\nCarries **no display data** — TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
+      "oneOf": [
+        {
+          "description": "Write succeeded.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "ok"
+            }
+          },
+          "required": [
+            "outcome"
+          ]
+        },
+        {
+          "description": "Write failed at some step. `kind` lets the TUI pick toast\nseverity / wording; `message` is the underlying error's\ndisplay text for inclusion in the toast body.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/SkillOverridesSaveErrorKind"
+            },
+            "message": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "string",
+              "const": "err"
+            }
+          },
+          "required": [
+            "outcome",
+            "kind",
+            "message"
+          ]
+        }
+      ]
+    },
+    "SkillsDialogEntry": {
+      "description": "One row in the `/skills` dialog. Mirrors the per-row payload\nshape consumed by TS `uJ4` (the 2.1.142 `<SkillsDialog>` editor)\n— every field is required so the dialog never has to fabricate\ndefaults for `baseline` / `lock` / etc.",
+      "type": "object",
+      "properties": {
+        "baseline": {
+          "description": "Project-or-user settings resolution, **without** local /\npolicy / flag layers. TS `aT5`. The dialog falls back here\nwhen the user reverts a local override (the save path\nwrites `Value::Null` so the local key is deleted and the\nbaseline resurfaces).",
+          "$ref": "#/$defs/SkillOverrideState"
+        },
+        "current_local": {
+          "description": "What is stored in `<cwd>/.claude/settings.local.json`'s\n`skill_overrides[name]` _right now_. `None` ⇒ key absent.\nDrives the dialog's diff-against-baseline save algorithm.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillOverrideState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "One-line description from the skill frontmatter. The 2.1.142\nfilter (`/` search) matches name + description + source\nlabel, so the dialog needs the description on the wire even\nthough it isn't shown on every row.",
+          "type": "string"
+        },
+        "frontmatter_bytes": {
+          "description": "Byte length of the frontmatter the token column derives from.\nThe dialog computes `frontmatter_bytes / bytes_per_token` per\nrow. Source: `coco_skills::estimate_skill_frontmatter_bytes`.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "lock": {
+          "description": "Optional lock — present when this row's state is forced by\na higher-precedence layer. Set by\n`resolve_skill_override_lock` (`oT5` mirror). When set, the\ndialog renders `🔒 <label>` and no-ops on Space.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillLock"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "name": {
           "description": "Canonical skill name — what `/<name>` invokes. TS\n`getCommandName(skill)`.",
           "type": "string"
@@ -1522,64 +1704,48 @@
           ]
         },
         "source": {
-          "description": "Source group this entry belongs to (drives ordering + group\nheader label).",
+          "description": "Source group this entry belongs to. Drives the source label\nrendered inline + the implicit alphabetical group when the\ndefault sort is active.",
           "$ref": "#/$defs/SkillsDialogSource"
-        },
-        "token_estimate": {
-          "description": "Rough token-count estimate of the skill's frontmatter\n(name + description + when-to-use). TS\n`estimateSkillFrontmatterTokens`. Displayed as\n`~{token_estimate} description tokens`.",
-          "type": "integer",
-          "format": "int64"
         }
       },
       "required": [
         "name",
         "source",
-        "token_estimate"
-      ]
-    },
-    "SkillsDialogGroupSubtitle": {
-      "description": "Subtitle text for one source group in the skills dialog. Keyed by\nthe group so the renderer can look it up without index gymnastics.",
-      "type": "object",
-      "properties": {
-        "source": {
-          "$ref": "#/$defs/SkillsDialogSource"
-        },
-        "subtitle": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "source",
-        "subtitle"
+        "description",
+        "frontmatter_bytes",
+        "baseline"
       ]
     },
     "SkillsDialogPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n\nTS parity: `components/skills/SkillsMenu.tsx`. The TS dialog is\nread-only — five source groups (project / user / policy / plugin /\nmcp), each row shows skill name + optional plugin name + token\nestimate (\"~N description tokens\"), Esc to close. No toggle, no\nsearch, no sort.",
+      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n\nTS parity: 2.1.142 `uJ4` (`cli_inner_pretty.js:476909`) — a flat\neditable list with 4-state override cycling, source labels\ninline, and lock annotations for policy/flag/author/plugin-locked\nrows. The 2.1.88 grouped read-only `SkillsMenu` has been retired.",
       "type": "object",
       "properties": {
+        "bytes_per_token": {
+          "description": "Bytes per token for the current main-role model. The TUI\ndivides [`SkillsDialogEntry::frontmatter_bytes`] by this to\nrender the `~N tok` column. Set to 4 when the host cannot\nresolve a more accurate value — `bytes/token ≈ 4` is the\nEnglish-text rule-of-thumb the TS dialog falls back to.\n\nTS: `bytesPerToken = sG(ctx.options.mainLoopModel)` passed\nto the dialog and re-used by `ZP$(skill, bytesPerToken)`.",
+          "type": "integer",
+          "format": "int64"
+        },
         "entries": {
-          "description": "All skills, in arbitrary order. The renderer groups by\n[`SkillsDialogEntry::source`] and sorts within each group by\nname. Total count is `entries.len()` (matches TS dialog\nsubtitle \"{N} skills\").",
+          "description": "All visible skills, in arbitrary order. The renderer\napplies its own sort (source-string lex + name; or token-\ndescending when the user pressed `t`). Total count is\n`entries.len()` (drives the subtitle `{N} skills`).",
           "type": "array",
           "items": {
             "$ref": "#/$defs/SkillsDialogEntry"
-          }
-        },
-        "group_subtitles": {
-          "description": "Per-source secondary text shown next to the group title (TS\n`getSourceSubtitle`). For file-based groups this is the\ndisplay path of the skills directory (e.g. `~/.coco/skills`);\nfor `Mcp` it's a comma-joined server-name list. `None` when\nthe subtitle is uninteresting (e.g. an empty group).",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SkillsDialogGroupSubtitle"
           }
         }
       },
       "required": [
         "entries",
-        "group_subtitles"
+        "bytes_per_token"
       ]
     },
     "SkillsDialogSource": {
-      "description": "Source group for a skill dialog entry. Mirrors TS `SkillSource`\nunion (`SettingSource | 'plugin' | 'mcp'`) collapsed to a closed\nenum so the wire shape is statically typed.",
+      "description": "Source group for a skill dialog entry. Mirrors TS `SkillSource`\nunion (`SettingSource | 'plugin' | 'mcp'`) collapsed to a closed\nenum so the wire shape is statically typed.\n\n**2.1.142 parity**: TS `xJ4` (`cli_inner_pretty.js:476897-476907`)\nnormalises `bundled`/`builtin` → display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
       "oneOf": [
+        {
+          "description": "Compiled-in bundled skill catalog. TS `bundled` / `builtin`\ncollapsed to a single label (display: `built-in`).",
+          "type": "string",
+          "const": "built_in"
+        },
         {
           "description": "`<cwd>/.claude/skills/` — TS `projectSettings`.",
           "type": "string",

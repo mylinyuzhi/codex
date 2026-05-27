@@ -381,7 +381,26 @@ class SkillDiscoverySource(str, Enum):
     aki = 'aki'
     both = 'both'
 
+class SkillLockSource(str, Enum):
+    policy = 'policy'
+    flag = 'flag'
+    author = 'author'
+    plugin = 'plugin'
+
+class SkillOverrideState(str, Enum):
+    on = 'on'
+    name_only = 'name-only'
+    user_invocable_only = 'user-invocable-only'
+    off = 'off'
+
+class SkillOverridesSaveErrorKind(str, Enum):
+    io = 'io'
+    parse = 'parse'
+    rebuild = 'rebuild'
+    no_publisher = 'no_publisher'
+
 class SkillsDialogSource(str, Enum):
+    built_in = 'built_in'
     project = 'project'
     user = 'user'
     policy = 'policy'
@@ -1366,6 +1385,21 @@ SharedV4FileData = Annotated[
     Field(discriminator='type_'),
 ]
 
+class SkillOverridesSaveResultOk(BaseModel):
+    model_config = {"populate_by_name": True}
+    outcome: Literal['ok'] = Field(default='ok', alias='outcome')
+
+class SkillOverridesSaveResultErr(BaseModel):
+    model_config = {"populate_by_name": True}
+    outcome: Literal['err'] = Field(default='err', alias='outcome')
+    kind: SkillOverridesSaveErrorKind
+    message: str
+
+SkillOverridesSaveResult = Annotated[
+    Union[SkillOverridesSaveResultOk, SkillOverridesSaveResultErr],
+    Field(discriminator='outcome'),
+]
+
 class SlashCommandStatusKindNoHandler(BaseModel):
     model_config = {"populate_by_name": True}
     kind: Literal['no_handler'] = Field(default='no_handler', alias='kind')
@@ -1707,8 +1741,13 @@ class TuiOnlyEventOpenSkillsDialog(BaseModel):
     type_: Literal['open_skills_dialog'] = Field(default='open_skills_dialog', alias='type')
     payload: SkillsDialogPayload
 
+class TuiOnlyEventSkillOverridesSaved(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['skill_overrides_saved'] = Field(default='skill_overrides_saved', alias='type')
+    result: SkillOverridesSaveResult
+
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSkillsDialog],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventSkillOverridesSaved],
     Field(discriminator='type_'),
 ]
 
@@ -3380,19 +3419,23 @@ class SkillDiscoverySkill(BaseModel):
     name: str
     short_id: str | None = Field(default=None, alias='shortId')
 
+class SkillLock(BaseModel):
+    forced_value: SkillOverrideState
+    source: SkillLockSource
+
 class SkillsDialogEntry(BaseModel):
+    baseline: SkillOverrideState
+    description: str
+    frontmatter_bytes: int
     name: str
     source: SkillsDialogSource
-    token_estimate: int
+    current_local: SkillOverrideState | None = None
+    lock: SkillLock | None = None
     plugin_name: str | None = None
 
-class SkillsDialogGroupSubtitle(BaseModel):
-    source: SkillsDialogSource
-    subtitle: str
-
 class SkillsDialogPayload(BaseModel):
+    bytes_per_token: int
     entries: list[SkillsDialogEntry]
-    group_subtitles: list[SkillsDialogGroupSubtitle]
 
 class SlashCommandInfo(BaseModel):
     name: str
