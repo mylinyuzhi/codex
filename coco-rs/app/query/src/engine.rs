@@ -2564,8 +2564,15 @@ impl QueryEngine {
                 if let Some(ref c) = streaming_ctx {
                     self.drain_nested_memory_triggers(c).await;
                 }
-                self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage)
-                    .await;
+                let is_terminal = streaming_control_prevent.is_some();
+                self.finalize_turn_post_tools(
+                    &mut *history,
+                    &event_tx,
+                    turn_id,
+                    usage,
+                    is_terminal,
+                )
+                .await;
                 if let Some(ref c) = streaming_ctx {
                     self.drain_dynamic_skill_triggers(c, &mut *history, &event_tx)
                         .await;
@@ -2658,7 +2665,8 @@ impl QueryEngine {
             run_artifacts.structured_output_attempts = run_artifacts
                 .structured_output_attempts
                 .saturating_add(tool_run_outcome.structured_output_attempts);
-            self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage)
+            let is_terminal = !tool_run_outcome.continue_after_tools;
+            self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage, is_terminal)
                 .await;
             self.drain_dynamic_skill_triggers(&ctx, &mut *history, &event_tx)
                 .await;
