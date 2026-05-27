@@ -41,10 +41,25 @@ impl AttachmentGenerator for BudgetUsdGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
+        // Surface cumulative session cost on every turn that has spend, even
+        // when no USD cap is configured (max_budget_usd = None). The
+        // model-visible reminder still requires a cap (TS parity), but ops
+        // logs always benefit from the cost signal. Format to 6 decimals
+        // so floating-point ulp noise (e.g. `0.058757500000000004`) doesn't
+        // leak into the log.
+        let used = ctx.total_cost_usd;
+        if used > 0.0 {
+            tracing::info!(
+                target: "coco_system_reminder::cost",
+                used_usd = format!("{used:.6}"),
+                budget_usd = ?ctx.max_budget_usd.map(|v| format!("{v:.6}")),
+                "session cost so far"
+            );
+        }
+
         let Some(total) = ctx.max_budget_usd else {
             return Ok(None);
         };
-        let used = ctx.total_cost_usd;
         let remaining = total - used;
         // TS `messages.ts:4071` template: `USD budget: $${used}/$${total}; $${remaining} remaining`
         // — `$${}` is a literal `$` followed by the interpolated number.

@@ -25,6 +25,7 @@ use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_system_reminder::SystemReminderOrchestrator;
+use coco_system_reminder::count_human_turns;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::TokenUsage;
@@ -66,18 +67,25 @@ pub use crate::config::QueryEngineConfig;
 pub use crate::config::QueryResult;
 pub use crate::config::SessionBootstrap;
 
-/// Last-compact tracker for `RecompactionInfo` population. Captured by
+/// Last-compact tracker for `RecompactionInfo` population. Set by
 /// `try_full_compact` after a successful compact and read by the next
 /// compaction to derive `is_recompaction` / `turns_since_previous`.
-/// TS parity: `compact.ts:317-323 RecompactionInfo`.
+/// TS parity: `services/compact/autoCompact.ts:51-60 AutoCompactTrackingState`
+/// + `query.ts:521 tracking = { compacted: true, turnId, turnCounter: 0 }`.
+///
+/// Field-by-field mirror of TS — read directly, no subtraction needed:
+/// - `run_id` ≡ TS `turnId` (UUID, generated per compact).
+/// - `turn_counter` ≡ TS `turnCounter` (resets to 0 on each compact,
+///   bumped +1 per subsequent turn at `engine_finalize_turn.rs`).
 #[derive(Debug, Clone)]
 pub(crate) struct LastCompactState {
-    /// Turn number at which the previous compaction completed.
-    pub(crate) turn_id: i64,
-    /// Run id of the previous compaction (UUID-shaped). Mirrors TS
-    /// `previousCompactTurnId`. Currently used only for transcript
-    /// observability since Rust has no `tengu_compact` analytics.
-    #[allow(dead_code)]
+    /// Turns elapsed since the previous compact. `0` immediately after
+    /// the compact lands; incremented on each `finalize_turn_post_tools`.
+    /// Read directly as `RecompactionInfo.turns_since_previous`.
+    pub(crate) turn_counter: i64,
+    /// UUID-shaped id of the previous compaction (boundary marker uuid).
+    /// Surfaced through `coco_query::compact_track` tracing log; Rust's
+    /// substitute for `tengu_post_autocompact_turn` analytics.
     pub(crate) run_id: String,
 }
 
@@ -394,13 +402,11 @@ pub struct QueryEngine {
     /// awareness; the caller (CLI/SDK) wires this on construction.
     pub(crate) running_tasks: Option<Arc<coco_tasks::running::TaskManager>>,
     /// Last-compact tracker — feeds `RecompactionInfo` (TS parity:
-    /// `compact.ts:317-323`). Set after each successful full compact.
-    /// `turn_id` is a monotonic per-engine counter so `turns_since_previous`
-    /// can be derived without external clocks.
+    /// `query.ts:521 tracking = { compacted, turnId, turnCounter: 0 }`).
+    /// `LastCompactState.turn_counter` resets to 0 each compact and bumps
+    /// +1 per turn in `finalize_turn_post_tools` — read directly with no
+    /// subtraction.
     pub(crate) last_compact_state: Arc<std::sync::Mutex<Option<LastCompactState>>>,
-    /// Monotonic turn counter incremented on every `finalize_turn_post_tools`.
-    /// Used to compute `RecompactionInfo.turns_since_previous`.
-    pub(crate) turn_counter: Arc<std::sync::atomic::AtomicI64>,
     /// Pre-rendered skill snapshot for in-band post-compact attachment.
     /// Caller (CLI/SDK runner) refreshes this whenever invoked skills
     /// change. TS calls `getInvokedSkillsForAgent()` inline; we keep it
@@ -868,9 +874,29 @@ impl QueryEngine {
             // provided via the `turn` / `turn_id` fields stamped on each
             // structured event below — pivots on `turn_id` reconstruct the
             // turn without an enclosing span.
+            // `turn` is the per-`run_session_loop` iteration (resets on each
+            // user submit — matches TS `query.ts` `turnCount`).
+            // `session_turn` is the monotonic human-turn count across the
+            // whole conversation, useful for cross-submit log correlation
+            // (matches TS `getPlanModeAttachmentTurnCount`'s human-only count).
+            // `last_compact_run_id` + `turns_since_last_compact` are the TS
+            // `tracking.turnId` + `tracking.turnCounter` payload — read
+            // directly from `LastCompactState`, no subtraction. `None`
+            // until the first compact lands.
+            let session_turn = count_human_turns(history.as_slice());
+            let (last_compact_run_id, turns_since_last_compact) = self
+                .last_compact_state
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .map(|prev| (Some(prev.run_id), Some(prev.turn_counter)))
+                .unwrap_or((None, None));
             info!(
                 turn,
                 turn_id = %turn_id,
+                session_turn,
+                last_compact_run_id = ?last_compact_run_id,
+                turns_since_last_compact = ?turns_since_last_compact,
                 history_len = history.len(),
                 active_model = model_runtime.current_model_id(),
                 "turn start"

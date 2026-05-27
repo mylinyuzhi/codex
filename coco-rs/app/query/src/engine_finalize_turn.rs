@@ -365,10 +365,14 @@ impl QueryEngine {
         // Never blocks; failure modes degrade to `None`.
         self.spawn_tool_use_summary(history).await;
 
-        // Bump the per-engine turn counter so RecompactionInfo can derive
-        // `turns_since_previous` accurately. TS: `compact.ts:317-323`.
-        self.turn_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Post-compact turn counter: TS `query.ts:1524 tracking.turnCounter++`.
+        // No-op when no compact has happened yet (`last_compact_state == None`).
+        // Lock is brief; only ever held at turn boundaries.
+        if let Ok(mut guard) = self.last_compact_state.lock()
+            && let Some(state) = guard.as_mut()
+        {
+            state.turn_counter = state.turn_counter.saturating_add(1);
+        }
 
         // Drain command queue: all priorities land before the next API
         // call. Slash commands excluded (processed post-turn).
@@ -543,14 +547,24 @@ impl QueryEngine {
         // Collapse-aware guard: when staged_compact is active it owns
         // the threshold ladder, so proactive autocompact suppresses.
         let collapse_active = self.is_collapse_active();
-        if coco_compact::should_auto_compact_guarded_with_collapse(
+        let auto_compact_needed = coco_compact::should_auto_compact_guarded_with_collapse(
             estimated_tokens,
             self.config.context_window,
             self.config.max_output_tokens,
             auto_cfg,
             coco_compact::CompactQuerySource::Other,
             collapse_active,
-        ) {
+        );
+        if !auto_compact_needed {
+            tracing::debug!(
+                target: "coco_query::compact_decision",
+                estimated_tokens,
+                context_window = self.config.context_window,
+                collapse_active,
+                "auto-compact check: not needed"
+            );
+        }
+        if auto_compact_needed {
             // Step 1: threshold micro_compact (count-based). TS external
             // doesn't run this — `microcompactMessages` is a no-op outside
             // `feature('CACHED_MICROCOMPACT')`. Opt-in via
@@ -588,14 +602,32 @@ impl QueryEngine {
                     .await;
             }
 
-            if coco_compact::should_auto_compact_guarded_with_collapse(
+            let still_over_threshold = coco_compact::should_auto_compact_guarded_with_collapse(
                 post_micro_tokens,
                 self.config.context_window,
                 self.config.max_output_tokens,
                 auto_cfg,
                 coco_compact::CompactQuerySource::Other,
                 collapse_active,
-            ) {
+            );
+            if still_over_threshold {
+                tracing::debug!(
+                    target: "coco_query::compact_decision",
+                    pre_micro_tokens,
+                    post_micro_tokens,
+                    removed,
+                    "auto-compact: micro insufficient, proceeding to full compact"
+                );
+            } else {
+                tracing::debug!(
+                    target: "coco_query::compact_decision",
+                    pre_micro_tokens,
+                    post_micro_tokens,
+                    removed,
+                    "auto-compact: micro sufficient, full compact skipped"
+                );
+            }
+            if still_over_threshold {
                 let should_attempt_auto = {
                     let state = self.auto_compact_state.lock().await;
                     state.should_attempt_reactive_compact()

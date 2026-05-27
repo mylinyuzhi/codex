@@ -310,9 +310,57 @@ fn test_char_inserts() {
 
 #[test]
 fn test_plain_character_input_is_not_logged_as_key_operation() {
-    assert!(!should_log_key_command(&TuiCommand::InsertChar('x')));
-    assert!(should_log_key_command(&TuiCommand::SubmitInput));
-    assert!(should_log_key_command(&TuiCommand::Cancel));
+    // Char inserts are always suppressed regardless of context.
+    assert!(!should_log_key_command(
+        KeybindingContext::Chat,
+        &TuiCommand::InsertChar('x')
+    ));
+    assert!(!should_log_key_command(
+        KeybindingContext::Picker,
+        &TuiCommand::InsertChar('x')
+    ));
+    // Meaningful control commands always log.
+    assert!(should_log_key_command(
+        KeybindingContext::Chat,
+        &TuiCommand::SubmitInput
+    ));
+    assert!(should_log_key_command(
+        KeybindingContext::Chat,
+        &TuiCommand::Cancel
+    ));
+}
+
+#[test]
+fn test_input_editor_keystrokes_suppressed_in_chat_only() {
+    use TuiCommand::*;
+    // In Chat (input box), editing keys are noise — drop them.
+    for cmd in [
+        DeleteBackward,
+        DeleteForward,
+        CursorLeft,
+        CursorRight,
+        CursorUp,
+        CursorDown,
+        WordLeft,
+        WordRight,
+    ] {
+        assert!(
+            !should_log_key_command(KeybindingContext::Chat, &cmd),
+            "expected suppression in Chat for {cmd:?}"
+        );
+    }
+    // In modal/overlay contexts the SAME keys are control navigation —
+    // keep the log.
+    for cmd in [DeleteBackward, CursorLeft, CursorRight] {
+        assert!(
+            should_log_key_command(KeybindingContext::Transcript, &cmd),
+            "expected log in Transcript for {cmd:?}"
+        );
+        assert!(
+            should_log_key_command(KeybindingContext::Picker, &cmd),
+            "expected log in Picker for {cmd:?}"
+        );
+    }
 }
 
 #[test]

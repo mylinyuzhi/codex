@@ -52,6 +52,10 @@ const OVERRIDABLE_PROVIDERS: &[&str] = &[
 ///   `ProviderConfig::resolve_api_key`)
 /// - `BASE_URL` → `base_url` (alternate gateway / mirror)
 /// - `WIRE_API` → `wire_api` (`responses` / `chat`; rare)
+/// - `FULL_URL` → `client_options.full_url` (parsed as bool; needed
+///   when the gateway embeds auth in the path/query, e.g. `?ak=…`,
+///   so the SDK must use `base_url` verbatim instead of appending
+///   `/responses` etc.)
 ///
 /// Note: per-test `MODEL` is *not* an overlay field — it's a per-call
 /// argument to `build_api_client`, not part of provider config. The
@@ -143,6 +147,18 @@ fn materialize_provider_overlay(path: &Path) -> Result<()> {
                     serde_json::Value::String(value.trim().to_string()),
                 );
             }
+        }
+        // `FULL_URL` lives under nested `client_options.full_url` and is
+        // a bool, so it can't share the flat string-only loop above.
+        if let Ok(value) = std::env::var(format!("{prefix}FULL_URL"))
+            && let Ok(parsed) = value.trim().parse::<bool>()
+        {
+            let mut client_opts = serde_json::Map::new();
+            client_opts.insert("full_url".into(), serde_json::Value::Bool(parsed));
+            fields.insert(
+                "client_options".into(),
+                serde_json::Value::Object(client_opts),
+            );
         }
         if !fields.is_empty() {
             overlay.insert(provider.to_string(), serde_json::Value::Object(fields));
