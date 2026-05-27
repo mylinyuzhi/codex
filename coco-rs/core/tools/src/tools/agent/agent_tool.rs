@@ -848,6 +848,7 @@ impl Tool for AgentTool {
             // parent context's resolved values so the child can't see
             // tools gated off at the top level.
             features: Some(ctx.features.clone()),
+            skill_overrides: Some(ctx.skill_overrides.clone()),
             tool_overrides: Some(ctx.tool_overrides.clone()),
             parent_tool_filter: Some(ctx.tool_filter.clone()),
             // `spawn_mode` carries the parent_snapshot embedded in the

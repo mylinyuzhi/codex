@@ -344,6 +344,17 @@ pub(super) fn handle(
             ));
             true
         }
+        // `/skills` dialog Enter result — CLI bridge has finished
+        // (or failed) the SettingsWriter round-trip + RuntimeConfig
+        // republish + CommandRegistry rebuild. Toast generation
+        // lives here (not in the CLI handler) so the `t!` macro can
+        // pull the localized strings — the i18n catalog is anchored
+        // at this crate root and can't be reached from `coco-cli`.
+        TuiOnlyEvent::SkillOverridesSaved { result } => {
+            let text = format_skill_overrides_save_toast(result);
+            state.ui.add_toast(Toast::info(text));
+            true
+        }
         // /copy [N] — branch into either direct clipboard write or the
         // CopyPicker modal based on `copy_full_response` + presence of
         // code blocks. TS parity: `commands/copy/copy.tsx::call`.
@@ -832,4 +843,31 @@ fn parse_question_items(input: &serde_json::Value) -> Vec<crate::state::Question
 
 fn str_field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
     v.get(key).and_then(serde_json::Value::as_str).unwrap_or("")
+}
+
+/// Render a localized toast for the `/skills` dialog Enter result.
+/// TS mirror: `cli_inner_pretty.js:476991-477016` post-save toast.
+fn format_skill_overrides_save_toast(result: coco_types::SkillOverridesSaveResult) -> String {
+    use coco_types::SkillOverridesSaveResult;
+    match result {
+        SkillOverridesSaveResult::Ok { total_edits: 0 } => {
+            t!("dialog.skills_save_no_changes").to_string()
+        }
+        SkillOverridesSaveResult::Ok { total_edits } => {
+            let noun = if total_edits == 1 {
+                t!("dialog.skills_override_noun_singular")
+            } else {
+                t!("dialog.skills_override_noun_plural")
+            };
+            t!(
+                "dialog.skills_save_updated",
+                n = total_edits.to_string().as_str(),
+                noun = noun.as_ref()
+            )
+            .to_string()
+        }
+        SkillOverridesSaveResult::Err { message } => {
+            t!("dialog.skills_save_failed", error = message.as_str()).to_string()
+        }
+    }
 }

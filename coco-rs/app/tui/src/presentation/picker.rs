@@ -19,8 +19,12 @@ use crate::state::MemoryDialogScope;
 use crate::state::MemoryDialogState;
 use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
+use crate::state::SkillLockSource;
+use crate::state::SkillOverrideState;
+use crate::state::SkillRow;
 use crate::state::SkillsDialogSource;
 use crate::state::SkillsDialogState;
+use crate::state::surface_payloads::skill_override_glyph_and_label;
 
 #[derive(Debug)]
 #[cfg(test)]
@@ -372,18 +376,17 @@ pub(crate) fn memory_dialog_content(
     )
 }
 
-/// Render the read-only `/skills` overlay. TS parity:
-/// `components/skills/SkillsMenu.tsx` — five source groups
-/// (project / user / policy / plugin / mcp), each row shows skill
-/// name + optional plugin name + token estimate. Esc closes; the
-/// dialog has no selection state.
+/// Render the editable 2.1.142 `/skills` overlay. TS parity: `uJ4`
+/// (`cli_inner_pretty.js:476909`). Flat list, per-row 4-state
+/// override cycle, inline source label, lock annotation, filter
+/// input + sort toggle.
 pub(crate) fn skills_dialog_content(
     s: &SkillsDialogState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let title = t!("dialog.title_skills").to_string();
 
-    if s.groups.is_empty() {
+    if s.rows.is_empty() {
         return (
             title,
             t!("dialog.skills_empty").to_string(),
@@ -391,57 +394,138 @@ pub(crate) fn skills_dialog_content(
         );
     }
 
-    let total = s.total();
-    let noun = if total == 1 {
+    let view = s.filtered_view();
+    let mut body = String::new();
+
+    // Subtitle: `<filtered>/<total> skills` when filter active, else
+    // `<total> skills`. Drives the visible "20 skills" header.
+    let total = s.rows.len();
+    let total_noun = if total == 1 {
         t!("dialog.skills_noun_singular")
     } else {
         t!("dialog.skills_noun_plural")
     };
-    let subtitle = t!(
-        "dialog.skills_subtitle",
-        count = total.to_string().as_str(),
-        noun = noun.as_ref()
-    )
-    .to_string();
-
-    let mut body = String::new();
-    body.push_str(&subtitle);
+    if s.filter_query.is_empty() {
+        body.push_str(&t!(
+            "dialog.skills_subtitle",
+            count = total.to_string().as_str(),
+            noun = total_noun.as_ref()
+        ));
+    } else {
+        body.push_str(&format!("{}/{} {}", view.len(), total, total_noun.as_ref()));
+    }
+    body.push_str(" · ");
+    body.push_str(&hint_line(s));
     body.push('\n');
-    for (idx, group) in s.groups.iter().enumerate() {
-        if idx > 0 {
-            body.push('\n');
-        }
+
+    // Filter input row — mirrors TS `DN` with placeholder "Search
+    // skills…". Render the query in-line; downstream styling is
+    // applied by the higher-level surface renderer.
+    body.push('\n');
+    body.push_str("⌕ ");
+    if s.filter_query.is_empty() {
+        body.push_str(&t!("dialog.skills_filter_placeholder"));
+    } else {
+        body.push_str(&s.filter_query);
+    }
+    body.push('\n');
+
+    if view.is_empty() {
         body.push('\n');
-        body.push_str(&skills_group_title(group.source));
-        if !group.subtitle.is_empty() {
-            body.push_str(&format!(" ({})", group.subtitle));
-        }
-        for entry in &group.entries {
+        body.push_str(&t!(
+            "dialog.skills_empty_filter",
+            query = s.filter_query.as_str()
+        ));
+    } else {
+        for (i, row_idx) in view.iter().enumerate() {
             body.push('\n');
-            body.push_str(&format!("  /{}", entry.name));
-            if let Some(plugin) = &entry.plugin_name {
-                body.push_str(&format!(" · {plugin}"));
-            }
-            body.push_str(" · ");
-            body.push_str(&t!(
-                "dialog.skills_token_suffix",
-                tokens = entry.token_estimate.to_string().as_str()
+            body.push_str(&render_skill_row(
+                &s.rows[*row_idx],
+                i == s.selected_filtered_idx,
+                s.bytes_per_token,
             ));
         }
     }
-    body.push_str("\n\n");
-    body.push_str(&t!("dialog.hints_close"));
+
+    // Plugin footer (TS `cli_inner_pretty.js:477128-477133`): only
+    // rendered when at least one plugin row is present.
+    if s.has_plugin_rows() {
+        body.push_str("\n\n");
+        body.push_str(&t!("dialog.skills_plugin_footer"));
+    }
 
     (title, body, styles.primary())
 }
 
-fn skills_group_title(source: SkillsDialogSource) -> String {
+/// Format the "Space to cycle, Enter to save, …" hint line. Two
+/// variants per TS `cli_inner_pretty.js:477080-477090`: select mode
+/// shows the full ladder; filter-focused mode swaps in the filter
+/// instructions.
+fn hint_line(s: &SkillsDialogState) -> String {
+    if s.filter_focused {
+        return t!("dialog.skills_hint_filter_focused").to_string();
+    }
+    t!("dialog.skills_hint_select").to_string()
+}
+
+/// One skill row in the dialog. Format mirrors TS `sT5`
+/// (`cli_inner_pretty.js:477137`):
+///
+/// ```text
+///   ✓ on        | my-skill · user · 42 tok
+///   🔒 on       | claude-api · built-in · 30 tok · locked by author
+/// ```
+fn render_skill_row(row: &SkillRow, focused: bool, bytes_per_token: i64) -> String {
+    let (glyph, label) = row
+        .lock
+        .as_ref()
+        .map(|l| ('\u{1F512}', state_label_for_lock(l.forced_value)))
+        .unwrap_or_else(|| skill_override_glyph_and_label(row.pending));
+    let cursor = if focused { '\u{276F}' } else { ' ' }; // ❯
+    let tokens = if bytes_per_token > 0 {
+        row.frontmatter_bytes / bytes_per_token
+    } else {
+        row.frontmatter_bytes / 4
+    };
+    let mut line = format!("{cursor} {glyph} {label:<9} {}", row.name);
+    line.push_str(" · ");
+    line.push_str(skills_source_label(row.source));
+    if let Some(plugin) = &row.plugin_name {
+        line.push_str(" · ");
+        line.push_str(plugin);
+    }
+    line.push_str(" · ");
+    line.push_str(&t!(
+        "dialog.skills_token_suffix",
+        tokens = tokens.to_string().as_str()
+    ));
+    if let Some(lock) = &row.lock {
+        line.push_str(" · ");
+        line.push_str(&t!(
+            "dialog.skills_locked_by",
+            source = lock_source_label(lock.source)
+        ));
+    }
+    line
+}
+
+fn state_label_for_lock(state: SkillOverrideState) -> &'static str {
+    let (_, label) = skill_override_glyph_and_label(state);
+    label
+}
+
+fn skills_source_label(source: SkillsDialogSource) -> &'static str {
+    // TS `xJ4` (`cli_inner_pretty.js:476897-476907`) — normalised
+    // labels shown inline next to each row.
+    source.label_lower()
+}
+
+fn lock_source_label(source: SkillLockSource) -> &'static str {
     match source {
-        SkillsDialogSource::Project => t!("dialog.skills_group_project").to_string(),
-        SkillsDialogSource::User => t!("dialog.skills_group_user").to_string(),
-        SkillsDialogSource::Policy => t!("dialog.skills_group_policy").to_string(),
-        SkillsDialogSource::Plugin => t!("dialog.skills_group_plugin").to_string(),
-        SkillsDialogSource::Mcp => t!("dialog.skills_group_mcp").to_string(),
+        SkillLockSource::Policy => "policy",
+        SkillLockSource::Flag => "flag",
+        SkillLockSource::Author => "author",
+        SkillLockSource::Plugin => "plugin",
     }
 }
 

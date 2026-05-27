@@ -214,6 +214,14 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 .tool_overrides
                 .clone()
                 .unwrap_or_else(|| Arc::new(ToolOverrides::none())),
+            // Subagents inherit the parent's resolved skill_overrides
+            // tiers so they apply the same listing + Skill tool gates
+            // for the duration of their fork. Subagents only narrow
+            // — they never widen the parent's permission shape.
+            skill_overrides: config
+                .skill_overrides
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_config::SkillOverrideTiers::default())),
             // Layer 4 — derive the subagent's allow/deny from its
             // AgentDefinition, then narrow against the parent's filter
             // so a child's `allowed_tools` cannot widen what the parent

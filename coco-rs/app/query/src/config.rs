@@ -263,6 +263,12 @@ pub struct QueryEngineConfig {
     /// Centralized feature gates (Layer 1 of the tool filter pipeline).
     /// See `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub features: Arc<Features>,
+    /// Per-tier `skill_overrides` map preserved without merging.
+    /// Threaded through the per-turn reminder pipeline and the
+    /// SkillTool gate so the model only sees what the user permitted.
+    /// Default-empty tiers ⇒ every skill resolves to `on` ⇒ all gates
+    /// no-op. See `coco_config::SkillOverrideTiers`.
+    pub skill_overrides: Arc<coco_config::SkillOverrideTiers>,
     /// Layer 2 — extra tools the active model adds + baseline tools it
     /// excludes.
     pub tool_overrides: Arc<ToolOverrides>,
@@ -388,6 +394,7 @@ impl Default for QueryEngineConfig {
             web_search_config: WebSearchConfig::default(),
             lsp_config: coco_config::LspConfig::default(),
             features: Arc::new(Features::with_defaults()),
+            skill_overrides: Arc::new(coco_config::SkillOverrideTiers::default()),
             tool_overrides: Arc::new(ToolOverrides::none()),
             tool_filter: ToolFilter::unrestricted(),
             allowed_write_roots: Vec::new(),

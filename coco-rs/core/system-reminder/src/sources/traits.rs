@@ -83,11 +83,22 @@ pub trait TaskStatusSource: Send + Sync + Debug {
 /// `invoked()` returns per-skill content (name/path/body).
 #[async_trait]
 pub trait SkillsSource: Send + Sync + Debug {
-    async fn listing(&self, agent_id: Option<&str>) -> Option<String>;
+    /// Per-turn skill listing reminder. `tiers` carries the
+    /// `skill_overrides` resolution layer; impls must apply the 3-gate
+    /// filter (`off` skip / `name-only` collapse / XG$) so the model
+    /// only sees what the user permitted.
+    async fn listing(
+        &self,
+        agent_id: Option<&str>,
+        tiers: &coco_config::SkillOverrideTiers,
+    ) -> Option<String>;
     async fn invoked(&self, agent_id: Option<&str>) -> Vec<InvokedSkillEntry>;
+    /// Local keyword-match skill recommender. `tiers` is honoured so
+    /// `off` skills never surface as recommendations.
     async fn skill_discovery(
         &self,
         _user_input: &str,
+        _tiers: &coco_config::SkillOverrideTiers,
     ) -> Option<coco_types::SkillDiscoveryPayload> {
         None
     }

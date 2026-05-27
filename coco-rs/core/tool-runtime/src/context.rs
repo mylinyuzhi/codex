@@ -115,6 +115,12 @@ pub struct ToolUseContext {
     /// Centralized feature gates. See
     /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub features: Arc<Features>,
+    /// Per-tier `skill_overrides` map preserved without merging. Read
+    /// by the SkillTool gate and by listing-budget filters so the
+    /// model only sees what the resolved override state permits.
+    /// Default-empty maps short-circuit every gate to `On` — that is
+    /// the no-config behavior PR2 ships.
+    pub skill_overrides: Arc<coco_config::SkillOverrideTiers>,
     /// schema validation of the tool-filter pipeline — extra tools the active
     /// model adds beyond the baseline + baseline tools it excludes.
     /// Resolved once at session start (or on `/model` switch).
@@ -617,6 +623,7 @@ impl ToolUseContext {
             plan_mode_settings: self.plan_mode_settings.clone(),
             lsp_config: self.lsp_config.clone(),
             features: self.features.clone(),
+            skill_overrides: self.skill_overrides.clone(),
             tool_overrides: self.tool_overrides.clone(),
             tool_filter: self.tool_filter.clone(),
             discovered_tool_names: self.discovered_tool_names.clone(),
@@ -725,6 +732,43 @@ impl ToolUseContext {
         self
     }
 
+    /// Whether the user typed `/<skill_name>` in any user message of
+    /// the current turn.
+    ///
+    /// TS mirror: `Am7` (`isUserTypedSlashCommandInTurn`) at
+    /// `cli_inner_pretty.js:??`. Used by the Skill tool gate to bypass
+    /// the `disable_model_invocation` and `skill_overrides ==
+    /// user-invocable-only` blocks when the user explicitly invoked
+    /// the skill via slash.
+    ///
+    /// Implementation walks the messages backwards looking for user
+    /// messages tagged with the triggering [`Self::user_message_id`].
+    /// Multi-line prompts count — a slash on any line of any
+    /// matching user message qualifies. Match is anchored at the
+    /// start of a line and requires the next char (if any) be
+    /// whitespace, so `/foo` matches but `/foobar` does not.
+    pub fn user_typed_slash_in_turn(&self, skill_name: &str) -> bool {
+        let Some(uid) = self.user_message_id.as_deref() else {
+            return false;
+        };
+        let Ok(uid_uuid) = uuid::Uuid::parse_str(uid) else {
+            return false;
+        };
+        let prefix = format!("/{skill_name}");
+        for arc in self.messages.iter().rev() {
+            let Message::User(user) = arc.as_ref() else {
+                continue;
+            };
+            if user.uuid != uid_uuid {
+                continue;
+            }
+            if user_message_contains_slash(&user.message, &prefix) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Builder: install the current model's `ToolSearch`-related
     /// capability flags on a stub context. Used by `engine_prompt`
     /// and `engine_turn_reminders` so the registry filter and the
@@ -794,6 +838,7 @@ impl ToolUseContext {
             plan_mode_settings: coco_config::PlanModeSettings::default(),
             lsp_config: coco_config::LspConfig::default(),
             features: Arc::new(Features::with_defaults()),
+            skill_overrides: Arc::new(coco_config::SkillOverrideTiers::default()),
             tool_overrides: Arc::new(ToolOverrides::none()),
             tool_filter: ToolFilter::unrestricted(),
             discovered_tool_names: Arc::new(HashSet::new()),
@@ -870,5 +915,131 @@ impl ToolUseContext {
             query_chain_id: None,
             query_depth: 0,
         }
+    }
+}
+
+/// True when any text content part of `msg` contains a line that
+/// starts with `prefix` followed by whitespace or end-of-line.
+/// Helper for [`ToolUseContext::user_typed_slash_in_turn`].
+fn user_message_contains_slash(msg: &coco_messages::LlmMessage, prefix: &str) -> bool {
+    let coco_messages::LlmMessage::User { content, .. } = msg else {
+        return false;
+    };
+    content.iter().any(|part| match part {
+        coco_messages::UserContent::Text(text) => text
+            .text
+            .lines()
+            .any(|line| line_starts_with_slash_token(line, prefix)),
+        coco_messages::UserContent::File(_) => false,
+    })
+}
+
+fn line_starts_with_slash_token(line: &str, prefix: &str) -> bool {
+    let trimmed = line.trim_start();
+    let Some(rest) = trimmed.strip_prefix(prefix) else {
+        return false;
+    };
+    // Boundary: nothing after, or the next char is whitespace. Avoids
+    // matching `/foobar` when `prefix` is `/foo`.
+    rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace())
+}
+
+#[cfg(test)]
+mod user_typed_slash_tests {
+    use super::*;
+    use coco_messages::LlmMessage;
+    use coco_messages::Message;
+    use coco_messages::UserMessage;
+    use uuid::Uuid;
+
+    fn make_user(text: &str, uuid: Uuid) -> Arc<Message> {
+        Arc::new(Message::User(UserMessage {
+            message: LlmMessage::user_text(text),
+            uuid,
+            timestamp: String::new(),
+            is_visible_in_transcript_only: false,
+            is_virtual: false,
+            is_compact_summary: false,
+            permission_mode: None,
+            origin: None,
+            parent_tool_use_id: None,
+        }))
+    }
+
+    fn ctx_with(messages: Vec<Arc<Message>>, user_msg_id: Option<String>) -> ToolUseContext {
+        let mut ctx = ToolUseContext::test_default_inner();
+        ctx.messages = Arc::new(messages);
+        ctx.user_message_id = user_msg_id;
+        ctx
+    }
+
+    #[test]
+    fn returns_false_when_user_message_id_unset() {
+        let uid = Uuid::new_v4();
+        let ctx = ctx_with(vec![make_user("/foo", uid)], None);
+        assert!(!ctx.user_typed_slash_in_turn("foo"));
+    }
+
+    #[test]
+    fn matches_exact_slash_on_a_line() {
+        let uid = Uuid::new_v4();
+        let ctx = ctx_with(vec![make_user("/foo", uid)], Some(uid.to_string()));
+        assert!(ctx.user_typed_slash_in_turn("foo"));
+    }
+
+    #[test]
+    fn matches_slash_then_args() {
+        let uid = Uuid::new_v4();
+        let ctx = ctx_with(
+            vec![make_user("/fix-issue 42 please", uid)],
+            Some(uid.to_string()),
+        );
+        assert!(ctx.user_typed_slash_in_turn("fix-issue"));
+    }
+
+    #[test]
+    fn matches_slash_on_first_line_of_multi_line_prompt() {
+        let uid = Uuid::new_v4();
+        let ctx = ctx_with(
+            vec![make_user("/deploy\nplease verify after", uid)],
+            Some(uid.to_string()),
+        );
+        assert!(ctx.user_typed_slash_in_turn("deploy"));
+    }
+
+    #[test]
+    fn rejects_prefix_collision() {
+        let uid = Uuid::new_v4();
+        // `/foobar` must NOT match prefix `/foo` — boundary check
+        let ctx = ctx_with(vec![make_user("/foobar", uid)], Some(uid.to_string()));
+        assert!(!ctx.user_typed_slash_in_turn("foo"));
+    }
+
+    #[test]
+    fn does_not_match_when_skill_name_only_appears_in_body() {
+        let uid = Uuid::new_v4();
+        let ctx = ctx_with(
+            vec![make_user("please run the /foo command for me", uid)],
+            Some(uid.to_string()),
+        );
+        // Mid-line slash is not a user-initiated invocation per TS Am7
+        // (anchored at line start).
+        assert!(!ctx.user_typed_slash_in_turn("foo"));
+    }
+
+    #[test]
+    fn skips_non_user_messages_and_mismatched_uuids() {
+        let triggering_uid = Uuid::new_v4();
+        let other_uid = Uuid::new_v4();
+        let ctx = ctx_with(
+            vec![
+                make_user("/foo", other_uid),
+                make_user("regular prompt", triggering_uid),
+            ],
+            Some(triggering_uid.to_string()),
+        );
+        // The `/foo` line came from a different turn (different uuid) —
+        // doesn't count.
+        assert!(!ctx.user_typed_slash_in_turn("foo"));
     }
 }

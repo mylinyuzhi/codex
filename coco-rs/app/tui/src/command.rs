@@ -210,6 +210,26 @@ pub enum UserCommand {
     },
     /// Execute a skill by name.
     ExecuteSkill { name: String, args: Option<String> },
+    /// Persist a `skill_overrides` patch to
+    /// `<cwd>/.claude/settings.local.json` and republish
+    /// `RuntimeConfig`. Emitted by the `/skills` dialog's Enter
+    /// handler. `total_edits` drives the toast ("Updated N
+    /// override(s)" vs "No changes"); ship `0` to render the
+    /// no-op toast.
+    ///
+    /// The CLI bridge in `tui_runner` owns the
+    /// [`coco_config::SettingsWriter`] handle — keeping the writer
+    /// out of the TUI lib avoids a coco-tui → coco-config write
+    /// dep that other dialogs don't need yet.
+    WriteSkillOverrides {
+        /// Settings JSON patch ready for
+        /// [`coco_config::SettingsWriter::write_local`] (the
+        /// `Value::Null` entries delete keys).
+        patch: serde_json::Value,
+        /// Number of rows whose effective override changed from
+        /// the at-open-time value. Used for the post-save toast.
+        total_edits: usize,
+    },
     /// Execute a registered slash command without echoing the raw slash
     /// invocation into chat history.
     ExecuteSlashCommand {

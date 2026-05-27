@@ -37,6 +37,7 @@ use crate::sections::ToolConfig;
 use crate::sections::WebFetchConfig;
 use crate::sections::WebSearchConfig;
 use crate::settings::SettingsWithSource;
+use crate::skill_overrides::SkillOverrideTiers;
 
 /// JSON-first runtime configuration snapshot.
 ///
@@ -88,6 +89,12 @@ pub struct RuntimeConfig {
     /// Coarse-grained capability gates. See
     /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub features: Features,
+    /// Per-tier `skill_overrides` map preserved without merging.
+    /// Drives the 4-state Skill tool gate, listing filters, and the
+    /// `/skills` dialog. **The TS resolution semantics are non-trivial
+    /// — see [`SkillOverrideTiers`] docs and `coco-skills::overrides`
+    /// for the three resolvers (`oT5` / `aT5` / `st` mirrors).**
+    pub skill_overrides: SkillOverrideTiers,
     /// Layer 2 of the tool-filter pipeline — extra tools the active
     /// main-loop model adds beyond the baseline + baseline tools it
     /// excludes. Resolved once from the Main role's `(provider,
@@ -249,6 +256,10 @@ pub fn build_runtime_config_with(
 
     let features = resolve_features(merged, &env, &overrides);
     let tool_overrides = resolve_main_tool_overrides(&model_roles, &model_registry);
+    // `skill_overrides` is read from per-tier raw JSON rather than
+    // `merged` — see `SkillOverrideTiers` docs for why this field
+    // sidesteps the standard deep-merge contract.
+    let skill_overrides = SkillOverrideTiers::from_per_source(&settings.per_source);
 
     Ok(RuntimeConfig {
         api: ApiConfig::resolve(merged),
@@ -267,6 +278,7 @@ pub fn build_runtime_config_with(
         prompt_cache: PromptCacheRuntimeConfig::resolve(merged, &env),
         account: AccountConfig::resolve(merged, &env),
         features,
+        skill_overrides,
         tool_overrides,
         settings,
         env_only,

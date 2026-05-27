@@ -163,6 +163,7 @@ impl TurnRunner for QueryEngineRunner {
                 web_search_config: runtime_config.web_search.clone(),
                 compact: runtime_config.compact.clone(),
                 features: std::sync::Arc::new(runtime_config.features.clone()),
+                skill_overrides: std::sync::Arc::new(runtime_config.skill_overrides.clone()),
                 tool_overrides: runtime_config.tool_overrides.clone(),
                 // Inherit `--include-hook-events` from the runtime's
                 // stored engine config so SDK turns honour the flag the

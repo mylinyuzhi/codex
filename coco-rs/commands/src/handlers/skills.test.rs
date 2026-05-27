@@ -227,7 +227,13 @@ async fn build_dialog_payload_groups_project_skills_under_project() {
     let payload = tokio::task::spawn_blocking({
         let config_home = config_home.clone();
         let cwd = cwd.clone();
-        move || build_dialog_payload(&config_home, &cwd)
+        move || {
+            build_dialog_payload(
+                &config_home,
+                &cwd,
+                &coco_config::SkillOverrideTiers::default(),
+            )
+        }
     })
     .await
     .unwrap();
@@ -244,25 +250,10 @@ async fn build_dialog_payload_groups_project_skills_under_project() {
         "expected project skill `foo` in payload, got: {project_names:?}"
     );
 
-    // Project subtitle present and lists both supported project roots
-    // (`.coco/skills` + `.claude/skills`).
-    let project_subtitle = payload
-        .group_subtitles
-        .iter()
-        .find(|g| matches!(g.source, SkillsDialogSource::Project))
-        .expect("project group should have a subtitle");
-    assert!(project_subtitle.subtitle.contains(".coco/skills"));
-    assert!(project_subtitle.subtitle.contains(".claude/skills"));
-
-    // No User subtitle since no user-scope skills exist.
-    let has_user_subtitle = payload
-        .group_subtitles
-        .iter()
-        .any(|g| matches!(g.source, SkillsDialogSource::User));
-    assert!(
-        !has_user_subtitle,
-        "empty groups must not emit subtitles (wire-tightness)"
-    );
+    // 2.1.142 dialog ships a flat list (no per-source subtitles).
+    // The renderer derives source labels inline from each entry's
+    // `source` field, so we only assert the entry surfaced.
+    assert!(payload.bytes_per_token > 0);
 }
 
 #[tokio::test]
@@ -285,7 +276,13 @@ async fn build_dialog_payload_loads_coco_skills_dir_too() {
     let payload = tokio::task::spawn_blocking({
         let config_home = config_home.clone();
         let cwd = cwd.clone();
-        move || build_dialog_payload(&config_home, &cwd)
+        move || {
+            build_dialog_payload(
+                &config_home,
+                &cwd,
+                &coco_config::SkillOverrideTiers::default(),
+            )
+        }
     })
     .await
     .unwrap();
@@ -321,13 +318,9 @@ async fn skills_handler_no_args_opens_dialog() {
 }
 
 #[tokio::test]
-async fn build_dialog_payload_excludes_bundled_skills() {
-    // TS parity: `SkillsMenu` filters
-    // `loadedFrom in [skills, commands_DEPRECATED, plugin, mcp]` — the
-    // bundled in-binary set is dropped. Verify by building a payload
-    // against a tmpdir with zero on-disk skills; the result must have
-    // an empty `entries` list, even though `register_bundled_default`
-    // populated the catalog.
+async fn build_dialog_payload_includes_bundled_skills_as_built_in_source() {
+    // 2.1.142 parity: bundled skills surface in the dialog so users
+    // can toggle a noisy in-binary skill. Source is `BuiltIn`.
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("empty-project");
     fs::create_dir_all(&cwd).unwrap();
@@ -337,23 +330,31 @@ async fn build_dialog_payload_excludes_bundled_skills() {
     let payload = tokio::task::spawn_blocking({
         let config_home = config_home.clone();
         let cwd = cwd.clone();
-        move || build_dialog_payload(&config_home, &cwd)
+        move || {
+            build_dialog_payload(
+                &config_home,
+                &cwd,
+                &coco_config::SkillOverrideTiers::default(),
+            )
+        }
     })
     .await
     .unwrap();
 
+    let built_in_count = payload
+        .entries
+        .iter()
+        .filter(|e| matches!(e.source, SkillsDialogSource::BuiltIn))
+        .count();
     assert!(
-        payload.entries.is_empty(),
-        "bundled skills must be excluded from the dialog (TS parity); got entries: {names:?}",
+        built_in_count > 0,
+        "bundled skills must surface as BuiltIn entries; got: {names:?}",
         names = payload
             .entries
             .iter()
-            .map(|e| e.name.as_str())
+            .map(|e| (e.name.as_str(), e.source))
             .collect::<Vec<_>>()
     );
-    // Empty payload also means no group subtitles — they only emit
-    // for present groups.
-    assert!(payload.group_subtitles.is_empty());
 }
 
 #[tokio::test]

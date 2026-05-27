@@ -1784,6 +1784,30 @@ pub enum TuiOnlyEvent {
     /// TS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog
     /// is read-only — Esc to close; selection has no side effects.
     OpenSkillsDialog { payload: SkillsDialogPayload },
+    /// Notify the TUI that a `/skills` dialog Enter has finished
+    /// persisting (or failed). TUI renders the localized
+    /// `Updated N / No changes / Failed: …` toast — keeping all
+    /// user-visible text generation on the UI side.
+    SkillOverridesSaved { result: SkillOverridesSaveResult },
+}
+
+/// Outcome of a `/skills` dialog save dispatch. CLI bridge populates
+/// this after `SettingsWriter::write_local`. TUI is the sole owner of
+/// the toast text rendered from it (`coco_tui`'s `t!` macro can't
+/// reach into `coco-cli`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SkillOverridesSaveResult {
+    /// Write succeeded. `total_edits` is the count of rows whose
+    /// effective state changed from open-time; `0` ⇒ the user toggled
+    /// rows and reverted them in the same session (no observable
+    /// change, render the "No changes" toast).
+    Ok { total_edits: i64 },
+    /// Write failed at some step (filesystem, runtime rebuild). The
+    /// TUI renders this as the "Failed to save skill overrides: <error>"
+    /// toast.
+    Err { message: String },
 }
 
 /// One row in the `/memory` file-picker overlay. Built by the slash
@@ -1866,69 +1890,174 @@ pub enum MemoryDialogScope {
     AgentMemFolder,
 }
 
+/// Per-skill override state stored under `skill_overrides` in any
+/// settings tier. Mirrors TS `skillOverrides` values
+/// (`cli_inner_pretty.js:477208-477214` `kB6 = ["on","name-only",
+/// "user-invocable-only","off"]`). Drives the `/skills` 4-state
+/// editor ladder.
+///
+/// Wire format is kebab-case (`"on"`, `"name-only"`,
+/// `"user-invocable-only"`, `"off"`) — exact match to TS so JSON
+/// settings files round-trip without translation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkillOverrideState {
+    /// Default — full description in model listing, both user `/` and
+    /// model Skill-tool invocation allowed.
+    On,
+    /// Name-only listing (model sees `- name` without description);
+    /// **model can still invoke**. Saves description tokens.
+    NameOnly,
+    /// Hidden from model listing; Skill tool rejects model invocation
+    /// **unless** the user typed `/<name>` in the current turn. Slash
+    /// dispatcher still works.
+    UserInvocableOnly,
+    /// Fully disabled — hidden from listing AND `/` autocomplete;
+    /// Skill tool rejects every invocation attempt.
+    Off,
+}
+
+impl SkillOverrideState {
+    /// Cycle to the next state in the TS 4-state ladder
+    /// (`on → name-only → user-invocable-only → off → on`). Used by
+    /// the `/skills` dialog Space key.
+    pub const fn next(self) -> Self {
+        match self {
+            Self::On => Self::NameOnly,
+            Self::NameOnly => Self::UserInvocableOnly,
+            Self::UserInvocableOnly => Self::Off,
+            Self::Off => Self::On,
+        }
+    }
+}
+
+/// Which precedence layer originated a non-overridable lock on a
+/// skill's `skill_overrides` state. Mirrors the four `lock.source`
+/// values returned by TS `oT5` (`cli_inner_pretty.js:476885-476893`).
+///
+/// In precedence order (highest first): [`Self::Policy`] →
+/// [`Self::Flag`] → [`Self::Author`] → [`Self::Plugin`]. A lock means
+/// the `/skills` dialog renders `🔒 <label>` for the row and refuses
+/// to cycle it (Space is a no-op).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillLockSource {
+    /// `policySettings.skill_overrides[name]` — enterprise-managed.
+    Policy,
+    /// `flagSettings.skill_overrides[name]` — `--settings <path>`
+    /// invocation override.
+    Flag,
+    /// Skill frontmatter `disable-model-invocation: true` — author
+    /// forced to `user-invocable-only`.
+    Author,
+    /// `skill.source == Plugin` — plugin-contributed skills are
+    /// forced to `on` (manage via `/plugin` instead).
+    Plugin,
+}
+
+/// A non-overridable lock on a skill row in the `/skills` dialog.
+/// Carries both the originating tier ([`Self::source`]) and the
+/// forced 4-state value ([`Self::forced_value`]) so downstream
+/// renderers don't need to re-derive the value from per-tier maps.
+///
+/// TS mirror: `oT5` returns `{ value, source }` —
+/// `cli_inner_pretty.js:476885-476893`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillLock {
+    pub source: SkillLockSource,
+    pub forced_value: SkillOverrideState,
+}
+
 /// Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the
 /// `/skills` slash handler so the TUI doesn't recompute paths, token
 /// estimates, or grouping.
 ///
-/// TS parity: `components/skills/SkillsMenu.tsx`. The TS dialog is
-/// read-only — five source groups (project / user / policy / plugin /
-/// mcp), each row shows skill name + optional plugin name + token
-/// estimate ("~N description tokens"), Esc to close. No toggle, no
-/// search, no sort.
+/// TS parity: 2.1.142 `uJ4` (`cli_inner_pretty.js:476909`) — a flat
+/// editable list with 4-state override cycling, source labels
+/// inline, and lock annotations for policy/flag/author/plugin-locked
+/// rows. The 2.1.88 grouped read-only `SkillsMenu` has been retired.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillsDialogPayload {
-    /// All skills, in arbitrary order. The renderer groups by
-    /// [`SkillsDialogEntry::source`] and sorts within each group by
-    /// name. Total count is `entries.len()` (matches TS dialog
-    /// subtitle "{N} skills").
+    /// All visible skills, in arbitrary order. The renderer
+    /// applies its own sort (source-string lex + name; or token-
+    /// descending when the user pressed `t`). Total count is
+    /// `entries.len()` (drives the subtitle `{N} skills`).
     pub entries: Vec<SkillsDialogEntry>,
-    /// Per-source secondary text shown next to the group title (TS
-    /// `getSourceSubtitle`). For file-based groups this is the
-    /// display path of the skills directory (e.g. `~/.coco/skills`);
-    /// for `Mcp` it's a comma-joined server-name list. `None` when
-    /// the subtitle is uninteresting (e.g. an empty group).
-    pub group_subtitles: Vec<SkillsDialogGroupSubtitle>,
+    /// Bytes per token for the current main-role model. The TUI
+    /// divides [`SkillsDialogEntry::frontmatter_bytes`] by this to
+    /// render the `~N tok` column. Set to 4 when the host cannot
+    /// resolve a more accurate value — `bytes/token ≈ 4` is the
+    /// English-text rule-of-thumb the TS dialog falls back to.
+    ///
+    /// TS: `bytesPerToken = sG(ctx.options.mainLoopModel)` passed
+    /// to the dialog and re-used by `ZP$(skill, bytesPerToken)`.
+    pub bytes_per_token: i64,
 }
 
-/// Subtitle text for one source group in the skills dialog. Keyed by
-/// the group so the renderer can look it up without index gymnastics.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SkillsDialogGroupSubtitle {
-    pub source: SkillsDialogSource,
-    pub subtitle: String,
-}
-
-/// One row in the `/skills` dialog. Mirrors `SkillCommand` from TS
-/// `components/skills/SkillsMenu.tsx`.
+/// One row in the `/skills` dialog. Mirrors the per-row payload
+/// shape consumed by TS `uJ4` (the 2.1.142 `<SkillsDialog>` editor)
+/// — every field is required so the dialog never has to fabricate
+/// defaults for `baseline` / `lock` / etc.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillsDialogEntry {
     /// Canonical skill name — what `/<name>` invokes. TS
     /// `getCommandName(skill)`.
     pub name: String,
-    /// Source group this entry belongs to (drives ordering + group
-    /// header label).
+    /// Source group this entry belongs to. Drives the source label
+    /// rendered inline + the implicit alphabetical group when the
+    /// default sort is active.
     pub source: SkillsDialogSource,
+    /// One-line description from the skill frontmatter. The 2.1.142
+    /// filter (`/` search) matches name + description + source
+    /// label, so the dialog needs the description on the wire even
+    /// though it isn't shown on every row.
+    pub description: String,
     /// Plugin name shown inline when `source == Plugin`. None
     /// otherwise. TS: `skill.pluginInfo?.pluginManifest.name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_name: Option<String>,
-    /// Rough token-count estimate of the skill's frontmatter
-    /// (name + description + when-to-use). TS
-    /// `estimateSkillFrontmatterTokens`. Displayed as
-    /// `~{token_estimate} description tokens`.
-    pub token_estimate: i64,
+    /// Byte length of the frontmatter the token column derives from.
+    /// The dialog computes `frontmatter_bytes / bytes_per_token` per
+    /// row. Source: `coco_skills::estimate_skill_frontmatter_bytes`.
+    pub frontmatter_bytes: i64,
+    /// What is stored in `<cwd>/.claude/settings.local.json`'s
+    /// `skill_overrides[name]` _right now_. `None` ⇒ key absent.
+    /// Drives the dialog's diff-against-baseline save algorithm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_local: Option<SkillOverrideState>,
+    /// Project-or-user settings resolution, **without** local /
+    /// policy / flag layers. TS `aT5`. The dialog falls back here
+    /// when the user reverts a local override (the save path
+    /// writes `Value::Null` so the local key is deleted and the
+    /// baseline resurfaces).
+    pub baseline: SkillOverrideState,
+    /// Optional lock — present when this row's state is forced by
+    /// a higher-precedence layer. Set by
+    /// `resolve_skill_override_lock` (`oT5` mirror). When set, the
+    /// dialog renders `🔒 <label>` and no-ops on Space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<SkillLock>,
 }
 
 /// Source group for a skill dialog entry. Mirrors TS `SkillSource`
 /// union (`SettingSource | 'plugin' | 'mcp'`) collapsed to a closed
 /// enum so the wire shape is statically typed.
+///
+/// **2.1.142 parity**: TS `xJ4` (`cli_inner_pretty.js:476897-476907`)
+/// normalises `bundled`/`builtin` → display label `"built-in"`; the
+/// dialog filter matches against that lowercased label.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillsDialogSource {
+    /// Compiled-in bundled skill catalog. TS `bundled` / `builtin`
+    /// collapsed to a single label (display: `built-in`).
+    BuiltIn,
     /// `<cwd>/.claude/skills/` — TS `projectSettings`.
     Project,
     /// `~/.coco/skills/` — TS `userSettings`.

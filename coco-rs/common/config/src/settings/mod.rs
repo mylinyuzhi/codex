@@ -3,8 +3,10 @@ pub mod policy;
 pub mod source;
 pub mod validation;
 pub mod watcher;
+pub mod writer;
 
 use coco_types::PermissionMode;
+use coco_types::SkillOverrideState;
 use coco_types::ThinkingLevel;
 use serde::Deserialize;
 use serde::Serialize;
@@ -173,6 +175,23 @@ pub struct Settings {
     // === Plugins ===
     #[serde(default)]
     pub enabled_plugins: HashMap<String, PluginConfig>,
+
+    // === Skill overrides ===
+    /// Per-skill 4-state override map (`on` / `name-only` /
+    /// `user-invocable-only` / `off`). Each tier carries its own
+    /// independent map — **the merged view of this field is
+    /// intentionally unused**. Consumers must go through
+    /// `RuntimeConfig.skill_overrides` (a [`crate::SkillOverrideTiers`])
+    /// and the three resolvers in `coco-skills::overrides` to compute
+    /// effective state correctly. TS parity: the `skillOverrides`
+    /// setting introduced in v2.1.129 — see
+    /// `cli_inner_pretty.js:476885-476893` (`oT5` resolver).
+    ///
+    /// `BTreeMap` so on-disk JSON writes (the `/skills` dialog's save
+    /// path in PR3) have deterministic key order — avoids noisy
+    /// `git diff` churn on per-tier files committed by users.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skill_overrides: BTreeMap<String, SkillOverrideState>,
 
     // === Worktree ===
     #[serde(skip_serializing_if = "Option::is_none")]

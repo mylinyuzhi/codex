@@ -232,6 +232,7 @@ fn build_session_command_registry(
         cwd.to_path_buf(),
         dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
         /*managed_root*/ None,
+        &runtime_config.skill_overrides,
     );
     (registry, skill_manager)
 }

@@ -40,7 +40,11 @@ fn skill(name: &str, desc: &str) -> SkillDefinition {
 #[tokio::test]
 async fn listing_returns_none_when_no_skills() {
     let mgr = SkillManager::new();
-    assert!(mgr.listing(None).await.is_none());
+    assert!(
+        mgr.listing(None, &coco_config::SkillOverrideTiers::default())
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -49,7 +53,10 @@ async fn listing_renders_sorted_bullet_list() {
     mgr.register(skill("zeta", "last alphabetically"));
     mgr.register(skill("alpha", "first"));
     mgr.register(skill("bravo", ""));
-    let body = mgr.listing(None).await.unwrap();
+    let body = mgr
+        .listing(None, &coco_config::SkillOverrideTiers::default())
+        .await
+        .unwrap();
     let lines: Vec<&str> = body.split('\n').collect();
     assert_eq!(lines[0], "- alpha: first");
     assert_eq!(lines[1], "- bravo");
