@@ -126,7 +126,7 @@ impl OpenAICompatibleChatLanguageModel {
                 .clone()
                 .or_else(|| match options.reasoning {
                     Some(level)
-                        if is_custom_reasoning(Some(level)) && level != ReasoningLevel::None =>
+                        if is_custom_reasoning(Some(level)) && level != ReasoningLevel::Off =>
                     {
                         Some(level.as_str().to_string())
                     }
@@ -210,11 +210,13 @@ impl OpenAICompatibleChatLanguageModel {
             body["parallel_tool_calls"] = Value::Bool(parallel);
         }
 
-        // Passthrough: spread remaining provider-specific keys into body
-        if let Some(obj) = body.as_object_mut() {
-            for (k, v) in &passthrough {
-                obj.insert(k.clone(), v.clone());
-            }
+        // Deep-merge extra_body onto the wire body. Callers
+        // (`coco_inference::thinking_convert`, user extras) own
+        // wire-correct nesting; deep merge places nested overlays
+        // at the right slot without clobbering sibling typed writes.
+        if !passthrough.is_empty() {
+            let overlay = Value::Object(passthrough.into_iter().collect());
+            body = vercel_ai_provider_utils::merge_json_value(&body, &overlay);
         }
 
         // Apply request body transform

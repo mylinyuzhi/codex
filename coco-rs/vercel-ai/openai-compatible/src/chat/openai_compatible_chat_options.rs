@@ -1,13 +1,17 @@
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use vercel_ai_provider_utils::ExtractExtras;
 
 use crate::provider_options_key::get_effective_provider_options;
 
 /// Provider-specific options for OpenAI-compatible Chat models.
 ///
 /// Only includes the 4 fields defined in the openai-compatible schema.
-/// All other provider-specific keys are passed through as-is into the request body.
+/// All other provider-specific keys flow through `extra` (captured by
+/// `#[serde(flatten)]`) and are deep-merged into the request body by
+/// the language model.
 ///
 /// Extracted from `options.provider_options[provider_name]` (with fallbacks).
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -20,21 +24,32 @@ pub struct OpenAICompatibleChatProviderOptions {
     pub text_verbosity: Option<String>,
     /// Defaults to true when response_format is json_schema.
     pub strict_json_schema: Option<bool>,
+
+    // Catches every key not consumed by the typed fields above so the
+    // language model can deep-merge them onto the wire body. Replaces
+    // the hand-maintained `SCHEMA_KEYS` whitelist with the idiomatic
+    // serde escape hatch — adding a typed field automatically removes
+    // it from the pass-through map.
+    //
+    // The "extras override typed writes at deep-merge final write"
+    // doctrine is documented in `services/inference/CLAUDE.md`
+    // (Design Notes).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-/// Known schema keys that should NOT be passed through into the body.
-const SCHEMA_KEYS: &[&str] = &[
-    "user",
-    "reasoningEffort",
-    "textVerbosity",
-    "strictJsonSchema",
-];
+impl ExtractExtras for OpenAICompatibleChatProviderOptions {
+    fn take_extras(&mut self) -> BTreeMap<String, Value> {
+        std::mem::take(&mut self.extra)
+    }
+}
 
 /// Extract provider-specific options from the generic provider options map,
 /// with fallback key resolution: `providerOptionsName` → `openaiCompatible`.
 ///
-/// Returns `(typed_options, passthrough_map)` where `passthrough_map` contains
-/// any keys not in the schema that should be spread into the request body.
+/// Returns `(typed_options, passthrough_map)` where `passthrough_map`
+/// contains only the keys not consumed by typed fields (captured by
+/// `#[serde(flatten)] extra`).
 pub fn extract_compatible_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
     provider_name: &str,
@@ -65,18 +80,9 @@ pub fn extract_compatible_options(
         }
     };
 
-    let typed: OpenAICompatibleChatProviderOptions =
-        serde_json::from_value(value.clone()).unwrap_or_default();
-
-    // Build passthrough map: all keys NOT in the schema
-    let mut passthrough = HashMap::new();
-    if let Value::Object(map) = &value {
-        for (k, v) in map {
-            if !SCHEMA_KEYS.contains(&k.as_str()) {
-                passthrough.insert(k.clone(), v.clone());
-            }
-        }
-    }
+    let mut typed: OpenAICompatibleChatProviderOptions =
+        serde_json::from_value(value).unwrap_or_default();
+    let passthrough: HashMap<String, Value> = typed.take_extras().into_iter().collect();
 
     (typed, passthrough)
 }

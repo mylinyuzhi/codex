@@ -159,11 +159,12 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
             body["user"] = Value::String(user.clone());
         }
 
-        // Passthrough: spread remaining provider-specific keys into body
-        if let Some(obj) = body.as_object_mut() {
-            for (k, v) in &passthrough {
-                obj.insert(k.clone(), v.clone());
-            }
+        // Deep-merge extra_body onto the wire body. Callers own
+        // wire-correct nesting; deep merge places nested overlays
+        // at the right slot without clobbering sibling typed writes.
+        if !passthrough.is_empty() {
+            let overlay = Value::Object(passthrough.into_iter().collect());
+            body = vercel_ai_provider_utils::merge_json_value(&body, &overlay);
         }
 
         // Apply request body transform
@@ -321,11 +322,12 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
             body["user"] = Value::String(user.clone());
         }
 
-        // Passthrough: spread remaining provider-specific keys into body
-        if let Some(obj) = body.as_object_mut() {
-            for (k, v) in &passthrough {
-                obj.insert(k.clone(), v.clone());
-            }
+        // Deep-merge extra_body onto the wire body. Callers own
+        // wire-correct nesting; deep merge places nested overlays
+        // at the right slot without clobbering sibling typed writes.
+        if !passthrough.is_empty() {
+            let overlay = Value::Object(passthrough.into_iter().collect());
+            body = vercel_ai_provider_utils::merge_json_value(&body, &overlay);
         }
 
         // Apply request body transform

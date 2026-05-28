@@ -2,7 +2,6 @@
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::io::BufReader;
 
@@ -97,40 +96,43 @@ pub enum SecureJsonError {
     Parse(#[from] serde_json::Error),
 }
 
-/// Shallow-merge `overlay` into `body`'s root object — each key in
-/// `overlay` overwrites the same key in `body`. Nested values are
-/// NOT merged. No-op when `body` is not a JSON object.
-///
-/// Used by language-model `get_args` to apply opaque user-supplied
 /// Returns `true` if `input` is a valid JSON string.
 pub fn is_parsable_json(input: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(input).is_ok()
 }
 
-/// `provider_options[<namespace>]` ("extra_body") onto the wire body
-/// after typed body construction. Every key wins over any earlier
-/// typed write at the same name; the user owns correctness.
-pub fn shallow_merge_object(body: &mut Value, overlay: BTreeMap<String, Value>) {
-    if let Some(obj) = body.as_object_mut() {
-        for (k, v) in overlay {
-            obj.insert(k, v);
-        }
-    }
-}
-
 /// Deep-merge two JSON values.
 ///
-/// Object keys merge recursively; arrays and primitives in `overrides`
-/// replace `base`. Prototype-polluting keys (`__proto__`,
-/// `constructor`, `prototype`) are dropped from `overrides`.
+/// Semantics:
+/// - **Objects** merge recursively, per-key.
+/// - **Arrays and primitives** in `overrides` replace `base`.
+/// - **`Value::Null` in `overrides`** is treated as "no override" and
+///   the corresponding `base` value (or key absence) is preserved.
+///   To unset a key, omit it from `overrides` — do NOT pass `null`.
+/// - **Prototype-polluting keys** (`__proto__`, `constructor`,
+///   `prototype`) are dropped from `overrides`.
+///
+/// Null-skip rationale: callers (provider-options extras path, the
+/// `thinking_convert` / `cache_convert` emit pipelines, user-written
+/// `extra_body`) routinely produce JSON via `serde_json::to_value` on
+/// `Option<T>` fields. Without `skip_serializing_if`, `None` would
+/// serialize to `null` and a subsequent deep-merge would replace a
+/// typed default with `null` — which the wire APIs (Gemini, OpenAI)
+/// then reject. Null-skip makes the merge resilient to that pattern
+/// without requiring every producer to add `skip_serializing_if`.
 ///
 /// Mirrors `@ai-sdk/ai`'s `mergeObjects` and is the single deep-merge
 /// implementation used across the workspace — `vercel-ai` builds
-/// `merge_provider_options` on top of it for per-step overrides, and
+/// `merge_provider_options` on top of it for per-step overrides,
 /// `coco-inference::build_call_options` uses it directly for nested
-/// `extra_body` merges. One canonical helper, identical semantics
-/// everywhere.
+/// `extra_body` merges, and every provider adapter's `get_args`
+/// deep-merges extras onto the wire body with it. One canonical
+/// helper, identical semantics everywhere.
 pub fn merge_json_value(base: &Value, overrides: &Value) -> Value {
+    // Null in overrides → "no override, preserve base".
+    if overrides.is_null() {
+        return base.clone();
+    }
     match (base, overrides) {
         (Value::Object(base_map), Value::Object(override_map)) => {
             let mut result = base_map.clone();
@@ -138,14 +140,15 @@ pub fn merge_json_value(base: &Value, overrides: &Value) -> Value {
                 if is_prototype_polluting_key(key) {
                     continue;
                 }
-                match result.get(key) {
-                    Some(base_value) => {
-                        result.insert(key.clone(), merge_json_value(base_value, override_value));
-                    }
-                    None => {
-                        result.insert(key.clone(), override_value.clone());
-                    }
+                // Null at any leaf key also means "no override" — skip.
+                if override_value.is_null() {
+                    continue;
                 }
+                let merged = match result.get(key) {
+                    Some(base_value) => merge_json_value(base_value, override_value),
+                    None => override_value.clone(),
+                };
+                result.insert(key.clone(), merged);
             }
             Value::Object(result)
         }

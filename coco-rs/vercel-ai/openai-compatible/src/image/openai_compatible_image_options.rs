@@ -1,11 +1,14 @@
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use vercel_ai_provider_utils::ExtractExtras;
 
 /// Provider-specific options for OpenAI-compatible image models.
 ///
 /// Only includes the 4 fields defined in the openai-compatible schema.
-/// All other provider-specific keys are passed through as-is into the request body.
+/// All other provider-specific keys flow through `extra` (captured by
+/// `#[serde(flatten)]`) and are deep-merged into the request body.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenAICompatibleImageProviderOptions {
@@ -13,16 +16,29 @@ pub struct OpenAICompatibleImageProviderOptions {
     pub style: Option<String>,
     pub size: Option<String>,
     pub user: Option<String>,
+
+    // Captures every key not consumed by the typed fields above so
+    // the image model can deep-merge them onto the wire body.
+    // Replaces the hand-maintained `SCHEMA_KEYS` whitelist.
+    //
+    // The "extras override typed writes at deep-merge final write"
+    // doctrine is documented in `services/inference/CLAUDE.md`
+    // (Design Notes).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-/// Known schema keys that should NOT be passed through into the body.
-const SCHEMA_KEYS: &[&str] = &["quality", "style", "size", "user"];
+impl ExtractExtras for OpenAICompatibleImageProviderOptions {
+    fn take_extras(&mut self) -> BTreeMap<String, Value> {
+        std::mem::take(&mut self.extra)
+    }
+}
 
 /// Extract image-specific options from provider options,
 /// with fallback key resolution: `providerOptionsName` → `openaiCompatible`.
 ///
-/// Returns `(typed_options, passthrough_map)` where `passthrough_map` contains
-/// any keys not in the schema that should be spread into the request body.
+/// Returns `(typed_options, passthrough_map)` where `passthrough_map`
+/// contains only the keys not consumed by typed fields.
 pub fn extract_image_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
     provider_name: &str,
@@ -57,18 +73,9 @@ pub fn extract_image_options(
         }
     };
 
-    let typed: OpenAICompatibleImageProviderOptions =
-        serde_json::from_value(value.clone()).unwrap_or_default();
-
-    // Build passthrough map: all keys NOT in the schema
-    let mut passthrough = HashMap::new();
-    if let Value::Object(map) = &value {
-        for (k, v) in map {
-            if !SCHEMA_KEYS.contains(&k.as_str()) {
-                passthrough.insert(k.clone(), v.clone());
-            }
-        }
-    }
+    let mut typed: OpenAICompatibleImageProviderOptions =
+        serde_json::from_value(value).unwrap_or_default();
+    let passthrough: HashMap<String, Value> = typed.take_extras().into_iter().collect();
 
     (typed, passthrough)
 }

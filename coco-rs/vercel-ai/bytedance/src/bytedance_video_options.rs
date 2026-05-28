@@ -1,6 +1,8 @@
 //! ByteDance video provider options.
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
+use vercel_ai_provider_utils::ExtractExtras;
 
 /// Provider-specific options for ByteDance video generation.
 ///
@@ -28,18 +30,22 @@ pub struct ByteDanceVideoProviderOptions {
     pub poll_interval_ms: Option<u64>,
     /// Override poll timeout in milliseconds.
     pub poll_timeout_ms: Option<u64>,
+
+    // Captures every key not consumed by the typed fields above so
+    // the video model can deep-merge them onto the wire body.
+    // Replaces the hand-maintained `HANDLED_PROVIDER_OPTIONS`
+    // blacklist with the idiomatic serde escape hatch — typed-consumed
+    // names auto-strip without an explicit list.
+    //
+    // The "extras override typed writes at deep-merge final write"
+    // doctrine is documented in `services/inference/CLAUDE.md`
+    // (Design Notes).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Keys handled by the provider options struct (not passed through to the API).
-pub const HANDLED_PROVIDER_OPTIONS: &[&str] = &[
-    "watermark",
-    "generate_audio",
-    "camera_fixed",
-    "return_last_frame",
-    "service_tier",
-    "draft",
-    "last_frame_image",
-    "reference_images",
-    "poll_interval_ms",
-    "poll_timeout_ms",
-];
+impl ExtractExtras for ByteDanceVideoProviderOptions {
+    fn take_extras(&mut self) -> BTreeMap<String, serde_json::Value> {
+        std::mem::take(&mut self.extra)
+    }
+}

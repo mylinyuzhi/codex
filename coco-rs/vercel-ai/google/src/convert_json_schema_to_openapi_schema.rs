@@ -20,6 +20,34 @@ pub fn convert_json_schema_to_openapi_schema(schema: &Value) -> Option<Value> {
     convert_inner(schema, true)
 }
 
+/// When every `oneOf` alternative is a singleton enum (`{"enum": [v]}`)
+/// sharing the same `type`, return `(shared_type, [v1, v2, ...])`.
+/// Otherwise return `None` so the caller falls back to verbatim
+/// pass-through. The shared type must be one of the OpenAPI primitive
+/// types (`string`/`integer`/`number`/`boolean`) — Gemini-3 requires it.
+fn try_coalesce_singleton_enum(schemas: &[Value]) -> Option<(String, Vec<Value>)> {
+    if schemas.is_empty() {
+        return None;
+    }
+    let mut shared_type: Option<String> = None;
+    let mut enum_values = Vec::with_capacity(schemas.len());
+    for s in schemas {
+        let obj = s.as_object()?;
+        let arr = obj.get("enum")?.as_array()?;
+        if arr.len() != 1 {
+            return None;
+        }
+        let ty = obj.get("type").and_then(|v| v.as_str())?;
+        match &shared_type {
+            None => shared_type = Some(ty.to_string()),
+            Some(prev) if prev != ty => return None,
+            _ => {}
+        }
+        enum_values.push(arr[0].clone());
+    }
+    shared_type.map(|t| (t, enum_values))
+}
+
 /// Check if a schema is an empty object schema.
 fn is_empty_object_schema(schema: &Value) -> bool {
     let Some(obj) = schema.as_object() else {
@@ -76,29 +104,40 @@ fn convert_inner(schema: &Value, is_root: bool) -> Option<Value> {
     if let Some(type_val) = obj.get("type") {
         match type_val {
             Value::Array(types) => {
-                // Type array: filter out "null" and create anyOf
+                // Type array: filter out "null" and emit anyOf only when
+                // more than one non-null type remains. Gemini-3 strict
+                // mode rejects `anyOf` with siblings (description/format/
+                // default/nullable from the pass-through block below), so
+                // single-element unions collapse to a plain `type` instead.
                 let has_null = types.iter().any(|t| t.as_str() == Some("null"));
                 let non_null_types: Vec<&Value> = types
                     .iter()
                     .filter(|t| t.as_str() != Some("null"))
                     .collect();
 
-                if non_null_types.is_empty() {
-                    // Only null type
-                    result.insert("type".to_string(), Value::String("null".to_string()));
-                } else {
-                    // One or more non-null types: always use anyOf
-                    let any_of: Vec<Value> = non_null_types
-                        .iter()
-                        .map(|t| {
-                            let mut m = Map::new();
-                            m.insert("type".to_string(), (*t).clone());
-                            Value::Object(m)
-                        })
-                        .collect();
-                    result.insert("anyOf".to_string(), Value::Array(any_of));
-                    if has_null {
-                        result.insert("nullable".to_string(), Value::Bool(true));
+                match non_null_types.as_slice() {
+                    [] => {
+                        result.insert("type".to_string(), Value::String("null".to_string()));
+                    }
+                    [only] => {
+                        result.insert("type".to_string(), (*only).clone());
+                        if has_null {
+                            result.insert("nullable".to_string(), Value::Bool(true));
+                        }
+                    }
+                    many => {
+                        let any_of: Vec<Value> = many
+                            .iter()
+                            .map(|t| {
+                                let mut m = Map::new();
+                                m.insert("type".to_string(), (*t).clone());
+                                Value::Object(m)
+                            })
+                            .collect();
+                        result.insert("anyOf".to_string(), Value::Array(any_of));
+                        if has_null {
+                            result.insert("nullable".to_string(), Value::Bool(true));
+                        }
                     }
                 }
             }
@@ -180,22 +219,56 @@ fn convert_inner(schema: &Value, is_root: bool) -> Option<Value> {
                 .iter()
                 .filter_map(|s| convert_inner(s, false))
                 .collect();
-            if !converted.is_empty() {
-                result.insert("anyOf".to_string(), Value::Array(converted));
+            match converted.as_slice() {
+                [] => {}
+                // Gemini-3 strict mode: `anyOf` may not coexist with
+                // sibling keys. A single-element union carries no
+                // information, so flatten it into the result (merge the
+                // sole alternative's fields). Mirrors the existing
+                // null-flatten branch above.
+                [only] => {
+                    if let Some(only_obj) = only.as_object() {
+                        for (k, v) in only_obj {
+                            result.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+                _ => {
+                    result.insert("anyOf".to_string(), Value::Array(converted));
+                }
             }
         }
     }
 
-    // Handle oneOf/allOf (not anyOf, handled above)
-    for keyword in &["oneOf", "allOf"] {
-        if let Some(Value::Array(schemas)) = obj.get(*keyword) {
-            let converted: Vec<Value> = schemas
-                .iter()
-                .filter_map(|s| convert_inner(s, false))
-                .collect();
-            if !converted.is_empty() {
-                result.insert(keyword.to_string(), Value::Array(converted));
-            }
+    // Handle oneOf: Rust `schemars` emits per-variant `oneOf` for
+    // string enums (one alternative per variant, each `{const: v,
+    // type: "string"}`), to keep per-variant docstrings. Gemini-3
+    // rejects this — the outer schema has no `type` field. Coalesce
+    // such oneOf into the canonical `{type: "string", enum: [..]}`
+    // form (Zod naturally produces this shape upstream; schemars
+    // doesn't, hence the divergence). Coalesce runs on the converted
+    // alternatives so the `const → enum` rewrite has already happened.
+    if let Some(Value::Array(schemas)) = obj.get("oneOf") {
+        let converted: Vec<Value> = schemas
+            .iter()
+            .filter_map(|s| convert_inner(s, false))
+            .collect();
+        if let Some((shared_type, enum_values)) = try_coalesce_singleton_enum(&converted) {
+            result.insert("type".to_string(), Value::String(shared_type));
+            result.insert("enum".to_string(), Value::Array(enum_values));
+        } else if !converted.is_empty() {
+            result.insert("oneOf".to_string(), Value::Array(converted));
+        }
+    }
+
+    // Handle allOf
+    if let Some(Value::Array(schemas)) = obj.get("allOf") {
+        let converted: Vec<Value> = schemas
+            .iter()
+            .filter_map(|s| convert_inner(s, false))
+            .collect();
+        if !converted.is_empty() {
+            result.insert("allOf".to_string(), Value::Array(converted));
         }
     }
 

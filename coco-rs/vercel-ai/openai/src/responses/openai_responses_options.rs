@@ -1,11 +1,12 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use vercel_ai_provider_utils::ExtractExtras;
+use vercel_ai_provider_utils::extract_namespaced;
 
 use crate::chat::openai_chat_options::PromptCacheRetention;
 use crate::chat::openai_chat_options::ReasoningEffort;
 use crate::chat::openai_chat_options::ServiceTier;
 use crate::chat::openai_chat_options::TextVerbosity;
-use crate::chat::openai_chat_options::extract_openai_namespace;
 use crate::openai_capabilities::SystemMessageMode;
 
 /// A context management entry for server-side compaction.
@@ -43,17 +44,29 @@ pub struct OpenAIResponsesProviderOptions {
     pub user: Option<String>,
     pub system_message_mode: Option<SystemMessageMode>,
     pub force_reasoning: Option<bool>,
+
+    // See `OpenAIChatProviderOptions::extra` for rationale. Typed-consumed
+    // keys never leak to the wire body root; only genuine extra_body
+    // fields flow through.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+impl ExtractExtras for OpenAIResponsesProviderOptions {
+    fn take_extras(&mut self) -> BTreeMap<String, serde_json::Value> {
+        std::mem::take(&mut self.extra)
+    }
 }
 
 /// Extract OpenAI Responses-specific options from the generic
-/// provider options map.
+/// provider options map. Single-namespace `"openai"`.
 pub fn extract_responses_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
 ) -> (
     OpenAIResponsesProviderOptions,
     BTreeMap<String, serde_json::Value>,
 ) {
-    extract_openai_namespace(provider_options)
+    extract_namespaced(provider_options.as_ref(), "openai", "openai")
 }
 
 #[cfg(test)]

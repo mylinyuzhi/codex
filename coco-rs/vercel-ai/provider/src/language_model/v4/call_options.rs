@@ -18,7 +18,7 @@ pub enum ReasoningLevel {
     /// Use the provider's default reasoning behavior.
     ProviderDefault,
     /// Disable reasoning.
-    None,
+    Off,
     /// Minimal reasoning effort.
     Minimal,
     /// Low reasoning effort.
@@ -36,7 +36,7 @@ impl ReasoningLevel {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ProviderDefault => "provider-default",
-            Self::None => "none",
+            Self::Off => "none",
             Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
