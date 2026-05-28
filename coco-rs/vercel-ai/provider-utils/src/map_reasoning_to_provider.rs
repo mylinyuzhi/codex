@@ -17,7 +17,7 @@ pub fn is_custom_reasoning(reasoning: Option<ReasoningLevel>) -> bool {
     matches!(
         reasoning,
         Some(
-            ReasoningLevel::None
+            ReasoningLevel::Off
                 | ReasoningLevel::Minimal
                 | ReasoningLevel::Low
                 | ReasoningLevel::Medium

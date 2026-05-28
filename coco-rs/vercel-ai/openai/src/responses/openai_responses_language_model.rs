@@ -171,7 +171,7 @@ impl OpenAIResponsesLanguageModel {
         let reasoning_effort = openai_options.reasoning_effort.or_else(|| {
             if is_custom_reasoning(options.reasoning) {
                 options.reasoning.and_then(|level| match level {
-                    ReasoningLevel::None => {
+                    ReasoningLevel::Off => {
                         Some(crate::chat::openai_chat_options::ReasoningEffort::None)
                     }
                     ReasoningLevel::Minimal => {
@@ -322,10 +322,10 @@ impl OpenAIResponsesLanguageModel {
         if let Some(ref metadata) = openai_options.metadata {
             body["metadata"] = metadata.clone();
         }
-        // Note: top-level `instructions` is written AFTER
-        // `shallow_merge_object` below so the layout slot wins over
-        // both the typed `openai_options.instructions` and any raw
-        // `openai.*` map override.
+        // Note: top-level `instructions` is written AFTER the
+        // `merge_json_value` extras deep-merge below so the layout
+        // slot wins over both the typed `openai_options.instructions`
+        // and any raw `openai.*` map override.
         if let Some(ref conversation) = openai_options.conversation {
             body["conversation"] = Value::String(conversation.clone());
         }
@@ -412,11 +412,18 @@ impl OpenAIResponsesLanguageModel {
             ensure_include_entry(&mut body, "reasoning.encrypted_content");
         }
 
-        vercel_ai_provider_utils::shallow_merge_object(&mut body, raw_provider_options);
+        // Deep-merge extra_body onto the wire body. Producers
+        // (`coco_inference::thinking_convert`, user extras) own the
+        // wire-correct nesting; deep merge places nested overlays at
+        // the right slot without clobbering sibling typed writes.
+        if !raw_provider_options.is_empty() {
+            let overlay = Value::Object(raw_provider_options.into_iter().collect());
+            body = vercel_ai_provider_utils::merge_json_value(&body, &overlay);
+        }
 
         // Top-level `instructions` resolution. Layout slot wins over
         // both `openai_options.instructions` and the raw `openai.*` map
-        // (which the shallow-merge above just spliced in). Emit a
+        // (which the deep-merge above just spliced in). Emit a
         // warning on conflict so callers notice the override.
         let instructions_to_write = match (
             layout_instructions.as_ref(),

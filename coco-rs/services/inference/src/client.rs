@@ -141,6 +141,14 @@ pub struct QueryResult {
     /// enum directly; no wire-string parsing anywhere above this
     /// boundary.
     pub stop_reason: Option<coco_llm_types::StopReason>,
+    /// Provider-original wire string preserved for diagnostics /
+    /// telemetry only (e.g. Gemini `RECITATION`/`MALFORMED_FUNCTION_CALL`
+    /// flowing through with `stop_reason: Other`, Anthropic
+    /// `"refusal"` with `stop_reason: ContentFilter`). Not consulted
+    /// for any behavioral decision — those go through `stop_reason`.
+    /// Mirrors `StreamEvent::Finish.raw_stop_reason` so the streaming
+    /// and non-streaming paths surface the same diagnostic signal.
+    pub raw_stop_reason: Option<String>,
     pub request_id: Option<String>,
     pub retries: i32,
     pub total_duration_ms: i64,
@@ -583,7 +591,10 @@ impl ApiClient {
 
         // Typed unified reason — single source of truth set by the
         // provider-adapter seam (see `vercel-ai-anthropic` etc).
+        // Raw is preserved alongside for diagnostics — same split the
+        // streaming `Finish` event uses.
         let stop_reason = Some(result.finish_reason.unified);
+        let raw_stop_reason = result.finish_reason.raw.clone();
 
         // Provider response.id (Anthropic message.id / OpenAI response.id
         // / OpenAI-compatible response.id) flows through to QueryResult so
@@ -596,6 +607,7 @@ impl ApiClient {
             usage,
             model: model_id,
             stop_reason,
+            raw_stop_reason,
             request_id,
             retries: 0,
             total_duration_ms: 0,

@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use vercel_ai_provider_utils::ExtractExtras;
 
 use crate::provider_options_key::get_effective_provider_options;
 
@@ -12,10 +14,23 @@ pub struct OpenAICompatibleCompletionProviderOptions {
     pub logit_bias: Option<HashMap<String, f64>>,
     pub suffix: Option<String>,
     pub user: Option<String>,
+
+    // Captures every key not consumed by the typed fields above so the
+    // language model can deep-merge them onto the wire body. Replaces
+    // the hand-maintained `SCHEMA_KEYS` whitelist.
+    //
+    // The "extras override typed writes at deep-merge final write"
+    // doctrine is documented in `services/inference/CLAUDE.md`
+    // (Design Notes).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-/// Known schema keys for completion options (used to filter passthrough).
-const SCHEMA_KEYS: &[&str] = &["echo", "logitBias", "suffix", "user"];
+impl ExtractExtras for OpenAICompatibleCompletionProviderOptions {
+    fn take_extras(&mut self) -> BTreeMap<String, Value> {
+        std::mem::take(&mut self.extra)
+    }
+}
 
 /// Extract completion-specific options and passthrough keys from provider options.
 pub fn extract_completion_options(
@@ -27,21 +42,11 @@ pub fn extract_completion_options(
 ) {
     let raw = get_effective_provider_options(provider_name, provider_options.as_ref());
 
-    let typed = raw
+    let mut typed = raw
         .and_then(|v| serde_json::to_value(v).ok())
         .and_then(|v| serde_json::from_value::<OpenAICompatibleCompletionProviderOptions>(v).ok())
         .unwrap_or_default();
-
-    // Collect passthrough keys (everything not in the schema)
-    let passthrough: HashMap<String, Value> = raw
-        .map(|inner| {
-            inner
-                .iter()
-                .filter(|(k, _)| !SCHEMA_KEYS.contains(&k.as_str()))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let passthrough: HashMap<String, Value> = typed.take_extras().into_iter().collect();
 
     (typed, passthrough)
 }

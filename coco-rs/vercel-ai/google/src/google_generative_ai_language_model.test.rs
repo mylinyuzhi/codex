@@ -28,6 +28,64 @@ fn model_id_and_provider() {
     assert_eq!(model.provider(), "google.generative-ai");
 }
 
+/// Architectural property: extras deep-merge onto the typed body, so
+/// a producer (e.g. `coco_inference::thinking_convert`) can emit
+/// `{"generationConfig": {"thinkingConfig": ...}}` and land at
+/// `body.generationConfig.thinkingConfig` without clobbering the
+/// adapter's typed write at `body.generationConfig.maxOutputTokens`.
+/// A shallow overwrite would replace the entire `generationConfig`
+/// object and lose `maxOutputTokens`. Locks down the deep-merge
+/// contract.
+#[test]
+fn get_args_extra_body_deep_merges_into_typed_nested_writes() {
+    use std::collections::HashMap as StdHashMap;
+    use vercel_ai_provider::ProviderOptions;
+    let model = make_model();
+
+    // Mirror exactly what `thinking_convert` emits for Gemini.
+    let nested_thinking = serde_json::json!({
+        "generationConfig": {
+            "thinkingConfig": {
+                "includeThoughts": true,
+                "thinkingBudget": 8000
+            }
+        }
+    });
+    let mut inner = StdHashMap::new();
+    if let serde_json::Value::Object(map) = nested_thinking {
+        for (k, v) in map {
+            inner.insert(k, v);
+        }
+    }
+    let mut outer = StdHashMap::new();
+    outer.insert("google".into(), inner);
+
+    let mut options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hi"),
+    ]);
+    options.max_output_tokens = Some(1024);
+    options.provider_options = Some(ProviderOptions(outer));
+
+    let (body, _h, _w, _name) = model.get_args(&options).unwrap();
+
+    // Typed write — adapter sets this from options.max_output_tokens.
+    assert_eq!(body["generationConfig"]["maxOutputTokens"], 1024);
+    // Extras deep-merge — thinking_convert's nested payload lands at
+    // the correct slot. Shallow overwrite would have nuked
+    // maxOutputTokens; deep-merge preserves both.
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+        true
+    );
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+        8000
+    );
+    // No root-level leak — `thinkingConfig` must NOT appear at the
+    // body root (Gemini's REST API rejects it there with 400).
+    assert!(body.get("thinkingConfig").is_none());
+}
+
 #[test]
 fn get_args_extra_body_patches_wire_body_verbatim() {
     // Multi-provider-plan §7.3 — `extra_body` is opaque to coco-rs.

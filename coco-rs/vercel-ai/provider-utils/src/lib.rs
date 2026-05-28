@@ -44,6 +44,7 @@ pub mod data_uri;
 pub mod delay;
 pub mod download;
 pub mod error_message;
+pub mod extract_namespaced;
 pub mod fetch;
 pub mod form_data;
 pub mod generate_id;
@@ -94,6 +95,9 @@ pub use delay::parse_retry_after;
 
 pub use error_message::get_error_message;
 
+pub use extract_namespaced::ExtractExtras;
+pub use extract_namespaced::extract_namespaced;
+
 pub use fetch::Fetch;
 pub use fetch::FetchOptions;
 
@@ -107,7 +111,6 @@ pub use json::is_prototype_polluting_key;
 pub use json::merge_json_value;
 pub use json::parse_json;
 pub use json::parse_json_event_stream;
-pub use json::shallow_merge_object;
 
 pub use load_api_key::load_api_key;
 pub use load_api_key::load_optional_api_key;

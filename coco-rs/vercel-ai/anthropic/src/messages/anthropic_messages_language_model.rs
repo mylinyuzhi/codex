@@ -493,7 +493,7 @@ impl AnthropicMessagesLanguageModel {
             && anthropic_options.effort.is_none()
             && let Some(reasoning) = options.reasoning
         {
-            if reasoning == ReasoningLevel::None {
+            if reasoning == ReasoningLevel::Off {
                 anthropic_options.thinking = Some(ThinkingConfig::Disabled);
             } else if let Some((thinking, effort)) =
                 resolve_anthropic_reasoning_config(reasoning, &capabilities, &mut warnings)
@@ -870,7 +870,14 @@ impl AnthropicMessagesLanguageModel {
             }
         }
 
-        vercel_ai_provider_utils::shallow_merge_object(&mut body, raw_provider_options);
+        // Deep-merge extra_body onto the wire body. Producers
+        // (`coco_inference::thinking_convert`, user extras) own the
+        // wire-correct nesting; deep merge places nested overlays at
+        // the right slot without clobbering sibling typed writes.
+        if !raw_provider_options.is_empty() {
+            let overlay = serde_json::Value::Object(raw_provider_options.into_iter().collect());
+            body = vercel_ai_provider_utils::merge_json_value(&body, &overlay);
+        }
 
         Ok((body, headers, warnings))
     }

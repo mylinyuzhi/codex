@@ -122,7 +122,7 @@ impl OpenAIChatLanguageModel {
         let reasoning_effort = openai_options.reasoning_effort.or_else(|| {
             if is_custom_reasoning(options.reasoning) {
                 options.reasoning.and_then(|level| match level {
-                    ReasoningLevel::None => Some(ReasoningEffort::None),
+                    ReasoningLevel::Off => Some(ReasoningEffort::None),
                     ReasoningLevel::Minimal => Some(ReasoningEffort::Minimal),
                     ReasoningLevel::Low => Some(ReasoningEffort::Low),
                     ReasoningLevel::Medium => Some(ReasoningEffort::Medium),
@@ -344,7 +344,14 @@ impl OpenAIChatLanguageModel {
             }
         }
 
-        vercel_ai_provider_utils::shallow_merge_object(&mut body, raw_provider_options);
+        // Deep-merge extra_body onto the wire body. Producers
+        // (`coco_inference::thinking_convert`, user extras) own the
+        // wire-correct nesting; deep merge places nested overlays at
+        // the right slot without clobbering sibling typed writes.
+        if !raw_provider_options.is_empty() {
+            let overlay = Value::Object(raw_provider_options.into_iter().collect());
+            body = vercel_ai_provider_utils::merge_json_value(&body, &overlay);
+        }
 
         Ok((body, warnings))
     }

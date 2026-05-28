@@ -1,7 +1,8 @@
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use vercel_ai_provider_utils::ExtractExtras;
+use vercel_ai_provider_utils::extract_namespaced;
 
 use crate::openai_capabilities::SystemMessageMode;
 
@@ -113,6 +114,27 @@ pub struct OpenAIChatProviderOptions {
     pub prompt_cache_key: Option<String>,
     pub prompt_cache_retention: Option<PromptCacheRetention>,
     pub safety_identifier: Option<String>,
+
+    // Catches every key not consumed by the typed fields above. The
+    // language model's `get_args` deep-merges this into the wire body
+    // via `merge_json_value` so users can push extra_body fields
+    // without code changes — and, more importantly, typed-consumed
+    // keys never leak to the body root. See `services/inference/src/
+    // thinking_convert.rs` for the upstream caller that injects
+    // camelCase signals (e.g. `reasoningSummary`) into this same
+    // namespace.
+    //
+    // The "extras override typed writes at deep-merge final write"
+    // doctrine is documented in `services/inference/CLAUDE.md`
+    // (Design Notes).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+impl ExtractExtras for OpenAIChatProviderOptions {
+    fn take_extras(&mut self) -> BTreeMap<String, serde_json::Value> {
+        std::mem::take(&mut self.extra)
+    }
 }
 
 impl<'de> Deserialize<'de> for SystemMessageMode {
@@ -134,41 +156,20 @@ impl<'de> Deserialize<'de> for SystemMessageMode {
 }
 
 /// Extract OpenAI Chat-specific options from the generic provider
-/// options map.
+/// options map. Single-namespace `"openai"` — no custom-namespace
+/// support (unlike Anthropic / Google).
+///
+/// The extras map is **deep-merged** into the wire body root by the
+/// language model via `merge_json_value` after typed writes. Because
+/// `#[serde(flatten)]` captures only unrecognized keys, typed-consumed
+/// names (`reasoningEffort`, `serviceTier`, …) cannot leak to the root.
 pub fn extract_openai_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
 ) -> (
     OpenAIChatProviderOptions,
     BTreeMap<String, serde_json::Value>,
 ) {
-    extract_openai_namespace(provider_options)
-}
-
-/// Extract the `provider_options["openai"]` namespace into a typed
-/// struct + verbatim raw map. Returns `(T::default(), empty)` when
-/// the namespace is missing or fails to deserialize.
-///
-/// The raw map is shallow-merged into the wire body root by the
-/// language model after typed writes — opaque to coco-rs; users own
-/// correctness.
-pub(crate) fn extract_openai_namespace<T>(
-    provider_options: &Option<vercel_ai_provider::ProviderOptions>,
-) -> (T, BTreeMap<String, serde_json::Value>)
-where
-    T: DeserializeOwned + Default,
-{
-    let Some(map) = provider_options
-        .as_ref()
-        .and_then(|opts| opts.0.get("openai"))
-    else {
-        return (T::default(), BTreeMap::new());
-    };
-    let typed: T = serde_json::to_value(map)
-        .and_then(serde_json::from_value)
-        .unwrap_or_default();
-    let raw: BTreeMap<String, serde_json::Value> =
-        map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    (typed, raw)
+    extract_namespaced(provider_options.as_ref(), "openai", "openai")
 }
 
 #[cfg(test)]

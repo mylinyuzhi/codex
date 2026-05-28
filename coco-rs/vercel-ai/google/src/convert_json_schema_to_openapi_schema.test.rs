@@ -19,12 +19,15 @@ fn converts_simple_object_schema() {
 
 #[test]
 fn converts_type_array_with_null() {
+    // Gemini-3 strict: `anyOf` may not coexist with siblings (including
+    // `nullable`). A single non-null type collapses to plain `type`.
     let schema = json!({
         "type": ["string", "null"]
     });
     let result = convert_json_schema_to_openapi_schema(&schema).unwrap();
-    assert_eq!(result["anyOf"], json!([{ "type": "string" }]));
+    assert_eq!(result["type"], "string");
     assert_eq!(result["nullable"], true);
+    assert!(result.get("anyOf").is_none());
 }
 
 #[test]
@@ -208,6 +211,94 @@ fn anyof_without_null_passes_through() {
         json!([{ "type": "string" }, { "type": "integer" }])
     );
     assert!(result.get("nullable").is_none());
+}
+
+/// Schemars emits this shape for `Option<i64>` with attributes:
+/// `{anyOf: [{type: "integer"}], default, description, format, nullable}`.
+/// Gemini-3 strict mode rejects `anyOf` alongside any sibling, with:
+///   "When using any_of, it must be the only field set."
+/// Flatten the single-element `anyOf` into the result.
+#[test]
+fn anyof_single_element_with_siblings_flattened() {
+    let schema = json!({
+        "anyOf": [{ "type": "integer" }],
+        "default": null,
+        "description": "line count",
+        "format": "int64",
+        "nullable": true,
+    });
+    let result = convert_json_schema_to_openapi_schema(&schema).unwrap();
+    assert_eq!(result["type"], "integer");
+    assert_eq!(result["description"], "line count");
+    assert_eq!(result["format"], "int64");
+    assert_eq!(result["nullable"], true);
+    assert!(result.get("anyOf").is_none());
+}
+
+/// `Option<i64>` round-trip: input is `{type: ["integer", "null"], ...}`,
+/// which goes through the type-array branch. Output must not contain
+/// `anyOf` (would conflict with the sibling `description`/`format` carried
+/// over by pass-through).
+#[test]
+fn option_int_type_array_with_siblings_flattened() {
+    let schema = json!({
+        "type": ["integer", "null"],
+        "description": "limit",
+        "format": "int64",
+    });
+    let result = convert_json_schema_to_openapi_schema(&schema).unwrap();
+    assert_eq!(result["type"], "integer");
+    assert_eq!(result["nullable"], true);
+    assert_eq!(result["description"], "limit");
+    assert_eq!(result["format"], "int64");
+    assert!(result.get("anyOf").is_none());
+}
+
+/// Rust `schemars` emits this shape for a string enum with per-variant
+/// docstrings (e.g. `GrepOutputMode`). Gemini-3 rejects the outer
+/// schema because it lacks `type`. Coalesce into the canonical
+/// `{type: "string", enum: [..]}` shape.
+#[test]
+fn oneof_singleton_enums_coalesced_to_string_enum() {
+    let schema = json!({
+        "oneOf": [
+            { "description": "first",  "enum": ["content"],            "type": "string" },
+            { "description": "second", "enum": ["files_with_matches"], "type": "string" },
+            { "description": "third",  "enum": ["count"],              "type": "string" },
+        ],
+        "default": null,
+        "description": "output mode",
+        "nullable": true,
+    });
+    let result = convert_json_schema_to_openapi_schema(&schema).unwrap();
+    assert_eq!(result["type"], "string");
+    assert_eq!(
+        result["enum"],
+        json!(["content", "files_with_matches", "count"])
+    );
+    assert!(result.get("oneOf").is_none());
+    assert_eq!(result["description"], "output mode");
+    assert_eq!(result["nullable"], true);
+}
+
+/// Coalesce only fires when every alternative is `{enum: [v], type: T}`
+/// with a consistent T. Mixed types or multi-value enums must stay as
+/// verbatim `oneOf` so semantics are preserved.
+#[test]
+fn oneof_with_mixed_alternatives_preserved() {
+    let schema = json!({
+        "oneOf": [
+            { "type": "string" },
+            { "type": "integer" },
+        ],
+    });
+    let result = convert_json_schema_to_openapi_schema(&schema).unwrap();
+    assert_eq!(
+        result["oneOf"],
+        json!([{ "type": "string" }, { "type": "integer" }])
+    );
+    assert!(result.get("type").is_none());
+    assert!(result.get("enum").is_none());
 }
 
 #[test]

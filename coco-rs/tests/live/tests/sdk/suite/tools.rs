@@ -31,7 +31,14 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
                 "What's the weather in Tokyo? Call get_weather with city='Tokyo'.",
             ),
         ],
-        max_tokens: Some(4096),
+        // 16k removes max_tokens as a possible variable in the
+        // assertion failure — see the assertion below: stop_reason
+        // is surfaced so an intermittent gateway / model-side flake
+        // (`Some(Error)` with 0 tokens = AIDP dropped the request;
+        // `Some(Other)` with reasoning tokens but no text = Gemini
+        // finished mid-thought without emitting content) is
+        // distinguishable from a real wire-shape regression.
+        max_tokens: Some(16_384),
         thinking_level: None,
         fast_mode: false,
         tools: Some(vec![weather_tool_def()]),
@@ -48,12 +55,59 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
     let result = target.client.query(&params).await?;
     usage_report::record(target.provider, &target.model, "tools.run", &result.usage);
 
+    // Surface BOTH `stop_reason` (typed) and `raw_stop_reason`
+    // (provider wire string) on failure so a flake is interpretable:
+    //   `Some(Error)` + 0/0 tokens → gateway dropped the request
+    //   `Some(Other)` + raw="..."  → Gemini unmapped finish reason
+    //   `Some(MaxTokens)`          → budget exhausted (real, bump cap)
+    // Anything else with raw_stop_reason set → real wire bug.
+    let content_summary = describe_content(&result.content);
     assert!(
         has_tool_call_named(&result, "get_weather"),
-        "{}/{}: no get_weather tool call in response (content count={})",
+        "{}/{}: no get_weather tool call in response \
+         (content count={}, summary={content_summary}, \
+         stop_reason={:?}, raw_stop_reason={:?}, \
+         tokens_in={:?}, tokens_out={:?})",
         target.provider,
         target.model,
-        result.content.len()
+        result.content.len(),
+        result.stop_reason,
+        result.raw_stop_reason,
+        result.usage.input_tokens,
+        result.usage.output_tokens,
     );
     Ok(())
+}
+
+/// Render `content` as a short per-part diagnostic string. Surfaced
+/// in tool-call assertion failures so a no-tool-call result is
+/// interpretable: an empty list (`[]`) means the model emitted nothing
+/// before finish; `[text:..]` means the model answered in prose;
+/// `[reasoning:..]` means the model only reasoned.
+fn describe_content(parts: &[coco_llm_types::AssistantContentPart]) -> String {
+    use coco_llm_types::AssistantContentPart;
+    let mut out = String::from("[");
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        match p {
+            AssistantContentPart::Text(t) => {
+                let preview: String = t.text.chars().take(60).collect();
+                out.push_str(&format!("text:{preview:?}"));
+            }
+            AssistantContentPart::Reasoning(r) => {
+                let preview: String = r.text.chars().take(60).collect();
+                out.push_str(&format!("reasoning:{preview:?}"));
+            }
+            AssistantContentPart::ToolCall(tc) => {
+                out.push_str(&format!("tool_call:{}", tc.tool_name));
+            }
+            other => {
+                out.push_str(&format!("{:?}", std::mem::discriminant(other)));
+            }
+        }
+    }
+    out.push(']');
+    out
 }

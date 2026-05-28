@@ -3,6 +3,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use vercel_ai_provider::ProviderOptions;
+use vercel_ai_provider_utils::ExtractExtras;
+use vercel_ai_provider_utils::extract_namespaced;
 
 /// Anthropic-specific thinking configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,20 +191,6 @@ pub struct CacheStrategy {
     pub skip_cache_write: bool,
 }
 
-/// Internal-only keys that `services/inference::cache_convert` emits
-/// into `provider_options["anthropic"]`. They MUST be stripped from
-/// the raw map before the shallow-merge into the wire body, otherwise
-/// they'd be sent verbatim to `api.anthropic.com/v1/messages` (which
-/// would either reject the body or silently ignore the keys).
-///
-/// Design §10.1.5 / Finding 2.
-const INTERNAL_ANTHROPIC_OPTION_KEYS: &[&str] = &[
-    "cacheStrategy",
-    "requestedBetas",
-    "agenticQuery",
-    "querySource",
-];
-
 /// Anthropic-specific provider options.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -255,6 +243,27 @@ pub struct AnthropicProviderOptions {
     // because `cache_policy::resolve_ttl` latches eligibility on the
     // first call — a missing first-call value would default-corrupt
     // the latch for the whole session.
+
+    // Catches every key not consumed by the typed fields above. The
+    // language model deep-merges this onto the wire body via
+    // `merge_json_value`, so callers (`coco_inference::thinking_convert`,
+    // user extras) can push arbitrary extra_body fields — including
+    // nested paths — without code changes. Typed-consumed keys (e.g.
+    // `cacheStrategy`, `requestedBetas`, `agenticQuery`, `querySource`)
+    // are now bound to typed fields and so never leak into wire body
+    // root via extras.
+    //
+    // The "extras override typed writes at deep-merge final write"
+    // doctrine is documented in `services/inference/CLAUDE.md`
+    // (Design Notes).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ExtractExtras for AnthropicProviderOptions {
+    fn take_extras(&mut self) -> BTreeMap<String, Value> {
+        std::mem::take(&mut self.extra)
+    }
 }
 
 /// Extract Anthropic-specific options from generic provider options.
@@ -264,113 +273,30 @@ pub struct AnthropicProviderOptions {
 /// - `typed` — parsed `AnthropicProviderOptions`, used for header /
 ///   beta / validation side-effects (e.g. `interleaved-thinking-*`
 ///   beta, MCP tool validation, `code-execution-*` beta gates).
-/// - `raw` — verbatim user-supplied map, shallow-merged into the wire
-///   body root at the end of `get_args`. **Opaque to coco-rs** — every
-///   key (typed-known or not) is patched as-is. Users are responsible
-///   for the correctness of their keys and shapes.
+/// - `raw` — extras captured by `#[serde(flatten)]`, deep-merged into
+///   the wire body root at the end of `get_args` via `merge_json_value`.
+///   **Opaque to coco-rs** — users are responsible for the correctness
+///   of their keys and shapes.
 ///
-/// Parses from both the canonical `"anthropic"` key and any custom
-/// provider name key (for renamed instances like `"my-proxy"`),
-/// merging them per-key with custom winning. The provider name prefix
-/// is extracted from the full provider string
-/// (`"my-proxy.messages"` → `"my-proxy"`).
-///
-/// `BTreeMap` keeps wire-body field order stable in tests / insta
-/// snapshots.
+/// Namespace policy: parses canonical `"anthropic"` and a custom
+/// provider-name namespace (e.g. `"my-proxy"`, derived from
+/// `"my-proxy.messages"` by stripping the suffix), **deep-merging**
+/// them with custom winning on per-key overlap (delegated to
+/// `vercel_ai_provider_utils::extract_namespaced`). Replaces the
+/// previous hand-written per-`Option<T>` `.or()` chain — for nested
+/// struct fields the new path is more correct (per-key merge rather
+/// than whole-struct replace).
 pub fn extract_anthropic_options(
     provider_options: &Option<ProviderOptions>,
     provider: &str,
 ) -> (AnthropicProviderOptions, BTreeMap<String, Value>) {
-    let opts = match provider_options.as_ref() {
-        Some(opts) => opts,
-        None => return (AnthropicProviderOptions::default(), BTreeMap::new()),
-    };
-
-    // Parse canonical "anthropic" key
-    let canonical_value = opts
-        .0
-        .get("anthropic")
-        .and_then(|v| serde_json::to_value(v).ok());
-    let canonical: AnthropicProviderOptions = canonical_value
-        .clone()
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default();
-
     // Extract custom provider name prefix (e.g., "my-proxy.messages" → "my-proxy")
     let provider_name = match provider.find('.') {
         Some(idx) => &provider[..idx],
         None => provider,
     };
 
-    let (typed, custom_value): (AnthropicProviderOptions, Option<Value>) =
-        if provider_name == "anthropic" {
-            (canonical, None)
-        } else {
-            let custom_value = opts
-                .0
-                .get(provider_name)
-                .and_then(|v| serde_json::to_value(v).ok());
-            let custom_typed: Option<AnthropicProviderOptions> = custom_value
-                .clone()
-                .and_then(|v| serde_json::from_value(v).ok());
-            let merged = match custom_typed {
-                Some(custom) => merge_anthropic_options(canonical, custom),
-                None => canonical,
-            };
-            (merged, custom_value)
-        };
-
-    // Verbatim raw map: every key from canonical + custom (custom wins
-    // per-key). NOT filtered by typed schema — user owns correctness.
-    let mut raw = BTreeMap::new();
-    if let Some(Value::Object(map)) = canonical_value {
-        for (k, v) in map {
-            raw.insert(k, v);
-        }
-    }
-    if let Some(Value::Object(map)) = custom_value {
-        for (k, v) in map {
-            raw.insert(k, v);
-        }
-    }
-
-    // Strip internal coco-rs-only signals so they never reach
-    // `api.anthropic.com/v1/messages` (design §10.1.5 / Finding 2).
-    for key in INTERNAL_ANTHROPIC_OPTION_KEYS {
-        raw.remove(*key);
-    }
-
-    (typed, raw)
-}
-
-/// Merge two option structs: custom values override canonical.
-fn merge_anthropic_options(
-    canonical: AnthropicProviderOptions,
-    custom: AnthropicProviderOptions,
-) -> AnthropicProviderOptions {
-    AnthropicProviderOptions {
-        send_reasoning: custom.send_reasoning.or(canonical.send_reasoning),
-        structured_output_mode: custom
-            .structured_output_mode
-            .or(canonical.structured_output_mode),
-        thinking: custom.thinking.or(canonical.thinking),
-        disable_parallel_tool_use: custom
-            .disable_parallel_tool_use
-            .or(canonical.disable_parallel_tool_use),
-        cache_control: custom.cache_control.or(canonical.cache_control),
-        mcp_servers: custom.mcp_servers.or(canonical.mcp_servers),
-        container: custom.container.or(canonical.container),
-        tool_streaming: custom.tool_streaming.or(canonical.tool_streaming),
-        effort: custom.effort.or(canonical.effort),
-        speed: custom.speed.or(canonical.speed),
-        anthropic_beta: custom.anthropic_beta.or(canonical.anthropic_beta),
-        context_management: custom.context_management.or(canonical.context_management),
-        inference_geo: custom.inference_geo.or(canonical.inference_geo),
-        cache_strategy: custom.cache_strategy.or(canonical.cache_strategy),
-        requested_betas: custom.requested_betas.or(canonical.requested_betas),
-        agentic_query: custom.agentic_query.or(canonical.agentic_query),
-        query_source: custom.query_source.or(canonical.query_source),
-    }
+    extract_namespaced(provider_options.as_ref(), "anthropic", provider_name)
 }
 
 #[cfg(test)]

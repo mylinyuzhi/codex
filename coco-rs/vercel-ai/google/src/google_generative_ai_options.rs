@@ -2,7 +2,9 @@
 
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use vercel_ai_provider_utils::ExtractExtras;
 
 /// Response modality for generation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,4 +174,23 @@ pub struct GoogleLanguageModelOptions {
     pub image_config: Option<ImageConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retrieval_config: Option<RetrievalConfig>,
+
+    // Catches every key not consumed by the typed fields above. The
+    // language model's `get_args` deep-merges this into the wire body
+    // via `merge_json_value` so users can push extra_body fields
+    // (including nested paths) without code changes — and typed-consumed
+    // keys like `thinkingConfig` never leak to the body root (Gemini's
+    // REST API rejects `thinkingConfig` outside `generationConfig`).
+    //
+    // The "extras override typed writes at deep-merge final write"
+    // doctrine is documented in `services/inference/CLAUDE.md`
+    // (Design Notes).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+impl ExtractExtras for GoogleLanguageModelOptions {
+    fn take_extras(&mut self) -> BTreeMap<String, serde_json::Value> {
+        std::mem::take(&mut self.extra)
+    }
 }

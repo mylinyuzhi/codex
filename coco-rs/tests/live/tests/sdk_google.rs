@@ -80,6 +80,18 @@ async fn test_streaming_tools_google() -> Result<()> {
     suite::streaming::run_with_tools(&target).await
 }
 
+/// Regression: thinking_level=medium + tool schema with `Option<i64>`
+/// and per-variant string enum. Covers two Gemini-3 bugs:
+/// (1) `thinkingConfig` root-leak via the `provider_options` shallow
+/// merge; (2) schema converter emitting `anyOf`/`oneOf` with siblings,
+/// rejected by Gemini-3 strict mode. See suite/streaming.rs doc comment
+/// on `run_thinking_with_option_typed_tools` for the full story.
+#[tokio::test]
+async fn test_streaming_thinking_with_option_typed_tools_google() -> Result<()> {
+    let target = require_live!(PROVIDER, "tools");
+    suite::streaming::run_thinking_with_option_typed_tools(&target).await
+}
+
 #[tokio::test]
 async fn test_tools_google() -> Result<()> {
     let target = require_live!(PROVIDER, "tools");

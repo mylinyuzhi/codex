@@ -39,6 +39,7 @@ use vercel_ai_provider::response_metadata::ResponseMetadata;
 
 use vercel_ai_provider_utils::JsonResponseHandler;
 use vercel_ai_provider_utils::combine_headers;
+use vercel_ai_provider_utils::extract_namespaced;
 use vercel_ai_provider_utils::is_custom_reasoning;
 use vercel_ai_provider_utils::map_reasoning_to_provider_budget;
 use vercel_ai_provider_utils::map_reasoning_to_provider_effort;
@@ -98,18 +99,21 @@ impl GoogleGenerativeAILanguageModel {
         }
     }
 
-    /// Parse provider options.
-    ///
-    /// Returns `(typed, raw)`:
+    /// Parse provider options into typed + extras.
     ///
     /// - `typed` — parsed `GoogleLanguageModelOptions`, used for
     ///   `generationConfig` / `safetySettings` / `thinkingConfig` /
     ///   `cachedContent` typed body writes and `responseSchema`
     ///   side-effects.
-    /// - `raw` — verbatim user-supplied namespace map. The language
-    ///   model shallow-merges this into the wire body root **as-is**
-    ///   — every key wins over earlier typed body writes. Opaque to
-    ///   coco-rs; users own correctness.
+    /// - `raw` — extras captured by `#[serde(flatten)]`. The language
+    ///   model **deep-merges** these into the wire body after typed
+    ///   writes (see "extras override typed writes" doctrine in
+    ///   `services/inference/CLAUDE.md`).
+    ///
+    /// Namespace policy: `"google"` is canonical; `provider_options_name`
+    /// is the custom override (e.g. `"vertex"`). When both are present
+    /// they are **deep-merged** with custom winning on per-key overlap —
+    /// previously a fallback-not-found path silently dropped one side.
     fn parse_provider_options(
         &self,
         options: &LanguageModelV4CallOptions,
@@ -118,41 +122,11 @@ impl GoogleGenerativeAILanguageModel {
         GoogleLanguageModelOptions,
         std::collections::BTreeMap<String, Value>,
     ) {
-        let Some(ref provider_options) = options.provider_options else {
-            return (
-                GoogleLanguageModelOptions::default(),
-                std::collections::BTreeMap::new(),
-            );
-        };
-
-        // Try provider-specific namespace first, then fallback to "google"
-        // (only "vertex" falls back to "google", not the reverse)
-        let opts_map = provider_options.get(provider_options_name).or_else(|| {
-            if provider_options_name != "google" {
-                provider_options.get("google")
-            } else {
-                None
-            }
-        });
-
-        let Some(opts_map) = opts_map else {
-            return (
-                GoogleLanguageModelOptions::default(),
-                std::collections::BTreeMap::new(),
-            );
-        };
-
-        let opts_value = serde_json::to_value(opts_map).unwrap_or(Value::Null);
-        let typed: GoogleLanguageModelOptions =
-            serde_json::from_value(opts_value.clone()).unwrap_or_default();
-
-        let mut raw = std::collections::BTreeMap::new();
-        if let Value::Object(map) = opts_value {
-            for (k, v) in map {
-                raw.insert(k, v);
-            }
-        }
-        (typed, raw)
+        extract_namespaced(
+            options.provider_options.as_ref(),
+            "google",
+            provider_options_name,
+        )
     }
 
     /// Build the request arguments for the Google API.
@@ -367,7 +341,20 @@ impl GoogleGenerativeAILanguageModel {
             body["labels"] = serde_json::to_value(labels).unwrap_or(Value::Null);
         }
 
-        vercel_ai_provider_utils::shallow_merge_object(&mut body, raw_provider_options);
+        // Deep-merge extra_body onto the wire body. Producers
+        // (`coco_inference::thinking_convert`, user-supplied
+        // `provider_options["google"]` extras) own the wire-correct
+        // nesting — e.g. `{"generationConfig": {"thinkingConfig":
+        // {..}}}` lands at `body.generationConfig.thinkingConfig`
+        // without clobbering sibling typed writes like
+        // `body.generationConfig.maxOutputTokens`. Shallow overwrite
+        // would clobber the whole `generationConfig` subtree on any
+        // overlap. Deep merge gives extras true escape-hatch override
+        // semantics at every nesting depth.
+        if !raw_provider_options.is_empty() {
+            let overlay = Value::Object(raw_provider_options.into_iter().collect());
+            body = vercel_ai_provider_utils::merge_json_value(&body, &overlay);
+        }
 
         // Build headers
         let headers = combine_headers(vec![Some((self.config.headers)()), options.headers.clone()]);
@@ -1559,7 +1546,7 @@ fn resolve_gemini_3_thinking_config(
     use crate::google_generative_ai_options::ThinkingConfig;
     use crate::google_generative_ai_options::ThinkingLevel as GoogleThinkingLevel;
 
-    if level == ReasoningLevel::None {
+    if level == ReasoningLevel::Off {
         // Cannot fully disable thinking on Gemini 3; use minimal.
         return Some(ThinkingConfig {
             thinking_budget: None,
@@ -1599,7 +1586,7 @@ fn resolve_gemini_25_thinking_config(
 ) -> Option<crate::google_generative_ai_options::ThinkingConfig> {
     use crate::google_generative_ai_options::ThinkingConfig;
 
-    if level == ReasoningLevel::None {
+    if level == ReasoningLevel::Off {
         return Some(ThinkingConfig {
             thinking_budget: Some(0),
             include_thoughts: None,
