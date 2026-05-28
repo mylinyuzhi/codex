@@ -67,22 +67,40 @@ fn openai_responses_uses_reasoning_summary_camelcase() {
 }
 
 #[test]
-fn google_thinking_config_uses_camelcase_keys() {
+fn google_thinking_config_nested_under_generation_config() {
+    // Producer responsibility: emit wire-correct nesting. Gemini's
+    // `thinkingConfig` lives INSIDE `generationConfig`, not at the
+    // body root — the language model deep-merges this onto the body.
+    //
+    // Effort → wire-shape (Gemini-3 `thinkingLevel` vs Gemini-2.5
+    // `thinkingBudget`) is version-aware and lives in the adapter
+    // (`resolve_thinking_config`), so this convert layer only
+    // contributes the `includeThoughts: true` signal that has no
+    // typed channel. `level.budget_tokens` is NOT emitted here:
+    // Gemini-3 dropped `thinkingBudget` support, and `level` already
+    // flows through the typed `call.reasoning` channel for
+    // version-aware mapping. Test passes a budget to lock the
+    // contract — passing one must NOT cause us to emit
+    // `thinkingBudget`.
     let level = ThinkingLevel::with_budget(ReasoningEffort::Medium, 8_000);
     let out = to_extra_body(&level, ProviderApi::Gemini, NO_CAPS);
-    let config = out.get("thinkingConfig").unwrap();
+
+    assert!(!out.contains_key("thinkingConfig"));
+
+    let config = out
+        .get("generationConfig")
+        .and_then(|v| v.get("thinkingConfig"))
+        .expect("generationConfig.thinkingConfig should be set");
     assert_eq!(
         config
             .get("includeThoughts")
             .and_then(serde_json::Value::as_bool),
         Some(true)
     );
-    assert_eq!(
-        config
-            .get("thinkingBudget")
-            .and_then(serde_json::Value::as_i64),
-        Some(8_000)
-    );
+    // Critical: thinking budget is NOT emitted here — the adapter's
+    // version-aware typed channel owns level/budget mapping.
+    assert!(config.get("thinkingBudget").is_none());
+    assert!(config.get("thinkingLevel").is_none());
 }
 
 #[test]
@@ -565,13 +583,17 @@ fn matrix_gemini_explicit_levels_emit_thinking_config() {
         ReasoningEffort::XHigh,
     ] {
         let out = to_extra_body(&level_with_effort(effort), ProviderApi::Gemini, NO_CAPS);
+        // Nested under generationConfig — adapter deep-merges this onto
+        // the wire body, so the nesting must match Gemini's wire shape.
         assert_eq!(
-            out.get("thinkingConfig")
+            out.get("generationConfig")
+                .and_then(|v| v.get("thinkingConfig"))
                 .and_then(|v| v.get("includeThoughts"))
                 .and_then(serde_json::Value::as_bool),
             Some(true),
-            "Gemini {effort:?} must emit thinkingConfig.includeThoughts=true",
+            "Gemini {effort:?} must emit generationConfig.thinkingConfig.includeThoughts=true",
         );
+        assert!(!out.contains_key("thinkingConfig"));
         assert!(!out.contains_key("thinking"));
         assert!(!out.contains_key("output_config"));
     }

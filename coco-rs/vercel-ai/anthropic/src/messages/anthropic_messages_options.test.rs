@@ -7,11 +7,16 @@ fn options_with(map: HashMap<String, HashMap<String, serde_json::Value>>) -> Pro
     ProviderOptions(map)
 }
 
-/// `raw` is verbatim — every key (typed-known and unknown) appears
-/// in the returned map. Patching this into the wire body lets the
-/// user's `extra_body` win over typed body writes at the same key.
+/// Extras carry unknown keys verbatim; typed-consumed keys
+/// (e.g. `disableParallelToolUse`) stay out — they're handled by the
+/// typed path and re-emitting them at the body root would let
+/// internally-injected signals (formerly the
+/// `INTERNAL_ANTHROPIC_OPTION_KEYS` blacklist of `cacheStrategy` /
+/// `requestedBetas` / `agenticQuery` / `querySource`) leak there too.
+/// `#[serde(flatten)] extra` is the structural replacement for the
+/// blacklist.
 #[test]
-fn raw_map_includes_every_key_verbatim() {
+fn extras_carry_unknown_keys_but_not_typed_keys() {
     let mut inner = HashMap::new();
     inner.insert("disableParallelToolUse".into(), json!(true)); // typed-known
     inner.insert("myCustomField".into(), json!("x")); // unknown
@@ -23,13 +28,38 @@ fn raw_map_includes_every_key_verbatim() {
     let (typed, raw) = extract_anthropic_options(&provider_options, "anthropic.messages");
     assert_eq!(typed.disable_parallel_tool_use, Some(true));
 
-    // Every original key — typed-known AND unknown — appears in raw.
-    assert!(
-        raw.contains_key("disableParallelToolUse"),
-        "typed-known keys are NOT filtered out; user owns correctness"
-    );
+    // Typed-consumed key absent; unknown keys remain.
+    assert!(!raw.contains_key("disableParallelToolUse"));
     assert!(raw.contains_key("myCustomField"));
     assert!(raw.contains_key("anotherKey"));
+}
+
+/// Locks down the structural replacement for the
+/// `INTERNAL_ANTHROPIC_OPTION_KEYS` blacklist: the four formerly-
+/// blacklisted internal signals are typed fields, so they're auto-
+/// stripped from extras without any explicit filter. (Spot-checks the
+/// two simpler signals; `cacheStrategy` + `requestedBetas` have
+/// their own typed coverage via `cache_convert` integration tests.)
+#[test]
+fn internal_signals_never_leak_into_extras() {
+    let mut inner = HashMap::new();
+    inner.insert("agenticQuery".into(), json!(true));
+    inner.insert("querySource".into(), json!("main_loop"));
+    inner.insert("myCustomField".into(), json!("ok"));
+    let mut outer = HashMap::new();
+    outer.insert("anthropic".into(), inner);
+    let provider_options = Some(options_with(outer));
+
+    let (typed, raw) = extract_anthropic_options(&provider_options, "anthropic.messages");
+    // Typed fields received the internal signals.
+    assert_eq!(typed.agentic_query, Some(true));
+    assert_eq!(typed.query_source.as_deref(), Some("main_loop"));
+    // Extras do NOT carry them — replaces the old blacklist
+    // (`INTERNAL_ANTHROPIC_OPTION_KEYS`).
+    assert!(!raw.contains_key("agenticQuery"));
+    assert!(!raw.contains_key("querySource"));
+    // Unknown keys still pass through to extras for deep-merge.
+    assert!(raw.contains_key("myCustomField"));
 }
 
 #[test]

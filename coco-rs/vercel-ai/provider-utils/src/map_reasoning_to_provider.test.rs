@@ -17,7 +17,7 @@ fn is_custom_reasoning_returns_false_for_provider_default() {
 
 #[test]
 fn is_custom_reasoning_returns_true_for_none_level() {
-    assert!(is_custom_reasoning(Some(ReasoningLevel::None)));
+    assert!(is_custom_reasoning(Some(ReasoningLevel::Off)));
 }
 
 #[test]

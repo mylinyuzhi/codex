@@ -62,7 +62,7 @@ fn test_call_options_with_reasoning() {
 fn test_reasoning_level_serde_round_trip() {
     for (level, expected_str) in [
         (ReasoningLevel::ProviderDefault, "\"provider-default\""),
-        (ReasoningLevel::None, "\"none\""),
+        (ReasoningLevel::Off, "\"none\""),
         (ReasoningLevel::Minimal, "\"minimal\""),
         (ReasoningLevel::Low, "\"low\""),
         (ReasoningLevel::Medium, "\"medium\""),
@@ -79,7 +79,7 @@ fn test_reasoning_level_serde_round_trip() {
 #[test]
 fn test_reasoning_level_as_str() {
     assert_eq!(ReasoningLevel::ProviderDefault.as_str(), "provider-default");
-    assert_eq!(ReasoningLevel::None.as_str(), "none");
+    assert_eq!(ReasoningLevel::Off.as_str(), "none");
     assert_eq!(ReasoningLevel::Minimal.as_str(), "minimal");
     assert_eq!(ReasoningLevel::Low.as_str(), "low");
     assert_eq!(ReasoningLevel::Medium.as_str(), "medium");

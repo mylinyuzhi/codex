@@ -3,11 +3,14 @@ use serde_json::json;
 use std::collections::HashMap;
 use vercel_ai_provider::ProviderOptions;
 
-/// `raw` is verbatim — every key (typed-known and unknown) appears
-/// in the returned map. Patching this into the wire body lets the
-/// user's `extra_body` win over typed body writes at the same key.
+/// `raw` (the extras map) carries unknown keys verbatim so users can
+/// push extra_body fields, while typed-consumed keys (`user`, etc.)
+/// stay out — they're already placed in their canonical wire location
+/// by `get_args`, and re-emitting them at the body root would let
+/// internally-injected camelCase signals (e.g. `reasoningSummary`)
+/// leak there as well. Mirrors the Google adapter's `extra` field.
 #[test]
-fn raw_map_includes_every_key_verbatim() {
+fn extras_carry_unknown_keys_but_not_typed_keys() {
     let mut inner = HashMap::new();
     inner.insert("user".into(), json!("uid")); // typed-known
     inner.insert("myCustom".into(), json!(true)); // unknown
@@ -17,7 +20,7 @@ fn raw_map_includes_every_key_verbatim() {
 
     let (typed, raw) = extract_openai_options(&po);
     assert_eq!(typed.user.as_deref(), Some("uid"));
-    // Both typed-known and unknown keys appear — no filter.
-    assert!(raw.contains_key("user"));
+    // typed-consumed key is gone from raw; unknown key remains.
+    assert!(!raw.contains_key("user"));
     assert!(raw.contains_key("myCustom"));
 }

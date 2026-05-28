@@ -2,7 +2,7 @@
 //!
 //! Uses async polling: POST to create task, GET to poll status until succeeded/failed.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -26,7 +26,6 @@ use vercel_ai_provider_utils::without_trailing_slash;
 use crate::bytedance_config::ByteDanceVideoModelConfig;
 use crate::bytedance_error::ByteDanceFailedResponseHandler;
 use crate::bytedance_video_options::ByteDanceVideoProviderOptions;
-use crate::bytedance_video_options::HANDLED_PROVIDER_OPTIONS;
 
 /// ByteDance Seedance video model.
 ///
@@ -95,8 +94,11 @@ impl VideoModelV4 for ByteDanceVideoModel {
 
         let headers = combine_headers(vec![Some((self.config.headers)()), options.headers.clone()]);
 
-        // Parse provider options
-        let provider_opts: ByteDanceVideoProviderOptions = options
+        // Parse provider options. `#[serde(flatten)] extra` captures
+        // unknown keys for deep-merge below; typed-consumed keys never
+        // appear in `extra`, replacing the old hand-maintained
+        // `HANDLED_PROVIDER_OPTIONS` blacklist.
+        let mut provider_opts: ByteDanceVideoProviderOptions = options
             .provider_options
             .as_ref()
             .and_then(|po| po.get("bytedance"))
@@ -105,12 +107,8 @@ impl VideoModelV4 for ByteDanceVideoModel {
                 serde_json::from_value(value).unwrap_or_default()
             })
             .unwrap_or_default();
-
-        // Get raw map for pass-through options
-        let raw_opts: Option<&HashMap<String, serde_json::Value>> = options
-            .provider_options
-            .as_ref()
-            .and_then(|po| po.get("bytedance"));
+        let raw_opts: BTreeMap<String, serde_json::Value> =
+            std::mem::take(&mut provider_opts.extra);
 
         // Determine poll settings (provider options override config)
         let poll_interval = provider_opts
@@ -201,13 +199,12 @@ impl VideoModelV4 for ByteDanceVideoModel {
             body["draft"] = json!(draft);
         }
 
-        // Apply pass-through options (keys not in HANDLED_PROVIDER_OPTIONS)
-        if let Some(raw) = raw_opts {
-            for (key, value) in raw {
-                if !HANDLED_PROVIDER_OPTIONS.contains(&key.as_str()) {
-                    body[key] = value.clone();
-                }
-            }
+        // Deep-merge extra_body onto the wire body. Callers own
+        // wire-correct nesting; deep merge places nested overlays
+        // at the right slot without clobbering sibling typed writes.
+        if !raw_opts.is_empty() {
+            let overlay = serde_json::Value::Object(raw_opts.into_iter().collect());
+            body = vercel_ai_provider_utils::merge_json_value(&body, &overlay);
         }
 
         // POST to create task

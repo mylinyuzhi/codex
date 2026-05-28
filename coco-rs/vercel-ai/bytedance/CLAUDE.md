@@ -19,3 +19,4 @@ Not a port of anything in `@ai-sdk/*` or `claude-code/src/` — coco-rs addition
 - Reads `ARK_API_KEY` by default.
 - Only exposes `provider.video_model(id)` — no language / embedding / image models.
 - Supported model: `seedance-1-5-pro-251215` (and successors).
+- **`extra_body` deep-merge escape hatch (F1 doctrine).** `provider_options["bytedance"]` extras deep-merge over typed body writes via `merge_json_value`; extras win at final-merge priority. `ByteDanceVideoProviderOptions` carries `#[serde(flatten)] extra` + implements `ExtractExtras`. `null` in extras is a no-op (skips, does NOT unset). Single source of truth: `services/inference/CLAUDE.md` "Design Notes".

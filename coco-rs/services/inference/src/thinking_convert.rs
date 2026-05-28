@@ -143,17 +143,40 @@ pub fn to_extra_body(
             }
         }
         ProviderApi::Gemini => {
-            // { "thinkingConfig": { "includeThoughts": true, "thinkingBudget": <n> } }
+            // Effort → wire shape (Gemini-3 `thinkingLevel` vs
+            // Gemini-2.5 `thinkingBudget`) is **version-aware** and
+            // lives in the adapter (`resolve_thinking_config` in
+            // `google_generative_ai_language_model.rs`), driven off
+            // the typed `call.reasoning` channel. This convert layer
+            // cannot see `model_id`, so it would have to guess which
+            // knob to emit. Emitting `thinkingBudget` here
+            // unconditionally produced a key Gemini-3 rejects (it
+            // dropped `thinkingBudget` support in favor of
+            // `thinkingLevel`), and double-wrote with the typed path
+            // under deep merge.
+            //
+            // The only Gemini-specific signal that does NOT have a
+            // typed channel is `includeThoughts: true` — without it
+            // Gemini's stream omits reasoning deltas. Emit just that
+            // here, nested correctly so deep-merge composes with the
+            // adapter's typed write at
+            // `generationConfig.thinkingConfig.{thinkingLevel,thinkingBudget}`:
+            //
+            //     { "generationConfig": {
+            //         "thinkingConfig": { "includeThoughts": true }
+            //     } }
             if level.effort.is_explicit_level() {
-                let mut config = serde_json::Map::new();
-                config.insert("includeThoughts".into(), serde_json::Value::Bool(true));
-                if let Some(budget) = level.budget_tokens {
-                    config.insert(
-                        "thinkingBudget".into(),
-                        serde_json::Value::Number(budget.into()),
-                    );
-                }
-                out.insert("thinkingConfig".into(), serde_json::Value::Object(config));
+                let mut thinking_config = serde_json::Map::new();
+                thinking_config.insert("includeThoughts".into(), serde_json::Value::Bool(true));
+                let mut generation_config = serde_json::Map::new();
+                generation_config.insert(
+                    "thinkingConfig".into(),
+                    serde_json::Value::Object(thinking_config),
+                );
+                out.insert(
+                    "generationConfig".into(),
+                    serde_json::Value::Object(generation_config),
+                );
             }
         }
         ProviderApi::Volcengine | ProviderApi::Zai | ProviderApi::OpenaiCompat => {
