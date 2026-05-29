@@ -424,7 +424,7 @@ async fn run_with_events(
         model_id: "json-scripted-mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
         max_turns: config_overrides.max_turns.unwrap_or(10),
-        max_tokens: config_overrides.max_tokens,
+        total_token_budget: config_overrides.max_tokens,
         ..Default::default()
     };
     let engine = QueryEngine::new(config, client, tools, cancel, None);
@@ -439,7 +439,7 @@ async fn run_with_events(
     });
 
     let query = engine
-        .run_with_events(prompt, event_tx)
+        .run_with_events(prompt, event_tx, coco_types::TurnId::generate())
         .await
         .expect("scenario engine should not fail");
 
@@ -458,9 +458,7 @@ fn classify_event(event: &CoreEvent) -> &'static str {
     match event {
         CoreEvent::Protocol(n) => match n {
             ServerNotification::TurnStarted(_) => "TurnStarted",
-            ServerNotification::TurnCompleted(_) => "TurnCompleted",
-            ServerNotification::TurnFailed(_) => "TurnFailed",
-            ServerNotification::TurnInterrupted(_) => "TurnInterrupted",
+            ServerNotification::TurnEnded(_) => "TurnEnded",
             ServerNotification::ContextCompacted(_) => "CompactionTriggered",
             ServerNotification::CompactionStarted => "ErrorRecovery",
             ServerNotification::QueueStateChanged { .. } => "CommandsDrained",

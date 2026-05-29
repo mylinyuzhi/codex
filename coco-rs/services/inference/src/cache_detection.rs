@@ -727,6 +727,15 @@ impl CacheBreakDetector {
         self.pending_changes.clear();
     }
 
+    /// Whether the detector currently has no tracked state. Returns
+    /// `true` after [`Self::reset`] or [`Self::new`]. Test-only
+    /// observable for assertions that the reset wiring fires (notably
+    /// the cross-provider fallback advance covered by finding N2 in
+    /// `app/query`).
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty() && self.pending_changes.is_empty()
+    }
+
     /// Borrow the previous serialized provider_options for a tracking key,
     /// if any. Used by the diff-file fallback when a break attributes to
     /// `extra_body_changed` but the textual change was stripped before

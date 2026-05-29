@@ -190,6 +190,62 @@ impl InferenceError {
         }
     }
 
+    /// Classify a free-form error message — produced by
+    /// `StreamEvent::Error.message` or `AISdkError::to_string()` — into
+    /// a typed `InferenceError`. Mirrors the body-sniff fallbacks in
+    /// [`Self::from_http_status`] but for the streaming path where no
+    /// HTTP status is available.
+    ///
+    /// Returns `None` when the message doesn't match any known
+    /// recoverable bucket. Callers should fall back to their default
+    /// handling.
+    ///
+    /// This is the canonical engine-side classification site for stream
+    /// errors. Higher layers (`app/query`) MUST NOT pattern-match on
+    /// the raw string — the multi-provider port rule (see
+    /// `coco-rs/CLAUDE.md` "Multi-Provider Boundaries") forbids
+    /// Anthropic-specific keywords leaking into upper layers.
+    pub fn classify_stream_message(msg: &str) -> Option<Self> {
+        let lower = msg.to_ascii_lowercase();
+        if lower.contains("prompt_too_long")
+            || lower.contains("context_length_exceeded")
+            || lower.contains("context length exceeded")
+            || lower.contains("too many tokens")
+        {
+            return Some(
+                inference_error::ContextWindowExceededSnafu {
+                    max_tokens: 0_i64,
+                    requested: 0_i64,
+                }
+                .build(),
+            );
+        }
+        if lower.contains("overloaded_error")
+            || lower.contains("provider overloaded")
+            || lower.contains("status: 529")
+            || lower.contains("status: 503")
+            || lower.contains("(529)")
+            || lower.contains("(503)")
+        {
+            return Some(
+                inference_error::OverloadedSnafu {
+                    retry_after_ms: None,
+                }
+                .build(),
+            );
+        }
+        if lower.contains("rate limited") || lower.contains("rate_limit") {
+            return Some(
+                inference_error::RateLimitedSnafu {
+                    retry_after_ms: None,
+                    message: msg.to_string(),
+                }
+                .build(),
+            );
+        }
+        None
+    }
+
     /// Error class for telemetry.
     pub fn error_class(&self) -> &'static str {
         match self {

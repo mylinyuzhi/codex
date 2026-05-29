@@ -18,7 +18,7 @@ use coco_types::JsonRpcResponse;
 use coco_types::NotificationMethod;
 use coco_types::RequestId;
 use coco_types::ServerNotification;
-use coco_types::TurnCompletedParams;
+use coco_types::TurnEndedParams;
 use coco_types::TurnStartedParams;
 use coco_types::error_codes;
 use pretty_assertions::assert_eq;
@@ -185,18 +185,18 @@ impl TurnRunner for ScriptedRunner {
             event_tx
                 .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
                     TurnStartedParams {
-                        turn_id: Some("scripted".into()),
-                        turn_number: 1,
+                        turn_id: coco_types::TurnId::from("scripted"),
                     },
                 )))
                 .await
                 .ok();
             event_tx
-                .send(CoreEvent::Protocol(ServerNotification::TurnCompleted(
-                    TurnCompletedParams {
-                        turn_id: Some("scripted".into()),
-                        usage: coco_types::TokenUsage::default(),
-                    },
+                .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
+                    TurnEndedParams::completed(
+                        coco_types::TurnId::from("scripted"),
+                        Some(coco_types::TokenUsage::default()),
+                        Some(coco_messages::StopReason::EndTurn),
+                    ),
                 )))
                 .await
                 .ok();
@@ -651,7 +651,7 @@ async fn turn_start_returns_turn_id_and_forwards_notifications() {
     assert!(turn_id.starts_with("turn-session-"));
     assert_eq!(
         notif_methods,
-        vec!["turn/started".to_string(), "turn/completed".to_string()]
+        vec!["turn/started".to_string(), "turn/ended".to_string()]
     );
 
     tokio::time::timeout(Duration::from_secs(1), completed.notified())
@@ -1681,10 +1681,15 @@ impl TurnRunner for LateEventOnCancelRunner {
             // Emit a late event POST-cancel — archive must flush this
             // before emitting its own aggregated SessionResult.
             let _ = event_tx
-                .send(CoreEvent::Protocol(ServerNotification::TurnFailed(
-                    coco_types::TurnFailedParams {
-                        error: "cancelled mid-turn".into(),
-                    },
+                .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
+                    TurnEndedParams::failed(
+                        coco_types::TurnId::from("scripted"),
+                        Some(coco_types::TokenUsage::default()),
+                        coco_types::ErrorPayload {
+                            message: "cancelled mid-turn".into(),
+                            code: coco_types::ErrorCode::Common,
+                        },
+                    ),
                 )))
                 .await;
             Ok(())
@@ -1754,8 +1759,8 @@ async fn session_archive_flushes_late_events_before_aggregate() {
         let msg = client.recv().await.unwrap().unwrap();
         match msg {
             JsonRpcMessage::Notification(n) => {
-                if n.method == NotificationMethod::TurnFailed.as_str() {
-                    observed_kinds.push(NotificationMethod::TurnFailed.as_str());
+                if n.method == NotificationMethod::TurnEnded.as_str() {
+                    observed_kinds.push(NotificationMethod::TurnEnded.as_str());
                 } else if n.method == NotificationMethod::SessionResult.as_str() {
                     observed_kinds.push(NotificationMethod::SessionResult.as_str());
                 }
@@ -1765,16 +1770,16 @@ async fn session_archive_flushes_late_events_before_aggregate() {
         }
     }
 
-    // TurnFailed must appear before session/result on the wire.
-    let late_pos = observed_kinds.iter().position(|k| *k == "turn/failed");
+    // TurnEnded must appear before session/result on the wire.
+    let late_pos = observed_kinds.iter().position(|k| *k == "turn/ended");
     let result_pos = observed_kinds.iter().position(|k| *k == "session/result");
     assert!(
         late_pos.is_some() && result_pos.is_some(),
-        "expected both turn/failed and session/result notifications, got {observed_kinds:?}"
+        "expected both turn/ended and session/result notifications, got {observed_kinds:?}"
     );
     assert!(
         late_pos < result_pos,
-        "expected turn/failed BEFORE session/result, got {observed_kinds:?}"
+        "expected turn/ended BEFORE session/result, got {observed_kinds:?}"
     );
 
     drop(client);

@@ -115,7 +115,11 @@ async def query(
             data = await router.next_event()
             event = _SERVER_NOTIFICATION_ADAPTER.validate_python(data)
             yield event
-            if event.method in (NotificationMethod.TURN_COMPLETED, NotificationMethod.TURN_FAILED):
+            # `turn/ended` is the single terminal event for the cycle; its
+            # discriminated `outcome` (completed / failed / interrupted /
+            # max_turns_reached / budget_exhausted) carries the reason. Stop
+            # iterating once it arrives.
+            if event.method == NotificationMethod.TURN_ENDED:
                 break
     finally:
         if "router" in locals():

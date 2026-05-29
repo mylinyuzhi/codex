@@ -52,9 +52,9 @@ async def test_context_usage_returns_token_breakdown(live_deepseek, isolated_cwd
     ) as client:
         async with asyncio.timeout(120):
             async for event in client.events():
-                if event.method == NotificationMethod.TURN_COMPLETED:
+                if event.method == NotificationMethod.TURN_ENDED:
                     break
-                if event.method == NotificationMethod.TURN_FAILED:
+                if event.method == NotificationMethod.TURN_ENDED:
                     pytest.fail(f"turn failed: {event.params}")
 
         result = await client.context_usage()

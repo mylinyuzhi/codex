@@ -36,7 +36,7 @@ impl ReasoningLevel {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ProviderDefault => "provider-default",
-            Self::Off => "none",
+            Self::Off => "off",
             Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",

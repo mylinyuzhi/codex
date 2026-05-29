@@ -42,6 +42,13 @@ pub struct ModelInfo {
     // === Capacity ===
     pub context_window: PositiveTokens,
     pub max_output_tokens: PositiveTokens,
+    /// Optional per-model escalate ceiling for `MaxTokens` finish_reason
+    /// recovery. `None` (default) disables Phase-1 escalate for this
+    /// model — recovery goes straight to the multi-turn resume-nudge
+    /// (Phase-2). `Some(N)` where `N > max_output_tokens` enables a
+    /// one-shot Phase-1 retry with `N` as the per-call cap. User opts
+    /// in per model via `~/.coco/models.json`. Provider-agnostic.
+    pub max_output_tokens_escalate: Option<PositiveTokens>,
     pub timeout_secs: Option<i64>,
 
     // === Capabilities ===
@@ -96,6 +103,7 @@ impl Default for ModelInfo {
             display_name: None,
             context_window: PositiveTokens::new(200_000),
             max_output_tokens: PositiveTokens::new(16_384),
+            max_output_tokens_escalate: None,
             timeout_secs: None,
             capabilities: None,
             temperature: None,
@@ -144,6 +152,24 @@ impl ModelInfo {
             });
         }
 
+        // M3 — Phase-1 escalate ceiling MUST exceed the baseline; an
+        // escalate at-or-below baseline is a silent no-op at the
+        // recovery dispatcher and almost certainly a config mistake.
+        // Reject at resolution time so the failure surfaces during
+        // boot, not on the first MaxTokens stop.
+        if let (Some(baseline), Some(escalate)) = (
+            partial.max_output_tokens,
+            partial.max_output_tokens_escalate,
+        ) && i64::from(escalate) <= i64::from(baseline)
+        {
+            return Err(ConfigError::EscalateBelowBaseline {
+                provider: provider.to_string(),
+                model: model_id.to_string(),
+                baseline: i64::from(baseline),
+                escalate: i64::from(escalate),
+            });
+        }
+
         Ok(Self {
             model_id: model_id.to_string(),
             display_name: partial.display_name,
@@ -161,6 +187,7 @@ impl ModelInfo {
                     field: ConfigField::MaxOutputTokens,
                 }
             })?,
+            max_output_tokens_escalate: partial.max_output_tokens_escalate,
             timeout_secs: partial.timeout_secs,
             capabilities: partial.capabilities,
             temperature: partial.temperature,

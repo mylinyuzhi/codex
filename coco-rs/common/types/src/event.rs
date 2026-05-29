@@ -22,8 +22,24 @@ use crate::wire_tagged::wire_tagged_enum;
 /// Where ordering matters, all related events must be emitted from a
 /// single task. Current ownership (one sequence = one task):
 ///
-/// - **Turn lifecycle** (`TurnStarted → Stream* → TurnCompleted|Failed|Interrupted`):
-///   emitted by `run_session_loop` in `coco-query::engine`.
+/// - **Turn lifecycle** (`TurnStarted → Stream* → TurnEnded`):
+///   `TurnStarted` is emitted **exactly once per logical user-prompt
+///   cycle** by the runner layer (`tui_runner` / `sdk_runner` /
+///   `TurnRunner` impls). The runner generates a fresh `TurnId`
+///   (`TurnId::generate()`), emits `TurnStarted` with that id, then
+///   threads the id into the engine via `run_with_messages` /
+///   `run_with_events`. Every `TurnEnded` for the cycle reuses the
+///   same id. Intra-turn LLM rounds (Stop-hook blocking, reactive
+///   compact, max-tokens recovery, every `ContinueReason::*`) do
+///   NOT re-emit lifecycle events. A second `TurnEnded(Interrupted)`
+///   MAY follow a `TurnEnded(Completed|Failed|MaxTurnsReached|
+///   BudgetExhausted)` when a user cancel was observed after the
+///   engine had already returned — this is the late-cancel signal
+///   the TUI uses to fire auto-restore. `TurnEnded.outcome` carries
+///   the discriminated terminal reason (`Completed { stop_reason }`
+///   / `Failed { error }` / `Interrupted { cancel_reason }` /
+///   `MaxTurnsReached { max_turns }` / `BudgetExhausted { used_tokens,
+///   budget_tokens }`).
 /// - **Session lifecycle** (`SessionStarted → (Running ↔ Idle ↔ RequiresAction)*
 ///   → SessionResult → SessionEnded`): emitted by `run_internal_with_messages`
 ///   in `coco-query::engine`; `SessionStateChanged` transitions are deduped
@@ -57,7 +73,7 @@ use crate::wire_tagged::wire_tagged_enum;
 ///
 /// **`large_enum_variant` exemption.** `Protocol(ServerNotification)` is
 /// considerably larger than `Stream` / `Tui` because `ServerNotification`
-/// carries 62 wire-tagged variants. Boxing it would churn hundreds of
+/// carries 59 wire-tagged variants. Boxing it would churn hundreds of
 /// pattern matches across `coco-query` / `coco-tui` / `coco-cli` for a
 /// per-event overhead that is dominated by per-turn work. Each
 /// `CoreEvent` is sent over `mpsc`, consumed once, and dropped — the
@@ -413,16 +429,22 @@ matching `NotificationMethod` discriminant.",
     /// Eliminates the prior I-2 exception in `TranscriptView`.
     "history/reasoningMetadataAttached" => ReasoningMetadataAttached(ReasoningMetadataAttachedParams),
 
-    // === Turn lifecycle (4) ===
+    // === Turn lifecycle (2) ===
 
-    /// Agent turn started.
+    /// Agent turn started. Emitted by the runner layer
+    /// (`tui_runner` / `sdk_runner`) at the start of every logical
+    /// user-prompt cycle. Pairs 1:1 with `TurnEnded` sharing the
+    /// same `turn_id`. Intra-turn loops (Stop-hook blocking,
+    /// reactive compact, max-tokens recovery, etc. — every
+    /// `ContinueReason::*`) do NOT re-emit this event.
     "turn/started" => TurnStarted(TurnStartedParams),
-    /// Agent turn completed successfully.
-    "turn/completed" => TurnCompleted(TurnCompletedParams),
-    /// Agent turn failed with error.
-    "turn/failed" => TurnFailed(TurnFailedParams),
-    /// Turn interrupted by user.
-    "turn/interrupted" => TurnInterrupted(TurnInterruptedParams),
+    /// Agent turn ended. Discriminated by `outcome.kind` —
+    /// `completed` / `failed` / `interrupted` / `max_turns_reached` /
+    /// `budget_exhausted`. Paired 1:1 with the preceding
+    /// `TurnStarted` (same `turn_id`). See `TurnOutcome` for
+    /// variant payloads; `stop_reason` only appears on `Completed`
+    /// where it is semantically meaningful.
+    "turn/ended" => TurnEnded(TurnEndedParams),
 
     // === Item lifecycle (3) ===
 
@@ -612,14 +634,6 @@ matching `NotificationMethod` discriminant.",
 
     /// Session state changed (idle/running/requires_action).
     "session/stateChanged" => SessionStateChanged { state: SessionState },
-
-    // === Max turns (1) ===
-
-    /// Max turns reached.
-    "turn/maxReached" => MaxTurnsReached {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_turns: Option<i32>,
-    },
 
     // === TS gap P2: additional SDK notifications (5) ===
 
@@ -892,17 +906,222 @@ pub struct SessionEndedParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnStartedParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
-    pub turn_number: i32,
+    pub turn_id: crate::TurnId,
 }
 
+/// Terminal event for one logical user-prompt cycle. The
+/// `outcome` discriminator carries the per-variant payload —
+/// `stop_reason` lives only on `Completed` where it is
+/// semantically meaningful. Other variants self-describe.
+///
+/// Pairing contract: every `TurnStartedParams` is followed by
+/// **at least one** `TurnEndedParams` sharing the same `turn_id`.
+/// A second `TurnEnded(Interrupted)` MAY follow a terminal outcome
+/// when the user cancel was observed after the engine had already
+/// returned — this is the late-cancel signal the TUI uses to fire
+/// auto-restore. Consumers should treat the latest `Interrupted`
+/// event as authoritative when it follows a same-id terminal.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TurnCompletedParams {
+pub struct TurnEndedParams {
+    pub turn_id: crate::TurnId,
+    /// Token usage accumulated over the cycle. `None` only when
+    /// the emitter genuinely does not know (runner-side bail
+    /// before engine entry, or late-cancel emitter that does not
+    /// own the engine's accumulator). `Some(TokenUsage::default())`
+    /// is a real "zero usage" signal — distinct from "unknown".
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
-    pub usage: TokenUsage,
+    pub usage: Option<TokenUsage>,
+    pub outcome: TurnOutcome,
+}
+
+/// Discriminated terminal reason. The `Completed` variant is
+/// the only one that carries `stop_reason`: the other variants'
+/// names ARE the terminal reason.
+///
+/// Wire format: `{"kind": "completed", "data": {"stop_reason": "end_turn"}}` etc.
+///
+/// Per-variant payloads are **named structs** rather than inline
+/// struct-variants. This is deliberate: schemars emits `$ref` to the
+/// named struct, which the Python codegen turns into a real Pydantic
+/// model. Inline struct-variants would degrade to `dict[str, Any]` on
+/// the Python side — losing typed access for SDK consumers.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum TurnOutcome {
+    /// Engine decided to terminate the cycle.
+    Completed(CompletedOutcome),
+    /// Engine error: provider failure, network, internal panic,
+    /// config invalid, etc.
+    Failed(FailedOutcome),
+    /// External cancellation (user Ctrl+C, system pre-empt).
+    Interrupted(InterruptedOutcome),
+    /// Turn budget exhausted — the cycle hit `config.max_turns`
+    /// before the model issued a non-tool-use stop.
+    MaxTurnsReached(MaxTurnsReachedOutcome),
+    /// Token budget exhausted (90% threshold / diminishing-returns
+    /// stop, distinct from `max_turns`).
+    BudgetExhausted(BudgetExhaustedOutcome),
+}
+
+/// Payload for [`TurnOutcome::Completed`]. `stop_reason` is the *last
+/// LLM round's* finish reason at the moment the engine returned.
+/// `None` when the cycle ended without ever resolving a real model
+/// finish reason (structured-output retry cap, Stop-hook prevent
+/// before any round resolved one) — emitters must not fabricate.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletedOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<crate::StopReason>,
+}
+
+/// Payload for [`TurnOutcome::Failed`]. `error.code` is the
+/// wire-stable category; `error.message` is the human-readable
+/// detail. No `stop_reason` — the failure did not originate from
+/// the model's finish_reason.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailedOutcome {
+    pub error: ErrorPayload,
+}
+
+/// Payload for [`TurnOutcome::Interrupted`]. `cancel_reason`
+/// distinguishes user Ctrl+C from system pre-empt (Clear / Compact
+/// / Rewind / Shutdown). Never carries a model `stop_reason`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterruptedOutcome {
+    pub cancel_reason: CancelReason,
+}
+
+/// Payload for [`TurnOutcome::MaxTurnsReached`]. The variant IS the
+/// terminal reason; consumers know "you ran out of turns".
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaxTurnsReachedOutcome {
+    pub max_turns: i32,
+}
+
+/// Payload for [`TurnOutcome::BudgetExhausted`]. `budget_tokens` is
+/// the configured `max_tokens` ceiling; `None` when no explicit max
+/// was set (the 90%-of-window heuristic still drove the stop, but
+/// there is no honest single number to emit).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetExhaustedOutcome {
+    pub used_tokens: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<i64>,
+}
+
+impl TurnEndedParams {
+    pub fn completed(
+        turn_id: crate::TurnId,
+        usage: Option<TokenUsage>,
+        stop_reason: Option<crate::StopReason>,
+    ) -> Self {
+        Self {
+            turn_id,
+            usage,
+            outcome: TurnOutcome::Completed(CompletedOutcome { stop_reason }),
+        }
+    }
+
+    pub fn failed(turn_id: crate::TurnId, usage: Option<TokenUsage>, error: ErrorPayload) -> Self {
+        Self {
+            turn_id,
+            usage,
+            outcome: TurnOutcome::Failed(FailedOutcome { error }),
+        }
+    }
+
+    pub fn interrupted(
+        turn_id: crate::TurnId,
+        usage: Option<TokenUsage>,
+        cancel_reason: CancelReason,
+    ) -> Self {
+        Self {
+            turn_id,
+            usage,
+            outcome: TurnOutcome::Interrupted(InterruptedOutcome { cancel_reason }),
+        }
+    }
+
+    pub fn max_turns_reached(
+        turn_id: crate::TurnId,
+        usage: Option<TokenUsage>,
+        max_turns: i32,
+    ) -> Self {
+        Self {
+            turn_id,
+            usage,
+            outcome: TurnOutcome::MaxTurnsReached(MaxTurnsReachedOutcome { max_turns }),
+        }
+    }
+
+    pub fn budget_exhausted(
+        turn_id: crate::TurnId,
+        usage: Option<TokenUsage>,
+        used_tokens: i64,
+        budget_tokens: Option<i64>,
+    ) -> Self {
+        Self {
+            turn_id,
+            usage,
+            outcome: TurnOutcome::BudgetExhausted(BudgetExhaustedOutcome {
+                used_tokens,
+                budget_tokens,
+            }),
+        }
+    }
+}
+
+/// Structured error payload for `TurnOutcome::Failed`. Replaces
+/// the older opaque `error: String` so Hub / SDK consumers can
+/// filter / aggregate by category without parsing the message.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorPayload {
+    /// Human-readable description. Always present.
+    pub message: String,
+    /// Wire-stable category. Maps 1:1 from
+    /// `coco_error::StatusCategory` (minus `Success`).
+    pub code: ErrorCode,
+}
+
+/// Wire-stable error category. Category-level (11 variants) rather
+/// than leaf `StatusCode` (~35 variants) so the protocol does not
+/// break every time a new internal status is added. The mapping
+/// from `coco_error::StatusCategory` lives in `coco_query::error_code`
+/// (the seam between the error layer and the wire types).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    Common,
+    Input,
+    Io,
+    Network,
+    Auth,
+    Config,
+    Provider,
+    Resource,
+    SystemReminder,
+    /// Hook policy blocked the turn (e.g. a `UserPromptSubmit` hook
+    /// returned a `blocking_error`). Not a coco_error condition —
+    /// it's a deliberate policy decision surfaced via the same wire
+    /// shape so consumers can render / filter it. Distinct from
+    /// `Unknown` so dashboards don't lump policy blocks together with
+    /// the defensive sentinel.
+    HookBlocked,
+    /// Defensive sentinel: an emitter reached the error path without
+    /// a classifiable `StatusCategory` (e.g. the `Success → Unknown`
+    /// collapse in `coco_query::error_code`). Treat as a bug signal,
+    /// not a load-bearing category — every `Unknown` in production
+    /// traffic warrants investigation.
+    Unknown,
 }
 
 /// Reasoning aggregates anchored to a specific assistant message.
@@ -926,21 +1145,13 @@ pub struct ReasoningMetadataAttachedParams {
     pub reasoning_tokens: i64,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TurnFailedParams {
-    pub error: String,
-}
-
 /// Why a turn was interrupted. Lets the TUI distinguish "user pressed
 /// Ctrl+C — restore the input if conditions match" from "system cancelled
 /// the in-flight turn to make room for `/clear` / `/compact` / `/rewind`
 /// / shutdown / next submit — leave the conversation alone".
 ///
 /// Mirrors TS `abortController.signal.reason` discrimination at
-/// `REPL.tsx:3001`. New variants default to non-user-initiated semantics
-/// at the consumer (no auto-restore), so adding e.g. `BudgetExhausted`
-/// or `Timeout` later is additive without breaking the TUI handler.
+/// `REPL.tsx:3001`. Used inside `TurnOutcome::Interrupted`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -953,19 +1164,6 @@ pub enum CancelReason {
     /// SubmitInput). Auto-restore is suppressed — the user did not
     /// request a rewind.
     SystemPreempt,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TurnInterruptedParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
-    /// Why the turn was interrupted. `None` only on legacy transcripts
-    /// that pre-date this field; new senders always populate it. The
-    /// TUI handler treats `None` as `SystemPreempt` (conservative — no
-    /// auto-restore on unknown reason).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<CancelReason>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

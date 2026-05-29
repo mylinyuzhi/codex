@@ -30,6 +30,16 @@ use coco_types::PermissionMode;
 use crate::CoreEvent;
 use crate::ServerNotification;
 
+// Test-only imports from sibling modules. Previously bridged via
+// `#[cfg(test)] pub(crate) use` re-exports in `engine.rs`; the
+// engine module no longer needs them in its lib surface so we
+// import them where they are actually consumed.
+use crate::engine_helpers::ProgressThrottle;
+use crate::engine_helpers::classify_progress_payload;
+use crate::engine_helpers::drain_one_progress;
+use crate::engine_helpers::emit_model_fallback_notice;
+use crate::engine_helpers::is_capacity_error_message;
+
 // ─── Simple text-only mock ───
 
 struct TextMock {
@@ -534,7 +544,7 @@ async fn text_only_end_turn_emits_reasoning_metadata() {
     });
 
     let result = engine
-        .run_with_events("hi", event_tx)
+        .run_with_events("hi", event_tx, coco_types::TurnId::generate())
         .await
         .expect("should succeed");
     let events = collector.await.expect("collector should join");
@@ -1045,7 +1055,7 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
     let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
 
     let result = engine
-        .run_with_events("please read it", event_tx)
+        .run_with_events("please read it", event_tx, coco_types::TurnId::generate())
         .await
         .expect("ok");
     assert_eq!(result.response_text, "done");
@@ -1176,7 +1186,7 @@ async fn test_budget_exhausted_in_engine() {
     let cancel = CancellationToken::new();
 
     let config = QueryEngineConfig {
-        max_tokens: Some(15),
+        total_token_budget: Some(15),
         ..Default::default()
     };
     let engine = QueryEngine::new(config, client, tools, cancel, None);
@@ -1217,7 +1227,7 @@ async fn collect_events_from_run(
     });
 
     let result = engine
-        .run_with_events(prompt, event_tx)
+        .run_with_events(prompt, event_tx, coco_types::TurnId::generate())
         .await
         .expect("engine run should succeed");
     let events = collector.await.unwrap();
@@ -1572,7 +1582,11 @@ async fn exit_plan_mode_observable_input_includes_disk_plan() {
         events
     });
     let result = engine
-        .run_with_events("approve plan exit", event_tx)
+        .run_with_events(
+            "approve plan exit",
+            event_tx,
+            coco_types::TurnId::generate(),
+        )
         .await
         .expect("engine run should succeed");
     let events = collector.await.unwrap();
@@ -1625,6 +1639,14 @@ impl coco_tool_runtime::Tool for PermissionRewriteTool {
         coco_types::ToolInputSchema::default()
     }
 
+    // Override: test mocks pin `Input = serde_json::Value`, whose schema
+    // derives to `type = null` — the runtime debug_assert in
+    // `core/tool-runtime/src/traits.rs:482` catches that. Return a
+    // permissive object envelope so the assert is satisfied.
+    fn input_json_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"type": "object"}))
+    }
+
     fn description(
         &self,
         _input: &serde_json::Value,
@@ -1673,6 +1695,14 @@ impl coco_tool_runtime::Tool for HookEchoTool {
         coco_types::ToolInputSchema::default()
     }
 
+    // Override: test mocks pin `Input = serde_json::Value`, whose schema
+    // derives to `type = null` — the runtime debug_assert in
+    // `core/tool-runtime/src/traits.rs:482` catches that. Return a
+    // permissive object envelope so the assert is satisfied.
+    fn input_json_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"type": "object"}))
+    }
+
     fn description(
         &self,
         _input: &serde_json::Value,
@@ -1711,6 +1741,14 @@ impl coco_tool_runtime::Tool for HookMcpTool {
 
     fn input_schema(&self) -> coco_types::ToolInputSchema {
         coco_types::ToolInputSchema::default()
+    }
+
+    // Override: test mocks pin `Input = serde_json::Value`, whose schema
+    // derives to `type = null` — the runtime debug_assert in
+    // `core/tool-runtime/src/traits.rs:482` catches that. Return a
+    // permissive object envelope so the assert is satisfied.
+    fn input_json_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"type": "object"}))
     }
 
     fn description(
@@ -1761,6 +1799,14 @@ impl coco_tool_runtime::Tool for HookOrderingTool {
         coco_types::ToolInputSchema::default()
     }
 
+    // Override: test mocks pin `Input = serde_json::Value`, whose schema
+    // derives to `type = null` — the runtime debug_assert in
+    // `core/tool-runtime/src/traits.rs:482` catches that. Return a
+    // permissive object envelope so the assert is satisfied.
+    fn input_json_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"type": "object"}))
+    }
+
     fn description(
         &self,
         _input: &serde_json::Value,
@@ -1804,6 +1850,14 @@ impl coco_tool_runtime::Tool for HookOrderingMcpTool {
 
     fn input_schema(&self) -> coco_types::ToolInputSchema {
         coco_types::ToolInputSchema::default()
+    }
+
+    // Override: test mocks pin `Input = serde_json::Value`, whose schema
+    // derives to `type = null` — the runtime debug_assert in
+    // `core/tool-runtime/src/traits.rs:482` catches that. Return a
+    // permissive object envelope so the assert is satisfied.
+    fn input_json_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"type": "object"}))
     }
 
     fn description(
@@ -1855,6 +1909,14 @@ impl coco_tool_runtime::Tool for HookFailTool {
 
     fn input_schema(&self) -> coco_types::ToolInputSchema {
         coco_types::ToolInputSchema::default()
+    }
+
+    // Override: test mocks pin `Input = serde_json::Value`, whose schema
+    // derives to `type = null` — the runtime debug_assert in
+    // `core/tool-runtime/src/traits.rs:482` catches that. Return a
+    // permissive object envelope so the assert is satisfied.
+    fn input_json_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"type": "object"}))
     }
 
     fn description(
@@ -2083,7 +2145,11 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
         events
     });
     let result = engine
-        .run_with_events("rewrite mcp output", event_tx)
+        .run_with_events(
+            "rewrite mcp output",
+            event_tx,
+            coco_types::TurnId::generate(),
+        )
         .await
         .expect("ok");
     let events = collector.await.expect("collector should join");
@@ -2504,7 +2570,11 @@ async fn failure_path_completed_event_matches_error_tool_result_text() {
         events
     });
     let result = engine
-        .run_with_events("check failure event output", event_tx)
+        .run_with_events(
+            "check failure event output",
+            event_tx,
+            coco_types::TurnId::generate(),
+        )
         .await
         .expect("ok");
     let events = collector.await.expect("collector should join");
@@ -2701,7 +2771,7 @@ async fn test_session_usage_updated_emits_cumulative_snapshot() {
         events
     });
     let _ = engine
-        .run_with_events("hi", event_tx)
+        .run_with_events("hi", event_tx, coco_types::TurnId::generate())
         .await
         .expect("engine run should succeed");
     let events = collector.await.unwrap();
@@ -2846,6 +2916,12 @@ impl coco_tool_runtime::Tool for AskingTool {
             properties: std::collections::HashMap::new(),
             required: Vec::new(),
         }
+    }
+    // Override: `Input = serde_json::Value` derives `type = null`,
+    // which the runtime debug_assert rejects. See first occurrence
+    // above for context.
+    fn input_json_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"type": "object"}))
     }
     fn description(
         &self,
@@ -3054,7 +3130,9 @@ async fn test_session_result_cancelled_marks_is_error() {
         events
     });
 
-    let _ = engine.run_with_events("hi", event_tx).await;
+    let _ = engine
+        .run_with_events("hi", event_tx, coco_types::TurnId::generate())
+        .await;
     let events = collector.await.unwrap();
 
     let sr = events.iter().find_map(|e| match e {
@@ -3109,6 +3187,11 @@ impl Tool for AskingMockTool {
     }
     fn input_schema(&self) -> ToolInputSchema {
         ToolInputSchema::default()
+    }
+    // Override: `Input = serde_json::Value` derives `type = null`,
+    // which the runtime debug_assert rejects. Permissive object envelope.
+    fn input_json_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"type": "object"}))
     }
     fn description(&self, _input: &Value, _opts: &DescriptionOptions) -> String {
         "Mock tool that always returns Ask".into()
@@ -3533,7 +3616,7 @@ async fn stop_hook_prevent_continuation_matches_ts_terminal_reason() {
     });
 
     let result = engine
-        .run_with_events("finish and stop", event_tx)
+        .run_with_events("finish and stop", event_tx, coco_types::TurnId::generate())
         .await
         .expect("stop prevent should be a clean terminal result");
     let events = collector.await.expect("collector should join");
@@ -3544,7 +3627,8 @@ async fn stop_hook_prevent_continuation_matches_ts_terminal_reason() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            CoreEvent::Protocol(ServerNotification::TurnCompleted(_))
+            CoreEvent::Protocol(ServerNotification::TurnEnded(p))
+                if matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
         )),
         "stop-hook prevent should still close the protocol turn"
     );
@@ -3679,6 +3763,7 @@ async fn run_with_messages_uses_last_user_message_for_history_key() {
         .run_with_messages(
             vec![std::sync::Arc::new(prior), std::sync::Arc::new(new)],
             tx,
+            coco_types::TurnId::generate(),
         )
         .await
         .expect("should succeed");
@@ -3911,14 +3996,14 @@ fn test_classify_progress_payload_recognizes_bash_and_powershell() {
         "taskId": "t-1",
     });
     let (tool_name, elapsed, task_id) =
-        super::classify_progress_payload(&bash).expect("bash must classify");
+        classify_progress_payload(&bash).expect("bash must classify");
     assert_eq!(tool_name, "Bash");
     assert_eq!(elapsed, 4.5);
     assert_eq!(task_id.as_deref(), Some("t-1"));
 
     let ps = serde_json::json!({"type": "powershell_progress"});
     let (tool_name, elapsed, task_id) =
-        super::classify_progress_payload(&ps).expect("powershell must classify");
+        classify_progress_payload(&ps).expect("powershell must classify");
     assert_eq!(tool_name, "PowerShell");
     assert_eq!(elapsed, 0.0);
     assert_eq!(task_id, None);
@@ -3931,14 +4016,14 @@ fn test_classify_progress_payload_rejects_unrelated_types() {
     for t in ["agent_progress", "skill_progress", "other"] {
         let v = serde_json::json!({"type": t});
         assert!(
-            super::classify_progress_payload(&v).is_none(),
+            classify_progress_payload(&v).is_none(),
             "type {t} must not classify"
         );
     }
     // Missing `type` field → None.
-    assert!(super::classify_progress_payload(&serde_json::json!({})).is_none());
+    assert!(classify_progress_payload(&serde_json::json!({})).is_none());
     // Non-object payload → None.
-    assert!(super::classify_progress_payload(&serde_json::json!("str")).is_none());
+    assert!(classify_progress_payload(&serde_json::json!("str")).is_none());
 }
 
 #[test]
@@ -3946,7 +4031,7 @@ fn test_progress_throttle_blocks_second_emission_within_window() {
     // 1-second window is enough for the test to never have to wait:
     // the two `now` values we pass are synthetic `Instant`s.
     let cap = std::num::NonZeroUsize::new(100).unwrap_or(std::num::NonZeroUsize::MIN);
-    let mut th = super::ProgressThrottle::with_params(std::time::Duration::from_secs(1), cap);
+    let mut th = ProgressThrottle::with_params(std::time::Duration::from_secs(1), cap);
     let t0 = std::time::Instant::now();
     assert!(th.allow("parent-A", t0), "first call must pass");
     let t1 = t0 + std::time::Duration::from_millis(500);
@@ -3962,7 +4047,7 @@ fn test_progress_throttle_blocks_second_emission_within_window() {
 fn test_progress_throttle_lru_evicts_oldest_key() {
     // Tiny max (2 entries) so the LRU path is exercised in one call.
     let cap = std::num::NonZeroUsize::new(2).unwrap_or(std::num::NonZeroUsize::MIN);
-    let mut th = super::ProgressThrottle::with_params(std::time::Duration::from_secs(60), cap);
+    let mut th = ProgressThrottle::with_params(std::time::Duration::from_secs(60), cap);
     let t = std::time::Instant::now();
     assert!(th.allow("A", t));
     assert!(th.allow("B", t + std::time::Duration::from_secs(1)));
@@ -3979,7 +4064,7 @@ fn test_progress_throttle_lru_evicts_oldest_key() {
 #[tokio::test]
 async fn test_drain_one_progress_emits_both_tui_and_protocol_when_qualifying() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(8);
-    let mut throttle = super::ProgressThrottle::new();
+    let mut throttle = ProgressThrottle::new();
     let progress = coco_tool_runtime::ToolProgress {
         tool_use_id: "tu-1".into(),
         parent_tool_use_id: Some("parent-1".into()),
@@ -3989,7 +4074,7 @@ async fn test_drain_one_progress_emits_both_tui_and_protocol_when_qualifying() {
             "elapsedTimeSeconds": 2.0,
         }),
     };
-    super::drain_one_progress(&Some(tx), progress, &mut throttle).await;
+    drain_one_progress(&Some(tx), progress, &mut throttle).await;
 
     // Event 1: TUI-only ToolProgress (raw data passthrough).
     let tui_evt = rx.recv().await.expect("first event");
@@ -4021,13 +4106,13 @@ async fn test_drain_one_progress_suppresses_protocol_for_non_bash_payload() {
     // yields `Ok(None)` instead of pending.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(8);
     let sender = Some(tx);
-    let mut throttle = super::ProgressThrottle::new();
+    let mut throttle = ProgressThrottle::new();
     let progress = coco_tool_runtime::ToolProgress {
         tool_use_id: "tu-agent".into(),
         parent_tool_use_id: None,
         data: serde_json::json!({"type": "agent_progress"}),
     };
-    super::drain_one_progress(&sender, progress, &mut throttle).await;
+    drain_one_progress(&sender, progress, &mut throttle).await;
     // Only the TUI event is delivered; the next recv blocks.
     let evt = rx.recv().await.expect("TUI event");
     assert!(matches!(
@@ -4047,14 +4132,14 @@ async fn test_drain_one_progress_throttles_bursts() {
     // Two back-to-back bash progress events share a parent id — the
     // second protocol emission must be throttled.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(16);
-    let mut throttle = super::ProgressThrottle::new();
+    let mut throttle = ProgressThrottle::new();
     let make = |tu: &str| coco_tool_runtime::ToolProgress {
         tool_use_id: tu.into(),
         parent_tool_use_id: Some("parent-X".into()),
         data: serde_json::json!({"type": "bash_progress"}),
     };
-    super::drain_one_progress(&Some(tx.clone()), make("tu-1"), &mut throttle).await;
-    super::drain_one_progress(&Some(tx), make("tu-2"), &mut throttle).await;
+    drain_one_progress(&Some(tx.clone()), make("tu-1"), &mut throttle).await;
+    drain_one_progress(&Some(tx), make("tu-2"), &mut throttle).await;
 
     // Four events max (two calls × {TUI, Protocol}) — but the second
     // protocol emission is throttled, so exactly 3 events arrive.
@@ -4080,16 +4165,14 @@ fn test_is_capacity_error_message_classifies_overloaded_variants() {
     // Covers: Rust `InferenceError::Overloaded` Display, Rust rate-limit
     // Display, raw Anthropic 529 text, raw 503, status prefixes, and
     // case insensitivity.
-    assert!(super::is_capacity_error_message("provider overloaded"));
-    assert!(super::is_capacity_error_message(
+    assert!(is_capacity_error_message("provider overloaded"));
+    assert!(is_capacity_error_message(
         "API Error: overloaded_error on request"
     ));
-    assert!(super::is_capacity_error_message(
-        "rate limited: retry later"
-    ));
-    assert!(super::is_capacity_error_message("status: 529 from gateway"));
-    assert!(super::is_capacity_error_message("HTTP (503) upstream"));
-    assert!(super::is_capacity_error_message(
+    assert!(is_capacity_error_message("rate limited: retry later"));
+    assert!(is_capacity_error_message("status: 529 from gateway"));
+    assert!(is_capacity_error_message("HTTP (503) upstream"));
+    assert!(is_capacity_error_message(
         "Provider Overloaded: high demand"
     ));
 }
@@ -4097,19 +4180,17 @@ fn test_is_capacity_error_message_classifies_overloaded_variants() {
 #[test]
 fn test_is_capacity_error_message_rejects_unrelated_errors() {
     // Non-capacity errors must not accidentally trigger the fallback.
-    assert!(!super::is_capacity_error_message("authentication failed"));
-    assert!(!super::is_capacity_error_message("prompt_too_long"));
-    assert!(!super::is_capacity_error_message("network error: timeout"));
-    assert!(!super::is_capacity_error_message(
-        "provider error (500): internal"
-    ));
+    assert!(!is_capacity_error_message("authentication failed"));
+    assert!(!is_capacity_error_message("prompt_too_long"));
+    assert!(!is_capacity_error_message("network error: timeout"));
+    assert!(!is_capacity_error_message("provider error (500): internal"));
 }
 
 #[tokio::test]
 async fn test_emit_model_fallback_notice_capacity_degrade_template() {
     // Capacity-degrade: "Switched to {new} due to high demand for {original}".
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(4);
-    super::emit_model_fallback_notice(
+    emit_model_fallback_notice(
         &Some(tx),
         /*original*/ "claude-opus",
         /*new_model*/ "claude-sonnet",
@@ -4139,7 +4220,7 @@ async fn test_emit_model_fallback_notice_probe_recovery_template() {
     // Probe recovery must NOT describe primary as a "fallback model".
     // Direction-aware template: "Recovered to primary {new} after probe".
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(4);
-    super::emit_model_fallback_notice(
+    emit_model_fallback_notice(
         &Some(tx),
         /*original*/ "",
         /*new_model*/ "claude-opus",
@@ -4167,7 +4248,7 @@ async fn test_emit_model_fallback_notice_probe_recovery_template() {
 async fn test_emit_model_fallback_notice_chain_exhausted_template() {
     // ChainExhausted is terminal — announces no successor model.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(4);
-    super::emit_model_fallback_notice(
+    emit_model_fallback_notice(
         &Some(tx),
         /*original*/ "gpt-5",
         /*new_model*/ "",
@@ -4254,7 +4335,9 @@ async fn collect_run_events(
         }
         events
     });
-    let result = engine.run_with_events(prompt, event_tx).await;
+    let result = engine
+        .run_with_events(prompt, event_tx, coco_types::TurnId::generate())
+        .await;
     let events = collector.await.expect("collector should join");
     (result, events)
 }
@@ -4281,30 +4364,74 @@ async fn turn_completed_fires_once_per_user_prompt_cycle() {
     let qr = result.expect("multi-round run should succeed");
     assert_eq!(qr.turns, 2, "two LLM rounds expected");
 
+    // C1+C2 invariant: TurnStarted is now once-per-cycle (emitted by
+    // engine_session before the loop), not once-per-round. This used
+    // to silently fire twice; the assertion locks the new contract.
+    let started = count_protocol(&events, |n| matches!(n, ServerNotification::TurnStarted(_)));
+    assert_eq!(
+        started, 1,
+        "exactly one TurnStarted per user prompt cycle, got {started}",
+    );
+
     let completed = count_protocol(&events, |n| {
-        matches!(n, ServerNotification::TurnCompleted(_))
+        matches!(
+            n,
+            ServerNotification::TurnEnded(p)
+                if matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
+        )
     });
     assert_eq!(
         completed, 1,
-        "exactly one TurnCompleted per user prompt cycle, got {completed}",
+        "exactly one TurnEnded(Completed) per user prompt cycle, got {completed}",
     );
-    // No TurnInterrupted / TurnFailed / MaxTurnsReached on the happy path.
+    // No non-Completed outcomes on the happy path.
     let other_terminals = count_protocol(&events, |n| {
         matches!(
             n,
-            ServerNotification::TurnInterrupted(_)
-                | ServerNotification::TurnFailed(_)
-                | ServerNotification::MaxTurnsReached { .. }
+            ServerNotification::TurnEnded(p)
+                if !matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
         )
     });
     assert_eq!(other_terminals, 0, "no non-success terminals expected");
+
+    // Pairing contract: every TurnStarted's turn_id appears on the
+    // matching TurnEnded.
+    let started_ids: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            CoreEvent::Protocol(ServerNotification::TurnStarted(p)) => {
+                Some(p.turn_id.as_str().to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    let ended_ids: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            CoreEvent::Protocol(ServerNotification::TurnEnded(p)) => {
+                Some(p.turn_id.as_str().to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        started_ids, ended_ids,
+        "TurnStarted/TurnEnded turn_ids must match (C2 pairing contract)"
+    );
 }
 
 #[tokio::test]
-async fn cancellation_emits_turn_interrupted_for_sdk_iterator() {
-    // Pre-X2 follow-up: cancellation just appended a UserInterruption
-    // message and returned `Ok`; SDK `events()` got no wire terminator
-    // and would block. Now we emit TurnInterrupted with reason=UserCancel.
+async fn cancellation_returns_cancelled_without_engine_turn_ended() {
+    // Turn-lifecycle refactor: the engine no longer wire-emits
+    // `TurnEnded(Interrupted)` on cancel. Only the runner
+    // (`tui_runner` / `sdk_runner`) knows the `CancelReason`
+    // (UserCancel vs SystemPreempt, tracked in its `OnceLock`), so the
+    // runner owns that emit. The engine just finalizes the user-cancel
+    // marker and returns `Ok(cancelled = true)`, leaving the terminal
+    // `TurnEnded(Interrupted)` to the runner. This test locks the
+    // engine's half of the contract; the runner-emitted terminator is
+    // covered by the sdk/tui runner paths and the `cancel_during_tool`
+    // live test.
     let model = Arc::new(TextMock {
         text: "nope".into(),
     });
@@ -4321,25 +4448,20 @@ async fn cancellation_emits_turn_interrupted_for_sdk_iterator() {
     let qr = result.expect("cancel path returns Ok with cancelled=true");
     assert!(qr.cancelled);
 
-    let interrupted = events.iter().any(|e| match e {
-        CoreEvent::Protocol(ServerNotification::TurnInterrupted(p)) => {
-            matches!(p.reason, Some(coco_types::CancelReason::UserCancel))
-        }
-        _ => false,
-    });
-    assert!(
-        interrupted,
-        "cancellation must emit TurnInterrupted with UserCancel reason"
+    // The engine emits NO `TurnEnded` of any outcome on the direct
+    // cancel path — neither `Interrupted` (the runner's job) nor
+    // `Completed` (cancellation is not a clean turn end). The
+    // `TurnStarted` from `run_internal_with_messages` is paired by the
+    // runner's later `TurnEnded(Interrupted)` in production.
+    let turn_ended = count_protocol(&events, |n| matches!(n, ServerNotification::TurnEnded(_)));
+    assert_eq!(
+        turn_ended, 0,
+        "engine must not emit TurnEnded on cancel — the runner owns the Interrupted terminator"
     );
-    // No TurnCompleted: cancellation is not a clean turn end.
-    let completed = count_protocol(&events, |n| {
-        matches!(n, ServerNotification::TurnCompleted(_))
-    });
-    assert_eq!(completed, 0);
 }
 
 #[tokio::test]
-async fn budget_exhaustion_emits_max_turns_reached() {
+async fn turn_budget_stop_emits_completed_or_max_turns_reached() {
     // max_turns=0 forces the budget check to fire on the first iteration.
     // SDK consumers need MaxTurnsReached so events() can terminate.
     let model = Arc::new(TextMock {
@@ -4368,23 +4490,25 @@ async fn budget_exhaustion_emits_max_turns_reached() {
     let (result, events) = collect_run_events(engine, "hi").await;
     let _ = result;
     // With max_turns=1 and a text-only model, the first turn completes
-    // cleanly (emits TurnCompleted) and the budget check exits on the
-    // second iteration. We assert that whichever path runs, the SDK
-    // sees a wire terminator on every exit.
+    // cleanly (emits TurnEnded(Completed)) and the budget check exits
+    // on the second iteration. Tightened from the looser pre-refactor
+    // assertion: the terminator must be Completed (clean turn 1) or
+    // MaxTurnsReached (budget hit turn 2) — not Failed / Interrupted /
+    // BudgetExhausted, since none of those paths fire here.
     let any_terminator = events.iter().any(|e| {
         matches!(
             e,
-            CoreEvent::Protocol(
-                ServerNotification::TurnCompleted(_)
-                    | ServerNotification::MaxTurnsReached { .. }
-                    | ServerNotification::TurnFailed(_)
-                    | ServerNotification::TurnInterrupted(_)
-            )
+            CoreEvent::Protocol(ServerNotification::TurnEnded(p))
+                if matches!(
+                    p.outcome,
+                    coco_types::TurnOutcome::Completed(_)
+                        | coco_types::TurnOutcome::MaxTurnsReached(_)
+                )
         )
     });
     assert!(
         any_terminator,
-        "every session-loop exit must emit a Turn* terminator for SDK consumers"
+        "every session-loop exit must emit a TurnEnded terminator for SDK consumers"
     );
 }
 
@@ -4428,9 +4552,15 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
 
     let (result, events) = collect_run_events(engine, "hi").await;
     assert!(result.is_err(), "provider failure must propagate as Err");
-    let failed = count_protocol(&events, |n| matches!(n, ServerNotification::TurnFailed(_)));
+    let failed = count_protocol(&events, |n| {
+        matches!(
+            n,
+            ServerNotification::TurnEnded(p)
+                if matches!(p.outcome, coco_types::TurnOutcome::Failed(_))
+        )
+    });
     assert_eq!(
         failed, 1,
-        "stream error must emit exactly one TurnFailed before propagating"
+        "stream error must emit exactly one TurnEnded(Failed) before propagating"
     );
 }

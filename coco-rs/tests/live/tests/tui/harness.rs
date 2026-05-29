@@ -271,7 +271,7 @@ impl TuiHarness {
             context_window: 200_000,
             max_output_tokens: 2_048,
             max_turns: cfg.max_turns,
-            max_tokens: None,
+            total_token_budget: None,
             system_prompt: Some("You are a test scripted model.".into()),
             is_non_interactive: true,
             project_dir: Some(workdir_path.clone()),
@@ -806,7 +806,9 @@ async fn run_test_agent_driver(
                 // `run_with_events` itself emits SessionStarted /
                 // TurnStarted / TurnCompleted / SessionResult into the
                 // event channel — the harness folds them into AppState.
-                let _ = engine.run_with_events(&content, event_tx.clone()).await;
+                let _ = engine
+                    .run_with_events(&content, event_tx.clone(), coco_types::TurnId::generate())
+                    .await;
             }
             UserCommand::Shutdown { .. } => break,
             // Other commands are intentionally ignored — see fn docs.

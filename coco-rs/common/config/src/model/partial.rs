@@ -34,6 +34,10 @@ pub struct PartialModelInfo {
     pub context_window: Option<PositiveTokens>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<PositiveTokens>,
+    /// Optional per-model escalate ceiling for `MaxTokens` recovery.
+    /// See [`super::ModelInfo::max_output_tokens_escalate`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens_escalate: Option<PositiveTokens>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<i64>,
 
@@ -104,6 +108,7 @@ impl PartialModelInfo {
                 display_name: None,
                 context_window: None,
                 max_output_tokens: None,
+                max_output_tokens_escalate: None,
                 timeout_secs: None,
                 capabilities: None,
                 temperature: None,
@@ -137,6 +142,7 @@ impl PartialModelInfo {
         merge_opt!(display_name);
         merge_opt!(context_window);
         merge_opt!(max_output_tokens);
+        merge_opt!(max_output_tokens_escalate);
         merge_opt!(timeout_secs);
         merge_opt!(capabilities);
         merge_opt!(temperature);

@@ -10,10 +10,12 @@ fn test_register_extended_builtins() {
 
     // Verify we registered a reasonable number of extended commands.
     // Count drifts as commands move between layers; the floor only
-    // catches whole-block regressions.
+    // catches whole-block regressions. Floor lowered to 44 after a
+    // builtin migrated to `handlers/` per CLAUDE.md "Deliberately Not
+    // Ported" / "Deferred" tables.
     assert!(
-        registry.len() >= 45,
-        "Expected at least 45 extended commands, got {}",
+        registry.len() >= 44,
+        "Expected at least 44 extended commands, got {}",
         registry.len()
     );
 }

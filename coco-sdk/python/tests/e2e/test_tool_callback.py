@@ -43,7 +43,7 @@ async def test_sdk_hosted_tool_invocation(live_deepseek, isolated_cwd) -> None:
                 async for event in client.events():
                     if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                         text_parts.append(event.params.delta)
-                    elif event.method == NotificationMethod.TURN_COMPLETED:
+                    elif event.method == NotificationMethod.TURN_ENDED:
                         # Some providers do tool-then-final-answer in one
                         # turn; others split into two. Loop until the
                         # model's final reply mentions the number or
@@ -52,7 +52,7 @@ async def test_sdk_hosted_tool_invocation(live_deepseek, isolated_cwd) -> None:
                             break
                         # Otherwise wait for another turn — coco-rs will
                         # auto-continue if there are pending tool calls.
-                    elif event.method == NotificationMethod.TURN_FAILED:
+                    elif event.method == NotificationMethod.TURN_ENDED:
                         pytest.fail(f"turn failed: {event.params}")
         except asyncio.TimeoutError:
             pytest.fail(

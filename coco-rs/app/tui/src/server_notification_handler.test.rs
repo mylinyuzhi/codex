@@ -635,10 +635,10 @@ fn test_live_status_tokens_start_fresh_and_follow_stream_deltas() {
     let mut state = AppState::new();
     handle_core_event(
         &mut state,
-        CoreEvent::Protocol(ServerNotification::TurnCompleted(
-            coco_types::TurnCompletedParams {
-                turn_id: None,
-                usage: coco_types::TokenUsage {
+        CoreEvent::Protocol(ServerNotification::TurnEnded(
+            coco_types::TurnEndedParams::completed(
+                coco_types::TurnId::from("t-test"),
+                Some(coco_types::TokenUsage {
                     input_tokens: coco_types::InputTokens {
                         total: 100,
                         ..Default::default()
@@ -647,8 +647,9 @@ fn test_live_status_tokens_start_fresh_and_follow_stream_deltas() {
                         total: 50,
                         ..Default::default()
                     },
-                },
-            },
+                }),
+                Some(coco_messages::StopReason::EndTurn),
+            ),
         )),
     );
     assert_eq!(state.session.token_usage.output_tokens, 50);
@@ -657,8 +658,7 @@ fn test_live_status_tokens_start_fresh_and_follow_stream_deltas() {
         &mut state,
         CoreEvent::Protocol(ServerNotification::TurnStarted(
             coco_types::TurnStartedParams {
-                turn_id: None,
-                turn_number: 2,
+                turn_id: coco_types::TurnId::from("t-test-2"),
             },
         )),
     );

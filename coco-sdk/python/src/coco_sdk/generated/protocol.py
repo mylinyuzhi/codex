@@ -21,6 +21,13 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
+# Scalar newtype aliases (transparent Rust newtypes)
+# ---------------------------------------------------------------------------
+
+TurnId = str
+
+
+# ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
 
@@ -184,6 +191,19 @@ class ElicitationAction(str, Enum):
 class ElicitationMode(str, Enum):
     form = 'form'
     url = 'url'
+
+class ErrorCode(str, Enum):
+    common = 'common'
+    input = 'input'
+    io = 'io'
+    network = 'network'
+    auth = 'auth'
+    config = 'config'
+    provider = 'provider'
+    resource = 'resource'
+    system_reminder = 'system_reminder'
+    hook_blocked = 'hook_blocked'
+    unknown = 'unknown'
 
 class ExitReason(str, Enum):
     clear = 'clear'
@@ -1030,20 +1050,10 @@ class ServerNotificationTurnStarted(BaseModel):
     method: Literal['turn/started'] = Field(default='turn/started', alias='method')
     params: TurnStartedParams
 
-class ServerNotificationTurnCompleted(BaseModel):
+class ServerNotificationTurnEnded(BaseModel):
     model_config = {"populate_by_name": True}
-    method: Literal['turn/completed'] = Field(default='turn/completed', alias='method')
-    params: TurnCompletedParams
-
-class ServerNotificationTurnFailed(BaseModel):
-    model_config = {"populate_by_name": True}
-    method: Literal['turn/failed'] = Field(default='turn/failed', alias='method')
-    params: TurnFailedParams
-
-class ServerNotificationTurnInterrupted(BaseModel):
-    model_config = {"populate_by_name": True}
-    method: Literal['turn/interrupted'] = Field(default='turn/interrupted', alias='method')
-    params: TurnInterruptedNotifParams
+    method: Literal['turn/ended'] = Field(default='turn/ended', alias='method')
+    params: TurnEndedParams
 
 class ServerNotificationItemStarted(BaseModel):
     model_config = {"populate_by_name": True}
@@ -1303,11 +1313,6 @@ class ServerNotificationSessionStateChanged(BaseModel):
     method: Literal['session/stateChanged'] = Field(default='session/stateChanged', alias='method')
     params: dict[str, Any]
 
-class ServerNotificationTurnMaxReached(BaseModel):
-    model_config = {"populate_by_name": True}
-    method: Literal['turn/maxReached'] = Field(default='turn/maxReached', alias='method')
-    params: dict[str, Any]
-
 class ServerNotificationLocalCommandOutput(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal['localCommand/output'] = Field(default='localCommand/output', alias='method')
@@ -1339,7 +1344,7 @@ class ServerNotificationPluginsChanged(BaseModel):
     params: dict[str, Any]
 
 ServerNotification = Annotated[
-    Union[ServerNotificationSessionStarted, ServerNotificationSessionResult, ServerNotificationSessionEnded, ServerNotificationSessionUsageUpdated, ServerNotificationHistoryMessageAppended, ServerNotificationHistoryMessageTruncated, ServerNotificationHistoryResetForResume, ServerNotificationHistoryReplaced, ServerNotificationHistoryReasoningMetadataAttached, ServerNotificationTurnStarted, ServerNotificationTurnCompleted, ServerNotificationTurnFailed, ServerNotificationTurnInterrupted, ServerNotificationItemStarted, ServerNotificationItemUpdated, ServerNotificationItemCompleted, ServerNotificationAgentMessageDelta, ServerNotificationReasoningDelta, ServerNotificationMcpStartupStatus, ServerNotificationMcpStartupComplete, ServerNotificationLspPrewarmComplete, ServerNotificationContextCompacted, ServerNotificationContextUsageWarning, ServerNotificationContextCompactionStarted, ServerNotificationContextCompactionPhase, ServerNotificationContextCompactionFailed, ServerNotificationContextCleared, ServerNotificationTaskStarted, ServerNotificationTaskCompleted, ServerNotificationTaskProgress, ServerNotificationTaskPanelChanged, ServerNotificationPlanApprovalRequested, ServerNotificationAgentsKilled, ServerNotificationModelFallbackStarted, ServerNotificationModelFallbackCompleted, ServerNotificationModelFastModeChanged, ServerNotificationModelRoleChanged, ServerNotificationPermissionModeChanged, ServerNotificationPromptSuggestion, ServerNotificationError, ServerNotificationRateLimit, ServerNotificationKeepAlive, ServerNotificationIdeSelectionChanged, ServerNotificationIdeDiagnosticsUpdated, ServerNotificationPlanModeChanged, ServerNotificationQueueStateChanged, ServerNotificationQueueCommandQueued, ServerNotificationQueueCommandDequeued, ServerNotificationRewindCompleted, ServerNotificationRewindFailed, ServerNotificationCostWarning, ServerNotificationSandboxStateChanged, ServerNotificationSandboxViolationsDetected, ServerNotificationAgentsRegistered, ServerNotificationHookStarted, ServerNotificationHookProgress, ServerNotificationHookResponse, ServerNotificationWorktreeEntered, ServerNotificationWorktreeExited, ServerNotificationSummarizeCompleted, ServerNotificationSummarizeFailed, ServerNotificationStreamStallDetected, ServerNotificationStreamWatchdogWarning, ServerNotificationStreamRequestEnd, ServerNotificationSessionStateChanged, ServerNotificationTurnMaxReached, ServerNotificationLocalCommandOutput, ServerNotificationFilesPersisted, ServerNotificationElicitationComplete, ServerNotificationToolUseSummary, ServerNotificationToolProgress, ServerNotificationPluginsChanged],
+    Union[ServerNotificationSessionStarted, ServerNotificationSessionResult, ServerNotificationSessionEnded, ServerNotificationSessionUsageUpdated, ServerNotificationHistoryMessageAppended, ServerNotificationHistoryMessageTruncated, ServerNotificationHistoryResetForResume, ServerNotificationHistoryReplaced, ServerNotificationHistoryReasoningMetadataAttached, ServerNotificationTurnStarted, ServerNotificationTurnEnded, ServerNotificationItemStarted, ServerNotificationItemUpdated, ServerNotificationItemCompleted, ServerNotificationAgentMessageDelta, ServerNotificationReasoningDelta, ServerNotificationMcpStartupStatus, ServerNotificationMcpStartupComplete, ServerNotificationLspPrewarmComplete, ServerNotificationContextCompacted, ServerNotificationContextUsageWarning, ServerNotificationContextCompactionStarted, ServerNotificationContextCompactionPhase, ServerNotificationContextCompactionFailed, ServerNotificationContextCleared, ServerNotificationTaskStarted, ServerNotificationTaskCompleted, ServerNotificationTaskProgress, ServerNotificationTaskPanelChanged, ServerNotificationPlanApprovalRequested, ServerNotificationAgentsKilled, ServerNotificationModelFallbackStarted, ServerNotificationModelFallbackCompleted, ServerNotificationModelFastModeChanged, ServerNotificationModelRoleChanged, ServerNotificationPermissionModeChanged, ServerNotificationPromptSuggestion, ServerNotificationError, ServerNotificationRateLimit, ServerNotificationKeepAlive, ServerNotificationIdeSelectionChanged, ServerNotificationIdeDiagnosticsUpdated, ServerNotificationPlanModeChanged, ServerNotificationQueueStateChanged, ServerNotificationQueueCommandQueued, ServerNotificationQueueCommandDequeued, ServerNotificationRewindCompleted, ServerNotificationRewindFailed, ServerNotificationCostWarning, ServerNotificationSandboxStateChanged, ServerNotificationSandboxViolationsDetected, ServerNotificationAgentsRegistered, ServerNotificationHookStarted, ServerNotificationHookProgress, ServerNotificationHookResponse, ServerNotificationWorktreeEntered, ServerNotificationWorktreeExited, ServerNotificationSummarizeCompleted, ServerNotificationSummarizeFailed, ServerNotificationStreamStallDetected, ServerNotificationStreamWatchdogWarning, ServerNotificationStreamRequestEnd, ServerNotificationSessionStateChanged, ServerNotificationLocalCommandOutput, ServerNotificationFilesPersisted, ServerNotificationElicitationComplete, ServerNotificationToolUseSummary, ServerNotificationToolProgress, ServerNotificationPluginsChanged],
     Field(discriminator='method'),
 ]
 
@@ -1774,6 +1779,36 @@ TuiOnlyEvent = Annotated[
     Field(discriminator='type_'),
 ]
 
+class TurnOutcomeCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['completed'] = Field(default='completed', alias='kind')
+    data: CompletedOutcome
+
+class TurnOutcomeFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['failed'] = Field(default='failed', alias='kind')
+    data: FailedOutcome
+
+class TurnOutcomeInterrupted(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['interrupted'] = Field(default='interrupted', alias='kind')
+    data: InterruptedOutcome
+
+class TurnOutcomeMaxTurnsReached(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['max_turns_reached'] = Field(default='max_turns_reached', alias='kind')
+    data: MaxTurnsReachedOutcome
+
+class TurnOutcomeBudgetExhausted(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['budget_exhausted'] = Field(default='budget_exhausted', alias='kind')
+    data: BudgetExhaustedOutcome
+
+TurnOutcome = Annotated[
+    Union[TurnOutcomeCompleted, TurnOutcomeFailed, TurnOutcomeInterrupted, TurnOutcomeMaxTurnsReached, TurnOutcomeBudgetExhausted],
+    Field(discriminator='kind'),
+]
+
 
 # ---------------------------------------------------------------------------
 # Item types
@@ -2088,20 +2123,13 @@ class ToolUseSummaryParams(BaseModel):
     preceding_tool_use_ids: list[str]
     summary: str
 
-class TurnCompletedParams(BaseModel):
-    usage: TokenUsage
-    turn_id: str | None = None
-
-class TurnFailedParams(BaseModel):
-    error: str
-
-class TurnInterruptedNotifParams(BaseModel):
-    reason: CancelReason | None = None
-    turn_id: str | None = None
+class TurnEndedParams(BaseModel):
+    outcome: TurnOutcome
+    turn_id: TurnId
+    usage: TokenUsage | None = None
 
 class TurnStartedParams(BaseModel):
-    turn_number: int
-    turn_id: str | None = None
+    turn_id: TurnId
 
 class WorktreeEnteredParams(BaseModel):
     branch: str
@@ -2192,9 +2220,6 @@ class StreamRequestEndParams(BaseModel):
 class SessionStateChangedParams(BaseModel):
     state: SessionState
 
-class TurnMaxReachedParams(BaseModel):
-    max_turns: int | None = None
-
 class PluginsChangedParams(BaseModel):
     reason: str
 
@@ -2216,9 +2241,7 @@ class NotificationMethod(str, Enum):
     HISTORY_REPLACED = 'history/replaced'
     HISTORY_REASONING_METADATA_ATTACHED = 'history/reasoningMetadataAttached'
     TURN_STARTED = 'turn/started'
-    TURN_COMPLETED = 'turn/completed'
-    TURN_FAILED = 'turn/failed'
-    TURN_INTERRUPTED = 'turn/interrupted'
+    TURN_ENDED = 'turn/ended'
     ITEM_STARTED = 'item/started'
     ITEM_UPDATED = 'item/updated'
     ITEM_COMPLETED = 'item/completed'
@@ -2271,7 +2294,6 @@ class NotificationMethod(str, Enum):
     STREAM_WATCHDOG_WARNING = 'stream/watchdogWarning'
     STREAM_REQUEST_END = 'stream/requestEnd'
     SESSION_STATE_CHANGED = 'session/stateChanged'
-    TURN_MAX_REACHED = 'turn/maxReached'
     LOCAL_COMMAND_OUTPUT = 'localCommand/output'
     FILES_PERSISTED = 'files/persisted'
     ELICITATION_COMPLETE = 'elicitation/complete'
@@ -2841,6 +2863,7 @@ class AlreadyReadFilePayload(BaseModel):
 
 class ApiError(BaseModel):
     message: str
+    error_type: str | None = None
     status_code: int | None = None
 
 class AssistantMessage(BaseModel):
@@ -2859,9 +2882,16 @@ class AttachmentMessage(BaseModel):
     uuid: str
     extras: AttachmentExtras | None = None
 
+class BudgetExhaustedOutcome(BaseModel):
+    used_tokens: int
+    budget_tokens: int | None = None
+
 class CommandPermissionsPayload(BaseModel):
     allowed_tools: list[str] = Field(alias='allowedTools')
     model: str | None = None
+
+class CompletedOutcome(BaseModel):
+    stop_reason: UnifiedFinishReason | None = None
 
 class ConfigChangeInput(BaseModel):
     cwd: str
@@ -2946,6 +2976,13 @@ class ElicitationResultInput(BaseModel):
     mode: ElicitationMode | None = None
     permission_mode: str | None = None
     transcript_path: str = ''
+
+class ErrorPayload(BaseModel):
+    code: ErrorCode
+    message: str
+
+class FailedOutcome(BaseModel):
+    error: ErrorPayload
 
 class FileChangeInfo(BaseModel):
     kind: FileChangeKind
@@ -3039,6 +3076,9 @@ class InstructionsLoadedInput(BaseModel):
     transcript_path: str = ''
     trigger_file_path: str | None = None
 
+class InterruptedOutcome(BaseModel):
+    cancel_reason: CancelReason
+
 class JsonRpcError(BaseModel):
     code: int
     message: str
@@ -3057,6 +3097,9 @@ class JsonRpcRequest(BaseModel):
 class JsonRpcResponse(BaseModel):
     request_id: RequestId
     result: Any = None
+
+class MaxTurnsReachedOutcome(BaseModel):
+    max_turns: int
 
 class MaxTurnsReachedPayload(BaseModel):
     max_turns: int = Field(alias='maxTurns')
@@ -3782,3 +3825,19 @@ HookInput = Annotated[
     Union[PreToolUseInput, PostToolUseInput, PostToolUseFailureInput, SessionStartInput, SessionEndInput, SetupInput, StopInput, StopFailureInput, PreCompactInput, PostCompactInput, SubagentStartInput, SubagentStopInput, UserPromptSubmitInput, PermissionRequestInput, PermissionDeniedInput, NotificationInput, ElicitationInput, ElicitationResultInput, FileChangedInput, ConfigChangeInput, InstructionsLoadedInput, CwdChangedInput, WorktreeCreateInput, WorktreeRemoveInput, TaskCreatedInput, TaskCompletedInput, TeammateIdleInput],
     Field(discriminator='hook_event_name'),
 ]
+
+
+# ── Resolve forward refs for every emitted BaseModel ──
+# Pydantic v2's TypeAdapter (used in discriminated unions)
+# constructs validators eagerly; classes that reference
+# later-defined models would error on first validation
+# without an explicit rebuild pass.
+import sys as _sys
+for _name in list(globals()):
+    _obj = globals()[_name]
+    if isinstance(_obj, type) and issubclass(_obj, BaseModel):
+        try:
+            _obj.model_rebuild()
+        except Exception:
+            pass
+del _name, _obj

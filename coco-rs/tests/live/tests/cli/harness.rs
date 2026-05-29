@@ -58,8 +58,9 @@ pub struct SessionConfig {
     pub max_output_tokens: i64,
     /// Hard upper bound on agent loop turns.
     pub max_turns: i32,
-    /// Per-call max_tokens; `None` lets the model decide.
-    pub max_tokens: Option<i64>,
+    /// Session-level total token budget (input + output, accumulated
+    /// across every API call). `None` lets the engine run unbounded.
+    pub total_token_budget: Option<i64>,
     /// Capacity of the `CoreEvent` channel. Bigger window = less
     /// back-pressure on the engine; tests assert post-hoc so 1024 is plenty.
     pub event_buffer: usize,
@@ -103,7 +104,7 @@ impl Default for SessionConfig {
             context_window: 200_000,
             max_output_tokens: 2_048,
             max_turns: 8,
-            max_tokens: None,
+            total_token_budget: None,
             event_buffer: 1024,
             system_prompt: None,
             permission_mode: PermissionMode::BypassPermissions,
@@ -201,7 +202,7 @@ pub async fn run_session(
         context_window: session_cfg.context_window,
         max_output_tokens: session_cfg.max_output_tokens,
         max_turns: session_cfg.max_turns,
-        max_tokens: session_cfg.max_tokens,
+        total_token_budget: session_cfg.total_token_budget,
         system_prompt: session_cfg.system_prompt,
         is_non_interactive: true,
         project_dir: Some(workdir_path.clone()),
@@ -228,7 +229,7 @@ pub async fn run_session(
     });
 
     let result = engine
-        .run_with_events(prompt, event_tx)
+        .run_with_events(prompt, event_tx, coco_types::TurnId::generate())
         .await
         .map_err(|e| {
             anyhow::anyhow!("engine.run_with_events on {provider_name}/{model_id}: {e}")
@@ -307,7 +308,7 @@ pub async fn run_session_with_steering(
         context_window: session_cfg.context_window,
         max_output_tokens: session_cfg.max_output_tokens,
         max_turns: session_cfg.max_turns,
-        max_tokens: session_cfg.max_tokens,
+        total_token_budget: session_cfg.total_token_budget,
         system_prompt: session_cfg.system_prompt,
         is_non_interactive: true,
         project_dir: Some(workdir_path.clone()),
@@ -337,7 +338,7 @@ pub async fn run_session_with_steering(
     });
 
     let result = engine
-        .run_with_events(prompt, event_tx)
+        .run_with_events(prompt, event_tx, coco_types::TurnId::generate())
         .await
         .map_err(|e| {
             anyhow::anyhow!("engine.run_with_events on {provider_name}/{model_id}: {e}")

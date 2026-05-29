@@ -18,9 +18,9 @@ from coco_sdk.generated.protocol import NotificationMethod
 
 
 TERMINAL_METHODS = {
-    NotificationMethod.TURN_INTERRUPTED,
-    NotificationMethod.TURN_FAILED,
-    NotificationMethod.TURN_COMPLETED,
+    NotificationMethod.TURN_ENDED,
+    NotificationMethod.TURN_ENDED,
+    NotificationMethod.TURN_ENDED,
 }
 
 

@@ -24,13 +24,31 @@ use coco_types::ToolFilter;
 use coco_types::ToolOverrides;
 use std::sync::Arc;
 
-/// Escalated max_output_tokens on first `length` stop. TS: `utils/context.ts:25`
-/// `ESCALATED_MAX_TOKENS = 64_000`.
-pub(crate) const ESCALATED_MAX_TOKENS: i64 = 64_000;
-
 /// Hard cap on how many recovery cycles (post-escalation) we attempt before
 /// giving up. TS: `query.ts:164` `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3`.
 pub(crate) const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT: i32 = 3;
+
+/// Default context window when no `ModelInfo` is wired (mocked clients,
+/// test fixtures) and the caller didn't pass an explicit value. Chosen
+/// to match the headline-model Anthropic / OpenAI bands at the time of
+/// import; conservative enough not to over-block, liberal enough to let
+/// typical sessions through.
+pub(crate) const DEFAULT_CONTEXT_WINDOW: i64 = 200_000;
+
+/// Default cap on consecutive `StructuredOutput` retries. Overridable
+/// via [`coco_config::EnvKey::CocoMaxStructuredOutputRetries`]. TS
+/// parity: `QueryEngine.ts:1005-1047`'s `MAX_STRUCTURED_OUTPUT_RETRIES`
+/// constant (= `5`).
+pub(crate) const DEFAULT_MAX_STRUCTURED_OUTPUT_RETRIES: u32 = 5;
+
+/// Resolved retry cap: env override wins, otherwise
+/// [`DEFAULT_MAX_STRUCTURED_OUTPUT_RETRIES`]. Single read site shared
+/// by the engine loop (`engine.rs::run_session_loop` terminal cap) and
+/// the session adapter (`engine_session.rs` error-message render).
+pub(crate) fn max_structured_output_retries() -> u32 {
+    coco_config::env::env_opt_u32(coco_config::EnvKey::CocoMaxStructuredOutputRetries)
+        .unwrap_or(DEFAULT_MAX_STRUCTURED_OUTPUT_RETRIES)
+}
 
 /// Why the loop is continuing instead of exiting.
 ///
@@ -42,7 +60,10 @@ pub enum ContinueReason {
     NextTurn,
     /// Reactive compaction after prompt-too-long error.
     ReactiveCompactRetry,
-    /// Max output tokens escalation (try 64k).
+    /// Max output tokens escalation — retry once with the active model's
+    /// opt-in `ModelInfo.max_output_tokens_escalate` ceiling instead of
+    /// the baseline cap. Per-model; no escalation when the field is
+    /// unset.
     MaxOutputTokensEscalate,
     /// Max output tokens recovery attempt.
     MaxOutputTokensRecovery { attempt: i32 },
@@ -59,8 +80,18 @@ pub enum ContinueReason {
 pub struct QueryEngineConfig {
     /// Maximum turns before stopping.
     pub max_turns: i32,
-    /// Maximum output tokens per request.
-    pub max_tokens: Option<i64>,
+    /// Session-level total token budget (input + output, accumulated
+    /// across every API call in this loop invocation). Drives
+    /// [`crate::budget::BudgetTracker`]'s 90% nudge / diminishing-returns
+    /// stop logic. `None` = unbounded.
+    ///
+    /// Per-call `max_output_tokens` is **not** in this struct — it lives
+    /// on each model's [`coco_config::ModelInfo::max_output_tokens`] (the
+    /// baseline) and [`coco_config::ModelInfo::max_output_tokens_escalate`]
+    /// (the opt-in Phase-1 retry ceiling). This separation matches the
+    /// `ModelRole` × multi-LLM swap surface — plan-mode / Fast role /
+    /// fallback advance each carry their own ModelInfo.
+    pub total_token_budget: Option<i64>,
     /// Per-call prompt-cache directive. Main sessions set this when the
     /// active provider/model supports prompt caching; forked sessions
     /// inherit it from the parent cache slot and may set
@@ -309,17 +340,6 @@ pub struct QueryEngineConfig {
     /// to. TS: `runForkedAgent({forkLabel})`.
     pub fork_label: Option<coco_types::ForkLabel>,
 
-    /// Hard cap on output tokens, overriding the model's default.
-    /// **WARNING**: setting this clamps `budget_tokens`, breaking
-    /// prompt cache parity with the parent. PR #18143 incident:
-    /// setting `effort: 'low'` on prompt-suggestion forks dropped
-    /// cache hit rate from 92.7% → 61% (45× spike in cache writes).
-    /// Only set this when cache parity is **not** a goal (e.g.
-    /// compact summaries that intentionally use a different model
-    /// and budget). The inference layer logs `tracing::warn!` when
-    /// this field is `Some` so the regression leaves a trail.
-    pub max_output_tokens_override: Option<i64>,
-
     /// Sub-context isolation overrides. `Some` ⇒ the engine is
     /// fork-spawned and the per-call `ToolUseContext` builder
     /// applies the [`ForkContextOverrides`] field-by-field
@@ -342,14 +362,14 @@ impl Default for QueryEngineConfig {
     fn default() -> Self {
         Self {
             max_turns: 30,
-            max_tokens: None,
+            total_token_budget: None,
             prompt_cache: None,
             system_prompt: None,
             append_system_prompt: None,
             model_id: String::new(),
             permission_mode: PermissionMode::Default,
             bypass_permissions_available: false,
-            context_window: 200_000,
+            context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: 16_384,
             max_budget_usd: None,
             // Phase 9 landed: safe tools start mid-stream via
@@ -402,7 +422,6 @@ impl Default for QueryEngineConfig {
             can_use_tool: None,
             query_source_override: None,
             fork_label: None,
-            max_output_tokens_override: None,
             fork_isolation: None,
         }
     }

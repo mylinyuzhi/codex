@@ -20,9 +20,9 @@ async def _drain_until_turn_completed(client: CocoClient) -> str:
         async for event in client.events():
             if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                 parts.append(event.params.delta)
-            elif event.method == NotificationMethod.TURN_COMPLETED:
+            elif event.method == NotificationMethod.TURN_ENDED:
                 break
-            elif event.method == NotificationMethod.TURN_FAILED:
+            elif event.method == NotificationMethod.TURN_ENDED:
                 pytest.fail(f"turn failed: {event.params}")
     return "".join(parts)
 
@@ -43,9 +43,9 @@ async def test_client_two_turns(live_deepseek, isolated_cwd) -> None:
             async for event in client.send("What number did I ask you to remember? Reply with just the digits."):
                 if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                     second_parts.append(event.params.delta)
-                elif event.method == NotificationMethod.TURN_COMPLETED:
+                elif event.method == NotificationMethod.TURN_ENDED:
                     break
-                elif event.method == NotificationMethod.TURN_FAILED:
+                elif event.method == NotificationMethod.TURN_ENDED:
                     pytest.fail(f"turn failed: {event.params}")
 
         second = "".join(second_parts)

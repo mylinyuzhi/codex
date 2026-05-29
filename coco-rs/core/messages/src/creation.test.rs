@@ -168,7 +168,7 @@ fn test_create_permission_denied_message() {
 
 #[test]
 fn test_create_assistant_error_message_with_request_id() {
-    let msg = create_assistant_error_message("rate limited", Some("req_abc"));
+    let msg = create_assistant_error_message("rate limited", Some("req_abc"), Some("rate_limited"));
     let Message::Assistant(a) = &msg else {
         panic!("expected Assistant variant");
     };
@@ -176,16 +176,18 @@ fn test_create_assistant_error_message_with_request_id() {
     let err = a.api_error.as_ref().expect("should have api_error");
     assert_eq!(err.message, "rate limited");
     assert!(err.status_code.is_none());
+    assert_eq!(err.error_type.as_deref(), Some("rate_limited"));
 }
 
 #[test]
 fn test_create_assistant_error_message_without_request_id() {
-    let msg = create_assistant_error_message("unknown error", None);
+    let msg = create_assistant_error_message("unknown error", None, None);
     let Message::Assistant(a) = &msg else {
         panic!("expected Assistant variant");
     };
     assert!(a.request_id.is_none());
-    assert!(a.api_error.is_some());
+    let err = a.api_error.as_ref().expect("should have api_error");
+    assert!(err.error_type.is_none());
     assert!(a.usage.is_none());
     assert!(matches!(a.message, LlmMessage::Assistant { .. }));
 }

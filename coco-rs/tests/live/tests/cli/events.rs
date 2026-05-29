@@ -37,11 +37,17 @@ pub fn tool_uses_completed(events: &[CoreEvent]) -> Vec<(&str, bool)> {
         .collect()
 }
 
-/// Number of `turn/completed` notifications emitted.
+/// Number of `turn/ended` notifications with `outcome.kind == "completed"`.
 pub fn turns_completed(events: &[CoreEvent]) -> usize {
     events
         .iter()
-        .filter(|e| matches!(e, CoreEvent::Protocol(ServerNotification::TurnCompleted(_))))
+        .filter(|e| {
+            matches!(
+                e,
+                CoreEvent::Protocol(ServerNotification::TurnEnded(p))
+                    if matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
+            )
+        })
         .count()
 }
 

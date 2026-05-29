@@ -35,18 +35,22 @@ use crate::helpers::drain_command_queue_into_history;
 /// Whether the session loop will continue with another LLM round or
 /// return immediately after this finalize call.
 ///
-/// Gates `TurnCompleted` wire emission inside
+/// Gates `TurnEnded(Completed)` wire emission inside
 /// [`QueryEngine::finalize_turn_post_tools`] / [`QueryEngine::finalize_successful_turn_tail`].
 /// Per-turn bookkeeping (queue drain, compaction, transcript flush,
 /// reasoning-metadata side-cache) runs in both modes.
+///
+/// `stop_reason` is **not** part of this enum: control-flow state
+/// must not launder a model finish reason. Callers pass
+/// `Option<StopReason>` separately to [`Self::emit_turn_ended_completed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TurnContinuation {
     /// Another LLM round will fire for the same user-prompt cycle.
-    /// Do *not* emit `TurnCompleted` — the SDK iterator and TUI state
-    /// machine treat that event as "user-prompt cycle done".
+    /// Do *not* emit terminal `TurnEnded` — the SDK iterator and TUI
+    /// state machine treat that event as "user-prompt cycle done".
     Continuing,
     /// The session loop is about to return: this is the last LLM round
-    /// for the current user prompt. Emit `TurnCompleted`.
+    /// for the current user prompt. Emit `TurnEnded(Completed)`.
     Terminal,
 }
 
@@ -81,20 +85,43 @@ impl QueryEngine {
     ///
     /// `site` is purely a tracing field for distinguishing the three call
     /// sites in logs.
+    ///
+    /// Returns [`crate::engine_recovery::ContextOverflowOutcome::Compacted`]
+    /// with the retry transition when compaction freed any tokens, and
+    /// [`crate::engine_recovery::ContextOverflowOutcome::Exhausted`] when
+    /// compaction was a no-op (circuit-breaker tripped or no progress).
+    /// Caller propagates `Exhausted` to a terminal exit (push synthetic
+    /// api_error → `TerminateExhausted` from recovery, or `Bail` from
+    /// the stream-open / mid-stream sites). TS parity: `query.ts:1166-1175`
+    /// — when `reactiveCompact.tryReactiveCompact(...)` returns null,
+    /// surface withheld lastMessage + `executeStopFailureHooks` + return
+    /// `'prompt_too_long'`. Without this signal, the loop would spin until
+    /// `BudgetTracker::Stop` (Finding **R1**).
     pub(crate) async fn handle_context_overflow(
         &self,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         budget: &mut BudgetTracker,
         site: &'static str,
-    ) -> ContinueReason {
+    ) -> crate::engine_recovery::ContextOverflowOutcome {
         warn!(
             site,
             "context window exceeded, attempting reactive compaction"
         );
-        self.do_reactive_compact(history, event_tx).await;
+        let made_progress = self.do_reactive_compact(history, event_tx).await;
         budget.reset_continuations();
-        ContinueReason::ReactiveCompactRetry
+        if made_progress {
+            crate::engine_recovery::ContextOverflowOutcome::Compacted(
+                ContinueReason::ReactiveCompactRetry,
+            )
+        } else {
+            warn!(
+                site,
+                "reactive compaction made no progress (circuit-breaker tripped \
+                 or no tokens freed); surfacing as terminal recovery exhaustion",
+            );
+            crate::engine_recovery::ContextOverflowOutcome::Exhausted
+        }
     }
 
     /// Shrink `history` with a reactive microcompact and emit the paired
@@ -102,6 +129,12 @@ impl QueryEngine {
     /// context-window-exceeded recovery site (stream-open 400, mid-stream
     /// error, and Anthropic `model_context_window_exceeded` finish reason) —
     /// keeps the three paths bit-identical.
+    ///
+    /// Returns `true` when compaction freed at least one token (the success
+    /// arm of `record_success`/`record_failure` bookkeeping below) and
+    /// `false` on circuit-breaker skip or no-progress runs. Caller uses
+    /// this signal to escalate "compaction can't help" to a terminal exit
+    /// (Finding **R1**).
     #[tracing::instrument(
         skip_all,
         name = "compaction",
@@ -115,7 +148,7 @@ impl QueryEngine {
         &self,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-    ) {
+    ) -> bool {
         // Circuit-breaker check (TS reactiveCompact.ts).
         // If we've already failed 3× in a row, don't keep wasting API calls.
         {
@@ -125,7 +158,7 @@ impl QueryEngine {
                     failures = state.failure_count(),
                     "reactive compact circuit-breaker tripped; skipping"
                 );
-                return;
+                return false;
             }
         }
 
@@ -335,6 +368,11 @@ impl QueryEngine {
         // next reminder build consumes (and clears) this flag.
         self.pending_just_compacted
             .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        // Progress signal for `handle_context_overflow` / recovery
+        // dispatcher (Finding **R1**). Any meaningful reduction counts;
+        // zero-freed runs surface as terminal exhaustion to the caller.
+        actually_freed > 0
     }
 
     /// Finalize a turn after tools have executed: drain queued commands + inbox,
@@ -356,13 +394,20 @@ impl QueryEngine {
     /// iterator, the TUI state machine, and the SDK dispatcher's
     /// `StreamAccumulator` flush all key on it. The TS reference `query.ts`
     /// has no analogous wire event; turn-end is signalled by generator return.
+    // Crate-internal helper. `cycle_turn_id` + `stop_reason` are the
+    // wire-emit gate; `usage` drives both the protocol payload and the
+    // reasoning-metadata side-cache lookup. The per-round `turn_id`
+    // string used to ride along for log correlation — it's now stamped
+    // upstream in `run_session_loop`'s info span and dropped from the
+    // signature here.
     pub(crate) async fn finalize_turn_post_tools(
         &self,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-        turn_id: String,
         usage: TokenUsage,
         continuation: TurnContinuation,
+        cycle_turn_id: Option<coco_types::TurnId>,
+        stop_reason: Option<coco_messages::StopReason>,
     ) {
         // Periodic terminal-task eviction. Fires every turn,
         // regardless of success / failure / cancellation outcome —
@@ -709,51 +754,72 @@ impl QueryEngine {
             }
         }
 
-        self.finalize_successful_turn_tail(history, event_tx, turn_id, usage, continuation)
-            .await;
+        self.finalize_successful_turn_tail(
+            history,
+            event_tx,
+            usage,
+            continuation,
+            cycle_turn_id,
+            stop_reason,
+        )
+        .await;
     }
 
     /// Shared successful-turn tail. Persistence (cache snapshot, transcript
     /// flush) and reasoning-metadata side-cache update always run; the
-    /// `TurnCompleted` protocol event fires only on
+    /// `TurnEnded(Completed)` protocol event fires only on
     /// [`TurnContinuation::Terminal`]. See [`Self::finalize_turn_post_tools`]
     /// for the wire-protocol rationale.
+    ///
+    /// `cycle_turn_id` is the wire id supplied by the runner; `None`
+    /// suppresses the wire emit when the caller had no event channel.
+    /// `stop_reason` is `Option<StopReason>` — `None` is preserved
+    /// rather than fabricated, so consumers can distinguish "model
+    /// returned EndTurn" from "we didn't observe one".
     pub(crate) async fn finalize_successful_turn_tail(
         &self,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-        turn_id: String,
         usage: TokenUsage,
         continuation: TurnContinuation,
+        cycle_turn_id: Option<coco_types::TurnId>,
+        stop_reason: Option<coco_messages::StopReason>,
     ) {
         self.flush_successful_turn_state(history).await;
         self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
             .await;
-        if continuation.is_terminal() {
-            self.emit_turn_completed(event_tx, turn_id, usage, history.len())
+        if continuation.is_terminal()
+            && let Some(id) = cycle_turn_id
+        {
+            self.emit_turn_ended_completed(event_tx, id, usage, history.len(), stop_reason)
                 .await;
         }
     }
 
     /// Emit the protocol completion events for a successful model turn.
     ///
-    /// Keep this separate from [`Self::flush_successful_turn_state`] because
-    /// some no-tool terminal paths intentionally flush before prompt
-    /// suggestion and Stop hooks. The completion invariant still belongs in
-    /// one place: reasoning metadata, when reported by the provider, must be
-    /// anchored by message UUID before `TurnCompleted` lets the TUI render the
-    /// completed turn.
+    /// Kept distinct from [`Self::finalize_successful_turn_tail`] because
+    /// no-tool terminal paths in `run_session_loop` flush + invoke
+    /// promptSuggestion + run Stop hooks BEFORE deciding whether to
+    /// emit completion (Stop hook may block and re-enter the loop). The
+    /// completion invariant still belongs in one place: reasoning
+    /// metadata, when reported by the provider, must be anchored by
+    /// message UUID before `TurnEnded(Completed)` lets the TUI render
+    /// the completed turn.
     pub(crate) async fn emit_successful_turn_completed(
         &self,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         history: &MessageHistory,
-        turn_id: String,
         usage: TokenUsage,
+        cycle_turn_id: Option<coco_types::TurnId>,
+        stop_reason: Option<coco_messages::StopReason>,
     ) {
         self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
             .await;
-        self.emit_turn_completed(event_tx, turn_id, usage, history.len())
-            .await;
+        if let Some(id) = cycle_turn_id {
+            self.emit_turn_ended_completed(event_tx, id, usage, history.len(), stop_reason)
+                .await;
+        }
     }
 
     /// Persist successful-turn state that must be current before any
@@ -778,26 +844,43 @@ impl QueryEngine {
         self.record_transcript_tail(history).await;
     }
 
-    pub(crate) async fn emit_turn_completed(
+    /// Emit `TurnEnded(Completed)` on the wire.
+    ///
+    /// - `cycle_turn_id` is the wire-level cycle id (shared with the
+    ///   runner's `TurnStarted`).
+    /// - `stop_reason` is `Option<StopReason>` because not every
+    ///   terminal path has a parsed model finish reason (structured-output
+    ///   retry cap, Stop-hook prevent before any round resolved one).
+    ///   Emit `None` rather than fabricating `EndTurn`.
+    ///
+    /// The per-round `turn_id` string is intentionally NOT a parameter —
+    /// it's purely log correlation, and `run_session_loop` already stamps
+    /// `turn_id` on its per-round info log line. Threading it through
+    /// the emit fn just to drop it into one more log line obscured the
+    /// wire-vs-log id distinction.
+    pub(crate) async fn emit_turn_ended_completed(
         &self,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-        turn_id: String,
+        cycle_turn_id: coco_types::TurnId,
         usage: TokenUsage,
         history_len: usize,
+        stop_reason: Option<coco_messages::StopReason>,
     ) {
         info!(
-            turn_id = %turn_id,
+            cycle_turn_id = %cycle_turn_id,
             tokens_in = usage.input_tokens.total,
             tokens_out = usage.output_tokens.total,
             history_len,
-            "turn completed"
+            ?stop_reason,
+            "turn ended (completed)"
         );
         let _ = emit_protocol(
             event_tx,
-            ServerNotification::TurnCompleted(coco_types::TurnCompletedParams {
-                turn_id: Some(turn_id),
-                usage,
-            }),
+            ServerNotification::TurnEnded(coco_types::TurnEndedParams::completed(
+                cycle_turn_id,
+                Some(usage),
+                stop_reason,
+            )),
         )
         .await;
     }

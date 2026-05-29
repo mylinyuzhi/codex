@@ -58,9 +58,17 @@ model-card-update:
 # Testing
 # ============================================================================
 
-# Run all tests (nextest, faster than cargo test)
+# Run all workspace tests (nextest, faster than cargo test).
+# `--workspace` is required: workspace `Cargo.toml` sets
+# `default-members = ["app/cli"]`, so without it cargo / nextest
+# narrows the run to coco-cli alone (~3% of the workspace) and
+# `just pre-commit` silently skips ~97% of the test surface. The
+# original recipe omitted `--workspace` and masked at least 18
+# pre-existing coco-query failures (`853117b14`-introduced
+# `debug_assert!` on test mocks lacking `input_json_schema`) plus
+# the coco-tui snapshot drift this surfaces.
 test *args:
-    cargo nextest run --no-fail-fast "$@"
+    cargo nextest run --workspace --no-fail-fast "$@"
 
 # Test a specific crate
 test-crate crate *args:

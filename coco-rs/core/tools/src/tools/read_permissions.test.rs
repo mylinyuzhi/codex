@@ -23,6 +23,45 @@ fn is_ignored_with(patterns: &[&str], path: &str) -> bool {
     is_read_ignored_with_matcher(Path::new(path), &matcher)
 }
 
+/// Create a fixture directory that the permission layer treats as an
+/// ordinary path — i.e. NOT one of the `coco_permissions::filesystem`
+/// readable-internal exemptions.
+///
+/// `tempfile::tempdir()` anchors at `$TMPDIR`. Sandboxed runners (incl.
+/// this repo's CI image) set `TMPDIR=/tmp/claude-<uid>`, which is the
+/// permission layer's project-temp / scratchpad space:
+/// `is_readable_internal_path` allows *any* path under the `/tmp/claude-`
+/// prefix. A fixture created there reads back as an allowed internal path,
+/// so the "outside working dir" / "path traversal" / "rule does not apply"
+/// assertions silently flip from `Ask` to `Allow`. On a plain `/tmp`
+/// (Linux) or `/var/folders` (macOS) `$TMPDIR` there is no collision, so
+/// this only bites under the sandbox TMPDIR — anchoring fixtures under a
+/// neutral base makes the tests independent of the runner's `$TMPDIR`.
+fn fixture_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("coco-readperm-")
+        .tempdir_in(neutral_temp_root())
+        .expect("create fixture tempdir under a neutral temp root")
+}
+
+/// Pick a temp root that is not a `coco_permissions` readable-internal
+/// exemption. Uses `$TMPDIR` unless it collides with the `/tmp/claude-`
+/// project-temp prefix, in which case it falls back to the system root
+/// temp (`/tmp` on Unix) — writable and treated as an ordinary path.
+fn neutral_temp_root() -> std::path::PathBuf {
+    let default = std::env::temp_dir();
+    let canonical = std::fs::canonicalize(&default).unwrap_or_else(|_| default.clone());
+    let lower = canonical.to_string_lossy().to_lowercase();
+    // macOS canonicalizes `/tmp` → `/private/tmp`; compare on the
+    // non-`/private` form so the prefix check matches `normalize_for_comparison`.
+    let normalized = lower.strip_prefix("/private").unwrap_or(&lower);
+    if cfg!(unix) && normalized.starts_with("/tmp/claude-") {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        default
+    }
+}
+
 /// `.env` pattern catches `.env`, `foo/.env`, `/abs/path/.env`.
 #[test]
 fn test_dotenv_pattern_catches_all_locations() {
@@ -81,7 +120,7 @@ fn test_non_ascii_path() {
 
 #[test]
 fn test_read_permission_allows_path_inside_cwd() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixture_tempdir();
     let file = dir.path().join("src/lib.rs");
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, "mod tests;").unwrap();
@@ -95,8 +134,8 @@ fn test_read_permission_allows_path_inside_cwd() {
 
 #[test]
 fn test_read_permission_asks_for_path_outside_working_dirs() {
-    let cwd = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
+    let cwd = fixture_tempdir();
+    let outside = fixture_tempdir();
     let file = outside.path().join("secret.txt");
     std::fs::write(&file, "secret").unwrap();
     let mut ctx = ToolUseContext::test_default();
@@ -109,7 +148,7 @@ fn test_read_permission_asks_for_path_outside_working_dirs() {
 
 #[test]
 fn test_read_permission_asks_for_path_traversal_outside_cwd() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = fixture_tempdir();
     let cwd = parent.path().join("repo");
     std::fs::create_dir_all(&cwd).unwrap();
     let outside = parent.path().join("secret.txt");
@@ -124,7 +163,7 @@ fn test_read_permission_asks_for_path_traversal_outside_cwd() {
 
 #[test]
 fn test_read_permission_asks_for_suspicious_windows_path_inside_cwd() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixture_tempdir();
     let mut ctx = ToolUseContext::test_default();
     ctx.cwd_override = Some(dir.path().to_path_buf());
 
@@ -135,8 +174,8 @@ fn test_read_permission_asks_for_suspicious_windows_path_inside_cwd() {
 
 #[test]
 fn test_read_permission_ask_includes_path_scoped_suggestion() {
-    let cwd = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
+    let cwd = fixture_tempdir();
+    let outside = fixture_tempdir();
     let file = outside.path().join("secret.txt");
     std::fs::write(&file, "secret").unwrap();
     let mut ctx = ToolUseContext::test_default();
@@ -163,8 +202,8 @@ fn test_read_permission_ask_includes_path_scoped_suggestion() {
 
 #[test]
 fn test_read_permission_allows_additional_working_dir() {
-    let cwd = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
+    let cwd = fixture_tempdir();
+    let outside = fixture_tempdir();
     let file = outside.path().join("data.txt");
     std::fs::write(&file, "data").unwrap();
     let mut ctx = ToolUseContext::test_default();
@@ -184,8 +223,8 @@ fn test_read_permission_allows_additional_working_dir() {
 
 #[test]
 fn test_read_permission_honors_path_scoped_read_allow_rule() {
-    let cwd = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
+    let cwd = fixture_tempdir();
+    let outside = fixture_tempdir();
     let file = outside.path().join("data.txt");
     std::fs::write(&file, "data").unwrap();
     let mut ctx = ToolUseContext::test_default();
@@ -210,8 +249,8 @@ fn test_read_permission_honors_path_scoped_read_allow_rule() {
 
 #[test]
 fn test_read_permission_edit_allow_implies_read_allow() {
-    let cwd = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
+    let cwd = fixture_tempdir();
+    let outside = fixture_tempdir();
     let file = outside.path().join("data.txt");
     std::fs::write(&file, "data").unwrap();
     let mut ctx = ToolUseContext::test_default();
@@ -236,8 +275,8 @@ fn test_read_permission_edit_allow_implies_read_allow() {
 
 #[test]
 fn test_read_permission_apply_patch_allow_does_not_imply_read_allow() {
-    let cwd = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
+    let cwd = fixture_tempdir();
+    let outside = fixture_tempdir();
     let file = outside.path().join("data.txt");
     std::fs::write(&file, "data").unwrap();
     let mut ctx = ToolUseContext::test_default();
@@ -261,8 +300,8 @@ fn test_read_permission_apply_patch_allow_does_not_imply_read_allow() {
 
 #[test]
 fn test_read_permission_honors_ts_double_slash_read_allow_rule() {
-    let cwd = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
+    let cwd = fixture_tempdir();
+    let outside = fixture_tempdir();
     let file = outside.path().join("data.txt");
     std::fs::write(&file, "data").unwrap();
     let mut ctx = ToolUseContext::test_default();
@@ -287,8 +326,8 @@ fn test_read_permission_honors_ts_double_slash_read_allow_rule() {
 
 #[test]
 fn test_read_permission_single_slash_rule_is_source_root_relative() {
-    let cwd = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
+    let cwd = fixture_tempdir();
+    let outside = fixture_tempdir();
     let file = outside.path().join("data.txt");
     std::fs::write(&file, "data").unwrap();
     let mut ctx = ToolUseContext::test_default();

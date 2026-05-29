@@ -53,6 +53,26 @@ def _notif(method: NotificationMethod, **params: Any) -> dict[str, Any]:
     return {"method": method.value, "params": params}
 
 
+_DEFAULT_USAGE: dict[str, Any] = {
+    "input_tokens": {"total": 1},
+    "output_tokens": {"total": 1},
+}
+
+
+def _turn_ended_completed(
+    turn_id: str = "t1",
+    usage: dict[str, Any] | None = None,
+    stop_reason: str = "end_turn",
+) -> dict[str, Any]:
+    """Build a `turn/ended` notification with `outcome.kind=completed`."""
+    return _notif(
+        NotificationMethod.TURN_ENDED,
+        turn_id=turn_id,
+        usage=usage or _DEFAULT_USAGE,
+        outcome={"kind": "completed", "data": {"stop_reason": stop_reason}},
+    )
+
+
 def _session_started(session_id: str = "s1", **overrides: Any) -> dict[str, Any]:
     """Build a `session/started` notification whose params satisfy the
     typed `SessionStartedParams` schema (cwd/model/permission_mode/
@@ -91,9 +111,10 @@ async def test_client_sends_initialize_session_start_turn_start() -> None:
         _response(3, {"turn_id": "t1"}),
         _session_started(session_id="s1"),
         _notif(
-            NotificationMethod.TURN_COMPLETED,
+            NotificationMethod.TURN_ENDED,
             turn_id="t1",
             usage={"input_tokens": {"total": 10}, "output_tokens": {"total": 5}},
+        outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
         ),
     ])
 
@@ -115,7 +136,7 @@ async def test_client_sends_initialize_session_start_turn_start() -> None:
 
     assert len(events) == 2
     assert events[0].method == NotificationMethod.SESSION_STARTED
-    assert events[1].method == NotificationMethod.TURN_COMPLETED
+    assert events[1].method == NotificationMethod.TURN_ENDED
 
 
 @pytest.mark.asyncio
@@ -123,9 +144,10 @@ async def test_client_send_follow_up() -> None:
     transport = MockTransport(responses=[
         _response(1, {"turn_id": "t2"}),
         _notif(
-            NotificationMethod.TURN_COMPLETED,
+            NotificationMethod.TURN_ENDED,
             turn_id="t2",
             usage={"input_tokens": {"total": 5}, "output_tokens": {"total": 3}},
+        outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
         ),
     ])
 
@@ -150,9 +172,10 @@ async def test_client_auto_approval() -> None:
             input={},
         ),
         _notif(
-            NotificationMethod.TURN_COMPLETED,
+            NotificationMethod.TURN_ENDED,
             turn_id="t1",
             usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+        outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
         ),
     ])
 
@@ -166,7 +189,7 @@ async def test_client_auto_approval() -> None:
     events = [event async for event in client.events()]
 
     assert len(events) == 1
-    assert events[0].method == NotificationMethod.TURN_COMPLETED
+    assert events[0].method == NotificationMethod.TURN_ENDED
 
     approval_sent = json.loads(transport.sent_lines[0])
     assert approval_sent["type"] == "response"
@@ -423,9 +446,10 @@ async def test_client_context_manager() -> None:
         _response(3, {"turn_id": "t1"}),
         _session_started(session_id="s1"),
         _notif(
-            NotificationMethod.TURN_COMPLETED,
+            NotificationMethod.TURN_ENDED,
             turn_id="t1",
             usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+        outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
         ),
     ])
 
@@ -706,15 +730,16 @@ async def test_send_and_await_skips_other_request_ids() -> None:
 async def test_concurrent_control_query_and_events_share_reader() -> None:
     """A control request and event stream can both complete with one stdout reader."""
     transport = MockTransport(responses=[
-        _notif(NotificationMethod.TURN_COMPLETED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}}),
+        _notif(NotificationMethod.TURN_ENDED,
+               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
         _response(1, {"mcpServers": []}),
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
     status_task = asyncio.create_task(client.mcp_status())
-    events_task = asyncio.create_task(client.wait_for_turn_completed())
+    events_task = asyncio.create_task(client.wait_for_turn_ended())
 
     status = await status_task
     assert status.mcp_servers == []
@@ -754,16 +779,17 @@ async def test_events_loop_drops_error_frames() -> None:
     """Error frames during events() get logged-and-dropped, never raised."""
     transport = MockTransport(responses=[
         {"type": "error", "request_id": 99, "code": -32600, "message": "bad request"},
-        {"type": "notification", **_notif(NotificationMethod.TURN_COMPLETED,
+        {"type": "notification", **_notif(NotificationMethod.TURN_ENDED,
                                           turn_id="t1",
-                                          usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}})},
+                                          usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}})},
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
     events = [e async for e in client.events()]
     assert len(events) == 1
-    assert events[0].method == NotificationMethod.TURN_COMPLETED
+    assert events[0].method == NotificationMethod.TURN_ENDED
 
 
 @pytest.mark.asyncio
@@ -771,16 +797,17 @@ async def test_events_loop_drops_response_frames() -> None:
     """Response frames during events() are silently dropped (handled by req/resp matcher)."""
     transport = MockTransport(responses=[
         {"type": "response", "request_id": 1, "result": {"orphan": True}},
-        {"type": "notification", **_notif(NotificationMethod.TURN_COMPLETED,
+        {"type": "notification", **_notif(NotificationMethod.TURN_ENDED,
                                           turn_id="t1",
-                                          usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}})},
+                                          usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}})},
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
     events = [e async for e in client.events()]
     assert len(events) == 1
-    assert events[0].method == NotificationMethod.TURN_COMPLETED
+    assert events[0].method == NotificationMethod.TURN_ENDED
 
 
 @pytest.mark.asyncio
@@ -799,8 +826,9 @@ async def test_hook_callback_dispatches_to_registered_handler() -> None:
             event_type="PreToolUse",
             input={"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}},
         ),
-        _notif(NotificationMethod.TURN_COMPLETED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}}),
+        _notif(NotificationMethod.TURN_ENDED,
+               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
@@ -828,7 +856,7 @@ async def test_hook_callback_dispatches_to_registered_handler() -> None:
     assert hook_responses[0]["result"]["output"]["behavior"] == "deny"
 
     # Subsequent terminator notification still flows through.
-    assert any(e.method == NotificationMethod.TURN_COMPLETED for e in events)
+    assert any(e.method == NotificationMethod.TURN_ENDED for e in events)
 
 
 @pytest.mark.asyncio
@@ -846,8 +874,9 @@ async def test_hook_callback_handler_exception_falls_back_to_empty_output() -> N
     transport = MockTransport(responses=[
         _server_request(ServerRequestMethod.HOOK_CALLBACK,
                         callback_id="cb_x", event_type="PreToolUse", input={}),
-        _notif(NotificationMethod.TURN_COMPLETED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}}),
+        _notif(NotificationMethod.TURN_ENDED,
+               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
@@ -867,15 +896,16 @@ async def test_hook_callback_unregistered_id_yields_event() -> None:
     transport = MockTransport(responses=[
         _server_request(ServerRequestMethod.HOOK_CALLBACK,
                         callback_id="cb_unknown", event_type="PreToolUse", input={}),
-        _notif(NotificationMethod.TURN_COMPLETED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}}),
+        _notif(NotificationMethod.TURN_ENDED,
+               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     # No handler registered — expect the request to be yielded as a parsed notification.
 
     events = [e async for e in client.events()]
-    assert any(event.method == NotificationMethod.TURN_COMPLETED for event in events)
+    assert any(event.method == NotificationMethod.TURN_ENDED for event in events)
 
 
 # ── Convenience helpers ─────────────────────────────────────────────
@@ -888,8 +918,9 @@ async def test_stream_text_yields_only_deltas() -> None:
         _notif(NotificationMethod.TURN_STARTED, turn_id="t1", turn_number=1),
         _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="Hello "),
         _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="world"),
-        _notif(NotificationMethod.TURN_COMPLETED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 2}}),
+        _notif(NotificationMethod.TURN_ENDED,
+               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 2}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
@@ -903,8 +934,9 @@ async def test_get_final_text_concatenates_deltas() -> None:
     transport = MockTransport(responses=[
         _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="Hello "),
         _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="world"),
-        _notif(NotificationMethod.TURN_COMPLETED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 2}}),
+        _notif(NotificationMethod.TURN_ENDED,
+               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 2}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
@@ -914,16 +946,17 @@ async def test_get_final_text_concatenates_deltas() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wait_for_turn_completed_returns_params() -> None:
+async def test_wait_for_turn_ended_returns_params() -> None:
     transport = MockTransport(responses=[
         _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="ok"),
-        _notif(NotificationMethod.TURN_COMPLETED,
-               turn_id="t1", usage={"input_tokens": {"total": 4}, "output_tokens": {"total": 1}}),
+        _notif(NotificationMethod.TURN_ENDED,
+               turn_id="t1", usage={"input_tokens": {"total": 4}, "output_tokens": {"total": 1}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
-    completed = await client.wait_for_turn_completed()
+    completed = await client.wait_for_turn_ended()
     assert completed is not None
     assert completed.turn_id == "t1"
     assert completed.usage.output_tokens.total == 1
@@ -935,8 +968,9 @@ async def test_resume_emits_session_resume_then_streams() -> None:
     transport = MockTransport(responses=[
         _response(1, {"session_id": "s_old"}),
         _session_started(session_id="s_old"),
-        _notif(NotificationMethod.TURN_COMPLETED,
-               turn_id="t-resumed", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}}),
+        _notif(NotificationMethod.TURN_ENDED,
+               turn_id="t-resumed", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
     ])
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
@@ -946,7 +980,7 @@ async def test_resume_emits_session_resume_then_streams() -> None:
     assert sent_methods[0] == ClientRequestMethod.SESSION_RESUME
     sent = json.loads(transport.sent_lines[0])
     assert sent["params"]["session_id"] == "s_old"
-    assert any(e.method == NotificationMethod.TURN_COMPLETED for e in events)
+    assert any(e.method == NotificationMethod.TURN_ENDED for e in events)
 
 
 # ── Full bidirectional flow: server-initiated approval round-trip ────
@@ -965,8 +999,9 @@ async def test_can_use_tool_deny_flows_through_approve() -> None:
             tool_use_id="tu_1",
             input={"command": "rm -rf /"},
         ),
-        _notif(NotificationMethod.TURN_COMPLETED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}}),
+        _notif(NotificationMethod.TURN_ENDED,
+               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
     ])
 
     async def deny_dangerous(tool_name: str, input: dict[str, Any]) -> ApprovalDecision:

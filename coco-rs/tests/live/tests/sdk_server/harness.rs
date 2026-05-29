@@ -516,10 +516,10 @@ pub async fn send_turn(
     Ok((resp, notifications))
 }
 
-/// Returns true when the wire-method string is a terminal turn signal
-/// (one of `turn/completed`, `turn/failed`, `turn/interrupted`).
+/// Returns true when the wire-method string is the terminal turn
+/// signal (`turn/ended`). Outcome variants (completed / failed /
+/// interrupted / max_turns_reached / budget_exhausted) are inside
+/// `params.outcome.kind`.
 pub fn is_turn_terminal_method(method: &str) -> bool {
-    method == NotificationMethod::TurnCompleted.as_str()
-        || method == NotificationMethod::TurnFailed.as_str()
-        || method == NotificationMethod::TurnInterrupted.as_str()
+    method == NotificationMethod::TurnEnded.as_str()
 }

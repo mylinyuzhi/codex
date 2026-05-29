@@ -39,11 +39,11 @@ async def test_query_basic_completes(live_deepseek, isolated_cwd) -> None:
                     saw_turn_started = True
                 elif method == NotificationMethod.AGENT_MESSAGE_DELTA:
                     saw_text_delta = True
-                elif method == NotificationMethod.TURN_COMPLETED:
+                elif method == NotificationMethod.TURN_ENDED:
                     saw_turn_completed = True
                     output_total = event.params.usage.output_tokens.total
                     break
-                elif method == NotificationMethod.TURN_FAILED:
+                elif method == NotificationMethod.TURN_ENDED:
                     pytest.fail(f"turn failed: {event.params}")
     except asyncio.TimeoutError:
         pytest.fail("query() did not complete within 120s")

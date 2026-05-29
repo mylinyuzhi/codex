@@ -1,42 +1,37 @@
-//! Tests for `on_turn_interrupted` auto-restore decision matrix.
+//! Tests for `on_turn_interrupted_outcome` auto-restore decision matrix.
 //!
 //! Mirrors TS `REPL.tsx:3010-3022` (`signal.reason === 'user-cancel'`
 //! + idle guards + `messagesAfterAreOnlySynthetic`).
 //!
 //! The auto-restore decision is now centralised on this event —
-//! removed from `on_turn_completed` and from `update::exit::on_interrupt`.
+//! removed from `on_turn_completed_outcome` and from
+//! `update::exit::on_interrupt`.
 
 use pretty_assertions::assert_eq;
 
 use coco_types::CancelReason;
-use coco_types::TurnInterruptedParams;
 
-use super::on_turn_interrupted;
+use super::on_turn_interrupted_outcome;
 use crate::state::AppState;
 use crate::state::ModalState;
 use crate::state::derive::test_helpers;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-fn user_cancel() -> TurnInterruptedParams {
-    TurnInterruptedParams {
-        turn_id: None,
-        reason: Some(CancelReason::UserCancel),
-    }
+fn user_cancel() -> CancelReason {
+    CancelReason::UserCancel
 }
 
-fn system_preempt() -> TurnInterruptedParams {
-    TurnInterruptedParams {
-        turn_id: None,
-        reason: Some(CancelReason::SystemPreempt),
-    }
+fn system_preempt() -> CancelReason {
+    CancelReason::SystemPreempt
 }
 
-fn legacy_no_reason() -> TurnInterruptedParams {
-    TurnInterruptedParams {
-        turn_id: None,
-        reason: None,
-    }
+// `CancelReason` is now non-Option in `TurnOutcome::Interrupted` — the
+// legacy "no reason" wire shape is gone. Tests that previously
+// exercised the `None`-as-SystemPreempt fallback now exercise
+// `system_preempt()` directly.
+fn legacy_no_reason() -> CancelReason {
+    CancelReason::SystemPreempt
 }
 
 /// Idle session with a single user message and a synthetic (empty)
@@ -100,7 +95,7 @@ fn drained_auto_restore(
 fn user_cancel_with_lossless_tail_restores() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
     let (tx, mut rx) = channel();
-    on_turn_interrupted(&mut state, user_cancel(), &tx);
+    on_turn_interrupted_outcome(&mut state, user_cancel(), &tx);
 
     // Auto-restore lives entirely on the engine round-trip — the TUI
     // dispatches `UserCommand::Rewind { mode: AutoRestore }` directly
@@ -120,7 +115,7 @@ fn user_cancel_without_auto_restore_leaves_no_dispatch() {
     // Meaningful tail → no auto-restore → no Rewind dispatch.
     let mut state = idle_with_meaningful_tail();
     let (tx, mut rx) = channel();
-    on_turn_interrupted(&mut state, user_cancel(), &tx);
+    on_turn_interrupted_outcome(&mut state, user_cancel(), &tx);
     assert!(drained_auto_restore(&mut rx).is_none());
 }
 
@@ -133,7 +128,7 @@ fn restored(rx: &mut tokio::sync::mpsc::Receiver<crate::command::UserCommand>) -
 fn user_cancel_with_meaningful_tail_does_not_restore() {
     let mut state = idle_with_meaningful_tail();
     let (tx, mut rx) = channel();
-    on_turn_interrupted(&mut state, user_cancel(), &tx);
+    on_turn_interrupted_outcome(&mut state, user_cancel(), &tx);
 
     // Auto-restore suppressed (meaningful tail). Engine pushes its
     // own `SystemMessage::UserInterruption` marker through
@@ -148,7 +143,7 @@ fn user_cancel_with_nonempty_input_does_not_restore() {
     state.ui.input.textarea.set_text("user typed during cancel");
     let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, user_cancel(), &tx);
+    on_turn_interrupted_outcome(&mut state, user_cancel(), &tx);
 
     // No restore: nonempty input gates it off.
     assert!(!restored(&mut rx));
@@ -165,7 +160,7 @@ fn user_cancel_with_active_surface_does_not_restore() {
     state.ui.show_modal(ModalState::Help);
     let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, user_cancel(), &tx);
+    on_turn_interrupted_outcome(&mut state, user_cancel(), &tx);
 
     assert!(!restored(&mut rx));
     assert_eq!(state.ui.input.text(), "");
@@ -184,7 +179,7 @@ fn user_cancel_with_queued_command_does_not_restore() {
         });
     let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, user_cancel(), &tx);
+    on_turn_interrupted_outcome(&mut state, user_cancel(), &tx);
 
     assert!(!restored(&mut rx));
     assert_eq!(state.ui.input.text(), "");
@@ -195,7 +190,7 @@ fn system_preempt_never_restores() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
     let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, system_preempt(), &tx);
+    on_turn_interrupted_outcome(&mut state, system_preempt(), &tx);
 
     assert!(
         !restored(&mut rx),
@@ -212,7 +207,7 @@ fn legacy_no_reason_is_treated_as_non_user_cancel() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
     let (tx, mut rx) = channel();
 
-    on_turn_interrupted(&mut state, legacy_no_reason(), &tx);
+    on_turn_interrupted_outcome(&mut state, legacy_no_reason(), &tx);
 
     assert!(!restored(&mut rx));
     assert_eq!(state.ui.input.text(), "");
@@ -225,7 +220,7 @@ fn on_turn_interrupted_clears_streaming_and_busy() {
     state.session.set_busy(true);
     let (tx, _rx) = channel();
 
-    on_turn_interrupted(&mut state, user_cancel(), &tx);
+    on_turn_interrupted_outcome(&mut state, user_cancel(), &tx);
 
     assert!(state.ui.streaming.is_none());
     assert!(!state.session.is_busy());

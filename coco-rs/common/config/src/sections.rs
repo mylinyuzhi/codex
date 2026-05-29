@@ -350,15 +350,21 @@ impl ApiRetryConfig {
 }
 
 // `ApiFallbackConfig` previously lived here. Removed — no consumer.
-// Stream-fallback, overflow-recovery, and the escalated-max-tokens
-// value all live inside `app/query::engine` today as named constants
-// (`ESCALATED_MAX_TOKENS`, `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT`).
+// Stream-fallback and overflow-recovery live inside `app/query::engine`.
+// The escalated-max-tokens ceiling is now per-model on
+// `ModelInfo.max_output_tokens_escalate`. Recovery cap stays in
+// `app/query::config::MAX_OUTPUT_TOKENS_RECOVERY_LIMIT`.
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PartialLoopSettings {
     pub max_turns: Option<i32>,
-    pub max_tokens: Option<i32>,
+    /// Session-level token budget. On-disk wire name kept as
+    /// `max_tokens` for settings.json compatibility; the field reads
+    /// as the total session budget (input + output, accumulated),
+    /// matching the renamed `QueryEngineConfig.total_token_budget`.
+    #[serde(alias = "total_token_budget", rename = "max_tokens")]
+    pub total_token_budget: Option<i32>,
     pub permission_mode: Option<PermissionMode>,
     pub enable_streaming_tools: Option<bool>,
 }
@@ -366,7 +372,9 @@ pub struct PartialLoopSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopConfig {
     pub max_turns: Option<i32>,
-    pub max_tokens: Option<i32>,
+    /// Session-level token budget. See [`PartialLoopSettings::total_token_budget`].
+    #[serde(alias = "total_token_budget", rename = "max_tokens")]
+    pub total_token_budget: Option<i32>,
     pub permission_mode: PermissionMode,
     pub enable_streaming_tools: bool,
 }
@@ -375,7 +383,7 @@ impl Default for LoopConfig {
     fn default() -> Self {
         Self {
             max_turns: Some(30),
-            max_tokens: None,
+            total_token_budget: None,
             permission_mode: PermissionMode::Default,
             enable_streaming_tools: true,
         }
@@ -390,8 +398,8 @@ impl LoopConfig {
         if loop_settings.max_turns.is_some() {
             config.max_turns = loop_settings.max_turns;
         }
-        if loop_settings.max_tokens.is_some() {
-            config.max_tokens = loop_settings.max_tokens;
+        if loop_settings.total_token_budget.is_some() {
+            config.total_token_budget = loop_settings.total_token_budget;
         }
         if let Some(mode) = loop_settings.permission_mode {
             config.permission_mode = mode;

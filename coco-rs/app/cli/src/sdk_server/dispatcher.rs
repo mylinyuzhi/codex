@@ -367,7 +367,7 @@ impl SdkServer {
                                 // Lifecycle hooks for accumulator scoping.
                                 match &notif {
                                     ServerNotification::TurnStarted(p) => {
-                                        let turn_id = p.turn_id.clone().unwrap_or_default();
+                                        let turn_id = p.turn_id.as_str().to_string();
                                         let mut acc = StreamAccumulator::new(turn_id);
                                         // Drain any stream events that arrived before TurnStarted.
                                         let buffered: Vec<_> = pre_turn_buffer
@@ -379,9 +379,7 @@ impl SdkServer {
                                         }
                                         accumulator = Some(acc);
                                     }
-                                    ServerNotification::TurnCompleted(_)
-                                    | ServerNotification::TurnFailed(_)
-                                    | ServerNotification::TurnInterrupted(_) => {
+                                    ServerNotification::TurnEnded(_) => {
                                         // Flush trailing items BEFORE the terminator.
                                         if let Some(ref mut acc) = accumulator {
                                             let flushed = acc.flush();

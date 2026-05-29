@@ -24,7 +24,8 @@
     "not_cancelled": true,
     "not_budget_exhausted": true,
     "min_event_counts": {
-      "TurnStarted": 2
+      "TurnStarted": 1,
+      "TurnEnded": 1
     }
   }
 }

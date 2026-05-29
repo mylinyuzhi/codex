@@ -24,25 +24,17 @@ pub const CONTEXT_WINDOW_1M: i64 = 1_000_000;
 // Output token limits (from TS `utils/context.ts`)
 // ---------------------------------------------------------------------------
 
-/// Default maximum output tokens.
-pub const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 16_384;
-
-/// Max output tokens for standard generation.
-pub const MAX_OUTPUT_TOKENS_DEFAULT: i64 = 32_000;
-
-/// Upper limit on output tokens (used for escalation on truncation).
-pub const MAX_OUTPUT_TOKENS_UPPER_LIMIT: i64 = 64_000;
-
-/// Compact operation output token budget.
-pub const COMPACT_MAX_OUTPUT_TOKENS: i64 = 20_000;
-
-/// Capped default for slot-reservation optimization. Most requests produce far
-/// fewer tokens; requests that hit this cap get one retry at the escalated
-/// limit.
-pub const CAPPED_DEFAULT_MAX_TOKENS: i64 = 8_000;
-
-/// Escalated max tokens after a truncation-induced retry.
-pub const ESCALATED_MAX_TOKENS: i64 = 64_000;
+// Per-model output-token caps live on `ModelInfo` — see
+// `model::ModelInfo::max_output_tokens` (baseline) and
+// `model::ModelInfo::max_output_tokens_escalate` (opt-in Phase-1
+// recovery ceiling). The previous global constants
+// (`DEFAULT_MAX_OUTPUT_TOKENS` / `MAX_OUTPUT_TOKENS_DEFAULT` /
+// `MAX_OUTPUT_TOKENS_UPPER_LIMIT` / `COMPACT_MAX_OUTPUT_TOKENS` /
+// `CAPPED_DEFAULT_MAX_TOKENS` / `ESCALATED_MAX_TOKENS`) were TS
+// `claude-code`-era Anthropic-Opus-specific magic numbers that
+// would mis-cap on smaller models (GPT-4 4k, Haiku 8k, …). Deleted
+// outright — production paths read per-model values via
+// `ModelInfo`, and recovery escalate is now per-model opt-in.
 
 // ---------------------------------------------------------------------------
 // Timeouts

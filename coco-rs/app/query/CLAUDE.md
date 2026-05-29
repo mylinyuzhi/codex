@@ -20,7 +20,7 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 | Type | Purpose |
 |------|---------|
 | `QueryEngine` | Orchestrator: owns tool/command registries, `ApiClient`, state |
-| `QueryEngineConfig` | max_turns, max_tokens, permission_mode, context_window, streaming_tool_execution, bypass_permissions_available, fallback_model, plan_mode_settings |
+| `QueryEngineConfig` | max_turns, total_token_budget (session cap), permission_mode, context_window, streaming_tool_execution, bypass_permissions_available, fallback_model, plan_mode_settings. Per-call `max_output_tokens` lives on `ModelInfo`, not here. |
 | `QueryResult`, `ContinueReason` | Loop control: `NextTurn`, `ReactiveCompactRetry`, `MaxOutputTokensEscalate`, `MaxOutputTokensRecovery`, `StopHookBlocking`, `TokenBudgetContinuation`, `CollapseDrainRetry` |
 | `SessionBootstrap` | Initial system prompt, messages, cost tracker |
 | `BudgetTracker`, `BudgetDecision` | Token budget; 3-continuation cap, 90% threshold, diminishing-returns stop |
@@ -44,16 +44,27 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 8.  Check ContinueReason
        - NextTurn / TokenBudgetContinuation → loop
        - ReactiveCompactRetry → compact then retry [coco-compact]
-       - MaxOutputTokensEscalate (→64k) / Recovery / StopHookBlocking / CollapseDrainRetry
+       - MaxOutputTokensEscalate (per-model ceiling via `ModelInfo.max_output_tokens_escalate`) / Recovery / StopHookBlocking / CollapseDrainRetry
 9.  Drain CommandQueue → attachment messages (User w/ system-reminder wrap)
-10. Goto 1 if tools remain; else emit TurnCompleted
+10. Goto 1 if tools remain; else emit TurnEnded(Completed)
 ```
 
 ## Emitted CoreEvent Variants
 
-Protocol: `TurnStarted`, `TurnCompleted`, `TurnFailed`, `CompactionStarted`,
-`ContextCompacted`, `Error` (budget nudge), `QueueStateChanged`,
-`CommandQueued`, `CommandDequeued`.
+Protocol: `TurnStarted` (runner-emitted, once per cycle — see
+`engine_session.rs`), `TurnEnded` (discriminated outcome:
+`Completed`/`Failed`/`Interrupted`/`MaxTurnsReached`/`BudgetExhausted`),
+`CompactionStarted`, `ContextCompacted`, `Error` (budget nudge),
+`QueueStateChanged`, `CommandQueued`, `CommandDequeued`.
+
+**Cycle TurnId contract.** Runners (`tui_runner`, `sdk_runner`,
+`QueryEngineRunner`, harnesses) generate one `TurnId::generate()` per
+user-prompt cycle and pass it into `engine.run_with_messages` /
+`run_with_events`. `engine_session::run_internal_with_messages` emits
+`TurnStarted` with that id; every internal `TurnEnded` emission inside
+the engine and the engine_session error path reuses the same id. The
+per-round `turn_id` (`format!("turn-{n}")`) survives only as a log
+correlation field — it never reaches the wire.
 Stream: `TextDelta`, `ThinkingDelta`, `ToolUseQueued`, `ToolUseStarted`,
 `ToolUseCompleted`.
 (See `docs/coco-rs/event-system-design.md` for full catalog.)
@@ -199,18 +210,22 @@ Three abnormal-stop branches feed this synthesizer:
    partial assistant message + synthetic api_error first (transcript
    provenance), then compacts and continues with
    `ContinueReason::ReactiveCompactRetry`. **Never escalates
-   `max_output_tokens` to 64k** — raising the output budget cannot
-   help when the *input* already exceeds the window.
+   `max_output_tokens`** — raising the output budget cannot help when
+   the *input* already exceeds the window.
 
 3. **`StopReason::MaxTokens`** (output-token cap — Anthropic
    `max_tokens`, OpenAI `length` / `max_output_tokens`, Google
-   `MAX_TOKENS`). Output-budget recovery: phase 1 escalates to 64k
-   and retries; phase 2 injects the resume-nudge meta message up to
-   `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` times; phase 3 falls through.
-   All three sub-branches push the synthetic message so transcripts
-   carry the explicit truncation marker — matches TS yielding
-   `createAssistantAPIErrorMessage` at the stream layer regardless of
-   subsequent recovery state.
+   `MAX_TOKENS`). Output-budget recovery: phase 1 retries with the
+   active model's opt-in `ModelInfo.max_output_tokens_escalate`
+   ceiling (skipped when unset — multi-LLM safety: GPT-4 / Haiku
+   would 4xx on a hardcoded 64k); phase 2 injects the resume-nudge
+   meta message up to `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` times;
+   phase 3 falls through. All three sub-branches push the synthetic
+   message so transcripts carry the explicit truncation marker —
+   matches TS yielding `createAssistantAPIErrorMessage` at the
+   stream layer regardless of subsequent recovery state. Phase 1
+   reads `ModelInfo` from the **post-plan-swap** client so plan-mode
+   sessions escalate against the active Plan role, not Main.
 
 Layering: `coco-inference` is provider-agnostic and cannot construct
 `coco_messages::Message` — the typed `coco_inference::StopReason`
