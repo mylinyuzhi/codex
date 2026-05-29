@@ -19,8 +19,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::presentation::styles::UiStyles;
 use crate::state::session::QueuedCommandDisplay;
+use coco_tui_ui::style::UiStyles;
 
 pub struct QueueStatusWidget<'a> {
     queued: &'a VecDeque<QueuedCommandDisplay>,

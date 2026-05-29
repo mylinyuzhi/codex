@@ -212,10 +212,32 @@ pub enum McpConnectionStatus {
 pub struct McpServerStatus {
     pub name: String,
     pub status: McpConnectionStatus,
+    /// Tools the model can actually call — the **registered** count, not the
+    /// advertised one (v4.2). A server can advertise more than it registers
+    /// when some tools' wire schemas are rejected.
     #[serde(default)]
     pub tool_count: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// v4.2: tools dropped at registration because their wire schema was
+    /// rejected (uncompilable / non-object root).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped_tools: Vec<McpSkippedToolStatus>,
+    /// v4.2: tool ids present on the previous connect but gone now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tombstoned_tools: Vec<String>,
+}
+
+/// One MCP tool dropped at registration because its wire schema was rejected (v4.2).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpSkippedToolStatus {
+    pub tool_name: String,
+    /// Human-readable rejection reason. (The classification is invariably
+    /// `InvalidArguments` for a schema rejection, so it is not carried as a
+    /// separate stringly-typed field — and `coco-error::StatusCode` can't live
+    /// in a `coco-types` wire DTO without violating the layering.)
+    pub error: String,
 }
 
 /// Response to `ClientRequest::ContextUsage`.

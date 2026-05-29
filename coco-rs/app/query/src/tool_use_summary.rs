@@ -289,8 +289,8 @@ pub async fn generate_tool_use_summary(
     };
 
     let summary = extract_assistant_text(&query_result.content);
-    let stop = query_result.stop_reason;
-    let stop_abnormal = stop.is_some_and(coco_messages::StopReason::is_abnormal);
+    let stop = query_result.stop_reason.as_ref();
+    let stop_abnormal = stop.is_some_and(coco_messages::FinishReason::is_abnormal);
     let summary_empty = summary.is_empty();
 
     // Any not-as-expected outcome surfaces as a single `warn` so the

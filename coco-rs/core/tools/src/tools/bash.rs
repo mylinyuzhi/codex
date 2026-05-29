@@ -15,12 +15,10 @@ use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Typed input for [`BashTool`].
 ///
@@ -246,6 +244,65 @@ impl Tool for BashTool {
     /// pattern as `ReadTool` / `PowerShellTool`).
     type Output = serde_json::Value;
 
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            // Runtime schema additionally declares `_simulatedSedEdit` — the TUI
+            // sed-edit dialog injects it before re-validation. The model schema
+            // omits it (see `model_schema`).
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The command to execute"
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Optional timeout in milliseconds. Defaults to the resolved \
+                                        Bash tool config and cannot exceed its configured max timeout."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Clear description of what this command does"
+                    },
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "Set to true to run this command in the background. You will be notified when it completes."
+                    },
+                    "dangerouslyDisableSandbox": {
+                        "type": "boolean",
+                        "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
+                    },
+                    "_simulatedSedEdit": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "filePath": { "type": "string" },
+                            "newContent": { "type": "string" }
+                        },
+                        "required": ["filePath", "newContent"],
+                        "description": "(internal) TUI-injected sed-edit payload"
+                    }
+                },
+                "required": []
+            }))
+            .expect("Bash input schema must be a valid object schema")
+        })
+    }
+
+    fn model_schema(
+        &self,
+        _ctx: &coco_tool_runtime::SchemaContext,
+    ) -> std::borrow::Cow<'_, serde_json::Value> {
+        std::borrow::Cow::Owned(coco_tool_runtime::schema_omit_properties(
+            self.runtime_validation_schema().as_value(),
+            &["_simulatedSedEdit"],
+        ))
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Bash)
     }
@@ -256,50 +313,6 @@ impl Tool for BashTool {
 
     fn description(&self, _input: &BashInput, _options: &DescriptionOptions) -> String {
         BASH_TOOL_DESCRIPTION.into()
-    }
-
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut props = HashMap::new();
-        props.insert(
-            "command".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The command to execute"
-            }),
-        );
-        props.insert(
-            "timeout".into(),
-            serde_json::json!({
-                "type": "number",
-                "description": "Optional timeout in milliseconds. Defaults to the resolved \
-                                Bash tool config and cannot exceed its configured max timeout."
-            }),
-        );
-        props.insert(
-            "description".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Clear description of what this command does"
-            }),
-        );
-        props.insert(
-            "run_in_background".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Set to true to run this command in the background. You will be notified when it completes."
-            }),
-        );
-        props.insert(
-            "dangerouslyDisableSandbox".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
-            }),
-        );
-        ToolInputSchema {
-            properties: props,
-            required: Vec::new(),
-        }
     }
 
     /// Read-only fast path. Mirrors TS `BashTool.isReadOnly` → `checkReadOnlyConstraints`

@@ -76,8 +76,8 @@ impl ClipboardLease {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn test() -> Self {
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test() -> Self {
         Self {
             #[cfg(target_os = "linux")]
             _clipboard: None,

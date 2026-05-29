@@ -135,20 +135,17 @@ pub struct QueryResult {
     pub content: Vec<AssistantContentPart>,
     pub usage: TokenUsage,
     pub model: String,
-    /// Typed stop reason — the canonical 8-variant
-    /// [`StopReason`] (re-exported as [`coco_llm_types::StopReason`])
-    /// from the vercel-ai-provider seam. Higher layers match on this
-    /// enum directly; no wire-string parsing anywhere above this
-    /// boundary.
-    pub stop_reason: Option<coco_llm_types::StopReason>,
-    /// Provider-original wire string preserved for diagnostics /
-    /// telemetry only (e.g. Gemini `RECITATION`/`MALFORMED_FUNCTION_CALL`
-    /// flowing through with `stop_reason: Other`, Anthropic
-    /// `"refusal"` with `stop_reason: ContentFilter`). Not consulted
-    /// for any behavioral decision — those go through `stop_reason`.
-    /// Mirrors `StreamEvent::Finish.raw_stop_reason` so the streaming
-    /// and non-streaming paths surface the same diagnostic signal.
-    pub raw_stop_reason: Option<String>,
+    /// Typed finish reason — the `{ unified, raw }`
+    /// [`coco_llm_types::FinishReason`] struct set at the
+    /// vercel-ai-provider seam, propagated verbatim (never decomposed
+    /// into the bare enum + a sibling raw string). Higher layers match
+    /// on `.unified` and read `.raw` for provider provenance — e.g.
+    /// Gemini `RECITATION` flowing through with `unified: Other`,
+    /// Anthropic `"refusal"` with `unified: ContentFilter`. No
+    /// wire-string parsing anywhere above this boundary. `None` only on
+    /// cancel / error-before-finish paths that never resolved a model
+    /// turn.
+    pub stop_reason: Option<coco_llm_types::FinishReason>,
     pub request_id: Option<String>,
     pub retries: i32,
     pub total_duration_ms: i64,
@@ -480,7 +477,7 @@ impl ApiClient {
                     // events without scraping every info-level line.
                     // Happy-path set: `EndTurn` / `StopSequence` /
                     // `ToolUse` (see [`StopReason::is_normal`]).
-                    if let Some(reason) = result.stop_reason
+                    if let Some(reason) = result.stop_reason.as_ref()
                         && reason.is_abnormal()
                     {
                         warn!(
@@ -589,12 +586,11 @@ impl ApiClient {
             .and_then(|r| r.model_id.clone())
             .unwrap_or_else(|| self.model.model_id().to_string());
 
-        // Typed unified reason — single source of truth set by the
-        // provider-adapter seam (see `vercel-ai-anthropic` etc).
-        // Raw is preserved alongside for diagnostics — same split the
-        // streaming `Finish` event uses.
-        let stop_reason = Some(result.finish_reason.unified);
-        let raw_stop_reason = result.finish_reason.raw.clone();
+        // Propagate the whole `FinishReason` struct verbatim — no
+        // decompose into bare enum + sibling raw. `.unified` (behavioral
+        // projection) and `.raw` (provider provenance) travel together
+        // from here into the committed `AssistantMessage`.
+        let stop_reason = Some(result.finish_reason);
 
         // Provider response.id (Anthropic message.id / OpenAI response.id
         // / OpenAI-compatible response.id) flows through to QueryResult so
@@ -607,7 +603,6 @@ impl ApiClient {
             usage,
             model: model_id,
             stop_reason,
-            raw_stop_reason,
             request_id,
             retries: 0,
             total_duration_ms: 0,

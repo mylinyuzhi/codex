@@ -77,7 +77,7 @@ Message, UserMessage, AssistantMessage, StopReason, MessageKind, NormalizedMessa
 PermissionMode, PermissionBehavior, PermissionRule, PermissionRuleSource, PermissionDecision
 CommandBase, CommandType, CommandAvailability, CommandSource
 ToolName (43 builtin variants, Copy), ToolId { Builtin(ToolName) | Mcp | Custom }
-ToolInputSchema, ToolResult<T>, ToolProgress
+ToolResult<T>, ToolProgress   (ToolInputSchema is NOT here — it's the self-validating newtype in coco-tool-runtime)
 SubagentType (7 builtin variants, Copy), AgentTypeId { Builtin(SubagentType) | Custom }
 TaskType, TaskStatus, TaskStateBase, TaskHandle
 SessionId, AgentId, TaskId

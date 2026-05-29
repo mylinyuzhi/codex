@@ -8,7 +8,6 @@ use uuid::Uuid;
 use crate::i18n::locale_test_guard;
 use crate::presentation::streaming::StreamingTailBlock;
 use crate::presentation::streaming::StreamingTailView;
-use crate::presentation::styles::UiStyles;
 use crate::state::derive::test_helpers::{
     assistant_text_cell, assistant_thinking_cell_with_metadata, info_cell, tool_result_cell,
     tool_use_cell, user_text_cell,
@@ -20,6 +19,7 @@ use crate::state::transcript::TranscriptState;
 use crate::state::ui::StreamingState;
 use crate::theme::Theme;
 use crate::widgets::TranscriptStateWidget;
+use coco_tui_ui::style::UiStyles;
 
 /// Push pre-built cells into `state.session.transcript` so the chat
 /// widget and modal render them. Each fixture cell carries its own

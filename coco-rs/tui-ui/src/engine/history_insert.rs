@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 /// Render finalized history lines into a buffer at the target width.
-pub(crate) fn render_history_lines(lines: Vec<Line<'static>>, width: u16) -> Buffer {
+pub fn render_history_lines(lines: Vec<Line<'static>>, width: u16) -> Buffer {
     let height = lines.len() as u16;
     let area = Rect::new(0, 0, width, height);
     let mut buffer = Buffer::empty(area);

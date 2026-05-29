@@ -41,6 +41,7 @@ pub struct SendMessageTool;
 #[async_trait::async_trait]
 impl Tool for SendMessageTool {
     type Input = SendMessageInput;
+    coco_tool_runtime::impl_runtime_schema!(SendMessageInput);
     /// Output is `Value` because the wire shape is a tagged union:
     /// bare confirmation string from `agent.send_message` for the
     /// running-agent path, or `{auto_resumed, original_agent_id,

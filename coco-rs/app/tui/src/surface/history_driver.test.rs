@@ -8,11 +8,11 @@ use ratatui::text::Line;
 use uuid::Uuid;
 
 use super::*;
-use crate::display_settings::SyntaxHighlighting;
-use crate::presentation::styles::UiStyles;
 use crate::state::derive::test_helpers;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
 use crate::theme::Theme;
+use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::style::UiStyles;
 
 #[test]
 fn driver_emit_append_only_uses_finalized_transcript_renderer() {

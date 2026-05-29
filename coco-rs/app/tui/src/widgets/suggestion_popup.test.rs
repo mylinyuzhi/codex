@@ -13,8 +13,8 @@ use ratatui::layout::Rect;
 
 use super::SuggestionItem;
 use super::SuggestionPopup;
-use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
+use coco_tui_ui::style::UiStyles;
 
 fn item(label: &str, description: Option<&str>) -> SuggestionItem {
     SuggestionItem {

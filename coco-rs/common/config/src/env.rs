@@ -135,6 +135,9 @@ pub enum EnvKey {
     /// settings.json path).
     CocoShellPrefix,
     CocoSimple,
+    /// Truthy ⇒ emit startup phase timings (one `debug!` per phase with a
+    /// `duration_ms` field). Read by `coco_cli::startup_profile`.
+    CocoStartupProfile,
     CocoTaskListId,
     CocoTeamName,
     CocoTeammateCommand,
@@ -317,6 +320,7 @@ impl EnvKey {
             Self::CocoShell => "COCO_SHELL",
             Self::CocoShellPrefix => "COCO_SHELL_PREFIX",
             Self::CocoSimple => "COCO_SIMPLE",
+            Self::CocoStartupProfile => "COCO_STARTUP_PROFILE",
             Self::CocoTaskListId => "COCO_TASK_LIST_ID",
             Self::CocoTeamName => "COCO_TEAM_NAME",
             Self::CocoTeammateCommand => "COCO_TEAMMATE_COMMAND",

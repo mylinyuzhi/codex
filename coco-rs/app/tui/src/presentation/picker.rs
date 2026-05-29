@@ -7,7 +7,6 @@ use ratatui::prelude::*;
 
 #[cfg(test)]
 use super::layout;
-use super::styles::UiStyles;
 use crate::i18n::t;
 use crate::state::CopyPickerSelection;
 use crate::state::CopyPickerState;
@@ -25,6 +24,7 @@ use crate::state::SkillRow;
 use crate::state::SkillsDialogSource;
 use crate::state::SkillsDialogState;
 use crate::state::surface_payloads::skill_override_glyph_and_label;
+use coco_tui_ui::style::UiStyles;
 
 #[derive(Debug)]
 #[cfg(test)]

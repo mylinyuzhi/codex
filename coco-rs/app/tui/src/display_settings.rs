@@ -3,40 +3,7 @@
 use coco_config::SettingSource;
 use coco_config::SettingsWithSource;
 use coco_config::settings::SYNTAX_HIGHLIGHTING_DISABLED_KEY;
-
-/// Whether language-level syntax highlighting is applied inside fenced code
-/// blocks. Diff add/remove colors and other semantic highlights are separate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SyntaxHighlighting {
-    #[default]
-    Enabled,
-    Disabled,
-}
-
-impl SyntaxHighlighting {
-    pub fn from_disabled(disabled: bool) -> Self {
-        if disabled {
-            Self::Disabled
-        } else {
-            Self::Enabled
-        }
-    }
-
-    pub fn is_enabled(self) -> bool {
-        matches!(self, Self::Enabled)
-    }
-
-    pub fn is_disabled(self) -> bool {
-        matches!(self, Self::Disabled)
-    }
-
-    pub fn toggle(self) -> Self {
-        match self {
-            Self::Enabled => Self::Disabled,
-            Self::Disabled => Self::Enabled,
-        }
-    }
-}
+use coco_tui_ui::display::SyntaxHighlighting;
 
 /// Whether a display preference can be edited from the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

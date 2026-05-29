@@ -17,6 +17,11 @@ pub fn map_anthropic_stop_reason(
         Some("refusal") => vercel_ai_provider::UnifiedFinishReason::ContentFilter,
         Some("tool_use") => {
             if is_json_response_from_tool {
+                // Structured-output-via-tool: the model used a tool to
+                // emit JSON, not to invoke a real tool, so the turn ended
+                // normally. `raw` stays `"tool_use"`, so `FinishReason`'s
+                // Display renders `end_turn(tool_use)` in logs — this is
+                // an INTENTIONAL remap, not a mis-mapping; don't "fix" it.
                 vercel_ai_provider::UnifiedFinishReason::EndTurn
             } else {
                 vercel_ai_provider::UnifiedFinishReason::ToolUse

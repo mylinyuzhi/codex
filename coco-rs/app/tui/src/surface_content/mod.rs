@@ -18,10 +18,10 @@ mod settings;
 use ratatui::prelude::*;
 
 use crate::i18n::t;
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
+use coco_tui_ui::style::UiStyles;
 
 pub(crate) enum TextSurfaceContent<'a> {
     Permission(&'a crate::state::PermissionPromptState),

@@ -26,9 +26,6 @@
 //! Draft 7 / 2020-12 dialect range; observable behavior is equivalent
 //! for the schemas the model is asked to produce.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -37,9 +34,7 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use jsonschema::Validator;
 use serde_json::Value;
 
 /// User-facing prompt body — TS verbatim
@@ -51,21 +46,14 @@ const TOOL_DESCRIPTION: &str = "Return structured output in the requested format
 
 /// Compiled-validator-backed structured-output tool.
 ///
-/// Stateless after construction: `schema` is the user-supplied JSON
-/// Schema (rendered to the model via `input_schema()`), `validator` is
-/// the pre-compiled validator. Clone-cheap via `Arc<Validator>`.
+/// Stateless after construction; clone-cheap (the validator is shared
+/// behind `Arc` inside the schema). `Debug` elides the compiled validator.
+#[derive(Debug)]
 pub struct StructuredOutputTool {
-    schema: Value,
-    validator: Arc<Validator>,
-}
-
-impl std::fmt::Debug for StructuredOutputTool {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StructuredOutputTool")
-            .field("schema", &self.schema)
-            .field("validator", &"<compiled>")
-            .finish()
-    }
+    /// Self-validating schema (v4.2) — owns the user document (model-facing)
+    /// and the compiled validator. Replaces the old `schema: Value` +
+    /// `validator: Arc<Validator>` pair.
+    schema: coco_tool_runtime::ToolInputSchema,
 }
 
 impl StructuredOutputTool {
@@ -76,18 +64,15 @@ impl StructuredOutputTool {
     /// Mirrors TS `buildSyntheticOutputTool` which returns `{error}` for
     /// the same condition.
     pub fn new(schema: Value) -> Result<Self, String> {
-        let validator =
-            jsonschema::validator_for(&schema).map_err(|e| format!("invalid JSON schema: {e}"))?;
-        Ok(Self {
-            schema,
-            validator: Arc::new(validator),
-        })
+        let schema = coco_tool_runtime::ToolInputSchema::from_value(schema)
+            .map_err(|e| format!("invalid JSON schema: {e}"))?;
+        Ok(Self { schema })
     }
 
     /// The user-supplied JSON Schema — exposed for telemetry / `init`
     /// echo without cloning the validator.
     pub fn schema(&self) -> &Value {
-        &self.schema
+        self.schema.as_value()
     }
 }
 
@@ -100,6 +85,10 @@ impl Tool for StructuredOutputTool {
     /// success message verbatim so the model sees the same text TS
     /// returns (`SyntheticOutputTool.ts:61`).
     type Output = String;
+
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        &self.schema
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::StructuredOutput)
@@ -115,52 +104,6 @@ impl Tool for StructuredOutputTool {
 
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         TOOL_PROMPT.into()
-    }
-
-    /// Returns the user-supplied JSON Schema unchanged. The provider's
-    /// strict-tool-input validation (Anthropic / OpenAI / Google) gives
-    /// first-line enforcement before `execute` runs Ajv-equivalent
-    /// client-side validation.
-    fn input_schema(&self) -> ToolInputSchema {
-        // The TS shape carries the full schema; coco-rs's
-        // `ToolInputSchema` only exposes `properties` + `required`, so
-        // when the user-provided schema is an object schema we forward
-        // those two fields; otherwise we expose an empty
-        // passthrough — same observable shape as `z.passthrough()`.
-        let properties = self
-            .schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .map(|obj| {
-                obj.iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<HashMap<_, _>>()
-            })
-            .unwrap_or_default();
-        let required = self
-            .schema
-            .get("required")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
-        ToolInputSchema {
-            properties,
-            required,
-        }
-    }
-
-    /// Returns the user-supplied JSON Schema verbatim. The blanket default
-    /// (`derive_input_schema_value::<Self::Input>()`) would derive from
-    /// `Self::Input = Value`, producing a permissive schema that strict
-    /// OpenAI-compatible providers (DeepSeek) reject with `type: null`.
-    /// Mirrors the [`crate::tools::mcp_tools::McpTool::input_json_schema`]
-    /// fix: stash the wire schema at construction, return it on demand.
-    fn input_json_schema(&self) -> Option<Value> {
-        Some(self.schema.clone())
     }
 
     fn is_read_only(&self, _input: &Value) -> bool {
@@ -192,8 +135,12 @@ impl Tool for StructuredOutputTool {
         input: Value,
         _ctx: &ToolUseContext,
     ) -> Result<ToolResult<String>, ToolError> {
-        if let Err(error) = self.validator.validate(&input) {
-            let detail = format!("{}: {}", error.instance_path(), error);
+        if let Err(issues) = self.schema.validate(&input) {
+            let detail = issues
+                .iter()
+                .map(|i| format!("{i:?}"))
+                .collect::<Vec<_>>()
+                .join("; ");
             return Err(ToolError::ExecutionFailed {
                 message: format!("Output does not match required schema: {detail}"),
                 source: None,

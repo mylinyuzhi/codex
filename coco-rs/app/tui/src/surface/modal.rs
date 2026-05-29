@@ -12,12 +12,12 @@ use ratatui::widgets::Wrap;
 
 use crate::presentation::layout;
 use crate::presentation::layout::text_width;
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
 use crate::state::ModalState;
-use crate::surface::compatibility::TerminalCompatibility;
-use crate::surface::terminal::SurfaceFrame;
 use crate::widgets::TranscriptLayoutIndex;
+use coco_tui_ui::engine::compatibility::TerminalCompatibility;
+use coco_tui_ui::engine::terminal::SurfaceFrame;
+use coco_tui_ui::style::UiStyles;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModalSurfacePlacement {

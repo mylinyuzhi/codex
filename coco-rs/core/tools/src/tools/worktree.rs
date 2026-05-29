@@ -49,6 +49,7 @@ pub struct EnterWorktreeTool;
 #[async_trait::async_trait]
 impl Tool for EnterWorktreeTool {
     type Input = EnterWorktreeInput;
+    coco_tool_runtime::impl_runtime_schema!(EnterWorktreeInput);
     type Output = EnterWorktreeOutput;
 
     fn id(&self) -> ToolId {
@@ -215,6 +216,7 @@ pub struct ExitWorktreeTool;
 #[async_trait::async_trait]
 impl Tool for ExitWorktreeTool {
     type Input = ExitWorktreeInput;
+    coco_tool_runtime::impl_runtime_schema!(ExitWorktreeInput);
     type Output = ExitWorktreeOutput;
 
     fn id(&self) -> ToolId {

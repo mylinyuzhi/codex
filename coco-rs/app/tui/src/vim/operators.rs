@@ -10,7 +10,7 @@ use super::Operator;
 use super::PersistentState;
 use super::motions::next_char_boundary;
 use super::motions::prev_char_boundary;
-use crate::widgets::TextArea;
+use coco_tui_ui::widgets::TextArea;
 
 /// Apply an operator to a half-open byte range.
 ///

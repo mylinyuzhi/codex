@@ -463,9 +463,9 @@ impl QueryEngine {
             ant_build,
         };
 
-        // Session context for `Tool::input_schema_for_session`. Lets
-        // AgentTool drop `run_in_background` from its model-facing
-        // schema when the runtime would silently veto it. TS parity:
+        // Session context for `Tool::model_schema`. Lets AgentTool drop
+        // `run_in_background` from its model-facing schema when the runtime
+        // would silently veto it. TS parity:
         // `AgentTool.tsx:110-125 lazySchema().omit({...})`.
         let schema_ctx = coco_tool_runtime::SchemaContext {
             background_tasks_disabled,
@@ -475,28 +475,14 @@ impl QueryEngine {
 
         let mut out = Vec::with_capacity(model_tools.len());
         for tool in model_tools {
-            // Prefer the session-aware JSON Schema so AgentTool's
-            // `omit({run_in_background})` reaches the model under
-            // `background_tasks_disabled || fork_mode_active` (TS
-            // `AgentTool.tsx:110-125 lazySchema().omit(...)`). The
-            // default `Tool::input_json_schema_for_session` returns
-            // the static derived schema, so tools that don't need
-            // dynamic omits pay no cost.
-            //
-            // Fallback path (no `input_json_schema_for_session`):
-            // synthesize from the legacy `input_schema_for_session`
-            // `properties` map and wrap as `{"type":"object",
-            // "properties":{...}}` — strict providers (DeepSeek,
-            // OpenAI Responses on some models) reject schemas
-            // missing a top-level `type` with HTTP 400.
-            let json_schema = tool
-                .input_json_schema_for_session(&schema_ctx)
-                .unwrap_or_else(|| {
-                    let schema = tool.input_schema_for_session(&schema_ctx);
-                    let props = serde_json::to_value(&schema.properties)
-                        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-                    serde_json::json!({ "type": "object", "properties": props })
-                });
+            // `model_schema(ctx)` is the model-facing JSON Schema — a plain
+            // Value, never validated, only serialized into the prompt tool
+            // list. The default borrows the runtime schema; AgentTool/Bash
+            // override it to omit runtime-only hook-injected fields
+            // (`mcp_servers`, `_simulatedSedEdit`), and AgentTool also drops
+            // `run_in_background` under `background_tasks_disabled ||
+            // fork_mode_active` (TS `AgentTool.tsx:110-125 lazySchema().omit(...)`).
+            let json_schema = tool.model_schema(&schema_ctx).into_owned();
             let description = tool.prompt(&prompt_options).await;
             // Attach `deferLoading: true` to tools the model has not
             // yet discovered via `ToolSearch`. Anthropic adapter reads
@@ -606,7 +592,6 @@ impl QueryEngine {
             // Session-scoped schema validator. Clone is cheap —
             // inner state is `Arc<RwLock<HashMap>>` shared across
             // per-turn ctx rebuilds so the compile cache persists.
-            tool_schema_validator: Some(self.tool_schema_validator.clone()),
             // Agent definition catalog snapshot (T7). When the
             // bootstrap installed one via `with_agent_catalog`,
             // AgentTool reads `subagent_type → AgentDefinition` from

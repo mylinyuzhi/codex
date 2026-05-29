@@ -71,6 +71,7 @@ pub struct SkillTool;
 #[async_trait::async_trait]
 impl Tool for SkillTool {
     type Input = SkillInput;
+    coco_tool_runtime::impl_runtime_schema!(SkillInput);
     type Output = SkillOutput;
 
     fn id(&self) -> ToolId {

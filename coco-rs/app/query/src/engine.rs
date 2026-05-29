@@ -232,11 +232,6 @@ pub struct QueryEngine {
     /// model call; Rust sessions that skip installation intentionally
     /// restrict Agent tools to model-visible errors.
     pub(crate) agent_handle: Option<coco_tool_runtime::AgentHandleRef>,
-    /// Session-scoped tool-input schema validator. One instance per
-    /// engine so compiled validators cache across turns. Plan I3's
-    /// Rust-side tightening — preparer runs this on both model
-    /// input and any PreToolUse hook-rewritten input.
-    pub(crate) tool_schema_validator: coco_tool_runtime::ToolSchemaValidator,
     /// Tool-result budget replacement state (TS
     /// `ContentReplacementState`). Threaded through every per-turn
     /// `apply_tool_result_budget` call so seen_ids freeze across

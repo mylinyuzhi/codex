@@ -77,17 +77,18 @@ async fn test_exit_worktree_nonexistent_path_fails_gracefully() {
 /// invoke the tool. TS contract check.
 #[test]
 fn test_exit_worktree_schema_advertises_previous_cwd() {
-    let schema = <ExitWorktreeTool as DynTool>::input_schema(&ExitWorktreeTool);
+    let schema =
+        <ExitWorktreeTool as DynTool>::runtime_validation_schema(&ExitWorktreeTool).as_value();
     assert!(
-        schema.properties.contains_key("previous_cwd"),
+        schema["properties"].get("previous_cwd").is_some(),
         "schema must expose previous_cwd parameter"
     );
     assert!(
-        schema.properties.contains_key("path"),
+        schema["properties"].get("path").is_some(),
         "schema must expose path parameter"
     );
     assert!(
-        schema.properties.contains_key("force"),
+        schema["properties"].get("force").is_some(),
         "schema must expose force parameter"
     );
 }

@@ -6,9 +6,9 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-use crate::constants;
 use crate::i18n::t;
-use crate::presentation::styles::UiStyles;
+use coco_tui_ui::constants;
+use coco_tui_ui::style::UiStyles;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThinkingDisplay {

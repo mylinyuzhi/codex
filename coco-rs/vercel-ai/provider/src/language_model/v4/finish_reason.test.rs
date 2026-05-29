@@ -76,16 +76,8 @@ fn finish_reason_constructors() {
         UnifiedFinishReason::EndTurn
     );
     assert_eq!(
-        FinishReason::max_tokens().unified,
-        UnifiedFinishReason::MaxTokens
-    );
-    assert_eq!(
         FinishReason::tool_use().unified,
         UnifiedFinishReason::ToolUse
-    );
-    assert_eq!(
-        FinishReason::content_filter().unified,
-        UnifiedFinishReason::ContentFilter
     );
     assert_eq!(FinishReason::error().unified, UnifiedFinishReason::Error);
     assert_eq!(FinishReason::other().unified, UnifiedFinishReason::Other);
@@ -100,13 +92,25 @@ fn finish_reason_with_raw_preserves_provenance() {
 }
 
 #[test]
-fn finish_reason_serde_round_trip() {
-    let reason = FinishReason::with_raw(UnifiedFinishReason::MaxTokens, "max_tokens");
+fn finish_reason_serializes_as_bare_unified_string() {
+    // Wire is shielded: a `FinishReason` serializes as just the bare
+    // `unified` snake_case string — NOT a `{unified, raw}` object — so
+    // transcripts / SDK payloads keep their pre-existing format and
+    // old string-form transcripts still deserialize.
+    let reason = FinishReason::with_raw(UnifiedFinishReason::Other, "compaction");
     let json = serde_json::to_string(&reason).unwrap();
-    assert_eq!(json, r#"{"unified":"max_tokens","raw":"max_tokens"}"#);
+    assert_eq!(json, r#""other""#, "raw must not leak onto the wire");
 
+    // Round-trip recovers `unified`; `raw` is a live diagnostic, not
+    // persisted, so it is `None` after deserialize.
     let parsed: FinishReason = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed, reason);
+    assert_eq!(parsed.unified, UnifiedFinishReason::Other);
+    assert!(parsed.raw.is_none());
+
+    // A bare string (old transcript form) deserializes cleanly too.
+    let from_old: FinishReason = serde_json::from_str(r#""end_turn""#).unwrap();
+    assert_eq!(from_old.unified, UnifiedFinishReason::EndTurn);
+    assert!(from_old.raw.is_none());
 }
 
 #[test]
@@ -114,4 +118,24 @@ fn finish_reason_from_unified() {
     let reason: FinishReason = UnifiedFinishReason::ToolUse.into();
     assert_eq!(reason.unified, UnifiedFinishReason::ToolUse);
     assert!(reason.raw.is_none());
+}
+
+#[test]
+fn finish_reason_display_annotates_raw_when_informative() {
+    // Raw that the projection drops → surfaced in parens for log audit.
+    assert_eq!(
+        FinishReason::with_raw(UnifiedFinishReason::Other, "compaction").to_string(),
+        "other(compaction)"
+    );
+    assert_eq!(
+        FinishReason::with_raw(UnifiedFinishReason::ContentFilter, "refusal").to_string(),
+        "content_filter(refusal)"
+    );
+    // Raw equal to the unified wire string adds nothing → no parens.
+    assert_eq!(
+        FinishReason::with_raw(UnifiedFinishReason::EndTurn, "end_turn").to_string(),
+        "end_turn"
+    );
+    // Synthetic (no provider raw) → bare unified wire string.
+    assert_eq!(FinishReason::tool_use().to_string(), "tool_use");
 }

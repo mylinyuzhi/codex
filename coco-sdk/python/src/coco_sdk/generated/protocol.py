@@ -3116,12 +3116,18 @@ class McpServerStatus(BaseModel):
     name: str
     status: McpConnectionStatus
     error: str | None = None
+    skipped_tools: list[McpSkippedToolStatus] | None = None
+    tombstoned_tools: list[str] | None = None
     tool_count: int = 0
 
 class McpSetServersResult(BaseModel):
     added: list[str]
     errors: dict[str, str]
     removed: list[str]
+
+class McpSkippedToolStatus(BaseModel):
+    error: str
+    tool_name: str
 
 class McpStatusResult(BaseModel):
     mcp_servers: list[McpServerStatus] = Field(alias='mcpServers')

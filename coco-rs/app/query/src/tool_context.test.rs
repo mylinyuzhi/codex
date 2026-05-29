@@ -51,7 +51,6 @@ fn factory_with_live_rules(
         skill_handle: None,
         lsp_handle: None,
         mcp_handle: None,
-        tool_schema_validator: None,
         agent_catalog: None,
         parent_runtime_snapshot: None,
         live_command_rules,

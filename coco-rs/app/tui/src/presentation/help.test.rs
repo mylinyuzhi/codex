@@ -2,8 +2,8 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
-use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
+use coco_tui_ui::style::UiStyles;
 
 #[test]
 fn help_content_renders_grouped_keymap_with_live_bindings() {

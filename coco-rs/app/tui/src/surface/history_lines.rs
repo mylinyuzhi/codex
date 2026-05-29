@@ -14,12 +14,12 @@ use std::collections::HashMap;
 
 use ratatui::text::Line;
 
-use crate::display_settings::SyntaxHighlighting;
 use crate::keybinding_resolver::KeybindingHandle;
-use crate::presentation::styles::UiStyles;
 use crate::state::session::ReasoningMetadata;
 use crate::state::transcript_view::RenderedCell;
 use crate::widgets::ChatWidget;
+use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::style::UiStyles;
 
 pub(crate) const DEFAULT_MAX_REFLOW_ROWS: usize = 9_000;
 
@@ -75,24 +75,52 @@ pub(crate) fn render_replay_history_lines(
         };
     }
 
-    // Walk forward by engine-message UUID boundaries so the "N older
-    // messages omitted" marker counts engine messages, not cells.
+    // Truncate at engine-message UUID boundaries so the "N older messages
+    // omitted" marker counts engine messages, not cells.
+    //
+    // Dropping more leading messages can only shrink the rendered suffix, so
+    // "suffix + marker fits within max_rows" is monotonic in the number of
+    // omitted messages. Binary-search the smallest omission that fits rather
+    // than re-rendering every candidate suffix forward — the old linear walk
+    // re-wrapped the whole remaining transcript on each step (O(messages ×
+    // cells)); this is O(messages × cells × log messages) and renders the
+    // chosen suffix at most a handful of times.
     let message_starts = engine_message_starts(cells);
-    for (i, &start) in message_starts.iter().enumerate().skip(1) {
-        let omitted_messages = i;
-        let mut lines = replay_truncation_marker(omitted_messages);
-        lines.extend(render_finalized_history_lines(&cells[start..], options));
-        if lines.len() <= max_rows {
-            return HistoryReplayLines {
-                lines,
-                omitted_messages,
-            };
+    let marker_rows = replay_truncation_marker(0).len();
+    let n = message_starts.len();
+
+    let fits = |omitted: usize| -> bool {
+        let start = message_starts[omitted];
+        marker_rows + render_finalized_history_lines(&cells[start..], options).len() <= max_rows
+    };
+
+    // Smallest `omitted` in `1..n` whose suffix fits; `n` ⇒ none fits.
+    let mut lo = 1;
+    let mut hi = n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if fits(mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
         }
     }
 
-    HistoryReplayLines {
-        lines: replay_truncation_marker(message_starts.len()),
-        omitted_messages: message_starts.len(),
+    if lo < n {
+        let start = message_starts[lo];
+        let mut lines = replay_truncation_marker(lo);
+        lines.extend(render_finalized_history_lines(&cells[start..], options));
+        HistoryReplayLines {
+            lines,
+            omitted_messages: lo,
+        }
+    } else {
+        // Even keeping only the final message overflows the cap; emit just
+        // the marker (matches the prior fallback behaviour).
+        HistoryReplayLines {
+            lines: replay_truncation_marker(n),
+            omitted_messages: n,
+        }
     }
 }
 

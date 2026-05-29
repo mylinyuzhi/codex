@@ -17,7 +17,6 @@ use coco_messages::Message;
 use coco_messages::SystemMessageLevel;
 use uuid::Uuid;
 
-use crate::clipboard_copy;
 use crate::command::SystemPushKind;
 use crate::command::UserCommand;
 use crate::i18n::t;
@@ -26,6 +25,7 @@ use crate::state::CopyPickerSelection;
 use crate::state::CopyPickerState;
 use crate::state::transcript_view::TranscriptView;
 use crate::state::ui::Toast;
+use coco_tui_ui::clipboard_copy;
 
 const RESPONSE_FILENAME: &str = "response.md";
 

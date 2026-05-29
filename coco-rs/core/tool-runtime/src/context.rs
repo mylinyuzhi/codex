@@ -397,15 +397,6 @@ pub struct ToolUseContext {
     /// concern.
     pub skill: crate::skill_handle::SkillHandleRef,
 
-    // ── Schema Validator ──
-    /// Cached JSON Schema validator for tool inputs. When
-    /// installed, the preparer runs model input (and any
-    /// PreToolUse-rewritten input) through the validator BEFORE
-    /// permission / execution. `None` skips schema validation and
-    /// relies solely on `Tool::validate_input`. Plan I3's
-    /// Rust-side tightening lives here.
-    pub tool_schema_validator: Option<crate::schema::ToolSchemaValidator>,
-
     // ── Swarm Mailbox ──
     /// Handle for writing protocol messages to swarm mailboxes.
     /// Used by ExitPlanModeTool (teammate plan_approval_request) and
@@ -668,7 +659,6 @@ impl ToolUseContext {
             schedules: self.schedules.clone(),
             agent: self.agent.clone(),
             skill: self.skill.clone(),
-            tool_schema_validator: self.tool_schema_validator.clone(),
             mailbox: self.mailbox.clone(),
             pending_messages: self.pending_messages.clone(),
             cwd_override: self.cwd_override.clone(),
@@ -885,7 +875,6 @@ impl ToolUseContext {
             schedules: Arc::new(crate::schedule_store::NoOpScheduleStore),
             agent: Arc::new(crate::agent_handle::NoOpAgentHandle),
             skill: Arc::new(crate::skill_handle::NoOpSkillHandle),
-            tool_schema_validator: None,
             mailbox: Arc::new(crate::NoOpMailboxHandle),
             pending_messages: Arc::new(crate::NoOpPendingMessageStore),
             cwd_override: None,

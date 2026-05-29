@@ -10,8 +10,20 @@ use coco_tool_runtime::mcp_handle::McpToolCallResult;
 use serde_json::json;
 use std::sync::Arc;
 
+/// Test wrapper: tests always pass valid schemas, so unwrap the v4.2
+/// fallible `McpTool::new`.
+fn mcp_tool(
+    server: String,
+    tool: String,
+    desc: String,
+    schema: serde_json::Value,
+    annotations: McpToolAnnotations,
+) -> McpTool {
+    McpTool::new(server, tool, desc, schema, annotations).expect("test mcp schema must be valid")
+}
+
 fn make_mcp_tool() -> McpTool {
-    McpTool::new(
+    mcp_tool(
         "test-server".into(),
         "test-tool".into(),
         "test description".into(),
@@ -47,7 +59,7 @@ fn always_load_propagates_from_meta_opt_out() {
     let annotations = McpToolAnnotations::from_input_schema_meta(&schema);
     assert!(annotations.always_load);
 
-    let tool = McpTool::new(
+    let tool = mcp_tool(
         "test-server".into(),
         "always-on".into(),
         "always-loaded tool".into(),
@@ -80,7 +92,7 @@ fn input_json_schema_returns_wire_envelope_verbatim() {
         "required": ["param"],
         "additionalProperties": false
     });
-    let tool = McpTool::new(
+    let tool = mcp_tool(
         "server".into(),
         "tool".into(),
         "desc".into(),
@@ -88,7 +100,7 @@ fn input_json_schema_returns_wire_envelope_verbatim() {
         McpToolAnnotations::default(),
     );
     let tool: &dyn DynTool = &tool;
-    assert_eq!(tool.input_json_schema(), Some(schema));
+    assert_eq!(tool.runtime_validation_schema().as_value(), &schema);
 }
 
 #[test]
@@ -99,7 +111,7 @@ fn input_json_schema_folds_in_type_object_when_omitted() {
     let schema = json!({
         "properties": { "param": { "type": "string" } }
     });
-    let tool = McpTool::new(
+    let tool = mcp_tool(
         "server".into(),
         "tool".into(),
         "desc".into(),
@@ -107,7 +119,7 @@ fn input_json_schema_folds_in_type_object_when_omitted() {
         McpToolAnnotations::default(),
     );
     let tool: &dyn DynTool = &tool;
-    let envelope = tool.input_json_schema().expect("schema present");
+    let envelope = tool.runtime_validation_schema().as_value();
     assert_eq!(
         envelope.get("type").and_then(|v| v.as_str()),
         Some("object")
@@ -127,7 +139,7 @@ fn required_array_preserved_from_wire() {
         },
         "required": ["name"]
     });
-    let tool = McpTool::new(
+    let tool = mcp_tool(
         "server".into(),
         "tool".into(),
         "desc".into(),
@@ -135,8 +147,14 @@ fn required_array_preserved_from_wire() {
         McpToolAnnotations::default(),
     );
     let tool: &dyn DynTool = &tool;
-    let view = tool.input_schema();
-    assert_eq!(view.required, vec!["name".to_string()]);
+    let view = tool.runtime_validation_schema().as_value();
+    let required: Vec<&str> = view["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(required, vec!["name"]);
 }
 
 #[test]
@@ -144,7 +162,7 @@ fn non_object_schema_falls_back_to_empty_envelope() {
     // Defensive: a misbehaving server that sends a bare string or
     // array as the schema must not crash the tool — fall back to the
     // canonical empty-params envelope.
-    let tool = McpTool::new(
+    let tool = mcp_tool(
         "server".into(),
         "tool".into(),
         "desc".into(),
@@ -152,7 +170,7 @@ fn non_object_schema_falls_back_to_empty_envelope() {
         McpToolAnnotations::default(),
     );
     let tool: &dyn DynTool = &tool;
-    let envelope = tool.input_json_schema().expect("schema present");
+    let envelope = tool.runtime_validation_schema().as_value();
     assert_eq!(
         envelope.get("type").and_then(|v| v.as_str()),
         Some("object")

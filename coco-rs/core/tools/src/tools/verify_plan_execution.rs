@@ -70,6 +70,7 @@ pub struct VerifyPlanExecutionTool;
 #[async_trait::async_trait]
 impl Tool for VerifyPlanExecutionTool {
     type Input = VerifyPlanExecutionInput;
+    coco_tool_runtime::impl_runtime_schema!(VerifyPlanExecutionInput);
     type Output = VerifyPlanExecutionOutput;
 
     fn id(&self) -> ToolId {

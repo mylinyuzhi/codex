@@ -229,8 +229,8 @@ impl HookLlmHandle for QueryHookLlm {
                 // truncated / content-filtered verdict would leave the
                 // user wondering why their hook didn't fire. Warn
                 // before parsing so the missing decision is traceable.
-                let stop = query_result.stop_reason;
-                if stop.is_some_and(coco_messages::StopReason::is_abnormal) {
+                let stop = query_result.stop_reason.as_ref();
+                if stop.is_some_and(coco_messages::FinishReason::is_abnormal) {
                     tracing::warn!(
                         stop_reason = ?stop,
                         tokens_out = query_result.usage.output_tokens.total,

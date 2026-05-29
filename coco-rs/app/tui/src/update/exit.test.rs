@@ -6,9 +6,9 @@ use pretty_assertions::assert_eq;
 use super::ExitEffect;
 use super::on_interrupt;
 use super::on_request_exit;
-use crate::constants::DOUBLE_PRESS_TIMEOUT;
 use crate::state::AppState;
 use crate::state::derive::test_helpers;
+use coco_tui_ui::constants::DOUBLE_PRESS_TIMEOUT;
 
 fn idle_state_with_history() -> AppState {
     let mut s = AppState::new();

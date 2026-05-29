@@ -82,6 +82,7 @@ pub struct LspTool;
 #[async_trait::async_trait]
 impl Tool for LspTool {
     type Input = LspInput;
+    coco_tool_runtime::impl_runtime_schema!(LspInput);
     type Output = crate::tools::lsp::LspOutput;
 
     fn id(&self) -> ToolId {

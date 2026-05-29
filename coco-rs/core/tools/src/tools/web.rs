@@ -6,12 +6,10 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Typed input for [`WebFetchTool`]. Manual `input_schema()` is the
 /// model-facing source of truth — this struct is the boundary
@@ -567,6 +565,22 @@ pub struct WebFetchTool;
 #[async_trait::async_trait]
 impl Tool for WebFetchTool {
     type Input = WebFetchInput;
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch content from"},
+                    "prompt": {"type": "string", "description": "The prompt to run on the fetched content"}
+                },
+                "required": []
+            }))
+            .expect("WebFetch input schema must be a valid object schema")
+        })
+    }
     /// Multi-shape output (cached/fresh extraction, cross-origin
     /// redirect envelope, raw markdown fallback) — keep `Value` as the
     /// escape hatch (see `BashTool` for the same rationale).
@@ -607,21 +621,6 @@ Usage notes:
   - For GitHub URLs, prefer using the gh CLI via Bash instead (e.g., gh pr view, gh issue view, gh api).
 "
         .into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "url".into(),
-            serde_json::json!({"type": "string", "description": "The URL to fetch content from"}),
-        );
-        p.insert(
-            "prompt".into(),
-            serde_json::json!({"type": "string", "description": "The prompt to run on the fetched content"}),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
     }
     fn is_read_only(&self, _input: &WebFetchInput) -> bool {
         true
@@ -1323,6 +1322,48 @@ pub struct WebSearchTool;
 #[async_trait::async_trait]
 impl Tool for WebSearchTool {
     type Input = WebSearchInput;
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to use",
+                        "minLength": 2
+                    },
+                    // Per-call override for `web_search.max_results` in settings —
+                    // lets the model widen for broad surveys or narrow for
+                    // precision. Clamped to `[1, SEARCH_MAX_RESULTS_CEILING]` at
+                    // execute-time.
+                    "max_results": {
+                        "type": "integer",
+                        "description": format!(
+                            "Maximum number of results to return (1-{SEARCH_MAX_RESULTS_CEILING}). \
+                             Overrides the configured default."
+                        ),
+                        "minimum": 1,
+                        "maximum": SEARCH_MAX_RESULTS_CEILING
+                    },
+                    "allowed_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Only include search results from these domains (post-filtered client-side)"
+                    },
+                    "blocked_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Never include search results from these domains (post-filtered client-side)"
+                    }
+                },
+                "required": []
+            }))
+            .expect("WebSearch input schema must be a valid object schema")
+        })
+    }
     /// Wire shape carries both prebuilt `formatted` markdown and a
     /// downstream-consumer `results` array; staying on `Value` keeps
     /// the consumer flexibility without forcing a typed result envelope.
@@ -1375,53 +1416,6 @@ IMPORTANT - Use the correct year in search queries:
   - Example: If the user asks for \"latest React docs\", search for \"React documentation\" with the current year, NOT last year
 "
         )
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "query".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The search query to use",
-                "minLength": 2
-            }),
-        );
-        // Per-call override for `web_search.max_results` in settings —
-        // lets the model widen for broad surveys or narrow for
-        // precision. Clamped to `[1, SEARCH_MAX_RESULTS_CEILING]` at
-        // execute-time.
-        p.insert(
-            "max_results".into(),
-            serde_json::json!({
-                "type": "integer",
-                "description": format!(
-                    "Maximum number of results to return (1-{SEARCH_MAX_RESULTS_CEILING}). \
-                     Overrides the configured default."
-                ),
-                "minimum": 1,
-                "maximum": SEARCH_MAX_RESULTS_CEILING
-            }),
-        );
-        p.insert(
-            "allowed_domains".into(),
-            serde_json::json!({
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Only include search results from these domains (post-filtered client-side)"
-            }),
-        );
-        p.insert(
-            "blocked_domains".into(),
-            serde_json::json!({
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Never include search results from these domains (post-filtered client-side)"
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
     }
     fn is_read_only(&self, _input: &WebSearchInput) -> bool {
         true

@@ -3,8 +3,8 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::information;
-use crate::presentation::styles::UiStyles;
 use crate::state::DiffViewState;
+use coco_tui_ui::style::UiStyles;
 
 pub(super) fn diff_view_content(
     d: &DiffViewState,

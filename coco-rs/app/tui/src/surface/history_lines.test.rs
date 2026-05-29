@@ -142,6 +142,29 @@ fn replay_history_lines_truncates_at_message_boundaries_with_marker() {
     );
 }
 
+#[test]
+fn replay_history_lines_binary_search_picks_smallest_fitting_suffix() {
+    let theme = Theme::default();
+    // 50 single-line assistant messages; each renders "⏺ msgN" + "" (2 rows).
+    let cells: Vec<_> = (0..50)
+        .map(|i| test_helpers::assistant_text_cell(&format!("msg{i}")))
+        .collect();
+
+    // marker = 3 rows, each message = 2 rows. Budget 13 ⇒ keep 5 messages
+    // (msg45..msg49) ⇒ omit 45. Exercises the binary search over boundaries.
+    let replay = render_replay_history_lines(&cells, options(&theme, 40), 13);
+
+    assert_eq!(replay.omitted_messages, 45);
+    assert!(replay.lines.len() <= 13);
+    let rendered = plain_lines(&replay.lines);
+    assert_eq!(
+        rendered.first().map(String::as_str),
+        Some("... 45 older messages retained in transcript, not replayed")
+    );
+    // First content row after the 3-row marker is the retained-suffix head.
+    assert_eq!(rendered.get(3).map(String::as_str), Some("⏺ msg45"));
+}
+
 fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
     HistoryLineRenderOptions {
         styles: UiStyles::new(theme),

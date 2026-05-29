@@ -5,10 +5,10 @@ use pretty_assertions::assert_eq;
 
 use super::copy_last_message_with;
 use super::paste_from_clipboard_with;
-use crate::clipboard_copy::ClipboardLease;
-use crate::paste::ImageData;
 use crate::state::AppState;
 use crate::state::ui::ToastSeverity;
+use coco_tui_ui::clipboard_copy::ClipboardLease;
+use coco_tui_ui::paste::ImageData;
 
 #[test]
 fn surfaces_info_toast_when_no_agent_response_cached() {
@@ -162,7 +162,7 @@ async fn paste_shows_info_toast_when_clipboard_has_no_image() {
 async fn paste_shows_error_toast_when_backend_fails() {
     let mut state = AppState::new();
     paste_from_clipboard_with(&mut state, || async {
-        Err(anyhow::anyhow!("xclip not installed"))
+        Err(std::io::Error::other("xclip not installed"))
     })
     .await;
 

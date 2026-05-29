@@ -215,6 +215,7 @@ pub struct EnterPlanModeInput {}
 #[async_trait::async_trait]
 impl Tool for EnterPlanModeTool {
     type Input = EnterPlanModeInput;
+    coco_tool_runtime::impl_runtime_schema!(EnterPlanModeInput);
     /// Output is `Value` — the renderer reads `message` +
     /// `isInterviewPhase` positionally. Could be a typed
     /// `{message, isInterviewPhase}` struct in a follow-up; current
@@ -413,12 +414,14 @@ pub struct ExitPlanAllowedPrompt {
 
 /// Typed input for [`ExitPlanModeTool`].
 ///
-/// The schema-visible field is `allowedPrompts` (TS-mirror). Two
-/// additional fields ride along internally: `plan` is spliced by the
-/// query layer (TS `normalizeToolInput` parity — injects the on-disk
-/// plan content into the tool's input for hooks/SDK/transcript), and
-/// `user_choice` is spliced by the TUI permission-multichoice dialog.
-/// The model is taught to emit only `allowedPrompts`.
+/// The schema-visible field is `allowedPrompts` (TS-mirror). Three
+/// additional fields ride along internally: `plan` and `planFilePath`
+/// are spliced by the query layer (TS `normalizeToolInput` parity —
+/// inject the on-disk plan content + its path into the tool's input for
+/// hooks/SDK/transcript), and `user_choice` is spliced by the TUI
+/// permission-multichoice dialog. All three are declared so the closed
+/// runtime schema accepts them on re-validation; the model is taught to
+/// emit only `allowedPrompts`.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ExitPlanModeInput {
     /// Prompt-based permissions needed to implement the plan.
@@ -429,6 +432,11 @@ pub struct ExitPlanModeInput {
     /// `normalizeToolInput`. Model never populates this.
     #[serde(default)]
     pub plan: Option<String>,
+    /// (Internal) Absolute path to the on-disk plan file, spliced by the
+    /// query layer alongside `plan` (same `normalizeToolInput` parity) so
+    /// hooks/SDK observe it. Model never populates this.
+    #[serde(default, rename = "planFilePath")]
+    pub plan_file_path: Option<String>,
     /// (Internal) User's choice from the multi-option permission
     /// dialog: `yes-keep-context`, `yes-clear-context`, or `no`. The
     /// TUI splices it via `PermissionOutcome::Allow.updated_input`.
@@ -439,6 +447,7 @@ pub struct ExitPlanModeInput {
 #[async_trait::async_trait]
 impl Tool for ExitPlanModeTool {
     type Input = ExitPlanModeInput;
+    coco_tool_runtime::impl_runtime_schema!(ExitPlanModeInput);
     /// Output is `Value` — `ExitPlanModeOutput` is rich (multiple
     /// flags + nested `PlanVerificationOutcome` from coco-context that
     /// lacks JsonSchema). Renderer continues reading positional fields.

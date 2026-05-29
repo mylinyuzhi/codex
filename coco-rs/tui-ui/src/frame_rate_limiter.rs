@@ -1,6 +1,6 @@
 //! Limits how frequently frame-draw notifications may be emitted.
 //!
-//! Widgets sometimes call [`crate::frame_requester::FrameRequester::schedule_frame`]
+//! Widgets sometimes request frame draws (via the shell's `FrameRequester`)
 //! more frequently than a user can perceive. This limiter clamps draw
 //! notifications to a maximum of 120 FPS to avoid wasted work. Ported
 //! verbatim from `codex-rs/tui/src/tui/frame_rate_limiter.rs`.
@@ -9,19 +9,19 @@ use std::time::Duration;
 use std::time::Instant;
 
 /// A 120 FPS minimum frame interval (≈8.33 ms).
-pub(crate) const MIN_FRAME_INTERVAL: Duration = Duration::from_nanos(8_333_334);
+pub const MIN_FRAME_INTERVAL: Duration = Duration::from_nanos(8_333_334);
 
 /// Remembers the most recent emitted draw, allowing deadlines to be
 /// clamped forward so we never exceed [`MIN_FRAME_INTERVAL`].
 #[derive(Debug, Default)]
-pub(crate) struct FrameRateLimiter {
+pub struct FrameRateLimiter {
     last_emitted_at: Option<Instant>,
 }
 
 impl FrameRateLimiter {
     /// Returns `requested`, clamped forward if it would exceed the
     /// maximum frame rate.
-    pub(crate) fn clamp_deadline(&self, requested: Instant) -> Instant {
+    pub fn clamp_deadline(&self, requested: Instant) -> Instant {
         let Some(last_emitted_at) = self.last_emitted_at else {
             return requested;
         };
@@ -32,7 +32,7 @@ impl FrameRateLimiter {
     }
 
     /// Records that a draw notification was emitted at `emitted_at`.
-    pub(crate) fn mark_emitted(&mut self, emitted_at: Instant) {
+    pub fn mark_emitted(&mut self, emitted_at: Instant) {
         self.last_emitted_at = Some(emitted_at);
     }
 }

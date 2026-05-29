@@ -6,14 +6,14 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 
 use crate::state::AppState;
-use crate::surface::compatibility::TerminalCompatibility;
 use crate::surface::controller::NativeSurfaceController;
 use crate::surface::modal::ModalSurfacePlacement;
 use crate::surface::modal::ModalSurfaceState;
-use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::interactive_viewport_desired_height;
 use crate::terminal::NATIVE_VIEWPORT_MAX_HEIGHT;
 use crate::terminal::native_viewport_area_with_max;
+use coco_tui_ui::engine::compatibility::TerminalCompatibility;
+use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
 #[derive(Debug, Default)]
 pub struct NativeSurfaceTestState {

@@ -44,10 +44,16 @@ fn id_and_name_use_structured_output_wire_form() {
 #[test]
 fn input_schema_forwards_user_supplied_properties_and_required() {
     let tool = StructuredOutputTool::new(person_schema()).unwrap();
-    let schema = tool.input_schema();
-    assert!(schema.properties.contains_key("name"));
-    assert!(schema.properties.contains_key("age"));
-    assert_eq!(schema.required, vec!["name".to_string()]);
+    let schema = tool.runtime_validation_schema().as_value();
+    assert!(schema["properties"].get("name").is_some());
+    assert!(schema["properties"].get("age").is_some());
+    let required: Vec<&str> = schema["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(required, vec!["name"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +70,7 @@ fn input_json_schema_returns_user_supplied_schema_verbatim() {
     let schema = person_schema();
     let tool = StructuredOutputTool::new(schema.clone()).unwrap();
     let tool: &dyn DynTool = &tool;
-    assert_eq!(tool.input_json_schema(), Some(schema));
+    assert_eq!(tool.runtime_validation_schema().as_value(), &schema);
 }
 
 #[test]
@@ -87,8 +93,8 @@ fn input_json_schema_preserves_top_level_fields_beyond_properties_and_required()
     });
     let tool = StructuredOutputTool::new(schema.clone()).unwrap();
     let tool: &dyn DynTool = &tool;
-    let echoed = tool.input_json_schema().expect("schema must be present");
-    assert_eq!(echoed, schema);
+    let echoed = tool.runtime_validation_schema().as_value();
+    assert_eq!(echoed, &schema);
 }
 
 #[test]
@@ -101,7 +107,7 @@ fn input_json_schema_does_not_emit_type_null_for_value_input() {
     use coco_tool_runtime::DynTool;
     let tool = StructuredOutputTool::new(person_schema()).unwrap();
     let tool: &dyn DynTool = &tool;
-    let schema = tool.input_json_schema().expect("schema must be present");
+    let schema = tool.runtime_validation_schema().as_value();
     assert_eq!(
         schema.get("type").and_then(|v| v.as_str()),
         Some("object"),

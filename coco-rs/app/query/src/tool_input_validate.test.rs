@@ -136,7 +136,6 @@ fn display_path_translates_json_pointer() {
 //   invalid_reason variant) → (formatted error message body)
 // ---------------------------------------------------------------------------
 
-use std::collections::HashMap;
 use std::sync::Arc as StdArc;
 
 use coco_tool_runtime::DescriptionOptions;
@@ -144,7 +143,6 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::traits::DynTool;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 
 use crate::tool_input_parse::parse_tool_arguments_or_empty;
@@ -153,7 +151,7 @@ use crate::tool_input_parse::parse_tool_arguments_or_empty;
 struct MockTool {
     id: ToolId,
     name: String,
-    schema: serde_json::Value,
+    runtime_schema: coco_tool_runtime::ToolInputSchema,
 }
 
 impl MockTool {
@@ -161,7 +159,8 @@ impl MockTool {
         Self {
             id: ToolId::Builtin(name),
             name: name.as_str().to_string(),
-            schema,
+            runtime_schema: coco_tool_runtime::ToolInputSchema::from_value(schema)
+                .expect("mock tool schema must be valid"),
         }
     }
 }
@@ -183,14 +182,8 @@ impl coco_tool_runtime::traits::Tool for MockTool {
     fn description(&self, _input: &serde_json::Value, _options: &DescriptionOptions) -> String {
         String::new()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-            required: Vec::new(),
-        }
-    }
-    fn input_json_schema(&self) -> Option<serde_json::Value> {
-        Some(self.schema.clone())
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        &self.runtime_schema
     }
     fn is_read_only(&self, _input: &serde_json::Value) -> bool {
         true
@@ -251,8 +244,7 @@ async fn run_pipeline(
 ) -> ToolCallPart {
     let input = parse_tool_arguments_or_empty(raw_arguments, tool_name);
     let mut tc = mk_tc(tool_name, input);
-    let validator = coco_tool_runtime::ToolSchemaValidator::new();
-    validate_tool_call(&mut tc, tool, &validator).await;
+    validate_tool_call(&mut tc, tool);
     tc
 }
 
@@ -414,8 +406,7 @@ async fn matrix_anthropic_value_string_nested_is_recovered_in_layer_2() {
     // recovers it before schema validation.
     let tool = read_tool();
     let mut tc = mk_tc("Read", json!("{\"file_path\": \"/tmp/recovered\"}"));
-    let validator = coco_tool_runtime::ToolSchemaValidator::new();
-    validate_tool_call(&mut tc, Some(&tool), &validator).await;
+    validate_tool_call(&mut tc, Some(&tool));
     assert!(!tc.invalid);
     assert_eq!(tc.input, json!({"file_path": "/tmp/recovered"}));
 }
@@ -432,8 +423,7 @@ async fn matrix_layer_1_invalid_skips_layer_2() {
             error: "expected `:` at line 1 column 2".to_string(),
         },
     );
-    let validator = coco_tool_runtime::ToolSchemaValidator::new();
-    validate_tool_call(&mut tc, Some(&tool), &validator).await;
+    validate_tool_call(&mut tc, Some(&tool));
     assert!(tc.invalid);
     match tc.invalid_reason.unwrap() {
         ToolInputInvalidReason::JsonParseFailed { error, .. } => {
@@ -451,7 +441,6 @@ async fn matrix_multi_tool_call_mixed_outcomes() {
     // ways. Each one should classify independently.
     let bash = bash_tool();
     let read = read_tool();
-    let validator = coco_tool_runtime::ToolSchemaValidator::new();
 
     struct Case {
         provider_hint: &'static str,
@@ -540,7 +529,7 @@ async fn matrix_multi_tool_call_mixed_outcomes() {
     for case in cases {
         let input = parse_tool_arguments_or_empty(case.raw_arguments, case.tool_name);
         let mut tc = mk_tc(case.tool_name, input);
-        validate_tool_call(&mut tc, case.tool.as_ref(), &validator).await;
+        validate_tool_call(&mut tc, case.tool.as_ref());
 
         assert_eq!(
             !tc.invalid, case.expected_valid,

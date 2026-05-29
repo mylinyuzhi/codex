@@ -40,9 +40,9 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
 use crate::state::session::SubagentStatus;
+use coco_tui_ui::style::UiStyles;
 
 /// Reserve enough columns for a trailing `[+N more]` tail before we
 /// commit to painting another pill.

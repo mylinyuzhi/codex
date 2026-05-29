@@ -1,5 +1,5 @@
 use super::FrameRequester;
-use crate::frame_rate_limiter::MIN_FRAME_INTERVAL;
+use coco_tui_ui::frame_rate_limiter::MIN_FRAME_INTERVAL;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::time;

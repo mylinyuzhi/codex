@@ -1,9 +1,7 @@
 use coco_messages::ToolResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
@@ -18,7 +16,9 @@ struct SafeTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for SafeTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -30,12 +30,6 @@ impl crate::traits::Tool for SafeTool {
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "safe".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-            required: Vec::new(),
-        }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
@@ -61,7 +55,9 @@ struct UnsafeTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for UnsafeTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -73,12 +69,6 @@ impl crate::traits::Tool for UnsafeTool {
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "unsafe".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-            required: Vec::new(),
-        }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         false
@@ -185,7 +175,9 @@ struct SlowSafeTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for SlowSafeTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -197,12 +189,6 @@ impl crate::traits::Tool for SlowSafeTool {
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "slow safe".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-            required: Vec::new(),
-        }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
@@ -237,7 +223,9 @@ struct PatchSafeTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for PatchSafeTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -249,12 +237,6 @@ impl crate::traits::Tool for PatchSafeTool {
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "patch safe".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-            required: Vec::new(),
-        }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true

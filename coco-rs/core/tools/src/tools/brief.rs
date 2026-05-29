@@ -78,6 +78,7 @@ pub struct BriefTool;
 #[async_trait::async_trait]
 impl Tool for BriefTool {
     type Input = BriefInput;
+    coco_tool_runtime::impl_runtime_schema!(BriefInput);
     type Output = BriefOutput;
 
     fn id(&self) -> ToolId {

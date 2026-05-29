@@ -16,9 +16,9 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::presentation::styles::UiStyles;
 use crate::state::ui::InputState;
 use crate::state::ui::PromptMode;
+use coco_tui_ui::style::UiStyles;
 
 /// Pure input presentation data shared by the input widget and cursor logic.
 #[derive(Debug, Clone, PartialEq, Eq)]

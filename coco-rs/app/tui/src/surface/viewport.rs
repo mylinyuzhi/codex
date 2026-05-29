@@ -14,7 +14,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
 use crate::FrameLayout;
-use crate::constants;
 use crate::presentation::activity::TurnActivityView;
 use crate::presentation::activity::inline_activity_height;
 use crate::presentation::activity::turn_activity_view;
@@ -24,16 +23,17 @@ use crate::presentation::footer::FooterView;
 use crate::presentation::footer::footer_view;
 use crate::presentation::input::InlinePopupView;
 use crate::presentation::input::inline_popup_view;
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::modal::render_modal_surface;
 use crate::surface::modal::required_text_surface_height_for_box;
-use crate::surface::terminal::SurfaceFrame;
 use crate::widgets::SuggestionPopup;
 use crate::widgets::ToastWidget;
 use crate::widgets::TranscriptLayoutIndex;
+use coco_tui_ui::constants;
+use coco_tui_ui::engine::terminal::SurfaceFrame;
+use coco_tui_ui::style::UiStyles;
 
 /// Render the retained native-scrollback viewport.
 ///
@@ -277,7 +277,7 @@ fn render_live_viewport(
             })
             .map(|a| a.total_tokens)
             .sum();
-        let view = crate::widgets::StatusIndicatorView {
+        let view = coco_tui_ui::widgets::StatusIndicatorView {
             verb: state.ui.ephemeral.current_verb().unwrap_or("Working"),
             elapsed_ms,
             input_tokens: None,
@@ -292,7 +292,7 @@ fn render_live_viewport(
             has_running_teammates,
         };
         frame.render_widget(
-            crate::widgets::StatusIndicator::new(view, styles),
+            coco_tui_ui::widgets::StatusIndicator::new(view, styles),
             status_indicator_area,
         );
     }

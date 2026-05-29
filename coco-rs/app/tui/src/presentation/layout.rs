@@ -4,8 +4,12 @@ use std::ops::Range;
 
 use ratatui::layout::Constraint;
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthChar;
-use unicode_width::UnicodeWidthStr;
+
+// Width-aware text helpers: the canonical, tested implementation lives in
+// `coco_tui_ui::truncate`. Re-exported so existing `layout::{text_width,
+// truncate_to_width}` call sites keep working without a second copy here.
+pub(crate) use coco_tui_ui::truncate::display_width as text_width;
+pub(crate) use coco_tui_ui::truncate::truncate_to_width;
 
 /// Bounds for a centered state.
 #[derive(Debug, Clone, Copy)]
@@ -103,36 +107,6 @@ pub(crate) fn visible_window(selected: usize, row_count: usize, height: usize) -
             .min(row_count - visible_len)
     };
     start..start + visible_len
-}
-
-pub(crate) fn text_width(text: &str) -> usize {
-    UnicodeWidthStr::width(text)
-}
-
-pub(crate) fn truncate_to_width(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if text_width(text) <= width {
-        return text.to_string();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-
-    let target = width - 1;
-    let mut used = 0usize;
-    let mut out = String::new();
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + ch_width > target {
-            break;
-        }
-        out.push(ch);
-        used += ch_width;
-    }
-    out.push('…');
-    out
 }
 
 fn clamp_modal_len(preferred: u16, min: u16, max: u16, available: u16) -> u16 {

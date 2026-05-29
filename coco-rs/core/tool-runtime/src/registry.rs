@@ -1,7 +1,6 @@
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::PermissionMode;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -64,6 +63,38 @@ struct RegistryInner {
     aliases: HashMap<String, String>,
 }
 
+impl RegistryInner {
+    /// Insert `tool` under its canonical name + aliases, replicating the
+    /// **MCP-namespace promotion** (a hostile MCP `Read` is stored as
+    /// `mcp__srv__Read`, never shadowing the built-in). Shared by
+    /// [`ToolRegistry::register`] and [`ToolRegistry::replace_server_tools`]
+    /// so the namespacing is identical on both paths.
+    fn register_with_aliases(&mut self, tool: Arc<dyn DynTool>) {
+        let native_name = tool.name().to_string();
+        let canonical = if let Some(info) = tool.mcp_info() {
+            let qualified = info.qualified_name();
+            if native_name == qualified || native_name.starts_with(MCP_TOOL_PREFIX) {
+                native_name
+            } else {
+                self.aliases.insert(native_name, qualified.clone());
+                qualified
+            }
+        } else {
+            native_name
+        };
+        for alias in tool.aliases() {
+            self.aliases.insert(alias.to_string(), canonical.clone());
+        }
+        self.tools.insert(canonical, tool);
+    }
+
+    /// Remove a tool by `ToolId` (canonical name is `id.to_string()`). Does
+    /// NOT touch aliases — callers wipe aliases separately.
+    fn remove_tool_by_id(&mut self, id: &ToolId) {
+        self.tools.remove(&id.to_string());
+    }
+}
+
 /// Registry of available tools. Populated at startup by coco-cli.
 ///
 /// Supports lookup by name, alias, and ToolId.
@@ -101,35 +132,11 @@ impl ToolRegistry {
     ///   tool named "Read" is registered as "mcp__foo__Read" rather than
     ///   overwriting the real Read tool).
     pub fn register(&self, tool: Arc<dyn DynTool>) {
-        let native_name = tool.name().to_string();
         let mut inner = self
             .inner
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        // MCP namespace enforcement: if the tool has MCP info but its
-        // name doesn't start with `mcp__`, silently promote to the
-        // qualified form so the real name is preserved as an alias.
-        let canonical = if let Some(info) = tool.mcp_info() {
-            let qualified = info.qualified_name();
-            if native_name == qualified || native_name.starts_with(MCP_TOOL_PREFIX) {
-                // Already correctly namespaced — nothing to do.
-                native_name
-            } else {
-                // Native name differs: use the qualified form as the
-                // canonical entry and map the original name back via
-                // alias so the model can still reference it both ways.
-                inner.aliases.insert(native_name, qualified.clone());
-                qualified
-            }
-        } else {
-            native_name
-        };
-
-        for alias in tool.aliases() {
-            inner.aliases.insert(alias.to_string(), canonical.clone());
-        }
-        inner.tools.insert(canonical, tool);
+        inner.register_with_aliases(tool);
     }
 
     /// Look up a tool by ToolId.
@@ -239,15 +246,6 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Get tool definitions for the model (name + schema pairs).
-    /// Only includes non-deferred enabled tools.
-    pub fn definitions(&self, ctx: &ToolUseContext) -> Vec<(String, ToolInputSchema)> {
-        self.loaded_tools(ctx)
-            .into_iter()
-            .map(|t| (t.name().to_string(), t.input_schema()))
-            .collect()
-    }
-
     /// Deregister all tools from a specific MCP server.
     ///
     /// Called when an MCP server disconnects. Removes all tools whose
@@ -279,6 +277,58 @@ impl ToolRegistry {
         inner
             .aliases
             .retain(|_, canonical| !to_remove.contains(canonical));
+    }
+
+    /// Atomically replace all tools belonging to `server_name` with
+    /// `new_tools`, under a SINGLE write lock (no window where readers see a
+    /// partial set — fixes the non-transactional `deregister`+loop-`register`
+    /// reconnect path). Returns the tombstoned `ToolId`s: present in the
+    /// previous batch but absent from `new_tools`.
+    ///
+    /// All server-owned aliases are wiped by **full membership** BEFORE
+    /// re-registering, so a retained tool whose advertised alias set changed
+    /// across reconnect leaves no stale alias (v4.2 finding 6).
+    pub fn replace_server_tools(
+        &self,
+        server_name: &str,
+        new_tools: Vec<Arc<dyn DynTool>>,
+    ) -> Vec<ToolId> {
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // 1. Snapshot the server's current canonical names + ToolIds.
+        let owned: Vec<(String, ToolId)> = inner
+            .tools
+            .iter()
+            .filter(|(_, t)| t.mcp_info().is_some_and(|i| i.server_name == server_name))
+            .map(|(name, t)| (name.clone(), t.id()))
+            .collect();
+        let owned_names: std::collections::HashSet<String> =
+            owned.iter().map(|(n, _)| n.clone()).collect();
+        let old_ids: std::collections::HashSet<ToolId> =
+            owned.into_iter().map(|(_, id)| id).collect();
+        let new_ids: std::collections::HashSet<ToolId> = new_tools.iter().map(|t| t.id()).collect();
+        let tombstones: Vec<ToolId> = old_ids.difference(&new_ids).cloned().collect();
+
+        // 2. Wipe ALL server-owned aliases (full membership, not just tombstones).
+        inner
+            .aliases
+            .retain(|_, canonical| !owned_names.contains(canonical.as_str()));
+
+        // 3. Drop tombstoned tools (their aliases already gone via step 2).
+        for id in &tombstones {
+            inner.remove_tool_by_id(id);
+        }
+
+        // 4. Re-register the new batch — re-establishes aliases fresh and
+        //    overwrites retained tools with their new (reconnect) instance.
+        for tool in new_tools {
+            inner.register_with_aliases(tool);
+        }
+
+        tombstones
     }
 
     pub fn len(&self) -> usize {

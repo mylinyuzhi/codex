@@ -118,32 +118,82 @@ pub fn register_structured_output_tool(
     Ok(tool)
 }
 
+/// Outcome of a [`register_mcp_tools`] call (v4.2).
+///
+/// `registered` is the source of truth for `mcp/status.tool_count` — what the
+/// model can actually call. `skipped` are tools whose wire schema was rejected
+/// (uncompilable / non-object root). `tombstones` existed on the previous
+/// connect but are gone now (server removed them).
+#[derive(Debug, Default)]
+pub struct RegisterMcpToolsReport {
+    pub registered: Vec<coco_types::ToolId>,
+    pub skipped: Vec<SkippedMcpTool>,
+    pub tombstones: Vec<coco_types::ToolId>,
+}
+
+/// An MCP tool dropped at registration because its wire schema was rejected.
+#[derive(Debug)]
+pub struct SkippedMcpTool {
+    pub tool_name: String,
+    pub error: coco_tool_runtime::SchemaError,
+}
+
 /// Register MCP server tools as dynamic McpTool wrappers.
 ///
-/// Called when MCP servers connect and report their tools. Each MCP server
-/// tool gets a McpTool wrapper registered in the ToolRegistry.
-///
-/// Handles reconnection: deregisters old tools from the server first,
-/// then registers the new ones. Safe to call multiple times for the
-/// same server (idempotent after deregister).
+/// Called when MCP servers connect and report their tools. Atomic + fallible
+/// (v4.2): each tool's wire schema is compiled at construction; uncompilable
+/// ones are skipped + reported, the rest are swapped in under a single write
+/// lock via [`coco_tool_runtime::ToolRegistry::replace_server_tools`] (no
+/// partial-set window on reconnect, alias-hygiene preserved). Returns a
+/// [`RegisterMcpToolsReport`] the SDK `mcp/status` handler surfaces.
 pub fn register_mcp_tools(
     registry: &coco_tool_runtime::ToolRegistry,
     server_name: &str,
     mcp_tools: Vec<coco_tool_runtime::McpToolSchema>,
-) {
+) -> RegisterMcpToolsReport {
     use std::sync::Arc;
 
-    // Deregister old tools from this server (handles reconnect)
-    registry.deregister_by_server(server_name);
-
+    let mut valid: Vec<Arc<dyn coco_tool_runtime::DynTool>> = Vec::new();
+    let mut skipped = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for schema in mcp_tools {
-        registry.register(Arc::new(McpTool::new(
+        // Intra-batch dedup: a server advertising two tools with the same name
+        // would otherwise silently last-wins in the registry (v4.2 finding 3b).
+        if !seen.insert(schema.tool_name.clone()) {
+            tracing::warn!(
+                server = %server_name,
+                tool = %schema.tool_name,
+                "duplicate MCP tool name in batch; keeping the first"
+            );
+            continue;
+        }
+        let tool_name = schema.tool_name.clone();
+        match McpTool::new(
             schema.server_name,
             schema.tool_name,
             schema.description.unwrap_or_default(),
             schema.input_schema,
             schema.annotations,
-        )));
+        ) {
+            Ok(tool) => valid.push(Arc::new(tool)),
+            Err(error) => {
+                tracing::warn!(
+                    server = %server_name,
+                    tool = %tool_name,
+                    error = %error,
+                    "skipping MCP tool: wire schema rejected"
+                );
+                skipped.push(SkippedMcpTool { tool_name, error });
+            }
+        }
+    }
+
+    let registered: Vec<coco_types::ToolId> = valid.iter().map(|t| t.id()).collect();
+    let tombstones = registry.replace_server_tools(server_name, valid);
+    RegisterMcpToolsReport {
+        registered,
+        skipped,
+        tombstones,
     }
 }
 

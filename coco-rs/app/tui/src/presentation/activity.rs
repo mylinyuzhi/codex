@@ -5,12 +5,12 @@ use std::borrow::Cow;
 use coco_types::ExpandedView;
 use unicode_width::UnicodeWidthStr;
 
-use crate::constants;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::SubagentStatus;
 use crate::state::session::TaskEntryStatus;
 use crate::state::session::ToolStatus;
+use coco_tui_ui::constants;
 
 const MAX_TOOL_ACTIVITY_DISPLAY: usize = 5;
 const INLINE_ACTIVITY_ROWS_NARROW: u16 = 3;

@@ -13,8 +13,8 @@
 use uuid::Uuid;
 
 use crate::state::transcript_view::RenderedCell;
-use crate::surface::terminal::SurfaceBackend;
-use crate::surface::terminal::SurfaceTerminal;
+use coco_tui_ui::engine::terminal::SurfaceBackend;
+use coco_tui_ui::engine::terminal::SurfaceTerminal;
 use ratatui::text::Line;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

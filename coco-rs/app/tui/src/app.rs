@@ -26,7 +26,6 @@ use crate::autocomplete::SymbolSearchManager;
 use crate::autocomplete::file_search::create_file_search_channel;
 use crate::autocomplete::symbol_search::create_symbol_search_channel;
 use crate::command::UserCommand;
-use crate::constants;
 use crate::events::TuiEvent;
 use crate::git_index_watcher;
 use crate::keybinding_bridge;
@@ -35,6 +34,7 @@ use crate::state::SuggestionKind;
 use crate::state::Toast;
 use crate::terminal::Tui;
 use crate::update::handle_command;
+use coco_tui_ui::constants;
 
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
@@ -424,7 +424,10 @@ impl App {
 
     fn handle_surface_attention_requested(&mut self) {
         let message = crate::i18n::t!("notification.action_required").to_string();
-        crate::widgets::notification::notify(&crate::i18n::t!("notification.app_name"), &message);
+        coco_tui_ui::widgets::notification::notify(
+            &crate::i18n::t!("notification.app_name"),
+            &message,
+        );
         self.state.ui.add_toast(Toast::warning(message));
     }
 

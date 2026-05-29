@@ -128,7 +128,7 @@ fn v2_uses_ts_glyphs() {
 const T0_MS: i64 = 1_700_000_000_000;
 
 fn state_at(now_ms: i64) -> AppState {
-    AppState::with_clock(crate::clock::MockClock::arc(now_ms))
+    AppState::with_clock(coco_tui_ui::clock::MockClock::arc(now_ms))
 }
 
 #[test]

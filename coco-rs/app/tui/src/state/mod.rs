@@ -17,7 +17,6 @@ pub mod ui;
 pub(crate) mod ui_ephemeral;
 
 pub use crate::display_settings::DisplaySettings;
-pub use crate::display_settings::SyntaxHighlighting;
 pub use agents_dialog::AgentsDialogState;
 pub use agents_dialog::AgentsDialogTab;
 pub use agents_dialog::CreateWizardState;
@@ -31,6 +30,7 @@ pub use agents_dialog::is_valid_desc_char;
 pub use agents_dialog::is_valid_name_char;
 pub use agents_dialog::resolve_create_target;
 pub use agents_dialog::validate_agent_name;
+pub use coco_tui_ui::display::SyntaxHighlighting;
 pub use interaction::AtPopupState;
 pub use interaction::ComposerPopupState;
 pub use interaction::ComposerState;
@@ -144,12 +144,12 @@ pub struct AppState {
     pub ui: UiState,
     /// Application lifecycle.
     pub running: RunningState,
-    /// Wall-clock source. Production uses [`crate::clock::SystemClock`];
-    /// tests substitute [`crate::clock::MockClock`] to pin time for
+    /// Wall-clock source. Production uses [`coco_tui_ui::clock::SystemClock`];
+    /// tests substitute [`coco_tui_ui::clock::MockClock`] to pin time for
     /// the todo-panel completion lift / hide windows and the
     /// subagent-progress stamp paths. `Arc<dyn Clock>` (Send + Sync)
     /// so it survives `tokio::spawn` across worker threads.
-    pub clock: std::sync::Arc<dyn crate::clock::Clock>,
+    pub clock: std::sync::Arc<dyn coco_tui_ui::clock::Clock>,
 }
 
 /// Application lifecycle state.
@@ -163,12 +163,12 @@ pub enum RunningState {
 impl AppState {
     /// Create a new default state with a [`SystemClock`].
     pub fn new() -> Self {
-        Self::with_clock(crate::clock::SystemClock::arc())
+        Self::with_clock(coco_tui_ui::clock::SystemClock::arc())
     }
 
     /// Create a new state with an explicit clock — used by tests to
     /// pin time deterministically.
-    pub fn with_clock(clock: std::sync::Arc<dyn crate::clock::Clock>) -> Self {
+    pub fn with_clock(clock: std::sync::Arc<dyn coco_tui_ui::clock::Clock>) -> Self {
         Self {
             session: SessionState::default(),
             ui: UiState::new(),

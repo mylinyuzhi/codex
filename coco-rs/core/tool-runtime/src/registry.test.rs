@@ -8,10 +8,8 @@ use crate::traits::McpToolInfo;
 use crate::traits::Tool;
 use coco_messages::ToolResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Minimal test tool with configurable name + optional MCP info. Used
@@ -26,7 +24,9 @@ struct StubTool {
 
 #[async_trait::async_trait]
 impl Tool for StubTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -38,12 +38,6 @@ impl Tool for StubTool {
     }
     fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
         "stub".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-            required: Vec::new(),
-        }
     }
     fn mcp_info(&self) -> Option<&McpToolInfo> {
         self.mcp.as_ref()
@@ -200,7 +194,9 @@ struct GatedTool {
 
 #[async_trait::async_trait]
 impl Tool for GatedTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -212,12 +208,6 @@ impl Tool for GatedTool {
     }
     fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
         "gated".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-            required: Vec::new(),
-        }
     }
     fn is_enabled(&self, ctx: &crate::context::ToolUseContext) -> bool {
         match self.feature_gate {

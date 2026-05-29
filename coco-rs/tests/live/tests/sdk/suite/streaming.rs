@@ -137,13 +137,12 @@ pub async fn run_with_tools(target: &LiveTarget) -> Result<()> {
             StreamEvent::TextDelta { text: delta } => text.push_str(&delta),
             StreamEvent::Finish {
                 usage,
-                stop_reason: sr,
-                raw_stop_reason: rsr,
+                stop_reason: fr,
                 ..
             } => {
                 final_usage = usage;
-                stop_reason = Some(sr);
-                raw_stop_reason = rsr;
+                raw_stop_reason = fr.raw.clone();
+                stop_reason = Some(fr.unified);
             }
             _ => {}
         }
@@ -295,13 +294,12 @@ pub async fn run_thinking_with_option_typed_tools(target: &LiveTarget) -> Result
             StreamEvent::TextDelta { text: delta } => text.push_str(&delta),
             StreamEvent::Finish {
                 usage,
-                stop_reason: sr,
-                raw_stop_reason: rsr,
+                stop_reason: fr,
                 ..
             } => {
                 final_usage = usage;
-                stop_reason = Some(sr);
-                raw_stop_reason = rsr;
+                raw_stop_reason = fr.raw.clone();
+                stop_reason = Some(fr.unified);
             }
             _ => {}
         }

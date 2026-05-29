@@ -89,6 +89,8 @@ fn mcp_status_result_roundtrip() {
             status: McpConnectionStatus::Connected,
             tool_count: 5,
             error: None,
+            skipped_tools: Vec::new(),
+            tombstoned_tools: Vec::new(),
         }],
     };
     let j = serde_json::to_value(&r).unwrap();

@@ -15,8 +15,8 @@ use crate::keymap::GROUP_ORDER;
 use crate::keymap::KeymapBinding;
 use crate::keymap::KeymapEntry;
 use crate::keymap::entries_for_group;
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
+use coco_tui_ui::style::UiStyles;
 
 const SHORTCUT_COLUMN_WIDTH: usize = 18;
 
