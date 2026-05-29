@@ -2,12 +2,12 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
-use crate::presentation::styles::UiStyles;
 use crate::state::CostWarningPromptState;
 use crate::state::FeedbackState;
 use crate::state::PlanApprovalPromptState;
 use crate::state::TaskDetailState;
 use crate::theme::Theme;
+use coco_tui_ui::style::UiStyles;
 
 #[test]
 fn cost_warning_content_formats_cents() {

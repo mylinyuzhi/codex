@@ -18,7 +18,7 @@ use super::motions::next_char_boundary;
 use super::motions::prev_char_boundary;
 use super::operators;
 use super::text_objects;
-use crate::widgets::TextArea;
+use coco_tui_ui::widgets::TextArea;
 
 /// Result of processing a key in vim mode.
 pub enum VimAction {

@@ -502,17 +502,14 @@ pub enum StreamEvent {
     /// share via Arc.
     Finish {
         usage: TokenUsage,
-        /// Typed unified stop reason — the 8-variant
-        /// `StopReason` set at the vercel-ai-provider seam.
-        /// All multi-LLM refinements (`ContextWindowExceeded`,
-        /// `StopSequence`) are first-class variants; no separate raw
-        /// string is needed for behavioral decisions.
-        stop_reason: coco_llm_types::StopReason,
-        /// Provider-original wire string preserved for diagnostics
-        /// only (e.g. Anthropic `"refusal"` flowing through with
-        /// `stop_reason: ContentFilter`). Not consulted for any
-        /// behavioral decision — those go through `stop_reason`.
-        raw_stop_reason: Option<String>,
+        /// Typed finish reason — the `{ unified, raw }`
+        /// [`coco_llm_types::FinishReason`] struct set at the
+        /// vercel-ai-provider seam, propagated verbatim (no decompose
+        /// into bare enum + sibling raw). Match on `.unified`; read
+        /// `.raw` for provider provenance. The `ContextWindowExceeded`
+        /// / `StopSequence` refinements are first-class `.unified`
+        /// variants.
+        stop_reason: coco_llm_types::FinishReason,
         metrics: StreamMetrics,
         snapshot: Arc<AssistantTurnSnapshot>,
     },
@@ -721,8 +718,7 @@ fn stream_event_from_part(
             let snapshot = Arc::new(std::mem::take(&mut turn_state.snapshot));
             Some(StreamEvent::Finish {
                 usage: token_usage_from_provider_usage(&usage),
-                stop_reason: finish_reason.unified,
-                raw_stop_reason: finish_reason.raw,
+                stop_reason: finish_reason,
                 metrics,
                 snapshot,
             })

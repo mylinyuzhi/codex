@@ -55,24 +55,23 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
     let result = target.client.query(&params).await?;
     usage_report::record(target.provider, &target.model, "tools.run", &result.usage);
 
-    // Surface BOTH `stop_reason` (typed) and `raw_stop_reason`
-    // (provider wire string) on failure so a flake is interpretable:
-    //   `Some(Error)` + 0/0 tokens → gateway dropped the request
-    //   `Some(Other)` + raw="..."  → Gemini unmapped finish reason
-    //   `Some(MaxTokens)`          → budget exhausted (real, bump cap)
-    // Anything else with raw_stop_reason set → real wire bug.
+    // Surface the full `FinishReason` (typed `unified` + provider wire
+    // `raw`, rendered together by its Debug) on failure so a flake is
+    // interpretable:
+    //   `Other` + raw="..."  → Gemini unmapped finish reason
+    //   `Error` + 0/0 tokens → gateway dropped the request
+    //   `MaxTokens`          → budget exhausted (real, bump cap)
     let content_summary = describe_content(&result.content);
     assert!(
         has_tool_call_named(&result, "get_weather"),
         "{}/{}: no get_weather tool call in response \
          (content count={}, summary={content_summary}, \
-         stop_reason={:?}, raw_stop_reason={:?}, \
+         stop_reason={:?}, \
          tokens_in={:?}, tokens_out={:?})",
         target.provider,
         target.model,
         result.content.len(),
         result.stop_reason,
-        result.raw_stop_reason,
         result.usage.input_tokens,
         result.usage.output_tokens,
     );

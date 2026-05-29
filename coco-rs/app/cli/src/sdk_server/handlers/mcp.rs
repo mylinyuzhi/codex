@@ -34,10 +34,11 @@ pub(super) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
         manager.clone()
     };
     let names = manager.registered_server_names();
+    let reports = ctx.state.mcp_registration_reports.read().await;
     let mut statuses: Vec<coco_types::McpServerStatus> = Vec::new();
     for name in &names {
         let state = manager.get_state(name).await;
-        let (status, error, tool_count) = match state {
+        let (status, error, advertised) = match state {
             Some(coco_mcp::McpConnectionState::Connected(server)) => (
                 coco_types::McpConnectionStatus::Connected,
                 None,
@@ -57,13 +58,37 @@ pub(super) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
             }
             None => (coco_types::McpConnectionStatus::Disconnected, None, 0),
         };
+        // v4.2: prefer the **registered** count (what the model can call) from
+        // the last registration report; fall back to the advertised count when
+        // no report exists (e.g. agent-inline connects bypassing the SDK path).
+        let report = reports.get(name);
+        let tool_count = report
+            .map(|r| r.registered.len() as i32)
+            .unwrap_or(advertised);
+        let (skipped_tools, tombstoned_tools) = report
+            .map(|r| {
+                let skipped = r
+                    .skipped
+                    .iter()
+                    .map(|s| coco_types::McpSkippedToolStatus {
+                        tool_name: s.tool_name.clone(),
+                        error: s.error.to_string(),
+                    })
+                    .collect();
+                let tombstoned = r.tombstones.iter().map(|t| t.to_string()).collect();
+                (skipped, tombstoned)
+            })
+            .unwrap_or_default();
         statuses.push(coco_types::McpServerStatus {
             name: name.clone(),
             status,
             tool_count,
             error,
+            skipped_tools,
+            tombstoned_tools,
         });
     }
+    drop(reports);
     info!(server_count = statuses.len(), "SdkServer: mcp/status");
     HandlerResult::ok(coco_types::McpStatusResult {
         mcp_servers: statuses,
@@ -114,18 +139,27 @@ async fn register_server_tools(
     server_name: &str,
     schemas: Vec<coco_tool_runtime::McpToolSchema>,
 ) {
-    let rt_guard = ctx.state.session_runtime.read().await;
-    if let Some(rt) = rt_guard.as_ref() {
-        coco_tools::register_mcp_tools(rt.tools(), server_name, schemas);
-    }
+    // Register under the session-runtime lock (sync), then persist the report
+    // after releasing it (the report store is a separate lock).
+    let report = {
+        let rt_guard = ctx.state.session_runtime.read().await;
+        let Some(rt) = rt_guard.as_ref() else { return };
+        coco_tools::register_mcp_tools(rt.tools(), server_name, schemas)
+    };
+    ctx.state
+        .record_mcp_registration_report(server_name, report)
+        .await;
 }
 
 /// Deregister all tools for an MCP server from the shared `ToolRegistry`.
 async fn deregister_server_tools(ctx: &HandlerContext, server_name: &str) {
-    let rt_guard = ctx.state.session_runtime.read().await;
-    if let Some(rt) = rt_guard.as_ref() {
-        coco_tools::deregister_mcp_server(rt.tools(), server_name);
+    {
+        let rt_guard = ctx.state.session_runtime.read().await;
+        if let Some(rt) = rt_guard.as_ref() {
+            coco_tools::deregister_mcp_server(rt.tools(), server_name);
+        }
     }
+    ctx.state.clear_mcp_registration_report(server_name).await;
 }
 
 /// `SendElicitation` factory for SDK-driven MCP connects.

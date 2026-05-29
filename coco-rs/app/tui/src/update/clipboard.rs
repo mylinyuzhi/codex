@@ -6,11 +6,11 @@
 //! terminal's bracketed-paste (Cmd+V / Ctrl+Shift+V), so this handler is
 //! exclusively about pulling an image off the system clipboard.
 
-use crate::clipboard_copy;
 use crate::i18n::t;
-use crate::paste::ImageData;
 use crate::state::AppState;
 use crate::state::ui::Toast;
+use coco_tui_ui::clipboard_copy;
+use coco_tui_ui::paste::ImageData;
 
 /// Copy the last agent response (raw markdown) to the system clipboard and
 /// surface the result as a toast. Mirrors codex-rs
@@ -76,7 +76,7 @@ pub(super) fn copy_last_message_with(
 /// Text paste intentionally stays with the terminal's bracketed-paste flow
 /// (handled by `TuiEvent::Paste`) — this path is image-only.
 pub(super) async fn paste_from_clipboard(state: &mut AppState) {
-    paste_from_clipboard_with(state, crate::clipboard::read_clipboard_image).await;
+    paste_from_clipboard_with(state, coco_tui_ui::clipboard::read_clipboard_image).await;
 }
 
 /// Inner implementation with an injectable reader so tests can avoid the
@@ -84,7 +84,7 @@ pub(super) async fn paste_from_clipboard(state: &mut AppState) {
 pub(super) async fn paste_from_clipboard_with<F, Fut>(state: &mut AppState, read_fn: F)
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<Option<ImageData>>>,
+    Fut: std::future::Future<Output = std::io::Result<Option<ImageData>>>,
 {
     match read_fn().await {
         Ok(Some(image)) => {

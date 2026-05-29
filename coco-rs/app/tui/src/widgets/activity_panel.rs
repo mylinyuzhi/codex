@@ -19,7 +19,7 @@ use crate::presentation::activity::ActivitySurfaceView;
 use crate::presentation::activity::ActivityTitle;
 use crate::presentation::activity::ActivityTone;
 use crate::presentation::activity::TurnActivityView;
-use crate::presentation::styles::UiStyles;
+use coco_tui_ui::style::UiStyles;
 
 pub(crate) struct ActivityPanel<'a> {
     view: TurnActivityView,

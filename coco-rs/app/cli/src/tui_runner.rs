@@ -105,6 +105,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         }
     };
     coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
+    coco_cli::startup_profile::mark("config_resolved");
     // Capture a fresh ConfigChange receiver from the reloader (when
     // available) so the SessionRuntime can drive the `ConfigChange`
     // hook on every settings/catalog file change. Borrowed before
@@ -127,6 +128,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // P1 handlers), so `dispatch_slash_command` and the SDK
     // `initialize.commands` advertisement share one Arc.
     let resources = build_engine_resources(cli, &runtime_config, &cwd)?;
+    coco_cli::startup_profile::mark("engine_resources_built");
     let model_id = resources.model_id.clone();
     let permission_mode = resources.startup.mode;
     let bypass_permissions_available = resources.startup.bypass_available;
@@ -271,6 +273,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     )
     .await;
     install_session_late_binds(runtime.clone(), &cwd, None, lsp_handle).await?;
+    coco_cli::startup_profile::mark("session_late_binds");
 
     // Install the SessionRuntime weak-ref on the permission bridge so
     // `Notification` hooks (TS `permission_prompt`) fire when the
@@ -558,6 +561,12 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         cwd.clone(),
         flag_settings_path,
     ));
+
+    // Startup is complete; emit the phase profile (COCO_STARTUP_PROFILE)
+    // before `app.run()` blocks for the rest of the session. The final
+    // `app_ready` mark closes the last window so App construction is counted.
+    coco_cli::startup_profile::mark("app_ready");
+    coco_cli::startup_profile::report();
 
     // Run TUI (blocks until exit)
     let tui_result = app.run().await;
@@ -3503,7 +3512,7 @@ async fn emit_slash_status(
 async fn process_submit_turn(
     user_message_id: String,
     content: String,
-    images: Vec<coco_tui::paste::ImageData>,
+    images: Vec<coco_tui::ImageData>,
     runtime: Arc<crate::session_runtime::SessionRuntime>,
     event_tx: mpsc::Sender<CoreEvent>,
     title_gen_attempted: Arc<RwLock<std::collections::HashSet<String>>>,
@@ -4255,7 +4264,7 @@ fn save_error_kind(e: &coco_config::SettingsWriteError) -> coco_types::SkillOver
 ///
 /// MIME defaults to `image/png` when missing — matches TS
 /// `attachments.ts:1119-1121` (`media_type ?? 'image/png'`).
-fn image_data_to_queued(images: &[coco_tui::paste::ImageData]) -> Vec<QueuedImage> {
+fn image_data_to_queued(images: &[coco_tui::ImageData]) -> Vec<QueuedImage> {
     use base64::Engine;
     images
         .iter()

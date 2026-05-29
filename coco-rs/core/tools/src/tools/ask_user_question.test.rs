@@ -60,9 +60,8 @@ async fn prompt_includes_plan_mode_and_preview_guidance() {
 #[test]
 fn input_schema_has_questions_array() {
     let t: &dyn DynTool = &AskUserQuestionTool;
-    let schema = t.input_schema();
-    let questions = schema
-        .properties
+    let schema = t.runtime_validation_schema().as_value();
+    let questions = schema["properties"]
         .get("questions")
         .expect("questions property missing");
     assert_eq!(questions["type"], "array");

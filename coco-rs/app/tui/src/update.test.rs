@@ -11,7 +11,6 @@ use crate::command::ShutdownReason;
 use crate::command::UserCommand;
 use crate::display_settings::DisplaySettingEditability;
 use crate::display_settings::DisplaySettings;
-use crate::display_settings::SyntaxHighlighting;
 use crate::events::TuiCommand;
 use crate::state::AppState;
 use crate::state::MemoryDialogEntry;
@@ -24,6 +23,7 @@ use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
 use crate::state::SlashCommandName;
 use crate::state::ui::ToastSeverity;
+use coco_tui_ui::display::SyntaxHighlighting;
 
 fn drained_channel() -> (mpsc::Sender<UserCommand>, mpsc::Receiver<UserCommand>) {
     mpsc::channel(8)

@@ -3,8 +3,8 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::information;
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
+use coco_tui_ui::style::UiStyles;
 
 pub(super) fn context_viz_content(
     state: &AppState,

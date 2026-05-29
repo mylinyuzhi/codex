@@ -223,25 +223,33 @@ impl SideQuery for SideQueryAdapter {
             }
         }
 
-        // Direct enum-to-enum conversion now that QueryResult carries
-        // the typed StopReason (single source of truth at the
-        // vercel-ai-provider seam). `ContextWindowExceeded` folds into
-        // `MaxTokens` here because the SDK wire side-query type
-        // doesn't split them; `Error` / `Other` carry the wire
-        // string in the `Other(_)` payload for diagnostic surfacing.
-        let stop_reason = match result.stop_reason {
-            Some(coco_llm_types::StopReason::EndTurn) | None => SideQueryStopReason::EndTurn,
-            Some(coco_llm_types::StopReason::StopSequence) => SideQueryStopReason::StopSequence,
-            Some(coco_llm_types::StopReason::ToolUse) => SideQueryStopReason::ToolUse,
-            Some(coco_llm_types::StopReason::MaxTokens)
-            | Some(coco_llm_types::StopReason::ContextWindowExceeded) => {
-                SideQueryStopReason::MaxTokens
-            }
-            Some(other @ coco_llm_types::StopReason::ContentFilter)
-            | Some(other @ coco_llm_types::StopReason::Error)
-            | Some(other @ coco_llm_types::StopReason::Other) => {
-                SideQueryStopReason::Other(other.as_wire_str().to_string())
-            }
+        // Map the typed `FinishReason` (set once at the
+        // vercel-ai-provider seam) to the SDK wire enum.
+        // `ContextWindowExceeded` folds into `MaxTokens` because the
+        // wire type doesn't split them. For the `Other(_)` payload we
+        // surface the **provider-original raw** string (e.g.
+        // `"compaction"`, an unknown OpenAI reason) — not the lossy
+        // `as_wire_str()` projection that would emit a useless
+        // `"other"`. Falls back to the unified wire name only when the
+        // reason was synthesized (no provider raw).
+        use coco_llm_types::StopReason;
+        let stop_reason = match result.stop_reason.as_ref() {
+            None => SideQueryStopReason::EndTurn,
+            Some(f) => match f.unified {
+                StopReason::EndTurn => SideQueryStopReason::EndTurn,
+                StopReason::StopSequence => SideQueryStopReason::StopSequence,
+                StopReason::ToolUse => SideQueryStopReason::ToolUse,
+                StopReason::MaxTokens | StopReason::ContextWindowExceeded => {
+                    SideQueryStopReason::MaxTokens
+                }
+                StopReason::ContentFilter | StopReason::Error | StopReason::Other => {
+                    let raw = f
+                        .raw
+                        .clone()
+                        .unwrap_or_else(|| f.unified.as_wire_str().to_string());
+                    SideQueryStopReason::Other(raw)
+                }
+            },
         };
 
         Ok(SideQueryResponse {

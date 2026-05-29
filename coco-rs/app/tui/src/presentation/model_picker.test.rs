@@ -1,7 +1,7 @@
 use super::*;
 use crate::i18n::locale_test_guard;
-use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
+use coco_tui_ui::style::UiStyles;
 use coco_types::ReasoningEffort;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;

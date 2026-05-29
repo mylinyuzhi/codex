@@ -774,8 +774,8 @@ impl QueryEngine {
 
         match self.client.query(&params).await {
             Ok(result) => {
-                let stop = result.stop_reason;
-                let stop_abnormal = stop.is_some_and(coco_messages::StopReason::is_abnormal);
+                let stop = result.stop_reason.as_ref();
+                let stop_abnormal = stop.is_some_and(coco_messages::FinishReason::is_abnormal);
                 // TS parity (`services/compact/compact.ts:493-515`): a
                 // truncated / content-filtered / refused summary is
                 // unusable — it would silently contaminate every
@@ -802,8 +802,7 @@ impl QueryEngine {
                     return Err(format!(
                         "compact_summary_aborted: model stopped with stop_reason={} \
                          (truncated or filtered summary discarded)",
-                        stop.map(coco_messages::StopReason::as_wire_str)
-                            .unwrap_or("unknown")
+                        stop.map(|f| f.unified.as_wire_str()).unwrap_or("unknown")
                     ));
                 }
                 let summary_res = extract_compact_summary_from_content(&result.content);

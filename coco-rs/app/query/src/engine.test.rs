@@ -1635,16 +1635,17 @@ impl coco_tool_runtime::Tool for PermissionRewriteTool {
         "permission_rewrite"
     }
 
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema::default()
-    }
-
     // Override: test mocks pin `Input = serde_json::Value`, whose schema
     // derives to `type = null` — the runtime debug_assert in
     // `core/tool-runtime/src/traits.rs:482` catches that. Return a
     // permissive object envelope so the assert is satisfied.
-    fn input_json_schema(&self) -> Option<serde_json::Value> {
-        Some(serde_json::json!({"type": "object"}))
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
     }
 
     fn description(
@@ -1691,16 +1692,17 @@ impl coco_tool_runtime::Tool for HookEchoTool {
         "hook_echo"
     }
 
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema::default()
-    }
-
     // Override: test mocks pin `Input = serde_json::Value`, whose schema
     // derives to `type = null` — the runtime debug_assert in
     // `core/tool-runtime/src/traits.rs:482` catches that. Return a
     // permissive object envelope so the assert is satisfied.
-    fn input_json_schema(&self) -> Option<serde_json::Value> {
-        Some(serde_json::json!({"type": "object"}))
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
     }
 
     fn description(
@@ -1739,16 +1741,17 @@ impl coco_tool_runtime::Tool for HookMcpTool {
         "hook_mcp"
     }
 
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema::default()
-    }
-
     // Override: test mocks pin `Input = serde_json::Value`, whose schema
     // derives to `type = null` — the runtime debug_assert in
     // `core/tool-runtime/src/traits.rs:482` catches that. Return a
     // permissive object envelope so the assert is satisfied.
-    fn input_json_schema(&self) -> Option<serde_json::Value> {
-        Some(serde_json::json!({"type": "object"}))
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
     }
 
     fn description(
@@ -1795,16 +1798,17 @@ impl coco_tool_runtime::Tool for HookOrderingTool {
         "hook_ordering"
     }
 
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema::default()
-    }
-
     // Override: test mocks pin `Input = serde_json::Value`, whose schema
     // derives to `type = null` — the runtime debug_assert in
     // `core/tool-runtime/src/traits.rs:482` catches that. Return a
     // permissive object envelope so the assert is satisfied.
-    fn input_json_schema(&self) -> Option<serde_json::Value> {
-        Some(serde_json::json!({"type": "object"}))
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
     }
 
     fn description(
@@ -1848,16 +1852,17 @@ impl coco_tool_runtime::Tool for HookOrderingMcpTool {
         "hook_ordering_mcp"
     }
 
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema::default()
-    }
-
     // Override: test mocks pin `Input = serde_json::Value`, whose schema
     // derives to `type = null` — the runtime debug_assert in
     // `core/tool-runtime/src/traits.rs:482` catches that. Return a
     // permissive object envelope so the assert is satisfied.
-    fn input_json_schema(&self) -> Option<serde_json::Value> {
-        Some(serde_json::json!({"type": "object"}))
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
     }
 
     fn description(
@@ -1907,16 +1912,17 @@ impl coco_tool_runtime::Tool for HookFailTool {
         "hook_fail"
     }
 
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema::default()
-    }
-
     // Override: test mocks pin `Input = serde_json::Value`, whose schema
     // derives to `type = null` — the runtime debug_assert in
     // `core/tool-runtime/src/traits.rs:482` catches that. Return a
     // permissive object envelope so the assert is satisfied.
-    fn input_json_schema(&self) -> Option<serde_json::Value> {
-        Some(serde_json::json!({"type": "object"}))
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
     }
 
     fn description(
@@ -2911,17 +2917,16 @@ impl coco_tool_runtime::Tool for AskingTool {
     fn name(&self) -> &str {
         "AskingTool"
     }
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema {
-            properties: std::collections::HashMap::new(),
-            required: Vec::new(),
-        }
-    }
     // Override: `Input = serde_json::Value` derives `type = null`,
     // which the runtime debug_assert rejects. See first occurrence
     // above for context.
-    fn input_json_schema(&self) -> Option<serde_json::Value> {
-        Some(serde_json::json!({"type": "object"}))
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
     }
     fn description(
         &self,
@@ -3161,7 +3166,6 @@ use coco_tool_runtime::ToolPermissionDecision;
 use coco_tool_runtime::ToolPermissionRequest;
 use coco_tool_runtime::ToolPermissionResolution;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use serde_json::Value;
 use std::sync::Mutex as StdMutex;
 
@@ -3185,13 +3189,15 @@ impl Tool for AskingMockTool {
     fn name(&self) -> &str {
         "asking_mock"
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema::default()
-    }
     // Override: `Input = serde_json::Value` derives `type = null`,
     // which the runtime debug_assert rejects. Permissive object envelope.
-    fn input_json_schema(&self) -> Option<serde_json::Value> {
-        Some(serde_json::json!({"type": "object"}))
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
     }
     fn description(&self, _input: &Value, _opts: &DescriptionOptions) -> String {
         "Mock tool that always returns Ask".into()

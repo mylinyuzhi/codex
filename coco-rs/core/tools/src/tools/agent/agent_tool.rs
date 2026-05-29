@@ -2,23 +2,18 @@
 //!
 //! TS: `tools/AgentTool/AgentTool.tsx` + `tools/AgentTool/runAgent.ts`.
 
-use std::collections::HashMap;
-
 use coco_messages::ToolResult;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::DescriptionOptions;
-use coco_tool_runtime::SchemaContext;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 /// Default `auto_background_ms` when `COCO_AUTO_BACKGROUND_TASKS` is
 /// truthy but doesn't carry a numeric value. Matches TS
@@ -145,6 +140,106 @@ impl Tool for AgentTool {
     type Input = AgentInput;
     type Output = AgentSpawnRenderResult;
 
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            // Runtime schema also accepts `mcp_servers` (permission/hook-injected,
+            // never model-set); the model view omits it (see `model_schema`).
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "The task for the agent to perform"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "A short (3-5 word) description of the task"
+                    },
+                    "subagent_type": {
+                        "type": "string",
+                        "description": "The type of specialized agent to use for this task"
+                    },
+                    // Note: NEITHER `model` NOR `model_role` is in the model-facing
+                    // schema. Both are operator-only knobs:
+                    //   - `model` (e.g. `openai/gpt-4o`) — set in `.md` frontmatter
+                    //     `model:` field by the author who knows the target provider.
+                    //   - `model_role` (e.g. `Fast`, `Explore`) — set in `.md`
+                    //     frontmatter `model_role:` field or derived from the
+                    //     `subagent_type → ModelRole` built-in mapping.
+                    // Why neither is LLM-pickable: `model` requires knowing the
+                    // operator's `provider/model_id` config (multi-LLM ⇒ no closed
+                    // enum to choose from); `model_role` requires knowing the
+                    // operator's `settings.models.<role>` mappings. The catalog-only
+                    // principle (matching TS) says static config is the source of
+                    // truth, the LLM picks an agent by `subagent_type`, and the
+                    // operator owns model selection. See root CLAUDE.md
+                    // "Multi-Provider Boundaries".
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "Set to true to run this agent in the background. You will be notified when it completes."
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "enum": ["worktree"],
+                        "description": "Isolation mode. \"worktree\" creates a temporary git worktree so the agent works on an isolated copy of the repo."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running."
+                    },
+                    "team_name": {
+                        "type": "string",
+                        "description": "Team name for spawning. Uses current team context if omitted."
+                    },
+                    "mode": {
+                        "type": "string",
+                        // PermissionMode wire form (camelCase). Listing the enum lets
+                        // the model know which values round-trip through
+                        // `serde_json::from_value::<PermissionMode>`.
+                        "enum": [
+                            "default", "plan", "dontAsk", "acceptEdits", "bubble",
+                            "bypassPermissions", "auto", "ask", "deny"
+                        ],
+                        "description": "Permission mode for spawned teammate (e.g., \"plan\" to require plan approval)."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Absolute path to run the agent in. Overrides the working directory for all filesystem and shell operations within this agent. Mutually exclusive with isolation: \"worktree\"."
+                    },
+                    // Runtime-only allowlist; `model_schema` omits it from the model view.
+                    "mcp_servers": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "(internal) permission/hook-injected MCP server allowlist"
+                    }
+                },
+                // TS zod requires `description` and `prompt` (`AgentTool.tsx:82-88`):
+                // `z.string()` without `.optional()`. All other fields are optional.
+                "required": ["description", "prompt"]
+            }))
+            .expect("AgentTool input schema must be a valid object schema")
+        })
+    }
+
+    fn model_schema(
+        &self,
+        ctx: &coco_tool_runtime::SchemaContext,
+    ) -> std::borrow::Cow<'_, serde_json::Value> {
+        // Always hide `mcp_servers`; hide `run_in_background` when the runtime
+        // would veto it (background disabled / fork mode) — TS lazySchema().omit().
+        let mut drop = vec!["mcp_servers"];
+        if ctx.background_tasks_disabled || ctx.fork_mode_active {
+            drop.push("run_in_background");
+        }
+        std::borrow::Cow::Owned(coco_tool_runtime::schema_omit_properties(
+            self.runtime_validation_schema().as_value(),
+            &drop,
+        ))
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Agent)
     }
@@ -213,178 +308,6 @@ impl Tool for AgentTool {
     /// `Agent(...) Agent(...) Agent(...)` and multiplying latency by N.
     fn is_concurrency_safe(&self, _input: &AgentInput) -> bool {
         true
-    }
-
-    /// TS-mirror schema (`AgentTool.tsx:82-101`).
-    ///
-    /// Fields exposed (11):
-    /// - `description`, `prompt`, `subagent_type`, `model`, `run_in_background`
-    ///   from TS `baseInputSchema`.
-    /// - `name`, `team_name`, `mode` from TS `multiAgentInputSchema`.
-    /// - `isolation`, `cwd` from TS `fullInputSchema` (TS gates `cwd` behind
-    ///   `feature('KAIROS')`; coco-rs exposes it unconditionally — operators
-    ///   wanting to hide it can use `disallowed_tool_params` once that gate
-    ///   lands).
-    /// - `model_role` is coco-rs-specific (multi-LLM addition, no TS
-    ///   equivalent — TS is Anthropic-only and uses `model` aliases
-    ///   directly).
-    ///
-    /// Fields NOT exposed (TS internal-only knobs that coco-rs callers set
-    /// on `AgentSpawnRequest` directly): `effort`, `use_exact_tools`,
-    /// `mcp_servers`, `disallowed_tools`, `max_turns`, `initial_prompt`.
-    /// Memory crate / coordinator resume populate these from frontmatter
-    /// or service-internal logic — exposing them to the LLM was a
-    /// coco-rs-only extension that diverged from TS.
-    ///
-    /// The static schema below exposes every field by default — the
-    /// dynamic [`Self::input_schema_for_session`] override removes
-    /// `run_in_background` when the runtime would silently veto it,
-    /// matching TS `AgentTool.tsx:110-125 lazySchema().omit(...)`.
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "prompt".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The task for the agent to perform"
-            }),
-        );
-        p.insert(
-            "description".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "A short (3-5 word) description of the task"
-            }),
-        );
-        p.insert(
-            "subagent_type".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "The type of specialized agent to use for this task"
-            }),
-        );
-        // Note: NEITHER `model` NOR `model_role` is in the model-facing
-        // schema. Both are operator-only knobs:
-        //   - `model` (e.g. `openai/gpt-4o`) — set in `.md` frontmatter
-        //     `model:` field by the author who knows the target provider.
-        //   - `model_role` (e.g. `Fast`, `Explore`) — set in `.md`
-        //     frontmatter `model_role:` field or derived from the
-        //     `subagent_type → ModelRole` built-in mapping.
-        //
-        // Why neither is LLM-pickable:
-        //   - `model` requires knowledge of operator's `provider/model_id`
-        //     configuration; coco-rs is multi-LLM so there is no closed
-        //     enum the LLM can choose from.
-        //   - `model_role` requires knowing operator's role mappings
-        //     in `settings.models.<role>`; even if the LLM picks a role,
-        //     it's pretending to make an informed choice it can't make.
-        //
-        // The catalog-only principle (matching TS) says: static
-        // configuration is the source of truth, the LLM picks an agent
-        // by `subagent_type` (semantic identity), and the operator
-        // owns model selection. See the root CLAUDE.md "Multi-Provider
-        // Boundaries" rule.
-        p.insert(
-            "run_in_background".into(),
-            serde_json::json!({
-                "type": "boolean",
-                "description": "Set to true to run this agent in the background. You will be notified when it completes."
-            }),
-        );
-        p.insert(
-            "isolation".into(),
-            serde_json::json!({
-                "type": "string",
-                "enum": ["worktree"],
-                "description": "Isolation mode. \"worktree\" creates a temporary git worktree so the agent works on an isolated copy of the repo."
-            }),
-        );
-        p.insert(
-            "name".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running."
-            }),
-        );
-        p.insert(
-            "team_name".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Team name for spawning. Uses current team context if omitted."
-            }),
-        );
-        p.insert(
-            "mode".into(),
-            serde_json::json!({
-                "type": "string",
-                // PermissionMode wire form (camelCase). Listing the
-                // enum lets the model know which values round-trip
-                // through `serde_json::from_value::<PermissionMode>`.
-                "enum": [
-                    "default",
-                    "plan",
-                    "dontAsk",
-                    "acceptEdits",
-                    "bubble",
-                    "bypassPermissions",
-                    "auto",
-                    "ask",
-                    "deny"
-                ],
-                "description": "Permission mode for spawned teammate (e.g., \"plan\" to require plan approval)."
-            }),
-        );
-        p.insert(
-            "cwd".into(),
-            serde_json::json!({
-                "type": "string",
-                "description": "Absolute path to run the agent in. Overrides the working directory for all filesystem and shell operations within this agent. Mutually exclusive with isolation: \"worktree\"."
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            // TS zod requires `description` and `prompt`
-            // (`AgentTool.tsx:82-88`): `z.string()` without `.optional()`.
-            // All other fields are `.optional()`.
-            required: vec!["description".into(), "prompt".into()],
-        }
-    }
-
-    /// Session-aware schema. Drops `run_in_background` from
-    /// `properties` when the runtime would silently veto it — TS
-    /// parity with `AgentTool.tsx:110-125 lazySchema()` which calls
-    /// `.omit({ run_in_background: true })` under either
-    /// `isBackgroundTasksDisabled` or `isForkSubagentEnabled()`.
-    ///
-    /// Legacy properties-map path. Live runtime seams now go through
-    /// [`Self::input_json_schema_for_session`] which mutates the full
-    /// JSON Schema; this override stays for older callers that still
-    /// consume `ToolInputSchema` directly (e.g. tests).
-    fn input_schema_for_session(&self, ctx: &SchemaContext) -> ToolInputSchema {
-        let mut schema = Tool::input_schema(self);
-        if ctx.background_tasks_disabled || ctx.fork_mode_active {
-            schema.properties.remove("run_in_background");
-        }
-        schema
-    }
-
-    /// Session-aware **full JSON Schema** (the path the model-facing
-    /// seam reads). Drops `run_in_background` from `properties` and
-    /// `required` when the runtime would silently veto it. TS parity:
-    /// `AgentTool.tsx:110-125 lazySchema().omit({ run_in_background: true })`.
-    fn input_json_schema_for_session(&self, ctx: &SchemaContext) -> Option<Value> {
-        let mut schema = Tool::input_json_schema(self)?;
-        if (ctx.background_tasks_disabled || ctx.fork_mode_active)
-            && let Some(obj) = schema.as_object_mut()
-        {
-            if let Some(props) = obj.get_mut("properties").and_then(Value::as_object_mut) {
-                props.remove("run_in_background");
-            }
-            if let Some(required) = obj.get_mut("required").and_then(Value::as_array_mut) {
-                required.retain(|v| v.as_str() != Some("run_in_background"));
-            }
-        }
-        Some(schema)
     }
 
     /// Render the spawn-result envelope into model-visible text. TS

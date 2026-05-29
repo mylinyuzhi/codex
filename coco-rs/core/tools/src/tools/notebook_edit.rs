@@ -149,6 +149,7 @@ pub struct NotebookEditTool;
 #[async_trait]
 impl Tool for NotebookEditTool {
     type Input = NotebookEditInput;
+    coco_tool_runtime::impl_runtime_schema!(NotebookEditInput);
     type Output = NotebookEditOutput;
 
     fn id(&self) -> ToolId {

@@ -5,9 +5,9 @@ use crate::state::PanePromptState;
 use crate::state::surface_payloads::PermissionDetail;
 use crate::state::surface_payloads::PermissionPromptState;
 use crate::state::transcript::TranscriptState;
-use crate::surface::compatibility::TerminalCompatibility;
 use crate::surface_content::TextSurfaceContent;
 use crate::theme::Theme;
+use coco_tui_ui::engine::compatibility::TerminalCompatibility;
 
 fn permission_prompt() -> PermissionPromptState {
     permission_prompt_with_id("p1")

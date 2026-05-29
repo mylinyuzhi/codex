@@ -4,7 +4,6 @@ use ratatui::prelude::*;
 
 use crate::presentation::model_picker;
 use crate::presentation::picker;
-use crate::presentation::styles::UiStyles;
 use crate::state::AgentsDialogState;
 use crate::state::CopyPickerState;
 use crate::state::ExportState;
@@ -15,6 +14,7 @@ use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
 use crate::state::SkillsDialogState;
 use crate::state::SubagentInstance;
+use coco_tui_ui::style::UiStyles;
 
 pub(super) fn model_picker_content(
     m: &ModelPickerState,

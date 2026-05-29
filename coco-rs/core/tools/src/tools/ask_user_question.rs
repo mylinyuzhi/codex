@@ -16,12 +16,10 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Typed input for [`AskUserQuestionTool`].
 ///
@@ -100,6 +98,100 @@ pub struct AskUserQuestionTool;
 #[async_trait::async_trait]
 impl Tool for AskUserQuestionTool {
     type Input = AskUserQuestionInput;
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "description": "Questions to ask the user (1-4 questions)",
+                        "minItems": 1,
+                        "maxItems": 4,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": {
+                                    "type": "string",
+                                    "description": "The question text"
+                                },
+                                "header": {
+                                    "type": "string",
+                                    "description": "Short label displayed as a chip/tag (max 20 chars)"
+                                },
+                                "options": {
+                                    "type": "array",
+                                    "description": "Available choices (2-4 options)",
+                                    "minItems": 2,
+                                    "maxItems": 4,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": {
+                                                "type": "string",
+                                                "description": "Display text for this option (1-5 words)"
+                                            },
+                                            "description": {
+                                                "type": "string",
+                                                "description": "Explanation of what this option means"
+                                            },
+                                            "preview": {
+                                                "type": "string",
+                                                "description": "Optional preview content when option is focused"
+                                            }
+                                        },
+                                        "required": ["label", "description"]
+                                    }
+                                },
+                                "multiSelect": {
+                                    "type": "boolean",
+                                    "description": "Allow multiple selections (default: false)"
+                                }
+                            },
+                            "required": ["question", "header", "options"]
+                        }
+                    },
+                    // `answers` and `annotations` are optional fields the TUI/CLI
+                    // layer splices into the tool input via
+                    // `PermissionOutcome::Allow.updated_input` BEFORE `tool_call_preparer`
+                    // re-validates the rewritten input. Declaring them here keeps
+                    // schema validation green; the model itself is not expected to
+                    // populate these — the prompt teaches it to emit `questions`
+                    // only. TS parity: `mapToolResultToToolResultBlockParam` reads
+                    // `answers` and `annotations` from the result envelope.
+                    "answers": {
+                        "type": "object",
+                        "description": "(Internal) User-supplied answers, spliced by the host before invocation. Map of question text → selected option label.",
+                        "additionalProperties": { "type": "string" }
+                    },
+                    "annotations": {
+                        "type": "object",
+                        "description": "(Internal) Per-question annotations (preview / notes), spliced by the host before invocation.",
+                        "additionalProperties": { "type": "object" }
+                    },
+                    // TS `commonFields.metadata` (AskUserQuestionTool.tsx:58-60).
+                    // Optional analytics-tracking blob the model may emit alongside
+                    // the question (e.g. `{source: "remember"}` for the /remember
+                    // command). Echoed straight through to logs; never user-visible.
+                    "metadata": {
+                        "type": "object",
+                        "description": "Optional metadata for tracking and analytics purposes. Not displayed to user.",
+                        "properties": {
+                            "source": {
+                                "type": "string",
+                                "description": "Optional identifier for the source of this question (e.g., \"remember\" for /remember command). Used for analytics tracking."
+                            }
+                        }
+                    }
+                },
+                "required": []
+            }))
+            .expect("AskUserQuestion input schema must be a valid object schema")
+        })
+    }
     /// Output stays on `Value`: `render_for_model` walks the
     /// `answers` / `annotations` maps generically, and the
     /// envelope is downstream-consumed (TUI overlay) so a typed
@@ -118,106 +210,6 @@ impl Tool for AskUserQuestionTool {
     async fn prompt(&self, _options: &PromptOptions) -> String {
         ASK_USER_QUESTION_PROMPT.clone()
     }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "questions".into(),
-            serde_json::json!({
-                "type": "array",
-                "description": "Questions to ask the user (1-4 questions)",
-                "minItems": 1,
-                "maxItems": 4,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "question": {
-                            "type": "string",
-                            "description": "The question text"
-                        },
-                        "header": {
-                            "type": "string",
-                            "description": "Short label displayed as a chip/tag (max 20 chars)"
-                        },
-                        "options": {
-                            "type": "array",
-                            "description": "Available choices (2-4 options)",
-                            "minItems": 2,
-                            "maxItems": 4,
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "label": {
-                                        "type": "string",
-                                        "description": "Display text for this option (1-5 words)"
-                                    },
-                                    "description": {
-                                        "type": "string",
-                                        "description": "Explanation of what this option means"
-                                    },
-                                    "preview": {
-                                        "type": "string",
-                                        "description": "Optional preview content when option is focused"
-                                    }
-                                },
-                                "required": ["label", "description"]
-                            }
-                        },
-                        "multiSelect": {
-                            "type": "boolean",
-                            "description": "Allow multiple selections (default: false)"
-                        }
-                    },
-                    "required": ["question", "header", "options"]
-                }
-            }),
-        );
-        // `answers` and `annotations` are optional fields the TUI/CLI
-        // layer splices into the tool input via
-        // `PermissionOutcome::Allow.updated_input` BEFORE `tool_call_preparer`
-        // re-validates the rewritten input. Declaring them here keeps
-        // schema validation green; the model itself is not expected to
-        // populate these — the prompt teaches it to emit `questions`
-        // only. TS parity: `mapToolResultToToolResultBlockParam` reads
-        // `answers` and `annotations` from the result envelope.
-        p.insert(
-            "answers".into(),
-            serde_json::json!({
-                "type": "object",
-                "description": "(Internal) User-supplied answers, spliced by the host before invocation. Map of question text → selected option label.",
-                "additionalProperties": { "type": "string" }
-            }),
-        );
-        p.insert(
-            "annotations".into(),
-            serde_json::json!({
-                "type": "object",
-                "description": "(Internal) Per-question annotations (preview / notes), spliced by the host before invocation.",
-                "additionalProperties": { "type": "object" }
-            }),
-        );
-        // TS `commonFields.metadata` (AskUserQuestionTool.tsx:58-60).
-        // Optional analytics-tracking blob the model may emit alongside
-        // the question (e.g. `{source: "remember"}` for the /remember
-        // command). Echoed straight through to logs; never user-visible.
-        p.insert(
-            "metadata".into(),
-            serde_json::json!({
-                "type": "object",
-                "description": "Optional metadata for tracking and analytics purposes. Not displayed to user.",
-                "properties": {
-                    "source": {
-                        "type": "string",
-                        "description": "Optional identifier for the source of this question (e.g., \"remember\" for /remember command). Used for analytics tracking."
-                    }
-                }
-            }),
-        );
-        ToolInputSchema {
-            properties: p,
-            required: Vec::new(),
-        }
-    }
-
     fn requires_user_interaction(&self) -> bool {
         true
     }

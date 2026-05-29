@@ -1,6 +1,5 @@
 use super::*;
 use crate::i18n::locale_test_guard;
-use crate::presentation::styles::UiStyles;
 use crate::state::ExportFormat;
 use crate::state::ExportState;
 use crate::state::GlobalSearchState;
@@ -16,6 +15,7 @@ use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
 use crate::state::SkillsDialogState;
 use crate::theme::Theme;
+use coco_tui_ui::style::UiStyles;
 
 #[test]
 fn grouped_list_inserts_group_headers_and_visible_range() {

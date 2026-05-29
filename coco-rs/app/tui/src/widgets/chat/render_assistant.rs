@@ -9,7 +9,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 
 use super::ChatWidget;
-use crate::constants;
 use crate::i18n::t;
 use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
@@ -19,6 +18,7 @@ use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
+use coco_tui_ui::constants;
 
 /// Turn-boundary glyph at the start of each assistant text response.
 /// TS `BLACK_CIRCLE` from `constants/figures.ts` picks `⏺` on macOS for
@@ -43,7 +43,7 @@ pub(super) fn try_render(
             // small compared to the wayfinding value on every other
             // turn. The trailing rows of the same response keep no
             // gutter so wrapped prose stays at column 0.
-            let mut md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
+            let mut md_lines = coco_tui_ui::widgets::markdown::markdown_to_lines_with_syntax(
                 text,
                 w.styles,
                 w.width,
@@ -92,7 +92,7 @@ pub(super) fn try_render(
                     toggle_hint: Some(&w.thinking_toggle_hint()),
                     display: if w.show_thinking {
                         ThinkingDisplay::Expanded {
-                            max_body_lines: crate::constants::THINKING_PREVIEW_LINES,
+                            max_body_lines: coco_tui_ui::constants::THINKING_PREVIEW_LINES,
                             truncated_hint: "…",
                         }
                     } else {
@@ -156,7 +156,7 @@ pub(super) fn try_render(
 
 fn tool_tone_color(
     tone: ToolNameTone,
-    styles: crate::presentation::styles::UiStyles<'_>,
+    styles: coco_tui_ui::style::UiStyles<'_>,
 ) -> ratatui::style::Color {
     match tone {
         ToolNameTone::ReadOnly => styles.success(),

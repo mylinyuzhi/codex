@@ -8,13 +8,13 @@ this crate stays unchanged. Guarded by `scripts/check-vercel-ai-seam.sh`.
 
 ## TS Source
 - `types/` — `command.ts`, `hooks.ts`, `ids.ts`, `logs.ts`, `permissions.ts`, `plugin.ts`, `textInputTypes.ts`, `generated/` (build-time message types)
-- `Tool.ts` — foundational tool identity (`ToolInputSchema`, `ToolName`, `ToolId`, `ToolProgress`).
+- `Tool.ts` — foundational tool identity (`ToolName`, `ToolId`, `ToolProgress`). The runtime input schema is **not** here — `coco_tool_runtime::ToolInputSchema` (self-validating newtype) owns it (depends on `jsonschema`, an L3 concern).
 - `Task.ts` — task lifecycle (`TaskType`, `TaskStatus`, `TaskStateBase`)
 - Message family — types relocated into this crate (sub-module `messages`) so wire protocol envelopes can carry typed payloads.
 
 ## Key Types
 
-Tool / Agent identity: `ToolName` (43 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolInputSchema`, `ToolProgress`.
+Tool / Agent identity: `ToolName` (43 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolProgress`.
 
 Permission: `PermissionMode` (camelCase wire), `PermissionBehavior`, `PermissionRule`, `PermissionRuleSource`, `PermissionDecision`, `PermissionDecisionReason`, `ToolPermissionContext`.
 

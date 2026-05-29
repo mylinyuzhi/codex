@@ -87,11 +87,10 @@ pub(crate) async fn prepare_committed_tool_call(
     // wrap selection so the model sees one format whether the failure
     // originated on the wire or in the schema validator.
     let mut validated = tool_call.clone();
-    if !validated.invalid
-        && let Some(validator) = ctx.tool_schema_validator.as_ref()
-    {
-        crate::tool_input_validate::validate_tool_call(&mut validated, Some(&tool), validator)
-            .await;
+    if !validated.invalid {
+        // v4.2: synchronous, lock-free — the validator is owned by the
+        // tool's `runtime_validation_schema()`.
+        crate::tool_input_validate::validate_tool_call(&mut validated, Some(&tool));
     }
     if validated.invalid {
         let message = match validated.invalid_reason {

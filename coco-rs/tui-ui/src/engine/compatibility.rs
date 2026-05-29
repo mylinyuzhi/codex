@@ -1,14 +1,14 @@
 //! Terminal compatibility decisions for native scrollback.
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum TerminalCompatibility {
+pub enum TerminalCompatibility {
     #[default]
     NativeScrollback,
     ZellijNativeScrollbackDisabled,
 }
 
 impl TerminalCompatibility {
-    pub(crate) fn detect() -> Self {
+    pub fn detect() -> Self {
         Self::detect_with(|name| {
             std::env::var_os(name).and_then(|value| {
                 let text = value.to_string_lossy();
@@ -17,7 +17,7 @@ impl TerminalCompatibility {
         })
     }
 
-    pub(crate) fn detect_with<F>(get_env: F) -> Self
+    pub fn detect_with<F>(get_env: F) -> Self
     where
         F: Fn(&str) -> Option<String>,
     {
@@ -31,11 +31,11 @@ impl TerminalCompatibility {
         }
     }
 
-    pub(crate) fn native_scrollback_enabled(self) -> bool {
+    pub fn native_scrollback_enabled(self) -> bool {
         matches!(self, Self::NativeScrollback)
     }
 
-    pub(crate) fn status_message(self) -> Option<&'static str> {
+    pub fn status_message(self) -> Option<&'static str> {
         match self {
             Self::NativeScrollback => None,
             Self::ZellijNativeScrollbackDisabled => Some("native scrollback disabled in Zellij"),

@@ -25,7 +25,7 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use crate::presentation::layout::truncate_to_width;
-use crate::presentation::styles::UiStyles;
+use coco_tui_ui::style::UiStyles;
 
 /// A suggestion item for the popup.
 #[derive(Debug, Clone)]

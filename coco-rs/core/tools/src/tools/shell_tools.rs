@@ -35,6 +35,7 @@ pub struct SleepTool;
 #[async_trait::async_trait]
 impl Tool for SleepTool {
     type Input = SleepInput;
+    coco_tool_runtime::impl_runtime_schema!(SleepInput);
     type Output = SleepOutput;
 
     fn id(&self) -> ToolId {
@@ -138,6 +139,7 @@ pub struct ReplTool;
 #[async_trait::async_trait]
 impl Tool for ReplTool {
     type Input = ReplInput;
+    coco_tool_runtime::impl_runtime_schema!(ReplInput);
     type Output = ReplOutput;
 
     fn id(&self) -> ToolId {

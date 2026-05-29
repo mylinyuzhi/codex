@@ -311,6 +311,7 @@ pub struct GrepTool;
 #[async_trait::async_trait]
 impl Tool for GrepTool {
     type Input = GrepInput;
+    coco_tool_runtime::impl_runtime_schema!(GrepInput);
     /// Output is the pre-formatted user-visible text (content /
     /// files_with_matches / count modes all build their final string
     /// inside `execute`). Rendered unwrapped so the model sees the

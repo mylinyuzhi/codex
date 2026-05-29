@@ -117,12 +117,6 @@ pub(crate) struct ToolContextFactory {
     /// `mcp_handle_adapter::McpManagerAdapter`; TUI currently passes
     /// `None` (no MCP bootstrap yet in TUI runner).
     pub(crate) mcp_handle: Option<McpHandleRef>,
-    /// Session-scoped JSON Schema validator for tool inputs.
-    /// Plan Phase 4a / I3: caches compiled `jsonschema::Validator`
-    /// per `ToolId`; the preparer runs it on model input AND on
-    /// PreToolUse hook-rewritten input to guarantee that
-    /// malformed rewrites reject BEFORE permission / execution.
-    pub(crate) tool_schema_validator: Option<coco_tool_runtime::ToolSchemaValidator>,
     /// Active agent-definition catalog snapshot (T7). Surfaced on
     /// `ToolUseContext.agent_catalog` so AgentTool can resolve a
     /// `subagent_type` to its full `AgentDefinition` and thread the
@@ -481,7 +475,6 @@ impl ToolContextFactory {
                 .skill_handle
                 .clone()
                 .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpSkillHandle)),
-            tool_schema_validator: self.tool_schema_validator.clone(),
             mailbox: self
                 .mailbox
                 .clone()

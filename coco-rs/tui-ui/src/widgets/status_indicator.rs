@@ -22,14 +22,14 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
-use crate::presentation::styles::UiStyles;
+use crate::style::UiStyles;
 
 /// Token-display threshold. Below this elapsed time the token segment
 /// is hidden unless `force_show_tokens` (verbose) is set or a teammate
 /// is actively running.
 ///
 /// TS source: `SpinnerAnimationRow.tsx:19` `const SHOW_TOKENS_AFTER_MS = 30_000`.
-pub(crate) const SHOW_TOKENS_AFTER_MS: i64 = 30_000;
+pub const SHOW_TOKENS_AFTER_MS: i64 = 30_000;
 
 /// Bidirectional braille spinner — 10 forward frames + 10 reverse so the
 /// glyph "bounces" instead of restarting each loop. TS parity
@@ -76,7 +76,7 @@ pub struct StatusIndicatorView<'a> {
 impl<'a> StatusIndicatorView<'a> {
     /// Convenience for tests: most fields default.
     #[cfg(test)]
-    pub(crate) fn for_verb(verb: &'a str) -> Self {
+    pub fn for_verb(verb: &'a str) -> Self {
         Self {
             verb,
             elapsed_ms: 0,
@@ -97,13 +97,13 @@ pub struct StatusIndicator<'a> {
 }
 
 impl<'a> StatusIndicator<'a> {
-    pub(crate) fn new(view: StatusIndicatorView<'a>, styles: UiStyles<'a>) -> Self {
+    pub fn new(view: StatusIndicatorView<'a>, styles: UiStyles<'a>) -> Self {
         Self { view, styles }
     }
 
     /// Pure-function frame selection so callers (and tests) can pick
     /// a spinner glyph without instantiating any state.
-    pub(crate) fn spinner_frame(elapsed_ms: i64) -> &'static str {
+    pub fn spinner_frame(elapsed_ms: i64) -> &'static str {
         let len = SPINNER_FRAMES.len() as i64;
         let idx = ((elapsed_ms.max(0) / SPINNER_INTERVAL_MS) % len) as usize;
         SPINNER_FRAMES[idx]

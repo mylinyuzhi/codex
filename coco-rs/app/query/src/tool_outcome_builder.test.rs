@@ -13,7 +13,6 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -26,6 +25,14 @@ struct RenderOnlyTool {
 
 #[async_trait::async_trait]
 impl Tool for RenderOnlyTool {
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
+    }
     // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
@@ -36,10 +43,6 @@ impl Tool for RenderOnlyTool {
 
     fn name(&self) -> &str {
         "RenderOnly"
-    }
-
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema::default()
     }
 
     fn description(&self, _: &Value, _: &DescriptionOptions) -> String {

@@ -501,15 +501,19 @@ impl QueryEngine {
                 StreamEvent::Finish {
                     usage,
                     stop_reason,
-                    raw_stop_reason,
                     snapshot,
                     ..
                 } => {
+                    // `%stop_reason` renders the full `FinishReason` —
+                    // its `Display` annotates the provider-original raw
+                    // when it differs from the projection (e.g.
+                    // `other(compaction)`). This debug line is the one
+                    // place the streaming path surfaces `raw`; downstream
+                    // carries only the `.unified` projection.
                     tracing::debug!(
                         turn = turn_state.turn,
                         turn_id = %turn_id,
                         stop_reason = %stop_reason,
-                        raw_stop_reason = ?raw_stop_reason,
                         tokens_in = usage.input_tokens.total,
                         tokens_out = usage.output_tokens.total,
                         cache_read = usage.input_tokens.cache_read,
@@ -519,13 +523,12 @@ impl QueryEngine {
                         tool_call_count = tool_order.len(),
                         "LLM stream finished"
                     );
-                    // raw_stop_reason is diagnostic only — already
-                    // captured in the debug log above. Drop it.
-                    let _ = raw_stop_reason;
                     outcome = StreamOutcome::Finished {
                         snapshot,
                         usage,
-                        stop_reason,
+                        // Project to the behavioral enum — `raw` was just
+                        // logged above and is not needed past this seam.
+                        stop_reason: stop_reason.unified,
                     };
                     break;
                 }

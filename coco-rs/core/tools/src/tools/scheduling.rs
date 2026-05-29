@@ -146,6 +146,7 @@ pub struct CronCreateTool;
 #[async_trait::async_trait]
 impl Tool for CronCreateTool {
     type Input = CronCreateInput;
+    coco_tool_runtime::impl_runtime_schema!(CronCreateInput);
     type Output = CronCreateOutput;
 
     fn id(&self) -> ToolId {
@@ -303,6 +304,7 @@ pub struct CronDeleteTool;
 #[async_trait::async_trait]
 impl Tool for CronDeleteTool {
     type Input = CronDeleteInput;
+    coco_tool_runtime::impl_runtime_schema!(CronDeleteInput);
     type Output = CronDeleteOutput;
 
     fn id(&self) -> ToolId {
@@ -405,6 +407,7 @@ pub struct CronListTool;
 #[async_trait::async_trait]
 impl Tool for CronListTool {
     type Input = CronListInput;
+    coco_tool_runtime::impl_runtime_schema!(CronListInput);
     type Output = CronListOutput;
 
     fn id(&self) -> ToolId {
@@ -542,6 +545,7 @@ pub struct RemoteTriggerTool;
 #[async_trait::async_trait]
 impl Tool for RemoteTriggerTool {
     type Input = RemoteTriggerInput;
+    coco_tool_runtime::impl_runtime_schema!(RemoteTriggerInput);
     /// Output is `Value` — per-action shape (`list` returns array,
     /// `get`/`update` return a trigger object, `create` returns
     /// `{id, name, status}`, `run` returns `{trigger_id, status, result}`).

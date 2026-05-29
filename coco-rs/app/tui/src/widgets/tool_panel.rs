@@ -11,9 +11,9 @@ use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-use crate::constants;
+use coco_tui_ui::constants;
 use crate::i18n::t;
-use crate::presentation::styles::UiStyles;
+use coco_tui_ui::style::UiStyles;
 use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
 

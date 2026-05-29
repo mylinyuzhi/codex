@@ -1,214 +1,261 @@
-//! Tool input-schema derivation + cached JSON Schema validator.
+//! Self-validating tool input schema: the [`ToolInputSchema`] newtype owns
+//! both the JSON Schema document (model-facing serialization via
+//! [`ToolInputSchema::as_value`]) AND the compiled [`jsonschema::Validator`]
+//! (runtime validation via [`ToolInputSchema::validate`]), built ONCE at
+//! construction.
 //!
-//! TS: `services/tools/toolExecution.ts:614` validates model input
-//! against the tool's full Zod schema via `tool.inputSchema.safeParse`.
-//! The plan's Phase 4a calls for the Rust equivalent — a cached
-//! [`jsonschema::Validator`] per `ToolId`, exercised both on
-//! pre-execution validation AND on re-validation after a PreToolUse
-//! hook rewrites the input (plan I3's Rust-side tightening).
+//! TS parity: `services/tools/toolExecution.ts:614` validates model input
+//! against the tool's full Zod schema (`tool.inputSchema.safeParse`) — both on
+//! pre-execution validation AND on re-validation after a PreToolUse hook
+//! rewrites the input (`tool_call_preparer.rs`). [`ToolInputSchema::validate`]
+//! is the Rust equivalent: sync, lock-free, classification-identical.
 //!
-//! ## Current schema source
+//! ## Construction
 //!
-//! Tools emit schemas via two trait methods:
+//! - [`ToolInputSchema::from_input_type`] — Bucket-A tools: derive from a
+//!   `T: JsonSchema` input struct, close it (`additionalProperties:false`),
+//!   then compile. A failure is a tool-author bug ⇒ panic with the type name
+//!   (the registry force-init gate catches it before ship).
+//! - [`ToolInputSchema::from_value`] — hand-built / MCP-wire / `--json-schema`
+//!   tools: normalize the root (fold in `type:"object"` when absent; reject an
+//!   explicit non-object root), then compile (= meta-validation) and KEEP the
+//!   validator.
 //!
-//! - [`Tool::input_json_schema`] — optional explicit override
-//!   returning a full JSON Schema document. Preferred when present.
-//! - [`Tool::input_schema`] — returns
-//!   [`ToolInputSchema`](coco_types::ToolInputSchema), currently a
-//!   `properties` sub-map. This module wraps it in a synthetic
-//!   `{"type": "object", "properties": <map>}` envelope so the
-//!   validator sees a complete JSON Schema document.
+//! ## No cache
 //!
-//! The envelope wrap is the plan's Phase-4 "migration prerequisite"
-//! deferred form — it accepts the properties-only legacy shape
-//! without breaking existing tools. Future work (plan acceptance
-//! gate 1) migrates every built-in to emit a full schema via
-//! `input_json_schema`, eliminating the wrap. This module's
-//! `effective_tool_schema` has ONE code path either way: always
-//! emits a full document.
+//! The validator lives inside the schema — compiled once, shared behind `Arc`
+//! on clone. There is no separate `ToolId`-keyed cache, no lazy compile, and no
+//! MCP-reconnect staleness: a reconnect builds a new tool ⇒ new schema ⇒ new
+//! validator, and the registry overwrite drops the old one.
 //!
-//! ## Caching
+//! ## Build invariant
 //!
-//! [`ToolSchemaValidator`] memoizes `jsonschema::Validator` keyed by
-//! `ToolId`. Lookups + validations are lock-free-ish (one `RwLock`
-//! read, potentially one write on cache miss). The cache is
-//! per-session because tool sets change across sessions; reset
-//! with [`ToolSchemaValidator::clear`] if the tool registry
-//! rebuilds mid-session.
+//! `jsonschema` stays `default-features = false` (resolve-http OFF) so a remote
+//! `$ref` is rejected as a graceful `Err` at construction — never fetched
+//! (SSRF / blocking-fetch guard for untrusted MCP schemas).
 //!
 //! ## Error shape
 //!
-//! Validation failures produce [`SchemaValidationError::Rejected`]
-//! carrying a compact human-readable message derived from
-//! `jsonschema::ValidationError`. Plan Phase 4 says textual parity
-//! with Zod is OUT of scope for first slice; we surface a
-//! useful-but-not-TS-identical message.
+//! Construction failures produce [`SchemaError`] (`StatusCode::InvalidArguments`);
+//! validation failures produce `Vec<`[`SchemaIssue`]`>` carrying compact,
+//! model-facing messages derived from `jsonschema::ValidationError`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use coco_types::ToolId;
 use serde_json::Value;
-use tokio::sync::RwLock;
 
-use crate::traits::DynTool;
+use crate::derive::derive_input_schema_value;
+use coco_error::ErrorExt;
+use coco_error::StackError;
+use coco_error::StatusCode;
+use schemars::JsonSchema;
 
-/// Build the full JSON Schema document the model saw for a tool.
+/// Self-validating tool input schema (v4.2 owner — supersedes the deleted
+/// `coco_types::ToolInputSchema`). Owns the JSON Schema document (for
+/// model-facing serialization via [`Self::as_value`]) AND the compiled
+/// validator (for runtime validation via [`Self::validate`]), compiled ONCE at
+/// construction. Cheap to clone — the validator is shared behind `Arc`.
 ///
-/// Preference: `tool.input_json_schema()` if present (explicit
-/// override); else wrap `tool.input_schema()`'s `properties` map in
-/// the standard `{type: object, properties: _}` envelope.
-///
-/// TS parity: mirrors `toolUseContext.options.tools[name]` — both
-/// validator input and model-visible schema come from the same
-/// function so drift is impossible.
-pub fn effective_tool_schema(tool: &dyn DynTool) -> Value {
-    if let Some(json) = tool.input_json_schema() {
-        return json;
+/// This collapses the old separate `ToolSchemaValidator` cache: there is no
+/// lazy compile, no `ToolId`-keyed lookup, and no MCP-reconnect staleness (a
+/// reconnect builds a new tool → new schema → new validator; the registry
+/// overwrite drops the old one).
+#[derive(Clone)]
+pub struct ToolInputSchema {
+    value: Value,
+    validator: Arc<jsonschema::Validator>,
+}
+
+impl std::fmt::Debug for ToolInputSchema {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The compiled validator tree is large and noisy; elide it.
+        f.debug_struct("ToolInputSchema")
+            .field("value", &self.value)
+            .field("validator", &"<compiled>")
+            .finish()
     }
-    let schema = tool.input_schema();
-    // Wrap the properties sub-map. This branch becomes unreachable
-    // once all tools migrate to full-schema `input_json_schema`.
-    let props = serde_json::to_value(&schema.properties).unwrap_or(Value::Null);
-    serde_json::json!({
-        "type": "object",
-        "properties": props,
-    })
 }
 
-/// Cached JSON Schema validator registry keyed by [`ToolId`].
-///
-/// Thread-safe and cheap to clone (shared state behind an
-/// `Arc<RwLock<_>>`). Miss-path compiles the validator once and
-/// caches it for subsequent calls.
-#[derive(Clone, Default)]
-pub struct ToolSchemaValidator {
-    cache: Arc<RwLock<HashMap<ToolId, Arc<jsonschema::Validator>>>>,
-}
-
-/// Error returned by [`ToolSchemaValidator::validate`].
-#[derive(Debug, thiserror::Error)]
-pub enum SchemaValidationError {
-    /// Validation rejected the input. `message` is a compact
-    /// explanation suitable for a tool_result error body.
-    #[error("input schema validation failed: {message}")]
-    Rejected { message: String },
-    /// The tool's schema itself didn't compile. Almost always a
-    /// tool-author bug (malformed `Tool::input_json_schema`). The
-    /// caller should surface this as an internal error rather than
-    /// a model-visible validation failure.
-    #[error("tool schema failed to compile: {message}")]
-    SchemaCompileFailed { message: String },
-}
-
-impl ToolSchemaValidator {
-    pub fn new() -> Self {
-        Self {
-            cache: Arc::new(RwLock::new(HashMap::new())),
+impl ToolInputSchema {
+    /// Bucket A entry — schemars-derived from `T`, closed with
+    /// `additionalProperties: false`, then compiled. A failure here is a
+    /// tool-author bug, so it panics with the offending type name (the
+    /// coco-tools force-init test turns that into a CI failure, not a
+    /// production-only panic).
+    #[must_use]
+    pub fn from_input_type<T: JsonSchema>() -> Self {
+        let mut raw = derive_input_schema_value::<T>();
+        if let Some(obj) = raw.as_object_mut() {
+            obj.insert("additionalProperties".to_string(), Value::Bool(false));
         }
+        Self::from_value(raw).unwrap_or_else(|e| {
+            panic!(
+                "schemars-derived schema for {} failed validation: {e}",
+                std::any::type_name::<T>(),
+            )
+        })
     }
 
-    /// Drop the cache. Call on tool-registry reload.
-    pub async fn clear(&self) {
-        self.cache.write().await.clear();
-    }
-
-    /// Validate `input` against the tool's effective schema.
-    ///
-    /// On cache miss, compiles a `jsonschema::Validator` from
-    /// [`effective_tool_schema`] and stores it keyed by
-    /// `tool.id()`. Subsequent calls hit the cache.
-    pub async fn validate(
-        &self,
-        tool: &dyn DynTool,
-        input: &Value,
-    ) -> Result<(), SchemaValidationError> {
-        let tool_id = tool.id();
-        // Fast path: read-lock check.
-        {
-            let cache = self.cache.read().await;
-            if let Some(validator) = cache.get(&tool_id) {
-                return Self::validate_with(validator.as_ref(), input);
-            }
-        }
-        // Slow path: compile + insert under write lock.
-        let schema = effective_tool_schema(tool);
-        let validator = jsonschema::validator_for(&schema).map_err(|e| {
-            SchemaValidationError::SchemaCompileFailed {
+    /// Bucket B/C/D/E entry — programmer-written Value, derive+mutate Value,
+    /// external MCP wire schema, or user `--json-schema`. Normalizes the root
+    /// (the ONLY mutation: fold-in `type:"object"` when neither `type` nor a
+    /// composition keyword is present — see [`normalize_root_object`]), then
+    /// compiles the validator (= meta-validation) and keeps it. External
+    /// schemas are otherwise preserved verbatim; a remote `$ref` surfaces here
+    /// as [`SchemaError::InvalidSchema`] (jsonschema returns `Err`, never
+    /// fetches, with `resolve-http` off).
+    pub fn from_value(mut raw: Value) -> Result<Self, SchemaError> {
+        normalize_root_object(&mut raw)?;
+        let validator =
+            jsonschema::validator_for(&raw).map_err(|e| SchemaError::InvalidSchema {
                 message: e.to_string(),
-            }
-        })?;
-        let validator = Arc::new(validator);
-        // Another writer may have beaten us; idempotent insert.
-        let mut cache = self.cache.write().await;
-        let validator = cache.entry(tool_id).or_insert(validator).clone();
-        Self::validate_with(validator.as_ref(), input)
-    }
-
-    /// Internal: run a single validation, aggregating errors.
-    fn validate_with(
-        validator: &jsonschema::Validator,
-        input: &Value,
-    ) -> Result<(), SchemaValidationError> {
-        // Surface up to 3 errors for signal without flooding.
-        let errors: Vec<String> = validator
-            .iter_errors(input)
-            .take(3)
-            .map(|e| e.to_string())
-            .collect();
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(SchemaValidationError::Rejected {
-                message: errors.join("; "),
-            })
-        }
-    }
-
-    /// Validate and return **structured** issues so callers can format
-    /// them TS-parity (e.g. `formatZodValidationError`-style output).
-    ///
-    /// Same cache as [`Self::validate`]. Returns `Ok(())` when the
-    /// input matches, `Err(Vec<SchemaIssue>)` carrying classified
-    /// issues otherwise. Schema-compile failures still raise
-    /// [`SchemaValidationError::SchemaCompileFailed`] via the inner
-    /// `Result`'s `Err` variant.
-    pub async fn validate_collect(
-        &self,
-        tool: &dyn DynTool,
-        input: &Value,
-    ) -> Result<Result<(), Vec<SchemaIssue>>, SchemaValidationError> {
-        let tool_id = tool.id();
-        // Fast path
-        let validator = {
-            let cache = self.cache.read().await;
-            cache.get(&tool_id).cloned()
-        };
-        let validator = if let Some(v) = validator {
-            v
-        } else {
-            // Slow path: compile + insert
-            let schema = effective_tool_schema(tool);
-            let compiled = jsonschema::validator_for(&schema).map_err(|e| {
-                SchemaValidationError::SchemaCompileFailed {
-                    message: e.to_string(),
-                }
             })?;
-            let compiled = Arc::new(compiled);
-            let mut cache = self.cache.write().await;
-            cache.entry(tool_id).or_insert(compiled).clone()
-        };
+        Ok(Self {
+            value: raw,
+            validator: Arc::new(validator),
+        })
+    }
 
-        let issues: Vec<SchemaIssue> = validator
+    /// The JSON Schema document (root `type:"object"`). Serialized into the
+    /// model-facing tool definition; also the base for
+    /// [`schema_omit_properties`].
+    #[must_use]
+    pub fn as_value(&self) -> &Value {
+        &self.value
+    }
+
+    /// Validate `input` against the compiled validator. Synchronous and
+    /// lock-free — the validator lives in `self`. Returns the same classified
+    /// [`SchemaIssue`] list the legacy `validate_collect` produced, so
+    /// `app/query::format_schema_error` is unaffected.
+    pub fn validate(&self, input: &Value) -> Result<(), Vec<SchemaIssue>> {
+        let issues: Vec<SchemaIssue> = self
+            .validator
             .iter_errors(input)
             .map(SchemaIssue::from_jsonschema)
             .collect();
         if issues.is_empty() {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            Ok(Err(issues))
+            Err(issues)
         }
     }
+}
+
+/// Fold-in `type:"object"` when the root omits `type` AND carries no
+/// composition keyword (`$ref`/`allOf`/`anyOf`/`oneOf`/`not`); reject an
+/// explicit non-object root. This is the ONLY mutation [`ToolInputSchema::from_value`]
+/// makes to an external schema. Rejecting array-form `["object","null"]`
+/// prevents a `null` input from passing validation for dynamic `Value` tools.
+pub(crate) fn normalize_root_object(value: &mut Value) -> Result<(), SchemaError> {
+    let Some(obj) = value.as_object_mut() else {
+        return Err(SchemaError::RootTypeNotObject);
+    };
+    match obj.get("type") {
+        Some(Value::String(s)) if s == "object" => Ok(()),
+        Some(Value::String(s)) if s == "null" => Err(SchemaError::RootTypeNull),
+        Some(_) => Err(SchemaError::RootTypeNotObject),
+        None => {
+            const COMPOSITION: [&str; 5] = ["$ref", "allOf", "anyOf", "oneOf", "not"];
+            if COMPOSITION.iter().any(|k| obj.contains_key(*k)) {
+                // Composition root — leave the author's contract untouched.
+                Ok(())
+            } else {
+                obj.insert("type".to_string(), Value::String("object".to_string()));
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Return a clone of `schema` with every name in `fields` removed from
+/// `properties` and `required`; drops `required` if it empties. Plural so a
+/// multi-field omit (AgentTool hides `mcp_servers` + `run_in_background`) costs
+/// a single clone. The model-facing view is never validated, so no recompile.
+#[must_use]
+pub fn schema_omit_properties(schema: &Value, fields: &[&str]) -> Value {
+    let mut out = schema.clone();
+    if let Some(obj) = out.as_object_mut() {
+        if let Some(props) = obj.get_mut("properties").and_then(Value::as_object_mut) {
+            for f in fields {
+                props.remove(*f);
+            }
+        }
+        if let Some(req) = obj.get_mut("required").and_then(Value::as_array_mut) {
+            req.retain(|v| !matches!(v.as_str(), Some(s) if fields.contains(&s)));
+            if req.is_empty() {
+                obj.remove("required");
+            }
+        }
+    }
+    out
+}
+
+/// Construction-time schema error. Tier-3 (`thiserror` + manual [`StackError`]
+/// + [`ErrorExt`]), mirroring `coco_context::ContextError`. Always classifies
+/// as [`StatusCode::InvalidArguments`] (non-retryable).
+#[derive(Debug, thiserror::Error)]
+pub enum SchemaError {
+    #[error(
+        "schema root must declare type:\"object\" as a single string \
+         (composition/array forms like [\"object\",\"null\"] are rejected)"
+    )]
+    RootTypeNotObject,
+
+    #[error("schema root is the singleton null type")]
+    RootTypeNull,
+
+    #[error("schema failed JSON Schema meta-validation: {message}")]
+    InvalidSchema { message: String },
+}
+
+impl StackError for SchemaError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn StackError> {
+        None
+    }
+}
+
+impl ErrorExt for SchemaError {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::InvalidArguments
+    }
+
+    fn as_any(&self) -> &(dyn std::any::Any + 'static) {
+        self
+    }
+}
+
+/// Test-double helper: a trivial closed `{"type":"object"}` schema for tool
+/// stubs whose `runtime_validation_schema` content is irrelevant (they exercise
+/// execution / registry / streaming, not schema validation). Available under
+/// `cfg(test)` and the `testing` feature so doubles in dependent crates share it.
+#[cfg(any(test, feature = "testing"))]
+pub fn test_runtime_schema() -> &'static ToolInputSchema {
+    static SCHEMA: std::sync::OnceLock<ToolInputSchema> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        ToolInputSchema::from_value(serde_json::json!({ "type": "object" }))
+            .expect("trivial object schema")
+    })
+}
+
+/// Implement [`Tool::runtime_validation_schema`](crate::Tool) for a derive-only
+/// (Bucket A) tool via a per-impl `OnceLock` cache of
+/// [`ToolInputSchema::from_input_type`]. Keeps the tool a unit struct (no
+/// field, no `new()`); the schema compiles on first access (the coco-tools
+/// force-init test turns a bad schema into a CI panic).
+#[macro_export]
+macro_rules! impl_runtime_schema {
+    ($input:ty) => {
+        fn runtime_validation_schema(&self) -> &$crate::ToolInputSchema {
+            static SCHEMA: ::std::sync::OnceLock<$crate::ToolInputSchema> =
+                ::std::sync::OnceLock::new();
+            SCHEMA.get_or_init($crate::ToolInputSchema::from_input_type::<$input>)
+        }
+    };
 }
 
 /// Structured form of a JSON Schema validation issue, captured at the

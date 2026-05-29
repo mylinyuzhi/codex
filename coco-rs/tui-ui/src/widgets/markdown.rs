@@ -10,8 +10,8 @@ use ratatui::text::Span;
 
 use crate::constants::TABLE_MAX_COL_WIDTH;
 use crate::constants::TABLE_MIN_COL_WIDTH;
-use crate::display_settings::SyntaxHighlighting;
-use crate::presentation::styles::UiStyles;
+use crate::display::SyntaxHighlighting;
+use crate::style::UiStyles;
 
 /// Convert markdown text to styled lines with default
 /// syntax-highlighting enabled. Test-only helper — production code

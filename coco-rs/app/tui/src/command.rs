@@ -155,7 +155,7 @@ pub enum UserCommand {
         /// Original input text (with pills intact) for display in chat history.
         display_text: Option<String>,
         /// Image data from pasted images (clipboard or drag-drop).
-        images: Vec<crate::paste::ImageData>,
+        images: Vec<coco_tui_ui::paste::ImageData>,
     },
     /// Interrupt current operation (Ctrl+C).
     Interrupt,
@@ -305,7 +305,7 @@ pub enum UserCommand {
     /// queueing — same shape as [`Self::SubmitInput`].
     QueueCommand {
         prompt: String,
-        images: Vec<crate::paste::ImageData>,
+        images: Vec<coco_tui_ui::paste::ImageData>,
     },
     /// Background all foreground tasks. Sent by the live single-press
     /// Ctrl+B path (`TuiCommand::BackgroundAllTasks` in update.rs).

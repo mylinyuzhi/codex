@@ -71,6 +71,7 @@ pub struct PowerShellTool;
 #[async_trait::async_trait]
 impl Tool for PowerShellTool {
     type Input = PowerShellInput;
+    coco_tool_runtime::impl_runtime_schema!(PowerShellInput);
     /// Output is `Value` because the wire shape is a tagged union of
     /// fg / bg / auto-bg-promotion envelopes (`{stdout, stderr,
     /// exitCode, interrupted}` vs `{task_id, status: "background",

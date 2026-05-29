@@ -39,6 +39,7 @@ pub struct ApplyPatchTool;
 #[async_trait]
 impl Tool for ApplyPatchTool {
     type Input = ApplyPatchInput;
+    coco_tool_runtime::impl_runtime_schema!(ApplyPatchInput);
     type Output = ApplyPatchOutput;
 
     fn id(&self) -> ToolId {

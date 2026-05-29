@@ -5,9 +5,9 @@ use ratatui::prelude::Color;
 use crate::i18n::t;
 use crate::presentation::footer::format_token_count;
 use crate::presentation::pager;
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
 use crate::state::DiffViewState;
+use coco_tui_ui::style::UiStyles;
 
 pub(crate) fn diff_view_content(
     d: &DiffViewState,

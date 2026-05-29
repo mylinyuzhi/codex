@@ -2,7 +2,6 @@ use coco_messages::ToolResult;
 use coco_messages::ToolResultContentPart;
 use coco_types::ToolCheckResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -12,7 +11,7 @@ use crate::context::ToolUseContext;
 use crate::error::ToolError;
 use crate::validation::ValidationResult;
 
-/// Session context for [`Tool::input_schema_for_session`]. Carries
+/// Session context for [`Tool::model_schema`]. Carries
 /// the per-session knobs that drive TS-parity dynamic schema omits
 /// (e.g. `AgentTool.tsx:110-125 lazySchema`'s
 /// `isBackgroundTasksDisabled || isForkSubagentEnabled()` gate).
@@ -248,8 +247,9 @@ pub type ProgressReceiver = tokio::sync::mpsc::UnboundedReceiver<ToolProgress>;
 //
 // Tools whose schema is dynamic (e.g. `McpTool` — the schema comes
 // from the wire at runtime) use `type Input = Value; type Output =
-// Value;` on the typed `Tool` trait and override `input_schema` /
-// `output_schema` manually. The blanket then degrades to a no-op
+// Value;` on the typed `Tool` trait and override
+// `runtime_validation_schema` / `output_schema` manually. The blanket
+// then degrades to a no-op
 // round-trip at the boundary.
 //
 // ## Why two traits
@@ -278,10 +278,8 @@ pub trait DynTool: Send + Sync + 'static {
 
     // -- Schema --
 
-    fn input_schema(&self) -> ToolInputSchema;
-    fn input_schema_for_session(&self, ctx: &SchemaContext) -> ToolInputSchema;
-    fn input_json_schema(&self) -> Option<Value>;
-    fn input_json_schema_for_session(&self, ctx: &SchemaContext) -> Option<Value>;
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema;
+    fn model_schema(&self, ctx: &SchemaContext) -> std::borrow::Cow<'_, Value>;
     fn output_schema(&self) -> Option<Value>;
     fn strict(&self) -> bool;
 
@@ -386,7 +384,7 @@ pub trait Tool: Send + Sync + 'static {
     /// parser (driven by `Deserialize`), eliminating drift.
     ///
     /// Tools whose schema is dynamic (e.g. MCP) set this to `Value`
-    /// and override [`Tool::input_schema`] manually.
+    /// and override [`Tool::runtime_validation_schema`] manually.
     type Input: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static;
     /// Typed output — `render_for_model(&Self::Output)` reads fields
     /// directly. Output also derives `JsonSchema` so the tool's
@@ -422,88 +420,21 @@ pub trait Tool: Send + Sync + 'static {
 
     // -- Schema --
 
-    /// JSON schema for tool input parameters. Default impl derives
-    /// from `Self::Input`'s `JsonSchema` impl with subschemas inlined
-    /// (TS-parity: zod schemas never produce `$ref`).
-    ///
-    /// Tools whose Input is `Value` (dynamic schema — MCP) MUST
-    /// override this to return the schema received from the wire.
-    fn input_schema(&self) -> ToolInputSchema {
-        crate::derive::derive_input_schema::<Self::Input>()
-    }
+    /// **Runtime validation schema** (v4.2 owner: `coco-tool-runtime`). Static,
+    /// owns the compiled validator; validated on every tool call (including
+    /// hook-rewritten input at `tool_call_preparer.rs`). No default ⇒ E0046
+    /// forces every tool to declare it (a `Value`-Input tool can't fall through
+    /// to a derive). MUST be a superset of every `model_schema(ctx)` view;
+    /// internally-built schemas carry `additionalProperties:false`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema;
 
-    /// Session-aware variant. Default impl just returns the static
-    /// [`Self::input_schema`]; tools whose schema depends on
-    /// per-session flags (env var killswitches, fork-mode gates,
-    /// feature toggles) override this to emit a variant.
-    ///
-    /// TS parity: `AgentTool.tsx:110-125 lazySchema` rebuilds the
-    /// zod schema per-call and conditionally `.omit({...})`s
-    /// fields when `isBackgroundTasksDisabled` or
-    /// `isForkSubagentEnabled()` flips. Without a session-aware
-    /// schema the model is told a field exists (e.g.
-    /// `run_in_background`) when the runtime would silently
-    /// override it — a schema-honesty gap.
-    ///
-    /// `engine_prompt::build_language_model_tools` calls this
-    /// instead of [`Self::input_schema`] so the model-facing
-    /// schema matches the actual runtime contract for the session.
-    fn input_schema_for_session(&self, _ctx: &SchemaContext) -> ToolInputSchema {
-        self.input_schema()
-    }
-
-    /// Full JSON Schema document override. Default derives the entire
-    /// document from `Self::Input`. The validator
-    /// ([`crate::schema::effective_tool_schema`]) consumes this when
-    /// present, otherwise wraps `input_schema()` in an `{type: object,
-    /// properties: …}` envelope.
-    ///
-    /// **Note**: this is the *static* schema — same for every session.
-    /// The model-facing schema seam in `app/query::engine_prompt`
-    /// reads [`Self::input_json_schema_for_session`] instead so
-    /// session-aware overrides (e.g. AgentTool dropping
-    /// `run_in_background` under `background_tasks_disabled`) reach
-    /// the LLM. Validator consumes this static schema because input
-    /// shape doesn't change per session — fields omitted from the
-    /// LLM-facing schema are still legal at the wire (TS parity:
-    /// `lazySchema().omit()` only narrows the model's view, the
-    /// runtime still accepts the field).
-    ///
-    /// **Tools whose `Input = serde_json::Value` MUST override this**
-    /// — schemars' permissive derive for `Value` produces a schema
-    /// strict OpenAI-compatible providers (DeepSeek etc.) reject with
-    /// `type: null`. The debug-assert below catches the missing-
-    /// override case during testing. Production callers fall through
-    /// to whatever schemars produced (preserves the existing
-    /// behaviour; the assert exists only to flag dev-time regressions
-    /// faster than waiting for a wire-level 400).
-    fn input_json_schema(&self) -> Option<Value> {
-        let schema = crate::derive::derive_input_schema_value::<Self::Input>();
-        debug_assert!(
-            schema.get("type") == Some(&Value::String("object".into())),
-            "Tool `{}` has `Self::Input` that doesn't derive to a JSON object schema \
-             (got `type = {:?}`). Override `input_json_schema()` to return the dynamic \
-             wire envelope — see `McpTool` for the pattern.",
-            std::any::type_name::<Self>(),
-            schema.get("type"),
-        );
-        Some(schema)
-    }
-
-    /// Session-aware JSON Schema for the model-facing tool listing.
-    ///
-    /// TS parity: `AgentTool.tsx:110-125 lazySchema()` rebuilds the
-    /// zod schema per-call and `.omit({...})`s fields the runtime
-    /// would silently veto. Schema-honesty gate: the LLM should not
-    /// see a field it can't actually set.
-    ///
-    /// Default delegates to [`Self::input_json_schema`] (static
-    /// derive). Override to mutate the derived schema based on
-    /// [`SchemaContext`] — e.g. `AgentTool` removes
-    /// `run_in_background` when `ctx.background_tasks_disabled ||
-    /// ctx.fork_mode_active`.
-    fn input_json_schema_for_session(&self, _ctx: &SchemaContext) -> Option<Value> {
-        self.input_json_schema()
+    /// **Model-facing schema** (v4.2) — a plain `Value`, never validated, only
+    /// serialized into the prompt tool list. Default borrows the runtime
+    /// schema's value; tools with runtime-only hook-injected fields (AgentTool
+    /// `mcp_servers`, Bash `_simulatedSedEdit`) override to omit them via
+    /// [`crate::schema::schema_omit_properties`].
+    fn model_schema(&self, _ctx: &SchemaContext) -> std::borrow::Cow<'_, Value> {
+        std::borrow::Cow::Borrowed(self.runtime_validation_schema().as_value())
     }
 
     /// Output schema. Default derives from `Self::Output`. Tools with
@@ -916,17 +847,11 @@ impl<T: Tool> DynTool for T {
         Tool::user_facing_name(self)
     }
 
-    fn input_schema(&self) -> ToolInputSchema {
-        Tool::input_schema(self)
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        Tool::runtime_validation_schema(self)
     }
-    fn input_schema_for_session(&self, ctx: &SchemaContext) -> ToolInputSchema {
-        Tool::input_schema_for_session(self, ctx)
-    }
-    fn input_json_schema(&self) -> Option<Value> {
-        Tool::input_json_schema(self)
-    }
-    fn input_json_schema_for_session(&self, ctx: &SchemaContext) -> Option<Value> {
-        Tool::input_json_schema_for_session(self, ctx)
+    fn model_schema(&self, ctx: &SchemaContext) -> std::borrow::Cow<'_, Value> {
+        Tool::model_schema(self, ctx)
     }
     fn output_schema(&self) -> Option<Value> {
         Tool::output_schema(self)

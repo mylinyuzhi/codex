@@ -10,9 +10,9 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-use crate::presentation::styles::UiStyles;
 use crate::state::ui::Toast;
 use crate::state::ui::ToastSeverity;
+use coco_tui_ui::style::UiStyles;
 
 /// Toast notification display.
 pub struct ToastWidget<'a> {

@@ -2,8 +2,8 @@
 
 use ratatui::style::Modifier;
 
-use crate::display_settings::SyntaxHighlighting;
-use crate::presentation::styles::UiStyles;
+use crate::display::SyntaxHighlighting;
+use crate::style::UiStyles;
 use crate::theme::Theme;
 use crate::widgets::markdown::markdown_to_lines;
 use crate::widgets::markdown::markdown_to_lines_with_syntax;

@@ -7,7 +7,6 @@
 pub(crate) mod activity;
 pub(crate) mod agents_dialog;
 pub(crate) mod confirm;
-pub(crate) mod diff;
 pub(crate) mod footer;
 pub(crate) mod header;
 pub(crate) mod help;
@@ -21,6 +20,5 @@ pub(crate) mod request;
 pub(crate) mod rewind;
 pub(crate) mod settings;
 pub(crate) mod streaming;
-pub(crate) mod styles;
 pub(crate) mod thinking;
 pub(crate) mod transcript;

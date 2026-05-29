@@ -611,8 +611,9 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     // permission parsing may silently mis-interpret as
                     // "allow". Warn so the permission misroute is
                     // discoverable.
-                    let stop = result.stop_reason;
-                    if stop.is_some_and(coco_messages::StopReason::is_abnormal) || chunks.is_empty()
+                    let stop = result.stop_reason.as_ref();
+                    if stop.is_some_and(coco_messages::FinishReason::is_abnormal)
+                        || chunks.is_empty()
                     {
                         tracing::warn!(
                             stop_reason = ?stop,
@@ -736,14 +737,14 @@ async fn validate_effective_input_or_complete_error(
     // returns malformed input produces a synthetic validation
     // error here, not silently downstream.
     //
-    // The validator is session-scoped via
-    // `ctx.tool_schema_validator` when present; a null validator
-    // short-circuits to the legacy path (no schema check). Cache
-    // hits across validations within a turn are free.
-    if let Some(validator) = ctx.tool_schema_validator.as_ref()
-        && let Err(e) = validator.validate(tool.as_ref(), &input).await
-    {
-        let message = format!("Invalid input: {e}");
+    // v4.2: the validator is owned by the tool's schema (synchronous,
+    // lock-free). A schema-compile failure is impossible here — a tool is
+    // only registered if its schema compiled at construction.
+    if let Err(issues) = tool.runtime_validation_schema().validate(&input) {
+        let message = format!(
+            "Invalid input: {}",
+            crate::tool_input_validate::format_schema_error(&tool_call.tool_name, &issues)
+        );
         complete_tool_call_with_error_mode(
             event_tx,
             history,

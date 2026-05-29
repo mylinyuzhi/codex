@@ -7,7 +7,7 @@ use super::*;
 use crate::state::derive::test_helpers;
 use crate::state::ui::StreamingState;
 use crate::surface::modal::HistorySurfaceMode;
-use crate::surface::terminal::SurfaceTerminal;
+use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
 #[test]
 fn interactive_viewport_does_not_render_session_header() {

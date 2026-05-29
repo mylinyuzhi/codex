@@ -48,6 +48,7 @@ pub struct TeamCreateTool;
 #[async_trait::async_trait]
 impl Tool for TeamCreateTool {
     type Input = TeamCreateInput;
+    coco_tool_runtime::impl_runtime_schema!(TeamCreateInput);
     type Output = TeamCreateOutput;
 
     fn id(&self) -> ToolId {
@@ -161,6 +162,7 @@ pub struct TeamDeleteTool;
 #[async_trait::async_trait]
 impl Tool for TeamDeleteTool {
     type Input = TeamDeleteInput;
+    coco_tool_runtime::impl_runtime_schema!(TeamDeleteInput);
     type Output = TeamDeleteOutput;
 
     fn id(&self) -> ToolId {

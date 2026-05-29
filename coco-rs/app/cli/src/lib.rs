@@ -26,6 +26,7 @@ pub mod session_bootstrap;
 pub mod session_rename;
 pub mod session_runtime;
 pub mod side_query_impl;
+pub mod startup_profile;
 pub mod task_runtime;
 pub mod team_task_list_router;
 pub mod tracing_init;

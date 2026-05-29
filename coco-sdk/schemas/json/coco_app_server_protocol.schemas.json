@@ -3925,11 +3925,26 @@
         "name": {
           "type": "string"
         },
+        "skipped_tools": {
+          "description": "v4.2: tools dropped at registration because their wire schema was\nrejected (uncompilable / non-object root).",
+          "items": {
+            "$ref": "#/$defs/McpSkippedToolStatus"
+          },
+          "type": "array"
+        },
         "status": {
           "$ref": "#/$defs/McpConnectionStatus"
         },
+        "tombstoned_tools": {
+          "description": "v4.2: tool ids present on the previous connect but gone now.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "tool_count": {
           "default": 0,
+          "description": "Tools the model can actually call \u2014 the **registered** count, not the\nadvertised one (v4.2). A server can advertise more than it registers\nwhen some tools' wire schemas are rejected.",
           "format": "int32",
           "type": "integer"
         }
@@ -3982,6 +3997,23 @@
         "errors"
       ],
       "title": "McpSetServersResult",
+      "type": "object"
+    },
+    "McpSkippedToolStatus": {
+      "description": "One MCP tool dropped at registration because its wire schema was rejected (v4.2).",
+      "properties": {
+        "error": {
+          "description": "Human-readable rejection reason. (The classification is invariably\n`InvalidArguments` for a schema rejection, so it is not carried as a\nseparate stringly-typed field \u2014 and `coco-error::StatusCode` can't live\nin a `coco-types` wire DTO without violating the layering.)",
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_name",
+        "error"
+      ],
       "type": "object"
     },
     "McpStartupCompleteParams": {

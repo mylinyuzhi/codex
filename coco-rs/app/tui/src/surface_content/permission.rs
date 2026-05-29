@@ -3,8 +3,8 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::request;
-use crate::presentation::styles::UiStyles;
 use crate::state::PermissionPromptState;
+use coco_tui_ui::style::UiStyles;
 
 pub(super) fn permission_content(
     p: &PermissionPromptState,

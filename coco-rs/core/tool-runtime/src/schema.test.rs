@@ -1,252 +1,152 @@
-//! Tests for [`ToolSchemaValidator`] and [`effective_tool_schema`].
-//!
-//! Covers:
-//! - properties-envelope wrap for tools without an explicit
-//!   `input_json_schema` override.
-//! - `input_json_schema` override wins when present.
-//! - Validator rejects `required` missing, unknown field with
-//!   `additionalProperties: false`, enum mismatch, nested type
-//!   mismatch — exercising the plan's semantic-parity surface.
-//! - Cache hit doesn't re-compile (asserted via counter proxy).
+//! Tests for the self-validating [`super::ToolInputSchema`] newtype (v4.2):
+//! construction (`from_input_type` / `from_value`), composition-aware root
+//! normalization, `schema_omit_properties`, `SchemaError` classification, and
+//! the `resolve-http`-off build invariant. `super::` is the `schema` module.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
-
-use coco_messages::ToolResult;
-use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use serde_json::{Value, json};
 
-use super::*;
-use crate::context::ToolUseContext;
-use crate::error::ToolError;
-use crate::traits::DescriptionOptions;
-
-/// Test tool with either a full `input_json_schema` override or
-/// just a properties map. Counts how many times `input_json_schema`
-/// is called, which lets us assert cache behavior.
-struct TestTool {
-    name: String,
-    properties: HashMap<String, Value>,
-    json_schema: Option<Value>,
-    json_schema_calls: Arc<AtomicI32>,
-}
-
-#[async_trait::async_trait]
-impl crate::traits::Tool for TestTool {
-    // Migration scaffold: assoc types pinned to `Value`.
-    type Input = serde_json::Value;
-    type Output = serde_json::Value;
-
-    fn id(&self) -> ToolId {
-        ToolId::Custom(self.name.clone())
-    }
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
-        "test".into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: self.properties.clone(),
-            required: Vec::new(),
-        }
-    }
-    fn input_json_schema(&self) -> Option<Value> {
-        self.json_schema_calls.fetch_add(1, Ordering::SeqCst);
-        self.json_schema.clone()
-    }
-    async fn execute(
-        &self,
-        _input: Value,
-        _ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        unreachable!("tests don't execute")
-    }
-}
-
-fn tool_with_properties(name: &str, props: HashMap<String, Value>) -> TestTool {
-    TestTool {
-        name: name.into(),
-        properties: props,
-        json_schema: None,
-        json_schema_calls: Arc::new(AtomicI32::new(0)),
-    }
-}
-
-fn tool_with_full_schema(name: &str, schema: Value) -> TestTool {
-    TestTool {
-        name: name.into(),
-        properties: HashMap::new(),
-        json_schema: Some(schema),
-        json_schema_calls: Arc::new(AtomicI32::new(0)),
-    }
-}
-
 #[test]
-fn test_effective_schema_wraps_properties_in_object_envelope() {
-    let mut props = HashMap::new();
-    props.insert("file_path".into(), json!({"type": "string"}));
-    let tool = tool_with_properties("Read", props);
-    let schema = effective_tool_schema(&tool);
-    assert_eq!(schema["type"], "object");
-    assert!(schema["properties"]["file_path"].is_object());
-}
-
-#[test]
-fn test_effective_schema_uses_input_json_schema_override_when_present() {
-    let explicit = json!({
-        "type": "object",
-        "properties": {"x": {"type": "integer"}},
-        "required": ["x"],
-        "additionalProperties": false,
-    });
-    let tool = tool_with_full_schema("Override", explicit.clone());
-    let schema = effective_tool_schema(&tool);
-    assert_eq!(schema, explicit);
-}
-
-#[tokio::test]
-async fn test_validator_accepts_valid_input() {
-    let mut props = HashMap::new();
-    props.insert("name".into(), json!({"type": "string"}));
-    let tool = tool_with_properties("Greet", props);
-    let validator = ToolSchemaValidator::new();
-    validator
-        .validate(&tool, &json!({"name": "alice"}))
-        .await
-        .expect("should accept valid input");
-}
-
-#[tokio::test]
-async fn test_validator_rejects_required_missing() {
-    let schema = json!({
-        "type": "object",
-        "properties": {"file_path": {"type": "string"}},
-        "required": ["file_path"],
-    });
-    let tool = tool_with_full_schema("Read", schema);
-    let validator = ToolSchemaValidator::new();
-    let err = validator.validate(&tool, &json!({})).await.unwrap_err();
-    match err {
-        SchemaValidationError::Rejected { message } => {
-            assert!(
-                message.to_lowercase().contains("required") || message.contains("file_path"),
-                "error must mention the missing required field; got: {message}"
-            );
-        }
-        other => panic!("expected Rejected, got {other:?}"),
+fn from_input_type_closes_schema_and_validates() {
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct DemoInput {
+        name: String,
+        count: Option<i64>,
     }
-}
-
-#[tokio::test]
-async fn test_validator_rejects_unknown_field_under_additional_properties_false() {
-    let schema = json!({
-        "type": "object",
-        "properties": {"known": {"type": "string"}},
-        "additionalProperties": false,
-    });
-    let tool = tool_with_full_schema("Strict", schema);
-    let validator = ToolSchemaValidator::new();
-    let err = validator
-        .validate(&tool, &json!({"known": "ok", "extra": 1}))
-        .await
-        .unwrap_err();
-    assert!(matches!(err, SchemaValidationError::Rejected { .. }));
-}
-
-#[tokio::test]
-async fn test_validator_rejects_enum_mismatch() {
-    let schema = json!({
-        "type": "object",
-        "properties": {
-            "color": {"type": "string", "enum": ["red", "green", "blue"]}
-        },
-        "required": ["color"],
-    });
-    let tool = tool_with_full_schema("Color", schema);
-    let validator = ToolSchemaValidator::new();
-    let err = validator
-        .validate(&tool, &json!({"color": "purple"}))
-        .await
-        .unwrap_err();
-    assert!(matches!(err, SchemaValidationError::Rejected { .. }));
-}
-
-#[tokio::test]
-async fn test_validator_rejects_nested_type_mismatch() {
-    let schema = json!({
-        "type": "object",
-        "properties": {
-            "nested": {
-                "type": "object",
-                "properties": {"count": {"type": "integer"}},
-                "required": ["count"],
-            }
-        },
-        "required": ["nested"],
-    });
-    let tool = tool_with_full_schema("Nested", schema);
-    let validator = ToolSchemaValidator::new();
-    let err = validator
-        .validate(&tool, &json!({"nested": {"count": "not-an-int"}}))
-        .await
-        .unwrap_err();
-    assert!(matches!(err, SchemaValidationError::Rejected { .. }));
-}
-
-#[tokio::test]
-async fn test_validator_caches_compiled_schema_per_tool_id() {
-    let tool = tool_with_full_schema(
-        "Cached",
-        json!({"type": "object", "properties": {"x": {"type": "string"}}}),
-    );
-    let calls = tool.json_schema_calls.clone();
-    let validator = ToolSchemaValidator::new();
-
-    // First call compiles + caches.
-    validator
-        .validate(&tool, &json!({"x": "hi"}))
-        .await
-        .unwrap();
-    let after_first = calls.load(Ordering::SeqCst);
-    // Second call hits cache — input_json_schema should NOT be
-    // called again.
-    validator
-        .validate(&tool, &json!({"x": "world"}))
-        .await
-        .unwrap();
-    let after_second = calls.load(Ordering::SeqCst);
+    let schema = super::ToolInputSchema::from_input_type::<DemoInput>();
+    let v = schema.as_value();
+    assert_eq!(v["type"], json!("object"));
     assert_eq!(
-        after_first, after_second,
-        "cache hit must not re-call input_json_schema; calls went {after_first} → {after_second}"
+        v["additionalProperties"],
+        json!(false),
+        "internal schema must be closed"
+    );
+    assert!(schema.validate(&json!({"name": "x"})).is_ok());
+    assert!(
+        schema.validate(&json!({"name": "x", "bogus": 1})).is_err(),
+        "additionalProperties:false must reject unknown fields"
+    );
+    assert!(
+        schema.validate(&json!({})).is_err(),
+        "missing required `name` must be rejected"
     );
 }
 
-#[tokio::test]
-async fn test_validator_clear_invalidates_cache() {
-    let tool = tool_with_full_schema(
-        "Clearable",
-        json!({"type": "object", "properties": {"x": {"type": "string"}}}),
+#[test]
+fn from_value_folds_in_missing_type() {
+    let s = super::ToolInputSchema::from_value(json!({
+        "properties": {"a": {"type": "string"}}
+    }))
+    .expect("typeless object schema accepted");
+    assert_eq!(
+        s.as_value()["type"],
+        json!("object"),
+        "type:object must be folded in"
     );
-    let calls = tool.json_schema_calls.clone();
-    let validator = ToolSchemaValidator::new();
+}
 
-    validator
-        .validate(&tool, &json!({"x": "hi"}))
-        .await
-        .unwrap();
-    let before_clear = calls.load(Ordering::SeqCst);
-    validator.clear().await;
-    validator
-        .validate(&tool, &json!({"x": "hi"}))
-        .await
-        .unwrap();
-    let after_reclear = calls.load(Ordering::SeqCst);
+#[test]
+fn from_value_rejects_explicit_non_object_roots() {
+    assert!(super::ToolInputSchema::from_value(json!({"type": "array"})).is_err());
+    assert!(super::ToolInputSchema::from_value(json!({"type": ["object", "null"]})).is_err());
+    assert!(matches!(
+        super::ToolInputSchema::from_value(json!({"type": "null"})),
+        Err(super::SchemaError::RootTypeNull)
+    ));
+}
+
+#[test]
+fn from_value_does_not_fold_composition_root() {
+    // A composition root ($ref) must not gain a spurious type:object.
+    if let Ok(s) = super::ToolInputSchema::from_value(json!({
+        "$ref": "#/$defs/X",
+        "$defs": {"X": {"type": "object"}}
+    })) {
+        assert!(
+            s.as_value().get("type").is_none(),
+            "composition root must not gain type:object"
+        );
+    }
+}
+
+#[test]
+fn from_value_rejects_remote_ref_without_fetch() {
+    // Unknown-scheme $ref is rejected by jsonschema's retriever regardless of
+    // the resolve-http feature, and never triggers a network request.
+    let s = super::ToolInputSchema::from_value(json!({
+        "type": "object",
+        "properties": {"x": {"$ref": "made-up-scheme://nope"}}
+    }));
     assert!(
-        after_reclear > before_clear,
-        "cache clear must force a recompile"
+        s.is_err(),
+        "remote/unknown $ref must be rejected as Err, not fetched"
+    );
+}
+
+#[test]
+fn schema_omit_properties_removes_from_properties_and_required() {
+    let base = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+        "required": ["a", "b"]
+    });
+    let out = super::schema_omit_properties(&base, &["b"]);
+    assert!(out["properties"].get("b").is_none());
+    assert_eq!(out["required"], json!(["a"]));
+    assert!(
+        base["properties"].get("b").is_some(),
+        "input must be untouched"
+    );
+}
+
+#[test]
+fn schema_omit_properties_drops_empty_required() {
+    let base = json!({
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"]
+    });
+    let out = super::schema_omit_properties(&base, &["a"]);
+    assert!(
+        out.get("required").is_none(),
+        "empty required must be removed"
+    );
+}
+
+#[test]
+fn schema_error_classifies_invalid_arguments() {
+    use coco_error::ErrorExt;
+    let e = super::ToolInputSchema::from_value(json!({"type": "array"})).unwrap_err();
+    assert_eq!(e.status_code(), coco_error::StatusCode::InvalidArguments);
+    assert!(!e.is_retryable());
+}
+
+/// Build-invariant: jsonschema must stay `default-features = false` so a remote
+/// `$ref` is rejected as `Err` (never fetched — SSRF / blocking-fetch guard).
+/// Pure build-graph assertion via `cargo metadata`: no network, fails fast.
+#[test]
+fn jsonschema_resolve_http_stays_off() {
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["metadata", "--format-version", "1"])
+        .output()
+        .expect("cargo metadata");
+    assert!(out.status.success(), "cargo metadata failed");
+    let md: Value = serde_json::from_slice(&out.stdout).expect("metadata json");
+    let node = md["resolve"]["nodes"]
+        .as_array()
+        .expect("resolve.nodes")
+        .iter()
+        .find(|n| n["id"].as_str().is_some_and(|s| s.contains("jsonschema@")))
+        .expect("jsonschema in resolved graph");
+    let feats: Vec<&str> = node["features"]
+        .as_array()
+        .expect("features array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        !feats.contains(&"resolve-http") && !feats.contains(&"resolve-file"),
+        "jsonschema must stay default-features=false (SSRF/blocking-fetch guard); got {feats:?}",
     );
 }

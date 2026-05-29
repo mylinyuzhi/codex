@@ -8,11 +8,11 @@
 //! content path without duplicating the widget.
 
 use crate::display_settings::DisplaySettings;
-use crate::display_settings::SyntaxHighlighting;
 use crate::i18n::t;
 use crate::theme::ThemeChoice;
 use crate::theme::ThemeRuntimeState;
 use crate::theme::ThemeSetting;
+use coco_tui_ui::display::SyntaxHighlighting;
 
 /// Settings panel tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

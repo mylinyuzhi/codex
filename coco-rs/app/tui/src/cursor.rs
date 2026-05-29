@@ -18,21 +18,11 @@ use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
+use coco_tui_ui::engine::CursorClaim;
+
 use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::widgets::InputRenderModel;
-
-/// What the cursor should look like at the end of this frame.
-///
-/// `None` returned from [`compute_cursor`] means "no cursor this frame";
-/// `Tui::draw` then emits `Hide + MoveTo(0, 0)` so the terminal never
-/// holds a stale cursor coordinate that focus-gained could re-show in a
-/// status-bar position.
-#[derive(Debug, Clone, Copy)]
-pub struct CursorClaim {
-    pub position: Position,
-    pub style: SetCursorStyle,
-}
 
 /// Decide where (and whether) the cursor goes for the next frame.
 ///

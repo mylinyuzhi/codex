@@ -11,7 +11,7 @@ use crate::vim::operators;
 use crate::vim::text_objects::{self};
 use crate::vim::transitions::VimAction;
 use crate::vim::transitions::{self};
-use crate::widgets::TextArea;
+use coco_tui_ui::widgets::TextArea;
 
 fn textarea_with(text: &str, cursor: usize) -> TextArea {
     let mut ta = TextArea::new();

@@ -70,8 +70,14 @@ pub async fn register_and_connect(
             &name,
         )
         .await;
-        if let Some(runtime) = state.session_runtime.read().await.as_ref() {
-            coco_tools::register_mcp_tools(runtime.tools(), &name, schemas);
+        let report = {
+            let guard = state.session_runtime.read().await;
+            guard
+                .as_ref()
+                .map(|runtime| coco_tools::register_mcp_tools(runtime.tools(), &name, schemas))
+        };
+        if let Some(report) = report {
+            state.record_mcp_registration_report(&name, report).await;
         }
     }
     Ok(())

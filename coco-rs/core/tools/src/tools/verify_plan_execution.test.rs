@@ -100,8 +100,9 @@ fn identity_and_schema() {
         ToolName::VerifyPlanExecution.as_str()
     );
     assert!(
-        <VerifyPlanExecutionTool as DynTool>::input_schema(&VerifyPlanExecutionTool,)
-            .properties
-            .contains_key("summary")
+        <VerifyPlanExecutionTool as DynTool>::runtime_validation_schema(&VerifyPlanExecutionTool)
+            .as_value()["properties"]
+            .get("summary")
+            .is_some()
     );
 }

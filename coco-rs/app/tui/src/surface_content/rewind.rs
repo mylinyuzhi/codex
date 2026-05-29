@@ -3,8 +3,8 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::rewind;
-use crate::presentation::styles::UiStyles;
 use crate::state::rewind::RewindState;
+use coco_tui_ui::style::UiStyles;
 
 pub(super) fn rewind_surface_content(
     state: &RewindState,

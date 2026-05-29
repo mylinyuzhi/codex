@@ -3,7 +3,6 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::confirm;
-use crate::presentation::styles::UiStyles;
 use crate::state::AutoModeOptInState;
 use crate::state::BridgeState;
 use crate::state::BypassPermissionsState;
@@ -20,6 +19,7 @@ use crate::state::SandboxPermissionPromptState;
 use crate::state::TaskDetailState;
 use crate::state::TrustState;
 use crate::state::WorktreeExitState;
+use coco_tui_ui::style::UiStyles;
 
 pub(super) fn cost_warning_content(
     c: &CostWarningPromptState,

@@ -1,18 +1,13 @@
-//! Schemars 1.2 → `ToolInputSchema` / output-schema derive helpers.
+//! Schemars 1.2 → JSON Schema document derive helpers.
 //!
-//! ## What this module replaces
-//!
-//! Pre-refactor each tool wrote `fn input_schema(&self) -> ToolInputSchema`
-//! by hand, building a `HashMap<String, Value>` of properties plus a
-//! `Vec<String>` of required field names. The args struct (used inside
-//! `execute` to `serde_json::from_value`) lived in a separate file and
-//! could drift from the schema silently — renaming a struct field did
-//! NOT cause a compile error in the schema.
-//!
-//! Post-refactor each tool declares ONE `#[derive(Deserialize, JsonSchema)]
-//! struct XxxInput;` and calls [`derive_input_schema::<XxxInput>`]. The
-//! schema and the typed parse share a single artifact; field renames are
-//! caught at `cargo check`.
+//! Each tool declares ONE `#[derive(Deserialize, JsonSchema)] struct
+//! XxxInput;`. The schema and the typed `execute` parse share a single
+//! artifact, so renaming a struct field is caught at `cargo check`
+//! instead of drifting silently. Bucket-A tools turn the struct into a
+//! closed runtime schema via the `impl_runtime_schema!` macro
+//! ([`crate::schema::ToolInputSchema::from_input_type`]); hand-built
+//! tools call [`derive_input_schema_value`] and wrap the result in
+//! `from_value(json!({ ... }))`.
 //!
 //! ## TS parity
 //!
@@ -41,39 +36,16 @@
 //! contract; for typical `#[derive]`-ed types the two contracts
 //! produce identical output.
 
-use coco_types::ToolInputSchema;
 use schemars::JsonSchema;
 use schemars::generate::SchemaSettings;
-use serde_json::Map as JsonMap;
 use serde_json::Value;
-use std::collections::HashMap;
 
-/// Derive a [`ToolInputSchema`] (model-facing properties + required)
-/// from a `T: JsonSchema` input struct.
-///
-/// `T` should be the tool's typed input — e.g. for a tool whose
-/// `execute` takes `BashInput`, call `derive_input_schema::<BashInput>()`.
-/// All subschemas are inlined (no `$ref` in the result).
-///
-/// # Panics
-///
-/// Panics if the top-level derived schema is not an object schema.
-/// That can only happen if `T` is something like a bare `String` /
-/// `i32` / tuple — none of which make sense as a tool's input. Tool
-/// inputs MUST be structs (or struct-shaped enums) so the panic
-/// signals a tool-author programming error, not a runtime failure.
-#[must_use]
-pub fn derive_input_schema<T: JsonSchema>() -> ToolInputSchema {
-    let value = derive_input_schema_value::<T>();
-    schema_value_to_tool_input_schema(value)
-}
-
-/// Like [`derive_input_schema`] but returns the entire JSON Schema
-/// document instead of stripping it down to `ToolInputSchema`.
-///
-/// Useful for the validator path
-/// ([`crate::schema::effective_tool_schema`]) which wants the full
-/// envelope (`{"type":"object","properties":...,"required":...}`).
+/// Derive the entire JSON Schema document from a `T: JsonSchema` input
+/// struct (subschemas inlined, no `$ref`). The closed runtime schema is
+/// built from this by [`crate::schema::ToolInputSchema::from_input_type`]
+/// (which adds `additionalProperties:false` and compiles the validator);
+/// hand-built / derive-and-mutate tools call this directly and wrap the
+/// result in `from_value(json!({ ... }))`.
 #[must_use]
 pub fn derive_input_schema_value<T: JsonSchema>() -> Value {
     let generator = SchemaSettings::default()
@@ -114,54 +86,6 @@ pub fn derive_output_schema<T: JsonSchema>() -> Value {
     // tool-listing path — the validator will then reject the empty
     // schema and the model gets a clean error.
     serde_json::to_value(&schema).unwrap_or(Value::Null)
-}
-
-/// Strip a top-level JSON Schema object document down to
-/// `ToolInputSchema { properties, required }`. Meta fields
-/// (`$schema`, `title`, `description`, `$defs`, `type`,
-/// `additionalProperties`, etc.) are dropped — they're noise from the
-/// model's perspective once the model already knows it's looking at a
-/// tool input object.
-fn schema_value_to_tool_input_schema(schema_value: Value) -> ToolInputSchema {
-    let Value::Object(mut map) = schema_value else {
-        panic!(
-            "derive_input_schema: top-level schema must be an object schema, got: {schema_value}"
-        );
-    };
-    let properties = extract_properties(map.remove("properties"));
-    let required = extract_required(map.remove("required"));
-    ToolInputSchema {
-        properties,
-        required,
-    }
-}
-
-fn extract_properties(props: Option<Value>) -> HashMap<String, Value> {
-    match props {
-        Some(Value::Object(map)) => map_to_hashmap(map),
-        None => HashMap::new(),
-        Some(other) => panic!("derive_input_schema: `properties` must be an object, got: {other}"),
-    }
-}
-
-fn extract_required(req: Option<Value>) -> Vec<String> {
-    match req {
-        Some(Value::Array(items)) => items
-            .into_iter()
-            .map(|v| match v {
-                Value::String(s) => s,
-                other => {
-                    panic!("derive_input_schema: `required` entries must be strings, got: {other}")
-                }
-            })
-            .collect(),
-        None => Vec::new(),
-        Some(other) => panic!("derive_input_schema: `required` must be an array, got: {other}"),
-    }
-}
-
-fn map_to_hashmap(map: JsonMap<String, Value>) -> HashMap<String, Value> {
-    map.into_iter().collect()
 }
 
 #[cfg(test)]

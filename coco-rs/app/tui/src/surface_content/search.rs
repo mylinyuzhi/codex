@@ -3,8 +3,8 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::picker;
-use crate::presentation::styles::UiStyles;
 use crate::state::GlobalSearchState;
+use coco_tui_ui::style::UiStyles;
 
 pub(super) fn global_search_content(
     g: &GlobalSearchState,

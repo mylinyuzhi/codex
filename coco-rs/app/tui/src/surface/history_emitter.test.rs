@@ -5,14 +5,14 @@ use ratatui::text::Line;
 use uuid::Uuid;
 
 use super::*;
-use crate::display_settings::SyntaxHighlighting;
-use crate::presentation::styles::UiStyles;
 use crate::state::derive::test_helpers;
 use crate::state::transcript_view::RenderedCell;
 use crate::surface::history_lines::HistoryLineRenderOptions;
 use crate::surface::history_lines::render_finalized_history_lines;
-use crate::surface::terminal::SurfaceTerminal;
 use crate::theme::Theme;
+use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::engine::terminal::SurfaceTerminal;
+use coco_tui_ui::style::UiStyles;
 
 /// Build a deterministic UUID from an integer index so tests can name
 /// stable cells without keeping local Uuid bindings.

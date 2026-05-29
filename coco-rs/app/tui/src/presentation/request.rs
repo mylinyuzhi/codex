@@ -3,7 +3,6 @@
 use ratatui::prelude::Color;
 
 use super::layout;
-use super::styles::UiStyles;
 use crate::i18n::t;
 use crate::state::OTHER_OPTION_DISPLAY;
 use crate::state::OTHER_OPTION_LABEL;
@@ -14,6 +13,7 @@ use crate::state::QuestionItem;
 use crate::state::QuestionPromptState;
 use crate::state::RiskLevel;
 use crate::state::surface_payloads::PermissionAction;
+use coco_tui_ui::style::UiStyles;
 
 pub(crate) fn permission_content(
     p: &PermissionPromptState,
