@@ -3,14 +3,14 @@
 use ratatui::prelude::Color;
 
 use super::layout;
-use super::styles::UiStyles;
-use crate::constants;
 use crate::i18n::t;
 use crate::state::DiffStatsPreview;
 use crate::state::rewind::RestoreType;
 use crate::state::rewind::RewindPhase;
 use crate::state::rewind::RewindState;
 use crate::state::rewind::RewindableMessage;
+use coco_tui_ui::constants;
+use coco_tui_ui::style::UiStyles;
 
 pub(crate) fn rewind_surface_content(
     state: &RewindState,

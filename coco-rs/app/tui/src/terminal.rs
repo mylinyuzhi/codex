@@ -32,13 +32,13 @@ use ratatui::layout::Size;
 use crate::FrameLayout;
 use crate::job_control::SuspendContext;
 use crate::state::AppState;
-use crate::surface::compatibility::TerminalCompatibility;
 use crate::surface::controller::NativeSurfaceController;
 use crate::surface::modal::ModalSurfacePlacement;
 use crate::surface::modal::ModalSurfaceState;
 use crate::surface::modal::SurfaceFramePlan;
-use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::interactive_viewport_desired_height;
+use coco_tui_ui::engine::compatibility::TerminalCompatibility;
+use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
 /// Type alias for the terminal backend.
 pub type TerminalBackend = CrosstermBackend<Stdout>;

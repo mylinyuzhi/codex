@@ -3,15 +3,13 @@
 //! TS: `imagePaste.ts` — NSPasteboard (macOS native), xclip/wl-paste (Linux),
 //! PowerShell (Windows).
 
-use anyhow::Result;
-
 use crate::paste::ImageData;
 
 /// Attempt to read an image from the system clipboard.
 ///
 /// Returns `Ok(None)` if no image is available or the clipboard tool is not found.
 /// Uses platform-specific tools: `xclip`/`wl-paste` on Linux, `osascript` on macOS.
-pub async fn read_clipboard_image() -> Result<Option<ImageData>> {
+pub async fn read_clipboard_image() -> std::io::Result<Option<ImageData>> {
     #[cfg(target_os = "linux")]
     {
         read_clipboard_image_linux().await
@@ -45,7 +43,7 @@ pub async fn has_clipboard_image_support() -> bool {
 // -- Linux implementation --
 
 #[cfg(target_os = "linux")]
-async fn read_clipboard_image_linux() -> Result<Option<ImageData>> {
+async fn read_clipboard_image_linux() -> std::io::Result<Option<ImageData>> {
     // Try xclip first (X11)
     if which_exists("xclip").await {
         // Check if clipboard contains image data
@@ -90,7 +88,7 @@ async fn read_clipboard_image_linux() -> Result<Option<ImageData>> {
 // -- macOS implementation --
 
 #[cfg(target_os = "macos")]
-async fn read_clipboard_image_macos() -> Result<Option<ImageData>> {
+async fn read_clipboard_image_macos() -> std::io::Result<Option<ImageData>> {
     // Use osascript to check for image in clipboard
     let check = tokio::process::Command::new("osascript")
         .args(["-e", "clipboard info for (clipboard info)"])

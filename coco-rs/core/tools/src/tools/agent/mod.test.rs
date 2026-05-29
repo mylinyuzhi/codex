@@ -231,8 +231,11 @@ impl AgentHandle for CapturingAgentHandle {
 /// coordinator now reads them off the resolved `AgentDefinition` only.
 #[test]
 fn test_agent_tool_input_schema_exposes_nine_user_fields() {
-    let schema = <AgentTool as DynTool>::input_schema(&AgentTool);
-    let p = &schema.properties;
+    let schema = <AgentTool as DynTool>::model_schema(
+        &AgentTool,
+        &coco_tool_runtime::SchemaContext::default(),
+    );
+    let p = schema["properties"].as_object().unwrap();
     let mut keys: Vec<&str> = p.keys().map(String::as_str).collect();
     keys.sort();
     let mut expected = vec![
@@ -279,7 +282,12 @@ fn test_agent_tool_input_schema_exposes_nine_user_fields() {
     assert_eq!(isolation_values, vec!["worktree"]);
 
     // Required fields are exactly `description` and `prompt`.
-    let mut required = schema.required.clone();
+    let mut required: Vec<String> = schema["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
     required.sort();
     assert_eq!(
         required,
@@ -293,8 +301,7 @@ fn test_agent_tool_input_schema_exposes_nine_user_fields() {
 /// `AgentTool.tsx:110-125 lazySchema().omit({ run_in_background: true })`.
 #[test]
 fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
-    let static_schema = <AgentTool as DynTool>::input_json_schema(&AgentTool)
-        .expect("AgentTool must ship a static JSON schema");
+    let static_schema = <AgentTool as DynTool>::runtime_validation_schema(&AgentTool).as_value();
     let static_props = static_schema["properties"]
         .as_object()
         .expect("static schema has properties");
@@ -309,8 +316,7 @@ fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
         fork_mode_active: false,
         features: None,
     };
-    let session_schema = <AgentTool as DynTool>::input_json_schema_for_session(&AgentTool, &ctx)
-        .expect("AgentTool must ship a session JSON schema");
+    let session_schema = <AgentTool as DynTool>::model_schema(&AgentTool, &ctx).into_owned();
     let session_props = session_schema["properties"]
         .as_object()
         .expect("session schema has properties");
@@ -326,8 +332,7 @@ fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
         features: None,
     };
     let session_schema_fork =
-        <AgentTool as DynTool>::input_json_schema_for_session(&AgentTool, &ctx_fork)
-            .expect("AgentTool must ship a session JSON schema");
+        <AgentTool as DynTool>::model_schema(&AgentTool, &ctx_fork).into_owned();
     let session_props_fork = session_schema_fork["properties"]
         .as_object()
         .expect("session schema has properties");
@@ -339,8 +344,7 @@ fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
     // Neither flag → keep the field.
     let ctx_default = coco_tool_runtime::SchemaContext::default();
     let session_schema_default =
-        <AgentTool as DynTool>::input_json_schema_for_session(&AgentTool, &ctx_default)
-            .expect("AgentTool must ship a session JSON schema");
+        <AgentTool as DynTool>::model_schema(&AgentTool, &ctx_default).into_owned();
     let session_props_default = session_schema_default["properties"]
         .as_object()
         .expect("session schema has properties");

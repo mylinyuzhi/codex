@@ -22,9 +22,18 @@
 //! `coco-inference`, `coco-messages`). [`FinishReason::raw`] is still
 //! preserved verbatim from the provider for diagnostics.
 //!
-//! `coco_inference::StopReason` and `coco_messages::StopReason` are
-//! re-exports of this enum so callers across the workspace see one
-//! typed value, set once at the provider-adapter seam.
+//! [`FinishReason`] — the `{ unified, raw }` pair — is the **live**
+//! finish-reason carrier: `coco_inference::QueryResult`,
+//! `StreamEvent::Finish`, and the `@ai-sdk` stream part hold the struct,
+//! so `.raw` (provider provenance) reaches the in-process consumers that
+//! need it — the side-query `Other` mapping and the [`fmt::Display`]
+//! that logs `other(compaction)`. On the **wire** it shields to the
+//! bare `unified` string (`#[serde(transparent)]`, `raw` skipped),
+//! matching `@ai-sdk`'s string `finishReason`. Persisted coco-rs types —
+//! the committed `AssistantMessage` and the turn-ended `CompletedOutcome`
+//! — store the bare [`UnifiedFinishReason`] projection (re-exported
+//! workspace-wide as `StopReason`) directly, since `raw` is a transient
+//! diagnostic, not archival state.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -136,25 +145,54 @@ impl fmt::Display for UnifiedFinishReason {
     }
 }
 
-/// The reason why a model response finished.
+/// The reason why a model response finished — the **live** carrier of
+/// finish-reason provenance.
 ///
-/// Contains both the typed [`UnifiedFinishReason`] (canonical for
-/// behavioral matching) and the provider-original [`Self::raw`] wire
-/// string (preserved for diagnostics / logs / transcript provenance).
-/// `unified` is the field higher layers should match on; `raw` is
-/// for humans reading logs.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+/// Pairs the typed [`UnifiedFinishReason`] (canonical for behavioral
+/// matching) with the provider-original [`Self::raw`] wire string (an
+/// in-memory diagnostic). Held by `coco_inference::QueryResult` /
+/// `StreamEvent::Finish` and the `@ai-sdk` stream part, where `raw` is
+/// read; persisted coco-rs types store the bare [`UnifiedFinishReason`]
+/// projection instead. `unified` is the field higher layers match on.
+///
+/// **Boundary rule** (why some carriers are `FinishReason` and others
+/// are the bare enum): a value stays `FinishReason` only as far as the
+/// last consumer that reads `.raw`, then projects to
+/// [`UnifiedFinishReason`]. The non-streaming `QueryResult` keeps the
+/// struct because its raw reader (the side-query `Other` mapping in
+/// `app/cli`) sits far downstream; the streaming `StreamOutcome`
+/// projects at the `engine_stream_consume` seam, immediately after the
+/// raw is logged, since nothing past that seam reads it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct FinishReason {
-    /// Typed unified finish reason — set once at the
-    /// provider-adapter seam.
+    /// Typed unified finish reason — set once at the provider-adapter
+    /// seam. Also the **wire form**: a `FinishReason` serializes as
+    /// *just* this bare snake_case string (`"end_turn"` / `"other"`),
+    /// matching `@ai-sdk`'s string `finishReason` on the stream part
+    /// (`LanguageModelV4StreamPart::Finish`) — see
+    /// `#[serde(transparent)]`. `FinishReason` derives serde **only**
+    /// because that `@ai-sdk` stream-part mirror embeds it; coco-rs
+    /// consumes stream parts in-memory and never serializes them at
+    /// runtime, so the wire form is type-fidelity, not a hot path.
     pub unified: UnifiedFinishReason,
 
-    /// Provider-original raw value (e.g. Anthropic `refusal`,
-    /// OpenAI `content_filter`, Google `RECITATION`). Useful for
-    /// debugging / telemetry — not used for behavioral decisions
-    /// (those go through [`Self::unified`]).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Provider-original raw value, carried **in memory** for every
+    /// variant — not just [`UnifiedFinishReason::Other`] (e.g.
+    /// Anthropic `refusal` / `compaction`, OpenAI `content_filter`,
+    /// Google `RECITATION`). [`Self::unified`] is a lossy projection;
+    /// `raw` lets in-process consumers audit a wrong `raw → unified`
+    /// mapping — `coco_inference::QueryResult` carries it for the
+    /// side-query `Other` surfacing, and the [`fmt::Display`] impl logs
+    /// `other(compaction)` from it.
+    ///
+    /// `#[serde(skip)]` — a **live diagnostic, never serialized**. The
+    /// wire form is the bare `unified` string, so `raw` is `None` after
+    /// any deserialize round-trip (and when SDK-synthesized). Persisted
+    /// coco-rs types (`AssistantMessage`, `CompletedOutcome`) store the
+    /// bare [`UnifiedFinishReason`] projection, not this struct — so no
+    /// `JsonSchema` impl is needed here.
+    #[serde(skip)]
     pub raw: Option<String>,
 }
 
@@ -175,16 +213,6 @@ impl FinishReason {
     /// Create an `EndTurn` finish reason.
     pub fn end_turn() -> Self {
         Self::new(UnifiedFinishReason::EndTurn)
-    }
-
-    /// Create a `MaxTokens` finish reason.
-    pub fn max_tokens() -> Self {
-        Self::new(UnifiedFinishReason::MaxTokens)
-    }
-
-    /// Create a content filter finish reason.
-    pub fn content_filter() -> Self {
-        Self::new(UnifiedFinishReason::ContentFilter)
     }
 
     /// Create a `ToolUse` finish reason.
@@ -238,6 +266,29 @@ impl FinishReason {
 impl From<UnifiedFinishReason> for FinishReason {
     fn from(unified: UnifiedFinishReason) -> Self {
         Self::new(unified)
+    }
+}
+
+impl fmt::Display for FinishReason {
+    /// The **log** form: the [`UnifiedFinishReason`] wire string,
+    /// annotated with the provider-original raw in parens whenever raw
+    /// differs from coco's wire name. That difference is **common**, not
+    /// rare — it fires on every normal OpenAI turn (`end_turn(stop)`)
+    /// and Google turn (`end_turn(STOP)`), not just on `other(compaction)`
+    /// / `content_filter(refusal)`. The annotation makes a wrong
+    /// `raw → unified` mapping visible inline in logs.
+    ///
+    /// For the **raw-free wire value** (error messages, SDK projections),
+    /// use `self.unified.`[`as_wire_str`](UnifiedFinishReason::as_wire_str)
+    /// instead — `Display` is for humans reading logs, `as_wire_str` is
+    /// the canonical machine value.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.raw {
+            Some(raw) if raw != self.unified.as_wire_str() => {
+                write!(f, "{}({raw})", self.unified)
+            }
+            _ => fmt::Display::fmt(&self.unified, f),
+        }
     }
 }
 

@@ -28,11 +28,13 @@ use coco_cli::session_runtime;
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    coco_cli::startup_profile::init();
 
     // Bind the handle for the lifetime of `main` so the non-blocking
     // file appender flushes on drop. `Mode::Skip` (status/doctor/etc.)
     // returns `None` and never installs a global subscriber.
     let _tracing_handle = tracing_init::install(&cli)?;
+    coco_cli::startup_profile::mark("subscriber_installed");
 
     tracing::info!(
         target: "coco_cli::startup",
@@ -268,6 +270,7 @@ async fn main() -> Result<()> {
         let cwd = std::env::current_dir()?;
         let plan: Option<ResumePlan> =
             resume_resolver::resolve(&cli, &global_config::config_home(), &cwd)?;
+        coco_cli::startup_profile::mark("resume_resolved");
         tracing::info!(
             target: "coco_cli::startup",
             mode = "tui",

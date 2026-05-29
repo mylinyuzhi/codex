@@ -113,7 +113,9 @@ struct ValidateRawExecuteStrippedBashTool;
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -127,13 +129,6 @@ impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
 
     fn description(&self, _: &serde_json::Value, _: &crate::traits::DescriptionOptions) -> String {
         String::new()
-    }
-
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema {
-            properties: Default::default(),
-            required: Vec::new(),
-        }
     }
 
     fn validate_input(
@@ -213,7 +208,9 @@ struct EchoTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for EchoTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -225,12 +222,6 @@ impl crate::traits::Tool for EchoTool {
     }
     fn description(&self, _: &serde_json::Value, _: &crate::traits::DescriptionOptions) -> String {
         String::new()
-    }
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema {
-            properties: Default::default(),
-            required: Vec::new(),
-        }
     }
     fn validate_input(
         &self,

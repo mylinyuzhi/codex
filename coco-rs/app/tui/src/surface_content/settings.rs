@@ -3,8 +3,8 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::settings;
-use crate::presentation::styles::UiStyles;
 use crate::widgets::settings_panel::SettingsPanelState;
+use coco_tui_ui::style::UiStyles;
 
 pub(super) fn settings_surface_content(
     s: &SettingsPanelState,

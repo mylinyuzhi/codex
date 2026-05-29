@@ -3,20 +3,20 @@
 use std::time::Instant;
 
 use crate::FrameLayout;
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
-#[cfg(test)]
-use crate::surface::compatibility::TerminalCompatibility;
 use crate::surface::history_driver::SurfaceHistoryDriver;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
 use crate::surface::history_lines::HistoryLineRenderOptions;
 #[cfg(test)]
 use crate::surface::modal::ModalSurfaceState;
 use crate::surface::modal::SurfaceFramePlan;
-use crate::surface::terminal::SurfaceBackend;
-use crate::surface::terminal::SurfaceTerminal;
 use crate::surface::viewport::render_interactive_viewport;
 use crate::widgets::TranscriptLayoutIndex;
+#[cfg(test)]
+use coco_tui_ui::engine::compatibility::TerminalCompatibility;
+use coco_tui_ui::engine::terminal::SurfaceBackend;
+use coco_tui_ui::engine::terminal::SurfaceTerminal;
+use coco_tui_ui::style::UiStyles;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct NativeSurfaceController {
@@ -29,7 +29,7 @@ pub(crate) struct NativeSurfaceController {
 struct HistoryDisplayState {
     show_system_reminders: bool,
     show_thinking: bool,
-    syntax_highlighting: crate::display_settings::SyntaxHighlighting,
+    syntax_highlighting: coco_tui_ui::display::SyntaxHighlighting,
     reasoning_metadata_revision: u64,
 }
 

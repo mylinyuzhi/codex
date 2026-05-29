@@ -36,7 +36,9 @@ struct ConfigurableTool {
 
 #[async_trait::async_trait]
 impl crate::traits::Tool for ConfigurableTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -48,12 +50,6 @@ impl crate::traits::Tool for ConfigurableTool {
     }
     fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
         "configurable".into()
-    }
-    fn input_schema(&self) -> coco_types::ToolInputSchema {
-        coco_types::ToolInputSchema {
-            properties: Default::default(),
-            required: Vec::new(),
-        }
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         self.safe

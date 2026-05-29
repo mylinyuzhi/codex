@@ -4,10 +4,10 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use crate::i18n::locale_test_guard;
-use crate::presentation::styles::UiStyles;
 use crate::state::PermissionDetail;
 use crate::state::QuestionOption;
 use crate::theme::Theme;
+use coco_tui_ui::style::UiStyles;
 
 fn permission_prompt(detail: PermissionDetail) -> PermissionPromptState {
     let display_input = match &detail {

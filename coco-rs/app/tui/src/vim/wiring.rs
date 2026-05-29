@@ -18,7 +18,7 @@ use super::VimRuntime;
 use super::VimState;
 use super::transitions;
 use super::transitions::VimAction;
-use crate::widgets::TextArea;
+use coco_tui_ui::widgets::TextArea;
 
 /// Dispatch a printable key through the vim state machine while in Normal
 /// mode. In Insert mode the call is a no-op (`VimAction::Unhandled`) — the

@@ -6,9 +6,9 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-use crate::presentation::diff::DiffLineView;
-use crate::presentation::diff::diff_line_views;
-use crate::presentation::styles::UiStyles;
+use crate::diff::DiffLineView;
+use crate::diff::diff_line_views;
+use crate::style::UiStyles;
 
 // ── Box-drawing characters ──────────────────────────────────────────
 

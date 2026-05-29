@@ -10,9 +10,7 @@ use std::time::Instant;
 
 use ratatui::layout::Size;
 
-use crate::constants;
 use crate::display_settings::DisplaySettings;
-use crate::double_press::DoublePressTracker;
 use crate::keybinding_resolver::KeybindingHandle;
 use crate::state::interaction::AtPopupState;
 use crate::state::interaction::ComposerPopupState;
@@ -26,6 +24,8 @@ use crate::theme::Theme;
 use crate::theme::ThemeRuntimeState;
 use crate::theme::ThemeSetting;
 use crate::widgets::suggestion_popup::SuggestionItem;
+use coco_tui_ui::constants;
+use coco_tui_ui::double_press::DoublePressTracker;
 
 /// Exit keys subject to double-press confirmation. Mirrors TS
 /// `ExitState::keyName` (`hooks/useExitOnCtrlCD.ts`).
@@ -58,7 +58,7 @@ pub struct UiState {
     /// Multi-line input state.
     pub input: InputState,
     /// Paste pill manager for tracking pasted content (text and images).
-    pub paste_manager: crate::paste::PasteManager,
+    pub paste_manager: coco_tui_ui::paste::PasteManager,
     /// Chat scroll offset (lines from bottom).
     pub scroll_offset: i32,
     /// Current focus target.
@@ -136,7 +136,7 @@ pub struct UiState {
     /// process that wrote it, so dropping the `arboard::Clipboard` handle
     /// would wipe the copied text. The lease is `None` on other platforms
     /// and on the OSC 52 path where no in-process ownership is required.
-    pub clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
+    pub clipboard_lease: Option<coco_tui_ui::clipboard_copy::ClipboardLease>,
     /// Active autocomplete suggestions (slash commands, @-mentions, etc.).
     /// `Some(_)` drives the keybinding bridge into `Autocomplete` context
     /// and renders a popup above the input. Recomputed after every input
@@ -192,7 +192,7 @@ pub struct StashedInput {
     /// time. Restored on pop so pill labels in the stashed `text`
     /// (e.g. `[Pasted text #1]`) still resolve to the original
     /// content. Empty `Vec` when the user hadn't pasted anything.
-    pub paste_entries: Vec<crate::paste::PasteEntry>,
+    pub paste_entries: Vec<coco_tui_ui::paste::PasteEntry>,
 }
 
 impl UiState {
@@ -201,7 +201,7 @@ impl UiState {
         let theme_state = ThemeRuntimeState::default();
         Self {
             input: InputState::new(),
-            paste_manager: crate::paste::PasteManager::new(),
+            paste_manager: coco_tui_ui::paste::PasteManager::new(),
             scroll_offset: 0,
             focus: FocusTarget::Input,
             interaction: InteractionPaneState::new(),
@@ -632,7 +632,7 @@ impl PromptMode {
 pub struct InputState {
     /// The editable buffer + cursor. Edit it directly for byte-offset
     /// access; the surrounding `InputState` API only owns history + vim.
-    pub textarea: crate::widgets::TextArea,
+    pub textarea: coco_tui_ui::widgets::TextArea,
     /// Command history ordered by frecency (most-relevant first).
     pub history: Vec<HistoryEntry>,
     /// Current history navigation index into `history` (None = live draft).
@@ -645,7 +645,7 @@ impl InputState {
     /// Create empty input.
     pub fn new() -> Self {
         Self {
-            textarea: crate::widgets::TextArea::new(),
+            textarea: coco_tui_ui::widgets::TextArea::new(),
             history: Vec::new(),
             history_index: None,
             vim: crate::vim::VimRuntime::new(),

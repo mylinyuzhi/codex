@@ -1,9 +1,12 @@
-//! Tests for `derive_input_schema` / `derive_output_schema`.
+//! Tests for `derive_input_schema_value` / `derive_output_schema`.
 //!
-//! Each test fixes one expected behaviour of the derive helper so the
-//! 43 tool migrations that depend on this module land on stable
-//! contract. If schemars changes its output shape across versions
-//! these tests catch it before it cascades through the tool surface.
+//! Each test fixes one expected behaviour of the derive helpers so the
+//! tool migrations that depend on this module land on a stable contract.
+//! If schemars changes its output shape across versions these tests catch
+//! it before it cascades through the tool surface.
+//!
+//! `derive_input_schema_value` returns the full JSON Schema document, so
+//! assertions read `["properties"]` / `["required"]` off the `Value`.
 //!
 //! Test naming: `test_<concern>_<expected_outcome>`.
 
@@ -13,6 +16,30 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+
+// ──────────────────────────────────────────────────────────────────
+// Accessors over the derived full-document `Value`
+// ──────────────────────────────────────────────────────────────────
+
+/// The `required` list as owned strings (empty when the key is absent).
+fn required_list(schema: &serde_json::Value) -> Vec<String> {
+    schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The `properties` object (`None` when the key is absent).
+fn properties(schema: &serde_json::Value) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+}
 
 // ──────────────────────────────────────────────────────────────────
 // Fixture types
@@ -80,26 +107,26 @@ enum TaggedOutput {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// derive_input_schema — basics
+// derive_input_schema_value — basics
 // ──────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_required_field_appears_in_required_list() {
-    let schema = derive_input_schema::<SimpleInput>();
+    let schema = derive_input_schema_value::<SimpleInput>();
+    let required = required_list(&schema);
     assert!(
-        schema.required.contains(&"pattern".to_string()),
-        "expected `pattern` in required, got: {:?}",
-        schema.required
+        required.contains(&"pattern".to_string()),
+        "expected `pattern` in required, got: {required:?}"
     );
 }
 
 #[test]
 fn test_option_field_not_in_required_list() {
-    let schema = derive_input_schema::<SimpleInput>();
+    let schema = derive_input_schema_value::<SimpleInput>();
+    let required = required_list(&schema);
     assert!(
-        !schema.required.contains(&"path".to_string()),
-        "`path: Option<String>` must not appear in required, got: {:?}",
-        schema.required
+        !required.contains(&"path".to_string()),
+        "`path: Option<String>` must not appear in required, got: {required:?}"
     );
 }
 
@@ -108,27 +135,27 @@ fn test_serde_default_field_not_in_required_list() {
     // `#[serde(default)] limit: i32` — value-typed but optional via
     // serde default. Schemars marks fields not in `required` when
     // `#[serde(default)]` is present.
-    let schema = derive_input_schema::<WithDefault>();
+    let schema = derive_input_schema_value::<WithDefault>();
+    let required = required_list(&schema);
     assert!(
-        !schema.required.contains(&"limit".to_string()),
-        "`#[serde(default)]` field must not appear in required, got: {:?}",
-        schema.required
+        !required.contains(&"limit".to_string()),
+        "`#[serde(default)]` field must not appear in required, got: {required:?}"
     );
 }
 
 #[test]
 fn test_properties_keys_present_for_all_fields() {
-    let schema = derive_input_schema::<SimpleInput>();
-    assert!(schema.properties.contains_key("pattern"));
-    assert!(schema.properties.contains_key("path"));
+    let schema = derive_input_schema_value::<SimpleInput>();
+    let props = properties(&schema).expect("object schema has properties");
+    assert!(props.contains_key("pattern"));
+    assert!(props.contains_key("path"));
 }
 
 #[test]
 fn test_field_description_propagates_from_doc_comment() {
-    let schema = derive_input_schema::<SimpleInput>();
-    let pattern_schema = schema
-        .properties
-        .get("pattern")
+    let schema = derive_input_schema_value::<SimpleInput>();
+    let pattern_schema = properties(&schema)
+        .and_then(|p| p.get("pattern"))
         .expect("pattern property must exist");
     let description = pattern_schema
         .get("description")
@@ -143,10 +170,9 @@ fn test_field_description_propagates_from_doc_comment() {
 
 #[test]
 fn test_enum_field_emits_enum_values_in_schema() {
-    let schema = derive_input_schema::<WithEnum>();
-    let mode_schema = schema
-        .properties
-        .get("mode")
+    let schema = derive_input_schema_value::<WithEnum>();
+    let mode_schema = properties(&schema)
+        .and_then(|p| p.get("mode"))
         .expect("mode property must exist");
     let enum_values = mode_schema
         .get("enum")
@@ -212,9 +238,10 @@ struct SnakeCaseInput {
 
 #[test]
 fn test_snake_case_rename_applies_to_property_keys() {
-    let schema = derive_input_schema::<SnakeCaseInput>();
-    assert!(schema.properties.contains_key("run_in_background"));
-    assert!(schema.properties.contains_key("pattern"));
+    let schema = derive_input_schema_value::<SnakeCaseInput>();
+    let props = properties(&schema).expect("object schema has properties");
+    assert!(props.contains_key("run_in_background"));
+    assert!(props.contains_key("pattern"));
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -252,9 +279,8 @@ fn test_tagged_output_enum_emits_discriminator_field() {
 
 #[test]
 fn test_input_schema_value_returns_full_object_envelope() {
-    // The full Value path keeps the `type: object` envelope — this
-    // is what the validator wants to see (see
-    // `crate::schema::effective_tool_schema`).
+    // The full Value path keeps the `type: object` envelope — this is
+    // what `ToolInputSchema::from_input_type` closes and compiles.
     let value = derive_input_schema_value::<SimpleInput>();
     assert_eq!(value.get("type"), Some(&json!("object")));
     assert!(value.get("properties").is_some());
@@ -269,7 +295,13 @@ struct EmptyInput {}
 
 #[test]
 fn test_empty_struct_yields_empty_properties_and_required() {
-    let schema = derive_input_schema::<EmptyInput>();
-    assert!(schema.properties.is_empty());
-    assert!(schema.required.is_empty());
+    let schema = derive_input_schema_value::<EmptyInput>();
+    assert!(
+        properties(&schema).is_none_or(serde_json::Map::is_empty),
+        "empty struct must yield no properties, got: {schema}"
+    );
+    assert!(
+        required_list(&schema).is_empty(),
+        "empty struct must yield no required entries, got: {schema}"
+    );
 }

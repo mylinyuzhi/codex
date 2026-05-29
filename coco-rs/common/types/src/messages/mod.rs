@@ -57,6 +57,7 @@ pub use hook_result::HookResult;
 pub use message::ApiError;
 pub use message::AssistantMessage;
 pub use message::AttachmentMessage;
+pub use message::FinishReason;
 pub use message::MAX_SKILL_DISCOVERY_RENDERED_CHARS;
 pub use message::Message;
 pub use message::MessageKind;

@@ -110,9 +110,12 @@ async fn enter_plan_mode_idempotent_does_not_stash_self() {
 
 #[test]
 fn enter_plan_mode_schema_has_no_parameters() {
-    let schema = <EnterPlanModeTool as DynTool>::input_schema(&EnterPlanModeTool);
+    let schema =
+        <EnterPlanModeTool as DynTool>::runtime_validation_schema(&EnterPlanModeTool).as_value();
     assert!(
-        schema.properties.is_empty(),
+        schema["properties"]
+            .as_object()
+            .is_none_or(|p| p.is_empty()),
         "EnterPlanMode takes no parameters"
     );
 }
@@ -613,8 +616,9 @@ async fn exit_plan_mode_injected_disk_plan_not_marked_as_user_edit() {
 
 #[test]
 fn exit_plan_mode_schema_exposes_allowed_prompts() {
-    let schema = <ExitPlanModeTool as DynTool>::input_schema(&ExitPlanModeTool);
-    assert!(schema.properties.contains_key("allowedPrompts"));
+    let schema =
+        <ExitPlanModeTool as DynTool>::runtime_validation_schema(&ExitPlanModeTool).as_value();
+    assert!(schema["properties"].get("allowedPrompts").is_some());
 }
 
 #[test]

@@ -20,6 +20,7 @@ coco-file-watch.workspace = true
 coco-git.workspace = true
 coco-keybindings = { workspace = true, features = ["crossterm", "loader"] }
 coco-subagent.workspace = true
+coco-tui-ui.workspace = true
 coco-utils-string.workspace = true
 dirs.workspace = true
 
@@ -47,6 +48,7 @@ arboard.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+coco-tui-ui = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 insta.workspace = true
 pretty_assertions.workspace = true

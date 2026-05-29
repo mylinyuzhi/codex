@@ -348,6 +348,12 @@ pub struct SdkServerState {
     /// `RwLock` (not `Mutex`) because `agents()` in `CliInitializeBootstrap`
     /// reads concurrently with other initialize-time accessors.
     pub pending_sdk_agents: RwLock<Vec<coco_types::AgentDefinition>>,
+
+    /// Last `RegisterMcpToolsReport` per MCP server (v4.2). Written by the
+    /// register call sites; read by `handle_mcp_status` to source the
+    /// registered `tool_count` + skipped / tombstoned tools. Cleared on
+    /// disconnect; bounded by the number of distinct server names seen.
+    pub mcp_registration_reports: RwLock<HashMap<String, coco_tools::RegisterMcpToolsReport>>,
 }
 
 impl Default for SdkServerState {
@@ -374,11 +380,32 @@ impl Default for SdkServerState {
             bypass_permissions_available: std::sync::atomic::AtomicBool::new(false),
             session_runtime: RwLock::new(None),
             pending_sdk_agents: RwLock::new(Vec::new()),
+            mcp_registration_reports: RwLock::new(HashMap::new()),
         }
     }
 }
 
 impl SdkServerState {
+    /// Persist the last MCP-registration report for `server` (v4.2). Read by
+    /// `handle_mcp_status` to surface the registered `tool_count` + skipped /
+    /// tombstoned tools. Overwritten on every (re)connect.
+    pub async fn record_mcp_registration_report(
+        &self,
+        server: &str,
+        report: coco_tools::RegisterMcpToolsReport,
+    ) {
+        self.mcp_registration_reports
+            .write()
+            .await
+            .insert(server.to_string(), report);
+    }
+
+    /// Drop the stored report for `server` on disconnect, so `mcp/status`
+    /// falls back to the advertised count + empty skipped/tombstoned lists.
+    pub async fn clear_mcp_registration_report(&self, server: &str) {
+        self.mcp_registration_reports.write().await.remove(server);
+    }
+
     /// Register an expected `approval/resolve`. Returns the receiver the
     /// agent-side code should `await` to get the client's decision.
     ///

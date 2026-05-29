@@ -20,11 +20,11 @@ use crate::surface::history_lines::DEFAULT_MAX_REFLOW_ROWS;
 use crate::surface::history_lines::HistoryLineRenderOptions;
 use crate::surface::history_lines::render_finalized_history_lines;
 use crate::surface::history_lines::render_replay_history_lines;
-use crate::surface::history_reflow::HistoryReflowState;
-use crate::surface::history_reflow::HistoryViewportChange;
-use crate::surface::history_reflow::HistoryWidthChange;
-use crate::surface::terminal::SurfaceBackend;
-use crate::surface::terminal::SurfaceTerminal;
+use coco_tui_ui::engine::history_reflow::HistoryReflowState;
+use coco_tui_ui::engine::history_reflow::HistoryViewportChange;
+use coco_tui_ui::engine::history_reflow::HistoryWidthChange;
+use coco_tui_ui::engine::terminal::SurfaceBackend;
+use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SurfaceHistoryDriver {

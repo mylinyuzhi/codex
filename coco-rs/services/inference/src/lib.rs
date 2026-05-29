@@ -28,7 +28,6 @@ pub mod retry;
 pub mod role_client_cache;
 pub mod stream;
 pub mod thinking_convert;
-pub mod tool_schemas;
 pub mod usage;
 
 pub use build_call_options::PerCallOverrides;
@@ -82,13 +81,6 @@ pub use stream::TurnPart;
 pub use stream::default_process_stream_config;
 pub use stream::synthetic_stream_from_content;
 pub use thinking_convert::to_extra_body;
-pub use tool_schemas::GeneratedSchemas;
-pub use tool_schemas::ToolSchemaOrigin;
-pub use tool_schemas::ToolSchemaSource;
-pub use tool_schemas::estimate_schema_tokens;
-pub use tool_schemas::filter_schemas_by_model;
-pub use tool_schemas::generate_tool_schemas;
-pub use tool_schemas::merge_tool_schemas;
 pub use usage::UsageAccumulator;
 
 // ─── Vercel-ai re-export hub ──────────────────────────────────────────────

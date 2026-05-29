@@ -24,7 +24,6 @@ use coco_types::AppStatePatch;
 use coco_types::ExpandedView;
 use coco_types::Feature;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -248,6 +247,7 @@ pub struct TaskCreateTool;
 #[async_trait::async_trait]
 impl Tool for TaskCreateTool {
     type Input = TaskCreateInput;
+    coco_tool_runtime::impl_runtime_schema!(TaskCreateInput);
     /// Output is a TS-shaped `{task: {...}}` envelope built by
     /// `project_create`. Kept as `Value` because the projection helper
     /// is shared across the 7 task tools and they share field-shape
@@ -371,6 +371,7 @@ pub struct TaskGetTool;
 #[async_trait::async_trait]
 impl Tool for TaskGetTool {
     type Input = TaskGetInput;
+    coco_tool_runtime::impl_runtime_schema!(TaskGetInput);
     type Output = Value;
 
     fn id(&self) -> ToolId {
@@ -490,6 +491,7 @@ pub struct TaskListTool;
 #[async_trait::async_trait]
 impl Tool for TaskListTool {
     type Input = TaskListInput;
+    coco_tool_runtime::impl_runtime_schema!(TaskListInput);
     type Output = Value;
 
     fn id(&self) -> ToolId {
@@ -643,6 +645,7 @@ pub struct TaskUpdateTool;
 #[async_trait::async_trait]
 impl Tool for TaskUpdateTool {
     type Input = TaskUpdateInput;
+    coco_tool_runtime::impl_runtime_schema!(TaskUpdateInput);
     type Output = Value;
 
     fn id(&self) -> ToolId {
@@ -1044,6 +1047,7 @@ pub struct TaskStopTool;
 #[async_trait::async_trait]
 impl Tool for TaskStopTool {
     type Input = TaskStopInput;
+    coco_tool_runtime::impl_runtime_schema!(TaskStopInput);
     type Output = Value;
 
     fn id(&self) -> ToolId {
@@ -1158,6 +1162,7 @@ pub struct TaskOutputTool;
 #[async_trait::async_trait]
 impl Tool for TaskOutputTool {
     type Input = TaskOutputInput;
+    coco_tool_runtime::impl_runtime_schema!(TaskOutputInput);
     type Output = Value;
 
     fn id(&self) -> ToolId {
@@ -1370,6 +1375,41 @@ pub struct TodoWriteTool;
 #[async_trait::async_trait]
 impl Tool for TodoWriteTool {
     type Input = TodoWriteInput;
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            // Derive from `TodoWriteInput`, then inject the `status` enum
+            // constraint: `TodoRecord.status` is a `String` in Rust (TUI/store
+            // paths pre-date this typing pass) so schemars can't synthesize the
+            // enum. TS `TodoItemSchema.status: z.enum([...])` restored here.
+            let mut derived = coco_tool_runtime::derive_input_schema_value::<TodoWriteInput>();
+            if let Some(status) = derived
+                .pointer_mut("/properties/todos/items/properties/status")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                status.insert(
+                    "enum".into(),
+                    serde_json::json!(["pending", "in_progress", "completed"]),
+                );
+            }
+            let properties = derived
+                .get("properties")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let required = derived
+                .get("required")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": properties,
+                "required": required,
+            }))
+            .expect("TodoWrite input schema must be a valid object schema")
+        })
+    }
     type Output = Value;
 
     fn id(&self) -> ToolId {
@@ -1391,28 +1431,6 @@ impl Tool for TodoWriteTool {
     }
     fn search_hint(&self) -> Option<&str> {
         Some("write the per-agent todo checklist for tracking work")
-    }
-
-    /// Override the auto-derived schema to inject the `status` enum
-    /// constraint. `TodoRecord.status` is a `String` in Rust (used
-    /// across TUI and store paths that pre-date this typing pass),
-    /// so schemars doesn't synthesize the enum on its own. TS
-    /// `TodoItemSchema.status: z.enum(['pending','in_progress','completed'])`
-    /// is restored here so the model gets the same tight schema.
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut schema = coco_tool_runtime::derive_input_schema::<TodoWriteInput>();
-        if let Some(todos) = schema.properties.get_mut("todos")
-            && let Some(items) = todos.get_mut("items")
-            && let Some(props) = items.get_mut("properties")
-            && let Some(status) = props.get_mut("status")
-            && let Some(obj) = status.as_object_mut()
-        {
-            obj.insert(
-                "enum".into(),
-                serde_json::json!(["pending", "in_progress", "completed"]),
-            );
-        }
-        schema
     }
 
     /// TS parity: `TodoWriteTool.ts::mapToolResultToToolResultBlockParam`.

@@ -223,7 +223,6 @@ mod execute_tests {
     use coco_tool_runtime::ToolRegistry;
     use coco_tool_runtime::ToolUseContext;
     use coco_types::ToolId;
-    use coco_types::ToolInputSchema;
     use serde_json::Value;
     use serde_json::json;
     use std::sync::Arc;
@@ -239,6 +238,14 @@ mod execute_tests {
 
     #[async_trait]
     impl Tool for StubTool {
+        fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+            static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+                std::sync::OnceLock::new();
+            S.get_or_init(|| {
+                coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                    .expect("schema")
+            })
+        }
         // Migration scaffold: assoc types pinned to `Value`.
         type Input = serde_json::Value;
         type Output = serde_json::Value;
@@ -251,12 +258,6 @@ mod execute_tests {
         }
         fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
             self.desc.clone()
-        }
-        fn input_schema(&self) -> ToolInputSchema {
-            ToolInputSchema {
-                properties: Default::default(),
-                required: Vec::new(),
-            }
         }
         fn search_hint(&self) -> Option<&str> {
             self.hint

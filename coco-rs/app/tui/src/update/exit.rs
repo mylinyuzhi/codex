@@ -20,8 +20,8 @@
 
 use std::time::Instant;
 
-use crate::double_press::Outcome;
 use crate::state::AppState;
+use coco_tui_ui::double_press::Outcome;
 
 /// What `update::handle_command` should do after `on_interrupt` /
 /// `on_request_exit` returns.

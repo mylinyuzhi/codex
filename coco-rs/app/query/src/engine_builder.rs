@@ -89,7 +89,6 @@ impl QueryEngine {
             fork_dispatcher: None,
             current_suggestion_abort: None,
             task_handle: None,
-            tool_schema_validator: coco_tool_runtime::ToolSchemaValidator::new(),
             tool_result_replacement_state: Arc::new(tokio::sync::RwLock::new(
                 coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX),
             )),

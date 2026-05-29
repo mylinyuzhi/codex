@@ -112,7 +112,7 @@ pub(super) fn handle(
             // is re-anchored at turn start; `Spinner.tsx:166`
             // `useState` initializer samples a verb once per turn.
             state.ui.ephemeral.start_turn(
-                crate::widgets::spinner_verbs::pick_verb_random(),
+                coco_tui_ui::widgets::spinner_verbs::pick_verb_random(),
                 state.clock.now(),
             );
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
@@ -1152,7 +1152,7 @@ fn on_turn_completed_outcome(state: &mut AppState, p: &coco_types::TurnEndedPara
     // typically want a ping when a long turn finishes in the background.
     // Skips when the terminal is focused to avoid pointless noise.
     if !state.ui.terminal_focused {
-        crate::widgets::notification::notify(
+        coco_tui_ui::widgets::notification::notify(
             &t!("notification.app_name"),
             &t!("notification.turn_complete"),
         );

@@ -26,8 +26,6 @@ use std::sync::Arc;
 use coco_llm_types::ToolCallPart;
 use coco_llm_types::ToolInputInvalidReason;
 use coco_tool_runtime::SchemaIssue;
-use coco_tool_runtime::SchemaValidationError;
-use coco_tool_runtime::ToolSchemaValidator;
 use coco_tool_runtime::traits::DynTool;
 use serde_json::Value;
 
@@ -61,16 +59,12 @@ pub fn normalize_value_string(input: &mut Value) {
 ///
 /// Skipped when the call is already invalid from wire parsing — the
 /// earlier provider-side classification stands.
-pub async fn validate_tool_call(
-    tc: &mut ToolCallPart,
-    tool: Option<&Arc<dyn DynTool>>,
-    validator: &ToolSchemaValidator,
-) {
+pub fn validate_tool_call(tc: &mut ToolCallPart, tool: Option<&Arc<dyn DynTool>>) {
     if tc.invalid {
         return;
     }
 
-    // 1. NoSuchTool — short-circuit before touching schema cache.
+    // 1. NoSuchTool — short-circuit before touching the schema.
     let Some(tool) = tool else {
         tc.invalid = true;
         tc.invalid_reason = Some(ToolInputInvalidReason::NoSuchTool {
@@ -82,36 +76,14 @@ pub async fn validate_tool_call(
     // 2. Value::String recovery (mirrors TS recursive-parse).
     normalize_value_string(&mut tc.input);
 
-    // 3. Schema validation — fetch structured issues so we can produce
-    //    TS-parity formatted output.
-    match validator.validate_collect(tool.as_ref(), &tc.input).await {
-        Ok(Ok(())) => {}
-        Ok(Err(issues)) => {
-            let message = format_schema_error(&tc.tool_name, &issues);
-            tc.invalid = true;
-            tc.invalid_reason = Some(ToolInputInvalidReason::SchemaViolation { message });
-        }
-        Err(SchemaValidationError::SchemaCompileFailed { message }) => {
-            // Tool-author bug: schema didn't compile. Don't mark the
-            // model's call invalid — the model couldn't have done
-            // anything different.
-            tracing::error!(
-                target: "coco_query::tool_input",
-                tool = %tc.tool_name,
-                %message,
-                "tool schema failed to compile; skipping schema-validation validation"
-            );
-        }
-        Err(SchemaValidationError::Rejected { .. }) => {
-            // `validate_collect` returns this only on the compile
-            // path, never on the validate path; treat as compile
-            // failure for safety.
-            tracing::error!(
-                target: "coco_query::tool_input",
-                tool = %tc.tool_name,
-                "unexpected Rejected from validate_collect"
-            );
-        }
+    // 3. Schema validation — synchronous and lock-free; the validator is
+    //    owned by the schema (v4.2). A schema-compile failure is impossible
+    //    here: a tool is only registered if its schema compiled at
+    //    construction, so the only outcomes are clean or classified issues.
+    if let Err(issues) = tool.runtime_validation_schema().validate(&tc.input) {
+        let message = format_schema_error(&tc.tool_name, &issues);
+        tc.invalid = true;
+        tc.invalid_reason = Some(ToolInputInvalidReason::SchemaViolation { message });
     }
 }
 

@@ -1,10 +1,8 @@
 use coco_messages::ToolResult;
 use coco_types::ToolId;
-use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::HashMap;
 
 use super::*;
 
@@ -13,7 +11,9 @@ struct EchoTool;
 
 #[async_trait::async_trait]
 impl Tool for EchoTool {
-    // Migration scaffold: assoc types pinned to `Value`.
+    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+        crate::schema::test_runtime_schema()
+    } // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
@@ -27,13 +27,6 @@ impl Tool for EchoTool {
 
     fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
         "Echoes input back".into()
-    }
-
-    fn input_schema(&self) -> ToolInputSchema {
-        ToolInputSchema {
-            properties: HashMap::new(),
-            required: Vec::new(),
-        }
     }
 
     fn is_read_only(&self, _input: &Value) -> bool {
@@ -102,6 +95,9 @@ fn test_is_mcp_derives_from_mcp_info() {
     struct McpStub;
     #[async_trait::async_trait]
     impl Tool for McpStub {
+        fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+            crate::schema::test_runtime_schema()
+        }
         // Migration scaffold: assoc types pinned to `Value`.
         type Input = serde_json::Value;
         type Output = serde_json::Value;
@@ -114,12 +110,6 @@ fn test_is_mcp_derives_from_mcp_info() {
         }
         fn description(&self, _: &serde_json::Value, _: &DescriptionOptions) -> String {
             "stub".into()
-        }
-        fn input_schema(&self) -> coco_types::ToolInputSchema {
-            coco_types::ToolInputSchema {
-                properties: std::collections::HashMap::new(),
-                required: Vec::new(),
-            }
         }
         fn mcp_info(&self) -> Option<&super::super::McpToolInfo> {
             static INFO: std::sync::LazyLock<super::super::McpToolInfo> =

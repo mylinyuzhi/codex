@@ -215,7 +215,7 @@ pub(super) fn history_prev(state: &mut AppState) {
         .ui
         .input
         .textarea
-        .move_cursor_to_end_of_line(crate::widgets::EolBehavior::StayPut);
+        .move_cursor_to_end_of_line(coco_tui_ui::widgets::EolBehavior::StayPut);
 }
 
 /// Down arrow: step back toward the most-relevant entry; leaving the list
@@ -233,7 +233,7 @@ pub(super) fn history_next(state: &mut AppState) {
             .ui
             .input
             .textarea
-            .move_cursor_to_end_of_line(crate::widgets::EolBehavior::StayPut);
+            .move_cursor_to_end_of_line(coco_tui_ui::widgets::EolBehavior::StayPut);
     } else {
         state.ui.input.history_index = None;
         state.ui.input.textarea.set_text("");

@@ -22,7 +22,7 @@ use std::time::Instant;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
-use crate::frame_rate_limiter::FrameRateLimiter;
+use coco_tui_ui::frame_rate_limiter::FrameRateLimiter;
 
 /// Requester for scheduling future frame draws on the TUI event loop.
 ///

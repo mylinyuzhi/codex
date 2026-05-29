@@ -459,6 +459,7 @@ pub struct ToolSearchTool;
 #[async_trait::async_trait]
 impl Tool for ToolSearchTool {
     type Input = ToolSearchInput;
+    coco_tool_runtime::impl_runtime_schema!(ToolSearchInput);
     type Output = ToolSearchOutput;
 
     fn id(&self) -> ToolId {

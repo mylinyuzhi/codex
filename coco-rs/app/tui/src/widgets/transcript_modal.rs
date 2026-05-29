@@ -21,7 +21,6 @@ use crate::i18n::t;
 use crate::keybinding_bridge::KeybindingContext as TuiContext;
 use crate::presentation::layout::text_width;
 use crate::presentation::streaming::StreamingTailBlock;
-use crate::presentation::styles::UiStyles;
 use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::format_duration_seconds;
@@ -47,6 +46,7 @@ use crate::state::transcript_view::RenderedCell;
 use crate::state::transcript_view::SystemCellKind;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
+use coco_tui_ui::style::UiStyles;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TranscriptHeightCacheKey {
@@ -1139,7 +1139,7 @@ fn result_line(text: String, color: ratatui::style::Color) -> Line<'static> {
 
 fn tool_tone_color(
     tone: ToolNameTone,
-    styles: crate::presentation::styles::UiStyles<'_>,
+    styles: coco_tui_ui::style::UiStyles<'_>,
 ) -> ratatui::style::Color {
     match tone {
         ToolNameTone::ReadOnly => styles.success(),

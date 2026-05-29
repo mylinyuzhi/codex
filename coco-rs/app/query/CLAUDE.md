@@ -228,14 +228,21 @@ Three abnormal-stop branches feed this synthesizer:
    sessions escalate against the active Plan role, not Main.
 
 Layering: `coco-inference` is provider-agnostic and cannot construct
-`coco_messages::Message` — the typed `coco_inference::StopReason`
-(re-exported from extended `vercel_ai_provider::UnifiedFinishReason`,
-8 variants) flows through `StreamEvent::Finish` and `app/query` does
-the synthesis. The `coco_messages::StopReason` enum is a re-export of
-the same type — there is **one** stop_reason enum in the workspace,
-set once at the provider-adapter seam (Anthropic / OpenAI / Google /
-ByteDance / OpenAI-compat). No string parsing anywhere — the old
-`helpers::parse_stop_reason` was deleted as part of the unification.
+`coco_messages::Message` — the typed `FinishReason` struct
+(`{ unified, raw }`; `unified` = the 8-variant
+`vercel_ai_provider::UnifiedFinishReason`, re-exported as
+`coco_messages::StopReason`) flows through `StreamEvent::Finish`, where
+`engine_stream_consume` logs `.raw` (`Display`, e.g. `other(compaction)`)
+and then **projects to `.unified`**. From that seam on, the engine
+threads the bare `StopReason` enum — `withhold_reason_for_stop`, the
+`ContentFilter` check, and the committed `AssistantMessage` /
+`CompletedOutcome` all use the projection, not the struct. There is
+**one** stop_reason enum in the workspace, set once at the
+provider-adapter seam (Anthropic / OpenAI / Google / ByteDance /
+OpenAI-compat); `raw` is a transient in-memory diagnostic on the live
+carriers (`QueryResult` / `StreamEvent::Finish`), never persisted. No
+string parsing anywhere — the old `helpers::parse_stop_reason` was
+deleted as part of the unification.
 
 `ContextWindowExceeded` and `MaxTokens` are deliberately routed to
 distinct handlers (compaction vs. output-budget escalate). There is

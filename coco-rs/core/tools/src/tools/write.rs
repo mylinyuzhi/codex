@@ -71,6 +71,7 @@ pub struct WriteTool;
 #[async_trait::async_trait]
 impl Tool for WriteTool {
     type Input = WriteInput;
+    coco_tool_runtime::impl_runtime_schema!(WriteInput);
     type Output = WriteOutput;
 
     fn id(&self) -> ToolId {

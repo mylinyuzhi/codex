@@ -1,8 +1,8 @@
 //! Unit tests for [`StashNotice`] visibility + preview truncation.
 
 use super::StashNotice;
-use crate::presentation::styles::UiStyles;
 use crate::state::ui::StashedInput;
+use coco_tui_ui::style::UiStyles;
 use pretty_assertions::assert_eq;
 
 fn stash_with(text: &str) -> StashedInput {

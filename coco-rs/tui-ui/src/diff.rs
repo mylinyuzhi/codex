@@ -6,15 +6,15 @@
 
 /// Parsed line numbers from a unified diff hunk header.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HunkHeader {
-    pub(crate) old_start: i32,
-    pub(crate) new_start: i32,
-    pub(crate) label: String,
+pub struct HunkHeader {
+    pub old_start: i32,
+    pub new_start: i32,
+    pub label: String,
 }
 
 /// A single source-backed diff row before styling.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DiffLineView {
+pub enum DiffLineView {
     FileHeader {
         marker: &'static str,
         path: String,
@@ -54,7 +54,7 @@ enum DiffChunk<'a> {
 }
 
 /// Parse a unified diff `@@` line into old/new start positions.
-pub(crate) fn parse_hunk_header(line: &str) -> Option<HunkHeader> {
+pub fn parse_hunk_header(line: &str) -> Option<HunkHeader> {
     // Format: @@ -old_start[,old_count] +new_start[,new_count] @@ [label]
     let stripped = line.strip_prefix("@@ ")?;
     let end_idx = stripped.find(" @@")?;
@@ -84,7 +84,7 @@ pub(crate) fn parse_hunk_header(line: &str) -> Option<HunkHeader> {
     })
 }
 
-pub(crate) fn diff_line_views(diff_text: &str) -> Vec<DiffLineView> {
+pub fn diff_line_views(diff_text: &str) -> Vec<DiffLineView> {
     let raw_lines: Vec<&str> = diff_text.lines().collect();
     let chunks = classify_diff_lines(&raw_lines);
 

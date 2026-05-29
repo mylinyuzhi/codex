@@ -375,7 +375,7 @@ pub fn theme_config_path() -> PathBuf {
 }
 
 pub fn load_theme_runtime_or_default() -> ThemeLoadResult {
-    match ThemeRuntimeState::load_default_path() {
+    let mut result = match ThemeRuntimeState::load_default_path() {
         Ok(state) => ThemeLoadResult { state, error: None },
         Err(err) => ThemeLoadResult {
             state: ThemeRuntimeState::default(),
@@ -384,7 +384,15 @@ pub fn load_theme_runtime_or_default() -> ThemeLoadResult {
                 theme_config_path().display()
             )),
         },
-    }
+    };
+    // Quantize the active palette to the terminal's color depth (no-op on
+    // truecolor). Done at the app entry — NOT in `from_config`/`resolve` — so
+    // the loader's own tests keep asserting on true RGB values.
+    result
+        .state
+        .theme
+        .downsample(coco_tui_ui::color::color_capability());
+    result
 }
 
 pub fn save_theme_setting(setting: &ThemeSetting) -> Result<PathBuf> {

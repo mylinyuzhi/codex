@@ -20,11 +20,11 @@ use super::picker::PickerListView;
 use super::picker::PickerRow;
 #[cfg(test)]
 use super::picker::SpanBgOpt;
-use super::styles::UiStyles;
 use crate::i18n::t;
 use crate::state::ModelEntry;
 use crate::state::ModelPickerState;
 use crate::state::ProviderUnavailableReason;
+use coco_tui_ui::style::UiStyles;
 
 /// Canonical role order — must mirror `update::show::next_role` so the
 /// pill order matches Tab/Shift+Tab cycling.

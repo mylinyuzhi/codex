@@ -18,10 +18,10 @@ use ratatui::widgets::Widget;
 use std::io::Write;
 use unicode_width::UnicodeWidthStr;
 
-use crate::cursor::CursorClaim;
-use crate::surface::history_insert::render_history_lines;
+use super::CursorClaim;
+use super::history_insert::render_history_lines;
 
-pub(crate) trait SurfaceBackend: Backend {
+pub trait SurfaceBackend: Backend {
     fn clear_scrollback_and_screen(&mut self) -> Result<(), Self::Error> {
         self.clear_region(ClearType::All)
     }
@@ -79,7 +79,7 @@ impl SurfaceBackend for TestBackend {
 /// viewport geometry, draw buffers, cursor policy application, and visible
 /// history row accounting instead of relying on stock `Viewport::Inline`.
 #[derive(Debug)]
-pub(crate) struct SurfaceTerminal<B: SurfaceBackend> {
+pub struct SurfaceTerminal<B: SurfaceBackend> {
     backend: B,
     buffers: [Buffer; 2],
     current: usize,
@@ -91,7 +91,7 @@ pub(crate) struct SurfaceTerminal<B: SurfaceBackend> {
 }
 
 /// Frame passed to surface renderers.
-pub(crate) struct SurfaceFrame<'a> {
+pub struct SurfaceFrame<'a> {
     viewport_area: Rect,
     buffer: &'a mut Buffer,
     cursor_claim: Option<CursorClaim>,
@@ -99,17 +99,17 @@ pub(crate) struct SurfaceFrame<'a> {
 
 impl<'a> SurfaceFrame<'a> {
     /// Area of the retained viewport.
-    pub(crate) fn area(&self) -> Rect {
+    pub fn area(&self) -> Rect {
         self.viewport_area
     }
 
     /// Render a ratatui widget into the frame buffer.
-    pub(crate) fn render_widget<W: Widget>(&mut self, widget: W, area: Rect) {
+    pub fn render_widget<W: Widget>(&mut self, widget: W, area: Rect) {
         widget.render(area, self.buffer);
     }
 
     /// Claim the terminal cursor for this frame.
-    pub(crate) fn set_cursor_claim(&mut self, claim: CursorClaim) {
+    pub fn set_cursor_claim(&mut self, claim: CursorClaim) {
         self.cursor_claim = Some(claim);
     }
 }
@@ -120,7 +120,7 @@ where
 {
     /// Create a surface terminal using the backend's current size as the
     /// initial viewport.
-    pub(crate) fn new(backend: B) -> Result<Self, B::Error> {
+    pub fn new(backend: B) -> Result<Self, B::Error> {
         let screen_size = backend.size()?;
         let viewport_area = Rect::new(0, 0, screen_size.width, 0);
         Ok(Self {
@@ -135,46 +135,45 @@ where
         })
     }
 
-    /// Immutable backend access for tests and future surface adapters.
-    #[cfg(any(test, feature = "testing"))]
-    pub(crate) fn backend(&self) -> &B {
+    /// Immutable backend access for tests and surface adapters.
+    pub fn backend(&self) -> &B {
         &self.backend
     }
 
     /// Mutable backend access for integration glue.
-    pub(crate) fn backend_mut(&mut self) -> &mut B {
+    pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
     }
 
     /// Current retained viewport area.
-    pub(crate) fn viewport_area(&self) -> Rect {
+    pub fn viewport_area(&self) -> Rect {
         self.viewport_area
     }
 
     /// Row immediately after the finalized history owned by this surface.
-    pub(crate) fn history_bottom_y(&self) -> u16 {
+    pub fn history_bottom_y(&self) -> u16 {
         self.history_bottom_y
     }
 
     /// Last backend screen size observed by the surface terminal.
     #[cfg(test)]
-    pub(crate) fn last_known_screen_size(&self) -> Size {
+    pub fn last_known_screen_size(&self) -> Size {
         self.last_known_screen_size
     }
 
     /// Current backend-reported terminal size.
-    pub(crate) fn size(&self) -> Result<Size, B::Error> {
+    pub fn size(&self) -> Result<Size, B::Error> {
         self.backend.size()
     }
 
     /// Rows of finalized history known to be visible above the viewport.
-    #[cfg(test)]
-    pub(crate) fn visible_history_rows(&self) -> u16 {
+    #[cfg(any(test, feature = "testing"))]
+    pub fn visible_history_rows(&self) -> u16 {
         self.visible_history_rows
     }
 
     /// Set the retained viewport area and resize both diff buffers.
-    pub(crate) fn set_viewport_area(&mut self, area: Rect) {
+    pub fn set_viewport_area(&mut self, area: Rect) {
         let had_history = self.visible_history_rows > 0;
         self.viewport_area = area;
         self.buffers[0].resize(area);
@@ -194,7 +193,7 @@ where
     /// interactive region. When the inline viewport grows upward, callers can
     /// ask the terminal to scroll finalized history up before clearing the old
     /// viewport, matching the native-scrollback draw path.
-    pub(crate) fn apply_viewport_area(
+    pub fn apply_viewport_area(
         &mut self,
         area: Rect,
         scroll_history_on_growth: bool,
@@ -246,13 +245,13 @@ where
     }
 
     /// Mark the next draw as a full repaint.
-    pub(crate) fn invalidate_viewport(&mut self) {
+    pub fn invalidate_viewport(&mut self) {
         self.invalidated = true;
         self.previous_buffer_mut().reset();
     }
 
     /// Record history rows inserted above the retained viewport.
-    pub(crate) fn note_history_rows_inserted(&mut self, rows: u16) {
+    pub fn note_history_rows_inserted(&mut self, rows: u16) {
         self.history_bottom_y = self
             .history_bottom_y
             .saturating_add(rows)
@@ -265,7 +264,7 @@ where
 
     /// Clear visible terminal content owned by the surface and reset history
     /// accounting.
-    pub(crate) fn clear_owned_scrollback(&mut self) -> Result<(), B::Error> {
+    pub fn clear_owned_scrollback(&mut self) -> Result<(), B::Error> {
         let previous = self.viewport_area;
         self.backend.clear_scrollback_and_screen()?;
         self.visible_history_rows = 0;
@@ -285,7 +284,7 @@ where
 
     /// Clear the retained interactive viewport while preserving rows above it.
     #[cfg(test)]
-    pub(crate) fn clear_viewport_to_end(&mut self) -> Result<(), B::Error> {
+    pub fn clear_viewport_to_end(&mut self) -> Result<(), B::Error> {
         if self.viewport_area.width == 0 || self.viewport_area.height == 0 {
             return Ok(());
         }
@@ -298,7 +297,7 @@ where
 
     /// Remove transient viewport chrome and leave the shell prompt at the
     /// first row after finalized history.
-    pub(crate) fn prepare_shell_prompt_after_exit(&mut self) -> Result<(), B::Error> {
+    pub fn prepare_shell_prompt_after_exit(&mut self) -> Result<(), B::Error> {
         if self.viewport_area.width == 0 {
             return Ok(());
         }
@@ -319,7 +318,7 @@ where
     }
 
     /// Clear from `position` through the visible screen bottom.
-    pub(crate) fn clear_after_position(&mut self, position: Position) -> Result<(), B::Error> {
+    pub fn clear_after_position(&mut self, position: Position) -> Result<(), B::Error> {
         self.backend.set_cursor_position(position)?;
         self.backend.clear_region(ClearType::CurrentLine)?;
         self.backend.clear_region(ClearType::AfterCursor)?;
@@ -333,7 +332,7 @@ where
     /// `TestBackend` can verify the visible behavior. The dedicated VT100 byte
     /// insertion path can be added under this same API without changing the
     /// transcript/history callers.
-    pub(crate) fn insert_history_lines<I>(&mut self, lines: I) -> Result<u16, B::Error>
+    pub fn insert_history_lines<I>(&mut self, lines: I) -> Result<u16, B::Error>
     where
         I: IntoIterator<Item = Line<'static>>,
     {
@@ -426,16 +425,16 @@ where
         Ok(())
     }
 
-    pub(crate) fn begin_synchronized_update(&mut self) -> Result<(), B::Error> {
+    pub fn begin_synchronized_update(&mut self) -> Result<(), B::Error> {
         self.backend.begin_synchronized_update()
     }
 
-    pub(crate) fn end_synchronized_update(&mut self) -> Result<(), B::Error> {
+    pub fn end_synchronized_update(&mut self) -> Result<(), B::Error> {
         self.backend.end_synchronized_update()
     }
 
     /// Draw one retained viewport frame and apply the frame's cursor claim.
-    pub(crate) fn draw_viewport<F>(&mut self, render: F) -> Result<(), B::Error>
+    pub fn draw_viewport<F>(&mut self, render: F) -> Result<(), B::Error>
     where
         F: FnOnce(&mut SurfaceFrame<'_>),
     {

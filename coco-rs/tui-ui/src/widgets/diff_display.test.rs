@@ -1,5 +1,5 @@
 use super::*;
-use crate::presentation::styles::UiStyles;
+use crate::style::UiStyles;
 use crate::theme::Theme;
 
 #[test]

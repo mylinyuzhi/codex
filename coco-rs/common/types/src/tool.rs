@@ -2,7 +2,6 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
@@ -360,24 +359,12 @@ impl ToolId {
     }
 }
 
-/// JSON Schema properties for tool input. Type is always "object" (not stored).
-///
-/// `required` lists property names that the model MUST supply. Mirrors the
-/// JSON Schema `required: [...]` array (TS zod derives this automatically from
-/// `.optional()`; Rust has no auto-derive yet — tools populate it manually).
-/// Empty `required` (the default) means every field is optional — that was the
-/// pre-`required` behaviour and stays compatible for tools that haven't
-/// adopted the field yet.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ToolInputSchema {
-    pub properties: HashMap<String, serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub required: Vec<String>,
-}
-
 // `ToolResult<T>` (which carries `Vec<Message>`) lives in `coco-messages`;
-// the foundational tool identity types (ToolName, ToolId, ToolInputSchema,
-// ToolProgress, MCP_TOOL_PREFIX, …) stay here.
+// the foundational tool identity types (ToolName, ToolId, ToolProgress,
+// MCP_TOOL_PREFIX, …) stay here. The self-validating runtime input schema
+// (compiled validator + closed JSON Schema) lives in `coco-tool-runtime`
+// (`coco_tool_runtime::ToolInputSchema`), not here — it depends on
+// `jsonschema`, an L3 concern.
 
 /// Progress report during tool execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]

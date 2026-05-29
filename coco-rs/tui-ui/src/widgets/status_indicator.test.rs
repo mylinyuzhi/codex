@@ -1,7 +1,7 @@
 use super::StatusIndicator;
 use super::StatusIndicatorView;
 use super::fmt_elapsed_compact;
-use crate::presentation::styles::UiStyles;
+use crate::style::UiStyles;
 use crate::theme::Theme;
 use pretty_assertions::assert_eq;
 use ratatui::Terminal;

@@ -2,11 +2,11 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
-use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
 use crate::widgets::settings_panel::PermissionRuleDisplay;
 use crate::widgets::settings_panel::SettingsPanelState;
 use crate::widgets::settings_panel::SettingsTab;
+use coco_tui_ui::style::UiStyles;
 
 #[test]
 fn settings_surface_content_renders_theme_tab_and_syntax_row() {

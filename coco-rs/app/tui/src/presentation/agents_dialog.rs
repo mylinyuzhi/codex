@@ -14,7 +14,6 @@
 
 use ratatui::style::Color;
 
-use super::styles::UiStyles;
 use crate::i18n::t;
 use crate::state::AgentsDialogState;
 use crate::state::AgentsDialogTab;
@@ -26,6 +25,7 @@ use crate::state::SubagentStatus;
 use crate::state::WizardError;
 use crate::state::WizardSource;
 use crate::state::WizardTextField;
+use coco_tui_ui::style::UiStyles;
 
 /// Caret glyph rendered between the text-before-cursor and text-
 /// after-cursor halves of an active input field. Static, not

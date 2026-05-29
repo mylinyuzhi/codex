@@ -2,9 +2,9 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::i18n::locale_test_guard;
-use crate::presentation::styles::UiStyles;
 use crate::state::rewind::SummarizeDirection;
 use crate::theme::Theme;
+use coco_tui_ui::style::UiStyles;
 
 fn message(id: &str, text: &str) -> RewindableMessage {
     // Tests use stable string ids; derive the v5 uuid the cell-push

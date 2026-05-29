@@ -142,6 +142,7 @@ pub struct ReadTool;
 #[async_trait::async_trait]
 impl Tool for ReadTool {
     type Input = ReadInput;
+    coco_tool_runtime::impl_runtime_schema!(ReadInput);
     /// Output is `Value` — the wire shape is a tagged union of
     /// `{type: "text", file: {content}}`, `{type: "image", file:
     /// {base64, type}}`, `{type: "pdf", ...}`, `{type: "notebook",

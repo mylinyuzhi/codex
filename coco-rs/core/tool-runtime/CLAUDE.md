@@ -123,35 +123,16 @@ Eliminates sparse LocalAgent sidecar shims entirely; per-task-type accessors
 return concrete types via match. Touches 20+ files (every consumer of
 `progress` / `retrieved` / `retain` / `evict_after` / `is_backgrounded`).
 
-### Schemars-derived `ToolInputSchema`
+### Schema ownership (done — formerly a deferred refactor)
 
-`ToolInputSchema` is currently a hand-built `HashMap<String, Value>` +
-`Vec<String>` `required` list. Every tool implements `input_schema()`
-with 40-200 lines of `serde_json::json!` macro construction. Workspace
-upgraded `schemars` to 1.2 (commit `ba50b1364`) — the infrastructure is
-in place to switch each tool to a `#[derive(JsonSchema, Deserialize)]`
-input struct.
-
-Migration pattern (per tool):
-
-```rust
-#[derive(Deserialize, JsonSchema)]
-pub struct AgentToolInput {
-    /// The task for the agent to perform
-    pub prompt: String,
-    /// A short (3-5 word) description of the task
-    pub description: String,
-    pub subagent_type: Option<String>,
-    // ...
-}
-
-impl Tool for AgentTool {
-    fn input_schema(&self) -> ToolInputSchema {
-        schema_from::<AgentToolInput>()
-    }
-}
-```
-
-Required fields fall out of `Option<T>` automatically. Hand-built
-schemas become validators-for-free. Touches all 43 built-in tools but
-each conversion is mechanical.
+`ToolInputSchema` is the **self-validating newtype** in `src/schema.rs`: it
+owns the JSON Schema `Value` (model-facing, via `as_value()`) plus a compiled
+`Arc<jsonschema::Validator>` (runtime, via `validate()`), built once at
+construction by `from_input_type::<T>()` (Bucket-A derive, auto-closed with
+`additionalProperties:false`) or `from_value(json!({ … }))` (hand-built /
+MCP-wire / `--json-schema`). The old `coco_types::ToolInputSchema
+{ properties, required }` data struct and the `Tool::input_schema()` bridge are
+**deleted** — every tool declares `runtime_validation_schema()` (no default ⇒
+E0046 forces it) and optionally `model_schema(&SchemaContext)` to hide
+hook-injected runtime-only fields. There is no separate validator cache. See
+`docs/coco-rs/tool-schema-final-plan.md` (v4.3).

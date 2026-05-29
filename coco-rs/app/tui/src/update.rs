@@ -9,13 +9,13 @@ use tokio::sync::mpsc;
 
 use crate::command::ShutdownReason;
 use crate::command::UserCommand;
-use crate::constants;
 use crate::events::TuiCommand;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
+use coco_tui_ui::constants;
 
 use exit::ExitEffect;
 
@@ -321,7 +321,7 @@ pub async fn handle_command(
                 && state.ui.active_suggestions.is_none()
                 && !state.ui.input.is_empty()
             {
-                use crate::double_press::Outcome;
+                use coco_tui_ui::double_press::Outcome;
                 if state.ui.esc_tracker.poll((), std::time::Instant::now()) == Outcome::Double {
                     let taken = state.ui.input.take_input();
                     state.ui.input.add_to_history(taken);
@@ -340,7 +340,7 @@ pub async fn handle_command(
             // dispatch only has `&AppState`; the tracker needs a
             // mutable borrow.
             if state.rewind_available_from_input() {
-                use crate::double_press::Outcome;
+                use coco_tui_ui::double_press::Outcome;
                 if state.ui.esc_tracker.poll((), std::time::Instant::now()) == Outcome::Double {
                     show::rewind(state, command_tx).await;
                     return true;
@@ -481,7 +481,7 @@ pub async fn handle_command(
                 .ui
                 .input
                 .textarea
-                .move_cursor_to_beginning_of_line(crate::widgets::BolBehavior::StayPut);
+                .move_cursor_to_beginning_of_line(coco_tui_ui::widgets::BolBehavior::StayPut);
             true
         }
         TuiCommand::CursorEnd => {
@@ -489,7 +489,7 @@ pub async fn handle_command(
                 .ui
                 .input
                 .textarea
-                .move_cursor_to_end_of_line(crate::widgets::EolBehavior::StayPut);
+                .move_cursor_to_end_of_line(coco_tui_ui::widgets::EolBehavior::StayPut);
             true
         }
         TuiCommand::WordLeft => {
@@ -953,7 +953,7 @@ async fn apply_exit_effect(
                 exit_case = "arm_exit_prompt",
                 rearmed_after_timeout = timing.expired_by_ms.is_some(),
                 expired_by_ms = timing.expired_by_ms.unwrap_or(0),
-                window_ms = crate::constants::DOUBLE_PRESS_TIMEOUT.as_millis(),
+                window_ms = coco_tui_ui::constants::DOUBLE_PRESS_TIMEOUT.as_millis(),
                 prompt,
                 "exit prompt armed"
             );

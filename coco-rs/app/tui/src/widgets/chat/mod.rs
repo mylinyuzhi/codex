@@ -22,11 +22,9 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
-use crate::display_settings::SyntaxHighlighting;
 use crate::i18n::t;
 use crate::presentation::streaming::StreamingTailBlock;
 use crate::presentation::streaming::StreamingTailView;
-use crate::presentation::styles::UiStyles;
 use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::format_duration_seconds;
@@ -47,6 +45,8 @@ use crate::state::transcript_view::SystemCellKind;
 use crate::state::ui::StreamingState;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
+use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::style::UiStyles;
 
 pub(crate) const TOOL_OUTPUT_PREVIEW_ROWS: usize = 5;
 
@@ -213,7 +213,7 @@ impl<'a> ChatWidget<'a> {
             TranscriptSourceCell::Active(ActiveTranscriptCell::BusySpinner) => {
                 /// Static fallback glyph for the chat-cell busy spinner.
                 /// The animated status-indicator spinner lives in
-                /// [`crate::widgets::status_indicator`]; this widget
+                /// [`coco_tui_ui::widgets::status_indicator`]; this widget
                 /// just needs a single character to anchor the
                 /// "processing…" line and never re-renders fast
                 /// enough to animate.
@@ -487,7 +487,7 @@ impl<'a> ChatWidget<'a> {
     }
 
     fn render_streaming_text(&self, content: &str, lines: &mut Vec<Line<'static>>) {
-        let mut md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
+        let mut md_lines = coco_tui_ui::widgets::markdown::markdown_to_lines_with_syntax(
             content,
             self.styles,
             self.width,
@@ -590,7 +590,7 @@ fn result_line(text: String, color: ratatui::style::Color) -> Line<'static> {
 
 fn tool_tone_color(
     tone: ToolNameTone,
-    styles: crate::presentation::styles::UiStyles<'_>,
+    styles: coco_tui_ui::style::UiStyles<'_>,
 ) -> ratatui::style::Color {
     match tone {
         ToolNameTone::ReadOnly => styles.success(),

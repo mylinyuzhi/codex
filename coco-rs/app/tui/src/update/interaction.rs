@@ -9,7 +9,6 @@ use coco_types::PermissionMode;
 use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
-use crate::constants;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ExportFormat;
@@ -25,6 +24,7 @@ use crate::state::surface_payloads::PermissionAction;
 use crate::state::ui::Toast;
 use crate::update_rewind;
 use crate::widgets::suggestion_popup::SuggestionMeta;
+use coco_tui_ui::constants;
 
 /// Splice the currently selected suggestion back into the input buffer.
 ///

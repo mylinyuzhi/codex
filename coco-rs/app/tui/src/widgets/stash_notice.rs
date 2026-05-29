@@ -15,8 +15,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
-use crate::presentation::styles::UiStyles;
 use crate::state::ui::StashedInput;
+use coco_tui_ui::style::UiStyles;
 
 const PREVIEW_CHARS: usize = 40;
 

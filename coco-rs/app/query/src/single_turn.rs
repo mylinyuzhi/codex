@@ -79,8 +79,8 @@ pub async fn single_turn_query(
     // doesn't carry stop_reason, so a length-truncated or
     // content-filtered response would otherwise reach the caller as
     // "just a short text" with no signal that the model didn't finish.
-    let stop = result.stop_reason;
-    if text.is_empty() || stop.is_some_and(coco_messages::StopReason::is_abnormal) {
+    let stop = result.stop_reason.as_ref();
+    if text.is_empty() || stop.is_some_and(coco_messages::FinishReason::is_abnormal) {
         tracing::warn!(
             stop_reason = ?stop,
             tokens_out = result.usage.output_tokens.total,

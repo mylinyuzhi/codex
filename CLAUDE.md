@@ -270,7 +270,8 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | Crate | Purpose |
 |-------|---------|
 | `cli` | CLI entry (clap), transports (SSE / WS / NDJSON), server / daemon / SDK modes; binary `coco` |
-| `tui` | Terminal UI with Elm architecture (TEA) + ratatui + rust-i18n |
+| `tui` | Terminal UI shell: Elm architecture (TEA) + rust-i18n; owns `AppState`, the AppState→Line projection, and the domain renderers. Drives `coco-tui-render` for the actual painting |
+| `tui-render` (top-level crate) | Pure, domain-free presentational layer: native-scrollback paint engine (`SurfaceTerminal`, BSU/ESU, cell-diff), generic widgets, theme/style/color, width-aware truncation. Depends only on ratatui/crossterm/unicode/tracing — no `AppState`, no i18n. Seam enforced by `scripts/check-tui-render-seam.sh` |
 | `session` | Session persistence, title generation, transcript recovery |
 | `query` | Multi-turn agent loop driver (`QueryEngine`) + budget + command queue |
 | `state` | Central `AppState` tree + swarm orchestration modules |

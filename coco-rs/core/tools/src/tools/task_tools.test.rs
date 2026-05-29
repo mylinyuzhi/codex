@@ -375,8 +375,8 @@ async fn test_task_output_rejects_missing_id() {
 /// instead assert the schema DEFAULT by inspecting the JSON description.
 #[test]
 fn test_task_output_schema_documents_block_default_true() {
-    let schema = <TaskOutputTool as DynTool>::input_schema(&TaskOutputTool);
-    let block_prop = schema.properties.get("block").unwrap();
+    let schema = <TaskOutputTool as DynTool>::runtime_validation_schema(&TaskOutputTool).as_value();
+    let block_prop = schema["properties"].get("block").unwrap();
     let desc = block_prop["description"].as_str().unwrap();
     assert!(
         desc.contains("true (default)") || desc.contains("default true"),
@@ -424,8 +424,8 @@ use super::TodoWriteTool;
 ///   - NO `id` field
 #[test]
 fn test_todo_write_schema_matches_ts() {
-    let schema = <TodoWriteTool as DynTool>::input_schema(&TodoWriteTool);
-    let todos_prop = schema.properties.get("todos").unwrap();
+    let schema = <TodoWriteTool as DynTool>::runtime_validation_schema(&TodoWriteTool).as_value();
+    let todos_prop = schema["properties"].get("todos").unwrap();
     let items = &todos_prop["items"];
     let required = items["required"].as_array().unwrap();
 

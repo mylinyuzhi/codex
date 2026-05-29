@@ -1,8 +1,8 @@
 use super::BackgroundPills;
 use super::BackgroundPillsView;
 use super::PillEntry;
-use crate::presentation::styles::UiStyles;
 use crate::theme::Theme;
+use coco_tui_ui::style::UiStyles;
 use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;

@@ -72,21 +72,22 @@ impl Clock for SystemClock {
 /// pins a real `Instant` at construction (`base_instant`) and offsets
 /// from there. `now_ms()` is fully synthetic — tests set whatever
 /// epoch-ms value they need.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug)]
 pub struct MockClock {
     base_instant: Instant,
     offset: std::sync::Mutex<MockOffset>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Clone, Copy)]
 struct MockOffset {
     instant_offset_ms: i64,
     now_ms: i64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
+#[allow(clippy::expect_used)] // mock-only: a poisoned lock is unreachable in tests
 impl MockClock {
     /// Pin time to `now_ms` (epoch milliseconds). Subsequent
     /// [`Self::advance`] calls shift both [`Clock::now`] and
@@ -116,7 +117,8 @@ impl MockClock {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
+#[allow(clippy::expect_used)] // mock-only: a poisoned lock is unreachable in tests
 impl Clock for MockClock {
     fn now(&self) -> Instant {
         let offset_ms = self

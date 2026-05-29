@@ -177,11 +177,19 @@ pub struct AssistantMessage {
     pub api_error: Option<ApiError>,
 }
 
-/// Canonical typed stop reason — re-exported from `coco-inference`'s
-/// extended `StopReason` (the single source of truth at the
-/// vercel-ai-provider seam). 8 variants; see
-/// `vercel-ai/provider/src/language_model/v4/finish_reason.rs` for
-/// the multi-LLM mapping table.
+/// Live finish-reason struct (`{ unified, raw }`) from the
+/// vercel-ai-provider seam — carried by `coco_inference::QueryResult` /
+/// `StreamEvent::Finish`, where `.raw` is read (side-query `Other`
+/// surfacing, log `Display`). Re-exported here only so in-process
+/// consumers (e.g. app/query's abnormal-stop readers) can reach it; the
+/// persisted [`AssistantMessage::stop_reason`] stores the [`StopReason`]
+/// projection below, **not** this struct.
+pub use coco_llm_types::FinishReason;
+/// Canonical typed stop reason — the behavioral projection inside
+/// [`FinishReason`] (8 variants), and the value [`AssistantMessage`]
+/// persists. Serializes as the bare snake_case wire string. See
+/// `vercel-ai/provider/src/language_model/v4/finish_reason.rs` for the
+/// multi-LLM mapping table.
 pub use coco_llm_types::StopReason;
 
 /// API error attached to an assistant message.

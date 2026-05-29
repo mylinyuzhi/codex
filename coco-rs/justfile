@@ -99,6 +99,7 @@ sdk-py-check:
 # services/inference/src/lib.rs for the canonical list.
 check-seam:
     bash "{{justfile_directory()}}/scripts/check-vercel-ai-seam.sh"
+    bash "{{justfile_directory()}}/scripts/check-tui-ui-seam.sh"
 
 # Enforce: utils/* and vercel-ai/* are libraries. Their public API may
 # not return `anyhow::Result<…>` — declare a typed `thiserror` enum

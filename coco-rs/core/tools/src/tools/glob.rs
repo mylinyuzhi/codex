@@ -89,6 +89,7 @@ pub struct GlobTool;
 #[async_trait::async_trait]
 impl Tool for GlobTool {
     type Input = GlobInput;
+    coco_tool_runtime::impl_runtime_schema!(GlobInput);
     /// Output is the pre-joined model-visible text (filenames + optional
     /// truncation hint, or `"No files found"`). TS-parity `GlobOutput
     /// { filenames, num_files, truncated }` is a follow-up — see the

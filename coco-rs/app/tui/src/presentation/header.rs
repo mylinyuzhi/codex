@@ -7,8 +7,8 @@ use ratatui::text::Span;
 use coco_types::ModelRole;
 
 use crate::i18n::t;
-use crate::presentation::styles::UiStyles;
 use crate::state::AppState;
+use coco_tui_ui::style::UiStyles;
 
 /// Logo gutter width (9 logo cells + 2-space padding).
 const HEADER_LOGO_WIDTH: u16 = 11;

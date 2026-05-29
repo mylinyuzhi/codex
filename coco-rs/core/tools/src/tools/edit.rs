@@ -70,6 +70,7 @@ pub struct EditTool;
 #[async_trait::async_trait]
 impl Tool for EditTool {
     type Input = EditInput;
+    coco_tool_runtime::impl_runtime_schema!(EditInput);
     type Output = EditOutput;
 
     fn id(&self) -> ToolId {
