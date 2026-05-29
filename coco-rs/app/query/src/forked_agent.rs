@@ -35,10 +35,12 @@
 //!   incident: setting `effort: 'low'` on prompt-suggestion forks
 //!   collapsed cache hit rate from 92.7% → 61% by changing
 //!   `budget_tokens` and busting the cache key)
-//! - `max_output_tokens: None` — same cache-bust risk; only set when
-//!   parity is *not* a goal (e.g. compact's distinct model)
 //!
-//! Override these only when cache parity isn't a goal.
+//! Override these only when cache parity isn't a goal. The per-call
+//! `max_output_tokens` lives on `ModelInfo` — to give a fork a
+//! different cap, point it at a `ModelInfo` whose
+//! `max_output_tokens` / `max_output_tokens_escalate` reflect the
+//! intent. There is no per-fork override field by design.
 
 use std::sync::Arc;
 
@@ -114,12 +116,6 @@ pub struct ForkedAgentOptions {
     /// parity** for older models that don't have adaptive thinking.
     /// Default `None` preserves the parent's cache key.
     pub effort: Option<coco_types::ReasoningEffort>,
-    /// Hard cap on output tokens. **WARNING**: setting this clamps
-    /// `budget_tokens`, breaking parent prompt-cache parity. PR #18143
-    /// incident: 92.7% → 61% hit-rate. Only set when cache parity is
-    /// not a goal (e.g. compact's distinct model). The inference
-    /// layer logs `tracing::warn!` when this is `Some`.
-    pub max_output_tokens: Option<i64>,
     /// Telemetry-only string for cache-break attribution. Defaults to
     /// `fork_label.as_str()` via [`Self::for_label`].
     pub query_source: String,
@@ -152,7 +148,6 @@ impl std::fmt::Debug for ForkedAgentOptions {
             .field("skip_transcript", &self.skip_transcript)
             .field("skip_cache_write", &self.skip_cache_write)
             .field("effort", &self.effort)
-            .field("max_output_tokens", &self.max_output_tokens)
             .field("query_source", &self.query_source)
             .field("fork_label", &self.fork_label)
             .field("can_use_tool_set", &self.can_use_tool.is_some())
@@ -167,17 +162,16 @@ impl ForkedAgentOptions {
     /// Build options with the cache-parity-safe defaults for `label`.
     ///
     /// Defaults: `max_turns=Some(1)`, `skip_transcript=true`,
-    /// `skip_cache_write=true`, `effort=None`, `max_output_tokens=None`,
-    /// `can_use_tool=None`, `require_can_use_tool=false`.
-    /// `query_source` defaults to `label.as_str()` so telemetry
-    /// strings stay aligned with the typed enum.
+    /// `skip_cache_write=true`, `effort=None`, `can_use_tool=None`,
+    /// `require_can_use_tool=false`. `query_source` defaults to
+    /// `label.as_str()` so telemetry strings stay aligned with the
+    /// typed enum.
     pub fn for_label(label: ForkLabel) -> Self {
         Self {
             max_turns: Some(1),
             skip_transcript: true,
             skip_cache_write: true,
             effort: None,
-            max_output_tokens: None,
             query_source: label.as_str().to_string(),
             fork_label: label,
             can_use_tool: None,
@@ -217,14 +211,13 @@ pub fn build_query_config(
         extra_permission_rules: Vec::new(),
         effort: options.effort,
         // Per-fork policy: thread can_use_tool / fork_label /
-        // max_output_tokens onto the child engine config so the
-        // engine builder reflects them on QueryEngineConfig and
-        // ToolUseContext. Empty when not set — preserves
-        // pre-canUseTool behavior for callers that haven't migrated.
+        // onto the child engine config so the engine builder reflects
+        // them on QueryEngineConfig and ToolUseContext. Empty when not
+        // set — preserves pre-canUseTool behavior for callers that
+        // haven't migrated.
         can_use_tool: options.can_use_tool.clone(),
         require_can_use_tool: options.require_can_use_tool,
         fork_label: Some(options.fork_label),
-        max_output_tokens_override: options.max_output_tokens,
         ..Default::default()
     }
 }

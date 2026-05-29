@@ -259,7 +259,7 @@ async fn test_full_path_budget_exhaustion() {
     let config = QueryEngineConfig {
         model_id: "mock-full-path".into(),
         permission_mode: PermissionMode::BypassPermissions,
-        max_tokens: Some(50), // Will be exhausted after first turn (100+50=150 > 50)
+        total_token_budget: Some(50), // Will be exhausted after first turn (100+50=150 > 50)
         max_turns: 10,
         ..Default::default()
     };

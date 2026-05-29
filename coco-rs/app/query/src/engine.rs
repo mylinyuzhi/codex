@@ -6,25 +6,19 @@
 //! recovery paths without inspecting message contents.
 
 use crate::budget::BudgetDecision;
-use crate::budget::BudgetTracker;
 use crate::command_queue::CommandQueue;
 use crate::emit::emit_protocol;
 use crate::emit::emit_stream;
 use crate::session_state::SessionStateTracker;
 use crate::tool_call_runner::ToolCallRunner;
-use coco_config::EnvKey;
-use coco_config::env;
 use coco_context::FileHistoryState;
 use coco_hooks::HookRegistry;
-use coco_hooks::orchestration;
 use coco_inference::ApiClient;
 use coco_inference::QueryParams;
-use coco_inference::StreamEvent;
 use coco_messages::CostTracker;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
-use coco_system_reminder::SystemReminderOrchestrator;
 use coco_system_reminder::count_human_turns;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
@@ -49,23 +43,29 @@ use tracing::warn;
 // Items from `crate::engine_helpers` used directly by `run_session_loop`.
 // `pub(crate) use` (rather than plain `use`) re-exposes them as members of
 // this module so `engine.test.rs` can keep resolving them via `super::name`.
-pub(crate) use crate::engine_helpers::ProgressThrottle;
-pub(crate) use crate::engine_helpers::StreamingToolCallBuffer;
-pub(crate) use crate::engine_helpers::drain_one_progress;
-pub(crate) use crate::engine_helpers::emit_model_fallback_notice;
+// `emit_model_fallback_notice` lived here until the `open_turn_stream`
+// extraction moved every call site into `engine_recovery.rs`; the
+// re-export was removed.
 pub(crate) use crate::engine_helpers::extract_streaming_result_text;
-pub(crate) use crate::engine_helpers::is_capacity_error_message;
-// Test-only re-export — `engine.test.rs` references this directly via
-// `super::classify_progress_payload`, but no production call site does.
-#[cfg(test)]
-pub(crate) use crate::engine_helpers::classify_progress_payload;
 
 pub use crate::config::ContinueReason;
-use crate::config::ESCALATED_MAX_TOKENS;
-use crate::config::MAX_OUTPUT_TOKENS_RECOVERY_LIMIT;
 pub use crate::config::QueryEngineConfig;
 pub use crate::config::QueryResult;
 pub use crate::config::SessionBootstrap;
+use crate::engine_loop_state::LoopAccumulator;
+use crate::engine_loop_state::LoopConstants;
+use crate::engine_loop_state::LoopTurnState;
+
+/// Maximum consecutive capacity errors (529 / 503 / Overloaded /
+/// RateLimited) tolerated on the active model slot before
+/// `ModelRuntime::advance` walks to the next fallback slot.
+///
+/// TS parity: `MAX_529_RETRIES = 3` in `services/api/withRetry.ts:54`.
+/// Previously declared inline as a function-local `const` inside
+/// `run_session_loop`; promoted to module scope so the value is
+/// addressable from helpers (and tests) without re-declaring the same
+/// number.
+pub(crate) const MAX_CONSECUTIVE_CAPACITY_ERRORS: i32 = 3;
 
 /// Last-compact tracker for `RecompactionInfo` population. Set by
 /// `try_full_compact` after a successful compact and read by the next
@@ -510,6 +510,18 @@ pub struct QueryEngine {
 // `crate::engine_finalize_turn`.
 
 impl QueryEngine {
+    /// Run the multi-turn agent loop.
+    ///
+    /// `cycle_turn_id` is the per-cycle wire id supplied by the
+    /// runner; it's used on every `TurnEnded` emission this function
+    /// makes (Completed / Interrupted / MaxTurnsReached /
+    /// BudgetExhausted). `None` only when the caller didn't pass an
+    /// `event_tx` — in that case no wire emit happens.
+    ///
+    /// Returns `(Result<QueryResult>, TokenUsage)`. The second tuple
+    /// element is the accumulated token usage at the moment the
+    /// loop exited — populated even on `Err` so the caller can
+    /// surface partial usage on the `TurnEnded(Failed)` wire emit.
     pub(crate) async fn run_session_loop(
         &self,
         turn_messages: Vec<std::sync::Arc<Message>>,
@@ -517,226 +529,46 @@ impl QueryEngine {
         state_tracker: &SessionStateTracker,
         hook_tx_opt: Option<tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
         history: &mut MessageHistory,
-    ) -> Result<QueryResult, coco_error::BoxedError> {
-        let start_time = std::time::Instant::now();
-        let mut api_time_ms: i64 = 0;
+        cycle_turn_id: Option<coco_types::TurnId>,
+    ) -> (Result<QueryResult, coco_error::BoxedError>, TokenUsage) {
         let mut total_usage = TokenUsage::default();
-        let mut cost_tracker = CostTracker::new();
+        let result = self
+            .run_session_loop_inner(
+                turn_messages,
+                event_tx,
+                state_tracker,
+                hook_tx_opt,
+                history,
+                cycle_turn_id,
+                &mut total_usage,
+            )
+            .await;
+        (result, total_usage)
+    }
 
-        // Build the per-session ModelRuntime. When the caller
-        // installed fallback clients via `with_fallback_client(s)`,
-        // the runtime holds a multi-slot chain and walks it on
-        // capacity-error streaks via `advance()`.
-        //
-        // Fallback trigger (TS parity, `services/api/withRetry.ts:335`):
-        // after `MAX_529_RETRIES` consecutive `Overloaded` (529/503)
-        // responses from the active slot, the next turn advances to
-        // the next slot. The engine tracks consecutive capacity
-        // errors because provider-layer retries are internal to the
-        // vercel-ai crates — this counter only ticks when the retry
-        // layer gives up and surfaces an error to us.
-        let mut model_runtime = crate::model_runtime::ModelRuntime::new(
-            self.client.clone(),
-            self.fallback_clients.clone(),
-        );
-        if let Some(policy) = self.recovery_policy {
-            model_runtime = model_runtime.with_recovery_policy(policy);
-        }
-        /// TS: `MAX_529_RETRIES = 3` in `services/api/withRetry.ts:54`.
-        const MAX_CONSECUTIVE_CAPACITY_ERRORS: i32 = 3;
-        let mut consecutive_capacity_errors: i32 = 0;
-        // TS `input`-parameter parity: tracks the UUID of the last user
-        // message that has already been handed to the UserPrompt-tier
-        // reminders. Prevents duplicate `at_mentioned_files` /
-        // `agent_mentions` / `ultrathink_effort` emissions across
-        // tool-result iterations of the same human turn.
-        let mut reminder_last_user_input_uuid: Option<uuid::Uuid> = None;
-        let mut turn = 0;
-        let mut last_continue_reason: Option<ContinueReason> = None;
-        // TS `stop_hook_active`: set to true once a Stop hook has
-        // blocked the loop, so subsequent Stop firings advertise the
-        // re-entry to the hook. Mirrors `query.ts handleStopHooks()`.
-        let mut stop_hook_active = false;
-        // max-output-tokens recovery state (TS: query.ts State.maxOutputTokensOverride + maxOutputTokensRecoveryCount)
-        let mut max_tokens_override: Option<i64> = None;
-        let mut max_tokens_recovery_count: i32 = 0;
-        let mut budget = BudgetTracker::new(
-            self.config.max_tokens,
-            self.config.max_turns,
-            /*max_continuations*/ 3,
-        );
-        // The "current turn" user message id is the LAST user message in
-        // `turn_messages`. In single-turn mode the list is
-        // `[user_msg, attachment, ...]` and the first (and only) user
-        // message is also the last. In multi-turn SDK mode the list is
-        // `[prior_history..., new_user_msg]`, so the LAST user message
-        // is the current turn's prompt — which is what file history
-        // snapshots should key on.
-        let user_msg_uuid = turn_messages
-            .iter()
-            .rev()
-            .find_map(|m| match m.as_ref() {
-                Message::User(u) => Some(u.uuid.to_string()),
-                _ => None,
-            })
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        // I-1 (Authority) — D2 fix: callers (`tui_runner`, SDK turn
-        // handler, subagent factory) emit `MessageAppended` for any
-        // NEW messages they introduce BEFORE invoking the engine. The
-        // initial load here just populates the engine's per-turn
-        // working `MessageHistory` with prior context — re-emitting
-        // would deliver duplicate events to consumers on every turn
-        // (TUI dedups by UUID, but SDK NDJSON observers would see N
-        // copies after N turns). Subsequent push sites inside the loop
-        // (new assistant turns, tool results, system messages) still
-        // emit normally.
-        for arc in turn_messages {
-            history.push_arc(arc);
-        }
-        // Run-local artifacts captured at emission sites. Avoids scanning
-        // `history` at finalize time — that scan is unsound under mid-run
-        // compaction (full/micro compact replaces the history Vec, so any
-        // index captured before then becomes stale).
-        let mut run_artifacts = RunArtifacts::default();
-
-        // NOTE: `SessionStarted` + `SessionStateChanged(Running)` + the
-        // hook → CoreEvent forwarder are set up by the outer
-        // `run_internal_with_messages` BEFORE calling this function, so
-        // SDK consumers see them even if the session loop errors out
-        // before its first turn. See TS `runHeadless()` which initializes
-        // the init message at the very top of the entry function.
-
-        // ── Progress-event forwarder ──
-        //
-        // Spawn one drain task per session. Tools send `ToolProgress`
-        // updates through `ctx.progress_tx`; the drain fans them out
-        // to:
-        //
-        //   1. `TuiOnlyEvent::ToolProgress { tool_use_id, data }` —
-        //      every event, unthrottled, carries the raw payload for
-        //      the TUI to render progress bars or byte counts.
-        //
-        //   2. `ServerNotification::ToolProgress(ToolProgressParams)` —
-        //      TS-parity wire event. Only emitted for
-        //      `bash_progress` / `powershell_progress` payload types
-        //      and throttled to ≤1 per 30 s per
-        //      `parent_tool_use_id` (or `tool_use_id` if the parent
-        //      is absent), matching `utils/queryHelpers.ts:99-189`.
-        //
-        // TS parity: `onProgress` in `StreamingToolExecutor` loops
-        // progress yielded from the tool generator back to the
-        // streaming UI; `normalizeMessage` throttles the SDK-facing
-        // version separately. Rust collapses both into one drain
-        // task because there's no separate normalization stage.
-        //
-        // Lifecycle: the tx is cloned into every `ToolUseContext`
-        // built for this session. When the session loop exits, the
-        // last tx clone (owned here) drops, the rx closes, and the
-        // drain task finishes naturally — no explicit await needed.
-        let (progress_tx_session, mut progress_rx_session) =
-            tokio::sync::mpsc::unbounded_channel::<coco_tool_runtime::ToolProgress>();
-        let progress_event_tx = event_tx.clone();
-        let _progress_drain = tokio::spawn(async move {
-            let mut throttle = ProgressThrottle::new();
-            while let Some(progress) = progress_rx_session.recv().await {
-                drain_one_progress(&progress_event_tx, progress, &mut throttle).await;
-            }
-        });
-
-        // Create file history snapshot for this user message.
-        // TS: fileHistoryMakeSnapshot() in handlePromptSubmit.ts + QueryEngine.ts
-        if let (Some(fh), Some(ch)) = (&self.file_history, &self.config_home) {
-            let mut fh = fh.write().await;
-            if let Err(e) = fh
-                .make_snapshot(&user_msg_uuid, ch, &self.config.session_id)
-                .await
-            {
-                warn!("file history make_snapshot failed: {e}");
-            }
-        }
-
-        // Permission denials accumulated across all tool calls in this session.
-        // Populated on each `PermissionDecision::Deny` branch and flushed
-        // into `SessionResultParams.permission_denials` via the `make_query_result`
-        // closure. Matches TS `QueryEngine.permissionDenials` wrapper
-        // behavior (QueryEngine.ts:244-271).
-        let mut permission_denials: Vec<coco_types::PermissionDenialInfo> = Vec::new();
-
-        // Plan-mode reminder tracker — injects the system-reminder at the
-        // start of every turn while plan mode is active and on the turn
-        // following an ExitPlanMode approval. TS: normalizeAttachmentForAPI
-        // cases `plan_mode` / `plan_mode_exit` / `plan_mode_reentry`.
-        // Plan/workflow / phase-4 / agent-count values are fed into the
-        // orchestrator's `TurnReminderInput` below. `PlanModeReminder` is
-        // now the per-turn side-effect driver (mode reconcile + mailbox
-        // polling + leader-pending-approvals) and no longer owns
-        // workflow state.
-        let plans_dir = crate::plan_mode_reminder::PlanModeReminder::resolve_plans_dir(
-            self.config_home.as_deref(),
-            self.config.project_dir.as_deref(),
-            self.config.plans_directory.as_deref(),
-        );
-        let mut plan_reminder = crate::plan_mode_reminder::PlanModeReminder::new(
-            self.config.permission_mode,
-            Some(self.config.session_id.clone()),
-            self.config.agent_id.clone(),
-            plans_dir.clone(),
-            self.app_state.clone(),
-        );
-        // Wire mailbox for swarm polling if identity is set and a mailbox
-        // handle is installed. Agent + team names come from env vars
-        // (set by the swarm spawner); mirror `swarm_identity::get_agent_name`
-        // env fallback. We keep the env read here rather than threading
-        // via ctx because the reminder is engine-level (no ToolUseContext).
-        // Env namespace is `COCO_*` — see swarm_constants.
-        let agent_name_env = env::env_opt(EnvKey::CocoAgentName);
-        let team_name_env = env::env_opt(EnvKey::CocoTeamName);
-        if let (Some(mbox), Some(agent), Some(team)) =
-            (self.mailbox.clone(), agent_name_env, team_name_env)
-        {
-            plan_reminder = plan_reminder.with_mailbox(
-                mbox,
-                agent,
-                team,
-                self.config.is_teammate && self.config.plan_mode_required,
-            );
-        }
-        // Install the protocol-event sink so leader-pending-approval
-        // polling can surface `PlanApprovalRequested` to the TUI in
-        // addition to injecting the LLM-prompt attachment. Absent sink
-        // (SDK-only / headless) means the overlay simply never fires.
-        if let Some(tx) = event_tx.clone() {
-            plan_reminder = plan_reminder.with_event_sink(tx);
-        }
-
-        // System-reminder orchestrator — owns reminder emission for the
-        // whole session. The orchestrator is Send+Sync and accumulates
-        // per-attachment throttle state across turns.
-        //
-        // `plan_reminder` above is retained for non-reminder side effects
-        // (mode reconciliation, teammate mailbox polling, leader-pending-
-        // approvals), called per turn via `turn_start_side_effects_only`.
-        // The reminder emission itself (plan/auto/todo/task/critical/
-        // compaction/date-change) moves here.
-        // Settings-driven reminder config (TS `settings.json` →
-        // `coco_config::Settings.system_reminder`). Cloned because the
-        // orchestrator owns its own copy for the session — subsequent
-        // settings reloads won't retroactively disable reminders until
-        // the next engine build.
-        let reminder_config = self.config.system_reminder.clone();
-        let reminder_orchestrator =
-            SystemReminderOrchestrator::new(reminder_config).with_default_generators();
-        // Todo-list lookup key: TS `agentId ?? sessionId`.
-        let reminder_todo_key = self
-            .config
-            .agent_id
-            .clone()
-            .unwrap_or_else(|| self.config.session_id.clone());
-        // Model context window — exposed to the compaction reminder
-        // generator. Effective = 90% of window (reserve 10% for output),
-        // matching the same approximation `coco-compact` uses.
-        let reminder_context_window = self.config.context_window;
-        let reminder_effective_window = (reminder_context_window * 9) / 10;
+    #[allow(clippy::too_many_arguments)]
+    // Internal helper. Argument count is intentional — splitting into
+    // a context struct adds indirection for a function with one
+    // call site and would obscure that each argument has distinct
+    // lifetime / ownership semantics (one `&mut`, one `&`, three
+    // owned, two `Option<owned>`).
+    async fn run_session_loop_inner(
+        &self,
+        turn_messages: Vec<std::sync::Arc<Message>>,
+        event_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+        state_tracker: &SessionStateTracker,
+        hook_tx_opt: Option<tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
+        history: &mut MessageHistory,
+        cycle_turn_id: Option<coco_types::TurnId>,
+        total_usage: &mut TokenUsage,
+    ) -> Result<QueryResult, coco_error::BoxedError> {
+        // ── Loop state, grouped by lifecycle. Mirrors TS `query.ts:204-217`
+        //    `State` adapted to Rust's borrow model — see
+        //    `engine_loop_state.rs` for the field-by-field rationale and
+        //    `init_loop_state` for the bundled construction site.
+        let (mut acc, mut turn_state, mut services, consts) = self
+            .init_loop_state(turn_messages, &event_tx, history)
+            .await;
 
         loop {
             if self.cancel.is_cancelled() {
@@ -751,34 +583,25 @@ impl QueryEngine {
                     history, /*in_flight_tool_calls*/ false, &event_tx,
                 )
                 .await;
-                // Wire-protocol terminator. SDK iterators and TUI state
-                // machines key on a terminal `Turn*` notification — without
-                // this, Python `events()` would block on cancellation.
-                // `turn_id` is unavailable here because the cancel check
-                // fires at the top of the loop, before the per-round
-                // `turn-{n}` id is computed.
-                let _ = emit_protocol(
-                    &event_tx,
-                    crate::ServerNotification::TurnInterrupted(coco_types::TurnInterruptedParams {
-                        turn_id: None,
-                        reason: Some(coco_types::CancelReason::UserCancel),
-                    }),
-                )
-                .await;
+                // NOTE: we do NOT emit `TurnEnded(Interrupted)` from the
+                // engine. The runner layer (`tui_runner` / `sdk_runner`)
+                // owns the cancel-reason source of truth — a TUI
+                // `/compact` cancel sets `SystemPreempt` in the runner's
+                // `OnceLock<CancelReason>` while `UserCommand::Interrupt`
+                // sets `UserCancel`. Engine has no visibility into which
+                // arm tripped `self.cancel`, so emitting from here would
+                // force a hardcoded reason and defeat the architecture.
+                // The runner reads `result.cancelled` and emits a single
+                // `TurnEnded(Interrupted)` with the correct reason.
                 return Ok(make_query_result(
+                    &consts,
+                    acc,
+                    turn_state,
                     String::new(),
-                    turn,
-                    total_usage,
-                    cost_tracker,
                     /*cancelled*/ true,
                     /*budget_exhausted*/ false,
-                    last_continue_reason,
-                    start_time,
-                    api_time_ms,
                     Some("cancelled".into()),
-                    permission_denials,
                     history.to_vec(),
-                    run_artifacts.clone(),
                 ));
             }
 
@@ -791,16 +614,17 @@ impl QueryEngine {
             self.drain_pending_tool_use_summary(&event_tx).await;
 
             // Budget check before each turn
-            match budget.check(turn) {
+            match turn_state.budget.check(turn_state.turn) {
                 BudgetDecision::Stop { reason } => {
                     warn!(%reason, "budget stop");
-                    let hit_max_turns = self.config.max_turns > 0 && turn >= self.config.max_turns;
+                    let hit_max_turns =
+                        self.config.max_turns > 0 && turn_state.turn >= self.config.max_turns;
                     if hit_max_turns {
                         let payload = coco_messages::MaxTurnsReachedPayload {
                             max_turns: self.config.max_turns,
-                            turn_count: turn,
+                            turn_count: turn_state.turn,
                         };
-                        run_artifacts.max_turns_reached = Some(payload.clone());
+                        acc.run_artifacts.max_turns_reached = Some(payload.clone());
                         crate::history_sync::history_push_and_emit(
                             history,
                             Message::Attachment(
@@ -810,43 +634,59 @@ impl QueryEngine {
                         )
                         .await;
                     }
-                    // Wire-protocol terminator. `MaxTurnsReached` carries
-                    // the max-turns hint for SDK consumers; the generic
-                    // budget-exhausted case maps to the same event without
-                    // a hint (TS doesn't distinguish either).
-                    let _ = emit_protocol(
-                        &event_tx,
-                        crate::ServerNotification::MaxTurnsReached {
-                            max_turns: if hit_max_turns {
-                                Some(self.config.max_turns)
-                            } else {
-                                None
-                            },
-                        },
-                    )
-                    .await;
+                    // Wire-protocol terminator. Two outcomes: `MaxTurnsReached`
+                    // when the turn budget is exhausted, `BudgetExhausted` for
+                    // the generic 90%/diminishing-returns token-budget stop.
+                    // Uses the runner-supplied cycle id so this pairs with
+                    // the runner's TurnStarted. `budget_tokens` is the
+                    // configured ceiling — `None` when no explicit max
+                    // was set (the 90%-of-window heuristic still drove
+                    // the stop; emitting 0 would be a lie).
+                    if let Some(id) = cycle_turn_id.as_ref() {
+                        // `*total_usage` deref is intentional — TokenUsage
+                        // is Copy. If a future refactor ever drops Copy
+                        // (Vec / String field), the resulting compile
+                        // error tells you to update both this emit AND
+                        // the make_query_result call below; don't paper
+                        // over with `.clone()` without checking the
+                        // sibling site.
+                        let outcome_params = if hit_max_turns {
+                            coco_types::TurnEndedParams::max_turns_reached(
+                                id.clone(),
+                                Some(*total_usage),
+                                self.config.max_turns,
+                            )
+                        } else {
+                            coco_types::TurnEndedParams::budget_exhausted(
+                                id.clone(),
+                                Some(*total_usage),
+                                total_usage.input_tokens.total + total_usage.output_tokens.total,
+                                self.config.total_token_budget,
+                            )
+                        };
+                        let _ = emit_protocol(
+                            &event_tx,
+                            crate::ServerNotification::TurnEnded(outcome_params),
+                        )
+                        .await;
+                    }
                     let last_text = extract_last_assistant_text(history);
                     return Ok(make_query_result(
+                        &consts,
+                        acc,
+                        turn_state,
                         last_text,
-                        turn,
-                        total_usage,
-                        cost_tracker,
                         /*cancelled*/ false,
                         /*budget_exhausted*/ true,
-                        last_continue_reason,
-                        start_time,
-                        api_time_ms,
                         Some(
-                            if self.config.max_turns > 0 && turn >= self.config.max_turns {
+                            if hit_max_turns {
                                 "max_turns"
                             } else {
                                 "budget_exhausted"
                             }
                             .into(),
                         ),
-                        permission_denials,
                         history.to_vec(),
-                        run_artifacts.clone(),
                     ));
                 }
                 BudgetDecision::Nudge { message } => {
@@ -866,8 +706,8 @@ impl QueryEngine {
                 BudgetDecision::Continue => {}
             }
 
-            turn += 1;
-            let turn_id = format!("turn-{turn}");
+            turn_state.turn += 1;
+            let turn_id = format!("turn-{}", turn_state.turn);
 
             // Consume the one-shot `pending_clear_message_history` flag
             // set by `ExitPlanModeTool` when the user picked "clear
@@ -894,7 +734,10 @@ impl QueryEngine {
                     // rotate session_id — `MessageTruncated { 0 }` is
                     // the right signal (vs. SessionResetForResume).
                     crate::history_sync::history_clear_and_emit(history, &event_tx).await;
-                    info!(turn, "plan-mode exit cleared conversation history");
+                    info!(
+                        turn = turn_state.turn,
+                        "plan-mode exit cleared conversation history"
+                    );
                 }
             }
 
@@ -922,23 +765,20 @@ impl QueryEngine {
                 .map(|prev| (Some(prev.run_id), Some(prev.turn_counter)))
                 .unwrap_or((None, None));
             info!(
-                turn,
+                turn = turn_state.turn,
                 turn_id = %turn_id,
+                cycle_turn_id = ?cycle_turn_id.as_ref().map(coco_types::TurnId::as_str),
                 session_turn,
                 last_compact_run_id = ?last_compact_run_id,
                 turns_since_last_compact = ?turns_since_last_compact,
                 history_len = history.len(),
-                active_model = model_runtime.current_model_id(),
-                "turn start"
+                active_model = services.runtime.current_model_id(),
+                "turn start (per-round; cycle TurnStarted was emitted by run_internal_with_messages)"
             );
-            let _delivered = emit_protocol(
-                &event_tx,
-                crate::ServerNotification::TurnStarted(coco_types::TurnStartedParams {
-                    turn_id: Some(turn_id.clone()),
-                    turn_number: turn,
-                }),
-            )
-            .await;
+            // No wire emit here — TurnStarted is once-per-cycle, fired
+            // by the runner / `engine_session::run_internal_with_messages`
+            // before this loop starts. `turn_id` above is the
+            // per-round id used only for log correlation.
 
             // Turn-start reminder pipeline (Phase D.3) — runs the five-phase
             // reminder build / orchestrate / bookkeeping / inject sequence
@@ -948,14 +788,14 @@ impl QueryEngine {
             let app_state_snapshot = self
                 .run_turn_reminder_pipeline(crate::engine_turn_reminders::TurnReminderContext {
                     history: &mut *history,
-                    plan_reminder: &mut plan_reminder,
-                    orchestrator: &reminder_orchestrator,
-                    last_user_input_uuid: &mut reminder_last_user_input_uuid,
-                    total_usage: &total_usage,
-                    cost_tracker: &cost_tracker,
-                    todo_key: &reminder_todo_key,
-                    context_window: reminder_context_window,
-                    effective_window: reminder_effective_window,
+                    plan_reminder: &mut services.plan,
+                    orchestrator: &services.reminders,
+                    last_user_input_uuid: &mut turn_state.reminder_last_user_input_uuid,
+                    total_usage: &acc.total_usage,
+                    cost_tracker: &acc.cost_tracker,
+                    todo_key: &consts.todo_key,
+                    context_window: consts.context_window,
+                    effective_window: consts.effective_window,
                     event_tx: &event_tx,
                 })
                 .await;
@@ -982,14 +822,10 @@ impl QueryEngine {
             // (mid-stream tool dispatch is a follow-up — see PR-E1 Phase 2).
             //
             // TS reference: query.ts:659-845 (streaming loop + tool exec).
-            // Escalation takes the MAX of the override and the user config so
-            // we never DOWNGRADE a user-configured higher limit (e.g. user
-            // set 128k, override says 64k → keep 128k, already sufficient).
-            let effective_max_tokens = match (max_tokens_override, self.config.max_tokens) {
-                (Some(a), Some(b)) => Some(a.max(b)),
-                (Some(v), None) | (None, Some(v)) => Some(v),
-                (None, None) => None,
-            };
+            // `max_tokens` is filled in after `active_client` resolves
+            // below (post plan-swap candidate selection) so the escalate
+            // ceiling reads from the actual model that will receive the
+            // request. See [`engine_recovery::effective_max_tokens`].
             // Anthropic-only `context_management`: ask the API to clear
             // old tool results / thinking blocks server-side without
             // breaking the prompt cache. Strategy list is built from the
@@ -1035,9 +871,9 @@ impl QueryEngine {
                 None
             };
 
-            let params = QueryParams {
+            let mut params = QueryParams {
                 prompt,
-                max_tokens: effective_max_tokens,
+                max_tokens: None,
                 // Per-call thinking override resolved at session
                 // bootstrap (parent: `/effort` slash command, agents:
                 // `AgentQueryConfig.effort` → adapter parses into
@@ -1089,13 +925,15 @@ impl QueryEngine {
             // below handles execution post-Finish.
             let streaming_enabled = self.config.streaming_tool_execution;
             let streaming_ctx: Option<Arc<ToolUseContext>> = if streaming_enabled {
-                let current_supports_tool_reference = model_runtime
+                let current_supports_tool_reference = services
+                    .runtime
                     .current_client()
                     .model_info()
                     .is_some_and(|info| {
                         info.has_capability(coco_types::Capability::ServerSideToolReference)
                     });
-                let current_supports_client_side_tool_search = model_runtime
+                let current_supports_client_side_tool_search = services
+                    .runtime
                     .current_client()
                     .model_info()
                     .is_some_and(|info| {
@@ -1104,9 +942,9 @@ impl QueryEngine {
                 let base = self
                     .tool_context_factory(hook_tx_opt.as_ref())
                     .build(crate::tool_context::ToolContextOverrides {
-                        user_message_id: Some(user_msg_uuid.clone()),
-                        progress_tx: Some(progress_tx_session.clone()),
-                        current_model_id: Some(model_runtime.current_model_id().to_string()),
+                        user_message_id: Some(consts.user_uuid.clone()),
+                        progress_tx: Some(services.progress_tx.clone()),
+                        current_model_id: Some(services.runtime.current_model_id().to_string()),
                         current_model_supports_tool_reference: current_supports_tool_reference,
                         current_model_supports_client_side_tool_search:
                             current_supports_client_side_tool_search,
@@ -1181,16 +1019,19 @@ impl QueryEngine {
             // is owned by ModelRuntime (see `probe_in_flight`),
             // not here — the engine only decides when to start
             // and when to finalize.
-            match model_runtime.attempt_probe_if_due(std::time::Instant::now()) {
+            match services
+                .runtime
+                .attempt_probe_if_due(std::time::Instant::now())
+            {
                 crate::model_runtime::ProbeDecision::Skip => {}
                 crate::model_runtime::ProbeDecision::Probe => {
                     info!(
-                        probe_target = model_runtime.current_model_id(),
+                        probe_target = services.runtime.current_model_id(),
                         "probing primary via half-open recovery",
                     );
                 }
             }
-            let was_probing = model_runtime.probe_in_flight();
+            let was_probing = services.runtime.probe_in_flight();
             // Route through ModelRuntime so post-fallback / probe
             // calls reach the active provider. When no fallback is
             // configured this is identical to `self.client.query_stream`.
@@ -1225,10 +1066,109 @@ impl QueryEngine {
             };
             let active_client = match plan_swap_candidate {
                 Some(plan_client) => plan_client.clone(),
-                None => model_runtime.current_client(),
+                None => services.runtime.current_client(),
             };
+
+            // Single-source per-call `max_tokens`: drives the QueryParams
+            // for the upcoming `open_turn_stream` call AND the C15 gate
+            // below. `Some(N)` only during a Phase-1 escalate retry
+            // (model opted in via `ModelInfo.max_output_tokens_escalate`);
+            // `None` on every other call — the inference layer falls
+            // through to the active model's baseline `max_output_tokens`.
+            // Computed here (not at QueryParams construction) so the
+            // ModelInfo lookup tracks the actually-active client even
+            // when plan-mode swaps the request to a Plan-role model.
+            let effective_max_tokens =
+                crate::engine_recovery::effective_max_tokens(&active_client, &turn_state);
+            params.max_tokens = effective_max_tokens;
+
+            // Pre-API blocking-limit gate (Finding C15). Prevents the
+            // request from hitting the API when the estimated prompt
+            // already exceeds the active model's context window minus
+            // the reserved output budget. Without this gate, the
+            // request would 4xx and route into reactive compaction,
+            // which may also fail (the history is already over the
+            // window for this model). Surfaces a synthetic api_error
+            // and exits with `stop_reason = "blocking_limit"` instead.
+            match self.check_blocking_limit(
+                history,
+                &active_client,
+                &turn_state,
+                effective_max_tokens,
+            ) {
+                crate::engine_recovery::BlockingLimitDecision::Block {
+                    estimated_tokens,
+                    context_window,
+                } => {
+                    warn!(
+                        estimated_tokens,
+                        context_window,
+                        provider = active_client.provider(),
+                        model_id = active_client.model_id(),
+                        "pre-API blocking limit hit — estimated prompt exceeds model context",
+                    );
+                    crate::history_sync::history_push_and_emit(
+                        history,
+                        crate::helpers::build_blocking_limit_api_error_message(
+                            estimated_tokens,
+                            context_window,
+                        ),
+                        &event_tx,
+                    )
+                    .await;
+                    // Wire-protocol terminator. SDK iterators / TUI
+                    // state machines key on a terminal `TurnEnded`
+                    // notification; without this they block on
+                    // `events()`. The other Ok-early-return paths emit
+                    // their own terminators too: cancel is left to the
+                    // runner's `TurnEnded(Interrupted)`, and budget
+                    // exhaustion emits `TurnEnded(MaxTurnsReached |
+                    // BudgetExhausted)`. `engine_session.rs`'s
+                    // `TurnEnded(Failed)` only fires on `Err` results, so
+                    // this Ok-return must emit one explicitly. Uses the
+                    // runner-supplied cycle id so it pairs with the
+                    // runner's `TurnStarted`; `Provider` matches the
+                    // `StatusCode::ContextWindowExceeded` category so a
+                    // client-side block and a provider-reported overflow
+                    // land under the same wire category.
+                    if let Some(id) = cycle_turn_id.as_ref() {
+                        let _ = emit_protocol(
+                            &event_tx,
+                            crate::ServerNotification::TurnEnded(
+                                coco_types::TurnEndedParams::failed(
+                                    id.clone(),
+                                    Some(*total_usage),
+                                    coco_types::ErrorPayload {
+                                        message: format!(
+                                            "blocking_limit: estimated {estimated_tokens} tokens \
+                                             exceeds active model context window {context_window} \
+                                             (provider={}, model={})",
+                                            active_client.provider(),
+                                            active_client.model_id(),
+                                        ),
+                                        code: coco_types::ErrorCode::Provider,
+                                    },
+                                ),
+                            ),
+                        )
+                        .await;
+                    }
+                    return Ok(make_query_result(
+                        &consts,
+                        acc,
+                        turn_state,
+                        String::new(),
+                        /*cancelled*/ false,
+                        /*budget_exhausted*/ false,
+                        Some("blocking_limit".into()),
+                        history.to_vec(),
+                    ));
+                }
+                crate::engine_recovery::BlockingLimitDecision::Proceed => {}
+            }
+
             tracing::debug!(
-                turn,
+                turn = turn_state.turn,
                 turn_id = %turn_id,
                 provider = active_client.provider(),
                 model_id = active_client.model_id(),
@@ -1239,856 +1179,186 @@ impl QueryEngine {
                 probing = was_probing,
                 "opening LLM stream"
             );
-            let mut rx = match active_client.query_stream(&params).await {
-                Ok(rx) => {
-                    // Success resets the capacity-error streak —
-                    // isolated 529s must not accumulate across turns.
-                    consecutive_capacity_errors = 0;
-                    if let Some(app_state) = self.app_state.as_ref() {
-                        crate::engine_helpers::clear_rate_limit_observation(
-                            app_state,
-                            active_client.provider(),
-                        )
-                        .await;
-                    }
-                    tracing::debug!(
-                        turn,
-                        turn_id = %turn_id,
-                        provider = active_client.provider(),
-                        model_id = active_client.model_id(),
-                        "LLM stream opened"
-                    );
-                    // Probe succeeded at stream-open — clear
-                    // recovery state and announce the switch-back.
-                    if was_probing {
-                        let recovered = model_runtime.current_model_id().to_string();
-                        model_runtime.finalize_probe(
-                            crate::model_runtime::ProbeOutcome::Success,
-                            std::time::Instant::now(),
-                        );
-                        emit_model_fallback_notice(
-                            &event_tx,
-                            /*original*/ "",
-                            &recovered,
-                            &self.config.session_id,
-                            crate::model_runtime::ModelFallbackReason::ProbeRecovery,
-                        )
-                        .await;
-                    }
-                    rx
-                }
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    // Probe failure: transparently revert to the
-                    // fallback, then retry the turn. A probe is
-                    // OPTIONAL — failing one must NOT surface as
-                    // a user-visible error; the session behaves
-                    // exactly as if no probe had been attempted.
-                    if was_probing {
-                        model_runtime.finalize_probe(
-                            crate::model_runtime::ProbeOutcome::Failure,
-                            std::time::Instant::now(),
-                        );
-                        warn!(
-                            active = model_runtime.current_model_id(),
-                            error = %err_msg,
-                            "probe failed at stream-open; reverting to fallback and retrying",
-                        );
-                        // Don't tick the capacity streak — probe
-                        // and streak are independent signals.
-                        // `continue` reruns the turn from the top
-                        // using the reverted fallback slot.
-                        continue;
-                    }
-                    if matches!(
-                        &e,
-                        coco_inference::InferenceError::ContextWindowExceeded { .. }
-                    ) || err_msg.contains("prompt_too_long")
-                        || err_msg.contains("context_length")
-                    {
-                        last_continue_reason = Some(
-                            self.handle_context_overflow(
-                                &mut *history,
-                                &event_tx,
-                                &mut budget,
-                                "stream_open",
-                            )
-                            .await,
-                        );
-                        continue;
-                    }
-                    let is_capacity = matches!(
-                        &e,
-                        coco_inference::InferenceError::Overloaded { .. }
-                            | coco_inference::InferenceError::RateLimited { .. }
-                    ) || is_capacity_error_message(&err_msg);
-                    if is_capacity {
-                        // Phase 7c: record per-provider rate-limit
-                        // observation onto `ToolAppState.rate_limits`
-                        // BEFORE the retry/fallback decision flow so
-                        // post-turn forks (prompt-suggestion) see the
-                        // throttle even on the first 429. Selectivity
-                        // is the read-side filter — every entry in
-                        // the map is keyed by the provider that
-                        // observed the error.
-                        if let Some(app_state) = self.app_state.as_ref() {
-                            let retry_after_ms = match &e {
-                                coco_inference::InferenceError::RateLimited {
-                                    retry_after_ms,
-                                    ..
-                                }
-                                | coco_inference::InferenceError::Overloaded {
-                                    retry_after_ms,
-                                    ..
-                                } => *retry_after_ms,
-                                _ => None,
-                            };
-                            crate::engine_helpers::record_rate_limit_observation(
-                                app_state,
-                                active_client.provider(),
-                                active_client.fingerprint().api,
-                                retry_after_ms,
-                            )
-                            .await;
-                        }
-                        consecutive_capacity_errors += 1;
-                        if consecutive_capacity_errors < MAX_CONSECUTIVE_CAPACITY_ERRORS {
-                            // Below threshold: log and retry the
-                            // turn on the same slot. The streak
-                            // counter accumulates across
-                            // iterations until `advance()` fires.
-                            warn!(
-                                consecutive = consecutive_capacity_errors,
-                                threshold = MAX_CONSECUTIVE_CAPACITY_ERRORS,
-                                active = model_runtime.current_model_id(),
-                                "capacity error below threshold; retrying on same slot",
-                            );
-                            continue;
-                        }
-                        if model_runtime.has_fallback() {
-                            let original = model_runtime.current_model_id().to_string();
-                            match model_runtime.advance() {
-                                crate::model_runtime::AdvanceOutcome::Switched(new_model) => {
-                                    warn!(
-                                        original,
-                                        fallback = new_model,
-                                        consecutive = consecutive_capacity_errors,
-                                        "advanced to next fallback slot after \
-                                         capacity streak",
-                                    );
-                                    consecutive_capacity_errors = 0;
-                                    emit_model_fallback_notice(
-                                        &event_tx,
-                                        &original,
-                                        &new_model,
-                                        &self.config.session_id,
-                                        crate::model_runtime::ModelFallbackReason::CapacityDegrade {
-                                            consecutive_errors: MAX_CONSECUTIVE_CAPACITY_ERRORS,
-                                        },
-                                    )
-                                    .await;
-                                    continue;
-                                }
-                                crate::model_runtime::AdvanceOutcome::Exhausted => {
-                                    warn!(
-                                        active = original,
-                                        "fallback chain exhausted on stream-open error",
-                                    );
-                                    emit_model_fallback_notice(
-                                        &event_tx,
-                                        &original,
-                                        /*new_model*/ "",
-                                        &self.config.session_id,
-                                        crate::model_runtime::ModelFallbackReason::ChainExhausted,
-                                    )
-                                    .await;
-                                }
-                            }
-                        }
-                    }
-                    return Err(Box::new(coco_error::PlainError::new(
-                        format!("LLM stream open failed: {e}"),
-                        coco_error::StatusCode::ProviderError,
-                    )));
-                }
+            let mut rx = match self
+                .open_turn_stream(
+                    &active_client,
+                    &params,
+                    was_probing,
+                    &mut services,
+                    &mut turn_state,
+                    &mut *history,
+                    &event_tx,
+                    &turn_id,
+                )
+                .await
+            {
+                Ok(rx) => rx,
+                Err(crate::engine_recovery::StreamErrorOutcome::Continue) => continue,
+                Err(crate::engine_recovery::StreamErrorOutcome::Bail(err)) => return Err(err),
             };
 
-            // Accumulate stream state. `tool_order` preserves the order tool
-            // calls first appeared (by `ToolInputStart`) so the downstream
-            // exec path keeps the same ordering contract as the blocking path.
+            // ── Phase 9: stream consume ──
             //
-            // `response_text` and `reasoning_text` are presentation-only
-            // accumulators driven from `StreamEvent::{TextDelta, ReasoningDelta}`:
-            //
-            // - `response_text` feeds the Stop hook's `last_assistant_message`
-            //   input (engine.rs:1691), a log field (`:1739`), and
-            //   `QueryResult.response_text` (`:1765`).
-            // - `reasoning_text` feeds a log field (`:1347`).
-            //
-            // The history-bearing assistant content is reconstructed from
-            // `event.snapshot` at `StreamEvent::Finish` — this is the path
-            // that preserves per-part `provider_metadata` (Gemini
-            // `thoughtSignature`, Anthropic `signature`, OpenAI
-            // `encrypted_content`). See `docs/coco-rs/streaming-metadata-roundtrip-plan.md`.
-            let mut response_text = String::new();
-            let mut reasoning_text = String::new();
-            let mut tool_order: Vec<String> = Vec::new();
-            let mut tool_buffers: std::collections::HashMap<String, StreamingToolCallBuffer> =
-                std::collections::HashMap::new();
-            let mut stream_usage: Option<TokenUsage> = None;
-            // Typed stop reason — set once by the provider-adapter
-            // seam (see `coco_llm_types::StopReason` = extended
-            // `StopReason`). The engine matches on the
-            // typed enum directly; no wire-string parsing.
-            let mut stream_stop_reason: Option<coco_messages::StopReason> = None;
-            let mut stream_error: Option<String> = None;
-            // Captured at `StreamEvent::Finish`; consumed to rebuild
-            // `Vec<AssistantContentPart>` for history. `None` until Finish
-            // arrives; cancellation/error paths skip reconstruction
-            // entirely so the `None` case is unreachable on the
-            // reconstruction path.
-            let mut turn_snapshot: Option<std::sync::Arc<coco_inference::AssistantTurnSnapshot>> =
-                None;
-
-            loop {
-                let event = tokio::select! {
-                    _ = self.cancel.cancelled() => {
-                        // Cancellation mid-stream: drop the stream
-                        // and fall through to the top-of-loop
-                        // `is_cancelled()` check which returns a
-                        // proper `Ok(QueryResult { cancelled: true })`.
-                        // With streaming_tool_execution enabled, the
-                        // StreamingHandle's JoinSet aborts any
-                        // inflight safe tools when dropped
-                        // (transitively via streaming_handle going
-                        // out of scope as this function unwinds).
-                        drop(rx);
-                        break;
-                    }
-                    ev = rx.recv() => ev,
-                };
-                let Some(event) = event else {
-                    // Channel closed without Finish/Error — treat as a premature
-                    // end. Keep whatever content we accumulated; callers fall
-                    // through to the empty-tool_calls exit below.
-                    break;
-                };
-
-                match event {
-                    StreamEvent::TextDelta { text } => {
-                        response_text.push_str(&text);
-                        let _ = emit_stream(
-                            &event_tx,
-                            crate::AgentStreamEvent::TextDelta {
-                                turn_id: turn_id.clone(),
-                                delta: text,
-                            },
-                        )
-                        .await;
-                    }
-                    StreamEvent::ReasoningDelta { text } => {
-                        reasoning_text.push_str(&text);
-                        let _ = emit_stream(
-                            &event_tx,
-                            crate::AgentStreamEvent::ThinkingDelta {
-                                turn_id: turn_id.clone(),
-                                delta: text,
-                            },
-                        )
-                        .await;
-                    }
-                    StreamEvent::ReasoningEnd { .. } => {
-                        // No-op: the snapshot accumulator at the
-                        // coco-inference layer captures the signature
-                        // per-segment and surfaces it on
-                        // `StreamEvent::Finish.snapshot` for full
-                        // multi-reasoning fidelity (see plan v6).
-                    }
-                    StreamEvent::ToolCallStart { id, tool_name } => {
-                        if !tool_buffers.contains_key(&id) {
-                            tool_order.push(id.clone());
-                        }
-                        tool_buffers.insert(
-                            id.clone(),
-                            StreamingToolCallBuffer {
-                                tool_name,
-                                input_json: String::new(),
-                                complete: false,
-                            },
-                        );
-                    }
-                    StreamEvent::ToolCallDelta { id, delta } => {
-                        if let Some(buf) = tool_buffers.get_mut(&id) {
-                            buf.input_json.push_str(&delta);
-                        }
-                    }
-                    StreamEvent::ToolCallEnd { id } => {
-                        if let Some(buf) = tool_buffers.get_mut(&id) {
-                            buf.complete = true;
-                        }
-                        // Streaming mode: parse the freshly-completed
-                        // input, run full per-tool preparation
-                        // (validate → pre-hook → permission →
-                        // re-validate), and feed the resulting plan
-                        // to the StreamingHandle. Safe tools start
-                        // executing immediately via tokio::spawn;
-                        // unsafe tools queue for commit_flush.
-                        //
-                        // ── I1 invariant fix ──
-                        // The preparer's early-error paths push
-                        // synthetic tool_result rows to history
-                        // directly (non-streaming behaviour). In
-                        // streaming mode, the assistant message
-                        // hasn't been committed yet — it lands at the
-                        // `Finish` arm below. A naive inline push
-                        // produces history of:
-                        //   N:   user/tool_result (synthetic error)
-                        //   N+1: assistant/tool_use(s)
-                        // ...which violates Anthropic's strict
-                        // tool_use/tool_result adjacency.
-                        //
-                        // Capture the pre-call length, then drain any
-                        // pushes after preparation. Successful prep
-                        // makes no pushes (the plan is fed to the
-                        // handle); failed prep pushes the synthetic
-                        // error, which we re-wrap as an
-                        // `EarlyOutcome` so `commit_flush` surfaces
-                        // it AFTER the assistant message lands.
-                        if let (Some(handle), Some(ctx_arc)) =
-                            (streaming_handle.as_mut(), streaming_ctx.as_ref())
-                            && let Some(buf) = tool_buffers.get(&id)
-                            && buf.complete
-                        {
-                            // Parse the accumulated `input_json` buffer
-                            // through the shared `llm_json` repair
-                            // helper, falling back to `Value::Object({})`
-                            // on failure. Mirrors TS Claude Code's
-                            // `parsed ?? {}` in `utils/messages.ts:2694`
-                            // — let schema validation in
-                            // `tool_call_preparer` report specific
-                            // missing fields instead of a generic
-                            // "JSON broken". `invalid` stays `false`
-                            // here; schema validation sets it on schema
-                            // violation.
-                            let parsed_input =
-                                crate::tool_input_parse::parse_tool_arguments_or_empty(
-                                    &buf.input_json,
-                                    &buf.tool_name,
-                                );
-                            let input =
-                                crate::tool_input_normalizer::normalize_observable_tool_input(
-                                    &buf.tool_name,
-                                    parsed_input,
-                                    crate::tool_input_normalizer::ToolInputNormalizationContext {
-                                        session_id: Some(&self.config.session_id),
-                                        plans_dir: plans_dir.as_deref(),
-                                        agent_id: ctx_arc
-                                            .agent_id
-                                            .as_ref()
-                                            .map(coco_types::AgentId::as_str),
-                                        cwd: None,
-                                    },
-                                );
-                            let tcp = ToolCallPart {
-                                tool_call_id: id.clone(),
-                                tool_name: buf.tool_name.clone(),
-                                input,
-                                provider_executed: None,
-                                invalid: false,
-                                invalid_reason: None,
-                                provider_metadata: None,
-                            };
-                            let slice = std::slice::from_ref(&tcp);
-                            let mut prep_args = crate::tool_call_preparer::PendingToolPreparation {
-                                event_tx: &event_tx,
-                                history: &mut *history,
-                                ctx: ctx_arc.as_ref(),
-                                tool_calls: slice,
-                                tools: &self.tools,
-                                hooks: self.hooks.as_ref(),
-                                orchestration_ctx: self.orchestration_ctx(),
-                                hook_tx_opt: hook_tx_opt.as_ref(),
-                                permission_denials: &mut permission_denials,
-                                state_tracker,
-                                permission_bridge: self.permission_bridge.as_ref(),
-                                session_id: &self.config.session_id,
-                                cancel: &self.cancel,
-                                auto_mode_state: self.auto_mode_state.as_ref(),
-                                denial_tracker: self.denial_tracker.as_ref(),
-                                client: &self.client,
-                                auto_mode_rules: &self.auto_mode_rules,
-                                completion_event_mode:
-                                    crate::helpers::ToolCompletionEventMode::Defer,
-                            };
-                            let pre_prep_len = prep_args.history.len();
-                            let prep_result =
-                                crate::tool_call_preparer::prepare_one_pending_tool_call(
-                                    &mut prep_args,
-                                    &tcp,
-                                )
-                                .await;
-                            // Drain whatever the preparer pushed
-                            // synchronously (synthetic error
-                            // tool_result rows on the failure paths).
-                            // `drain_pushed_since` rebuilds the UUID
-                            // index so subsequent lookups stay valid.
-                            let captured_errors = history.len().saturating_sub(pre_prep_len);
-                            let captured: Vec<coco_messages::Message> = if captured_errors > 0 {
-                                history.drain_pushed_since(pre_prep_len)
-                            } else {
-                                Vec::new()
-                            };
-
-                            match prep_result {
-                                Some((pending, _ctx)) => {
-                                    debug_assert!(
-                                        captured.is_empty(),
-                                        "preparation succeeded but pushed messages"
-                                    );
-                                    // Emit ToolUseStarted now that
-                                    // the call has passed pre-hook +
-                                    // permission and is about to be
-                                    // spawned. Non-streaming path
-                                    // emits this in
-                                    // tool_call_runner.rs:145; we
-                                    // mirror that here so SDK
-                                    // consumers see the same event
-                                    // sequence regardless of path.
-                                    let _ = emit_stream(
-                                        &event_tx,
-                                        crate::AgentStreamEvent::ToolUseStarted {
-                                            call_id: pending.tool_use_id.clone(),
-                                            name: pending.tool.name().to_string(),
-                                            batch_id: None,
-                                        },
-                                    )
-                                    .await;
-                                    let model_index = streaming_model_index;
-                                    streaming_model_index += 1;
-                                    handle.feed_plan(coco_tool_runtime::ToolCallPlan::Runnable(
-                                        coco_tool_runtime::PreparedToolCall {
-                                            tool_use_id: pending.tool_use_id,
-                                            tool_id: pending.tool.id(),
-                                            tool: pending.tool,
-                                            parsed_input: pending.input,
-                                            model_index,
-                                        },
-                                    ));
-                                }
-                                None if !captured.is_empty() => {
-                                    // Preparation failed and pushed a
-                                    // synthetic-error tool_result. If
-                                    // cancellation raced the permission
-                                    // wait, preserve a valid partial
-                                    // assistant/tool_result pair now;
-                                    // the normal Finish path will not
-                                    // run commit_flush after the cancel
-                                    // token is set.
-                                    if self.cancel.is_cancelled() {
-                                        let mut content_parts = Vec::new();
-                                        if !response_text.is_empty() {
-                                            content_parts.push(AssistantContentPart::Text(
-                                                TextPart {
-                                                    text: response_text.clone(),
-                                                    provider_metadata: None,
-                                                },
-                                            ));
-                                        }
-                                        content_parts
-                                            .push(AssistantContentPart::ToolCall(tcp.clone()));
-                                        crate::history_sync::history_push_and_emit(
-                                            history,
-                                            Message::Assistant(coco_messages::AssistantMessage {
-                                                message: LlmMessage::Assistant {
-                                                    content: content_parts
-                                                        .into_iter()
-                                                        .map(convert_to_assistant_content)
-                                                        .collect(),
-                                                    provider_options: None,
-                                                },
-                                                uuid: uuid::Uuid::new_v4(),
-                                                model: model_runtime.current_model_id().to_string(),
-                                                stop_reason: Some(
-                                                    coco_messages::StopReason::ToolUse,
-                                                ),
-                                                usage: None,
-                                                cost_usd: None,
-                                                request_id: None,
-                                                api_error: None,
-                                            }),
-                                            &event_tx,
-                                        )
-                                        .await;
-                                        for msg in captured {
-                                            crate::history_sync::history_push_and_emit(
-                                                history, msg, &event_tx,
-                                            )
-                                            .await;
-                                        }
-                                    } else {
-                                        // Re-wrap and feed as EarlyOutcome
-                                        // so commit_flush surfaces it
-                                        // after the assistant message
-                                        // commits (I1 ordering fix).
-                                        // The streaming preparer runs in
-                                        // `ToolCompletionEventMode::Defer`,
-                                        // so it did NOT emit
-                                        // `ToolUseCompleted` inline —
-                                        // commit_flush's `on_outcome`
-                                        // callback is the sole emitter
-                                        // for this id and must not be
-                                        // suppressed by dedup.
-                                        let tool_id_for_outcome: coco_types::ToolId =
-                                            buf.tool_name.parse().unwrap_or_else(|_| {
-                                                coco_types::ToolId::Custom(buf.tool_name.clone())
-                                            });
-                                        let model_index = streaming_model_index;
-                                        streaming_model_index += 1;
-                                        let outcome = crate::helpers::build_streaming_early_outcome(
-                                            &id,
-                                            tool_id_for_outcome,
-                                            model_index,
-                                            captured,
-                                        );
-                                        handle.feed_plan(
-                                            coco_tool_runtime::ToolCallPlan::EarlyOutcome(outcome),
-                                        );
-                                    }
-                                }
-                                None => {
-                                    // Rare: prep returned None with
-                                    // no captured messages. Drop
-                                    // silently — there is no
-                                    // model-visible result to pair.
-                                }
-                            }
-                        }
-                    }
-                    StreamEvent::Finish {
-                        usage,
-                        stop_reason,
-                        raw_stop_reason,
-                        snapshot,
-                        ..
-                    } => {
-                        turn_snapshot = Some(snapshot);
-                        tracing::debug!(
-                            turn,
-                            turn_id = %turn_id,
-                            stop_reason = %stop_reason,
-                            raw_stop_reason = ?raw_stop_reason,
-                            tokens_in = usage.input_tokens.total,
-                            tokens_out = usage.output_tokens.total,
-                            cache_read = usage.input_tokens.cache_read,
-                            cache_creation = usage.input_tokens.cache_write,
-                            text_chars = response_text.len(),
-                            reasoning_chars = reasoning_text.len(),
-                            tool_call_count = tool_order.len(),
-                            "LLM stream finished"
-                        );
-                        stream_usage = Some(usage);
-                        stream_stop_reason = Some(stop_reason);
-                        // raw_stop_reason is diagnostic only — already
-                        // captured in the debug log above. Drop it.
-                        let _ = raw_stop_reason;
-                        break;
-                    }
-                    StreamEvent::Error { message, .. } => {
-                        warn!(
-                            turn,
-                            turn_id = %turn_id,
-                            error = %message,
-                            text_chars = response_text.len(),
-                            tool_call_count = tool_order.len(),
-                            "LLM stream errored"
-                        );
-                        stream_error = Some(message);
-                        break;
-                    }
-                }
-            }
+            // Drive the per-turn LLM stream to completion via the
+            // `engine_stream_consume::consume_stream` extension
+            // method. Returns `StreamConsumed { accumulators, outcome }`
+            // where `outcome` is the typed three-variant
+            // `StreamOutcome`. Cancellation is observed via
+            // `self.cancel.is_cancelled()` post-call — the token
+            // itself is the canonical signal.
+            let consumed = self
+                .consume_stream(
+                    &mut rx,
+                    &event_tx,
+                    &mut *history,
+                    hook_tx_opt.as_ref(),
+                    &mut streaming_handle,
+                    streaming_ctx.as_ref(),
+                    &mut streaming_model_index,
+                    state_tracker,
+                    &turn_id,
+                    &consts,
+                    &services,
+                    &mut acc,
+                    &turn_state,
+                )
+                .await;
+            let crate::engine_stream_consume::StreamConsumed {
+                response_text,
+                tool_order,
+                tool_buffers,
+                outcome,
+            } = consumed;
 
             let api_elapsed_ms = api_start.elapsed().as_millis() as i64;
-            api_time_ms += api_elapsed_ms;
+            acc.api_time_ms += api_elapsed_ms;
 
-            // Cancellation mid-stream: skip the rest of turn
-            // processing and let the top-of-loop cancel check build
-            // the proper `QueryResult { cancelled: true }`. Any
-            // streaming handle in-flight is implicitly aborted when
-            // this function unwinds (JoinSet drops cancel pending
-            // tasks).
-            //
-            // Before dropping the handle we still drain its
-            // `pending_early` queue — cancel races with
-            // `prepare_one_pending_tool_call` (e.g. cancel during
-            // permission wait) may have parked synthesized error
-            // `tool_result` rows there for the I1-ordered commit. We
-            // emit a synthetic assistant_msg containing the matching
-            // tool_use blocks so the final history honors Anthropic's
-            // tool_use ↔ tool_result adjacency. TS parity:
-            // `query.ts:1015-1028` (`yieldMissingToolResultBlocks`
-            // after abort).
+            // Cancellation mid-stream: drain staged tool plans (their
+            // pending_early `tool_result` rows must pair with a
+            // synthetic `tool_use` assistant message for I1
+            // adjacency), write the canonical user-cancel marker, and
+            // `continue` so the top-of-loop cancel check builds the
+            // proper `QueryResult { cancelled: true }`. See
+            // `engine_stream_consume::cancel_epilogue` for details.
+            // This also catches the late-cancel case: cancel token
+            // observable post-`consume_stream` even if the loop
+            // returned a `Finished`/`Errored` outcome (cancel set
+            // racing with `break;` after event arm).
             if self.cancel.is_cancelled() {
-                let mut had_tool_use = false;
-                if let Some(handle) = streaming_handle.take() {
-                    let discarded = handle.discard().await;
-                    let early: Vec<_> = discarded
-                        .into_iter()
-                        .filter(|o| !o.ordered_messages.is_empty())
-                        .collect();
-                    if !early.is_empty() {
-                        had_tool_use = true;
-                        let kept_ids: std::collections::HashSet<&String> =
-                            early.iter().map(|o| &o.tool_use_id).collect();
-                        let synth_parts: Vec<coco_inference::TurnPart> = tool_order
-                            .iter()
-                            .filter(|id| kept_ids.contains(*id))
-                            .filter_map(|id| tool_buffers.get(id).map(|buf| (id, buf)))
-                            .map(|(id, buf)| {
-                                coco_inference::TurnPart::ToolCall(
-                                    coco_inference::ToolCallSegment {
-                                        id: id.clone(),
-                                        tool_name: buf.tool_name.clone(),
-                                        input_json: buf.input_json.clone(),
-                                        provider_executed: None,
-                                        dynamic: None,
-                                        is_input_complete: buf.complete,
-                                        is_complete: false,
-                                        provider_metadata: None,
-                                        invalid: false,
-                                        invalid_reason: None,
-                                    },
-                                )
-                            })
-                            .collect();
-                        let synth_snapshot =
-                            coco_inference::AssistantTurnSnapshot { parts: synth_parts };
-                        let (content_parts, _) = assistant_content_from_snapshot(
-                            &synth_snapshot,
-                            crate::tool_input_normalizer::ToolInputNormalizationContext {
-                                session_id: Some(&self.config.session_id),
-                                plans_dir: plans_dir.as_deref(),
-                                agent_id: self.config.agent_id.as_deref(),
-                                cwd: None,
-                            },
-                        );
-                        if !content_parts.is_empty() {
-                            let assistant_msg =
-                                Message::Assistant(coco_messages::AssistantMessage {
-                                    message: LlmMessage::Assistant {
-                                        content: content_parts
-                                            .into_iter()
-                                            .map(convert_to_assistant_content)
-                                            .collect(),
-                                        provider_options: None,
-                                    },
-                                    uuid: uuid::Uuid::new_v4(),
-                                    model: model_runtime.current_model_id().to_string(),
-                                    stop_reason: None,
-                                    usage: None,
-                                    cost_usd: None,
-                                    request_id: None,
-                                    api_error: None,
-                                });
-                            crate::history_sync::history_push_and_emit(
-                                history,
-                                assistant_msg,
-                                &event_tx,
-                            )
-                            .await;
-                        }
-                        for outcome in early {
-                            for msg in outcome.ordered_messages {
-                                crate::history_sync::history_push_and_emit(history, msg, &event_tx)
-                                    .await;
-                            }
-                        }
-                    }
-                }
-                // Mid-stream cancel: tool calls may have been
-                // synthesized into history above (`had_tool_use`
-                // tracks the engine's authoritative view), so
-                // `for_tool_use` is decided once here and stored on
-                // the typed marker — downstream renders read the
-                // field rather than recomputing from running-tool
-                // state. See `engine-tui-unified-transcript-plan.md`
-                // §7.2.
-                crate::history_sync::finalize_user_cancel(
-                    history,
-                    /*in_flight_tool_calls*/ had_tool_use,
+                self.cancel_epilogue(
+                    &mut streaming_handle,
+                    &tool_order,
+                    &tool_buffers,
+                    &mut *history,
                     &event_tx,
+                    &services,
+                    &consts,
                 )
                 .await;
                 continue;
             }
 
-            if let Some(err_msg) = stream_error {
-                // Probe failure mid-stream: transparently revert
-                // and retry — same rule as stream-open. Probes
-                // are optional; their failures must never be
-                // user-visible.
-                if model_runtime.probe_in_flight() {
-                    model_runtime.finalize_probe(
-                        crate::model_runtime::ProbeOutcome::Failure,
-                        std::time::Instant::now(),
-                    );
-                    warn!(
-                        active = model_runtime.current_model_id(),
-                        error = %err_msg,
-                        "probe failed mid-stream; reverting to fallback and retrying",
-                    );
-                    continue;
-                }
-                if err_msg.contains("prompt_too_long") || err_msg.contains("context_length") {
-                    last_continue_reason = Some(
-                        self.handle_context_overflow(
+            // Branch on outcome: `Errored` routes through the recovery
+            // dispatcher (may `continue` or surface a fatal error);
+            // `Finished` and `PrematureClose` both fall through to
+            // the success path — `PrematureClose` is modeled as a
+            // clean turn with empty snapshot + `stop_reason: None`.
+            let (snapshot, usage, parsed_stop_reason) = match outcome {
+                crate::engine_stream_consume::StreamOutcome::Errored { message } => {
+                    match self
+                        .handle_stream_error(
+                            message,
+                            &mut services,
+                            &mut turn_state,
                             &mut *history,
                             &event_tx,
-                            &mut budget,
-                            "mid_stream",
+                            &mut streaming_handle,
+                            &turn_id,
                         )
-                        .await,
-                    );
-                    continue;
-                }
-                if is_capacity_error_message(&err_msg) {
-                    consecutive_capacity_errors += 1;
-                    if consecutive_capacity_errors < MAX_CONSECUTIVE_CAPACITY_ERRORS {
-                        warn!(
-                            consecutive = consecutive_capacity_errors,
-                            threshold = MAX_CONSECUTIVE_CAPACITY_ERRORS,
-                            active = model_runtime.current_model_id(),
-                            "capacity error mid-stream below threshold; retrying on same slot",
-                        );
-                        continue;
-                    }
-                    if model_runtime.has_fallback() {
-                        let original = model_runtime.current_model_id().to_string();
-                        match model_runtime.advance() {
-                            crate::model_runtime::AdvanceOutcome::Switched(new_model) => {
-                                warn!(
-                                    original,
-                                    fallback = new_model,
-                                    consecutive = consecutive_capacity_errors,
-                                    "advanced to next fallback slot after \
-                                     capacity streak (mid-stream)",
-                                );
-                                consecutive_capacity_errors = 0;
-                                emit_model_fallback_notice(
-                                    &event_tx,
-                                    &original,
-                                    &new_model,
-                                    &self.config.session_id,
-                                    crate::model_runtime::ModelFallbackReason::CapacityDegrade {
-                                        consecutive_errors: MAX_CONSECUTIVE_CAPACITY_ERRORS,
-                                    },
-                                )
-                                .await;
-                                continue;
-                            }
-                            crate::model_runtime::AdvanceOutcome::Exhausted => {
-                                warn!(active = original, "fallback chain exhausted mid-stream",);
-                                emit_model_fallback_notice(
-                                    &event_tx,
-                                    &original,
-                                    /*new_model*/ "",
-                                    &self.config.session_id,
-                                    crate::model_runtime::ModelFallbackReason::ChainExhausted,
-                                )
-                                .await;
-                            }
-                        }
+                        .await
+                    {
+                        crate::engine_recovery::StreamErrorOutcome::Continue => continue,
+                        crate::engine_recovery::StreamErrorOutcome::Bail(err) => return Err(err),
                     }
                 }
-                // Surface streaming-discard outcomes for telemetry
-                // before bailing out. The assistant message hasn't
-                // committed yet on this path, so committing
-                // tool_result rows to history would violate I1;
-                // instead we emit `ToolUseCompleted{is_error}` per
-                // discarded plan and warn-log a summary, then drop
-                // them. Without this drain `JoinSet::drop` aborts
-                // inflight safe tools silently — operators lose
-                // visibility into how much real work the stream
-                // error invalidated.
-                if let Some(handle) = streaming_handle.take() {
-                    let discarded = handle.discard().await;
-                    if !discarded.is_empty() {
-                        let count = discarded.len() as i64;
-                        for outcome in discarded {
-                            let tool_use_id = outcome.tool_use_id.clone();
-                            let tool_id = outcome.tool_id.clone();
-                            let text = extract_streaming_result_text(&outcome.ordered_messages);
-                            let _ = emit_stream(
-                                &event_tx,
-                                crate::AgentStreamEvent::ToolUseCompleted {
-                                    call_id: tool_use_id,
-                                    name: tool_id.to_string(),
-                                    output: text,
-                                    is_error: true,
-                                },
-                            )
-                            .await;
-                        }
-                        warn!(
-                            turn,
-                            turn_id = %turn_id,
-                            discarded_count = count,
-                            error = %err_msg,
-                            "discarded streaming tool outcomes after mid-stream error",
-                        );
-                    }
-                }
-                return Err(Box::new(coco_error::PlainError::new(
-                    format!("LLM stream failed: {err_msg}"),
-                    coco_error::StatusCode::ProviderError,
-                )));
-            }
-            // Stream closed without error — reset the capacity streak
-            // so an isolated failure followed by a successful turn
-            // doesn't carry forward.
-            consecutive_capacity_errors = 0;
+                crate::engine_stream_consume::StreamOutcome::Finished {
+                    snapshot,
+                    usage,
+                    stop_reason,
+                } => (snapshot, usage, Some(stop_reason)),
+                crate::engine_stream_consume::StreamOutcome::PrematureClose => (
+                    std::sync::Arc::new(coco_inference::AssistantTurnSnapshot::default()),
+                    coco_types::TokenUsage::default(),
+                    None,
+                ),
+            };
 
-            let usage = stream_usage.unwrap_or_default();
-            total_usage += usage;
-            budget.record_usage(&usage);
+            // Capacity streak was already cleared at stream-open
+            // success (the `Ok(rx) => ...` arm above sets
+            // `consecutive_capacity_errors = 0`). Reaching this point
+            // means the stream opened cleanly, so a second reset here
+            // would be a no-op writing `0 = 0`. Kept as a load-bearing
+            // invariant comment instead of dead code (Finding **R9**).
+
+            acc.total_usage += usage;
+            // Mirror into the wrapper-owned `&mut total_usage` slot so
+            // `run_session_loop` can surface accumulated usage on the
+            // Err path (where `acc` is dropped without ever building a
+            // QueryResult) and so the once-per-cycle `TurnEnded` emits
+            // that read `*total_usage` agree with `acc.total_usage`. On
+            // the Ok paths the value rides home inside
+            // `QueryResult.total_usage` via `make_query_result`.
+            *total_usage = acc.total_usage;
+            turn_state.budget.record_usage(&usage);
             // Record usage against the currently-active logical model
             // identity (post-fallback value if a switch has happened),
             // not the provider wire alias after `api_model_name`.
             let identity = active_client.model_identity();
             let provider = identity.provider.clone();
             let model_id = identity.model_id.clone();
-            cost_tracker.record_usage(&provider, &model_id, usage, api_elapsed_ms);
+            acc.cost_tracker
+                .record_usage(&provider, &model_id, usage, api_elapsed_ms);
             self.record_session_usage(&event_tx, &provider, &model_id, usage, api_elapsed_ms)
                 .await;
+
+            // **Finding R11** — stamp the wall-clock "last assistant
+            // message" timestamp the moment we know the LLM produced
+            // a response (Finish or PrematureClose with content). Drives
+            // (a) `time_since_last_assistant_ms` on next-turn
+            // `QueryParams` and (b)
+            // `coco_compact::evaluate_time_based_trigger` inside
+            // `finalize_turn_post_tools`. The setter
+            // [`Self::stamp_assistant_now`] was defined but had zero
+            // callers, so time-based microcompact silently never
+            // triggered and the QueryParams field was always `None`.
+            // Stamped here rather than at the various `history_push_*`
+            // sites because (i) recovery + ContentFilter + clean paths
+            // all converge here after usage is recorded, and (ii)
+            // stream-Error paths (`handle_stream_*_error` → Continue or
+            // Bail) deliberately don't stamp — no model output, no
+            // signal.
+            self.stamp_assistant_now();
 
             // Reconstruct assistant content from the per-turn snapshot
             // accumulated inside `coco-inference::process_stream_with_config`.
             // Each `TurnPart` carries its own `provider_metadata`, so
             // Gemini `thoughtSignature` / Anthropic `signature` /
             // OpenAI `encrypted_content` survive intact and round-trip
-            // back to the model on the next turn.
-            //
-            // Cancellation / mid-stream error paths skip this block via
-            // `continue;` upstream (engine.rs:~1379), so `turn_snapshot`
-            // is always `Some` here. Defensive fallback to empty
-            // snapshot keeps the unwrap from panicking if that
-            // invariant ever weakens.
-            let snapshot = turn_snapshot.take().unwrap_or_default();
+            // back to the model on the next turn. On the
+            // `PrematureClose` path `snapshot` is the empty default —
+            // `assistant_content_from_snapshot` returns
+            // `(vec![], vec![])` and the downstream commit lands as
+            // an empty assistant message (mirrors the pre-enum
+            // `unwrap_or_default()` behavior).
             let (content_parts, tool_calls) = assistant_content_from_snapshot(
                 &snapshot,
                 crate::tool_input_normalizer::ToolInputNormalizationContext {
                     session_id: Some(&self.config.session_id),
-                    plans_dir: plans_dir.as_deref(),
+                    plans_dir: consts.plans_dir.as_deref(),
                     agent_id: self.config.agent_id.as_deref(),
                     cwd: None,
                 },
             );
-
-            // Typed StopReason flows straight from the stream — no
-            // wire-string parsing. `stream_stop_reason` carries the
-            // canonical StopReason set at the
-            // vercel-ai-provider seam.
-            let parsed_stop_reason = stream_stop_reason;
             let assistant_msg = Message::Assistant(coco_messages::AssistantMessage {
                 message: LlmMessage::Assistant {
                     content: content_parts
@@ -2111,28 +1381,75 @@ impl QueryEngine {
                 api_error: None,
             });
 
-            // Content-filter / refusal: no recovery — policy decision,
-            // retry won't change it. Push the partial real response
-            // (may contain a partial refusal explanation from the
-            // model), then synthesize an `api_error`-tagged assistant
-            // message carrying the user-facing explanation, and fall
-            // through to the natural `tool_calls.is_empty()` end-of-turn
-            // exit. TS parity: `services/api/claude.ts:2258-2264`
-            // (`getErrorMessageIfRefusal`) yields the synthetic message
-            // at the stream layer; `query.ts:1262-1265` then short-
-            // circuits stop-hooks when the last message is
-            // `isApiErrorMessage`. coco-rs synthesizes here at the
-            // engine layer because `coco-inference` is provider-agnostic
-            // and can't construct `coco_messages::Message`. Multi-LLM:
-            // every `vercel-ai-<provider>` adapter maps refusal /
-            // safety / recitation / content_filter → typed
-            // `StopReason::ContentFilter` at the seam, so this single
-            // branch covers Anthropic / OpenAI / Google.
-            if tool_calls.is_empty()
+            // Recovery dispatch (Finding C2 / C4 / C22 / N1):
+            // - `withheld_opt = Some(reason)` ⇒ the stream finished
+            //   with a recoverable stop reason; the dispatcher decides
+            //   how to act and consumes `assistant_msg` for whichever
+            //   pushes the recovery branch needs.
+            // - ContentFilter ⇒ refusal is a terminal policy decision,
+            //   handled inline below (push assistant + synthetic, fall
+            //   through to no-tool-calls).
+            // - Otherwise ⇒ clean stream, normal commit with usage
+            //   anchor.
+            //
+            // Multi-provider: `withhold_reason_for_stop` matches the
+            // typed `StopReason` directly; every `vercel-ai-*` adapter
+            // (Anthropic / OpenAI / Google / ByteDance / OpenAI-compat)
+            // maps its raw signal to the same enum at the seam — no
+            // wire-string sniffing reaches this layer.
+            let withheld_opt = if tool_calls.is_empty() {
+                parsed_stop_reason.and_then(crate::engine_stream_consume::withhold_reason_for_stop)
+            } else {
+                None
+            };
+
+            if let Some(withheld) = withheld_opt {
+                match self
+                    .run_post_stream_recovery(
+                        withheld,
+                        assistant_msg,
+                        &mut *history,
+                        &event_tx,
+                        &mut turn_state,
+                        // Pass the post-plan-swap client so escalate
+                        // decisions read the same `ModelInfo` the next
+                        // iteration's retry will hit. Without this,
+                        // plan-mode could fire Phase-1 against the
+                        // Main role's escalate ceiling while the actual
+                        // retry runs through the Plan role's smaller
+                        // (or no-escalate) `ModelInfo`.
+                        &active_client,
+                    )
+                    .await
+                {
+                    crate::engine_recovery::RecoveryDisposition::Continue(transition) => {
+                        turn_state.transition = Some(transition);
+                        continue;
+                    }
+                    crate::engine_recovery::RecoveryDisposition::TerminateExhausted => {
+                        // Dispatcher pushed assistant_msg + the
+                        // synthetic api_error. Falling through to the
+                        // no-tool-calls terminal lets Stop hooks (with
+                        // the `isApiErrorMessage` short-circuit from
+                        // commit 5) close out the turn.
+                    }
+                }
+            } else if tool_calls.is_empty()
                 && parsed_stop_reason == Some(coco_messages::StopReason::ContentFilter)
             {
+                // Refusal — terminal policy decision; retry can't
+                // change it. Push partial response (may contain the
+                // model's refusal text) + the synthetic api_error
+                // (carries the user-facing explanation), then fall
+                // through to the no-tool-calls exit. TS parity:
+                // `services/api/claude.ts:2258-2264` synthesizes at
+                // the stream layer; coco-rs synthesizes here because
+                // `coco-inference` is provider-agnostic.
+                // Multi-provider: refusal / safety / recitation /
+                // content_filter all unify to `StopReason::ContentFilter`
+                // at the `vercel-ai-*` seam.
                 warn!(
-                    turn,
+                    turn = turn_state.turn,
                     turn_id = %turn_id,
                     "content-filter / refusal — emitting api_error message and ending turn"
                 );
@@ -2141,152 +1458,15 @@ impl QueryEngine {
                     history,
                     crate::helpers::build_abnormal_stop_api_error_message(
                         coco_messages::StopReason::ContentFilter,
-                        max_tokens_override.or(self.config.max_tokens),
-                    ),
-                    &event_tx,
-                )
-                .await;
-                // Skip the MaxTokens block below; fall through to the
-                // text-only end-of-turn path that emits TurnCompleted.
-                // No `continue` — we want the loop to exit naturally.
-            }
-            // Context-window-exceeded: input + output > model context window.
-            // Anthropic-only finish reason (extended-context beta); for other
-            // providers the same condition arrives as an HTTP 400 handled at
-            // the stream-open / mid-stream sites above. Always route to
-            // [`Self::handle_context_overflow`] — escalating
-            // `max_output_tokens` cannot help when the *input* already
-            // exceeds the window. Push the synthetic api_error first so the
-            // transcript records the precipitating event before compaction
-            // rewrites history; push the partial `assistant_msg` so the
-            // truncated content remains visible to the model post-compact.
-            else if tool_calls.is_empty()
-                && parsed_stop_reason == Some(coco_messages::StopReason::ContextWindowExceeded)
-            {
-                let effective_max = max_tokens_override.or(self.config.max_tokens);
-                crate::history_sync::history_push_and_emit(history, assistant_msg, &event_tx).await;
-                crate::history_sync::history_push_and_emit(
-                    history,
-                    crate::helpers::build_abnormal_stop_api_error_message(
-                        coco_messages::StopReason::ContextWindowExceeded,
-                        effective_max,
-                    ),
-                    &event_tx,
-                )
-                .await;
-                last_continue_reason = Some(
-                    self.handle_context_overflow(
-                        &mut *history,
-                        &event_tx,
-                        &mut budget,
-                        "finish_reason",
-                    )
-                    .await,
-                );
-                continue;
-            }
-            // Max-output-tokens recovery: the model hit the output budget
-            // with no tool calls. Phase 1: escalate `max_output_tokens` to
-            // 64k and retry without persisting the truncated response (TS:
-            // query.ts:1199-1221). Phase 2: if already escalated, keep the
-            // partial response and inject a "resume" meta user message (TS:
-            // query.ts:1223-1249), up to `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT`
-            // times.
-            //
-            // **TS parity for the synthetic api_error message:** TS yields
-            // `createAssistantAPIErrorMessage` AT THE STREAM LAYER for every
-            // `max_tokens` event (`services/api/claude.ts:2266-2292`), even when
-            // the engine will escalate / recover. coco-rs mirrors this — each of
-            // the three sub-branches (escalate / recover / fall-through) pushes
-            // the synthetic message so transcripts and the UI carry the explicit
-            // truncation marker, not just a silently-rewritten "[No message
-            // content]" stub.
-            else if tool_calls.is_empty()
-                && parsed_stop_reason == Some(coco_messages::StopReason::MaxTokens)
-            {
-                // Escalation only helps when the user's configured limit is
-                // BELOW the escalation target. If they're already >= 64k (or
-                // we've already escalated this session), skip straight to
-                // recovery. TS: `query.ts:1201-1202` guards on env override.
-                let user_already_at_escalated = self
-                    .config
-                    .max_tokens
-                    .is_some_and(|v| v >= ESCALATED_MAX_TOKENS);
-                let effective_max = max_tokens_override.or(self.config.max_tokens);
-                if max_tokens_override.is_none() && !user_already_at_escalated {
-                    warn!(
-                        escalated_to = ESCALATED_MAX_TOKENS,
-                        "max_tokens hit, escalating"
-                    );
-                    // TS parity: yield the synthetic api_error message even
-                    // though we're about to escalate — the user sees the
-                    // signal once, before the retry overwrites the
-                    // immediate UI state.
-                    crate::history_sync::history_push_and_emit(
-                        history,
-                        crate::helpers::build_abnormal_stop_api_error_message(
-                            coco_messages::StopReason::MaxTokens,
-                            effective_max,
-                        ),
-                        &event_tx,
-                    )
-                    .await;
-                    max_tokens_override = Some(ESCALATED_MAX_TOKENS);
-                    last_continue_reason = Some(ContinueReason::MaxOutputTokensEscalate);
-                    continue;
-                } else if max_tokens_recovery_count < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT {
-                    max_tokens_recovery_count += 1;
-                    warn!(
-                        attempt = max_tokens_recovery_count,
-                        "max_tokens hit after escalation, injecting resume nudge"
-                    );
-                    crate::history_sync::history_push_and_emit(history, assistant_msg, &event_tx)
-                        .await;
-                    crate::history_sync::history_push_and_emit(
-                        history,
-                        crate::helpers::build_abnormal_stop_api_error_message(
-                            coco_messages::StopReason::MaxTokens,
-                            effective_max,
-                        ),
-                        &event_tx,
-                    )
-                    .await;
-                    crate::history_sync::history_push_and_emit(
-                        history,
-                        coco_messages::create_meta_message(
-                            "Output token limit hit. Resume directly — no apology, no recap of \
-                             what you were doing. Pick up mid-thought if that is where the cut \
-                             happened. Break remaining work into smaller pieces.",
-                        ),
-                        &event_tx,
-                    )
-                    .await;
-                    // Reset override so next call uses the provider default again;
-                    // TS does the same (query.ts:1241 `maxOutputTokensOverride: undefined`).
-                    max_tokens_override = None;
-                    last_continue_reason = Some(ContinueReason::MaxOutputTokensRecovery {
-                        attempt: max_tokens_recovery_count,
-                    });
-                    continue;
-                }
-                // Recovery exhausted — push real + synthetic api_error and
-                // fall through to terminate the session normally.
-                crate::history_sync::history_push_and_emit(history, assistant_msg, &event_tx).await;
-                crate::history_sync::history_push_and_emit(
-                    history,
-                    crate::helpers::build_abnormal_stop_api_error_message(
-                        coco_messages::StopReason::MaxTokens,
-                        effective_max,
+                        crate::engine_recovery::effective_max_tokens(&active_client, &turn_state),
                     ),
                     &event_tx,
                 )
                 .await;
             } else {
-                // Atomic push + marker anchor: the assistant message
-                // came from a clean API response, so we commit and
-                // anchor in one operation. Abnormal stop_reason
-                // branches above (ContentFilter, ContextWindowExceeded,
-                // MaxTokens) intentionally use the plain
+                // Atomic push + marker anchor: clean API response, so
+                // we commit and anchor in one operation. Recovery and
+                // ContentFilter branches above use the plain
                 // `history_push_and_emit` so partial responses do not
                 // anchor the marker.
                 crate::history_sync::history_push_assistant_with_usage_and_emit(
@@ -2298,18 +1478,6 @@ impl QueryEngine {
                 )
                 .await;
             }
-
-            // Backward-compat: the ContentFilter branch above already pushed
-            // both `assistant_msg` and the synthetic message; the MaxTokens
-            // exhaust branch pushed both too; the MaxTokens escalate/recover
-            // branches pushed assistant_msg in some sub-cases. Normal-path
-            // (no abnormal stop_reason matched) takes the `else` arm above
-            // and pushes here. NB: do **not** push again here.
-            //
-            // (Earlier the line below was the only `history.push(assistant_msg)`
-            // call site; the refactor moved it into the branches above so the
-            // synthetic api_error message lands adjacent to its real
-            // counterpart.)
 
             // Streaming commit point: flush the StreamingHandle to
             // drain inflight safe tools, run queued unsafe tools
@@ -2340,8 +1508,8 @@ impl QueryEngine {
             {
                 let prevent_slot = &mut streaming_control_prevent;
                 let commits_ref = &mut streaming_commits;
-                let structured_slot = &mut run_artifacts.structured_output;
-                let attempts_slot = &mut run_artifacts.structured_output_attempts;
+                let structured_slot = &mut acc.run_artifacts.structured_output;
+                let attempts_slot = &mut acc.run_artifacts.structured_output_attempts;
                 handle
                     .commit_flush(0, |outcome| {
                         let call_id = outcome.tool_use_id().to_string();
@@ -2410,33 +1578,35 @@ impl QueryEngine {
                 // via the existing `StopHookBlocking` path. So the
                 // engine here only has to enforce the *terminal* cap.
                 if self.tools.get_by_name("StructuredOutput").is_some()
-                    && run_artifacts.structured_output.is_none()
+                    && acc.run_artifacts.structured_output.is_none()
                 {
-                    let max_retries = std::env::var("COCO_MAX_STRUCTURED_OUTPUT_RETRIES")
-                        .ok()
-                        .and_then(|s| s.parse::<u32>().ok())
-                        .unwrap_or(5);
-                    if run_artifacts.structured_output_attempts >= max_retries {
+                    let max_retries = crate::config::max_structured_output_retries();
+                    if acc.run_artifacts.structured_output_attempts >= max_retries {
                         warn!(
-                            attempts = run_artifacts.structured_output_attempts,
+                            attempts = acc.run_artifacts.structured_output_attempts,
                             max_retries, "structured output retry cap exceeded"
                         );
-                        self.emit_successful_turn_completed(&event_tx, history, turn_id, usage)
-                            .await;
+                        // No fabricated stop_reason: the retry-cap exit
+                        // path didn't necessarily resolve a model finish
+                        // reason. Emit whatever was parsed (often `None`)
+                        // and let consumers branch on it.
+                        self.emit_successful_turn_completed(
+                            &event_tx,
+                            history,
+                            usage,
+                            cycle_turn_id.clone(),
+                            parsed_stop_reason,
+                        )
+                        .await;
                         return Ok(make_query_result(
+                            &consts,
+                            acc,
+                            turn_state,
                             response_text,
-                            turn,
-                            total_usage,
-                            cost_tracker,
                             /*cancelled*/ false,
                             /*budget_exhausted*/ false,
-                            last_continue_reason,
-                            start_time,
-                            api_time_ms,
                             Some("error_max_structured_output_retries".into()),
-                            permission_denials,
                             history.to_vec(),
-                            run_artifacts.clone(),
                         ));
                     }
                 }
@@ -2450,77 +1620,107 @@ impl QueryEngine {
                 self.maybe_spawn_prompt_suggestion_after_stop(&event_tx)
                     .await;
 
-                // Stop hooks: let external hooks block session completion and
-                // inject feedback into the conversation. If any Stop hook
-                // blocks, the loop continues with the feedback visible to the
-                // model. TS: `query.ts` `handleStopHooks()` around line 1050.
-                if let Some(hooks) = &self.hooks {
-                    let hook_ctx = self.orchestration_ctx();
-                    let last_assistant_message = if response_text.is_empty() {
-                        None
-                    } else {
-                        Some(response_text.as_str())
-                    };
-                    let history_snapshot = history.to_vec();
-                    match orchestration::execute_stop(
-                        hooks,
-                        &hook_ctx,
-                        stop_hook_active,
-                        last_assistant_message,
-                        &history_snapshot,
+                // Stop hooks via the dispatcher (Finding C3 + TS parity
+                // `query/stopHooks.ts`). The dispatcher owns the
+                // `isApiErrorMessage` short-circuit that prevents the
+                // error → block → retry → error death spiral, and
+                // returns a typed `StopHookDecision` for the four
+                // possible outcomes.
+                let stop_decision = self
+                    .run_stop_hooks(
+                        &mut *history,
+                        &event_tx,
                         hook_tx_opt.as_ref(),
+                        &mut turn_state,
+                        &response_text,
                     )
-                    .await
-                    {
-                        Ok(agg) if agg.prevent_continuation => {
-                            info!("Stop hook prevented continuation");
-                            self.flush_successful_turn_state(&mut *history).await;
-                            self.emit_successful_turn_completed(&event_tx, history, turn_id, usage)
-                                .await;
-                            return Ok(make_query_result(
-                                response_text,
-                                turn,
-                                total_usage,
-                                cost_tracker,
-                                /*cancelled*/ false,
-                                /*budget_exhausted*/ false,
-                                last_continue_reason,
-                                start_time,
-                                api_time_ms,
-                                Some("stop_hook_prevented".into()),
-                                permission_denials,
-                                history.to_vec(),
-                                run_artifacts.clone(),
-                            ));
-                        }
-                        Ok(agg) if agg.is_blocked() => {
-                            if let Some(err) = &agg.blocking_error {
-                                let feedback = orchestration::format_stop_hook_message(err);
-                                warn!(%feedback, "Stop hook blocked session completion");
-                                crate::history_sync::history_push_and_emit(
-                                    history,
-                                    coco_messages::create_meta_message(&feedback),
-                                    &event_tx,
-                                )
-                                .await;
-                                self.flush_successful_turn_state(&mut *history).await;
-                                last_continue_reason = Some(ContinueReason::StopHookBlocking);
-                                // Mark the recursion so the next Stop
-                                // firing carries `stop_hook_active: true`
-                                // (TS parity).
-                                stop_hook_active = true;
-                                continue;
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(e) => warn!(error = %e, "Stop hook execution failed"),
+                    .await;
+                match stop_decision {
+                    crate::engine_stop_hooks::StopHookDecision::Prevented => {
+                        // Note: no second `flush_successful_turn_state` here —
+                        // the pre-`run_stop_hooks` flush at the entry of this
+                        // no-tool-calls block (above) already wrote the
+                        // transcript tail + cache-safe params; the `Prevented`
+                        // branch of the dispatcher pushes nothing new, so a
+                        // repeat flush would just overwrite the cache snapshot
+                        // and re-walk the dedup set for zero benefit.
+                        self.emit_successful_turn_completed(
+                            &event_tx,
+                            history,
+                            usage,
+                            cycle_turn_id.clone(),
+                            parsed_stop_reason,
+                        )
+                        .await;
+                        return Ok(make_query_result(
+                            &consts,
+                            acc,
+                            turn_state,
+                            response_text,
+                            /*cancelled*/ false,
+                            /*budget_exhausted*/ false,
+                            Some("stop_hook_prevented".into()),
+                            history.to_vec(),
+                        ));
+                    }
+                    crate::engine_stop_hooks::StopHookDecision::BlockedContinueLoop => {
+                        // Dispatcher pushed feedback + flushed transcript +
+                        // set `turn_state.transition = StopHookBlocking` +
+                        // `turn_state.stop_hook_active = true`.
+                        continue;
+                    }
+                    crate::engine_stop_hooks::StopHookDecision::SkippedApiError { error_type } => {
+                        // C3 death-spiral guard fired — last assistant
+                        // message is api_error. Fall through to end-turn
+                        // emit; skip token-budget continuation (no point
+                        // in retrying into another error).
+                        //
+                        // Finding **R1** — use the api_error's typed
+                        // `error_type` as the QueryResult.stop_reason so
+                        // SDK consumers see the specific code
+                        // (`prompt_too_long` / `max_output_tokens` /
+                        // `content_filter` / `invalid_request` / …)
+                        // instead of the generic `end_turn_api_error`
+                        // bucket. TS parity:
+                        // `query.ts:1175 return { reason: 'prompt_too_long' }`
+                        // / `query.ts:1182` / etc. `None` means the
+                        // synthesis site didn't classify — fall back to
+                        // the legacy label.
+                        let stop_reason = error_type.unwrap_or_else(|| "end_turn_api_error".into());
+                        info!(
+                            turn = turn_state.turn,
+                            stop_reason = %stop_reason,
+                            "ending turn early — last message is api_error (C3 guard)"
+                        );
+                        self.emit_successful_turn_completed(
+                            &event_tx,
+                            history,
+                            usage,
+                            cycle_turn_id.clone(),
+                            parsed_stop_reason,
+                        )
+                        .await;
+                        return Ok(make_query_result(
+                            &consts,
+                            acc,
+                            turn_state,
+                            response_text,
+                            /*cancelled*/ false,
+                            /*budget_exhausted*/ false,
+                            Some(stop_reason),
+                            history.to_vec(),
+                        ));
+                    }
+                    crate::engine_stop_hooks::StopHookDecision::Continue => {
+                        // No hooks or all passed; fall through to token-budget
+                        // continuation check.
                     }
                 }
 
                 if self.config.enable_token_budget_continuation
-                    && should_continue_for_budget(&budget)
+                    && should_continue_for_budget(&turn_state.budget)
                 {
-                    let pct = budget_pct_used(&budget);
+                    let pct = budget_pct_used(&turn_state.budget);
                     let nudge = format!(
                         "Token budget continuation: you've used {pct}% of the turn budget. \
                          Keep going — don't summarize or recap, just continue the work."
@@ -2531,34 +1731,58 @@ impl QueryEngine {
                         &event_tx,
                     )
                     .await;
-                    budget.record_continuation();
-                    last_continue_reason = Some(ContinueReason::TokenBudgetContinuation);
-                    info!(turn, pct, "token budget continuation");
+                    turn_state.budget.record_continuation();
+                    turn_state.transition = Some(ContinueReason::TokenBudgetContinuation);
+                    // TS parity query.ts:1332-1336 — token-budget
+                    // continuation is a fresh user-prompt-style attempt
+                    // and resets every per-incident counter:
+                    //   * `stopHookActive: undefined` (R2)
+                    //   * `maxOutputTokensRecoveryCount: 0` (R4)
+                    //   * `hasAttemptedReactiveCompact: false` (R4 —
+                    //     mirrored by clearing the `ReactiveCompactState`
+                    //     circuit-breaker so the next overflow gets a
+                    //     fresh 3-attempt budget).
+                    //
+                    // TS `maxOutputTokensOverride: undefined` (query.ts:1334)
+                    // has no Rust counterpart — the slot field was deleted
+                    // when escalate became a derived property of
+                    // `ModelInfo.max_output_tokens_escalate` + the per-turn
+                    // `transition`. The next iteration's transition will be
+                    // `TokenBudgetContinuation`, not `MaxOutputTokensEscalate`,
+                    // so `effective_max_tokens` returns `None` naturally.
+                    turn_state.stop_hook_active = false;
+                    turn_state.max_tokens_recovery_count = 0;
+                    {
+                        let mut state = self.reactive_state.lock().await;
+                        state.reset();
+                    }
+                    info!(turn = turn_state.turn, pct, "token budget continuation");
                     continue;
                 }
                 info!(
-                    turn,
+                    turn = turn_state.turn,
                     response_chars = response_text.len(),
                     tokens_in = usage.input_tokens.total,
                     tokens_out = usage.output_tokens.total,
                     "no tool calls, conversation complete"
                 );
-                self.emit_successful_turn_completed(&event_tx, history, turn_id, usage)
-                    .await;
+                self.emit_successful_turn_completed(
+                    &event_tx,
+                    history,
+                    usage,
+                    cycle_turn_id.clone(),
+                    parsed_stop_reason,
+                )
+                .await;
                 return Ok(make_query_result(
+                    &consts,
+                    acc,
+                    turn_state,
                     response_text,
-                    turn,
-                    total_usage,
-                    cost_tracker,
                     /*cancelled*/ false,
                     /*budget_exhausted*/ false,
-                    last_continue_reason,
-                    start_time,
-                    api_time_ms,
                     Some("end_turn".into()),
-                    permission_denials,
                     history.to_vec(),
-                    run_artifacts.clone(),
                 ));
             }
 
@@ -2602,9 +1826,10 @@ impl QueryEngine {
                 self.finalize_turn_post_tools(
                     &mut *history,
                     &event_tx,
-                    turn_id,
                     usage,
                     continuation,
+                    cycle_turn_id.clone(),
+                    parsed_stop_reason,
                 )
                 .await;
                 if let Some(ref c) = streaming_ctx {
@@ -2613,22 +1838,17 @@ impl QueryEngine {
                 }
                 if let Some(stop_reason) = streaming_control_prevent {
                     return Ok(make_query_result(
+                        &consts,
+                        acc,
+                        turn_state,
                         response_text,
-                        turn,
-                        total_usage,
-                        cost_tracker,
                         /*cancelled*/ false,
                         /*budget_exhausted*/ false,
-                        last_continue_reason,
-                        start_time,
-                        api_time_ms,
                         Some(stop_reason),
-                        permission_denials,
                         history.to_vec(),
-                        run_artifacts.clone(),
                     ));
                 }
-                last_continue_reason = Some(ContinueReason::NextTurn);
+                turn_state.transition = Some(ContinueReason::NextTurn);
                 continue;
             }
 
@@ -2639,13 +1859,15 @@ impl QueryEngine {
             // `ToolUseContext` when hooks are configured so tool callbacks
             // that need PreToolUse/PostToolUse use the same pipeline as the
             // runner.
-            let ctx_supports_tool_reference = model_runtime
+            let ctx_supports_tool_reference = services
+                .runtime
                 .current_client()
                 .model_info()
                 .is_some_and(|info| {
                     info.has_capability(coco_types::Capability::ServerSideToolReference)
                 });
-            let ctx_supports_client_side_tool_search = model_runtime
+            let ctx_supports_client_side_tool_search = services
+                .runtime
                 .current_client()
                 .model_info()
                 .is_some_and(|info| {
@@ -2654,9 +1876,9 @@ impl QueryEngine {
             let ctx = self
                 .tool_context_factory(hook_tx_opt.as_ref())
                 .build(crate::tool_context::ToolContextOverrides {
-                    user_message_id: Some(user_msg_uuid.clone()),
-                    progress_tx: Some(progress_tx_session.clone()),
-                    current_model_id: Some(model_runtime.current_model_id().to_string()),
+                    user_message_id: Some(consts.user_uuid.clone()),
+                    progress_tx: Some(services.progress_tx.clone()),
+                    current_model_id: Some(services.runtime.current_model_id().to_string()),
                     current_model_supports_tool_reference: ctx_supports_tool_reference,
                     current_model_supports_client_side_tool_search:
                         ctx_supports_client_side_tool_search,
@@ -2669,12 +1891,12 @@ impl QueryEngine {
                 history: &mut *history,
                 ctx: &ctx,
                 tool_calls: &tool_calls,
-                turn,
+                turn: turn_state.turn,
                 tools: &self.tools,
                 hooks: self.hooks.as_ref(),
                 orchestration_ctx: self.orchestration_ctx(),
                 hook_tx_opt: hook_tx_opt.as_ref(),
-                permission_denials: &mut permission_denials,
+                permission_denials: &mut acc.permission_denials,
                 state_tracker,
                 permission_bridge: self.permission_bridge.as_ref(),
                 session_id: &self.config.session_id,
@@ -2694,9 +1916,10 @@ impl QueryEngine {
             // API call.
             self.drain_nested_memory_triggers(&ctx).await;
             if let Some(data) = tool_run_outcome.structured_output.clone() {
-                run_artifacts.structured_output = Some(data);
+                acc.run_artifacts.structured_output = Some(data);
             }
-            run_artifacts.structured_output_attempts = run_artifacts
+            acc.run_artifacts.structured_output_attempts = acc
+                .run_artifacts
                 .structured_output_attempts
                 .saturating_add(tool_run_outcome.structured_output_attempts);
             let continuation = if tool_run_outcome.continue_after_tools {
@@ -2704,29 +1927,30 @@ impl QueryEngine {
             } else {
                 crate::engine_finalize_turn::TurnContinuation::Terminal
             };
-            self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage, continuation)
-                .await;
+            self.finalize_turn_post_tools(
+                &mut *history,
+                &event_tx,
+                usage,
+                continuation,
+                cycle_turn_id.clone(),
+                parsed_stop_reason,
+            )
+            .await;
             self.drain_dynamic_skill_triggers(&ctx, &mut *history, &event_tx)
                 .await;
             if !tool_run_outcome.continue_after_tools {
                 return Ok(make_query_result(
+                    &consts,
+                    acc,
+                    turn_state,
                     response_text,
-                    turn,
-                    total_usage,
-                    cost_tracker,
                     /*cancelled*/ false,
                     /*budget_exhausted*/ false,
-                    last_continue_reason,
-                    start_time,
-                    api_time_ms,
                     tool_run_outcome.stop_reason_override,
-                    permission_denials,
                     history.to_vec(),
-                    run_artifacts.clone(),
                 ));
             }
-            last_continue_reason = Some(ContinueReason::NextTurn);
-            let _ = tool_calls; // has_tool_calls retained for future metrics
+            turn_state.transition = Some(ContinueReason::NextTurn);
         }
     }
 }
@@ -2758,7 +1982,7 @@ impl QueryEngine {
 /// calls. Malformed JSON is skipped with a `tracing::warn!`,
 /// matching the previous behavior on the buffer-driven reconstruction
 /// path.
-fn assistant_content_from_snapshot(
+pub(crate) fn assistant_content_from_snapshot(
     snapshot: &coco_inference::AssistantTurnSnapshot,
     normalizer_ctx: crate::tool_input_normalizer::ToolInputNormalizationContext<'_>,
 ) -> (Vec<AssistantContentPart>, Vec<ToolCallPart>) {
@@ -2860,39 +2084,35 @@ pub(crate) struct RunArtifacts {
 }
 
 /// Pure constructor for [`QueryResult`], factored out of `run_session_loop`.
-/// All inputs flow through parameters — there is no captured state — so the
-/// loop's five exit branches build the same shape with one call.
+/// Consumes the loop's [`LoopAccumulator`] / [`LoopTurnState`] (terminal
+/// callers always `return` immediately after invoking) and borrows
+/// [`LoopConstants`] for the `consts.started_at` read.
 #[allow(clippy::too_many_arguments)]
 fn make_query_result(
+    consts: &LoopConstants,
+    acc: LoopAccumulator,
+    turn_state: LoopTurnState,
     response_text: String,
-    turns: i32,
-    total_usage: TokenUsage,
-    cost_tracker: CostTracker,
     cancelled: bool,
     budget_exhausted: bool,
-    last_continue_reason: Option<ContinueReason>,
-    start_time: std::time::Instant,
-    api_time_ms: i64,
     stop_reason: Option<String>,
-    permission_denials: Vec<coco_types::PermissionDenialInfo>,
     final_messages: Vec<std::sync::Arc<Message>>,
-    artifacts: RunArtifacts,
 ) -> QueryResult {
     QueryResult {
         response_text,
-        turns,
-        total_usage,
-        cost_tracker,
+        turns: turn_state.turn,
+        total_usage: acc.total_usage,
+        cost_tracker: acc.cost_tracker,
         cancelled,
         budget_exhausted,
-        last_continue_reason,
-        duration_ms: start_time.elapsed().as_millis() as i64,
-        duration_api_ms: api_time_ms,
+        last_continue_reason: turn_state.transition,
+        duration_ms: consts.started_at.elapsed().as_millis() as i64,
+        duration_api_ms: acc.api_time_ms,
         stop_reason,
-        permission_denials,
+        permission_denials: acc.permission_denials,
         final_messages,
-        structured_output: artifacts.structured_output,
-        max_turns_reached: artifacts.max_turns_reached,
+        structured_output: acc.run_artifacts.structured_output,
+        max_turns_reached: acc.run_artifacts.max_turns_reached,
     }
 }
 

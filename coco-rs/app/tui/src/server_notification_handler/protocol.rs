@@ -96,7 +96,15 @@ pub(super) fn handle(
 
         // === Turn lifecycle ===
         ServerNotification::TurnStarted(p) => {
-            state.session.turn_count = p.turn_number;
+            // `TurnStarted` is per logical user-prompt cycle. Increment
+            // the local cumulative count rather than reading it off the
+            // wire — the wire field used to be hardcoded to `1` at every
+            // runner, so reading it always overwrote the footer back to
+            // 1. The runner doesn't know cumulative session-level turn
+            // count anyway; the TUI is the only consumer that needs the
+            // running total.
+            state.session.turn_count = state.session.turn_count.saturating_add(1);
+            let _ = &p.turn_id;
             state.session.set_busy(true);
             state.session.stream_stall = false;
             // Reset pause accumulators + sample a fresh spinner verb +
@@ -110,68 +118,13 @@ pub(super) fn handle(
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
             true
         }
-        ServerNotification::TurnCompleted(p) => on_turn_completed(state, p, command_tx),
-        ServerNotification::TurnFailed(p) => {
-            state.session.set_busy(false);
-            state.ui.ephemeral.end_turn();
-            state.ui.streaming = None;
-            // Drop in-flight tool widgets (status=Queued/Running, no
-            // stamped `message_uuid`): the turn failed before they
-            // could resolve to a finalized `Message::ToolResult`, so
-            // leaving them on screen renders ghost spinners that
-            // outlast the turn. Stamped executions belong to prior
-            // turns and stay.
-            let before = state.session.tool_executions.len();
-            state
-                .session
-                .tool_executions
-                .retain(|t| t.message_uuid.is_some());
-            let dropped = before.saturating_sub(state.session.tool_executions.len());
-            if dropped > 0 {
-                tracing::info!(
-                    target: "coco_tui::turn",
-                    dropped,
-                    remaining = state.session.tool_executions.len(),
-                    error = %p.error,
-                    "TurnFailed: dropped in-flight tool widgets",
-                );
-            } else {
-                tracing::warn!(
-                    target: "coco_tui::turn",
-                    error = %p.error,
-                    "TurnFailed",
-                );
-            }
-            // Keep the toast for session history / notification log, AND
-            // raise a modal error dialog so users can't miss the failure
-            // (PR-F1 P0). The toast auto-expires; the state blocks input
-            // until dismissed.
-            state.ui.add_toast(Toast::error(
-                t!("toast.turn_failed_short", error = p.error.as_str()).to_string(),
-            ));
-            let body = crate::widgets::error_dialog::turn_failed_body(&p);
-            state.ui.show_modal(ModalState::Error(body));
-            true
-        }
-        ServerNotification::TurnInterrupted(p) => on_turn_interrupted(state, p, command_tx),
-        // [F11 anchor] All remaining match arms below this point don't
-        // dispatch follow-up UserCommands; they're pure state folds.
-        ServerNotification::MaxTurnsReached { max_turns } => {
-            state.session.set_busy(false);
-            state.ui.ephemeral.end_turn();
-            state.ui.streaming = None;
-            let msg = match max_turns {
-                Some(n) => t!("toast.max_turns_reached", n = n).to_string(),
-                None => t!("toast.max_turns_unbounded").to_string(),
-            };
-            state.ui.add_toast(Toast::warning(msg.clone()));
-            // Reaching the turn limit stops the loop; require explicit
-            // acknowledgement before the user sends another prompt so
-            // they notice it isn't silently continuing.
-            let body = crate::widgets::error_dialog::format_error_body(&msg, Some("limit"), false);
-            state.ui.show_modal(ModalState::Error(body));
-            true
-        }
+        // Unified terminal event: `TurnEnded` discriminates by
+        // `outcome.kind`. The four (now five) old separate arms collapse
+        // into one match. Each outcome routes to a dedicated handler so
+        // bodies stay focused.
+        // [F11 anchor] None of these dispatch follow-up UserCommands
+        // except `Interrupted` (auto-restore path).
+        ServerNotification::TurnEnded(p) => on_turn_ended(state, p, command_tx),
 
         // === Item lifecycle (SDK-path only; TUI uses Stream layer) ===
         // The TUI gets real-time display from AgentStreamEvent (TextDelta,
@@ -952,6 +905,18 @@ pub(super) fn handle(
                 state
                     .session
                     .stamp_tool_executions_with_assistant_uuid(&message);
+                // Persist the raw markdown body for `/copy` and the
+                // rewind-overlay preview. TS parity: `record_agent_markdown`
+                // is invoked on every assistant message append — defined in
+                // `state/session.rs:379` but previously had no production
+                // caller, leaving `last_agent_markdown` permanently `None`
+                // and dangling features (`/copy`, transcript markdown
+                // export) silently broken. The text extractor pulls plain
+                // `AssistantContent::Text` parts only; reasoning / tool
+                // calls / files are intentionally skipped (TS does the same
+                // via its `firstTextContent` walk).
+                let text = coco_messages::wrapping::extract_text_from_message(message.as_ref());
+                state.session.record_agent_markdown(&text);
             }
             state.session.transcript.on_message_appended(message);
             if is_assistant {
@@ -1128,14 +1093,37 @@ fn clear_session_boundary_state(state: &mut AppState) {
 /// Handle `TurnCompleted`: finalize usage, flush streaming buffer into the
 /// message list, prune completed tools.
 ///
-/// Does NOT handle auto-restore — that lives in [`on_turn_interrupted`].
-/// `TurnCompleted` fires only on natural turn end; cancel paths emit
-/// `TurnInterrupted` separately (see `app/cli/src/tui_runner.rs`).
-fn on_turn_completed(
+/// Dispatcher for the unified `TurnEnded` event. Routes to one of five
+/// per-outcome handlers; preserves the auto-restore path on `Interrupted`
+/// (see `on_turn_interrupted_outcome`). Pairs 1:1 with `TurnStarted`.
+fn on_turn_ended(
     state: &mut AppState,
-    p: coco_types::TurnCompletedParams,
-    _command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
+    p: coco_types::TurnEndedParams,
+    command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
 ) -> bool {
+    match &p.outcome {
+        coco_types::TurnOutcome::Completed(_) => on_turn_completed_outcome(state, &p),
+        coco_types::TurnOutcome::Failed(data) => on_turn_failed_outcome(state, &data.error),
+        coco_types::TurnOutcome::Interrupted(data) => {
+            on_turn_interrupted_outcome(state, data.cancel_reason, command_tx)
+        }
+        coco_types::TurnOutcome::MaxTurnsReached(data) => {
+            on_max_turns_reached_outcome(state, Some(data.max_turns))
+        }
+        coco_types::TurnOutcome::BudgetExhausted(data) => {
+            on_budget_exhausted_outcome(state, data.used_tokens, data.budget_tokens)
+        }
+    }
+}
+// end on_turn_ended
+
+/// `TurnEnded(Completed)` handler. Folds usage, end-of-turn UI state,
+/// notifications, and tool-execution cleanup.
+///
+/// Does NOT handle auto-restore — that lives in
+/// [`on_turn_interrupted_outcome`]. `Completed` fires only on natural
+/// turn end; cancel paths take the `Interrupted` branch.
+fn on_turn_completed_outcome(state: &mut AppState, p: &coco_types::TurnEndedParams) -> bool {
     state.session.set_busy(false);
     // TS REPL.tsx:3901 — `updateLastInteractionTime(true)` also fires
     // here so the idle window starts ticking from "user has had a
@@ -1144,13 +1132,20 @@ fn on_turn_completed(
     state.session.last_query_completion_at = Some(now);
     state.session.last_user_interaction_at = now;
     state.session.idle_prompt_fired = false;
-    if state.session.session_usage.is_none() {
+    // `p.usage` is `Option<TokenUsage>` since the refactor — `None`
+    // means the emitter didn't have access to accumulated usage
+    // (runner-side bail, late-cancel). Skip the token fold in that
+    // case; the SessionUsage emit path is the authoritative live
+    // counter when no per-turn snapshot is available.
+    if state.session.session_usage.is_none()
+        && let Some(usage) = p.usage.as_ref()
+    {
         state.session.update_tokens(TokenUsage {
-            input_tokens: p.usage.input_tokens.total,
-            output_tokens: p.usage.output_tokens.total,
-            reasoning_tokens: p.usage.output_tokens.reasoning,
-            cache_read_tokens: p.usage.input_tokens.cache_read,
-            cache_creation_tokens: p.usage.input_tokens.cache_write,
+            input_tokens: usage.input_tokens.total,
+            output_tokens: usage.output_tokens.total,
+            reasoning_tokens: usage.output_tokens.reasoning,
+            cache_read_tokens: usage.input_tokens.cache_read,
+            cache_creation_tokens: usage.input_tokens.cache_write,
         });
     }
     // Emit a terminal notification when the user has switched away — they
@@ -1206,21 +1201,21 @@ fn token_usage_from_session_snapshot(
     }
 }
 
-/// Handle `TurnInterrupted`: clear streaming state, surface the banner,
-/// and run auto-restore when the cancel was user-initiated AND the idle
-/// guards + lossless-tail predicate hold.
+/// Handle `TurnEnded(Interrupted)`: clear streaming state, surface the
+/// banner, and run auto-restore when the cancel was user-initiated AND
+/// the idle guards + lossless-tail predicate hold.
 ///
 /// Mirrors TS `REPL.tsx:3010-3022` — the `.finally` block that fires
 /// after `abortController.abort('user-cancel')` resolves the query.
-fn on_turn_interrupted(
+fn on_turn_interrupted_outcome(
     state: &mut AppState,
-    p: coco_types::TurnInterruptedParams,
+    cancel_reason: coco_types::CancelReason,
     command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
 ) -> bool {
     state.session.set_busy(false);
     state.ui.ephemeral.end_turn();
     state.ui.streaming = None;
-    // Drop in-flight tool widgets — same rationale as `TurnFailed`.
+    // Drop in-flight tool widgets — same rationale as `TurnEnded(Failed)`.
     // The cancel aborts the turn before tools could resolve to a
     // `Message::ToolResult`, so any unstamped (= mid-turn) execution
     // would otherwise leak across the interrupt boundary.
@@ -1232,13 +1227,13 @@ fn on_turn_interrupted(
     let dropped = before.saturating_sub(state.session.tool_executions.len());
     tracing::info!(
         target: "coco_tui::turn",
-        reason = ?p.reason,
+        cancel_reason = ?cancel_reason,
         tool_widgets_dropped = dropped,
         tool_widgets_remaining = state.session.tool_executions.len(),
-        "TurnInterrupted",
+        "TurnEnded(Interrupted)",
     );
 
-    let user_cancel = matches!(p.reason, Some(coco_types::CancelReason::UserCancel));
+    let user_cancel = matches!(cancel_reason, coco_types::CancelReason::UserCancel);
 
     // Auto-restore is gated on:
     // - reason == UserCancel  → TS `signal.reason === 'user-cancel'`
@@ -1356,6 +1351,89 @@ fn apply_auto_restore(
             "apply_auto_restore: failed to dispatch Rewind AutoRestore",
         );
     }
+}
+
+/// `TurnEnded(Failed)` handler. Engine-level failure: clear streaming
+/// state, drop in-flight tool widgets, surface a toast, and raise a
+/// blocking modal so the user must acknowledge the failure.
+fn on_turn_failed_outcome(state: &mut AppState, error: &coco_types::ErrorPayload) -> bool {
+    state.session.set_busy(false);
+    state.ui.ephemeral.end_turn();
+    state.ui.streaming = None;
+    let before = state.session.tool_executions.len();
+    state
+        .session
+        .tool_executions
+        .retain(|t| t.message_uuid.is_some());
+    let dropped = before.saturating_sub(state.session.tool_executions.len());
+    if dropped > 0 {
+        tracing::info!(
+            target: "coco_tui::turn",
+            dropped,
+            remaining = state.session.tool_executions.len(),
+            error = %error.message,
+            code = ?error.code,
+            "TurnEnded(Failed): dropped in-flight tool widgets",
+        );
+    } else {
+        tracing::warn!(
+            target: "coco_tui::turn",
+            error = %error.message,
+            code = ?error.code,
+            "TurnEnded(Failed)",
+        );
+    }
+    state.ui.add_toast(Toast::error(
+        t!("toast.turn_failed_short", error = error.message.as_str()).to_string(),
+    ));
+    let body = crate::widgets::error_dialog::turn_failed_body(error);
+    state.ui.show_modal(ModalState::Error(body));
+    true
+}
+
+/// `TurnEnded(MaxTurnsReached)` handler. Turn budget exhausted — show a
+/// modal so the user explicitly acknowledges the stop instead of
+/// silently continuing on next prompt.
+fn on_max_turns_reached_outcome(state: &mut AppState, max_turns: Option<i32>) -> bool {
+    state.session.set_busy(false);
+    state.ui.ephemeral.end_turn();
+    state.ui.streaming = None;
+    let msg = match max_turns {
+        Some(n) => t!("toast.max_turns_reached", n = n).to_string(),
+        None => t!("toast.max_turns_unbounded").to_string(),
+    };
+    state.ui.add_toast(Toast::warning(msg.clone()));
+    let body = crate::widgets::error_dialog::format_error_body(&msg, Some("limit"), false);
+    state.ui.show_modal(ModalState::Error(body));
+    true
+}
+
+/// `TurnEnded(BudgetExhausted)` handler. Token budget (90%/diminishing-
+/// returns) exhausted distinctly from max_turns. UI-wise treated as a
+/// stop-with-acknowledge, but the toast carries token figures so the
+/// user can decide whether to keep going. `budget_tokens` is
+/// `Option` because the engine emits `None` when no explicit
+/// `config.max_tokens` was set.
+fn on_budget_exhausted_outcome(
+    state: &mut AppState,
+    used_tokens: i64,
+    budget_tokens: Option<i64>,
+) -> bool {
+    state.session.set_busy(false);
+    state.ui.ephemeral.end_turn();
+    state.ui.streaming = None;
+    let msg = match budget_tokens {
+        Some(budget) => {
+            format!("Token budget exhausted: used {used_tokens} of {budget}. Stop and acknowledge.")
+        }
+        None => {
+            format!("Token budget exhausted: used {used_tokens} tokens. Stop and acknowledge.")
+        }
+    };
+    state.ui.add_toast(Toast::warning(msg.clone()));
+    let body = crate::widgets::error_dialog::format_error_body(&msg, Some("budget"), false);
+    state.ui.show_modal(ModalState::Error(body));
+    true
 }
 
 /// Push (or no-op dedupe) a `SubagentInstance` row for the given

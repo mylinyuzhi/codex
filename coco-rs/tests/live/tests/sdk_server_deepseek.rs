@@ -92,7 +92,7 @@ async fn test_sdk_turn_basic_deepseek_openai() -> Result<()> {
     assert!(
         notifs
             .iter()
-            .any(|n| n.method == NotificationMethod::TurnCompleted.as_str()),
+            .any(|n| n.method == NotificationMethod::TurnEnded.as_str()),
         "expected `turn/completed` notification; got methods: {:?}",
         notifs.iter().map(|n| n.method.as_str()).collect::<Vec<_>>()
     );
@@ -120,7 +120,7 @@ async fn test_sdk_turn_basic_deepseek_anthropic() -> Result<()> {
     assert!(
         notifs
             .iter()
-            .any(|n| n.method == NotificationMethod::TurnCompleted.as_str()),
+            .any(|n| n.method == NotificationMethod::TurnEnded.as_str()),
         "expected `turn/completed`; got: {:?}",
         notifs.iter().map(|n| n.method.as_str()).collect::<Vec<_>>()
     );
@@ -260,12 +260,22 @@ async fn test_sdk_turn_mid_flight_interrupt_deepseek_openai() -> Result<()> {
         .iter()
         .rev()
         .find(|n| is_turn_terminal_method(&n.method))
-        .map(|n| n.method.clone())
-        .unwrap_or_default();
+        .cloned();
+    let terminal = last_terminal.expect("expected a final turn/ended terminator");
+    assert_eq!(
+        terminal.method,
+        NotificationMethod::TurnEnded.as_str(),
+        "interrupt should yield turn/ended"
+    );
+    let outcome_kind = terminal
+        .params
+        .get("outcome")
+        .and_then(|o| o.get("kind"))
+        .and_then(|k| k.as_str())
+        .unwrap_or("");
     assert!(
-        last_terminal == NotificationMethod::TurnInterrupted.as_str()
-            || last_terminal == NotificationMethod::TurnFailed.as_str(),
-        "interrupt should yield turn/interrupted or turn/failed; got {last_terminal}"
+        matches!(outcome_kind, "interrupted" | "failed"),
+        "interrupt outcome must be interrupted|failed; got `{outcome_kind}`"
     );
     server.shutdown().await;
     Ok(())
@@ -299,7 +309,7 @@ async fn test_sdk_turn_tool_call_round_trip_deepseek_openai() -> Result<()> {
     assert!(
         notifs
             .iter()
-            .any(|n| n.method == NotificationMethod::TurnCompleted.as_str()),
+            .any(|n| n.method == NotificationMethod::TurnEnded.as_str()),
         "turn must complete; got methods: {:?}",
         notifs.iter().map(|n| n.method.as_str()).collect::<Vec<_>>()
     );

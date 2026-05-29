@@ -74,8 +74,17 @@ pub fn scan_memory_files_with_cancel(
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| {
+            // Always include the scan root, even if its own name
+            // starts with `.` (e.g. when the caller passes a
+            // `tempfile::tempdir()` path like `/tmp/.tmpJfFwwR` —
+            // `filter_entry` rejecting the root suppresses the
+            // entire walk, which the regression tests at
+            // `scan.test.rs` hit). At depth ≥ 1, skip hidden + the
+            // team subtree.
+            if e.depth() == 0 {
+                return true;
+            }
             let name = e.file_name().to_string_lossy();
-            // Skip hidden + the team subtree at any depth.
             !(name.starts_with('.') || name == "team")
         });
     for entry in walker {

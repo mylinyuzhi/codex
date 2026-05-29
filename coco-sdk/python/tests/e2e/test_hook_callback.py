@@ -40,10 +40,10 @@ async def test_pre_tool_use_hook_fires(live_deepseek, isolated_cwd) -> None:
         try:
             async with asyncio.timeout(180):
                 async for event in client.events():
-                    if event.method == NotificationMethod.TURN_COMPLETED:
+                    if event.method == NotificationMethod.TURN_ENDED:
                         if seen:
                             break
-                    elif event.method == NotificationMethod.TURN_FAILED:
+                    elif event.method == NotificationMethod.TURN_ENDED:
                         pytest.fail(f"turn failed: {event.params}")
         except asyncio.TimeoutError:
             pytest.fail(

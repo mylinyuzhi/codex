@@ -271,29 +271,38 @@ def test_permission_mode_enum() -> None:
 def test_server_notification_typed_dispatch() -> None:
     """``ServerNotification`` is a Pydantic discriminated union; validating
     a wire payload dispatches to the typed variant class based on the
-    `method` discriminator. Replaces the old `as_X()` accessor pattern.
+    `method` discriminator. ``TurnEnded`` further discriminates by
+    ``outcome.kind`` — the unified terminal event covers what used to be
+    ``turn/completed`` / ``turn/failed`` / ``turn/interrupted`` /
+    ``turn/maxReached``.
     """
     from pydantic import TypeAdapter
     from coco_sdk import (
         NotificationMethod,
         ServerNotification,
         ServerNotificationSessionStarted,
-        ServerNotificationTurnCompleted,
+        ServerNotificationTurnEnded,
     )
 
     adapter = TypeAdapter(ServerNotification)
     notif = adapter.validate_python(
         {
-            "method": NotificationMethod.TURN_COMPLETED.value,
+            "method": NotificationMethod.TURN_ENDED.value,
             "params": {
                 "turn_id": "t1",
                 "usage": {"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                "outcome": {"kind": "completed", "data": {"stop_reason": "end_turn"}},
             },
         }
     )
-    assert isinstance(notif, ServerNotificationTurnCompleted)
+    assert isinstance(notif, ServerNotificationTurnEnded)
     assert notif.params.turn_id == "t1"
     assert notif.params.usage.input_tokens.total == 1
+    assert notif.params.outcome.kind == "completed"
+    # Typed access: `outcome.data` is a `CompletedOutcome` Pydantic
+    # model (H2 fix — was `dict[str, Any]` before the named-data
+    # refactor of `TurnOutcome` variants in `coco-types`).
+    assert notif.params.outcome.data.stop_reason == "end_turn"
 
     # Different method → different concrete variant class.
     other = adapter.validate_python(
@@ -310,7 +319,55 @@ def test_server_notification_typed_dispatch() -> None:
         }
     )
     assert isinstance(other, ServerNotificationSessionStarted)
-    assert not isinstance(other, ServerNotificationTurnCompleted)
+    assert not isinstance(other, ServerNotificationTurnEnded)
+
+    # All five outcome variants parse via the discriminated union on
+    # `outcome.kind`. Sample each so the wire contract is locked. The
+    # H2 fix means `outcome.data` is now a typed Pydantic model
+    # (CompletedOutcome / FailedOutcome / …); the test reads typed
+    # attributes rather than dict keys.
+    for outcome, attr_check in [
+        (
+            {"kind": "failed", "data": {"error": {"message": "boom", "code": "provider"}}},
+            lambda d: d.error.message == "boom" and d.error.code == "provider",
+        ),
+        (
+            {"kind": "interrupted", "data": {"cancel_reason": "user_cancel"}},
+            lambda d: d.cancel_reason == "user_cancel",
+        ),
+        (
+            {"kind": "max_turns_reached", "data": {"max_turns": 5}},
+            lambda d: d.max_turns == 5,
+        ),
+        (
+            {
+                "kind": "budget_exhausted",
+                "data": {"used_tokens": 12, "budget_tokens": 100},
+            },
+            lambda d: d.used_tokens == 12 and d.budget_tokens == 100,
+        ),
+        # C5 invariant: `budget_tokens: None` round-trips when the
+        # engine had no `config.max_tokens` set.
+        (
+            {"kind": "budget_exhausted", "data": {"used_tokens": 12}},
+            lambda d: d.used_tokens == 12 and d.budget_tokens is None,
+        ),
+    ]:
+        ev = adapter.validate_python(
+            {
+                "method": NotificationMethod.TURN_ENDED.value,
+                "params": {
+                    "turn_id": "t-x",
+                    "usage": {"input_tokens": {"total": 0}, "output_tokens": {"total": 0}},
+                    "outcome": outcome,
+                },
+            }
+        )
+        assert isinstance(ev, ServerNotificationTurnEnded)
+        assert ev.params.outcome.kind == outcome["kind"]
+        assert attr_check(ev.params.outcome.data), (
+            f"typed-data assertion failed for outcome {outcome!r}"
+        )
 
 
 # ── 9. Decorator + Python-only types ───────────────────────────────

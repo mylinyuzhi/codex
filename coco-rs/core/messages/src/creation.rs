@@ -302,7 +302,17 @@ pub fn create_permission_denied_message(tool_name: &str, reason: &str) -> Messag
 }
 
 /// Create an assistant error message with an attached API error.
-pub fn create_assistant_error_message(error: &str, request_id: Option<&str>) -> Message {
+///
+/// `error_type` is the TS-parity short code (`max_output_tokens`,
+/// `prompt_too_long`, `content_filter`, `blocking_limit`, …) used by
+/// hook matchers and the C3 death-spiral guard. Pass `None` only when
+/// no canonical code applies — the StopFailure hook will then default
+/// to `unknown` per TS `executeStopFailureHooks` parity.
+pub fn create_assistant_error_message(
+    error: &str,
+    request_id: Option<&str>,
+    error_type: Option<&str>,
+) -> Message {
     Message::Assistant(AssistantMessage {
         message: LlmMessage::assistant(vec![]),
         uuid: Uuid::new_v4(),
@@ -314,6 +324,7 @@ pub fn create_assistant_error_message(error: &str, request_id: Option<&str>) -> 
         api_error: Some(ApiError {
             message: error.to_string(),
             status_code: None,
+            error_type: error_type.map(str::to_string),
         }),
     })
 }

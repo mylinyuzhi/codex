@@ -38,10 +38,10 @@ async def test_text_arrives_incrementally(live_deepseek, isolated_cwd) -> None:
                     if event.params.delta:
                         delta_arrival_times.append(time.monotonic() - started)
                         accumulated.append(event.params.delta)
-                elif method == NotificationMethod.TURN_COMPLETED:
+                elif method == NotificationMethod.TURN_ENDED:
                     turn_completed_at = time.monotonic() - started
                     break
-                elif method == NotificationMethod.TURN_FAILED:
+                elif method == NotificationMethod.TURN_ENDED:
                     pytest.fail(f"turn failed: {event.params}")
     except asyncio.TimeoutError:
         pytest.fail(

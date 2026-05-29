@@ -1,5 +1,6 @@
+use coco_types::ErrorCode;
 use coco_types::ErrorParams;
-use coco_types::TurnFailedParams;
+use coco_types::ErrorPayload;
 
 use super::error_body;
 use super::format_error_body;
@@ -28,12 +29,13 @@ fn format_drops_empty_category() {
 }
 
 #[test]
-fn turn_failed_body_uses_turn_category_and_non_retryable() {
-    let body = turn_failed_body(&TurnFailedParams {
-        error: "upstream 503".into(),
+fn turn_failed_body_uses_error_code_category_and_non_retryable() {
+    let body = turn_failed_body(&ErrorPayload {
+        message: "upstream 503".into(),
+        code: ErrorCode::Provider,
     });
     assert!(body.starts_with("upstream 503"));
-    assert!(body.contains("Category: turn"));
+    assert!(body.contains("Category: provider"));
     assert!(body.contains("Non-retryable"));
 }
 

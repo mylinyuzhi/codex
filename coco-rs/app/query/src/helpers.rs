@@ -182,28 +182,60 @@ pub(crate) fn build_abnormal_stop_api_error_message(
 ) -> coco_messages::Message {
     use coco_messages::StopReason;
     const PREFIX: &str = "API Error";
-    let text = match parsed {
-        StopReason::ContextWindowExceeded => {
-            format!("{PREFIX}: The model has reached its context window limit.")
-        }
-        StopReason::MaxTokens => match effective_max_tokens {
-            Some(n) if n > 0 => format!(
-                "{PREFIX}: Model response exceeded the {n} output token maximum. \
-                 To increase, set `max_output_tokens` in settings.json or via `--max-tokens`."
-            ),
-            _ => format!("{PREFIX}: Model response exceeded the configured output token maximum."),
-        },
-        StopReason::ContentFilter => format!(
-            "{PREFIX}: Model declined to respond — the request appears to violate the \
-             provider's content policy or safety filter. Try rephrasing the request or \
-             start a new session."
+    let (text, error_type): (String, &str) = match parsed {
+        StopReason::ContextWindowExceeded => (
+            format!("{PREFIX}: The model has reached its context window limit."),
+            "prompt_too_long",
         ),
-        other => format!(
-            "{PREFIX}: Turn ended on stop_reason={}.",
-            other.as_wire_str()
+        StopReason::MaxTokens => (
+            match effective_max_tokens {
+                Some(n) if n > 0 => format!(
+                    "{PREFIX}: Model response exceeded the {n} output token maximum. \
+                     To increase, set `max_output_tokens` in settings.json or via `--max-tokens`."
+                ),
+                _ => format!(
+                    "{PREFIX}: Model response exceeded the configured output token maximum."
+                ),
+            },
+            "max_output_tokens",
+        ),
+        StopReason::ContentFilter => (
+            format!(
+                "{PREFIX}: Model declined to respond — the request appears to violate the \
+                 provider's content policy or safety filter. Try rephrasing the request or \
+                 start a new session."
+            ),
+            "content_filter",
+        ),
+        other => (
+            format!(
+                "{PREFIX}: Turn ended on stop_reason={}.",
+                other.as_wire_str()
+            ),
+            "model_error",
         ),
     };
-    coco_messages::create_assistant_error_message(&text, None)
+    coco_messages::create_assistant_error_message(&text, None, Some(error_type))
+}
+
+/// Build the synthetic assistant message for the pre-API blocking-limit
+/// gate (Finding **C15**). Distinct from
+/// [`build_abnormal_stop_api_error_message`] because the blocking-limit
+/// is a *client-side* gate decision — no real provider error reached the
+/// engine — and TS labels it `error: 'invalid_request'` rather than
+/// `prompt_too_long` so hook matchers can distinguish "we never sent"
+/// from "the provider rejected after sending". TS parity:
+/// `query.ts:642-647` `createAssistantAPIErrorMessage({ error: 'invalid_request' })`.
+pub(crate) fn build_blocking_limit_api_error_message(
+    estimated_tokens: i64,
+    context_window: i64,
+) -> coco_messages::Message {
+    let text = format!(
+        "API Error: Estimated prompt size ({estimated_tokens} tokens) exceeds the \
+         active model's context window ({context_window} tokens). The request was \
+         not sent. Reduce history or switch to a model with a larger window."
+    );
+    coco_messages::create_assistant_error_message(&text, None, Some("invalid_request"))
 }
 
 /// Map `HookOutcome` to the protocol-layer `HookOutcomeStatus`.

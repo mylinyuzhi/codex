@@ -44,9 +44,9 @@ async def test_list_then_resume(live_deepseek, isolated_cwd) -> None:
         # Drive turn 1 to completion so the session lands in storage.
         async with asyncio.timeout(120):
             async for event in client.events():
-                if event.method == NotificationMethod.TURN_COMPLETED:
+                if event.method == NotificationMethod.TURN_ENDED:
                     break
-                if event.method == NotificationMethod.TURN_FAILED:
+                if event.method == NotificationMethod.TURN_ENDED:
                     pytest.fail(f"turn failed: {event.params}")
 
         # 1) list_sessions surfaces the just-saved session.

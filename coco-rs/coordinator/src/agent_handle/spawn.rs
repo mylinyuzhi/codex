@@ -1239,7 +1239,6 @@ impl SwarmAgentHandle {
             can_use_tool: request.can_use_tool.clone(),
             require_can_use_tool: request.require_can_use_tool,
             fork_label: request.fork_label,
-            max_output_tokens_override: None,
             cancel: None,
         };
 

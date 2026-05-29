@@ -51,6 +51,7 @@ fn assistant_with_api_error(text: &str) -> Message {
         a.api_error = Some(ApiError {
             message: "boom".into(),
             status_code: Some(500),
+            error_type: None,
         });
     }
     msg

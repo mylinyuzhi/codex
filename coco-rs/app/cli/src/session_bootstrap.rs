@@ -180,7 +180,7 @@ pub fn build_engine_resources(
     tracing::debug!(
         target: "coco_cli::session_bootstrap",
         max_turns = ?runtime_config.loop_config.max_turns,
-        max_tokens = ?runtime_config.loop_config.max_tokens,
+        total_token_budget = ?runtime_config.loop_config.total_token_budget,
         streaming_tools = runtime_config.loop_config.enable_streaming_tools,
         auto_compact_enabled = runtime_config.compact.auto.enabled,
         auto_compact_disabled_by_env = runtime_config.compact.auto.auto_disabled_by_env,

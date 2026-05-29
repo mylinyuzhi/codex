@@ -565,8 +565,12 @@ impl QueryEngine {
         out
     }
 
-    /// Stamp the most recent assistant timestamp (called from the stream
-    /// accumulator on every `TurnCompleted`). Drives time-based MC.
+    /// Stamp the most recent assistant timestamp. Called from
+    /// `run_session_loop` immediately after `record_session_usage` on
+    /// every Finish / PrematureClose turn (Finding **R11**). Drives:
+    /// (a) `time_since_last_assistant_ms` on the next-turn `QueryParams`,
+    /// (b) `coco_compact::evaluate_time_based_trigger` inside
+    /// `finalize_turn_post_tools` (time-based microcompact gate).
     pub fn stamp_assistant_now(&self) {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

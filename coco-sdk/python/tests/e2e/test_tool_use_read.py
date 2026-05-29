@@ -54,7 +54,7 @@ async def test_model_invokes_read_tool_on_fixture(live_deepseek, isolated_cwd) -
                         details = item.get("details", {})
                         if details.get("type") == "tool_call":
                             tool_call_item_ids.add(item.get("item_id", ""))
-                    elif method == NotificationMethod.TURN_COMPLETED:
+                    elif method == NotificationMethod.TURN_ENDED:
                         saw_terminal = True
                         # If the model already invoked the tool, we have
                         # everything we need — bail out early to keep
@@ -63,7 +63,7 @@ async def test_model_invokes_read_tool_on_fixture(live_deepseek, isolated_cwd) -
                         # are pending tool calls).
                         if tool_call_item_ids:
                             break
-                    elif method == NotificationMethod.TURN_FAILED:
+                    elif method == NotificationMethod.TURN_ENDED:
                         pytest.fail(f"turn failed: {event.params}")
         except asyncio.TimeoutError:
             pytest.fail(

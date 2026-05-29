@@ -392,16 +392,26 @@ async fn dialog_payload_roundtrip_reflects_persisted_overrides() {
     let config_home = tmp.path().join("home");
     fs::create_dir_all(&config_home).unwrap();
 
-    // Pick an arbitrary bundled skill name so we don't depend on
-    // disk fixtures — `register_bundled_default` populates a known
-    // set. Use the first one that exists.
+    // Pick a deterministic, lock-free bundled skill so the assertion
+    // below is stable. `all_including_conditional` yields `disk.values()`
+    // in random per-process HashMap order, and some bundled skills
+    // (e.g. `/batch`, `/debug`) carry an Author lock via
+    // `disable_model_invocation` — selecting one of those would make
+    // `row.lock` non-empty. Filter the locked ones out and sort.
     let bundled_target = {
         let mgr = SkillManager::new();
         register_bundled_default(&mgr);
-        mgr.all_including_conditional()
-            .first()
+        let mut names: Vec<String> = mgr
+            .all_including_conditional()
+            .iter()
+            .filter(|s| !s.disable_model_invocation)
             .map(|s| s.name.clone())
-            .expect("bundled skills should not be empty")
+            .collect();
+        names.sort();
+        names
+            .into_iter()
+            .next()
+            .expect("at least one lock-free bundled skill")
     };
 
     // Simulate: user previously saved `<target>: off` to localSettings

@@ -114,6 +114,16 @@ pub enum ConfigError {
         supported: Vec<ReasoningEffort>,
     },
 
+    #[error(
+        "model `{provider}/{model}`: max_output_tokens_escalate {escalate} must be strictly greater than max_output_tokens {baseline} — set it higher to enable Phase-1 escalate, or omit it to disable escalation for this model"
+    )]
+    EscalateBelowBaseline {
+        provider: String,
+        model: String,
+        baseline: i64,
+        escalate: i64,
+    },
+
     #[error("{message}")]
     InvalidConfig { message: String },
 
@@ -193,9 +203,9 @@ impl ErrorExt for ConfigError {
             Self::UnknownProvider { .. } => StatusCode::ProviderNotFound,
             Self::UnknownModel { .. } => StatusCode::ModelNotFound,
             Self::InvalidTimeoutSecs { .. } => StatusCode::InvalidArguments,
-            Self::DefaultThinkingLevelNotSupported { .. } | Self::InvalidConfig { .. } => {
-                StatusCode::InvalidConfig
-            }
+            Self::DefaultThinkingLevelNotSupported { .. }
+            | Self::EscalateBelowBaseline { .. }
+            | Self::InvalidConfig { .. } => StatusCode::InvalidConfig,
             Self::Io { .. } => StatusCode::IoError,
             Self::Json { .. } => StatusCode::InvalidJson,
             Self::Jsonc { .. } => StatusCode::InvalidJson,

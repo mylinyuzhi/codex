@@ -32,3 +32,9 @@ testpaths = ["tests"]
 markers = [
     "e2e: end-to-end tests that spawn the real `coco sdk` subprocess (skip without DEEPSEEK_API_KEY)",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+]

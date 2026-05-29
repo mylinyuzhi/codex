@@ -78,6 +78,12 @@ pub enum EnvKey {
     /// reaching the LSP server (rust-analyzer / pyright OOM-guard).
     CocoLspMaxFileSizeBytes,
     CocoMaxContextTokens,
+    /// Hard cap on consecutive `StructuredOutput` retries before the
+    /// engine surfaces `error_max_structured_output_retries` and ends
+    /// the turn. Replaces ad-hoc `std::env::var` reads in the engine
+    /// loop. TS parity: `QueryEngine.ts:1005-1047`'s
+    /// `MAX_STRUCTURED_OUTPUT_RETRIES` constant (default `5`).
+    CocoMaxStructuredOutputRetries,
     CocoMaxToolUseConcurrency,
     /// Full-path override for the auto-memory directory. When set, replaces
     /// the computed `<config_home>/projects/<sanitized-canonical-git-root>/memory/`
@@ -289,6 +295,7 @@ impl EnvKey {
             Self::CocoLogTimezone => "COCO_LOG_TIMEZONE",
             Self::CocoLspMaxFileSizeBytes => "COCO_LSP_MAX_FILE_SIZE_BYTES",
             Self::CocoMaxContextTokens => "COCO_MAX_CONTEXT_TOKENS",
+            Self::CocoMaxStructuredOutputRetries => "COCO_MAX_STRUCTURED_OUTPUT_RETRIES",
             Self::CocoMaxToolUseConcurrency => "COCO_MAX_TOOL_USE_CONCURRENCY",
             Self::CocoMemoryPathOverride => "COCO_MEMORY_PATH_OVERRIDE",
             Self::CocoMemoryExtractionDisable => "COCO_MEMORY_EXTRACTION_DISABLE",
@@ -422,6 +429,11 @@ pub fn env_opt_i32<K: AsRef<OsStr>>(key: K) -> Option<i32> {
 
 /// Get an environment variable as an optional i64.
 pub fn env_opt_i64<K: AsRef<OsStr>>(key: K) -> Option<i64> {
+    env_opt(key).and_then(|v| v.parse().ok())
+}
+
+/// Get an environment variable as an optional u32.
+pub fn env_opt_u32<K: AsRef<OsStr>>(key: K) -> Option<u32> {
     env_opt(key).and_then(|v| v.parse().ok())
 }
 

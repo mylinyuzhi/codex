@@ -24,7 +24,7 @@ fn help_content_renders_grouped_keymap_with_live_bindings() {
     // surface their static combo; the column is left-padded to 18 cols).
     assert!(body.contains("Ctrl+A             Move to beginning of line"));
     assert!(body.contains("!cmd               Run a shell command inline (skips the model)"));
-    assert!(body.contains("@path              Autocomplete a file path or @agent-name"));
+    assert!(body.contains("@path              Autocomplete a file path, agent, or MCP resource"));
 }
 
 #[test]

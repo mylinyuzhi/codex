@@ -273,15 +273,6 @@ pub struct AgentQueryConfig {
     /// `runForkedAgent({forkLabel})`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_label: Option<coco_types::ForkLabel>,
-
-    /// Hard cap on output tokens. **WARNING**: setting this clamps
-    /// `budget_tokens`, invalidates parent prompt cache. PR #18143
-    /// incident — setting `effort: 'low'` on prompt-suggestion forks
-    /// dropped cache hit rate from 92.7% → 61% (45× spike in cache
-    /// writes). Only set when cache parity is not a goal (e.g.
-    /// compact summaries that intentionally use a different model).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens_override: Option<i64>,
 }
 
 /// Result of a multi-turn agent query.

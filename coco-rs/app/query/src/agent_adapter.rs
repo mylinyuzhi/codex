@@ -92,7 +92,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
 
         let engine_config = QueryEngineConfig {
             max_turns: config.max_turns.unwrap_or(30),
-            max_tokens: None,
+            total_token_budget: None,
             prompt_cache: config.prompt_cache.clone(),
             system_prompt: Some(config.system_prompt),
             append_system_prompt: None,
@@ -103,7 +103,9 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // forward `--dangerously-skip-permissions` to spawned
             // child processes; the in-process analog is this field.
             bypass_permissions_available: config.bypass_permissions_available,
-            context_window: config.context_window.unwrap_or(200_000),
+            context_window: config
+                .context_window
+                .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW),
             max_output_tokens: config.max_output_tokens.unwrap_or(16_384),
             max_budget_usd: None,
             streaming_tool_execution: true,
@@ -251,10 +253,6 @@ impl AgentQueryEngine for QueryEngineAdapter {
             can_use_tool: config.can_use_tool.clone(),
             query_source_override: None,
             fork_label: config.fork_label,
-            // PR #18143 cache-bust risk — only memory/compact callers
-            // intentionally set this; user-driven AgentTool spawns
-            // pass through unchanged.
-            max_output_tokens_override: config.max_output_tokens_override,
             // Sub-context isolation for fork-flavored subagent spawns.
             // When `fork_label` is set (memory services: extract /
             // dream / session_memory; agent_summary timer), build a
@@ -316,7 +314,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 prompt,
             )));
             engine
-                .run_with_messages(messages, event_tx)
+                .run_with_messages(messages, event_tx, coco_types::TurnId::generate())
                 .await
                 .map_err(|e| {
                     Box::new(coco_error::PlainError::new(
@@ -329,7 +327,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // caller's `event_tx` (or our discarded fallback) drives
             // the same emission stream as the fork path.
             engine
-                .run_with_events(prompt, event_tx)
+                .run_with_events(prompt, event_tx, coco_types::TurnId::generate())
                 .await
                 .map_err(|e| {
                     Box::new(coco_error::PlainError::new(

@@ -24,8 +24,7 @@ use super::emit_tui;
 
 fn make_protocol_event() -> ServerNotification {
     ServerNotification::TurnStarted(TurnStartedParams {
-        turn_id: Some("t1".into()),
-        turn_number: 1,
+        turn_id: coco_types::TurnId::from("t1"),
     })
 }
 
@@ -55,8 +54,7 @@ async fn emit_protocol_routes_to_protocol_layer() {
     let received = rx.recv().await.expect("event delivered");
     match received {
         CoreEvent::Protocol(ServerNotification::TurnStarted(p)) => {
-            assert_eq!(p.turn_number, 1);
-            assert_eq!(p.turn_id.as_deref(), Some("t1"));
+            assert_eq!(p.turn_id.as_str(), "t1");
         }
         other => panic!("expected Protocol(TurnStarted), got {other:?}"),
     }

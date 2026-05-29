@@ -5,4 +5,4 @@ expression: "render_popup(&items, 0, 60, 4)"
                                                             
                                                             
                                                             
-▸ /add-dir  <path> Mount an extra working directory
+▸   /add-dir  <path> Mount an extra working directory

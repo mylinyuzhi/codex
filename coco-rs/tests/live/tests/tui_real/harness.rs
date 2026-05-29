@@ -779,11 +779,17 @@ impl Drop for RealTuiHarness {
         if let Some(usage) = self.session_total_usage() {
             // LLM call count comes from the cost tracker carried in
             // the SessionResult — for now infer from the number of
-            // `TurnCompleted` notifications the engine emitted.
+            // `TurnEnded(Completed)` notifications the engine emitted.
             let llm_calls = self
                 .events
                 .iter()
-                .filter(|e| matches!(e, CoreEvent::Protocol(ServerNotification::TurnCompleted(_))))
+                .filter(|e| {
+                    matches!(
+                        e,
+                        CoreEvent::Protocol(ServerNotification::TurnEnded(p))
+                            if matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
+                    )
+                })
                 .count() as u64;
             common::usage_report::record_with_llm_calls(
                 &self.provider,
@@ -870,7 +876,11 @@ async fn run_real_agent_driver(
                         }
                     });
 
-                    match engine.run_with_messages(messages, core_event_tx).await {
+                    let harness_cycle_id = coco_types::TurnId::generate();
+                    match engine
+                        .run_with_messages(messages, core_event_tx, harness_cycle_id.clone())
+                        .await
+                    {
                         Ok(result) => {
                             let mut h = runtime_t.history.lock().await;
                             h.clear();
@@ -879,13 +889,19 @@ async fn run_real_agent_driver(
                             }
                         }
                         Err(e) => {
-                            let _ = event_tx_t
-                                .send(CoreEvent::Protocol(ServerNotification::TurnFailed(
-                                    coco_types::TurnFailedParams {
-                                        error: e.to_string(),
-                                    },
-                                )))
-                                .await;
+                            // No harness-side `TurnEnded(Failed)` emit:
+                            // `engine_session::run_internal_with_messages`
+                            // is the sole `Failed` emitter on the engine
+                            // Err path (it has the partial usage + typed
+                            // error code we'd otherwise have to fabricate).
+                            // Re-emitting here produced a double-Failed
+                            // terminator on every error path before the
+                            // refactor.
+                            tracing::warn!(
+                                error = %e,
+                                cycle_turn_id = %harness_cycle_id,
+                                "tui_real harness: engine returned Err"
+                            );
                         }
                     }
                     let _ = forward.await;

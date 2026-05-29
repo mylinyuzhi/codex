@@ -31,8 +31,10 @@ use uuid::Uuid;
 /// One staged span awaiting commit.
 ///
 /// Same semantic fields as TS `staged[]` items inside
-/// `ContextCollapseSnapshotEntry`; wire is snake_case JSON (Rust idiom).
+/// `ContextCollapseSnapshotEntry`; wire is camelCase JSON for
+/// transcript-format interop with the TS source.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StagedRange {
     /// First archived message UUID (inclusive).
     pub start_uuid: Uuid,
@@ -47,8 +49,10 @@ pub struct StagedRange {
 }
 
 /// Committed collapse — archived span replaced by a placeholder. Same
-/// semantic shape as TS `ContextCollapseCommitEntry`; wire snake_case.
+/// semantic shape as TS `ContextCollapseCommitEntry`; wire camelCase
+/// for transcript-format interop with the TS source.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitEntry {
     /// `'marble-origami-commit'`.
     #[serde(rename = "type")]
@@ -65,8 +69,10 @@ pub struct CommitEntry {
 
 /// Latest snapshot of pending staged ranges + spawn-clock state.
 /// Same semantic shape as TS `ContextCollapseSnapshotEntry`; wire
-/// snake_case. Last-wins by `session_id` on resume.
+/// camelCase for transcript-format interop. Last-wins by
+/// `session_id` on resume.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotEntry {
     /// `'marble-origami-snapshot'`.
     #[serde(rename = "type")]

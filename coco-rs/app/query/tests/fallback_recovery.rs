@@ -140,7 +140,7 @@ fn minimal_config(model_id: &str) -> QueryEngineConfig {
     QueryEngineConfig {
         model_id: model_id.to_string(),
         max_turns: 20,
-        max_tokens: Some(16_384),
+        total_token_budget: Some(16_384),
         context_window: 200_000,
         max_output_tokens: 4_096,
         streaming_tool_execution: false,
@@ -235,6 +235,7 @@ async fn test_engine_surfaces_error_when_chain_exhausted() {
                 "hello",
             ))],
             tx,
+            coco_types::TurnId::generate(),
         )
         .await;
     assert!(result.is_err(), "exhausted chain must surface error");

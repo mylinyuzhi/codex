@@ -58,22 +58,6 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         prompt: &str,
         system_prompt_override: Option<String>,
     ) -> Result<ForkedAgentResult, coco_error::BoxedError> {
-        // PR #18143 cache-bust trail. Setting max_output_tokens on a
-        // cache-shared fork clamps `budget_tokens`, invalidating the
-        // parent's prompt cache (TS incident: 92.7% → 61% hit-rate).
-        // Only `Compact` legitimately sets this (distinct model).
-        // Surface a structured warn! on every other variant so a
-        // regression leaves a trail in the logs.
-        if let Some(cap) = options.max_output_tokens
-            && !matches!(options.fork_label, coco_types::ForkLabel::Compact)
-        {
-            tracing::warn!(
-                fork_label = %options.fork_label,
-                max_output_tokens = cap,
-                "max_output_tokens override set on cache-shared fork; cache key parity broken (PR #18143: 92.7% → 61% hit-rate incident)"
-            );
-        }
-
         // Derive the AgentQueryConfig shape from the cache slot. This
         // keeps the byte-faithful contract documented on `forked_agent`
         // (skip_cache_write, skip_transcript, max_turns: 1 by default).
@@ -108,7 +92,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             context_window: agent_config.context_window.unwrap_or(200_000),
             max_output_tokens: agent_config.max_output_tokens.unwrap_or(16_384),
             max_turns: agent_config.max_turns.unwrap_or(1),
-            max_tokens: None,
+            total_token_budget: None,
             prompt_cache: agent_config.prompt_cache.clone(),
             system_prompt: Some(agent_config.system_prompt.clone()),
             streaming_tool_execution: false,
@@ -137,14 +121,13 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
                 options: std::collections::HashMap::new(),
             }),
             // Per-fork plumbing — thread the canUseTool callback,
-            // fork_label, query_source override, and (cache-bust-risky)
-            // max_output_tokens override onto the child engine config
-            // so step 3.5 in execute_tool_call enforces uniformly and
-            // log lines self-identify which fork they belong to.
+            // fork_label, and query_source override onto the child
+            // engine config so step 3.5 in execute_tool_call enforces
+            // uniformly and log lines self-identify which fork they
+            // belong to.
             can_use_tool: options.can_use_tool.clone(),
             query_source_override: Some(options.query_source.clone()),
             fork_label: Some(options.fork_label),
-            max_output_tokens_override: options.max_output_tokens,
             // Sub-context isolation primitives applied at the
             // per-call ToolUseContext build site (tool_context.rs
             // reads `fork_isolation` and applies auto agent_id,

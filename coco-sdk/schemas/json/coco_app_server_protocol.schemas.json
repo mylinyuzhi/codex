@@ -382,8 +382,14 @@
       "type": "object"
     },
     "ApiError": {
-      "description": "API error attached to an assistant message.",
+      "description": "API error attached to an assistant message.\n\n`error_type` carries the short canonical code TS Claude Code emits\non `AssistantMessage.error` (`max_output_tokens`, `prompt_too_long`,\n`content_filter`, `rate_limited`, `overloaded`, `blocking_limit`,\n`model_error`, \u2026). The C3 death-spiral guard forwards it as the\n`error` field of the StopFailure hook input so hook matchers can\nfilter by specific error type; surfaces in the SDK transcript as\nthe typed equivalent of TS `lastMessage.error`.",
       "properties": {
+        "error_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message": {
           "type": "string"
         },
@@ -913,8 +919,28 @@
       ],
       "type": "object"
     },
+    "BudgetExhaustedOutcome": {
+      "description": "Payload for [`TurnOutcome::BudgetExhausted`]. `budget_tokens` is\nthe configured `max_tokens` ceiling; `None` when no explicit max\nwas set (the 90%-of-window heuristic still drove the stop, but\nthere is no honest single number to emit).",
+      "properties": {
+        "budget_tokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "used_tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "used_tokens"
+      ],
+      "type": "object"
+    },
     "CancelReason": {
-      "description": "Why a turn was interrupted. Lets the TUI distinguish \"user pressed\nCtrl+C \u2014 restore the input if conditions match\" from \"system cancelled\nthe in-flight turn to make room for `/clear` / `/compact` / `/rewind`\n/ shutdown / next submit \u2014 leave the conversation alone\".\n\nMirrors TS `abortController.signal.reason` discrimination at\n`REPL.tsx:3001`. New variants default to non-user-initiated semantics\nat the consumer (no auto-restore), so adding e.g. `BudgetExhausted`\nor `Timeout` later is additive without breaking the TUI handler.",
+      "description": "Why a turn was interrupted. Lets the TUI distinguish \"user pressed\nCtrl+C \u2014 restore the input if conditions match\" from \"system cancelled\nthe in-flight turn to make room for `/clear` / `/compact` / `/rewind`\n/ shutdown / next submit \u2014 leave the conversation alone\".\n\nMirrors TS `abortController.signal.reason` discrimination at\n`REPL.tsx:3001`. Used inside `TurnOutcome::Interrupted`.",
       "oneOf": [
         {
           "const": "user_cancel",
@@ -1733,6 +1759,22 @@
       ],
       "type": "object"
     },
+    "CompletedOutcome": {
+      "description": "Payload for [`TurnOutcome::Completed`]. `stop_reason` is the *last\nLLM round's* finish reason at the moment the engine returned.\n`None` when the cycle ended without ever resolving a real model\nfinish reason (structured-output retry cap, Stop-hook prevent\nbefore any round resolved one) \u2014 emitters must not fabricate.",
+      "properties": {
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UnifiedFinishReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ConfigApplyFlagsParams": {
       "description": "Matches TS `SDKControlApplyFlagSettingsRequestSchema` (controlSchemas.ts:467-472).",
       "properties": {
@@ -2122,6 +2164,35 @@
       ],
       "type": "object"
     },
+    "ErrorCode": {
+      "description": "Wire-stable error category. Category-level (11 variants) rather\nthan leaf `StatusCode` (~35 variants) so the protocol does not\nbreak every time a new internal status is added. The mapping\nfrom `coco_error::StatusCategory` lives in `coco_query::error_code`\n(the seam between the error layer and the wire types).",
+      "oneOf": [
+        {
+          "enum": [
+            "common",
+            "input",
+            "io",
+            "network",
+            "auth",
+            "config",
+            "provider",
+            "resource",
+            "system_reminder"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "hook_blocked",
+          "description": "Hook policy blocked the turn (e.g. a `UserPromptSubmit` hook\nreturned a `blocking_error`). Not a coco_error condition \u2014\nit's a deliberate policy decision surfaced via the same wire\nshape so consumers can render / filter it. Distinct from\n`Unknown` so dashboards don't lump policy blocks together with\nthe defensive sentinel.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Defensive sentinel: an emitter reached the error path without\na classifiable `StatusCategory` (e.g. the `Success \u2192 Unknown`\ncollapse in `coco_query::error_code`). Treat as a bug signal,\nnot a load-bearing category \u2014 every `Unknown` in production\ntraffic warrants investigation.",
+          "type": "string"
+        }
+      ]
+    },
     "ErrorParams": {
       "properties": {
         "category": {
@@ -2143,6 +2214,24 @@
       ],
       "type": "object"
     },
+    "ErrorPayload": {
+      "description": "Structured error payload for `TurnOutcome::Failed`. Replaces\nthe older opaque `error: String` so Hub / SDK consumers can\nfilter / aggregate by category without parsing the message.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode",
+          "description": "Wire-stable category. Maps 1:1 from\n`coco_error::StatusCategory` (minus `Success`)."
+        },
+        "message": {
+          "description": "Human-readable description. Always present.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "code"
+      ],
+      "type": "object"
+    },
     "ExpandedView": {
       "description": "Which panel the TUI should have expanded in the task area.\n\nTS parity: `AppState.expandedView` in `AppStateStore.ts` (3 variants:\n`'none' | 'tasks' | 'teammates'`).\n\n**`Teammates` \u2260 general subagents.** In TS, `expandedView ===\n'teammates'` mounts `TeammateSpinnerTree`, which strictly filters\n`task.type === 'in_process_teammate'` \u2014 i.e. agents created by\n`spawnTeammate()` with persistent identity (`agentId@teamName`,\nsurvives `/clear`, mailbox-based). Async subagents from the\n`Agent` tool (TS `LocalAgentTask`, type `'local_agent'`) render\ninline in the transcript via `AgentProgressLine` and in the\n`BackgroundTaskStatus` pill row \u2014 **not** here.\n\nA subagent only appears in this view when the Agent tool was\ninvoked with `isAgentSwarmsEnabled() && teamName` set, which\nroutes through `spawnTeammate()` and transforms the worker into\na first-class teammate.",
       "enum": [
@@ -2151,6 +2240,18 @@
         "teammates"
       ],
       "type": "string"
+    },
+    "FailedOutcome": {
+      "description": "Payload for [`TurnOutcome::Failed`]. `error.code` is the\nwire-stable category; `error.message` is the human-readable\ndetail. No `stop_reason` \u2014 the failure did not originate from\nthe model's finish_reason.",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorPayload"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "type": "object"
     },
     "FastModeState": {
       "description": "Matches TS `FastModeStateSchema` (coreSchemas.ts:1883-1889).",
@@ -3307,6 +3408,18 @@
       },
       "type": "object"
     },
+    "InterruptedOutcome": {
+      "description": "Payload for [`TurnOutcome::Interrupted`]. `cancel_reason`\ndistinguishes user Ctrl+C from system pre-empt (Clear / Compact\n/ Rewind / Shutdown). Never carries a model `stop_reason`.",
+      "properties": {
+        "cancel_reason": {
+          "$ref": "#/$defs/CancelReason"
+        }
+      },
+      "required": [
+        "cancel_reason"
+      ],
+      "type": "object"
+    },
     "ItemStatus": {
       "enum": [
         "in_progress",
@@ -3690,6 +3803,19 @@
       "required": [
         "started",
         "root"
+      ],
+      "type": "object"
+    },
+    "MaxTurnsReachedOutcome": {
+      "description": "Payload for [`TurnOutcome::MaxTurnsReached`]. The variant IS the\nterminal reason; consumers know \"you ran out of turns\".",
+      "properties": {
+        "max_turns": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_turns"
       ],
       "type": "object"
     },
@@ -4368,9 +4494,7 @@
         "history/replaced",
         "history/reasoningMetadataAttached",
         "turn/started",
-        "turn/completed",
-        "turn/failed",
-        "turn/interrupted",
+        "turn/ended",
         "item/started",
         "item/updated",
         "item/completed",
@@ -4423,7 +4547,6 @@
         "stream/watchdogWarning",
         "stream/requestEnd",
         "session/stateChanged",
-        "turn/maxReached",
         "localCommand/output",
         "files/persisted",
         "elicitation/complete",
@@ -6112,7 +6235,7 @@
           "type": "object"
         },
         {
-          "description": "Agent turn started.",
+          "description": "Agent turn started. Emitted by the runner layer\n(`tui_runner` / `sdk_runner`) at the start of every logical\nuser-prompt cycle. Pairs 1:1 with `TurnEnded` sharing the\nsame `turn_id`. Intra-turn loops (Stop-hook blocking,\nreactive compact, max-tokens recovery, etc. \u2014 every\n`ContinueReason::*`) do NOT re-emit this event.",
           "properties": {
             "method": {
               "const": "turn/started",
@@ -6129,48 +6252,14 @@
           "type": "object"
         },
         {
-          "description": "Agent turn completed successfully.",
+          "description": "Agent turn ended. Discriminated by `outcome.kind` \u2014\n`completed` / `failed` / `interrupted` / `max_turns_reached` /\n`budget_exhausted`. Paired 1:1 with the preceding\n`TurnStarted` (same `turn_id`). See `TurnOutcome` for\nvariant payloads; `stop_reason` only appears on `Completed`\nwhere it is semantically meaningful.",
           "properties": {
             "method": {
-              "const": "turn/completed",
+              "const": "turn/ended",
               "type": "string"
             },
             "params": {
-              "$ref": "#/$defs/TurnCompletedParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Agent turn failed with error.",
-          "properties": {
-            "method": {
-              "const": "turn/failed",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/$defs/TurnFailedParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Turn interrupted by user.",
-          "properties": {
-            "method": {
-              "const": "turn/interrupted",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/$defs/TurnInterruptedParams"
+              "$ref": "#/$defs/TurnEndedParams"
             }
           },
           "required": [
@@ -7196,32 +7285,6 @@
               "required": [
                 "state"
               ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Max turns reached.",
-          "properties": {
-            "method": {
-              "const": "turn/maxReached",
-              "type": "string"
-            },
-            "params": {
-              "properties": {
-                "max_turns": {
-                  "format": "int32",
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              },
               "type": "object"
             }
           },
@@ -11720,55 +11783,126 @@
       ],
       "title": "TuiOnlyEvent"
     },
-    "TurnCompletedParams": {
+    "TurnEndedParams": {
+      "description": "Terminal event for one logical user-prompt cycle. The\n`outcome` discriminator carries the per-variant payload \u2014\n`stop_reason` lives only on `Completed` where it is\nsemantically meaningful. Other variants self-describe.\n\nPairing contract: every `TurnStartedParams` is followed by\n**at least one** `TurnEndedParams` sharing the same `turn_id`.\nA second `TurnEnded(Interrupted)` MAY follow a terminal outcome\nwhen the user cancel was observed after the engine had already\nreturned \u2014 this is the late-cancel signal the TUI uses to fire\nauto-restore. Consumers should treat the latest `Interrupted`\nevent as authoritative when it follows a same-id terminal.",
       "properties": {
+        "outcome": {
+          "$ref": "#/$defs/TurnOutcome"
+        },
         "turn_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/TurnId"
         },
         "usage": {
-          "$ref": "#/$defs/TokenUsage"
-        }
-      },
-      "required": [
-        "usage"
-      ],
-      "type": "object"
-    },
-    "TurnFailedParams": {
-      "properties": {
-        "error": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "error"
-      ],
-      "type": "object"
-    },
-    "TurnInterruptedParams": {
-      "properties": {
-        "reason": {
           "anyOf": [
             {
-              "$ref": "#/$defs/CancelReason"
+              "$ref": "#/$defs/TokenUsage"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Why the turn was interrupted. `None` only on legacy transcripts\nthat pre-date this field; new senders always populate it. The\nTUI handler treats `None` as `SystemPreempt` (conservative \u2014 no\nauto-restore on unknown reason)."
-        },
-        "turn_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "Token usage accumulated over the cycle. `None` only when\nthe emitter genuinely does not know (runner-side bail\nbefore engine entry, or late-cancel emitter that does not\nown the engine's accumulator). `Some(TokenUsage::default())`\nis a real \"zero usage\" signal \u2014 distinct from \"unknown\"."
         }
       },
+      "required": [
+        "turn_id",
+        "outcome"
+      ],
       "type": "object"
+    },
+    "TurnId": {
+      "description": "Branded turn identifier. One per logical user-prompt cycle \u2014\nshared between the paired `TurnStarted` and `TurnEnded` events.\nGenerated by the runner layer (`tui_runner` / `sdk_runner`),\nnot the engine, so pre-engine hook blocks still emit a complete\nlifecycle pair.",
+      "type": "string"
+    },
+    "TurnOutcome": {
+      "description": "Discriminated terminal reason. The `Completed` variant is\nthe only one that carries `stop_reason`: the other variants'\nnames ARE the terminal reason.\n\nWire format: `{\"kind\": \"completed\", \"data\": {\"stop_reason\": \"end_turn\"}}` etc.\n\nPer-variant payloads are **named structs** rather than inline\nstruct-variants. This is deliberate: schemars emits `$ref` to the\nnamed struct, which the Python codegen turns into a real Pydantic\nmodel. Inline struct-variants would degrade to `dict[str, Any]` on\nthe Python side \u2014 losing typed access for SDK consumers.",
+      "oneOf": [
+        {
+          "description": "Engine decided to terminate the cycle.",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/CompletedOutcome"
+            },
+            "kind": {
+              "const": "completed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Engine error: provider failure, network, internal panic,\nconfig invalid, etc.",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/FailedOutcome"
+            },
+            "kind": {
+              "const": "failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "External cancellation (user Ctrl+C, system pre-empt).",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/InterruptedOutcome"
+            },
+            "kind": {
+              "const": "interrupted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Turn budget exhausted \u2014 the cycle hit `config.max_turns`\nbefore the model issued a non-tool-use stop.",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/MaxTurnsReachedOutcome"
+            },
+            "kind": {
+              "const": "max_turns_reached",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Token budget exhausted (90% threshold / diminishing-returns\nstop, distinct from `max_turns`).",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/BudgetExhaustedOutcome"
+            },
+            "kind": {
+              "const": "budget_exhausted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "TurnStartParams": {
       "description": "Params for `turn/start`.",
@@ -11805,7 +11939,7 @@
       "type": "object"
     },
     "TurnStartResult": {
-      "description": "Response to `ClientRequest::TurnStart`.\n\n`turn/start` is a fire-and-forget trigger \u2014 the server accepts the\nrequest, spawns the turn as a detached task, and replies immediately\nwith a handle. Progress is delivered via `turn/started`, streaming\ndeltas, `turn/completed` / `turn/failed` notifications.",
+      "description": "Response to `ClientRequest::TurnStart`.\n\n`turn/start` is a fire-and-forget trigger \u2014 the server accepts the\nrequest, spawns the turn as a detached task, and replies immediately\nwith a handle. Progress is delivered via `turn/started`, streaming\ndeltas, and the terminal `turn/ended` notification.",
       "properties": {
         "turn_id": {
           "description": "Opaque turn identifier the client can use to correlate notifications\nand issue `turn/interrupt` for cancellation.",
@@ -11821,18 +11955,11 @@
     "TurnStartedParams": {
       "properties": {
         "turn_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "turn_number": {
-          "format": "int32",
-          "type": "integer"
+          "$ref": "#/$defs/TurnId"
         }
       },
       "required": [
-        "turn_number"
+        "turn_id"
       ],
       "type": "object"
     },

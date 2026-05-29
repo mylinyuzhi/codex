@@ -1103,6 +1103,20 @@ def main() -> None:
     model_names: set[str] = set()
     union_alias_names: set[str] = set()
     tagged_oneof_names: set[str] = set()
+    # Scalar newtype aliases — Rust `#[serde(transparent)] struct X(T)`
+    # where T is a primitive. Schema is `{"type": "<scalar>"}` with no
+    # `enum` / `properties` / `oneOf`. Without explicit handling these
+    # would silently disappear from the generated module and any class
+    # referencing them by name fails Pydantic forward-ref resolution
+    # at module import. Each becomes `Name = <pytype>` so the wire
+    # shape (transparent passthrough) is preserved.
+    scalar_alias_names: dict[str, str] = {}
+    _SCALAR_PY_TYPE = {
+        "string": "str",
+        "integer": "int",
+        "number": "float",
+        "boolean": "bool",
+    }
     for name, defn in all_defs.items():
         if name in SKIP_TYPES or name in explicitly_handled:
             continue
@@ -1114,6 +1128,14 @@ def main() -> None:
             union_alias_names.add(name)
         elif defn.get("type") == "object":
             model_names.add(name)
+        elif (
+            isinstance(defn.get("type"), str)
+            and defn["type"] in _SCALAR_PY_TYPE
+            and "enum" not in defn
+            and "properties" not in defn
+            and "oneOf" not in defn
+        ):
+            scalar_alias_names[name] = _SCALAR_PY_TYPE[defn["type"]]
 
     ENUM_TYPES.update(enum_names)
 
@@ -1150,6 +1172,22 @@ def main() -> None:
         sections.append(generate_model("Usage", all_defs["Usage"], all_defs))
         model_names.discard("Usage")
     sections.append("")
+
+    # ── Section: Scalar newtype aliases ──
+    # Emit BEFORE any model class references them. Schema `type:
+    # string|integer|number|boolean` without further constraints is a
+    # transparent Rust newtype (`#[serde(transparent)]`); Python
+    # mirrors with a plain type alias.
+    if scalar_alias_names:
+        sections.append("# " + "-" * 75)
+        sections.append("# Scalar newtype aliases (transparent Rust newtypes)")
+        sections.append("# " + "-" * 75)
+        sections.append("")
+        for name in sorted(scalar_alias_names):
+            py_type = scalar_alias_names[name]
+            sections.append(f"{name} = {py_type}")
+        sections.append("")
+        sections.append("")
 
     # ── Section: Enums ──
     sections.append("# " + "-" * 75)
@@ -1523,6 +1561,38 @@ def main() -> None:
         f"Generated: {len(notif_variants)} notifications, "
         f"{len(sr_variants)} server requests, "
         f"{len(cr_variants)} client requests"
+    )
+
+    # ── Section: forward-ref resolution ──
+    # Pydantic v2 `TypeAdapter(<discriminated union>)` constructs its
+    # validator eagerly at module-import time. If any variant class
+    # references a Pydantic model that's defined LATER in the file
+    # (`from __future__ import annotations` defers annotation
+    # evaluation but not the TypeAdapter construction), Pydantic
+    # raises `class-not-fully-defined` on the first `.validate_python`
+    # call. The fix is to walk every BaseModel-subclass we emitted and
+    # call `model_rebuild()` so each class has its forward refs
+    # resolved against the now-complete module namespace.
+    #
+    # Done unconditionally as a tail section so any future class
+    # introduced by the generator is auto-rebuilt. Errors are
+    # swallowed: classes without forward refs (the common case)
+    # raise `PydanticUserError("already-defined")`, which is harmless.
+    sections.append(
+        "\n# ── Resolve forward refs for every emitted BaseModel ──\n"
+        "# Pydantic v2's TypeAdapter (used in discriminated unions)\n"
+        "# constructs validators eagerly; classes that reference\n"
+        "# later-defined models would error on first validation\n"
+        "# without an explicit rebuild pass.\n"
+        "import sys as _sys\n"
+        "for _name in list(globals()):\n"
+        "    _obj = globals()[_name]\n"
+        "    if isinstance(_obj, type) and issubclass(_obj, BaseModel):\n"
+        "        try:\n"
+        "            _obj.model_rebuild()\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "del _name, _obj\n"
     )
 
     # Write output
