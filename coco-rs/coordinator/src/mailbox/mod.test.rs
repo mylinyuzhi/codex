@@ -86,7 +86,9 @@ fn test_parse_protocol_message_idle() {
 
 #[test]
 fn test_parse_protocol_message_shutdown() {
-    let text = r#"{"type": "shutdown_request", "request_id": "shutdown-1", "from": "leader", "timestamp": "2026-04-06T10:00:00Z"}"#;
+    // Wire format: `requestId` is camelCase (matches the
+    // `#[serde(rename = "requestId")]` on the variant).
+    let text = r#"{"type": "shutdown_request", "requestId": "shutdown-1", "from": "leader", "timestamp": "2026-04-06T10:00:00Z"}"#;
     let msg = parse_protocol_message(text).unwrap();
     match msg {
         ProtocolMessage::ShutdownRequest {

@@ -1142,9 +1142,9 @@ impl SessionRuntime {
             context_window: 200_000,
             max_output_tokens: 16_384,
             max_turns: runtime_config.loop_config.max_turns.unwrap_or(30),
-            max_tokens: cli
+            total_token_budget: cli
                 .max_tokens
-                .or_else(|| runtime_config.loop_config.max_tokens.map(i64::from)),
+                .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
             prompt_cache: client
                 .supports_prompt_cache()
                 .then(|| coco_types::PromptCacheConfig {

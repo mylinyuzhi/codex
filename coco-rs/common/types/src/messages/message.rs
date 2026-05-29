@@ -185,12 +185,22 @@ pub struct AssistantMessage {
 pub use coco_llm_types::StopReason;
 
 /// API error attached to an assistant message.
+///
+/// `error_type` carries the short canonical code TS Claude Code emits
+/// on `AssistantMessage.error` (`max_output_tokens`, `prompt_too_long`,
+/// `content_filter`, `rate_limited`, `overloaded`, `blocking_limit`,
+/// `model_error`, …). The C3 death-spiral guard forwards it as the
+/// `error` field of the StopFailure hook input so hook matchers can
+/// filter by specific error type; surfaces in the SDK transcript as
+/// the typed equivalent of TS `lastMessage.error`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_type: Option<String>,
 }
 
 /// Attachment message: `kind` carries the TS-parity discriminant (60 variants),

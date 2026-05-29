@@ -121,12 +121,30 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
         .iter()
         .rev()
         .find(|n| is_turn_terminal_method(&n.method))
-        .map(|n| n.method.clone())
-        .unwrap_or_default();
-    assert!(
-        last_terminal == NotificationMethod::TurnInterrupted.as_str()
-            || last_terminal == NotificationMethod::TurnFailed.as_str(),
-        "cancel-during-tool should yield turn/interrupted or turn/failed; got {last_terminal}"
+        .cloned();
+    let terminal = last_terminal.expect("expected a final turn/ended terminator");
+    assert_eq!(
+        terminal.method,
+        NotificationMethod::TurnEnded.as_str(),
+        "cancel-during-tool's last terminator must be turn/ended"
+    );
+    // Outcome must be `interrupted` — never `failed` (the engine_session
+    // Err path now suppresses the `Failed` emit when cancel was the
+    // cause, so cancellation-induced bails surface only as the runner's
+    // `Interrupted` terminator), never `completed` (would mean the
+    // cancel did not propagate at all), and never `max_turns_reached`
+    // / `budget_exhausted` (wrong reason for this scenario).
+    let outcome_kind = terminal
+        .params
+        .get("outcome")
+        .and_then(|o| o.get("kind"))
+        .and_then(|k| k.as_str())
+        .unwrap_or("");
+    assert_eq!(
+        outcome_kind, "interrupted",
+        "cancel-during-tool outcome must be `interrupted`; got `{outcome_kind}`. \
+         If this asserts as `failed` again, the engine_session Err path \
+         likely regressed and is emitting Failed for cancel-induced Err."
     );
 
     // Wall-clock check: if cancel didn't propagate to the bash child

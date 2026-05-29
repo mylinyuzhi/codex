@@ -168,6 +168,68 @@ fn from_partial_accepts_default_matching_supported() {
     assert_eq!(info.default_thinking_level, Some(ReasoningEffort::Medium));
 }
 
+/// **M3 regression** — Phase-1 escalate ceiling must exceed baseline.
+/// At-or-below baseline would be a silent no-op at the recovery
+/// dispatcher (`phase1_available = e > b`); rejecting at config
+/// resolution surfaces the misconfig at boot instead of when MaxTokens
+/// first fires.
+#[test]
+fn from_partial_rejects_escalate_at_or_below_baseline() {
+    use crate::positive::PositiveTokens;
+
+    // escalate == baseline — invalid.
+    let equal = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(100_000)),
+        max_output_tokens: Some(PositiveTokens::new(8_192)),
+        max_output_tokens_escalate: Some(PositiveTokens::new(8_192)),
+        ..Default::default()
+    };
+    let err = ModelInfo::from_partial("test", "m-eq", equal).unwrap_err();
+    match err {
+        crate::error::ConfigError::EscalateBelowBaseline {
+            provider,
+            model,
+            baseline,
+            escalate,
+        } => {
+            assert_eq!(provider, "test");
+            assert_eq!(model, "m-eq");
+            assert_eq!(baseline, 8_192);
+            assert_eq!(escalate, 8_192);
+        }
+        other => panic!("expected EscalateBelowBaseline, got {other:?}"),
+    }
+
+    // escalate < baseline — also invalid.
+    let below = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(100_000)),
+        max_output_tokens: Some(PositiveTokens::new(8_192)),
+        max_output_tokens_escalate: Some(PositiveTokens::new(4_096)),
+        ..Default::default()
+    };
+    assert!(matches!(
+        ModelInfo::from_partial("test", "m-lt", below).unwrap_err(),
+        crate::error::ConfigError::EscalateBelowBaseline { .. }
+    ));
+}
+
+#[test]
+fn from_partial_accepts_escalate_strictly_above_baseline() {
+    use crate::positive::PositiveTokens;
+
+    let valid = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(16_384)),
+        max_output_tokens_escalate: Some(PositiveTokens::new(64_000)),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("test", "m-ok", valid).expect("must resolve");
+    assert_eq!(
+        info.max_output_tokens_escalate,
+        Some(PositiveTokens::new(64_000))
+    );
+}
+
 #[test]
 fn from_partial_skips_validation_when_either_side_unset() {
     use crate::positive::PositiveTokens;

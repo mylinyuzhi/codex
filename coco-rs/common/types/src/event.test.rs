@@ -114,13 +114,170 @@ fn item_status_serializes_snake_case() {
 #[test]
 fn server_notification_turn_started_wire_method() {
     let notif = ServerNotification::TurnStarted(TurnStartedParams {
-        turn_id: Some("t1".into()),
-        turn_number: 1,
+        turn_id: crate::TurnId::from("t1"),
     });
     let json = serde_json::to_value(&notif).unwrap();
     assert_eq!(json["method"], "turn/started");
-    assert_eq!(json["params"]["turn_number"], 1);
     assert_eq!(json["params"]["turn_id"], "t1");
+    assert_eq!(json["params"]["turn_id"], "t1");
+}
+
+#[test]
+fn server_notification_turn_ended_completed_wire_method() {
+    let notif = ServerNotification::TurnEnded(TurnEndedParams::completed(
+        crate::TurnId::from("t-1"),
+        Some(TokenUsage::default()),
+        Some(crate::StopReason::EndTurn),
+    ));
+    let json = serde_json::to_value(&notif).unwrap();
+    assert_eq!(json["method"], "turn/ended");
+    assert_eq!(json["params"]["turn_id"], "t-1");
+    assert_eq!(json["params"]["outcome"]["kind"], "completed");
+    assert_eq!(json["params"]["outcome"]["data"]["stop_reason"], "end_turn");
+}
+
+#[test]
+fn server_notification_turn_ended_completed_omits_optional_fields() {
+    // `usage: None` + `stop_reason: None` skip-serializes-if-none so
+    // the wire stays compact. Consumers must treat absent fields as
+    // "unknown" (not "zero" / "EndTurn") — see TurnOutcome doc.
+    let notif = ServerNotification::TurnEnded(TurnEndedParams::completed(
+        crate::TurnId::from("t-noop"),
+        None,
+        None,
+    ));
+    let json = serde_json::to_value(&notif).unwrap();
+    assert_eq!(json["params"]["outcome"]["kind"], "completed");
+    // Both optional fields elide cleanly.
+    assert!(json["params"].get("usage").is_none());
+    assert!(
+        json["params"]["outcome"]["data"]
+            .get("stop_reason")
+            .is_none()
+    );
+}
+
+#[test]
+fn server_notification_turn_ended_failed_wire_method() {
+    let notif = ServerNotification::TurnEnded(TurnEndedParams::failed(
+        crate::TurnId::from("t-2"),
+        Some(TokenUsage::default()),
+        ErrorPayload {
+            message: "provider 500".into(),
+            code: ErrorCode::Provider,
+        },
+    ));
+    let json = serde_json::to_value(&notif).unwrap();
+    assert_eq!(json["method"], "turn/ended");
+    assert_eq!(json["params"]["outcome"]["kind"], "failed");
+    assert_eq!(
+        json["params"]["outcome"]["data"]["error"]["message"],
+        "provider 500"
+    );
+    assert_eq!(
+        json["params"]["outcome"]["data"]["error"]["code"],
+        "provider"
+    );
+}
+
+#[test]
+fn server_notification_turn_ended_interrupted_wire_method() {
+    let notif = ServerNotification::TurnEnded(TurnEndedParams::interrupted(
+        crate::TurnId::from("t-3"),
+        Some(TokenUsage::default()),
+        CancelReason::UserCancel,
+    ));
+    let json = serde_json::to_value(&notif).unwrap();
+    assert_eq!(json["method"], "turn/ended");
+    assert_eq!(json["params"]["outcome"]["kind"], "interrupted");
+    assert_eq!(
+        json["params"]["outcome"]["data"]["cancel_reason"],
+        "user_cancel"
+    );
+}
+
+#[test]
+fn server_notification_turn_ended_max_turns_reached_wire_method() {
+    let notif = ServerNotification::TurnEnded(TurnEndedParams::max_turns_reached(
+        crate::TurnId::from("t-4"),
+        Some(TokenUsage::default()),
+        12,
+    ));
+    let json = serde_json::to_value(&notif).unwrap();
+    assert_eq!(json["method"], "turn/ended");
+    assert_eq!(json["params"]["outcome"]["kind"], "max_turns_reached");
+    assert_eq!(json["params"]["outcome"]["data"]["max_turns"], 12);
+}
+
+#[test]
+fn server_notification_turn_ended_budget_exhausted_wire_method() {
+    let notif = ServerNotification::TurnEnded(TurnEndedParams::budget_exhausted(
+        crate::TurnId::from("t-5"),
+        Some(TokenUsage::default()),
+        180_000,
+        Some(200_000),
+    ));
+    let json = serde_json::to_value(&notif).unwrap();
+    assert_eq!(json["method"], "turn/ended");
+    assert_eq!(json["params"]["outcome"]["kind"], "budget_exhausted");
+    assert_eq!(json["params"]["outcome"]["data"]["used_tokens"], 180_000);
+    assert_eq!(json["params"]["outcome"]["data"]["budget_tokens"], 200_000);
+}
+
+#[test]
+fn server_notification_turn_ended_budget_exhausted_no_ceiling() {
+    // `budget_tokens: None` — engine had no `config.max_tokens` set;
+    // the 90%-of-window heuristic still drove the stop. Wire elides
+    // the field rather than fabricating zero.
+    let notif = ServerNotification::TurnEnded(TurnEndedParams::budget_exhausted(
+        crate::TurnId::from("t-5b"),
+        Some(TokenUsage::default()),
+        180_000,
+        None,
+    ));
+    let json = serde_json::to_value(&notif).unwrap();
+    assert_eq!(json["params"]["outcome"]["kind"], "budget_exhausted");
+    assert_eq!(json["params"]["outcome"]["data"]["used_tokens"], 180_000);
+    assert!(
+        json["params"]["outcome"]["data"]
+            .get("budget_tokens")
+            .is_none()
+    );
+}
+
+#[test]
+fn turn_ended_roundtrips_through_serde() {
+    let original = ServerNotification::TurnEnded(TurnEndedParams::completed(
+        crate::TurnId::from("t-rt"),
+        Some(TokenUsage::default()),
+        Some(crate::StopReason::StopSequence),
+    ));
+    let json = serde_json::to_string(&original).unwrap();
+    let back: ServerNotification = serde_json::from_str(&json).unwrap();
+    match back {
+        ServerNotification::TurnEnded(p) => {
+            assert_eq!(p.turn_id.as_str(), "t-rt");
+            match p.outcome {
+                TurnOutcome::Completed(data) => {
+                    assert_eq!(data.stop_reason, Some(crate::StopReason::StopSequence));
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+        other => panic!("expected TurnEnded, got {other:?}"),
+    }
+}
+
+#[test]
+fn error_code_serializes_snake_case() {
+    assert_eq!(
+        serde_json::to_value(ErrorCode::SystemReminder).unwrap(),
+        json!("system_reminder")
+    );
+    assert_eq!(
+        serde_json::to_value(ErrorCode::Provider).unwrap(),
+        json!("provider")
+    );
 }
 
 #[test]
@@ -131,8 +288,7 @@ fn notification_method_matches_server_notification_wire_tag() {
     let cases: &[(ServerNotification, NotificationMethod)] = &[
         (
             ServerNotification::TurnStarted(TurnStartedParams {
-                turn_id: None,
-                turn_number: 0,
+                turn_id: crate::TurnId::from("t-method"),
             }),
             NotificationMethod::TurnStarted,
         ),
@@ -255,8 +411,7 @@ fn hook_outcome_status_serializes_snake_case() {
 #[test]
 fn core_event_debug_formatting_works() {
     let ev = CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
-        turn_id: None,
-        turn_number: 1,
+        turn_id: crate::TurnId::from("t-dbg"),
     }));
     let s = format!("{ev:?}");
     assert!(s.contains("Protocol"));

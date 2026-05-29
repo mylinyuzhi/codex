@@ -47,10 +47,7 @@ from coco_sdk.generated.protocol import (
     RewindFilesRequest,
     SdkHookOutput,
     ServerNotification,
-    ServerNotificationTurnCompleted,
-    ServerNotificationTurnFailed,
-    ServerNotificationTurnInterrupted,
-    ServerNotificationTurnMaxReached,
+    ServerNotificationTurnEnded,
     ServerRequestMethod,
     SessionArchiveRequest,
     SessionListRequest,
@@ -64,7 +61,7 @@ from coco_sdk.generated.protocol import (
     SetThinkingRequest,
     StopTaskRequest,
     ThinkingLevel,
-    TurnCompletedParams,
+    TurnEndedParams,
     TurnInterruptRequest,
     TurnStartRequest,
     UpdateEnvRequest,
@@ -380,20 +377,13 @@ class CocoClient:
                 # Unknown method or malformed payload — already logged.
                 continue
             yield event
-            # Break on any wire-protocol turn terminator: `TurnCompleted`
-            # (clean end), `TurnFailed` (engine error), `TurnInterrupted`
-            # (cancellation), `TurnMaxReached` (budget / max-turns).
-            # Without all four, `events()` would block forever on the
-            # non-success paths since the transport stays open.
-            if isinstance(
-                event,
-                (
-                    ServerNotificationTurnCompleted,
-                    ServerNotificationTurnFailed,
-                    ServerNotificationTurnInterrupted,
-                    ServerNotificationTurnMaxReached,
-                ),
-            ):
+            # Break on the wire-protocol turn terminator: `TurnEnded`
+            # discriminates the outcome (`completed` / `failed` /
+            # `interrupted` / `max_turns_reached` / `budget_exhausted`)
+            # via `params.outcome.kind`. Without this, `events()` would
+            # block forever on the non-success paths since the transport
+            # stays open.
+            if isinstance(event, ServerNotificationTurnEnded):
                 break
 
     async def send(self, text: str) -> AsyncIterator[ServerNotification]:
@@ -725,10 +715,18 @@ class CocoClient:
             if isinstance(event, ServerNotificationAgentMessageDelta):
                 yield event.params.delta
 
-    async def wait_for_turn_completed(self) -> TurnCompletedParams | None:
-        """Consume all events and return the turn completion params."""
+    async def wait_for_turn_ended(self) -> TurnEndedParams | None:
+        """Consume all events and return the terminal `TurnEnded` params.
+
+        Inspect ``result.outcome`` (a tagged union discriminated by
+        ``kind``) to determine why the cycle ended:
+        ``completed`` / ``failed`` / ``interrupted`` / ``max_turns_reached``
+        / ``budget_exhausted``. ``completed.stop_reason`` is the only
+        field that carries the model's terminal stop_reason — the other
+        variants self-describe through their variant name.
+        """
         async for event in self.events():
-            if isinstance(event, ServerNotificationTurnCompleted):
+            if isinstance(event, ServerNotificationTurnEnded):
                 return event.params
         return None
 

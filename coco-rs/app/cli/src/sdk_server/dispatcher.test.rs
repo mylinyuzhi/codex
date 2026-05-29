@@ -131,13 +131,11 @@ fn core_event_protocol_serializes_to_notification() {
     use coco_types::TurnStartedParams;
 
     let event = CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
-        turn_id: Some("t1".into()),
-        turn_number: 1,
+        turn_id: coco_types::TurnId::from("t1"),
     }));
 
     let notif = core_event_to_notification(event).expect("should translate");
     assert_eq!(notif.method, "turn/started");
-    assert_eq!(notif.params["turn_number"], 1);
     assert_eq!(notif.params["turn_id"], "t1");
 }
 

@@ -139,7 +139,7 @@ impl TurnRunner for QueryEngineRunner {
                 } else {
                     runtime_config.loop_config.max_turns.unwrap_or(max_turns)
                 },
-                max_tokens: runtime_config.loop_config.max_tokens.map(i64::from),
+                total_token_budget: runtime_config.loop_config.total_token_budget.map(i64::from),
                 prompt_cache: runtime
                     .main_client()
                     .await
@@ -403,6 +403,12 @@ impl TurnRunner for QueryEngineRunner {
                 return Ok(());
             }
 
+            // Generate the per-cycle TurnId up front. The runner owns
+            // the lifecycle id so every emission on this cycle —
+            // pre-engine bail, engine-emitted, late-cancel — pairs
+            // against the same TurnStarted.
+            let cycle_turn_id = coco_types::TurnId::generate();
+
             // TS parity (`processUserInput.ts:182-263`): fire
             // UserPromptSubmit hooks BEFORE the LLM call. Output
             // surfaces as `hook_*` reminders on the next reminder pass;
@@ -430,11 +436,33 @@ impl TurnRunner for QueryEngineRunner {
                         },
                     ))
                     .await;
+                // Pre-engine bail: emit a self-contained
+                // TurnStarted + TurnEnded(Failed) pair so SDK
+                // consumers see a complete cycle envelope. `HookBlocked`
+                // is the typed signal that this is a policy decision,
+                // not a runtime/config/provider error — lets dashboards
+                // filter "real failures" from "hook said no".
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::TurnFailed(coco_types::TurnFailedParams {
-                            error: warning.clone(),
-                        }),
+                        coco_types::ServerNotification::TurnStarted(
+                            coco_types::TurnStartedParams {
+                                turn_id: cycle_turn_id.clone(),
+                            },
+                        ),
+                    ))
+                    .await;
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(
+                        coco_types::ServerNotification::TurnEnded(
+                            coco_types::TurnEndedParams::failed(
+                                cycle_turn_id.clone(),
+                                /*usage*/ None,
+                                coco_types::ErrorPayload {
+                                    message: warning.clone(),
+                                    code: coco_types::ErrorCode::HookBlocked,
+                                },
+                            ),
+                        ),
                     ))
                     .await;
                 return Ok(());
@@ -526,7 +554,10 @@ impl TurnRunner for QueryEngineRunner {
             let event_tx_for_error = event_tx.clone();
             let session_id_for_error = handoff.session_id.clone();
 
-            match engine.run_with_messages(combined, event_tx).await {
+            match engine
+                .run_with_messages(combined, event_tx, cycle_turn_id.clone())
+                .await
+            {
                 Ok(result) => {
                     info!(
                         turns = result.turns,
@@ -543,26 +574,28 @@ impl TurnRunner for QueryEngineRunner {
                         let mut h = history_handle.lock().await;
                         *h = result.final_messages;
                     }
-                    // Cancellation is reported as `Ok(QueryResult{cancelled:true})`
-                    // by the engine, NOT as Err — see engine.rs's top-of-loop
-                    // cancel check. Emit `TurnInterrupted` here so the SDK
-                    // wire stream produces a terminal turn event in this
-                    // path; without it, clients waiting for `turn/completed`
-                    // / `turn/interrupted` would hang forever after a
-                    // mid-flight `control/interrupt`.
-                    if cancel_for_terminal.is_cancelled() {
-                        // SDK mode's only cancel entry is the
-                        // `control/interrupt` client request, which is
-                        // a user-initiated cancel. Mirrors TS where the
-                        // SDK-control path also corresponds to
-                        // `abortController.abort('user-cancel')`.
+                    // Sole Interrupted emit site. Fires when either the
+                    // engine observed cancel mid-loop (`result.cancelled`
+                    // = true → engine returned Ok with cancelled marker)
+                    // OR the cancel raced and arrived after Ok return
+                    // (`cancel_for_terminal.is_cancelled()`). The engine
+                    // no longer wire-emits Interrupted — runner owns the
+                    // single terminator. Reason is hardcoded
+                    // `UserCancel`: SDK has only the `turn/interrupt`
+                    // control message as a cancel source, which is by
+                    // definition user-initiated. (TUI has the broader
+                    // UserCancel-vs-SystemPreempt split because of
+                    // `/clear` / `/compact` / `/rewind` — SDK has no
+                    // equivalent runner-level cancel arms.)
+                    if result.cancelled || cancel_for_terminal.is_cancelled() {
                         let _ = event_tx_for_error
                             .send(CoreEvent::Protocol(
-                                coco_types::ServerNotification::TurnInterrupted(
-                                    coco_types::TurnInterruptedParams {
-                                        turn_id: None,
-                                        reason: Some(coco_types::CancelReason::UserCancel),
-                                    },
+                                coco_types::ServerNotification::TurnEnded(
+                                    coco_types::TurnEndedParams::interrupted(
+                                        cycle_turn_id.clone(),
+                                        /*usage*/ None,
+                                        coco_types::CancelReason::UserCancel,
+                                    ),
                                 ),
                             ))
                             .await;
@@ -575,26 +608,25 @@ impl TurnRunner for QueryEngineRunner {
                         "QueryEngineRunner: engine returned error; \
                          user message already persisted to session history"
                     );
-                    // Emit a wire-level terminal notification BEFORE the
-                    // synthetic SessionResult. Without this the SDK
-                    // client never sees `turn/failed` or `turn/interrupted`
-                    // on the engine-bail path — `TurnCompleted` is only
-                    // emitted on the Ok path, so the client would hang
-                    // waiting for a terminator that never arrives.
-                    let was_cancelled = cancel_for_terminal.is_cancelled();
-                    let terminal = if was_cancelled {
-                        coco_types::ServerNotification::TurnInterrupted(
-                            coco_types::TurnInterruptedParams {
-                                turn_id: None,
-                                reason: Some(coco_types::CancelReason::UserCancel),
-                            },
-                        )
-                    } else {
-                        coco_types::ServerNotification::TurnFailed(coco_types::TurnFailedParams {
-                            error: e.to_string(),
-                        })
-                    };
-                    let _ = event_tx_for_error.send(CoreEvent::Protocol(terminal)).await;
+                    // Engine-bail path: when cancel was the cause the
+                    // engine_session Err branch skipped its `Failed`
+                    // emit, so we synthesize the Interrupted terminator
+                    // here. When it's a true error the engine_session
+                    // already emitted `Failed` — no second terminator
+                    // needed.
+                    if cancel_for_terminal.is_cancelled() {
+                        let _ = event_tx_for_error
+                            .send(CoreEvent::Protocol(
+                                coco_types::ServerNotification::TurnEnded(
+                                    coco_types::TurnEndedParams::interrupted(
+                                        cycle_turn_id.clone(),
+                                        /*usage*/ None,
+                                        coco_types::CancelReason::UserCancel,
+                                    ),
+                                ),
+                            ))
+                            .await;
+                    }
 
                     // Emit a synthetic `SessionResult` with `is_error=true`
                     // so the forwarder's `accumulate_session_result` folds
@@ -614,7 +646,7 @@ impl TurnRunner for QueryEngineRunner {
                         duration_ms: 0,
                         duration_api_ms: 0,
                         is_error: true,
-                        stop_reason: if was_cancelled {
+                        stop_reason: if cancel_for_terminal.is_cancelled() {
                             "interrupted".into()
                         } else {
                             "engine_error".into()

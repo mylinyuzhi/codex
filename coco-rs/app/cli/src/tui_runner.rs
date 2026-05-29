@@ -3528,20 +3528,46 @@ async fn process_submit_turn(
     )
     .await;
 
+    // Generate the per-cycle TurnId up front. The runner owns the
+    // lifecycle id so every emission on this cycle — pre-engine
+    // bail, engine-emitted, and late-cancel — pairs against the
+    // same TurnStarted.
+    let cycle_turn_id = coco_types::TurnId::generate();
+
     // TS parity (`processUserInput.ts:182-263`): fire UserPromptSubmit
     // hooks BEFORE building the engine. Output queues onto the shared
     // sync-hook buffer so the next turn surfaces `hook_*` reminders;
-    // a blocking_error suppresses the turn and surfaces a TurnFailed;
-    // prevent_continuation keeps the prompt but skips the engine.
+    // a blocking_error suppresses the turn and surfaces a
+    // TurnEnded(Failed); prevent_continuation keeps the prompt but
+    // skips the engine.
     let prompt_hook_result = runtime.fire_user_prompt_submit_hooks(&content).await;
     if let Some(blocking) = &prompt_hook_result.blocking_error {
         let warning = format!(
             "UserPromptSubmit hook blocked the turn: {}\n\nOriginal prompt: {content}",
             blocking.blocking_error,
         );
+        // Pre-engine bail: emit a self-contained TurnStarted +
+        // TurnEnded pair so consumers see a complete cycle envelope.
+        // `HookBlocked` is the typed signal that this is a policy
+        // decision, not a runtime / config / provider error — lets
+        // dashboards filter "real failures" from "hook said no".
         let _ = event_tx
-            .send(CoreEvent::Protocol(ServerNotification::TurnFailed(
-                coco_types::TurnFailedParams { error: warning },
+            .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
+                coco_types::TurnStartedParams {
+                    turn_id: cycle_turn_id.clone(),
+                },
+            )))
+            .await;
+        let _ = event_tx
+            .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
+                coco_types::TurnEndedParams::failed(
+                    cycle_turn_id.clone(),
+                    /*usage*/ None,
+                    coco_types::ErrorPayload {
+                        message: warning,
+                        code: coco_types::ErrorCode::HookBlocked,
+                    },
+                ),
             )))
             .await;
         return;
@@ -3637,8 +3663,20 @@ async fn process_submit_turn(
         }
     });
 
-    match engine.run_with_messages(messages, core_event_tx).await {
+    // Track whether the engine returned with cancel observed. Engine
+    // no longer wire-emits `Interrupted` — the runner is the sole
+    // emitter because only it knows whether the cancel was UserCancel
+    // (Esc / Ctrl+C) or SystemPreempt (Clear / Compact / Rewind /
+    // Shutdown). `result.cancelled` only tells us "engine saw cancel";
+    // the runner's `OnceLock<CancelReason>` is the authoritative source
+    // for *why*.
+    let engine_observed_cancel;
+    match engine
+        .run_with_messages(messages, core_event_tx, cycle_turn_id.clone())
+        .await
+    {
         Ok(result) => {
+            engine_observed_cancel = result.cancelled;
             let mut h = runtime.history.lock().await;
             h.clear();
             for arc in result.final_messages {
@@ -3646,35 +3684,45 @@ async fn process_submit_turn(
             }
         }
         Err(e) => {
+            engine_observed_cancel = false;
             // User message stays in `runtime.history` from the
-            // pre-engine push above. Surface failure as TurnFailed so
-            // TUI can render it.
-            let _ = event_tx
-                .send(CoreEvent::Protocol(ServerNotification::TurnFailed(
-                    coco_types::TurnFailedParams {
-                        error: e.to_string(),
-                    },
-                )))
-                .await;
+            // pre-engine push above. The engine_session error path
+            // emits `TurnEnded(Failed)` only when cancel was NOT the
+            // cause; on cancel-induced Err, we fall through to the
+            // runner's Interrupted emit below. Either way, no double
+            // emit.
+            tracing::warn!(
+                error = %e,
+                cycle_turn_id = %cycle_turn_id,
+                "tui_runner: engine returned Err"
+            );
         }
     }
 
     let _ = forward_handle.await;
 
-    // Emit a runner-synthesised `TurnInterrupted{reason}` when the turn
-    // was cancelled. The engine's `TurnCompleted` (if it fired mid-turn
-    // before the cancel was observed) is still forwarded above — the
-    // TUI's `on_turn_completed` no longer mutates state on interrupt,
-    // so the only auto-restore code path is the `TurnInterrupted`
-    // handler below in protocol.rs. Mirrors TS REPL.tsx's `.finally`
-    // block (`signal.reason === 'user-cancel'`).
-    if let Some(reason) = cancel_reason.get().copied() {
+    // Sole Interrupted emit site for this runner. Fires when either:
+    // - the engine observed cancel mid-loop and returned `Ok(cancelled=true)`
+    //   (clean cancel path), or
+    // - the user-cancel raced the engine and arrived after Ok return
+    //   (late-cancel path — TS REPL.tsx `.finally` analog).
+    //
+    // The reason comes from `cancel_reason.get()` — `UserCommand::Interrupt`
+    // sets `UserCancel`; `drain_active_turn` sets `SystemPreempt`. When
+    // the engine cancelled but the OnceLock somehow stayed unset
+    // (defensive — every cancel path writes first), default to
+    // `UserCancel` so auto-restore at least fires on the conservative
+    // "user wanted out" interpretation.
+    let cancel_reason_emit = cancel_reason.get().copied();
+    if engine_observed_cancel || cancel_reason_emit.is_some() {
+        let reason = cancel_reason_emit.unwrap_or(CancelReason::UserCancel);
         let _ = event_tx
-            .send(CoreEvent::Protocol(ServerNotification::TurnInterrupted(
-                coco_types::TurnInterruptedParams {
-                    turn_id: None,
-                    reason: Some(reason),
-                },
+            .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
+                coco_types::TurnEndedParams::interrupted(
+                    cycle_turn_id.clone(),
+                    /*usage*/ None,
+                    reason,
+                ),
             )))
             .await;
     }

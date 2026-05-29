@@ -31,8 +31,8 @@
     "not_cancelled": true,
     "not_budget_exhausted": true,
     "event_counts": {
-      "TurnStarted": 2,
-      "TurnCompleted": 1
+      "TurnStarted": 1,
+      "TurnEnded": 1
     },
     "min_event_counts": {
       "ToolUseEnd": 1

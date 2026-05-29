@@ -22,6 +22,7 @@ use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::create_user_message;
 use coco_types::TokenUsage;
+use coco_types::TurnId;
 
 use crate::CoreEvent;
 use crate::ServerNotification;
@@ -29,19 +30,50 @@ use crate::config::QueryResult;
 use crate::emit::emit_protocol;
 use crate::emit::emit_protocol_owned;
 use crate::engine::QueryEngine;
+use crate::error_code::error_code_from_boxed_error;
 use crate::helpers::extract_last_assistant_text;
 use crate::helpers::hook_outcome_to_status;
 use crate::session_state::SessionStateTracker;
 
 impl QueryEngine {
     /// Run the agent loop with event streaming from a text prompt.
+    ///
+    /// **I-1 protocol**: because this entry point CREATES the user
+    /// message internally (vs `run_with_messages` where the caller
+    /// pre-builds + pre-emits), it is the "authoritative introducer"
+    /// for that message and must emit `MessageAppended` itself.
+    /// Without this, consumers folding `MessageAppended` into a
+    /// transcript view (TUI, test harnesses) never see the user
+    /// cell — production tui_runner has its own
+    /// `history_push_and_emit` step which feeds `run_with_messages`,
+    /// so that path was unaffected, but every test using
+    /// `run_with_events` silently lost user-message rendering until
+    /// this commit.
+    ///
+    /// `cycle_turn_id` is the lifecycle id shared between the
+    /// `TurnStarted` event this function emits and every `TurnEnded`
+    /// event the engine (or this function on Err) emits for the same
+    /// user-prompt cycle. Callers (`tui_runner` / `sdk_runner` / SDK
+    /// `TurnRunner`) generate it via [`TurnId::generate`] so they can
+    /// emit late-cancel `TurnEnded(Interrupted)` with the matching id.
     pub async fn run_with_events(
         &self,
         user_prompt: &str,
         event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
+        cycle_turn_id: TurnId,
     ) -> Result<QueryResult, coco_error::BoxedError> {
         let user_msg = std::sync::Arc::new(create_user_message(user_prompt));
-        self.run_internal_with_messages(vec![user_msg], Some(event_tx))
+        let event_tx_opt = Some(event_tx.clone());
+        let _delivered = emit_protocol(
+            &event_tx_opt,
+            coco_types::ServerNotification::MessageAppended {
+                message: user_msg.clone(),
+                session_id: self.config.session_id.clone(),
+                agent_id: self.config.agent_id.clone(),
+            },
+        )
+        .await;
+        self.run_internal_with_messages(vec![user_msg], Some(event_tx), Some(cycle_turn_id))
             .await
     }
 
@@ -50,6 +82,7 @@ impl QueryEngine {
         &self,
         messages: Vec<std::sync::Arc<Message>>,
         event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
+        cycle_turn_id: TurnId,
     ) -> Result<QueryResult, coco_error::BoxedError> {
         if messages.is_empty() {
             return Err(Box::new(coco_error::PlainError::new(
@@ -57,7 +90,7 @@ impl QueryEngine {
                 coco_error::StatusCode::InvalidArguments,
             )));
         }
-        self.run_internal_with_messages(messages, Some(event_tx))
+        self.run_internal_with_messages(messages, Some(event_tx), Some(cycle_turn_id))
             .await
     }
 
@@ -72,13 +105,14 @@ impl QueryEngine {
                 coco_error::StatusCode::InvalidArguments,
             )));
         }
-        self.run_internal_with_messages(messages, None).await
+        self.run_internal_with_messages(messages, None, None).await
     }
 
     /// Run the agent loop with an initial user prompt (no event streaming).
     pub async fn run(&self, user_prompt: &str) -> Result<QueryResult, coco_error::BoxedError> {
         let user_msg = std::sync::Arc::new(create_user_message(user_prompt));
-        self.run_internal_with_messages(vec![user_msg], None).await
+        self.run_internal_with_messages(vec![user_msg], None, None)
+            .await
     }
 
     /// Core internal implementation: user + attachment messages.
@@ -109,6 +143,7 @@ impl QueryEngine {
         &self,
         turn_messages: Vec<std::sync::Arc<Message>>,
         event_tx: Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+        cycle_turn_id: Option<TurnId>,
     ) -> Result<QueryResult, coco_error::BoxedError> {
         info!(
             turn_message_count = turn_messages.len(),
@@ -131,6 +166,20 @@ impl QueryEngine {
         state_tracker
             .transition_to(coco_types::SessionState::Running, &event_tx)
             .await;
+
+        // TurnStarted — one per logical user-prompt cycle. The id is
+        // owned by the runner so that late-cancel emits from there
+        // share the same id; if a caller skipped the event_tx (no-events
+        // path), there's nothing to pair against and we skip emission.
+        if let (Some(tx), Some(id)) = (event_tx.as_ref(), cycle_turn_id.as_ref()) {
+            let _ = tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
+                    coco_types::TurnStartedParams {
+                        turn_id: id.clone(),
+                    },
+                )))
+                .await;
+        }
 
         // Set up the Hook → CoreEvent forwarder as a structured child task.
         //
@@ -170,13 +219,14 @@ impl QueryEngine {
         // Stamp F9 envelope so every emit from this engine invocation
         // carries the active session + agent identity.
         history.set_envelope(self.config.session_id.clone(), self.config.agent_id.clone());
-        let result = self
+        let (result, accumulated_usage) = self
             .run_session_loop(
                 turn_messages,
                 event_tx.clone(),
                 &state_tracker,
                 hook_tx_opt.clone(),
                 &mut history,
+                cycle_turn_id.clone(),
             )
             .await;
 
@@ -215,16 +265,37 @@ impl QueryEngine {
             self.client.cache_break_cleanup_agent(agent_id).await;
         }
 
-        // TurnFailed — wire-protocol terminator on the error path so SDK
-        // iterators / TUI state machines don't block on `events()` waiting
-        // for a `Turn*` notification. Fires before `SessionResult` so
-        // turn-level consumers see the turn-end signal first.
-        if let Err(e) = &result {
+        // TurnEnded(Failed) — wire-protocol terminator on the error path
+        // so SDK iterators / TUI state machines don't block on `events()`
+        // waiting for a `TurnEnded` notification. Fires before
+        // `SessionResult` so turn-level consumers see the turn-end signal
+        // first. Maps `coco_error::StatusCategory` → typed `ErrorCode`
+        // via the central seam in `crate::error_code` so Hub/SDK consumers
+        // can filter without parsing the message string. The accumulated
+        // usage up to the failure point flows through here — `None` only
+        // when the caller provided no event_tx, never as a sentinel for
+        // "zero".
+        //
+        // Cancel-aware: when `self.cancel.is_cancelled()`, the Err is the
+        // bubbled cancellation, not a real failure. Skip the Failed emit
+        // and let the runner emit Interrupted with the correct
+        // `CancelReason` (it owns the `OnceLock<CancelReason>`). Without
+        // this gate the wire stream becomes `… → Failed → Interrupted`
+        // for the same cycle — the Failed lights up the TUI error modal
+        // milliseconds before Interrupted overrides it.
+        if let (Err(e), Some(id)) = (&result, cycle_turn_id.as_ref())
+            && !self.cancel.is_cancelled()
+        {
             let _ = emit_protocol(
                 &event_tx,
-                ServerNotification::TurnFailed(coco_types::TurnFailedParams {
-                    error: e.to_string(),
-                }),
+                ServerNotification::TurnEnded(coco_types::TurnEndedParams::failed(
+                    id.clone(),
+                    Some(accumulated_usage),
+                    coco_types::ErrorPayload {
+                        message: e.to_string(),
+                        code: error_code_from_boxed_error(e),
+                    },
+                )),
             )
             .await;
         }
@@ -428,10 +499,7 @@ impl QueryEngine {
             ));
         }
         if stop_reason == "error_max_structured_output_retries" {
-            let cap = std::env::var("COCO_MAX_STRUCTURED_OUTPUT_RETRIES")
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(5);
+            let cap = crate::config::max_structured_output_retries();
             errors.push(format!(
                 "Failed to provide valid structured output after {cap} attempts"
             ));

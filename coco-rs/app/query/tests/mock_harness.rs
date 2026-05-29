@@ -598,7 +598,7 @@ pub async fn run_plan_mode_turn(
         // `next_turn()` which pushes one before handing off.
         let (tx, _rx) = tokio::sync::mpsc::channel(16);
         engine
-            .run_with_messages(params.messages, tx)
+            .run_with_messages(params.messages, tx, coco_types::TurnId::generate())
             .await
             .expect("mock engine run_with_messages failed")
     }

@@ -45,21 +45,22 @@ pub(crate) struct StreamingToolCallBuffer {
 
 /// Classify an error message as a transient capacity error.
 ///
+/// Thin wrapper over [`coco_inference::InferenceError::classify_stream_message`]
+/// — keeps the engine-helpers surface (`bool` return) ergonomic while
+/// the keyword sniffing itself lives in the inference layer where the
+/// rest of the error classification already does. Multi-provider boundary
+/// rule (`CLAUDE.md`) forbids the engine from owning Anthropic-specific
+/// keyword matches; this re-export satisfies the rule.
+///
 /// TS parity: `is529Error` + 429 clauses in `services/api/withRetry.ts`.
-/// Rust's [`coco_inference::InferenceError::Overloaded`] Display formats
-/// as `"provider overloaded"`; rate-limit as `"rate limited"`. Raw HTTP
-/// status codes appear in messages bubbled from provider crates. Match
-/// any of these.
 pub(crate) fn is_capacity_error_message(msg: &str) -> bool {
-    let m = msg.to_ascii_lowercase();
-    m.contains("provider overloaded")
-        || m.contains("overloaded_error")
-        || m.contains("rate limited")
-        || m.contains("rate_limit")
-        || m.contains("status: 529")
-        || m.contains("status: 503")
-        || m.contains("(529)")
-        || m.contains("(503)")
+    matches!(
+        coco_inference::InferenceError::classify_stream_message(msg),
+        Some(
+            coco_inference::InferenceError::Overloaded { .. }
+                | coco_inference::InferenceError::RateLimited { .. }
+        )
+    )
 }
 
 /// Record a per-provider rate-limit observation onto

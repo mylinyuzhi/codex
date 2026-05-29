@@ -24,7 +24,7 @@ Provider / Model: `ProviderApi`, `ModelRole`, `ModelSpec`, `Capability`, `Capabi
 
 Thinking / Token / ID / Sandbox: `ThinkingLevel { effort, budget_tokens, options }`, `ReasoningEffort` (7 variants), `TokenUsage`, `ModelUsage`, `SessionId`, `AgentId`, `TaskId`, `SandboxMode`.
 
-Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (62 variants) + `NotificationMethod` (typed wire-method enum), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus 50+ event param structs.
+Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (59 variants — Turn lifecycle is `TurnStarted` + `TurnEnded(TurnEndedParams)` with discriminated `TurnOutcome`: Completed/Failed/Interrupted/MaxTurnsReached/BudgetExhausted) + `NotificationMethod` (typed wire-method enum), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus 50+ event param structs.
 
 Wire protocol: `ClientRequest` + `ClientRequestMethod` (30 variants), `ServerRequest` + `ServerRequestMethod` (5 variants), `JsonRpcMessage` family, `RequestId`, `error_codes`.
 

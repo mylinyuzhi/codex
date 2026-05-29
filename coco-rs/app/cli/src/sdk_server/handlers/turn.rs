@@ -24,8 +24,9 @@ use crate::sdk_server::pending_map::ResolveOutcome;
 /// Fire-and-forget: the dispatcher delegates to the configured
 /// [`super::TurnRunner`] (spawned on a detached task) and replies
 /// immediately with a `turn_id`. Progress flows back via `turn/started`,
-/// streaming deltas, and `turn/completed` / `turn/failed` notifications
-/// on the shared `notif_tx` channel.
+/// streaming deltas, and the terminal `turn/ended` notification (whose
+/// discriminated `outcome` carries completed / failed / interrupted /
+/// max_turns_reached / budget_exhausted) on the shared `notif_tx` channel.
 ///
 /// Errors:
 /// - `INVALID_REQUEST` if no session is active.

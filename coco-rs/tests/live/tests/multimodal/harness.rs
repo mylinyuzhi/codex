@@ -94,7 +94,7 @@ pub async fn run_multimodal_scenario(
         // Multimodal scenarios are 2-turn: tool_call + final answer.
         // Cap tight so an under-specified `replies` queue can't spin.
         max_turns: 4,
-        max_tokens: None,
+        total_token_budget: None,
         system_prompt: Some(
             "You are a deterministic test scripted model. Use tools as instructed.".into(),
         ),
@@ -118,7 +118,7 @@ pub async fn run_multimodal_scenario(
     });
 
     let result = engine
-        .run_with_events(prompt, event_tx)
+        .run_with_events(prompt, event_tx, coco_types::TurnId::generate())
         .await
         .map_err(|e| anyhow::anyhow!("multimodal engine.run_with_events: {e}"))?;
     let events = drainer.await.unwrap_or_default();

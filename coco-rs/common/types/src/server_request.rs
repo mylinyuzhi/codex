@@ -558,7 +558,7 @@ pub struct SessionStartResult {
 /// `turn/start` is a fire-and-forget trigger — the server accepts the
 /// request, spawns the turn as a detached task, and replies immediately
 /// with a handle. Progress is delivered via `turn/started`, streaming
-/// deltas, `turn/completed` / `turn/failed` notifications.
+/// deltas, and the terminal `turn/ended` notification.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TurnStartResult {

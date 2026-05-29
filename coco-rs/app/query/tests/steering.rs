@@ -308,7 +308,7 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
         "kick off a turn so we can steer it",
     ))];
     let result = engine
-        .run_with_messages(initial_messages, event_tx)
+        .run_with_messages(initial_messages, event_tx, coco_types::TurnId::generate())
         .await
         .expect("engine should complete");
     let _ = producer.await;

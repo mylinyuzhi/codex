@@ -757,9 +757,9 @@ pub async fn run_chat_with_options(
             .max_turns
             .or(runtime_config.loop_config.max_turns)
             .unwrap_or(30),
-        max_tokens: cli
+        total_token_budget: cli
             .max_tokens
-            .or_else(|| runtime_config.loop_config.max_tokens.map(i64::from)),
+            .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
         prompt_cache: client
             .supports_prompt_cache()
             .then(|| coco_types::PromptCacheConfig {
@@ -801,7 +801,7 @@ pub async fn run_chat_with_options(
     tracing::info!(
         target: "coco_cli::headless",
         max_turns = config.max_turns,
-        max_tokens = ?config.max_tokens,
+        total_token_budget = ?config.total_token_budget,
         context_window = config.context_window,
         streaming_tools = config.streaming_tool_execution,
         plan_mode = ?config.plan_mode_settings,
@@ -917,7 +917,7 @@ pub async fn run_chat_with_options(
     // down to `coco_query::QueryEngine::run_with_events` directly.
     let drainer = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });
     let result = engine
-        .run_with_messages(messages, event_tx)
+        .run_with_messages(messages, event_tx, coco_types::TurnId::generate())
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     drainer.abort();

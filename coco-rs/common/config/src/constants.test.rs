@@ -7,13 +7,10 @@ fn test_context_window_sizes_are_ordered() {
     assert_eq!(CONTEXT_WINDOW_1M, 1_000_000);
 }
 
-#[test]
-fn test_output_token_limits_hierarchy() {
-    // Capped < default < upper limit
-    const _: () = assert!(CAPPED_DEFAULT_MAX_TOKENS < MAX_OUTPUT_TOKENS_DEFAULT);
-    const _: () = assert!(MAX_OUTPUT_TOKENS_DEFAULT < MAX_OUTPUT_TOKENS_UPPER_LIMIT);
-    assert_eq!(ESCALATED_MAX_TOKENS, MAX_OUTPUT_TOKENS_UPPER_LIMIT);
-}
+// `test_output_token_limits_hierarchy` removed: the global
+// max-output-tokens constants it asserted on were deleted
+// when the per-model `ModelInfo` design replaced them. See
+// `constants.rs` comment block for the rationale.
 
 #[test]
 fn test_tool_result_bytes_derived_correctly() {

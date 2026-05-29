@@ -6,5 +6,5 @@ expression: "render_popup(&items, 0, 50, 6)"
                                                   
                                                   
                                                   
-▸ /clear    Clear chat                            
-  /config   Settings
+▸   /clear    Clear chat                          
+    /config   Settings

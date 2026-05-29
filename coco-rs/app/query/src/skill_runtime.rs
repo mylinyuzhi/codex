@@ -311,7 +311,6 @@ impl SkillHandle for QuerySkillRuntime {
                     can_use_tool: None,
                     require_can_use_tool: false,
                     fork_label: None,
-                    max_output_tokens_override: None,
                     cancel: None,
                 };
 

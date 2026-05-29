@@ -17,8 +17,7 @@ use super::*;
 fn test_for_label_is_cache_safe() {
     // The cache-safe defaults are what `/btw` / promptSuggestion /
     // session_memory expect: 1 turn, skip transcript, skip cache
-    // write, no effort override, no max_output_tokens override
-    // (PR #18143 cache-bust risk).
+    // write, no effort override (PR #18143 cache-bust risk).
     let opts = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
     assert_eq!(opts.max_turns, Some(1));
     assert!(opts.skip_transcript);
@@ -26,10 +25,6 @@ fn test_for_label_is_cache_safe() {
     assert!(
         opts.effort.is_none(),
         "effort override busts cache; default must be None"
-    );
-    assert!(
-        opts.max_output_tokens.is_none(),
-        "max_output_tokens override busts cache; default must be None"
     );
     assert!(opts.can_use_tool.is_none());
     assert!(!opts.require_can_use_tool);
