@@ -30,7 +30,8 @@ pub fn prepare_responses_tools(
         for tool in ts {
             match tool {
                 LanguageModelV4Tool::Function(ft) => {
-                    let mut params = ft.input_schema.clone();
+                    let mut params =
+                        vercel_ai_provider_utils::to_openai_compatible_schema(&ft.input_schema);
                     if !params.is_object() {
                         params = json!({ "type": "object", "properties": {} });
                     }

@@ -51,7 +51,7 @@ pub struct EditInput {
 /// wire format (`FileEditTool.ts:567-568`); `userModified` is always
 /// `false` in coco-rs since there's no TUI accept-with-edits overlay
 /// equivalent of the TS feature.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EditOutput {
     #[serde(default, rename = "filePath")]
     pub file_path: String,

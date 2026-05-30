@@ -131,8 +131,13 @@ impl GoogleGenerativeAILanguageModel {
 
     /// Build the request arguments for the Google API.
     /// Returns (body, headers, warnings, provider_options_name).
+    ///
+    /// `pub` so sibling transports that speak the same Gemini wire (e.g.
+    /// `vercel-ai-google-codeassist`, which wraps this body in a Code Assist
+    /// envelope and posts it to `cloudcode-pa`) can reuse the exact
+    /// `generateContent` body builder rather than duplicating it.
     #[allow(clippy::type_complexity)]
-    fn get_args(
+    pub fn get_args(
         &self,
         options: &LanguageModelV4CallOptions,
     ) -> Result<(Value, HashMap<String, String>, Vec<Warning>, String), AISdkError> {
@@ -360,6 +365,119 @@ impl GoogleGenerativeAILanguageModel {
         let headers = combine_headers(vec![Some((self.config.headers)()), options.headers.clone()]);
 
         Ok((body, headers, warnings, provider_options_name))
+    }
+
+    /// Map a parsed `generateContent` response into a generate result (content
+    /// parts, sources, finish reason, usage, provider metadata).
+    ///
+    /// `pub` so sibling transports (`vercel-ai-google-codeassist`) that unwrap
+    /// their own response envelope can reuse the exact same mapping rather than
+    /// duplicating it. `request_body` is echoed onto `result.request`.
+    pub fn map_response(
+        &self,
+        response: &GoogleGenerateContentResponse,
+        request_body: Value,
+        warnings: Vec<Warning>,
+    ) -> LanguageModelV4GenerateResult {
+        let provider_options_name = self.provider_options_name();
+        let id_gen = &*self.config.generate_id;
+        let candidate = response.candidates.first();
+
+        // Extract content parts with thoughtSignature support
+        let content = if let Some(candidate) = candidate {
+            if let Some(ref content) = candidate.content {
+                convert_response_parts_with_metadata(&content.parts, id_gen, &provider_options_name)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Extract sources from grounding metadata
+        let mut all_content = content;
+        if let Some(candidate) = candidate {
+            let sources = extract_sources(
+                &candidate.grounding_metadata,
+                &candidate.url_context_metadata,
+                id_gen,
+            );
+            for source in sources {
+                all_content.push(AssistantContentPart::Source(source));
+            }
+        }
+
+        // Check for tool calls in content (exclude provider-executed)
+        let has_tool_calls = all_content.iter().any(|p| {
+            matches!(p, AssistantContentPart::ToolCall(tc) if tc.provider_executed != Some(true))
+        });
+
+        let finish_reason = crate::map_google_generative_ai_finish_reason::map_finish_reason(
+            candidate.and_then(|c| c.finish_reason.as_deref()),
+            has_tool_calls,
+        );
+
+        let usage = convert_usage(response.usage_metadata.as_ref());
+
+        // Build provider metadata under namespace key — always include all 6 fields
+        let mut namespace_meta = HashMap::new();
+        namespace_meta.insert(
+            "promptFeedback".to_string(),
+            response.prompt_feedback.clone().unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "groundingMetadata".to_string(),
+            candidate
+                .and_then(|c| c.grounding_metadata.as_ref())
+                .and_then(|gm| serde_json::to_value(gm).ok())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "urlContextMetadata".to_string(),
+            candidate
+                .and_then(|c| c.url_context_metadata.as_ref())
+                .and_then(|ucm| serde_json::to_value(ucm).ok())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "safetyRatings".to_string(),
+            candidate
+                .and_then(|c| c.safety_ratings.clone())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "usageMetadata".to_string(),
+            response
+                .usage_metadata
+                .as_ref()
+                .and_then(|um| serde_json::to_value(um).ok())
+                .unwrap_or(Value::Null),
+        );
+        namespace_meta.insert(
+            "finishMessage".to_string(),
+            candidate
+                .and_then(|c| c.finish_message.as_ref())
+                .map(|fm| Value::String(fm.clone()))
+                .unwrap_or(Value::Null),
+        );
+
+        let provider_metadata = {
+            let mut outer = HashMap::new();
+            outer.insert(
+                provider_options_name,
+                serde_json::to_value(&namespace_meta).unwrap_or(Value::Null),
+            );
+            Some(ProviderMetadata::from_map(outer))
+        };
+
+        let mut result = LanguageModelV4GenerateResult::new(all_content, usage, finish_reason);
+        result.warnings = warnings;
+        result.request = Some(LanguageModelV4Request::new().with_body(request_body));
+        if let Some(model_version) = response.model_version.clone() {
+            result.response = Some(LanguageModelV4Response::new().with_model_id(model_version));
+        }
+        result.provider_metadata = provider_metadata;
+        result
     }
 }
 
@@ -828,7 +946,7 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
         options: &LanguageModelV4CallOptions,
         abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        let (body, headers, warnings, provider_options_name) = self.get_args(options)?;
+        let (body, headers, warnings, _provider_options_name) = self.get_args(options)?;
 
         let model_path = get_model_path(&self.model_id);
         let url = format!(
@@ -848,105 +966,7 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
         )
         .await?;
 
-        let candidate = response.candidates.first();
-        let id_gen = &*self.config.generate_id;
-
-        // Extract content parts with thoughtSignature support
-        let content = if let Some(candidate) = candidate {
-            if let Some(ref content) = candidate.content {
-                convert_response_parts_with_metadata(&content.parts, id_gen, &provider_options_name)
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        // Extract sources from grounding metadata
-        let mut all_content = content;
-        if let Some(candidate) = candidate {
-            let sources = extract_sources(
-                &candidate.grounding_metadata,
-                &candidate.url_context_metadata,
-                id_gen,
-            );
-            for source in sources {
-                all_content.push(AssistantContentPart::Source(source));
-            }
-        }
-
-        // Check for tool calls in content (exclude provider-executed)
-        let has_tool_calls = all_content.iter().any(|p| {
-            matches!(p, AssistantContentPart::ToolCall(tc) if tc.provider_executed != Some(true))
-        });
-
-        let finish_reason = crate::map_google_generative_ai_finish_reason::map_finish_reason(
-            candidate.and_then(|c| c.finish_reason.as_deref()),
-            has_tool_calls,
-        );
-
-        let usage = convert_usage(response.usage_metadata.as_ref());
-
-        // Build provider metadata under namespace key — always include all 6 fields
-        let mut namespace_meta = HashMap::new();
-        namespace_meta.insert(
-            "promptFeedback".to_string(),
-            response.prompt_feedback.clone().unwrap_or(Value::Null),
-        );
-        namespace_meta.insert(
-            "groundingMetadata".to_string(),
-            candidate
-                .and_then(|c| c.grounding_metadata.as_ref())
-                .and_then(|gm| serde_json::to_value(gm).ok())
-                .unwrap_or(Value::Null),
-        );
-        namespace_meta.insert(
-            "urlContextMetadata".to_string(),
-            candidate
-                .and_then(|c| c.url_context_metadata.as_ref())
-                .and_then(|ucm| serde_json::to_value(ucm).ok())
-                .unwrap_or(Value::Null),
-        );
-        namespace_meta.insert(
-            "safetyRatings".to_string(),
-            candidate
-                .and_then(|c| c.safety_ratings.clone())
-                .unwrap_or(Value::Null),
-        );
-        namespace_meta.insert(
-            "usageMetadata".to_string(),
-            response
-                .usage_metadata
-                .as_ref()
-                .and_then(|um| serde_json::to_value(um).ok())
-                .unwrap_or(Value::Null),
-        );
-        namespace_meta.insert(
-            "finishMessage".to_string(),
-            candidate
-                .and_then(|c| c.finish_message.as_ref())
-                .map(|fm| Value::String(fm.clone()))
-                .unwrap_or(Value::Null),
-        );
-
-        let provider_metadata = {
-            let mut outer = HashMap::new();
-            outer.insert(
-                provider_options_name.clone(),
-                serde_json::to_value(&namespace_meta).unwrap_or(Value::Null),
-            );
-            Some(ProviderMetadata::from_map(outer))
-        };
-
-        let mut result = LanguageModelV4GenerateResult::new(all_content, usage, finish_reason);
-        result.warnings = warnings;
-        result.request = Some(LanguageModelV4Request::new().with_body(body));
-        if let Some(model_version) = response.model_version {
-            result.response = Some(LanguageModelV4Response::new().with_model_id(model_version));
-        }
-        result.provider_metadata = provider_metadata;
-
-        Ok(result)
+        Ok(self.map_response(&response, body, warnings))
     }
 
     async fn do_stream(
@@ -981,6 +1001,7 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
             include_raw,
             warnings,
             provider_options_name,
+            ChunkEnvelope::Direct,
         );
 
         let mut result = LanguageModelV4StreamResult::new(stream);
@@ -1004,18 +1025,37 @@ struct StreamState {
     started: bool,
     warnings: Vec<Warning>,
     provider_options_name: String,
+    envelope: ChunkEnvelope,
     last_code_execution_tool_call_id: Option<String>,
     last_grounding_metadata: Option<GroundingMetadata>,
     last_url_context_metadata: Option<UrlContextMetadata>,
 }
 
+/// How each SSE `data:` chunk is framed before it deserializes into a
+/// `GoogleGenerateContentResponse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkEnvelope {
+    /// The chunk is a bare `GoogleGenerateContentResponse` (the public
+    /// `generativelanguage` streaming API).
+    Direct,
+    /// The chunk is wrapped as `{"response": <GoogleGenerateContentResponse>}`
+    /// (the Code Assist `cloudcode-pa` streaming API). The `response` field is
+    /// unwrapped before mapping.
+    CodeAssistWrapped,
+}
+
 /// Create a stream of LanguageModelV4StreamPart from a byte stream.
-fn create_google_stream(
+///
+/// `pub` so `vercel-ai-google-codeassist` can reuse the full SSE framing +
+/// part-mapping state machine, supplying its own byte stream (posted to
+/// `cloudcode-pa` with a Bearer header) and `ChunkEnvelope::CodeAssistWrapped`.
+pub fn create_google_stream(
     byte_stream: vercel_ai_provider_utils::ByteStream,
     id_gen: Arc<dyn Fn() -> String + Send + Sync>,
     include_raw: bool,
     warnings: Vec<Warning>,
     provider_options_name: String,
+    envelope: ChunkEnvelope,
 ) -> Pin<Box<dyn Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send>> {
     use std::collections::HashSet;
 
@@ -1034,6 +1074,7 @@ fn create_google_stream(
             started: false,
             warnings,
             provider_options_name,
+            envelope,
             last_code_execution_tool_call_id: None,
             last_grounding_metadata: None,
             last_url_context_metadata: None,
@@ -1073,7 +1114,23 @@ fn create_google_stream(
                             }
 
                             if let Some(data) = line.strip_prefix("data: ") {
-                                match serde_json::from_str::<GoogleGenerateContentResponse>(data) {
+                                // Code Assist wraps each chunk as `{"response": {...}}`;
+                                // unwrap to the inner response before mapping.
+                                let parsed = match state.envelope {
+                                    ChunkEnvelope::Direct => {
+                                        serde_json::from_str::<GoogleGenerateContentResponse>(data)
+                                    }
+                                    ChunkEnvelope::CodeAssistWrapped => {
+                                        serde_json::from_str::<Value>(data).and_then(|v| {
+                                            let inner =
+                                                v.get("response").cloned().unwrap_or(Value::Null);
+                                            serde_json::from_value::<GoogleGenerateContentResponse>(
+                                                inner,
+                                            )
+                                        })
+                                    }
+                                };
+                                match parsed {
                                     Ok(response) => {
                                         let mut stream_ctx = StreamProcessingContext {
                                             id_gen: &state.id_gen,

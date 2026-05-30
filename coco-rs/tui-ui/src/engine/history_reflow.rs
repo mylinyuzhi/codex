@@ -1,17 +1,9 @@
 //! Source-backed native-history replay scheduling.
-// S2 state machine lands before production native scrollback wiring.
-#![allow(dead_code)]
 
 use std::time::Duration;
 use std::time::Instant;
 
 pub const HISTORY_REFLOW_DEBOUNCE: Duration = Duration::from_millis(75);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HistoryWidthChange {
-    pub initialized: bool,
-    pub changed: bool,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HistoryViewportChange {
@@ -37,17 +29,6 @@ impl HistoryReflowState {
         *self = Self::default();
     }
 
-    pub fn note_width(&mut self, width: u16) -> HistoryWidthChange {
-        let previous = self.last_observed_width.replace(width);
-        if previous.is_none() {
-            self.last_replayed_width = Some(width);
-        }
-        HistoryWidthChange {
-            initialized: previous.is_none(),
-            changed: previous.is_some_and(|previous| previous != width),
-        }
-    }
-
     pub fn note_viewport(&mut self, width: u16, height: u16) -> HistoryViewportChange {
         let previous_width = self.last_observed_width.replace(width);
         let previous_height = self.last_observed_height.replace(height);
@@ -65,21 +46,11 @@ impl HistoryReflowState {
         }
     }
 
-    pub fn replay_needed_for_width(&self, width: u16) -> bool {
-        self.last_replayed_width != Some(width) && self.pending_width != Some(width)
-    }
-
     pub fn replay_needed_for_viewport(&self, width: u16, height: u16) -> bool {
         let replayed =
             self.last_replayed_width == Some(width) && self.last_replayed_height == Some(height);
         let pending = self.pending_width == Some(width) && self.pending_height == Some(height);
         !replayed && !pending
-    }
-
-    pub fn schedule_resize_replay(&mut self, width: u16, stream_active: bool) {
-        self.pending_width = Some(width);
-        self.pending_height = self.last_observed_height;
-        self.schedule_pending(stream_active);
     }
 
     pub fn schedule_viewport_replay(&mut self, width: u16, height: u16, stream_active: bool) {
@@ -103,10 +74,6 @@ impl HistoryReflowState {
         self.pending_until.is_some_and(|deadline| now >= deadline)
     }
 
-    pub fn pending_width(&self) -> Option<u16> {
-        self.pending_width
-    }
-
     pub fn pending_viewport(&self) -> Option<(u16, u16)> {
         Some((self.pending_width?, self.pending_height?))
     }
@@ -115,15 +82,6 @@ impl HistoryReflowState {
         self.pending_width = None;
         self.pending_height = None;
         self.pending_until = None;
-    }
-
-    pub fn mark_replayed_width(&mut self, width: u16, stream_active: bool) {
-        self.last_replayed_width = Some(width);
-        self.last_replayed_height = self.last_observed_height;
-        self.clear_pending();
-        if stream_active {
-            self.replayed_during_stream = true;
-        }
     }
 
     pub fn mark_replayed_viewport(&mut self, width: u16, height: u16, stream_active: bool) {

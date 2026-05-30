@@ -1,5 +1,8 @@
 //! Semantic style accessors over the active theme.
 
+use std::hash::Hash;
+use std::hash::Hasher;
+
 use ratatui::style::Color;
 use ratatui::style::Style;
 
@@ -17,6 +20,15 @@ impl<'a> UiStyles<'a> {
 
     pub fn primary_border(self) -> Style {
         Style::default().fg(self.theme.primary)
+    }
+
+    /// Stable fingerprint of the active palette, for render cache keys. Two
+    /// `UiStyles` over equal palettes hash identically; any color change (incl.
+    /// a hot-reloaded `theme.json`) changes the fingerprint, invalidating caches.
+    pub fn theme_hash(self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.theme.hash(&mut hasher);
+        hasher.finish()
     }
 
     pub fn border(self) -> Color {
@@ -145,6 +157,46 @@ impl<'a> UiStyles<'a> {
 
     pub fn code_keyword(self) -> Color {
         self.theme.code_keyword
+    }
+
+    pub fn code_function(self) -> Color {
+        self.theme.code_function
+    }
+
+    pub fn code_type(self) -> Color {
+        self.theme.code_type
+    }
+
+    pub fn code_operator(self) -> Color {
+        self.theme.code_operator
+    }
+
+    pub fn code_bg(self) -> Option<Color> {
+        self.theme.code_bg
+    }
+
+    pub fn blockquote(self) -> Color {
+        self.theme.blockquote
+    }
+
+    pub fn heading(self) -> Color {
+        self.theme.heading
+    }
+
+    pub fn hr(self) -> Color {
+        self.theme.hr
+    }
+
+    pub fn strikethrough(self) -> Color {
+        self.theme.strikethrough
+    }
+
+    pub fn modal_border(self) -> Color {
+        self.theme.modal_border
+    }
+
+    pub fn panel_border(self) -> Color {
+        self.theme.panel_border
     }
 
     pub fn hyperlink(self) -> Color {

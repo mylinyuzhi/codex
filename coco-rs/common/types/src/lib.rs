@@ -34,6 +34,7 @@ pub use messages::*;
 mod permission;
 mod plugin;
 mod provider;
+mod provider_auth_status;
 mod rate_limit;
 mod sandbox;
 mod sdk_hook_output;
@@ -358,9 +359,13 @@ pub use provider::CapabilitySet;
 pub use provider::LlmModelSelection;
 pub use provider::ModelRole;
 pub use provider::ModelSpec;
+pub use provider::OAuthFlowId;
 pub use provider::ProviderApi;
 pub use provider::ProviderModelSelection;
 pub use provider::WireApi;
+pub use provider_auth_status::AuthReadinessLevel;
+pub use provider_auth_status::AuthRefreshSupport;
+pub use provider_auth_status::AuthState;
 
 // Sandbox types
 pub use sandbox::SandboxMode;

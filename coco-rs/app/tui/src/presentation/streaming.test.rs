@@ -12,13 +12,8 @@ fn streaming_tail_view_uses_visible_content_as_assistant_text() {
         show_thinking: true,
     });
 
-    assert_eq!(
-        view.blocks,
-        vec![
-            StreamingTailBlock::AssistantText("first\n"),
-            StreamingTailBlock::Cursor,
-        ]
-    );
+    assert_eq!(view.assistant_text, Some("first\n"));
+    assert_eq!(view.thinking_tokens, None);
 }
 
 #[test]
@@ -31,10 +26,8 @@ fn streaming_tail_view_adds_thinking_tokens_when_enabled() {
         show_thinking: true,
     });
 
-    assert_eq!(
-        view.blocks,
-        vec![StreamingTailBlock::ThinkingTokens { count: 5 }]
-    );
+    assert_eq!(view.assistant_text, None);
+    assert_eq!(view.thinking_tokens, Some(5));
 }
 
 #[test]
@@ -49,13 +42,8 @@ fn streaming_tail_view_hides_thinking_when_disabled() {
         show_thinking: false,
     });
 
-    assert_eq!(
-        view.blocks,
-        vec![
-            StreamingTailBlock::AssistantText("visible"),
-            StreamingTailBlock::Cursor,
-        ]
-    );
+    assert_eq!(view.assistant_text, Some("visible"));
+    assert_eq!(view.thinking_tokens, None);
 }
 
 #[test]
@@ -67,5 +55,6 @@ fn streaming_tail_view_is_empty_without_visible_content_or_thinking() {
         show_thinking: true,
     });
 
-    assert_eq!(view.blocks, Vec::<StreamingTailBlock<'_>>::new());
+    assert_eq!(view.assistant_text, None);
+    assert_eq!(view.thinking_tokens, None);
 }

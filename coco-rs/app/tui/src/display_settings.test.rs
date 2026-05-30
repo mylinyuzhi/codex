@@ -59,6 +59,54 @@ fn from_settings_reads_show_thinking_default() {
 }
 
 #[test]
+fn from_settings_converts_native_replay_cache_kib_to_bytes() {
+    let mut settings = Settings::default();
+    settings.tui.native_replay_cache.enabled = false;
+    settings.tui.native_replay_cache.max_entries = 7;
+    settings.tui.native_replay_cache.max_estimated_kb = 128;
+    settings.tui.native_replay_cache.min_cells = 3;
+    settings.tui.native_replay_cache.min_content_kb = 4;
+    settings.tui.native_replay_cache.admit_min_render_us = 99;
+    settings.tui.native_replay_cache.admit_min_result_kb = 5;
+
+    let display = DisplaySettings::from_settings(&settings);
+
+    assert!(!display.native_replay_cache.enabled);
+    assert_eq!(display.native_replay_cache.max_entries, 7);
+    assert_eq!(display.native_replay_cache.max_estimated_bytes, 128 * 1024);
+    assert_eq!(display.native_replay_cache.min_cells, 3);
+    assert_eq!(display.native_replay_cache.min_content_bytes, 4 * 1024);
+    assert_eq!(
+        display.native_replay_cache.admit_min_render_elapsed,
+        std::time::Duration::from_micros(99)
+    );
+    assert_eq!(display.native_replay_cache.admit_min_result_bytes, 5 * 1024);
+}
+
+#[test]
+fn from_settings_converts_tui_performance_defaults_and_overrides() {
+    let display = DisplaySettings::from_settings(&Settings::default());
+
+    assert!(!display.performance.enabled);
+    assert_eq!(display.performance.sample_every_n_frames, 0);
+    assert_eq!(display.performance.slow_frame_ms, 16);
+    assert_eq!(display.performance.slow_stage_us, 500);
+
+    let mut settings = Settings::default();
+    settings.tui.performance.enabled = true;
+    settings.tui.performance.sample_every_n_frames = 5;
+    settings.tui.performance.slow_frame_ms = 24;
+    settings.tui.performance.slow_stage_us = 900;
+
+    let display = DisplaySettings::from_settings(&settings);
+
+    assert!(display.performance.enabled);
+    assert_eq!(display.performance.sample_every_n_frames, 5);
+    assert_eq!(display.performance.slow_frame_ms, 24);
+    assert_eq!(display.performance.slow_stage_us, 900);
+}
+
+#[test]
 fn from_settings_with_sources_marks_higher_priority_syntax_highlighting_as_overridden() {
     let mut per_source = HashMap::new();
     per_source.insert(SettingSource::Project, raw_syntax_highlighting(true));

@@ -37,7 +37,7 @@ pub struct EnterWorktreeInput {
 }
 
 /// Typed output for [`EnterWorktreeTool`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EnterWorktreeOutput {
     pub message: String,
     pub path: String,
@@ -184,7 +184,7 @@ pub struct ExitWorktreeInput {
 /// 2–6 (from `ExitWorktreeTool.ts:126-145`) can't be performed by the
 /// tool itself; this struct reports what the upper layer still needs
 /// to restore.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExitWorktreeRestoration {
     /// Process-cwd target the tool resolved (explicit `previous_cwd`,
     /// then the worktree's parent dir, then `current_dir`).
@@ -204,7 +204,7 @@ pub struct ExitWorktreeRestoration {
     pub pending_layers: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExitWorktreeOutput {
     pub message: String,
     pub path: String,

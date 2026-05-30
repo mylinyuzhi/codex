@@ -238,7 +238,14 @@ impl UiState {
     }
 
     pub fn apply_theme_runtime(&mut self, theme_state: ThemeRuntimeState) {
+        // Single install chokepoint: quantize RGB palettes to the terminal's
+        // color capability here so every theme path — initial load AND in-app
+        // theme switches (which resolve a fresh, un-downsampled `Theme`) — gets
+        // adapted. `downsample` is idempotent (already-indexed colors pass
+        // through), so the loader's own downsample is harmless.
         self.theme = theme_state.theme.clone();
+        self.theme
+            .downsample(coco_tui_ui::color::color_capability());
         if let Some(ModalState::Settings(settings)) = self.modal.as_mut() {
             settings.set_themes(theme_state.choices.clone(), theme_state.setting.clone());
         }

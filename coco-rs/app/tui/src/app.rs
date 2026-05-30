@@ -18,6 +18,7 @@ use tokio::time::interval;
 use tokio_stream::StreamExt;
 
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::autocomplete::FileSearchEvent;
 use crate::autocomplete::FileSearchManager;
@@ -111,6 +112,8 @@ pub struct App {
     /// are buffered until the editor completion event restores TUI modes.
     external_editor_active: Option<String>,
     deferred_core_events: VecDeque<CoreEvent>,
+    pending_frame_inputs: crate::perf::FrameInputStats,
+    frame_index: u64,
 }
 
 impl App {
@@ -158,6 +161,8 @@ impl App {
             config_reload_errors_rx: None,
             external_editor_active: None,
             deferred_core_events: VecDeque::new(),
+            pending_frame_inputs: crate::perf::FrameInputStats::default(),
+            frame_index: 0,
         })
     }
 
@@ -193,6 +198,8 @@ impl App {
             config_reload_errors_rx: None,
             external_editor_active: None,
             deferred_core_events: VecDeque::new(),
+            pending_frame_inputs: crate::perf::FrameInputStats::default(),
+            frame_index: 0,
         }
     }
 
@@ -289,6 +296,7 @@ impl App {
                 // Terminal events
                 Some(Ok(evt)) = event_stream.next(), if self.external_editor_active.is_none() => {
                     if let Some(event) = self.convert_crossterm_event(evt) {
+                        self.pending_frame_inputs.terminal_inputs += 1;
                         needs_redraw = self.handle_event(event).await;
                     }
                 }
@@ -296,8 +304,10 @@ impl App {
                 // Under high throughput (e.g. 100+ TextDeltas/sec) this avoids
                 // one redraw per token by draining all ready events first.
                 Some(event) = self.notification_rx.recv() => {
+                    self.pending_frame_inputs.record_core_event(&event);
                     needs_redraw = self.handle_core_event(event).await?;
                     while let Ok(next) = self.notification_rx.try_recv() {
+                        self.pending_frame_inputs.record_core_event(&next);
                         needs_redraw |= self.handle_core_event(next).await?;
                     }
                 }
@@ -322,10 +332,12 @@ impl App {
                     needs_redraw = apply_theme_reload(&mut self.state, result);
                 }
                 Some(display_settings) = recv_optional(&mut self.display_settings_rx), if self.display_settings_rx.is_some() => {
+                    self.pending_frame_inputs.settings_reloads += 1;
                     self.state.ui.apply_display_settings(display_settings);
                     needs_redraw = true;
                 }
                 Some(error) = recv_optional(&mut self.config_reload_errors_rx), if self.config_reload_errors_rx.is_some() => {
+                    self.pending_frame_inputs.settings_reloads += 1;
                     self.state.ui.add_toast(crate::state::ui::Toast::warning(
                         crate::i18n::t!("toast.config_reload_failed", error = error.as_str()).to_string(),
                     ));
@@ -349,6 +361,7 @@ impl App {
                 // `FrameRequester::schedule_frame_in` from
                 // `redraw()` now.
                 _ = tick_interval.tick(), if self.external_editor_active.is_none() && tick_active => {
+                    self.pending_frame_inputs.ticks += 1;
                     needs_redraw = self.handle_event(TuiEvent::Tick).await;
                 }
             };
@@ -383,6 +396,11 @@ impl App {
     /// so the spinner self-perpetuates at `SPINNER_TICK_INTERVAL`
     /// without an unconditional 50 ms timer in the main loop.
     fn redraw(&mut self) -> io::Result<()> {
+        self.frame_index = self.frame_index.saturating_add(1);
+        let frame_index = self.frame_index;
+        let perf_config = self.state.ui.display_settings.performance;
+        let frame_start = perf_config.enabled.then(Instant::now);
+        let frame_inputs = std::mem::take(&mut self.pending_frame_inputs);
         let now = self.state.clock.now();
 
         // Drive the pause clock from the actual paint instant so the
@@ -403,7 +421,7 @@ impl App {
             streaming.advance_display();
         }
 
-        let outcome = self.tui.draw(&self.state)?;
+        let outcome = self.tui.draw_with_frame_index(&self.state, frame_index)?;
         if outcome.retained_surface_visible && self.state.ui.terminal_focused {
             self.state.ui.confirm_surface_visibility_after_draw(now);
         }
@@ -417,6 +435,26 @@ impl App {
         if self.state.ui.ephemeral.turn_active() || self.state.ui.streaming.is_some() {
             self.frame_requester
                 .schedule_frame_in(constants::SPINNER_TICK_INTERVAL);
+        }
+
+        if let Some(start) = frame_start {
+            let elapsed = start.elapsed();
+            if crate::perf::should_log_frame(perf_config, frame_index, elapsed) {
+                tracing::debug!(
+                    target: crate::perf::TARGET,
+                    frame_index,
+                    duration_ms = crate::perf::duration_ms(elapsed),
+                    core_events = frame_inputs.core_events,
+                    stream_text_deltas = frame_inputs.stream_text_deltas,
+                    stream_thinking_deltas = frame_inputs.stream_thinking_deltas,
+                    terminal_inputs = frame_inputs.terminal_inputs,
+                    ticks = frame_inputs.ticks,
+                    settings_reloads = frame_inputs.settings_reloads,
+                    retained_surface_visible = outcome.retained_surface_visible,
+                    attention_requested = outcome.attention_requested,
+                    "tui frame redraw completed",
+                );
+            }
         }
 
         Ok(())

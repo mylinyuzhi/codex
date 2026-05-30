@@ -86,3 +86,17 @@ fn test_model_role_from_str_rejects_unknown() {
     assert!("teammate".parse::<ModelRole>().is_err());
     assert!("".parse::<ModelRole>().is_err());
 }
+
+/// `OAuthFlowId::as_str` MUST equal the serde wire form for every variant —
+/// the fingerprint digest and persisted `StoredCredential.flow` would otherwise
+/// disagree. Mirrors `test_model_role_as_str_matches_serde`.
+#[test]
+fn test_oauth_flow_id_as_str_matches_serde() {
+    for flow in [OAuthFlowId::OpenAiChatGpt, OAuthFlowId::GeminiCodeAssist] {
+        let json = serde_json::to_string(&flow).unwrap();
+        assert_eq!(json, format!("\"{}\"", flow.as_str()));
+        // Round-trips back from the canonical spelling.
+        let parsed: OAuthFlowId = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, flow);
+    }
+}

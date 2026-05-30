@@ -76,7 +76,19 @@ _SERVER_NOTIFICATION_ADAPTER: TypeAdapter[ServerNotification] = TypeAdapter(
     ServerNotification
 )
 from coco_sdk.decorators import HookDefinition
+from coco_sdk.errors import ProcessError
 from coco_sdk.types import ModelSpec
+
+# A follow-up `turn/start` can arrive in the brief window after the server emits
+# `TurnEnded` but before the detached turn task's post-run cleanup clears the
+# one-at-a-time slot, so the server transiently rejects it with "a turn is
+# already running". Retry that specific rejection with a short backoff rather
+# than surfacing a race to the caller. Bounded so a genuinely concurrent turn
+# still raises.
+_TURN_START_BUSY_MARKER = "already running"
+_TURN_START_RETRY_INITIAL = 0.01
+_TURN_START_RETRY_MAX_DELAY = 0.2
+_TURN_START_RETRY_TIMEOUT = 5.0
 
 
 def _safe_parse_notification(line_data: dict[str, Any]) -> ServerNotification | None:
@@ -391,9 +403,34 @@ class CocoClient:
         request = TurnStartRequest(
             params=TurnStartRequest.TurnStartRequestParams(prompt=text)
         )
-        await self._request(request)
+        await self._start_turn_with_retry(request)
         async for event in self.events():
             yield event
+
+    async def _start_turn_with_retry(self, request: Any) -> None:
+        """Send ``turn/start``, tolerating the server's post-``TurnEnded``
+        finalization window.
+
+        After a turn ends, the server clears its one-at-a-time turn slot in a
+        detached cleanup that runs *after* ``TurnEnded`` is already on the wire.
+        A follow-up sent the instant a caller sees ``TurnEnded`` can therefore
+        race that cleanup and be rejected with "a turn is already running". That
+        is transient, so retry with a short exponential backoff; a genuinely
+        concurrent turn still surfaces the error once the bounded window lapses.
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + _TURN_START_RETRY_TIMEOUT
+        delay = _TURN_START_RETRY_INITIAL
+        while True:
+            try:
+                await self._request(request)
+                return
+            except ProcessError as exc:
+                now = loop.time()
+                if _TURN_START_BUSY_MARKER not in str(exc) or now >= deadline:
+                    raise
+                await asyncio.sleep(min(delay, deadline - now))
+                delay = min(delay * 2, _TURN_START_RETRY_MAX_DELAY)
 
     # ── Bidirectional control methods ────────────────────────────────
 

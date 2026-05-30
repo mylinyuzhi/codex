@@ -386,6 +386,35 @@ impl AnthropicMessagesLanguageModel {
         let tool_name_mapping = ToolNameMapping::new(&tool_name_mapping_map);
         let mut cache_validator = CacheControlValidator::new();
 
+        // Resolve the effective cache-marker value ONCE (design §10.3). The
+        // policy engine may downgrade `1h` → `5m` per (account, allowlist)
+        // eligibility; only an `Auto` strategy auto-places markers (`Manual`
+        // leaves placement to the caller via `provider_options`). The single
+        // resolved value is shared by BOTH the last-user auto-marker (placed
+        // below) and the built-in/MCP tool-boundary marker (emitted by
+        // `prepare_anthropic_tools` via the validator), so the two coco-driven
+        // breakpoints always agree on TTL. `None` ⇒ caching inactive ⇒ neither
+        // marker is emitted.
+        let cache_marker: Option<Value> =
+            anthropic_options
+                .cache_strategy
+                .as_ref()
+                .and_then(|strategy| {
+                    if !matches!(
+                        strategy.mode,
+                        super::anthropic_messages_options::AdapterCacheMode::Auto
+                    ) {
+                        return None;
+                    }
+                    let ttl = self.cache_policy.resolve_ttl(
+                        &self.config,
+                        strategy,
+                        anthropic_options.query_source.as_deref(),
+                    )?;
+                    Some(crate::cache_placement::build_cache_control_value(ttl))
+                });
+        cache_validator.set_tool_boundary_marker(cache_marker.clone());
+
         // Convert prompt
         let send_reasoning = anthropic_options.send_reasoning.unwrap_or(true);
         let converted = convert_to_anthropic_messages_full(
@@ -399,29 +428,17 @@ impl AnthropicMessagesLanguageModel {
         warnings.extend(converted.warnings);
         let betas_from_messages = converted.betas;
 
-        // Auto cache-marker placement (design §10.3). When the caller
-        // requested a cache strategy (`Auto` or `Manual`), the policy
-        // engine resolves the effective TTL — possibly downgrading
-        // `1h` → `5m` based on (account, allowlist) eligibility. Only
-        // `Auto` triggers automatic placement; `Manual` leaves
-        // marker placement to the caller via `provider_options`.
-        if let Some(strategy) = anthropic_options.cache_strategy.as_ref() {
-            let resolved_ttl = self.cache_policy.resolve_ttl(
-                &self.config,
-                strategy,
-                anthropic_options.query_source.as_deref(),
-            );
-            if let Some(ttl) = resolved_ttl
-                && matches!(
-                    strategy.mode,
-                    super::anthropic_messages_options::AdapterCacheMode::Auto
-                )
-                && let Some(idx) =
-                    crate::cache_placement::compute_marker_index_post_group(&messages)
-            {
-                let cc = crate::cache_placement::build_cache_control_value(ttl);
-                crate::cache_placement::attach_marker_at(&mut messages, idx, cc);
-            }
+        // Auto cache-marker on the last user message (the agent-loop boundary:
+        // long stable system prompt + tool-result history + new user turn).
+        // Placed directly (NOT through `cache_validator`), so it does not count
+        // against the 4-breakpoint budget — coco emits at most two markers (this
+        // + the built-in/MCP tool boundary), well under the limit. coco's Auto
+        // strategy never emits per-message breakpoints, so the *counted* total
+        // stays at ≤1 and the wire never approaches the limit.
+        if let Some(ref cc) = cache_marker
+            && let Some(idx) = crate::cache_placement::compute_marker_index_post_group(&messages)
+        {
+            crate::cache_placement::attach_marker_at(&mut messages, idx, cc.clone());
         }
 
         // Eligibility predicate computed once and passed to both

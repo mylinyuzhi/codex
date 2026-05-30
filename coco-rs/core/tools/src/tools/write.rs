@@ -41,7 +41,7 @@ pub struct WriteInput {
 /// Typed output for [`WriteTool`] — tagged enum keyed by the operation
 /// performed. `filePath` is camelCase on the wire for TS parity
 /// (`FileWriteTool.ts:418-433 mapToolResultToToolResultBlockParam`).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WriteOutput {
     /// New file created. `filePath` is the resolved absolute path.

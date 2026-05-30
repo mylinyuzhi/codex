@@ -6,7 +6,6 @@ use ratatui::widgets::Widget;
 use uuid::Uuid;
 
 use crate::i18n::locale_test_guard;
-use crate::presentation::streaming::StreamingTailBlock;
 use crate::presentation::streaming::StreamingTailView;
 use crate::state::derive::test_helpers::{
     assistant_text_cell, assistant_thinking_cell_with_metadata, info_cell, tool_result_cell,
@@ -515,7 +514,8 @@ fn transcript_modal_caps_expanded_tool_result_lines() {
 
     assert!(body.contains("line-0"));
     assert!(!body.contains(&format!("line-{TRANSCRIPT_EXPANDED_CELL_LINE_CAP}")));
-    assert!(body.contains("output truncated in UI"));
+    // Reader caps at the per-cell line budget; the overflow is marked, not shown.
+    assert!(body.contains("+1 lines"));
 }
 
 #[test]
@@ -528,10 +528,8 @@ fn active_transcript_cell_prioritizes_streaming_over_busy_spinner() {
     assert_eq!(
         active_transcript_cell(Some(&streaming), true, &tools),
         Some(ActiveTranscriptCell::Streaming(StreamingTailView {
-            blocks: vec![
-                StreamingTailBlock::AssistantText("hello"),
-                StreamingTailBlock::Cursor,
-            ],
+            assistant_text: Some("hello"),
+            thinking_tokens: None,
         }))
     );
     assert_eq!(
@@ -563,7 +561,8 @@ fn transcript_presentation_appends_active_streaming_after_committed_cells() {
         vec![
             TranscriptSourceCell::Committed(TranscriptCell::Cell { index: 0 }),
             TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(StreamingTailView {
-                blocks: Vec::new(),
+                assistant_text: None,
+                thinking_tokens: None,
             })),
         ]
     );

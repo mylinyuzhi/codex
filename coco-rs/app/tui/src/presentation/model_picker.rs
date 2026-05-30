@@ -68,7 +68,7 @@ pub(crate) fn render_model_picker(
         Block::default()
             .borders(Borders::ALL)
             .title(title)
-            .border_style(styles.primary_border()),
+            .border_style(ratatui::style::Style::default().fg(styles.modal_border())),
     );
 
     frame.render_widget(content, modal_area);
@@ -487,6 +487,11 @@ fn unavailable_reason_label(reason: &ProviderUnavailableReason) -> String {
         ProviderUnavailableReason::MissingApiKey { env_key } => t!(
             "dialog.model_picker_unavailable_api_key",
             env_key = env_key.as_str()
+        )
+        .to_string(),
+        ProviderUnavailableReason::NotLoggedIn { provider } => t!(
+            "dialog.model_picker_unavailable_not_logged_in",
+            provider = provider.as_str()
         )
         .to_string(),
         ProviderUnavailableReason::NoModels => {

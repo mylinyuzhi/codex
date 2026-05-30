@@ -11,31 +11,20 @@ pub(crate) struct StreamingTailInput<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StreamingTailView<'a> {
-    pub(crate) blocks: Vec<StreamingTailBlock<'a>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StreamingTailBlock<'a> {
-    AssistantText(&'a str),
-    Cursor,
-    ThinkingTokens { count: i64 },
+    pub(crate) assistant_text: Option<&'a str>,
+    pub(crate) thinking_tokens: Option<i64>,
 }
 
 pub(crate) fn streaming_tail_view(input: StreamingTailInput<'_>) -> StreamingTailView<'_> {
-    let mut blocks = Vec::new();
     let content = input.streaming.visible_content();
-    if !content.is_empty() {
-        blocks.push(StreamingTailBlock::AssistantText(content));
-        blocks.push(StreamingTailBlock::Cursor);
-    }
+    let assistant_text = (!content.is_empty()).then_some(content);
+    let thinking_tokens = (input.show_thinking && !input.streaming.thinking.is_empty())
+        .then(|| estimate_reasoning_tokens(&input.streaming.thinking));
 
-    if input.show_thinking && !input.streaming.thinking.is_empty() {
-        blocks.push(StreamingTailBlock::ThinkingTokens {
-            count: estimate_reasoning_tokens(&input.streaming.thinking),
-        });
+    StreamingTailView {
+        assistant_text,
+        thinking_tokens,
     }
-
-    StreamingTailView { blocks }
 }
 
 #[cfg(test)]

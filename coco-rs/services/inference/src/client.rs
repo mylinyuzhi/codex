@@ -191,6 +191,10 @@ pub struct ApiClient {
     /// (compact paths, subagent finalize, `/clear caches`) can
     /// declare expected drops.
     cache_break_detector: Option<Arc<Mutex<CacheBreakDetector>>>,
+    /// Reactive-401 recovery hook for OAuth-subscription providers. When set, a
+    /// 401/403 triggers one forced token refresh + retry. Bound by
+    /// `model_factory::build_api_client` to `resolver.refresh_now(provider)`.
+    refresh_hook: Option<crate::credentials::RefreshHook>,
 }
 
 impl ApiClient {
@@ -219,7 +223,18 @@ impl ApiClient {
             retry,
             usage: Arc::new(Mutex::new(UsageAccumulator::new())),
             cache_break_detector: None,
+            refresh_hook: None,
         }
+    }
+
+    /// Install a reactive-401 refresh hook. When the underlying model returns an
+    /// auth error (401/403), the client invokes this once to force a token
+    /// refresh, then retries — so an expired OAuth-subscription access token
+    /// recovers transparently instead of surfacing to the user.
+    #[must_use]
+    pub fn with_refresh_hook(mut self, hook: crate::credentials::RefreshHook) -> Self {
+        self.refresh_hook = Some(hook);
+        self
     }
 
     /// Install a shared `CacheBreakDetector`. When present, every
@@ -420,6 +435,8 @@ impl ApiClient {
     pub async fn query(&self, params: &QueryParams) -> Result<QueryResult, InferenceError> {
         let start = std::time::Instant::now();
         let mut attempt = 0;
+        // Reactive-401 recovery fires at most once per call.
+        let mut auth_refreshed = false;
         debug!("api_call begin");
 
         // Build call options exactly once. Same options reused across
@@ -536,6 +553,19 @@ impl ApiClient {
                     return Ok(result);
                 }
                 Err(e) => {
+                    // Reactive-401: on an auth error, force one token refresh
+                    // and retry (same attempt count) before normal retry policy.
+                    if RetryConfig::is_auth_error(&e)
+                        && !auth_refreshed
+                        && let Some(hook) = &self.refresh_hook
+                    {
+                        auth_refreshed = true;
+                        if hook().await {
+                            info!(attempt, "auth error; refreshed credentials, retrying");
+                            continue;
+                        }
+                    }
+
                     if !self.retry.should_retry(attempt, &e) {
                         warn!(
                             error_class = e.error_class(),
@@ -642,11 +672,27 @@ impl ApiClient {
         let options = self.build_options(params);
 
         // `abort_signal: None` — see `do_query_with_options` rationale.
-        let result = self.model.do_stream(&options, None).await.map_err(|e| {
-            let err = self.wrap_provider_error(e);
-            warn!(error = %err, "api_call stream open failed");
-            err
-        })?;
+        let result = match self.model.do_stream(&options, None).await {
+            Ok(r) => r,
+            Err(e) => {
+                let err = self.wrap_provider_error(e);
+                // Reactive-401: refresh once and reopen the stream.
+                if RetryConfig::is_auth_error(&err)
+                    && let Some(hook) = &self.refresh_hook
+                    && hook().await
+                {
+                    warn!("stream auth error; refreshed credentials, reopening");
+                    self.model.do_stream(&options, None).await.map_err(|e2| {
+                        let err2 = self.wrap_provider_error(e2);
+                        warn!(error = %err2, "api_call stream reopen failed");
+                        err2
+                    })?
+                } else {
+                    warn!(error = %err, "api_call stream open failed");
+                    return Err(err);
+                }
+            }
+        };
 
         debug!("api_call stream opened");
         let (tx, rx) = tokio::sync::mpsc::channel(64);
@@ -672,8 +718,19 @@ impl ApiClient {
     /// doesn't carry HTTP status — typed status codes are recovered at
     /// the next layer up via [`crate::errors`] classification.
     fn wrap_provider_error(&self, e: vercel_ai_provider::AISdkError) -> InferenceError {
+        // Recover the HTTP status from the boxed `APICallError` cause (the
+        // adapter preserves it there). Without this it defaults to 0, and a
+        // real 401/403 would never classify as an auth error — defeating the
+        // reactive-refresh + retry-policy paths.
+        let status = e
+            .cause
+            .as_ref()
+            .and_then(|c| c.downcast_ref::<vercel_ai_provider::APICallError>())
+            .and_then(|api| api.status_code)
+            .map(i32::from)
+            .unwrap_or(0);
         crate::errors::ProviderSnafu {
-            status: 0_i32,
+            status,
             message: format!(
                 "Provider '{}' error for model '{}': {}",
                 self.model.provider(),

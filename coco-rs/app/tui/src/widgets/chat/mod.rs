@@ -9,6 +9,10 @@ mod render_assistant;
 mod render_system;
 mod render_tool;
 mod render_user;
+pub(crate) mod tool_result_render;
+
+#[cfg(any(test, feature = "testing"))]
+pub(crate) use render_assistant::clear_committed_markdown_memo_for_tests;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -23,7 +27,6 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
-use crate::presentation::streaming::StreamingTailBlock;
 use crate::presentation::streaming::StreamingTailView;
 use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
@@ -31,24 +34,30 @@ use crate::presentation::thinking::format_duration_seconds;
 use crate::presentation::thinking::render_thinking_block;
 use crate::presentation::transcript::ActiveTranscriptCell;
 use crate::presentation::transcript::TRANSCRIPT_LINE_CHAR_CAP;
-use crate::presentation::transcript::ToolOutputPreview;
 use crate::presentation::transcript::TranscriptCell;
 use crate::presentation::transcript::TranscriptPresentationInput;
 use crate::presentation::transcript::TranscriptProjectionOptions;
 use crate::presentation::transcript::TranscriptSourceCell;
-use crate::presentation::transcript::tool_output_preview;
 use crate::presentation::transcript::transcript_presentation;
 use crate::state::session::ToolExecution;
 use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
 use crate::state::transcript_view::SystemCellKind;
 use crate::state::ui::StreamingState;
+use crate::streaming::render_controller::StreamRenderController;
+use crate::streaming::render_controller::StreamRenderInput;
+use crate::streaming::render_controller::streaming_cursor_line;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 
 pub(crate) const TOOL_OUTPUT_PREVIEW_ROWS: usize = 5;
+
+thread_local! {
+    static STREAM_RENDER_CONTROLLER: std::cell::RefCell<StreamRenderController> =
+        std::cell::RefCell::new(StreamRenderController::new());
+}
 
 /// Chat history widget.
 ///
@@ -266,13 +275,17 @@ impl<'a> ChatWidget<'a> {
         {
             self.render_tool_call_header(tool_name, call_id, &cell.source, lines);
             if let Some(rc) = result_cell {
-                self.render_tool_result_summary(rc, lines);
+                // Paired path: the invocation cell carries the tool input, so
+                // input-derived views (diffs, code, web target) can render.
+                let input =
+                    crate::state::derive::extract_tool_call_input(cell.source.as_ref(), call_id);
+                self.render_tool_result(input.as_ref(), rc, lines);
             }
             return;
         }
 
         if let Some(rc) = result_cell {
-            self.render_tool_result_summary(rc, lines);
+            self.render_tool_result(None, rc, lines);
         }
     }
 
@@ -291,7 +304,7 @@ impl<'a> ChatWidget<'a> {
                     }
                 }
                 CellKind::ToolResult { .. } => {
-                    self.render_tool_result_summary(cell, lines);
+                    self.render_tool_result(None, cell, lines);
                     return;
                 }
                 _ => {}
@@ -311,7 +324,8 @@ impl<'a> ChatWidget<'a> {
             .tool_executions
             .iter()
             .find(|tool| tool.call_id == call_id);
-        let input_preview = crate::state::derive::extract_tool_call_input_preview(source, call_id);
+        let input_preview =
+            crate::state::derive::tool_call_header_preview(source, call_id, tool_name);
         let preview = single_line_capped(&input_preview, 96);
         let elapsed = execution
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
@@ -329,72 +343,46 @@ impl<'a> ChatWidget<'a> {
         lines.push(Line::from(spans));
     }
 
-    fn render_tool_result_summary(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
-        let CellKind::ToolResult { .. } = &cell.kind else {
+    /// Render a tool-result cell body. `input` is the issuing call's arguments
+    /// when the caller has the invocation cell on hand (paired path), enabling
+    /// input-derived views (diffs, code, web target); `None` degrades to output.
+    pub(crate) fn render_tool_result(
+        &self,
+        input: Option<&serde_json::Value>,
+        result_cell: &RenderedCell,
+        lines: &mut Vec<Line<'static>>,
+    ) {
+        let CellKind::ToolResult { .. } = &result_cell.kind else {
             return;
         };
-        let coco_messages::Message::ToolResult(tr) = cell.source.as_ref() else {
+        let coco_messages::Message::ToolResult(tr) = result_cell.source.as_ref() else {
             return;
         };
-        let Some((_tool_name, output)) =
-            crate::state::derive::tool_result_output(cell.source.as_ref())
+        let Some((tool_name, output)) =
+            crate::state::derive::tool_result_output(result_cell.source.as_ref())
         else {
             return;
         };
-        if tr.is_error {
-            lines.push(result_line(
-                format!(
-                    "error: {}",
-                    single_line_capped(&output, TRANSCRIPT_LINE_CHAR_CAP)
-                ),
-                self.styles.error(),
-            ));
-        } else {
-            self.render_output_preview(&output, lines);
-        }
+        tool_result_render::render_tool_result_body(
+            &self.tool_result_ctx(),
+            &tool_name,
+            input,
+            &output,
+            tr.is_error,
+            lines,
+        );
     }
 
-    pub(crate) fn render_output_preview(&self, output: &str, lines: &mut Vec<Line<'static>>) {
-        match tool_output_preview(output, TOOL_OUTPUT_PREVIEW_ROWS) {
-            ToolOutputPreview::Empty => {
-                lines.push(result_line("(no output)".to_string(), self.styles.dim()));
-            }
-            ToolOutputPreview::Full(output_lines) => {
-                for (index, line) in output_lines.into_iter().enumerate() {
-                    lines.push(output_result_line(
-                        transcript_safe_line(line),
-                        self.styles.text(),
-                        index == 0,
-                    ));
-                }
-            }
-            ToolOutputPreview::Truncated {
-                head,
-                omitted,
-                tail,
-            } => {
-                let mut rendered = 0usize;
-                for line in head {
-                    lines.push(output_result_line(
-                        transcript_safe_line(line),
-                        self.styles.text(),
-                        rendered == 0,
-                    ));
-                    rendered += 1;
-                }
-                lines.push(output_result_line(
-                    format!("… +{omitted} lines {}", self.expand_hint()),
-                    self.styles.dim(),
-                    rendered == 0,
-                ));
-                for line in tail {
-                    lines.push(output_result_line(
-                        transcript_safe_line(line),
-                        self.styles.text(),
-                        false,
-                    ));
-                }
-            }
+    /// Build the surface context the per-tool renderers paint into. Inline chat
+    /// is never the full-detail surface, so caps stay tight and the truncation
+    /// hint points at the Ctrl+O reader (which renders the same body expanded).
+    pub(crate) fn tool_result_ctx(&self) -> tool_result_render::ToolResultRenderCtx<'_> {
+        tool_result_render::ToolResultRenderCtx {
+            styles: self.styles,
+            width: self.width,
+            syntax_highlighting: self.syntax_highlighting,
+            expand_hint: self.expand_hint(),
+            expanded: false,
         }
     }
 
@@ -462,59 +450,40 @@ impl<'a> ChatWidget<'a> {
     }
 
     fn render_streaming(&self, view: StreamingTailView<'_>, lines: &mut Vec<Line<'static>>) {
-        for block in view.blocks {
-            match block {
-                StreamingTailBlock::AssistantText(content) => {
-                    self.render_streaming_text(content, lines);
-                }
-                StreamingTailBlock::Cursor => {
-                    lines.push(Line::from(Span::raw("▌").fg(self.styles.accent())));
-                }
-                StreamingTailBlock::ThinkingTokens { count } => {
-                    lines.extend(render_thinking_block(
-                        ThinkingRenderInput {
-                            content: "",
-                            duration_ms: None,
-                            reasoning_tokens: Some(count),
-                            toggle_hint: Some(&self.thinking_toggle_hint()),
-                            display: ThinkingDisplay::Collapsed,
-                        },
-                        self.styles,
-                    ));
-                }
-            }
+        if let Some(content) = view.assistant_text {
+            self.render_streaming_text(content, lines);
+            lines.push(streaming_cursor_line(self.styles));
+        }
+
+        if let Some(count) = view.thinking_tokens {
+            lines.extend(render_thinking_block(
+                ThinkingRenderInput {
+                    content: "",
+                    duration_ms: None,
+                    reasoning_tokens: Some(count),
+                    toggle_hint: Some(&self.thinking_toggle_hint()),
+                    display: ThinkingDisplay::Collapsed,
+                },
+                self.styles,
+            ));
         }
     }
 
     fn render_streaming_text(&self, content: &str, lines: &mut Vec<Line<'static>>) {
-        let mut md_lines = coco_tui_ui::widgets::markdown::markdown_to_lines_with_syntax(
-            content,
-            self.styles,
-            self.width,
-            self.syntax_highlighting,
-        );
-        // Match `render_assistant::try_render`'s leading dot so the
-        // partial response and the finalised response share the same
-        // marker — otherwise the row jumps when streaming finishes
-        // and the assistant text replaces the live buffer.
-        if let Some(first) = md_lines.first_mut() {
-            let dot_span = Span::styled(
-                "⏺ ".to_string(),
-                ratatui::style::Style::default().fg(self.styles.assistant_message()),
-            );
-            let leading_is_indent = first
-                .spans
-                .first()
-                .map(|s| s.content.as_ref() == "  ")
-                .unwrap_or(false);
-            if leading_is_indent {
-                first.spans[0] = dot_span;
-            } else {
-                first.spans.insert(0, dot_span);
-            }
-        }
-        lines.extend(md_lines);
+        let rendered = STREAM_RENDER_CONTROLLER.with(|controller| {
+            controller.borrow_mut().render(StreamRenderInput {
+                source: content,
+                styles: self.styles,
+                width: self.width,
+                syntax_highlighting: self.syntax_highlighting,
+            })
+        });
+        lines.extend(rendered);
     }
+}
+
+pub(crate) fn assistant_stream_lead_marker(styles: UiStyles<'_>) -> coco_tui_markdown::LeadMarker {
+    render_assistant::assistant_lead_marker(styles.assistant_message())
 }
 
 impl Widget for ChatWidget<'_> {

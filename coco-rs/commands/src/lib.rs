@@ -949,6 +949,22 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
             &["perms"],
             permissions_handler,
         ),
+        // ── Provider auth (OAuth subscriptions) ──
+        // The interactive flow is handled in `app/cli::tui_runner` (it owns the
+        // runtime + AuthService); these entries provide discoverability + a
+        // non-TUI fallback hint.
+        (
+            "login",
+            "Log in to a provider subscription via OAuth (e.g. /login openai)",
+            &[],
+            login_handler,
+        ),
+        (
+            "logout",
+            "Clear a provider subscription credential (e.g. /logout openai)",
+            &[],
+            logout_handler,
+        ),
         // ── Session ──
         (
             "session",
@@ -1053,6 +1069,23 @@ fn help_handler(_args: &str) -> String {
 
 fn clear_handler(_args: &str) -> String {
     "Conversation cleared. Plan state, file caches, and cache-break tracking reset.".to_string()
+}
+
+// `/login` + `/logout` are intercepted by `app/cli::tui_runner` (which runs the
+// real OAuth flow on the shared `AuthService`). These bodies are reached only
+// on non-interactive paths (e.g. SDK), where a browser flow can't run — point
+// the user at the CLI.
+fn login_handler(_args: &str) -> String {
+    "Interactive login isn't available here. Run `coco login <provider>` in a terminal.".to_string()
+}
+
+fn logout_handler(args: &str) -> String {
+    let who = args.trim();
+    if who.is_empty() {
+        "Run `coco logout <provider>` in a terminal.".to_string()
+    } else {
+        format!("Run `coco logout {who}` in a terminal.")
+    }
 }
 
 fn compact_handler(_args: &str) -> String {

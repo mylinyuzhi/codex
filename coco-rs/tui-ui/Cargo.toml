@@ -36,6 +36,11 @@ pretty_assertions.workspace = true
 vt100.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 criterion = { workspace = true }
+# Dev-only: the render bench drives the real markdown renderer to generate
+# representative `Vec<Line>` input. A dev-dependency keeps the production seam
+# clean (the seam guard only scans `[dependencies]`) and the cycle is permitted
+# (coco-tui-markdown depends on coco-tui-ui in turn).
+coco-tui-markdown.workspace = true
 
 [[bench]]
 name = "render"

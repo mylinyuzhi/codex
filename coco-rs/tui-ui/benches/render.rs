@@ -8,7 +8,7 @@
 //!
 //! - `markdown_parse` — cost of parsing markdown → `Vec<Line>`, by document
 //!   size. The input to every wrap/paint and a regression guard on the parser.
-//!   (Width is *not* a parameter here: `markdown_to_lines` wraps nothing — it
+//!   (Width is *not* a parameter here: `render_markdown` wraps nothing — it
 //!   only sizes code-fence borders + table columns; line wrapping happens later
 //!   at paint time, which is what `reflow_wrap` measures.)
 //! - `reflow_wrap` — width-driven wrap+paint through the real engine
@@ -28,24 +28,28 @@
 //! unit tests through libtest, which rejects criterion flags like `--quick`.)
 
 use std::hint::black_box;
+use std::io;
+use std::io::Write;
 
 use criterion::BatchSize;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::criterion_group;
 use criterion::criterion_main;
+use ratatui::backend::CrosstermBackend;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
+use coco_tui_markdown::MarkdownOptions;
+use coco_tui_markdown::render_markdown;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::engine::terminal::SurfaceFrame;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::theme::Theme;
-use coco_tui_ui::widgets::markdown::markdown_to_lines_with_syntax;
 
 /// One representative assistant message block: prose + fenced code + list + table.
 const BLOCK: &str = "\
@@ -74,11 +78,10 @@ fn sample_doc(blocks: usize) -> String {
 
 /// Render `doc` to styled lines at `width` (syntax highlighting on).
 fn render_lines(doc: &str, theme: &Theme, width: u16) -> Vec<Line<'static>> {
-    markdown_to_lines_with_syntax(
+    render_markdown(
         doc,
-        UiStyles::new(theme),
-        width,
-        SyntaxHighlighting::Enabled,
+        MarkdownOptions::new(UiStyles::new(theme), width, SyntaxHighlighting::Enabled),
+        None,
     )
 }
 
@@ -88,6 +91,29 @@ fn surface(width: u16, height: u16) -> SurfaceTerminal<TestBackend> {
     let mut term = SurfaceTerminal::new(TestBackend::new(width, height)).expect("surface terminal");
     term.set_viewport_area(Rect::new(0, 0, width, height));
     term
+}
+
+fn crossterm_surface(width: u16, height: u16) -> SurfaceTerminal<CrosstermBackend<CountingWriter>> {
+    let mut term = SurfaceTerminal::new(CrosstermBackend::new(CountingWriter::default()))
+        .expect("surface terminal");
+    term.set_viewport_area(Rect::new(0, height.saturating_sub(12), width, 12));
+    term
+}
+
+#[derive(Debug, Default)]
+struct CountingWriter {
+    bytes: usize,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buf.len());
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Markdown parse cost by document size — the input to every wrap/paint.
@@ -193,11 +219,62 @@ fn bench_markdown_streaming(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_history_insert(c: &mut Criterion) {
+    let theme = Theme::default();
+    let width = 100u16;
+    let height = 40u16;
+    let lines = render_lines("plain\n**styled**\n界 url", &theme, width);
+    let final_remainder_lines =
+        render_lines("\nfinal remainder after provisional prefix", &theme, width);
+
+    let mut group = c.benchmark_group("history_insert");
+    group.bench_function("test_backend_large_scrollback", |b| {
+        b.iter_batched(
+            || {
+                let mut term = surface(width, height);
+                term.set_viewport_area(Rect::new(0, height.saturating_sub(12), width, 12));
+                for i in 0..500 {
+                    term.insert_history_lines([Line::from(format!("seed {i}"))])
+                        .expect("seed");
+                }
+                term
+            },
+            |mut term| {
+                black_box(term.insert_history_lines(lines.clone()).expect("insert"));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("crossterm_direct_vt", |b| {
+        b.iter_batched(
+            || crossterm_surface(width, height),
+            |mut term| {
+                black_box(term.insert_history_lines(lines.clone()).expect("insert"));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("crossterm_direct_vt_final_remainder", |b| {
+        b.iter_batched(
+            || crossterm_surface(width, height),
+            |mut term| {
+                black_box(
+                    term.insert_history_lines(final_remainder_lines.clone())
+                        .expect("insert"),
+                );
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_markdown_parse,
     bench_reflow_wrap,
     bench_surface_paint,
-    bench_markdown_streaming
+    bench_markdown_streaming,
+    bench_history_insert
 );
 criterion_main!(benches);

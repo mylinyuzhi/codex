@@ -28,7 +28,7 @@ pub struct ApplyPatchInput {
 }
 
 /// Typed output — stdout / stderr emitted by `coco_apply_patch::apply_patch`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ApplyPatchOutput {
     pub stdout: String,
     pub stderr: String,

@@ -5,6 +5,7 @@
 //! when the backlog grows.
 
 pub mod chunking;
+pub(crate) mod render_controller;
 
 use std::time::Instant;
 

@@ -130,6 +130,20 @@ pub fn prepare_anthropic_tools(
                     tool_def["cache_control"] = cc;
                 }
 
+                // Built-in/MCP boundary breakpoint. The engine marks the last
+                // built-in tool with `cacheBoundary: true` (it owns the
+                // `is_mcp` partition); the provider owns the cache POLICY, so
+                // the marker's TTL is resolved here to match the last-user
+                // auto-marker and is gated on caching being active. Skipped
+                // when an explicit `cacheControl` already set this tool's
+                // breakpoint, so the slot is never double-counted.
+                if tool_def.get("cache_control").is_none()
+                    && let Some(ref mut validator) = cache_validator
+                    && let Some(cc) = validator.tool_boundary_cache_control(&ft.provider_options)
+                {
+                    tool_def["cache_control"] = cc;
+                }
+
                 anthropic_tools.push(tool_def);
             }
             LanguageModelV4Tool::Provider(pt) => {

@@ -19,7 +19,7 @@ Enforced by `scripts/check-tui-ui-seam.sh` (wired into `just check-seam` →
 | Module | Purpose |
 |--------|---------|
 | `engine` | Native-scrollback paint engine: `SurfaceTerminal<B: SurfaceBackend>`, BSU/ESU synchronized-update framing, cell-diff drawing, history insert/reflow, terminal-capability detection, and the `CursorClaim` type. Consumes `Vec<Line>` + a `&mut Buffer` + a `CursorClaim` — never `AppState`. |
-| `widgets` | Pure ratatui widgets: `textarea`, `markdown` (flat char-scanner highlighter, no syntect), `notification`, `spinner_verbs`, `status_indicator`, `diff_display`. |
+| `widgets` | Pure ratatui widgets: `textarea`, `notification`, `spinner_verbs`, `status_indicator`, `diff_display`. (Markdown rendering moved to the sibling `coco-tui-markdown` crate — pulldown-cmark + syntect; mermaid to `coco-tui-mermaid`.) |
 | `theme` | `Theme` palette struct + `ThemeName` + 9 built-ins (config-free; the shell owns the `settings.json` / `~/.coco/theme.json` loader + file-watcher). |
 | `style` | `UiStyles<'a>` — semantic style accessors over `&Theme`. |
 | `color` | RGB→xterm-256 downsampling + terminal color-capability detection (absorbed from jcode). |

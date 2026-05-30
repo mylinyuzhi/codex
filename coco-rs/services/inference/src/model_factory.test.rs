@@ -61,7 +61,7 @@ fn spec(provider: &str, api: ProviderApi, model_id: &str) -> ModelSpec {
 fn build_anthropic_succeeds_via_runtime() {
     let runtime = build_runtime_with(None);
     let s = spec("anthropic", ProviderApi::Anthropic, "claude-opus-4-7");
-    let result = build_language_model_from_runtime(&runtime, &s);
+    let result = build_language_model_from_runtime(&runtime, &s, None);
     assert!(
         result.is_ok(),
         "anthropic factory must succeed (err: {:?})",
@@ -73,7 +73,7 @@ fn build_anthropic_succeeds_via_runtime() {
 fn build_openai_succeeds_via_runtime() {
     let runtime = build_runtime_with(None);
     let s = spec("openai", ProviderApi::Openai, "gpt-4o-mini");
-    let result = build_language_model_from_runtime(&runtime, &s);
+    let result = build_language_model_from_runtime(&runtime, &s, None);
     assert!(
         result.is_ok(),
         "openai factory must succeed (err: {:?})",
@@ -85,7 +85,7 @@ fn build_openai_succeeds_via_runtime() {
 fn build_gemini_dispatches_to_google_provider() {
     let runtime = build_runtime_with(None);
     let s = spec("google", ProviderApi::Gemini, "gemini-2.5-flash");
-    let result = build_language_model_from_runtime(&runtime, &s);
+    let result = build_language_model_from_runtime(&runtime, &s, None);
     match result {
         Ok(_) => {}
         Err(e) => {
@@ -105,7 +105,7 @@ fn build_volcengine_routes_to_openai_compat_via_runtime() {
     // longer rejected with an error.
     let runtime = build_runtime_with(None);
     let s = spec("volcengine", ProviderApi::Volcengine, "doubao-1.5");
-    let result = build_language_model_from_runtime(&runtime, &s);
+    let result = build_language_model_from_runtime(&runtime, &s, None);
     assert!(
         result.is_ok(),
         "volcengine should route via openai-compat (err: {:?})",
@@ -136,7 +136,7 @@ fn build_openai_compat_routes_for_user_defined_instance() {
     };
     let runtime = build_runtime_with(Some(("local-router".into(), partial)));
     let s = spec("local-router", ProviderApi::OpenaiCompat, "local-model");
-    let result = build_language_model_from_runtime(&runtime, &s);
+    let result = build_language_model_from_runtime(&runtime, &s, None);
     assert!(
         result.is_ok(),
         "openai-compat instance should construct (err: {:?})",
@@ -159,7 +159,7 @@ fn build_openai_compat_routes_for_user_defined_instance() {
 fn build_unknown_provider_fails_with_typed_error() {
     let runtime = build_runtime_with(None);
     let s = spec("unknown-provider", ProviderApi::OpenaiCompat, "x");
-    let err = build_language_model_from_runtime(&runtime, &s)
+    let err = build_language_model_from_runtime(&runtime, &s, None)
         .map(|_| ())
         .unwrap_err()
         .to_string();
@@ -173,7 +173,7 @@ fn build_unknown_provider_fails_with_typed_error() {
 fn build_api_client_uses_real_fingerprint_for_anthropic() {
     let runtime = build_runtime_with(None);
     let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
-    let client = build_api_client(&runtime, &s, RetryConfig::default()).expect("api client");
+    let client = build_api_client(&runtime, &s, RetryConfig::default(), None).expect("api client");
     let fp = client.fingerprint();
     assert_eq!(fp.api, ProviderApi::Anthropic);
     assert_eq!(fp.provider, "anthropic");
@@ -198,7 +198,7 @@ fn build_api_client_anthropic_url_composes_to_messages_endpoint() {
     // format!("{base_url}/messages")`).
     let runtime = build_runtime_with(None);
     let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
-    let client = build_api_client(&runtime, &s, RetryConfig::default()).expect("api client");
+    let client = build_api_client(&runtime, &s, RetryConfig::default(), None).expect("api client");
     let base_url = &client.fingerprint().base_url;
     let composed = if base_url.ends_with("/messages") {
         base_url.clone()
@@ -263,7 +263,7 @@ fn namespace_round_trip_for_openai_compat_instance() {
     };
     let runtime = build_runtime_with(Some(("internal-router".into(), partial)));
     let s = spec("internal-router", ProviderApi::OpenaiCompat, "local-model");
-    let model = build_language_model_from_runtime(&runtime, &s).expect("model");
+    let model = build_language_model_from_runtime(&runtime, &s, None).expect("model");
 
     let info_partial = coco_config::PartialModelInfo {
         context_window: Some(coco_config::PositiveTokens::new(128_000)),
@@ -326,7 +326,7 @@ fn build_api_client_resolves_api_model_name_override() {
         ProviderApi::OpenaiCompat,
         "internal/coder-v3",
     );
-    let client = build_api_client(&runtime, &s, RetryConfig::default()).expect("api client");
+    let client = build_api_client(&runtime, &s, RetryConfig::default(), None).expect("api client");
     assert_eq!(
         client.fingerprint().api_model_name,
         "ep-internal-v3-prod",
@@ -336,5 +336,163 @@ fn build_api_client_resolves_api_model_name_override() {
         client.model_identity().model_id,
         "internal/coder-v3",
         "usage and session accounting keep the configured model identity",
+    );
+}
+
+// ── Subscription-OAuth auth-mode mapping (the neutral→wire seam) ───────────
+
+/// Test double for [`crate::credentials::ProviderCredentialResolver`]: reports a
+/// fixed supplier (or none) regardless of the provider name.
+struct FakeResolver {
+    creds: Option<crate::credentials::SubscriptionCreds>,
+}
+
+impl crate::credentials::ProviderCredentialResolver for FakeResolver {
+    fn subscription_creds(
+        &self,
+        _provider_name: &str,
+    ) -> Option<crate::credentials::SubscriptionCredsSupplier> {
+        let creds = self.creds.clone()?;
+        Some(Arc::new(move || Some(creds.clone())))
+    }
+}
+
+fn resolver_with(
+    creds: Option<crate::credentials::SubscriptionCreds>,
+) -> Arc<dyn crate::credentials::ProviderCredentialResolver> {
+    Arc::new(FakeResolver { creds })
+}
+
+fn oauth_openai_chatgpt_provider() -> ProviderConfig {
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::Openai),
+        auth: Some(coco_config::ProviderAuth::OAuth {
+            flow: coco_types::OAuthFlowId::OpenAiChatGpt,
+        }),
+        base_url: Some("https://chatgpt.com/backend-api/codex".into()),
+        ..Default::default()
+    };
+    ProviderConfig::from_partial("openai-chatgpt", &partial).expect("oauth provider")
+}
+
+#[test]
+fn build_openai_auth_oauth_logged_in_yields_subscription() {
+    let cfg = oauth_openai_chatgpt_provider();
+    let resolver = resolver_with(Some(crate::credentials::SubscriptionCreds {
+        access_token: "tok".into(),
+        account_id: Some("acct".into()),
+        ..Default::default()
+    }));
+    let auth = build_openai_auth(&cfg, Some(&resolver)).expect("auth maps");
+    assert!(
+        auth.is_chatgpt_subscription(),
+        "a logged-in OAuth provider must map to ChatGptSubscription"
+    );
+}
+
+#[test]
+fn build_openai_auth_oauth_not_logged_in_errors_with_login_hint() {
+    let cfg = oauth_openai_chatgpt_provider();
+    let resolver = resolver_with(None);
+    // `OpenAIAuth` holds a closure and isn't `Debug`, so `expect_err` is out.
+    let err = match build_openai_auth(&cfg, Some(&resolver)) {
+        Ok(_) => panic!("must error when logged out"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().to_lowercase().contains("login"),
+        "error must tell the user to log in; got: {err}"
+    );
+}
+
+#[test]
+fn build_openai_auth_apikey_yields_apikey() {
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::Openai),
+        env_key: Some("OPENAI_API_KEY".into()),
+        base_url: Some("https://api.openai.com/v1".into()),
+        ..Default::default()
+    };
+    let cfg = ProviderConfig::from_partial("openai", &partial).expect("apikey provider");
+    let auth = build_openai_auth(&cfg, None).expect("auth maps");
+    assert!(
+        !auth.is_chatgpt_subscription(),
+        "an api-key provider must map to ApiKey, never subscription"
+    );
+}
+
+#[test]
+fn build_openai_auth_rejects_gemini_flow_on_openai_provider() {
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::Openai),
+        auth: Some(coco_config::ProviderAuth::OAuth {
+            flow: coco_types::OAuthFlowId::GeminiCodeAssist,
+        }),
+        base_url: Some("https://api.openai.com/v1".into()),
+        ..Default::default()
+    };
+    let cfg = ProviderConfig::from_partial("misrouted", &partial).expect("provider");
+    let resolver = resolver_with(Some(crate::credentials::SubscriptionCreds::default()));
+    assert!(
+        build_openai_auth(&cfg, Some(&resolver)).is_err(),
+        "a Gemini flow on an OpenAI provider is a misconfiguration"
+    );
+}
+
+fn gemini_code_assist_provider() -> ProviderConfig {
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::Gemini),
+        auth: Some(coco_config::ProviderAuth::OAuth {
+            flow: coco_types::OAuthFlowId::GeminiCodeAssist,
+        }),
+        base_url: Some("https://cloudcode-pa.googleapis.com/v1internal".into()),
+        ..Default::default()
+    };
+    ProviderConfig::from_partial("gemini-code-assist", &partial).expect("provider")
+}
+
+#[test]
+fn build_google_oauth_not_logged_in_errors_with_login_hint() {
+    let cfg = gemini_code_assist_provider();
+    // No resolver / not logged in → actionable error, never a silent wrong-key build.
+    let err = match build_google(&cfg, "gemini-3.1-pro-preview", None) {
+        Ok(_) => panic!("OAuth Gemini without a logged-in resolver must error"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().to_lowercase().contains("login"),
+        "error must tell the user to log in; got: {err}"
+    );
+}
+
+#[test]
+fn build_google_oauth_logged_in_builds_code_assist_model() {
+    let cfg = gemini_code_assist_provider();
+    let resolver = resolver_with(Some(crate::credentials::SubscriptionCreds {
+        access_token: "tok".into(),
+        project_id: Some("proj-1".into()),
+        ..Default::default()
+    }));
+    let model = build_google(&cfg, "gemini-3.1-pro-preview", Some(&resolver))
+        .expect("a logged-in Code Assist provider builds");
+    // The provider label is the configured instance name (set from the config,
+    // like every other provider), not the crate default.
+    assert_eq!(model.provider(), "gemini-code-assist");
+    assert_eq!(model.model_id(), "gemini-3.1-pro-preview");
+}
+
+#[test]
+fn provider_credential_present_oauth_tracks_login_state() {
+    let cfg = oauth_openai_chatgpt_provider();
+    let logged_in = resolver_with(Some(crate::credentials::SubscriptionCreds {
+        access_token: "t".into(),
+        ..Default::default()
+    }));
+    let logged_out = resolver_with(None);
+    assert!(provider_credential_present(&cfg, Some(&logged_in)));
+    assert!(!provider_credential_present(&cfg, Some(&logged_out)));
+    assert!(
+        !provider_credential_present(&cfg, None),
+        "no resolver ⇒ an OAuth provider is not credentialed"
     );
 }

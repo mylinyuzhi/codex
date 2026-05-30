@@ -45,12 +45,21 @@ pub(crate) fn render_interactive_viewport(
     state: &AppState,
     plan: SurfaceFramePlan,
     transcript_layout: &mut TranscriptLayoutIndex,
+    precomputed_live: Option<Vec<Line<'static>>>,
 ) -> FrameLayout {
     let mut layout = FrameLayout::default();
     let area = frame.area();
     let styles = UiStyles::new(&state.ui.theme);
 
-    render_live_viewport(frame, area, state, styles, plan, &mut layout);
+    render_live_viewport(
+        frame,
+        area,
+        state,
+        styles,
+        plan,
+        &mut layout,
+        precomputed_live,
+    );
 
     if state.ui.has_toasts() {
         render_toasts(frame, area, &state.ui.toasts, styles);
@@ -76,13 +85,19 @@ pub(crate) fn interactive_viewport_desired_height(
     width: u16,
     max_height: u16,
     plan: SurfaceFramePlan,
+    precomputed_live_height: Option<u16>,
 ) -> u16 {
     if width == 0 || max_height == 0 {
         return 0;
     }
 
-    let styles = UiStyles::new(&state.ui.theme);
-    let live_content_height = build_live_tail_lines(state, styles, width, plan).len() as u16;
+    // The live tail is built once per frame in `Tui::draw` and threaded in
+    // here as `precomputed_live_height`; only fall back to rebuilding it when
+    // no precomputed value is supplied (alt-screen / tests).
+    let live_content_height = precomputed_live_height.unwrap_or_else(|| {
+        let styles = UiStyles::new(&state.ui.theme);
+        build_live_tail_lines(state, styles, width, plan).len() as u16
+    });
     let activity = turn_activity_view(state, width);
     let activity_rows = inline_activity_height(&activity, max_height, width);
     let queue_rows: u16 =
@@ -91,13 +106,39 @@ pub(crate) fn interactive_viewport_desired_height(
         } else {
             0
         };
-    let bottom =
-        interaction_pane_bottom_reservation(state, width, max_height, activity_rows, queue_rows);
+    // Mirror render_live_viewport's reservations so the sizing pass and the
+    // paint pass agree on viewport height (these were previously omitted here).
+    let status_indicator_rows: u16 = if state.ui.ephemeral.turn_active() {
+        1
+    } else {
+        0
+    };
+    let background_pills_rows: u16 =
+        if crate::widgets::build_background_pills_view(state).is_empty() {
+            0
+        } else {
+            1
+        };
+    let bottom = interaction_pane_bottom_reservation(
+        state,
+        width,
+        max_height,
+        status_indicator_rows,
+        background_pills_rows,
+        activity_rows,
+        queue_rows,
+    );
     let prompt_rows = interaction_prompt_height(state, width, max_height);
     let input_height = bottom.input_height;
     let stash_rows = bottom.stash_rows;
     let bottom_height = bottom.bottom_height;
-    let other_fixed_rows = activity_rows + queue_rows + prompt_rows + input_height + stash_rows;
+    let other_fixed_rows = status_indicator_rows
+        + background_pills_rows
+        + activity_rows
+        + queue_rows
+        + prompt_rows
+        + input_height
+        + stash_rows;
     let fixed_rows = other_fixed_rows + bottom_height;
     let desired = fixed_rows + live_content_height.min(max_height.saturating_sub(fixed_rows));
     desired.min(max_height)
@@ -110,10 +151,13 @@ struct InteractionPaneBottomReservation {
     bottom_height: u16,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn interaction_pane_bottom_reservation(
     state: &AppState,
     _width: u16,
     max_height: u16,
+    status_indicator_rows: u16,
+    background_pills_rows: u16,
     activity_rows: u16,
     queue_rows: u16,
 ) -> InteractionPaneBottomReservation {
@@ -132,7 +176,16 @@ fn interaction_pane_bottom_reservation(
     let popup_active = popup_items > 0;
     let status_height: u16 = 1;
     let prompt_rows = interaction_prompt_height(state, _width, max_height);
-    let other_fixed_rows = activity_rows + queue_rows + prompt_rows + input_height + stash_rows;
+    // Match render_live_viewport's avail_below_input base exactly (it subtracts
+    // the status-indicator and background-pill rows too) so the sizing pass and
+    // the paint pass derive the same bottom_height when a popup is active.
+    let other_fixed_rows = status_indicator_rows
+        + background_pills_rows
+        + activity_rows
+        + queue_rows
+        + prompt_rows
+        + input_height
+        + stash_rows;
     let avail_below_input = max_height.saturating_sub(other_fixed_rows);
     let bottom_height: u16 = if popup_active {
         (popup_items as u16)
@@ -156,6 +209,7 @@ fn render_live_viewport(
     styles: UiStyles<'_>,
     plan: SurfaceFramePlan,
     layout: &mut FrameLayout,
+    precomputed_live: Option<Vec<Line<'static>>>,
 ) {
     let input_height = 3.min(constants::MAX_INPUT_HEIGHT as u16);
     let activity = turn_activity_view(state, area.width);
@@ -174,7 +228,8 @@ fn render_live_viewport(
         };
     let prompt_rows = interaction_prompt_height(state, area.width, area.height);
 
-    let live_lines = build_live_tail_lines(state, styles, area.width, plan);
+    let live_lines =
+        precomputed_live.unwrap_or_else(|| build_live_tail_lines(state, styles, area.width, plan));
     let live_content_height = live_lines.len() as u16;
     let inline_popup = inline_popup_view(state);
     let popup_items = inline_popup
@@ -337,7 +392,7 @@ fn render_live_viewport(
     }
 }
 
-fn build_live_tail_lines(
+pub(crate) fn build_live_tail_lines(
     state: &AppState,
     styles: UiStyles<'_>,
     width: u16,

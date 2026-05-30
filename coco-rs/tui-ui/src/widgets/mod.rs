@@ -3,7 +3,6 @@
 //! renders into a `Buffer` / returns `Line`s.
 
 pub mod diff_display;
-pub mod markdown;
 pub mod notification;
 pub mod spinner_verbs;
 pub mod status_indicator;

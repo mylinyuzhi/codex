@@ -13,9 +13,13 @@ use ratatui::buffer::Cell;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use std::io::Write;
+use std::time::Duration;
+use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 use super::CursorClaim;
@@ -36,6 +40,16 @@ pub trait SurfaceBackend: Backend {
 
     fn end_synchronized_update(&mut self) -> Result<(), Self::Error> {
         Ok(())
+    }
+
+    fn insert_history_rows_direct(
+        &mut self,
+        _rendered: &Buffer,
+        _source_start_row: u16,
+        _row_count: u16,
+        _target_top: u16,
+    ) -> Result<Option<usize>, Self::Error> {
+        Ok(None)
     }
 }
 
@@ -61,6 +75,41 @@ where
     fn end_synchronized_update(&mut self) -> Result<(), Self::Error> {
         queue!(self, EndSynchronizedUpdate)?;
         Write::flush(self)
+    }
+
+    fn insert_history_rows_direct(
+        &mut self,
+        rendered: &Buffer,
+        source_start_row: u16,
+        row_count: u16,
+        target_top: u16,
+    ) -> Result<Option<usize>, Self::Error> {
+        let mut out =
+            String::with_capacity((row_count as usize) * (rendered.area.width as usize + 16));
+        out.push_str("\x1b7");
+        for source_y in source_start_row..source_start_row.saturating_add(row_count) {
+            let target_y = target_top + (source_y - source_start_row);
+            out.push_str("\x1b[");
+            push_u16(&mut out, target_y + 1);
+            out.push_str(";1H");
+            let mut current_style: Option<CellStyleKey> = None;
+            for x in 0..rendered.area.width {
+                let index = rendered.index_of(x, source_y);
+                let cell = &rendered.content[index];
+                if !cell.skip {
+                    let next_style = CellStyleKey::from(cell);
+                    if current_style != Some(next_style) {
+                        push_ansi_style_prefix(&mut out, next_style);
+                        current_style = Some(next_style);
+                    }
+                    out.push_str(cell.symbol());
+                }
+            }
+        }
+        out.push_str("\x1b[0m\x1b8");
+        let bytes = out.len();
+        self.write_all(out.as_bytes())?;
+        Ok(Some(bytes))
     }
 }
 
@@ -88,6 +137,29 @@ pub struct SurfaceTerminal<B: SurfaceBackend> {
     visible_history_rows: u16,
     history_bottom_y: u16,
     invalidated: bool,
+    perf_stats_enabled: bool,
+    last_viewport_draw_stats: ViewportDrawStats,
+    last_history_insert_stats: HistoryInsertStats,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ViewportDrawStats {
+    pub buffer_updates: usize,
+    pub invalidated: bool,
+    pub diff_elapsed: Duration,
+    pub draw_elapsed: Duration,
+    pub flush_elapsed: Duration,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryInsertStats {
+    pub wrapped_rows: u16,
+    pub buffer_updates: usize,
+    pub bytes_written: usize,
+    pub invalidated: bool,
+    pub build_elapsed: Duration,
+    pub draw_elapsed: Duration,
+    pub flush_elapsed: Duration,
 }
 
 /// Frame passed to surface renderers.
@@ -132,6 +204,9 @@ where
             visible_history_rows: 0,
             history_bottom_y: viewport_area.top(),
             invalidated: true,
+            perf_stats_enabled: false,
+            last_viewport_draw_stats: ViewportDrawStats::default(),
+            last_history_insert_stats: HistoryInsertStats::default(),
         })
     }
 
@@ -164,6 +239,27 @@ where
     /// Current backend-reported terminal size.
     pub fn size(&self) -> Result<Size, B::Error> {
         self.backend.size()
+    }
+
+    /// Synchronize the terminal size observed by the outer draw loop.
+    ///
+    /// Native-surface callers already need the screen size to plan the
+    /// viewport. Passing that observation here keeps history insertion off the
+    /// terminal-size syscall hot path.
+    pub fn sync_screen_size(&mut self, size: Size) {
+        self.note_observed_screen_size(size);
+    }
+
+    pub fn last_viewport_draw_stats(&self) -> ViewportDrawStats {
+        self.last_viewport_draw_stats
+    }
+
+    pub fn last_history_insert_stats(&self) -> HistoryInsertStats {
+        self.last_history_insert_stats
+    }
+
+    pub fn set_perf_stats_enabled(&mut self, enabled: bool) {
+        self.perf_stats_enabled = enabled;
     }
 
     /// Rows of finalized history known to be visible above the viewport.
@@ -328,26 +424,41 @@ where
 
     /// Insert finalized history rows immediately above the retained viewport.
     ///
-    /// This first substrate uses ratatui's scrolling-region backend API so
-    /// `TestBackend` can verify the visible behavior. The dedicated VT100 byte
-    /// insertion path can be added under this same API without changing the
-    /// transcript/history callers.
+    /// `TestBackend` uses ratatui's scrolling-region API so tests can verify
+    /// visible behavior. Production crossterm backends use direct VT writes for
+    /// inserted cells while preserving this same surface API.
     pub fn insert_history_lines<I>(&mut self, lines: I) -> Result<u16, B::Error>
     where
         I: IntoIterator<Item = Line<'static>>,
     {
         let lines = lines.into_iter().collect::<Vec<_>>();
         if lines.is_empty() || self.viewport_area.width == 0 {
+            self.last_history_insert_stats = HistoryInsertStats::default();
             return Ok(0);
         }
 
+        let build_start = self.perf_stats_enabled.then(Instant::now);
         let rendered = render_history_lines(lines, self.viewport_area.width);
+        let build_elapsed = build_start.map(|start| start.elapsed()).unwrap_or_default();
         let rows = rendered.area.height;
         let previous = self.viewport_area;
+        let was_invalidated = self.invalidated;
+        let mut buffer_updates = 0usize;
+        let mut bytes_written = 0usize;
+        let mut draw_elapsed = Duration::default();
         self.move_viewport_down_for_history(rows)?;
 
         let viewport_top = self.viewport_area.top();
         if rows == 0 || viewport_top == 0 {
+            self.last_history_insert_stats = HistoryInsertStats {
+                wrapped_rows: rows,
+                buffer_updates,
+                bytes_written: 0,
+                invalidated: was_invalidated,
+                build_elapsed,
+                draw_elapsed,
+                flush_elapsed: Duration::default(),
+            };
             return Ok(0);
         }
 
@@ -356,14 +467,10 @@ where
         if gap_below_history > 0 {
             let rows_to_draw = rows.min(gap_below_history);
             let target_top = self.history_bottom_y;
-            let updates = drawable_cell_indices(&rendered)
-                .into_iter()
-                .filter_map(|index| {
-                    let cell = &rendered.content[index];
-                    let (x, y) = rendered.pos_of(index);
-                    (y < rows_to_draw).then_some((x, target_top + y, cell))
-                });
-            self.backend.draw(updates)?;
+            let draw = self.draw_history_rows(&rendered, 0, rows_to_draw, target_top)?;
+            buffer_updates += draw.buffer_updates;
+            bytes_written += draw.bytes_written;
+            draw_elapsed += draw.elapsed;
             self.history_bottom_y = self.history_bottom_y.saturating_add(rows_to_draw);
             start_row = rows_to_draw;
         }
@@ -372,21 +479,15 @@ where
             let chunk_rows = (rows - start_row).min(viewport_top);
             self.backend.scroll_region_up(0..viewport_top, chunk_rows)?;
             let target_top = viewport_top - chunk_rows;
-            let updates = drawable_cell_indices(&rendered)
-                .into_iter()
-                .filter_map(|index| {
-                    let cell = &rendered.content[index];
-                    let (x, y) = rendered.pos_of(index);
-                    if y >= start_row && y < start_row + chunk_rows {
-                        Some((x, target_top + (y - start_row), cell))
-                    } else {
-                        None
-                    }
-                });
-            self.backend.draw(updates)?;
+            let draw = self.draw_history_rows(&rendered, start_row, chunk_rows, target_top)?;
+            buffer_updates += draw.buffer_updates;
+            bytes_written += draw.bytes_written;
+            draw_elapsed += draw.elapsed;
             start_row += chunk_rows;
         }
+        let flush_start = self.perf_stats_enabled.then(Instant::now);
         self.backend.flush()?;
+        let flush_elapsed = flush_start.map(|start| start.elapsed()).unwrap_or_default();
         self.history_bottom_y = viewport_top;
         self.note_history_rows_inserted(rows);
         tracing::debug!(
@@ -399,14 +500,67 @@ where
             "insert history lines"
         );
         self.invalidate_viewport();
+        self.last_history_insert_stats = HistoryInsertStats {
+            wrapped_rows: rows,
+            buffer_updates,
+            bytes_written,
+            invalidated: was_invalidated,
+            build_elapsed,
+            draw_elapsed,
+            flush_elapsed,
+        };
         Ok(rows)
+    }
+
+    fn draw_history_rows(
+        &mut self,
+        rendered: &Buffer,
+        source_start_row: u16,
+        row_count: u16,
+        target_top: u16,
+    ) -> Result<HistoryRowsDraw, B::Error> {
+        let draw_start = self.perf_stats_enabled.then(Instant::now);
+        if let Some(bytes_written) = self.backend.insert_history_rows_direct(
+            rendered,
+            source_start_row,
+            row_count,
+            target_top,
+        )? {
+            let elapsed = draw_start.map(|start| start.elapsed()).unwrap_or_default();
+            return Ok(HistoryRowsDraw {
+                buffer_updates: 0,
+                bytes_written,
+                elapsed,
+            });
+        }
+
+        let updates = drawable_cell_indices(rendered)
+            .into_iter()
+            .filter_map(|index| {
+                let cell = &rendered.content[index];
+                let (x, y) = rendered.pos_of(index);
+                if y >= source_start_row && y < source_start_row + row_count {
+                    Some((x, target_top + (y - source_start_row), cell))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let buffer_updates = updates.len();
+        self.backend.draw(updates.into_iter())?;
+        let elapsed = draw_start.map(|start| start.elapsed()).unwrap_or_default();
+        Ok(HistoryRowsDraw {
+            buffer_updates,
+            bytes_written: 0,
+            elapsed,
+        })
     }
 
     fn move_viewport_down_for_history(&mut self, rows: u16) -> Result<(), B::Error> {
         if rows == 0 {
             return Ok(());
         }
-        let screen_size = self.size()?;
+        let screen_size = self.last_known_screen_size;
         let available_below = screen_size
             .height
             .saturating_sub(self.viewport_area.bottom());
@@ -450,11 +604,25 @@ where
         render(&mut frame);
         let cursor_claim = frame.cursor_claim;
 
+        let was_invalidated = self.invalidated;
+        let diff_start = self.perf_stats_enabled.then(Instant::now);
         let updates = self.buffer_updates();
+        let diff_elapsed = diff_start.map(|start| start.elapsed()).unwrap_or_default();
+        let draw_start = self.perf_stats_enabled.then(Instant::now);
         self.backend
             .draw(updates.iter().map(|(x, y, cell)| (*x, *y, cell)))?;
+        let draw_elapsed = draw_start.map(|start| start.elapsed()).unwrap_or_default();
         self.apply_cursor_claim(cursor_claim)?;
+        let flush_start = self.perf_stats_enabled.then(Instant::now);
         self.backend.flush()?;
+        let flush_elapsed = flush_start.map(|start| start.elapsed()).unwrap_or_default();
+        self.last_viewport_draw_stats = ViewportDrawStats {
+            buffer_updates: updates.len(),
+            invalidated: was_invalidated,
+            diff_elapsed,
+            draw_elapsed,
+            flush_elapsed,
+        };
         self.swap_buffers();
         self.invalidated = false;
         Ok(())
@@ -462,11 +630,15 @@ where
 
     fn autoresize(&mut self) -> Result<(), B::Error> {
         let screen_size = self.backend.size()?;
-        if screen_size != self.last_known_screen_size {
-            self.last_known_screen_size = screen_size;
+        self.note_observed_screen_size(screen_size);
+        Ok(())
+    }
+
+    fn note_observed_screen_size(&mut self, size: Size) {
+        if self.last_known_screen_size != size {
+            self.last_known_screen_size = size;
             self.invalidate_viewport();
         }
-        Ok(())
     }
 
     fn apply_cursor_claim(&mut self, claim: Option<CursorClaim>) -> Result<(), B::Error> {
@@ -530,6 +702,13 @@ where
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct HistoryRowsDraw {
+    buffer_updates: usize,
+    bytes_written: usize,
+    elapsed: Duration,
+}
+
 fn drawable_cell_indices(buffer: &Buffer) -> Vec<usize> {
     let mut indices = Vec::new();
     for y in buffer.area.y..buffer.area.bottom() {
@@ -548,6 +727,146 @@ fn drawable_cell_indices(buffer: &Buffer) -> Vec<usize> {
 
 fn display_width(symbol: &str) -> usize {
     UnicodeWidthStr::width(symbol).max(1)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CellStyleKey {
+    fg: Color,
+    bg: Color,
+    modifier: Modifier,
+}
+
+impl From<&Cell> for CellStyleKey {
+    fn from(cell: &Cell) -> Self {
+        Self {
+            fg: cell.fg,
+            bg: cell.bg,
+            modifier: cell.modifier,
+        }
+    }
+}
+
+fn push_ansi_style_prefix(out: &mut String, style: CellStyleKey) {
+    out.push_str("\x1b[0");
+    push_color_code(out, style.fg, ColorLayer::Foreground);
+    push_color_code(out, style.bg, ColorLayer::Background);
+    let modifiers = style.modifier;
+    if modifiers.contains(Modifier::BOLD) {
+        out.push_str(";1");
+    }
+    if modifiers.contains(Modifier::DIM) {
+        out.push_str(";2");
+    }
+    if modifiers.contains(Modifier::ITALIC) {
+        out.push_str(";3");
+    }
+    if modifiers.contains(Modifier::UNDERLINED) {
+        out.push_str(";4");
+    }
+    if modifiers.contains(Modifier::SLOW_BLINK) {
+        out.push_str(";5");
+    }
+    if modifiers.contains(Modifier::RAPID_BLINK) {
+        out.push_str(";6");
+    }
+    if modifiers.contains(Modifier::REVERSED) {
+        out.push_str(";7");
+    }
+    if modifiers.contains(Modifier::HIDDEN) {
+        out.push_str(";8");
+    }
+    if modifiers.contains(Modifier::CROSSED_OUT) {
+        out.push_str(";9");
+    }
+    out.push('m');
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ColorLayer {
+    Foreground,
+    Background,
+}
+
+fn push_color_code(out: &mut String, color: Color, layer: ColorLayer) {
+    let base = match layer {
+        ColorLayer::Foreground => 30,
+        ColorLayer::Background => 40,
+    };
+    let bright_base = match layer {
+        ColorLayer::Foreground => 90,
+        ColorLayer::Background => 100,
+    };
+    match color {
+        Color::Reset => {}
+        Color::Black => push_sgr_number(out, base),
+        Color::Red => push_sgr_number(out, base + 1),
+        Color::Green => push_sgr_number(out, base + 2),
+        Color::Yellow => push_sgr_number(out, base + 3),
+        Color::Blue => push_sgr_number(out, base + 4),
+        Color::Magenta => push_sgr_number(out, base + 5),
+        Color::Cyan => push_sgr_number(out, base + 6),
+        Color::Gray | Color::White => push_sgr_number(out, base + 7),
+        Color::DarkGray => push_sgr_number(out, bright_base),
+        Color::LightRed => push_sgr_number(out, bright_base + 1),
+        Color::LightGreen => push_sgr_number(out, bright_base + 2),
+        Color::LightYellow => push_sgr_number(out, bright_base + 3),
+        Color::LightBlue => push_sgr_number(out, bright_base + 4),
+        Color::LightMagenta => push_sgr_number(out, bright_base + 5),
+        Color::LightCyan => push_sgr_number(out, bright_base + 6),
+        Color::Rgb(r, g, b) => match layer {
+            ColorLayer::Foreground => {
+                push_extended_color(out, 38, r, g, b);
+            }
+            ColorLayer::Background => {
+                push_extended_color(out, 48, r, g, b);
+            }
+        },
+        Color::Indexed(i) => match layer {
+            ColorLayer::Foreground => {
+                push_indexed_color(out, 38, i);
+            }
+            ColorLayer::Background => {
+                push_indexed_color(out, 48, i);
+            }
+        },
+    }
+}
+
+fn push_sgr_number(out: &mut String, value: u16) {
+    out.push(';');
+    push_u16(out, value);
+}
+
+fn push_extended_color(out: &mut String, prefix: u16, r: u8, g: u8, b: u8) {
+    push_sgr_number(out, prefix);
+    out.push_str(";2;");
+    push_u16(out, u16::from(r));
+    out.push(';');
+    push_u16(out, u16::from(g));
+    out.push(';');
+    push_u16(out, u16::from(b));
+}
+
+fn push_indexed_color(out: &mut String, prefix: u16, index: u8) {
+    push_sgr_number(out, prefix);
+    out.push_str(";5;");
+    push_u16(out, u16::from(index));
+}
+
+fn push_u16(out: &mut String, mut value: u16) {
+    let mut buf = [0u8; 5];
+    let mut index = buf.len();
+    loop {
+        index -= 1;
+        buf[index] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    for digit in &buf[index..] {
+        out.push(char::from(*digit));
+    }
 }
 
 #[cfg(test)]

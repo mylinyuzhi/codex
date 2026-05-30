@@ -19,7 +19,7 @@ fn interactive_viewport_does_not_render_session_header() {
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout);
+            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout, None);
         })
         .expect("draw");
 
@@ -34,7 +34,7 @@ fn interactive_viewport_desired_height_tracks_idle_composer() {
     let state = AppState::new();
 
     assert_eq!(
-        interactive_viewport_desired_height(&state, 48, 12, native_plan()),
+        interactive_viewport_desired_height(&state, 48, 12, native_plan(), None),
         4
     );
 }
@@ -44,7 +44,7 @@ fn interactive_viewport_desired_height_never_exceeds_cap() {
     let state = AppState::new();
 
     assert_eq!(
-        interactive_viewport_desired_height(&state, 48, 2, native_plan()),
+        interactive_viewport_desired_height(&state, 48, 2, native_plan(), None),
         2
     );
 }
@@ -60,7 +60,7 @@ fn interactive_viewport_does_not_render_finalized_messages() {
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout);
+            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout, None);
         })
         .expect("draw");
 
@@ -84,6 +84,7 @@ fn interactive_viewport_renders_finalized_messages_in_viewport_history_mode() {
                 &state,
                 viewport_history_plan(),
                 &mut transcript_layout,
+                None,
             );
         })
         .expect("draw");
@@ -106,7 +107,7 @@ fn interactive_viewport_renders_active_streaming_tail() {
 
     terminal
         .draw_viewport(|frame| {
-            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout);
+            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout, None);
         })
         .expect("draw");
 
@@ -125,8 +126,13 @@ fn interactive_viewport_reports_input_rect_for_cursor_policy() {
 
     terminal
         .draw_viewport(|frame| {
-            layout =
-                render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout);
+            layout = render_interactive_viewport(
+                frame,
+                &state,
+                native_plan(),
+                &mut transcript_layout,
+                None,
+            );
         })
         .expect("draw");
 

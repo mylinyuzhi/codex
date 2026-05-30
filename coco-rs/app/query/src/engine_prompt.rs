@@ -343,7 +343,7 @@ impl QueryEngine {
         // — its short-circuit on `tool_search_active` covers the
         // capability-missing case automatically.
         let use_server_side_path = supports_tool_reference && stub_ctx.tool_search_active();
-        let (model_tools, deferred_marker): (Vec<_>, std::collections::HashSet<String>) =
+        let (mut model_tools, deferred_marker): (Vec<_>, std::collections::HashSet<String>) =
             if use_server_side_path {
                 let enabled = self.tools.enabled(&stub_ctx);
                 let deferred: std::collections::HashSet<String> = self
@@ -359,6 +359,19 @@ impl QueryEngine {
                     std::collections::HashSet::new(),
                 )
             };
+        // Deterministic tool order for prompt-cache stability. The registry is a
+        // `HashMap`, so `.values()` order is unstable across process restarts and
+        // reshuffles wholesale when an MCP server registers mid-session (the
+        // insert rehashes the table and reorders ALL keys). Sort so the prefix
+        // stays byte-stable, AND **partition built-ins before MCP/dynamic tools**:
+        // built-ins form a stable prefix while MCP tools (which connect/disconnect
+        // mid-session) are appended at the end, so MCP churn never shifts a
+        // built-in's index. Mirrors codex-rs (built-ins first, MCP appended) and
+        // jcode (sorted "for prompt cache hits"). `false < true` ⇒ non-MCP first;
+        // ties broken by wire name. NB: keyed on `is_mcp()` (not a name prefix) —
+        // MCP `name()` is the bare tool name, so a case/name coincidence cannot be
+        // relied on to keep MCP out of the built-in prefix.
+        model_tools.sort_by(|a, b| (a.is_mcp(), a.name()).cmp(&(b.is_mcp(), b.name())));
         let tool_names: Vec<String> = model_tools.iter().map(|t| t.name().to_string()).collect();
 
         let agent_names: Vec<String> = self
@@ -473,8 +486,26 @@ impl QueryEngine {
             features: Some(self.config.features.clone()),
         };
 
+        // Cache breakpoint at the built-in/MCP boundary. When MCP/dynamic tools
+        // follow the stable built-in block, flag the LAST built-in tool with a
+        // `cacheBoundary` hint so the built-in prefix is cached as its own
+        // segment — a mid-session MCP connect/disconnect that appends/removes the
+        // tail then doesn't invalidate it. Without a breakpoint here the only
+        // cache segment is the whole [tools+system+history] prefix (auto-marker on
+        // the last user message), so any tool-set change forces a full re-cache of
+        // the built-ins too (tools sit first in the request).
+        //
+        // The engine emits only the provider-agnostic *hint* (it alone knows the
+        // `is_mcp` partition); the Anthropic adapter owns the cache POLICY —
+        // resolving the marker's TTL to match the auto-marker, gating on caching
+        // being active, and counting it against the 4-breakpoint budget. Other
+        // providers ignore the `anthropic` namespace; OpenAI-family auto
+        // prefix-caching already benefits from the built-ins-first ordering.
+        let builtin_count = model_tools.iter().filter(|t| !t.is_mcp()).count();
+        let cache_boundary_idx = builtin_mcp_boundary_idx(builtin_count, model_tools.len());
+
         let mut out = Vec::with_capacity(model_tools.len());
-        for tool in model_tools {
+        for (idx, tool) in model_tools.into_iter().enumerate() {
             // `model_schema(ctx)` is the model-facing JSON Schema — a plain
             // Value, never validated, only serialized into the prompt tool
             // list. The default borrows the runtime schema; AgentTool/Bash
@@ -484,21 +515,26 @@ impl QueryEngine {
             // fork_mode_active` (TS `AgentTool.tsx:110-125 lazySchema().omit(...)`).
             let json_schema = tool.model_schema(&schema_ctx).into_owned();
             let description = tool.prompt(&prompt_options).await;
-            // Attach `deferLoading: true` to tools the model has not
-            // yet discovered via `ToolSearch`. Anthropic adapter reads
-            // this in `prepare_tools::prepare_anthropic_tools` and
-            // emits `defer_loading: true` on the wire so the server
-            // hides the schema from the model. Other providers ignore
-            // unknown provider_options blocks — no-op for them.
+            // Build the `anthropic` provider-options block. `deferLoading: true`
+            // hides a not-yet-discovered tool's schema from the model (ToolSearch);
+            // `cacheBoundary: true` flags the built-in/MCP boundary tool for the
+            // adapter's prefix-cache breakpoint. Other providers ignore the
+            // `anthropic` namespace.
             let tool_name = tool.name();
-            let provider_options = if deferred_marker.contains(tool_name) {
-                let mut anthropic = std::collections::HashMap::new();
+            let mut anthropic: std::collections::HashMap<String, serde_json::Value> =
+                std::collections::HashMap::new();
+            if deferred_marker.contains(tool_name) {
                 anthropic.insert("deferLoading".to_string(), serde_json::Value::Bool(true));
+            }
+            if Some(idx) == cache_boundary_idx {
+                anthropic.insert("cacheBoundary".to_string(), serde_json::Value::Bool(true));
+            }
+            let provider_options = if anthropic.is_empty() {
+                None
+            } else {
                 let mut po_map = std::collections::HashMap::new();
                 po_map.insert("anthropic".to_string(), anthropic);
                 Some(coco_llm_types::ProviderOptions(po_map))
-            } else {
-                None
             };
             out.push(LanguageModelTool::Function(LanguageModelFunctionTool {
                 name: tool_name.to_string(),
@@ -647,6 +683,15 @@ impl QueryEngine {
             }
         }
     }
+}
+
+/// Index of the cache-boundary tool — the LAST built-in — when a non-empty
+/// built-in prefix is followed by MCP/dynamic tools; `None` otherwise (all
+/// built-in, all MCP, or empty). Pure and underflow-safe: the guard must
+/// short-circuit BEFORE `builtin_count - 1` is evaluated, since a `0` count
+/// would underflow `usize`. See `build_tool_definitions`.
+fn builtin_mcp_boundary_idx(builtin_count: usize, total: usize) -> Option<usize> {
+    (builtin_count > 0 && builtin_count < total).then(|| builtin_count - 1)
 }
 
 #[derive(Debug)]

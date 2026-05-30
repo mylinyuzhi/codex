@@ -25,6 +25,15 @@ mod openai;
 mod volcengine;
 mod zai;
 
+/// Canonical name of the builtin OpenAI ChatGPT-subscription (OAuth) provider
+/// instance. The single source of truth shared by the builtin registry entry
+/// (`builtin/openai.rs`) and the `coco login` shorthand resolver
+/// (`app/cli::provider_login::instance_name`) — so a rename is one edit the
+/// compiler enforces, not two literals that silently drift.
+pub const OPENAI_CHATGPT_PROVIDER: &str = "openai-chatgpt";
+/// Canonical name of the builtin Gemini Code Assist (OAuth) provider instance.
+pub const GEMINI_CODE_ASSIST_PROVIDER: &str = "gemini-code-assist";
+
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 

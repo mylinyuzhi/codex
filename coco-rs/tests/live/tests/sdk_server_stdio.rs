@@ -136,6 +136,7 @@ async fn serve(args: Args) -> Result<()> {
         &runtime_config,
         coco_types::ModelRole::Main,
         retry,
+        None,
     )?;
     let recovery_policy = runtime_config
         .model_roles

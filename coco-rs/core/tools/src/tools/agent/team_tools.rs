@@ -33,7 +33,7 @@ pub struct TeamCreateInput {
 
 /// Typed output for [`TeamCreateTool`]. All fields default so partial
 /// fixtures (`json!({"team_name": "x"})`) round-trip via the blanket.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamCreateOutput {
     #[serde(default)]
     pub team_name: String,
@@ -149,7 +149,7 @@ impl Tool for TeamCreateTool {
 pub struct TeamDeleteInput {}
 
 /// Typed output for [`TeamDeleteTool`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamDeleteOutput {
     #[serde(default)]
     pub success: bool,

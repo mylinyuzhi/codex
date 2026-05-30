@@ -57,12 +57,10 @@ impl Widget for ToolPanel<'_> {
             };
 
             let desc = tool.description.as_deref().unwrap_or(&tool.name);
+            // Width-safe truncation: a raw `&desc[..max_chars-3]` byte slice
+            // panics when the cut lands mid-codepoint (CJK/emoji descriptions).
             let max_chars = constants::TOOL_DESCRIPTION_MAX_CHARS as usize;
-            let truncated = if desc.len() > max_chars {
-                format!("{}...", &desc[..max_chars - 3])
-            } else {
-                desc.to_string()
-            };
+            let truncated = coco_tui_ui::truncate::truncate_to_width(desc, max_chars);
 
             lines.push(Line::from(vec![
                 Span::raw(format!("{icon} ")).fg(color),

@@ -565,11 +565,14 @@ pub struct WebFetchTool;
 #[async_trait::async_trait]
 impl Tool for WebFetchTool {
     type Input = WebFetchInput;
+    // Static schema from a literal `json!`; a parse failure means the literal
+    // is malformed (a programmer error), so panicking on first build is correct.
+    #[allow(clippy::expect_used)]
     fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
         static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
             std::sync::OnceLock::new();
         SCHEMA.get_or_init(|| {
-            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+            coco_tool_runtime::ToolInputSchema::from_static_value(serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
@@ -578,7 +581,6 @@ impl Tool for WebFetchTool {
                 },
                 "required": []
             }))
-            .expect("WebFetch input schema must be a valid object schema")
         })
     }
     /// Multi-shape output (cached/fresh extraction, cross-origin
@@ -1322,11 +1324,14 @@ pub struct WebSearchTool;
 #[async_trait::async_trait]
 impl Tool for WebSearchTool {
     type Input = WebSearchInput;
+    // Static schema from a literal `json!`; a parse failure means the literal
+    // is malformed (a programmer error), so panicking on first build is correct.
+    #[allow(clippy::expect_used)]
     fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
         static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
             std::sync::OnceLock::new();
         SCHEMA.get_or_init(|| {
-            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+            coco_tool_runtime::ToolInputSchema::from_static_value(serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
@@ -1361,7 +1366,6 @@ impl Tool for WebSearchTool {
                 },
                 "required": []
             }))
-            .expect("WebSearch input schema must be a valid object schema")
         })
     }
     /// Wire shape carries both prebuilt `formatted` markdown and a

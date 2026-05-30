@@ -6,6 +6,7 @@
 
 use coco_types::ApplyPatchToolType;
 use coco_types::Capability;
+use coco_types::OAuthFlowId;
 use coco_types::ProviderApi;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
@@ -17,26 +18,45 @@ use coco_types::WireApi;
 use crate::model::partial::PartialModelInfo;
 use crate::positive::PositiveTokens;
 use crate::provider::PartialProviderConfig;
+use crate::provider::ProviderAuth;
 
 const GPT_5_4: &str = include_str!("../../instructions/gpt5_4_prompt.md");
 const GPT_5_5: &str = include_str!("../../instructions/gpt5_5_prompt.md");
 const GPT_5_3_CODEX: &str = include_str!("../../instructions/gpt5_3_codex_prompt.md");
 
 pub(super) fn providers() -> Vec<(&'static str, PartialProviderConfig)> {
-    vec![(
-        "openai",
-        PartialProviderConfig {
-            api: Some(ProviderApi::Openai),
-            env_key: Some("OPENAI_API_KEY".into()),
-            base_url: Some("https://api.openai.com/v1".into()),
-            // OpenAI direct defaults to the Responses API (the
-            // SDK's `language_model()` default). Users with
-            // legacy Chat Completions deployments override via
-            // `wire_api: "chat"` in providers.json.
-            wire_api: Some(WireApi::Responses),
-            ..Default::default()
-        },
-    )]
+    vec![
+        (
+            "openai",
+            PartialProviderConfig {
+                api: Some(ProviderApi::Openai),
+                env_key: Some("OPENAI_API_KEY".into()),
+                base_url: Some("https://api.openai.com/v1".into()),
+                // OpenAI direct defaults to the Responses API (the
+                // SDK's `language_model()` default). Users with
+                // legacy Chat Completions deployments override via
+                // `wire_api: "chat"` in providers.json.
+                wire_api: Some(WireApi::Responses),
+                ..Default::default()
+            },
+        ),
+        (
+            // ChatGPT-subscription route: same OpenAI Responses wire body,
+            // but authenticated by `coco login openai` (OAuth) and pointed at
+            // the codex backend. `env_key` is intentionally omitted — OAuth
+            // credentials come from `coco-provider-auth`, not an env var.
+            super::OPENAI_CHATGPT_PROVIDER,
+            PartialProviderConfig {
+                api: Some(ProviderApi::Openai),
+                auth: Some(ProviderAuth::OAuth {
+                    flow: OAuthFlowId::OpenAiChatGpt,
+                }),
+                base_url: Some("https://chatgpt.com/backend-api/codex".into()),
+                wire_api: Some(WireApi::Responses),
+                ..Default::default()
+            },
+        ),
+    ]
 }
 
 pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {

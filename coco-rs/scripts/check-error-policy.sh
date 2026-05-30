@@ -56,7 +56,7 @@ is_tier1_terminal() {
 
 is_tier2_lib() {
     case "$1" in
-        utils/*|vercel-ai/*|bridge|retrieval|tui-ui) return 0 ;;
+        utils/*|vercel-ai/*|bridge|retrieval|tui-ui|tui-markdown|tui-mermaid) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -134,7 +134,7 @@ check_dep_rules() {
 }
 
 check_pubfn_rule() {
-    find utils vercel-ai bridge retrieval tui-ui -name '*.rs' -not -path '*/target/*' 2>/dev/null \
+    find utils vercel-ai bridge retrieval tui-ui tui-markdown tui-mermaid -name '*.rs' -not -path '*/target/*' 2>/dev/null \
     | grep -Ev '\.test\.rs$|/tests\.rs$|/tests/|/main\.rs$' \
     | while IFS= read -r path; do
         awk -v file="$path" '

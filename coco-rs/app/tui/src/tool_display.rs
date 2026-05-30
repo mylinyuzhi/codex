@@ -108,7 +108,7 @@ fn normalized_builtin_tool(tool_name: &str) -> Option<ToolName> {
     ToolName::from_str(normalized).ok()
 }
 
-fn single_line_tool_input(tool_name: &str, input: &Value) -> String {
+pub(crate) fn single_line_tool_input(tool_name: &str, input: &Value) -> String {
     let Some(tool) = normalized_builtin_tool(tool_name) else {
         return object_summary(input);
     };

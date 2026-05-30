@@ -22,7 +22,7 @@ pub struct SleepInput {
     pub seconds: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SleepOutput {
     /// Human-readable confirmation message.
     pub message: String,
@@ -126,7 +126,7 @@ pub struct ReplInput {
 /// `execute` boundary. Kept typed so a future REPL backend can
 /// produce structured output (stdout / language metadata / continuation
 /// state) without breaking the trait.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReplOutput {
     #[serde(default)]
     pub stdout: String,
