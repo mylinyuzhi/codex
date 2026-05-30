@@ -1,4 +1,4 @@
-//! Tests for `derive_input_schema_value` / `derive_output_schema`.
+//! Tests for `derive_input_schema_value`.
 //!
 //! Each test fixes one expected behaviour of the derive helpers so the
 //! tool migrations that depend on this module land on a stable contract.
@@ -14,7 +14,6 @@ use super::*;
 use pretty_assertions::assert_eq;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde::Serialize;
 use serde_json::json;
 
 // ──────────────────────────────────────────────────────────────────
@@ -95,15 +94,6 @@ struct Nested {
 struct WithNested {
     outer: String,
     nested: Nested,
-}
-
-#[derive(Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
-#[allow(dead_code)]
-enum TaggedOutput {
-    Completed { stdout: String, exit_code: i32 },
-    Background { task_id: String },
-    Failed { error: String },
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -242,35 +232,6 @@ fn test_snake_case_rename_applies_to_property_keys() {
     let props = properties(&schema).expect("object schema has properties");
     assert!(props.contains_key("run_in_background"));
     assert!(props.contains_key("pattern"));
-}
-
-// ──────────────────────────────────────────────────────────────────
-// derive_output_schema — tagged-union output (BashOutput / AgentSpawnRenderResult pattern)
-// ──────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_tagged_output_enum_emits_discriminator_field() {
-    // TS-mirror output shape: `#[serde(tag = "status", rename_all =
-    // "snake_case")]` produces a union of object schemas, each
-    // carrying the `status` discriminator. This is the pattern
-    // BashOutput and AgentSpawnRenderResult should use.
-    let value = derive_output_schema::<TaggedOutput>();
-    let serialized = serde_json::to_string(&value).expect("serialise");
-    // Inlined ⇒ no $ref / $defs in the output either.
-    assert!(
-        !serialized.contains("$ref"),
-        "tagged output must inline variants, got: {serialized}"
-    );
-    // The discriminator field name must appear somewhere in the schema.
-    assert!(
-        serialized.contains("\"status\""),
-        "tagged output must carry the `status` discriminator key, got: {serialized}"
-    );
-    // Snake-case variant names appear on the wire as the discriminator's
-    // accepted constant values.
-    assert!(serialized.contains("completed"));
-    assert!(serialized.contains("background"));
-    assert!(serialized.contains("failed"));
 }
 
 // ──────────────────────────────────────────────────────────────────

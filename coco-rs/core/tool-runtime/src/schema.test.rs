@@ -150,3 +150,62 @@ fn jsonschema_resolve_http_stays_off() {
         "jsonschema must stay default-features=false (SSRF/blocking-fetch guard); got {feats:?}",
     );
 }
+
+#[test]
+fn validate_reports_every_unexpected_field() {
+    // jsonschema lumps all unexpected keys into one error; `from_jsonschema`
+    // must expand them so the model is told about every one in a single turn.
+    let schema = super::ToolInputSchema::from_value(json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"]
+    }))
+    .expect("schema");
+    let issues = schema
+        .validate(&json!({"name": "x", "b1": 1, "b2": 2}))
+        .expect_err("unexpected fields must be rejected");
+    let unexpected: Vec<&str> = issues
+        .iter()
+        .filter_map(|i| match i {
+            super::SchemaIssue::UnexpectedField { field, .. } => Some(field.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        unexpected.len(),
+        2,
+        "every unexpected key must surface: {issues:?}"
+    );
+    assert!(unexpected.contains(&"b1") && unexpected.contains(&"b2"));
+}
+
+#[test]
+fn validate_enumerates_multiple_expected_types() {
+    // A `type: [..]` mismatch must list the accepted types, not the literal
+    // placeholder "multiple".
+    let schema = super::ToolInputSchema::from_value(json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {"x": {"type": ["string", "integer"]}}
+    }))
+    .expect("schema");
+    let issues = schema
+        .validate(&json!({"x": true}))
+        .expect_err("bool must fail string|integer");
+    let expected = issues
+        .iter()
+        .find_map(|i| match i {
+            super::SchemaIssue::TypeMismatch { expected, .. } => Some(expected.clone()),
+            _ => None,
+        })
+        .expect("a TypeMismatch issue");
+    assert!(
+        expected.contains("string") && expected.contains("integer"),
+        "expected must enumerate both member types, got {expected:?}"
+    );
+    assert_ne!(
+        expected, "multiple",
+        "must not emit the literal placeholder"
+    );
+}

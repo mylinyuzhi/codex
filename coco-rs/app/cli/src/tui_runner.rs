@@ -2468,6 +2468,16 @@ async fn dispatch_slash_command(
             .await;
         return SlashOutcome::Handled;
     }
+    // `/login [provider]` / `/logout [provider]` activate a configured OAuth
+    // subscription against the SHARED `AuthService`, so the running session's
+    // clients pick up the new token immediately. Handled here (not the
+    // registry) because the auth flow lives in `app/cli` + needs the runtime.
+    if name == "login" {
+        return dispatch_provider_login(args, event_tx).await;
+    }
+    if name == "logout" {
+        return dispatch_provider_logout(args, event_tx).await;
+    }
     // `/rewind` flows through the standard registry → handler →
     // `DialogSpec::MessageSelector` → `OpenRewindPicker` path. The
     // handler ignores args to match TS; this dispatcher does only the
@@ -3490,6 +3500,61 @@ async fn emit_slash_text(event_tx: &mpsc::Sender<CoreEvent>, name: &str, text: &
             text: text.to_string(),
         }))
         .await;
+}
+
+/// Optional `/login <provider>` arg → instance name. Empty → builtin default.
+fn slash_provider_arg(args: &str) -> Option<String> {
+    let a = args.trim();
+    (!a.is_empty()).then(|| a.to_string())
+}
+
+/// `/login [provider]` — runs the OAuth flow on the shared `AuthService`, shows
+/// the authorize URL + result in the transcript. Loopback-only (the TUI owns
+/// stdin, so the paste fallback isn't available in-session — use `coco login
+/// --no-browser` on a plain terminal for that).
+async fn dispatch_provider_login(args: &str, event_tx: &mpsc::Sender<CoreEvent>) -> SlashOutcome {
+    let provider = slash_provider_arg(args);
+    let tx = event_tx.clone();
+    let url_sink: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(move |url| {
+        let _ = tx.try_send(CoreEvent::Tui(TuiOnlyEvent::SlashCommandResult {
+            name: "login".to_string(),
+            text: format!("Opening your browser to sign in. If it doesn't open, visit:\n{url}"),
+        }));
+    });
+    match coco_cli::provider_login::run_login_session(provider, url_sink).await {
+        Ok(msg) => emit_slash_text(event_tx, "login", &msg).await,
+        Err(e) => {
+            emit_slash_status(
+                event_tx,
+                "login",
+                SlashCommandStatusKind::Failed {
+                    error: e.to_string(),
+                },
+            )
+            .await;
+        }
+    }
+    SlashOutcome::Handled
+}
+
+/// `/logout [provider]` — clears the subscription credential on the shared
+/// `AuthService` (best-effort server-side revocation included).
+async fn dispatch_provider_logout(args: &str, event_tx: &mpsc::Sender<CoreEvent>) -> SlashOutcome {
+    let provider = slash_provider_arg(args);
+    match coco_cli::provider_login::run_logout_session(provider).await {
+        Ok(msg) => emit_slash_text(event_tx, "logout", &msg).await,
+        Err(e) => {
+            emit_slash_status(
+                event_tx,
+                "logout",
+                SlashCommandStatusKind::Failed {
+                    error: e.to_string(),
+                },
+            )
+            .await;
+        }
+    }
+    SlashOutcome::Handled
 }
 
 /// Emit a `TuiOnlyEvent::SlashCommandStatus` so the TUI renders a
@@ -4873,6 +4938,7 @@ fn build_provider_statuses(
     use coco_tui::state::ProviderStatus;
     use coco_tui::state::ProviderUnavailableReason;
 
+    let resolver = coco_cli::provider_login::shared_resolver();
     runtime_config
         .providers
         .iter()
@@ -4881,14 +4947,31 @@ fn build_provider_statuses(
             if cfg.base_url.trim().is_empty() {
                 unavailable_reasons.push(ProviderUnavailableReason::MissingBaseUrl);
             }
-            let has_api_key = cfg
-                .resolve_api_key()
-                .is_some_and(|key| !key.trim().is_empty())
-                || cfg.client_options.auth_token.is_some();
-            if !has_api_key {
-                unavailable_reasons.push(ProviderUnavailableReason::MissingApiKey {
-                    env_key: cfg.env_key.clone(),
-                });
+            // Branch on auth mode so a logged-in OAuth provider isn't mislabeled
+            // "missing API key" (env_key is empty for OAuth instances). Reuses
+            // the same credential-presence decision as the client-build gate.
+            match cfg.auth {
+                coco_config::ProviderAuth::OAuth { .. } => {
+                    if !coco_inference::model_factory::provider_credential_present(
+                        cfg,
+                        Some(&resolver),
+                    ) {
+                        unavailable_reasons.push(ProviderUnavailableReason::NotLoggedIn {
+                            provider: cfg.name.clone(),
+                        });
+                    }
+                }
+                coco_config::ProviderAuth::ApiKey => {
+                    let has_api_key = cfg
+                        .resolve_api_key()
+                        .is_some_and(|key| !key.trim().is_empty())
+                        || cfg.client_options.auth_token.is_some();
+                    if !has_api_key {
+                        unavailable_reasons.push(ProviderUnavailableReason::MissingApiKey {
+                            env_key: cfg.env_key.clone(),
+                        });
+                    }
+                }
             }
             (
                 provider.clone(),

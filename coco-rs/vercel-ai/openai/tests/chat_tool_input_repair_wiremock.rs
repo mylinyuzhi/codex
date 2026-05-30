@@ -17,6 +17,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use serde_json::json;
+use vercel_ai_openai::OpenAIAuth;
 use vercel_ai_openai::OpenAIProviderSettings;
 use vercel_ai_openai::create_openai;
 use vercel_ai_provider::AssistantContentPart;
@@ -94,7 +95,7 @@ async fn dispatch_with_arguments(raw_arguments: &str) -> vercel_ai_provider::Too
 
     let provider = create_openai(OpenAIProviderSettings {
         base_url: Some(server.uri()),
-        api_key: Some("test-key".to_string()),
+        auth: OpenAIAuth::ApiKey(Some("test-key".to_string())),
         ..Default::default()
     });
     let model = provider.chat("gpt-test");

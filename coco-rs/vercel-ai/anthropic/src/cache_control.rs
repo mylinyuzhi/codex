@@ -22,6 +22,12 @@ pub struct CacheContext<'a> {
 pub struct CacheControlValidator {
     breakpoint_count: u32,
     warnings: Vec<Warning>,
+    /// Resolved `cache_control` value the adapter emits at the built-in/MCP
+    /// tool boundary. The engine marks that tool with `cacheBoundary: true`
+    /// (it owns the `is_mcp` partition); the TTL is resolved *here* so it
+    /// matches the last-user auto-marker exactly. `None` when caching is
+    /// inactive — so a no-cache request never gains a lone tool breakpoint.
+    tool_boundary_marker: Option<Value>,
 }
 
 impl CacheControlValidator {
@@ -29,6 +35,7 @@ impl CacheControlValidator {
         Self {
             breakpoint_count: 0,
             warnings: Vec::new(),
+            tool_boundary_marker: None,
         }
     }
 
@@ -57,6 +64,44 @@ impl CacheControlValidator {
         let cache_control_value = extract_cache_control_from_options(provider_options);
         let cache_control_value = cache_control_value?;
         self.validate_and_track(cache_control_value, context)
+    }
+
+    /// Set the resolved `cache_control` marker emitted at the built-in/MCP
+    /// tool boundary (see [`tool_boundary_cache_control`]). Pass the *same*
+    /// value used for the last-user auto-marker so the two coco-driven
+    /// breakpoints share a TTL; pass `None` to disable boundary caching
+    /// (caching off or a non-`Auto` strategy).
+    ///
+    /// [`tool_boundary_cache_control`]: Self::tool_boundary_cache_control
+    pub fn set_tool_boundary_marker(&mut self, marker: Option<Value>) {
+        self.tool_boundary_marker = marker;
+    }
+
+    /// Emit the boundary `cache_control` for a tool that carries the engine's
+    /// `cacheBoundary: true` hint, counted through the shared breakpoint
+    /// budget. Returns `None` when the tool is not the boundary, no marker is
+    /// configured (caching off), or the 4-breakpoint limit is exhausted.
+    pub fn tool_boundary_cache_control(
+        &mut self,
+        provider_options: &Option<ProviderOptions>,
+    ) -> Option<Value> {
+        let marker = self.tool_boundary_marker.clone()?;
+        let is_boundary = provider_options
+            .as_ref()
+            .and_then(|po| po.0.get("anthropic"))
+            .and_then(|anthropic| anthropic.get("cacheBoundary"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        if !is_boundary {
+            return None;
+        }
+        self.validate_and_track(
+            marker,
+            CacheContext {
+                type_name: "tool cache boundary",
+                can_cache: true,
+            },
+        )
     }
 
     /// Common validation logic for both metadata and options.

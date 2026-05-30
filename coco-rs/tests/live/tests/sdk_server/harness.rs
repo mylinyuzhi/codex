@@ -203,6 +203,7 @@ pub async fn build_live_server_with_options(
         &runtime_config,
         coco_types::ModelRole::Main,
         retry,
+        None,
     )?;
     let recovery_policy = runtime_config
         .model_roles

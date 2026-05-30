@@ -171,6 +171,11 @@ pub struct Settings {
     /// "Always copy full response" option.
     #[serde(default)]
     pub copy_full_response: bool,
+    /// TUI-only rendering/performance knobs. These are deliberately not part
+    /// of `RuntimeConfig`: they do not affect agent behavior or protocol
+    /// semantics, only the terminal renderer.
+    #[serde(default)]
+    pub tui: TuiSettings,
 
     // === Plugins ===
     #[serde(default)]
@@ -247,6 +252,67 @@ pub struct Settings {
     pub include_co_authored_by: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_git_instructions: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TuiSettings {
+    pub native_replay_cache: NativeReplayCacheSettings,
+    pub performance: TuiPerformanceSettings,
+}
+
+/// TUI frame performance logging knobs.
+///
+/// Disabled by default; when enabled, callers can sample every Nth frame and
+/// always log frames/stages that exceed the configured slow thresholds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TuiPerformanceSettings {
+    pub enabled: bool,
+    pub sample_every_n_frames: u64,
+    pub slow_frame_ms: u64,
+    pub slow_stage_us: u64,
+}
+
+impl Default for TuiPerformanceSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sample_every_n_frames: 0,
+            slow_frame_ms: 16,
+            slow_stage_us: 500,
+        }
+    }
+}
+
+/// Native scrollback replay cache policy.
+///
+/// Sizes are configured in KiB so real-world tuning from `settings.json` stays
+/// readable. The renderer converts them to bytes with saturating arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NativeReplayCacheSettings {
+    pub enabled: bool,
+    pub max_entries: usize,
+    pub max_estimated_kb: usize,
+    pub min_cells: usize,
+    pub min_content_kb: usize,
+    pub admit_min_render_us: u64,
+    pub admit_min_result_kb: usize,
+}
+
+impl Default for NativeReplayCacheSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_entries: 32,
+            max_estimated_kb: 2048,
+            min_cells: 32,
+            min_content_kb: 8,
+            admit_min_render_us: 250,
+            admit_min_result_kb: 32,
+        }
+    }
 }
 
 /// Permission rules configuration within settings.

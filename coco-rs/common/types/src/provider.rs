@@ -367,6 +367,45 @@ pub enum WireApi {
     Responses,
 }
 
+/// Which interactive OAuth login flow a provider instance uses for
+/// **subscription** authentication. Closed set — each variant maps to one
+/// `OAuthFlowDescriptor` in `coco-provider-auth` and one `*Auth` wire mode in
+/// the owning `vercel-ai-<provider>` crate. Adding a subscription provider adds
+/// a variant here (the canonical closed-set owner).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthFlowId {
+    /// ChatGPT subscription → `chatgpt.com/backend-api/codex` Responses route.
+    ///
+    /// `rename` pins the wire form to `openai_chatgpt`: the default
+    /// `rename_all = "snake_case"` would split the acronym into
+    /// `open_ai_chat_gpt`, diverging from [`Self::as_str`]. Guarded by
+    /// `test_oauth_flow_id_as_str_matches_serde`.
+    #[serde(rename = "openai_chatgpt")]
+    OpenAiChatGpt,
+    /// Google Gemini Code Assist (Google account OAuth).
+    GeminiCodeAssist,
+    // Future: AnthropicClaude (Claude Max).
+}
+
+impl OAuthFlowId {
+    /// Canonical snake_case spelling; matches the serde wire form (enforced by
+    /// `test_oauth_flow_id_as_str_matches_serde`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiChatGpt => "openai_chatgpt",
+            Self::GeminiCodeAssist => "gemini_code_assist",
+        }
+    }
+}
+
+impl fmt::Display for OAuthFlowId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A set of capabilities for convenience.
 pub type CapabilitySet = HashSet<Capability>;
 

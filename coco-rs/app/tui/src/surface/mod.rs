@@ -7,5 +7,7 @@ pub(crate) mod controller;
 pub(crate) mod history_driver;
 pub(crate) mod history_emitter;
 pub(crate) mod history_lines;
+pub(crate) mod line_fingerprint;
 pub(crate) mod modal;
+pub(crate) mod stream;
 pub(crate) mod viewport;

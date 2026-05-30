@@ -23,6 +23,19 @@ pub enum EnvKey {
     CocoAgentColor,
     CocoAgentId,
     CocoAgentName,
+    /// Test/diagnostic override for the OpenAI OAuth token endpoint used by
+    /// the provider-auth subscription flow (wiremock seam). Unset in normal
+    /// use. Mirrors codex `CODEX_REFRESH_TOKEN_URL_OVERRIDE`.
+    CocoAuthOpenaiTokenUrl,
+    /// Test/diagnostic override for the Google (Gemini) OAuth token endpoint
+    /// used by the provider-auth subscription flow (wiremock seam).
+    CocoAuthGeminiTokenUrl,
+    /// Test/diagnostic override for the OpenAI OAuth revocation endpoint
+    /// (logout). Wiremock seam; unset in normal use.
+    CocoAuthOpenaiRevokeUrl,
+    /// Test/diagnostic override for the Google (Gemini) OAuth revocation
+    /// endpoint (logout). Wiremock seam; unset in normal use.
+    CocoAuthGeminiRevokeUrl,
     /// Entrypoint label written to the concurrent-sessions PID registry
     /// (`<config_home>/sessions/{pid}.json`). Identifies *how* the
     /// session was started ("sdk-py", "tmux-bg", "cli-interactive", …)
@@ -278,6 +291,10 @@ impl EnvKey {
             Self::CocoAgentColor => "COCO_AGENT_COLOR",
             Self::CocoAgentId => "COCO_AGENT_ID",
             Self::CocoAgentName => "COCO_AGENT_NAME",
+            Self::CocoAuthOpenaiTokenUrl => "COCO_AUTH_OPENAI_TOKEN_URL",
+            Self::CocoAuthGeminiTokenUrl => "COCO_AUTH_GEMINI_TOKEN_URL",
+            Self::CocoAuthOpenaiRevokeUrl => "COCO_AUTH_OPENAI_REVOKE_URL",
+            Self::CocoAuthGeminiRevokeUrl => "COCO_AUTH_GEMINI_REVOKE_URL",
             Self::CocoEntrypoint => "COCO_ENTRYPOINT",
             Self::CocoSessionKind => "COCO_SESSION_KIND",
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",

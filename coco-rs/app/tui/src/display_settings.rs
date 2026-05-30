@@ -2,8 +2,13 @@
 
 use coco_config::SettingSource;
 use coco_config::SettingsWithSource;
+use coco_config::settings::NativeReplayCacheSettings;
 use coco_config::settings::SYNTAX_HIGHLIGHTING_DISABLED_KEY;
+use coco_config::settings::TuiPerformanceSettings;
 use coco_tui_ui::display::SyntaxHighlighting;
+use std::time::Duration;
+
+use crate::surface::history_lines::HistoryReplayCachePolicy;
 
 /// Whether a display preference can be edited from the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -33,6 +38,22 @@ pub struct DisplaySettings {
     pub syntax_highlighting_editability: DisplaySettingEditability,
     pub show_thinking: bool,
     pub copy_full_response: bool,
+    pub native_replay_cache: HistoryReplayCachePolicy,
+    pub performance: TuiPerformanceConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TuiPerformanceConfig {
+    pub enabled: bool,
+    pub sample_every_n_frames: u64,
+    pub slow_frame_ms: u64,
+    pub slow_stage_us: u64,
+}
+
+impl Default for TuiPerformanceConfig {
+    fn default() -> Self {
+        performance_config(TuiPerformanceSettings::default())
+    }
 }
 
 impl DisplaySettings {
@@ -44,6 +65,8 @@ impl DisplaySettings {
             syntax_highlighting_editability: DisplaySettingEditability::Editable,
             show_thinking: settings.show_thinking,
             copy_full_response: settings.copy_full_response,
+            native_replay_cache: replay_cache_policy(settings.tui.native_replay_cache),
+            performance: performance_config(settings.tui.performance),
         }
     }
 
@@ -55,6 +78,8 @@ impl DisplaySettings {
             syntax_highlighting_editability: syntax_highlighting_editability(settings),
             show_thinking: settings.merged.show_thinking,
             copy_full_response: settings.merged.copy_full_response,
+            native_replay_cache: replay_cache_policy(settings.merged.tui.native_replay_cache),
+            performance: performance_config(settings.merged.tui.performance),
         }
     }
 
@@ -75,6 +100,31 @@ impl DisplaySettings {
             ..self
         }
     }
+}
+
+fn replay_cache_policy(settings: NativeReplayCacheSettings) -> HistoryReplayCachePolicy {
+    HistoryReplayCachePolicy {
+        enabled: settings.enabled,
+        max_entries: settings.max_entries,
+        max_estimated_bytes: kib_to_bytes(settings.max_estimated_kb),
+        min_cells: settings.min_cells,
+        min_content_bytes: kib_to_bytes(settings.min_content_kb),
+        admit_min_render_elapsed: Duration::from_micros(settings.admit_min_render_us),
+        admit_min_result_bytes: kib_to_bytes(settings.admit_min_result_kb),
+    }
+}
+
+fn performance_config(settings: TuiPerformanceSettings) -> TuiPerformanceConfig {
+    TuiPerformanceConfig {
+        enabled: settings.enabled,
+        sample_every_n_frames: settings.sample_every_n_frames,
+        slow_frame_ms: settings.slow_frame_ms,
+        slow_stage_us: settings.slow_stage_us,
+    }
+}
+
+fn kib_to_bytes(kib: usize) -> usize {
+    kib.saturating_mul(1024)
 }
 
 fn syntax_highlighting_editability(settings: &SettingsWithSource) -> DisplaySettingEditability {

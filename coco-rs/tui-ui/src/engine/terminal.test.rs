@@ -5,7 +5,9 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use std::cell::RefCell;
@@ -283,6 +285,44 @@ fn insert_history_lines_writes_above_viewport_and_preserves_viewport() {
 }
 
 #[test]
+fn surface_terminal_reports_viewport_draw_stats() {
+    let backend = TestBackend::new(8, 4);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_perf_stats_enabled(true);
+    terminal.set_viewport_area(Rect::new(0, 2, 8, 2));
+
+    terminal
+        .draw_viewport(|frame| {
+            frame.render_widget(Paragraph::new("hi"), frame.area());
+        })
+        .expect("draw");
+
+    let stats = terminal.last_viewport_draw_stats();
+    assert_eq!(stats.buffer_updates, 16);
+    assert!(stats.invalidated);
+    assert!(stats.diff_elapsed.as_nanos() > 0);
+}
+
+#[test]
+fn surface_terminal_reports_history_insert_stats() {
+    let backend = TestBackend::new(8, 6);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_perf_stats_enabled(true);
+    terminal.set_viewport_area(Rect::new(0, 4, 8, 2));
+
+    let inserted = terminal
+        .insert_history_lines([Line::from("history line")])
+        .expect("insert history");
+
+    let stats = terminal.last_history_insert_stats();
+    assert_eq!(inserted, 2);
+    assert_eq!(stats.wrapped_rows, 2);
+    assert_eq!(stats.buffer_updates, 16);
+    assert!(stats.invalidated);
+    assert!(stats.build_elapsed.as_nanos() > 0);
+}
+
+#[test]
 fn insert_history_lines_pushes_viewport_down_when_screen_has_room() {
     let backend = TestBackend::with_lines(["view0 ", "view1 ", "      ", "      ", "      "]);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
@@ -298,6 +338,22 @@ fn insert_history_lines_pushes_viewport_down_when_screen_has_room() {
     terminal
         .backend()
         .assert_buffer_lines(["hist0 ", "hist1 ", "view0 ", "view1 ", "      "]);
+}
+
+#[test]
+fn insert_history_lines_uses_synced_screen_size_when_moving_viewport() {
+    let backend = TestBackend::with_lines(["view0   ", "view1   ", "        "]);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 8, 2));
+    terminal.backend_mut().resize(8, 5);
+    terminal.sync_screen_size(Size::new(8, 5));
+
+    terminal
+        .insert_history_lines([Line::from("hist0"), Line::from("hist1")])
+        .expect("insert history");
+
+    assert_eq!(terminal.last_known_screen_size(), Size::new(8, 5));
+    assert_eq!(terminal.viewport_area(), Rect::new(0, 2, 8, 2));
 }
 
 #[test]
@@ -362,6 +418,89 @@ fn crossterm_surface_backend_emits_scroll_region_bytes() {
         bytes.contains("\x1b[r"),
         "expected scroll region reset in {bytes:?}"
     );
+}
+
+#[test]
+fn crossterm_surface_backend_direct_inserts_plain_history_rows() {
+    let capture = CapturedWriter::default();
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 1, 8, 1));
+
+    let rows = terminal
+        .insert_history_lines([Line::from("plain")])
+        .expect("insert history");
+
+    assert_eq!(rows, 1);
+    let stats = terminal.last_history_insert_stats();
+    assert_eq!(stats.buffer_updates, 0);
+    assert!(stats.bytes_written > 0);
+    let bytes = capture.ansi_bytes();
+    parse_with_vt100(&bytes);
+    assert!(
+        bytes.contains("\x1b[2;1H\x1b[0mp"),
+        "expected direct cursor-positioned write in {bytes:?}"
+    );
+    assert!(
+        bytes.contains("\x1b[0m"),
+        "expected style reset after direct write in {bytes:?}"
+    );
+}
+
+#[test]
+fn crossterm_surface_backend_direct_inserts_styled_and_wide_rows() {
+    let capture = CapturedWriter::default();
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 1, 8, 1));
+
+    terminal
+        .insert_history_lines([Line::from(vec!["界".red().bold(), " url".underlined()])])
+        .expect("insert history");
+
+    let stats = terminal.last_history_insert_stats();
+    assert_eq!(stats.buffer_updates, 0);
+    assert!(stats.bytes_written > 0);
+    let bytes = capture.ansi_bytes();
+    parse_with_vt100(&bytes);
+    assert!(bytes.contains("\x1b[0;31;1m界"), "{bytes:?}");
+    assert!(bytes.contains("\x1b[0;4m url"), "{bytes:?}");
+    assert!(bytes.contains("\x1b[0m"), "{bytes:?}");
+}
+
+#[test]
+fn crossterm_surface_backend_direct_inserts_extended_modifiers() {
+    let capture = CapturedWriter::default();
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 1, 20, 1));
+
+    terminal
+        .insert_history_lines([Line::from(vec![
+            ratatui::text::Span::styled(
+                "gone",
+                Style::default().add_modifier(Modifier::CROSSED_OUT),
+            ),
+            ratatui::text::Span::styled(
+                " blink",
+                Style::default().add_modifier(Modifier::SLOW_BLINK | Modifier::HIDDEN),
+            ),
+            ratatui::text::Span::styled(
+                " loud",
+                Style::default()
+                    .fg(ratatui::style::Color::LightRed)
+                    .add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK),
+            ),
+        ])])
+        .expect("insert history");
+
+    let bytes = capture.ansi_bytes();
+    parse_with_vt100(&bytes);
+    assert!(bytes.contains("\x1b7"), "{bytes:?}");
+    assert!(bytes.contains("\x1b[2;1H\x1b[0;9mgone"), "{bytes:?}");
+    assert!(bytes.contains("\x1b[0;5;8m blink"), "{bytes:?}");
+    assert!(bytes.contains("\x1b[0;91;1;6m loud"), "{bytes:?}");
+    assert!(bytes.ends_with("\x1b[0m\x1b8"), "{bytes:?}");
 }
 
 #[test]

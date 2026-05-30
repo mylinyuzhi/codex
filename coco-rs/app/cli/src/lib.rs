@@ -18,6 +18,7 @@ pub mod output;
 pub mod paths;
 pub mod permission_rule_loader;
 pub mod plugin_watch;
+pub mod provider_login;
 pub mod resume_hint;
 pub mod resume_resolver;
 pub mod sandbox_reload;
@@ -357,10 +358,20 @@ pub enum Commands {
     Status,
     /// Run diagnostics.
     Doctor,
-    /// Authenticate with Anthropic.
-    Login,
-    /// Clear credentials.
-    Logout,
+    /// Log in to a provider subscription via OAuth (e.g. `coco login openai`).
+    Login {
+        /// Provider to log into (e.g. `openai`). Defaults to `openai`.
+        provider: Option<String>,
+        /// Print the authorization URL instead of opening a browser
+        /// (headless / SSH).
+        #[arg(long, alias = "headless")]
+        no_browser: bool,
+    },
+    /// Clear stored provider credentials (defaults to `openai`).
+    Logout {
+        /// Provider to log out of (e.g. `openai`). Defaults to `openai`.
+        provider: Option<String>,
+    },
     /// Initialize project (.claude/ directory).
     Init,
     /// Review code changes or a PR.

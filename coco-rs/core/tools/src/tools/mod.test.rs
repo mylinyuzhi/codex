@@ -104,3 +104,25 @@ fn test_plan_mode_tool_list_includes_verify_plan_execution() {
         "VerifyPlanExecution is read-only and must stay visible in Plan mode"
     );
 }
+
+/// Force-initialize every registered tool's runtime validation schema. The
+/// schemas are `OnceLock`-lazy, so registering a tool does NOT compile them —
+/// only calling `runtime_validation_schema()` does. This is the gate the schema
+/// constructors rely on: a malformed Bucket-A (`from_input_type`) or hand-built
+/// (`from_static_value`) schema panics HERE in CI, not on first production use.
+#[test]
+fn test_all_tool_schemas_force_initialize() {
+    let all = ToolRegistry::new();
+    crate::register_all_tools(&all);
+    let core = ToolRegistry::new();
+    crate::register_core_tools(&core);
+    for registry in [&all, &core] {
+        for tool in registry.all() {
+            assert!(
+                tool.runtime_validation_schema().as_value().is_object(),
+                "{} runtime schema must compile to a root object",
+                tool.name()
+            );
+        }
+    }
+}

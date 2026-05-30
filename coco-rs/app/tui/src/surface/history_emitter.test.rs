@@ -8,6 +8,7 @@ use super::*;
 use crate::state::derive::test_helpers;
 use crate::state::transcript_view::RenderedCell;
 use crate::surface::history_lines::HistoryLineRenderOptions;
+use crate::surface::history_lines::HistoryReplayCachePolicy;
 use crate::surface::history_lines::render_finalized_history_lines;
 use crate::theme::Theme;
 use coco_tui_ui::display::SyntaxHighlighting;
@@ -60,6 +61,19 @@ fn plan_appends_only_new_tail_when_prefix_matches() {
         tracker.plan(&next),
         HistoryEmissionPlan::Append { start: 1 }
     );
+}
+
+#[test]
+fn mark_appended_from_extends_tracker_without_rebuilding_prefix() {
+    let initial = cells_with_indices([1, 2]);
+    let next = cells_with_indices([1, 2, 3, 4]);
+    let mut tracker = HistoryEmissionTracker::new();
+    tracker.mark_emitted_through(&initial, initial.len());
+
+    tracker.mark_appended_from(&next, 2);
+
+    assert_eq!(tracker.emitted_count(), 4);
+    assert_eq!(tracker.plan(&next), HistoryEmissionPlan::Noop);
 }
 
 #[test]
@@ -116,7 +130,10 @@ fn emit_append_only_writes_new_tail_and_marks_messages() {
         HistoryEmissionOutcome::Appended {
             start: 0,
             message_count: 1,
-            rows: 1,
+            // The 36-char UUID line wraps to 6 rows at width 6 — committed
+            // scrollback now wraps like the live tail instead of clipping to one
+            // row (which had silently truncated the line).
+            rows: 6,
         }
     );
     assert_eq!(tracker.emitted_count(), 1);
@@ -173,7 +190,8 @@ fn replay_all_clears_surface_reinserts_all_rows_and_marks_messages() {
         outcome,
         HistoryEmissionOutcome::Replayed {
             message_count: 2,
-            rows: 2,
+            // 2 UUID lines × 6 wrapped rows each at width 6 (was clipped to 2).
+            rows: 12,
         }
     );
     assert_eq!(tracker.emitted_count(), 2);
@@ -200,6 +218,7 @@ fn emit_append_only_accepts_finalized_transcript_renderer() {
                     show_system_reminders: false,
                     show_thinking: false,
                     kb_handle: None,
+                    replay_cache_policy: HistoryReplayCachePolicy::default(),
                     reasoning_metadata: None,
                 },
             )

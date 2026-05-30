@@ -435,7 +435,7 @@ pub struct ToolSearchInput {
 ///
 /// All fields default so transcript replay / partial fixtures
 /// round-trip via the `DynTool` blanket.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolSearchOutput {
     #[serde(default)]
     pub matches: Vec<String>,

@@ -13,6 +13,7 @@ import pytest
 
 from coco_sdk._internal.transport import Transport
 from coco_sdk.client import CocoClient
+from coco_sdk.errors import ProcessError
 from coco_sdk.generated.protocol import (
     ClientRequestMethod,
     NotificationMethod,
@@ -159,6 +160,43 @@ async def test_client_send_follow_up() -> None:
     assert sent["method"] == ClientRequestMethod.TURN_START
     assert sent["params"]["prompt"] == "follow up"
     assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_start_turn_retries_transient_turn_busy(monkeypatch) -> None:
+    """A follow-up turn briefly rejected with "a turn is already running"
+    (the post-TurnEnded finalization window) is retried, not surfaced."""
+    client = CocoClient(prompt="init", transport=MockTransport())
+    attempts = {"n": 0}
+
+    async def flaky_request(_request: Any) -> dict[str, Any]:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise ProcessError(
+                "coco rejected request 4: a turn is already running; "
+                "call turn/interrupt first"
+            )
+        return {}
+
+    monkeypatch.setattr(client, "_request", flaky_request)
+    await client._start_turn_with_retry(object())
+    assert attempts["n"] == 3, "should retry the transient busy rejection"
+
+
+@pytest.mark.asyncio
+async def test_start_turn_does_not_retry_other_process_errors(monkeypatch) -> None:
+    """A non-busy ProcessError surfaces immediately (no retry loop)."""
+    client = CocoClient(prompt="init", transport=MockTransport())
+    attempts = {"n": 0}
+
+    async def failing_request(_request: Any) -> dict[str, Any]:
+        attempts["n"] += 1
+        raise ProcessError("no active session; call session/start first")
+
+    monkeypatch.setattr(client, "_request", failing_request)
+    with pytest.raises(ProcessError):
+        await client._start_turn_with_retry(object())
+    assert attempts["n"] == 1, "must not retry a non-transient error"
 
 
 @pytest.mark.asyncio

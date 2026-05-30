@@ -215,7 +215,8 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `vercel-ai` | High-level SDK matching `@ai-sdk/ai` (generate_text, stream_text, …) |
 | `vercel-ai-openai` | OpenAI provider (Chat + Responses + Embeddings + Image) |
 | `vercel-ai-openai-compatible` | Generic OpenAI-compatible provider (xAI, Groq, Together) |
-| `vercel-ai-google` | Google Gemini provider |
+| `vercel-ai-google` | Google Gemini provider (API key → generativelanguage) |
+| `vercel-ai-google-codeassist` | Gemini Code Assist subscription transport (OAuth → cloudcode-pa); reuses `vercel-ai-google`'s codec |
 | `vercel-ai-anthropic` | Anthropic Claude provider |
 | `vercel-ai-bytedance` | ByteDance Seedance video provider |
 

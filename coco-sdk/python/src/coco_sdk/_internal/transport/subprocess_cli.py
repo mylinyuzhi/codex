@@ -21,6 +21,15 @@ from . import Transport
 
 logger = logging.getLogger("coco_sdk.transport")
 
+# asyncio's StreamReader defaults to a 64 KiB line buffer; a single NDJSON
+# message can far exceed that (a large session list, a tool result carrying file
+# contents, a long assistant reply), and `readline()` then raises
+# `ValueError: Separator is found, but chunk is longer than limit`, tearing down
+# the transport mid-stream. Raise the ceiling so realistic messages stream
+# cleanly. It is a cap, not a preallocation — memory grows only with the line
+# actually read; 64 MiB bounds a runaway line while covering any real payload.
+_STDOUT_LINE_LIMIT = 64 * 1024 * 1024
+
 
 def _find_coco_binary() -> str:
     """Locate the coco binary on PATH or common install locations."""
@@ -112,6 +121,9 @@ class SubprocessCLITransport(Transport):
             stderr=asyncio.subprocess.PIPE,
             cwd=self._cwd,
             env=process_env,
+            # Raise the StreamReader line-buffer ceiling above asyncio's 64 KiB
+            # default so a large NDJSON message does not crash the read loop.
+            limit=_STDOUT_LINE_LIMIT,
         )
 
         self._stderr_task = asyncio.create_task(self._read_stderr())

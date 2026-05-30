@@ -9,7 +9,7 @@
 mod activity_panel;
 pub(crate) mod activity_summary;
 mod background_pills;
-mod chat;
+pub(crate) mod chat;
 pub mod error_dialog;
 mod input;
 mod queue_status_widget;

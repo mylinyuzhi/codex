@@ -244,6 +244,9 @@ impl Tool for BashTool {
     /// pattern as `ReadTool` / `PowerShellTool`).
     type Output = serde_json::Value;
 
+    // Static schema from a literal `json!`; a parse failure means the literal
+    // is malformed (a programmer error), so panicking on first build is correct.
+    #[allow(clippy::expect_used)]
     fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
         static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
             std::sync::OnceLock::new();
@@ -251,7 +254,7 @@ impl Tool for BashTool {
             // Runtime schema additionally declares `_simulatedSedEdit` — the TUI
             // sed-edit dialog injects it before re-validation. The model schema
             // omits it (see `model_schema`).
-            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+            coco_tool_runtime::ToolInputSchema::from_static_value(serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
@@ -289,7 +292,6 @@ impl Tool for BashTool {
                 },
                 "required": []
             }))
-            .expect("Bash input schema must be a valid object schema")
         })
     }
 

@@ -116,6 +116,17 @@ impl ToolInputSchema {
         })
     }
 
+    /// Bucket B/C/E hand-built static schema — an author-written `json!({ … })`
+    /// guaranteed to be a valid, closed object schema. Like
+    /// [`Self::from_input_type`], a construction failure is a tool-author bug, so
+    /// it panics with the meta-validation error (the coco-tools force-init test
+    /// turns that into a CI failure, never a production panic). Centralizes the
+    /// panic policy so hand-built tools don't each `from_value(..).expect(..)`.
+    #[must_use]
+    pub fn from_static_value(raw: Value) -> Self {
+        Self::from_value(raw).unwrap_or_else(|e| panic!("static tool input schema is invalid: {e}"))
+    }
+
     /// The JSON Schema document (root `type:"object"`). Serialized into the
     /// model-facing tool definition; also the base for
     /// [`schema_omit_properties`].
@@ -132,7 +143,7 @@ impl ToolInputSchema {
         let issues: Vec<SchemaIssue> = self
             .validator
             .iter_errors(input)
-            .map(SchemaIssue::from_jsonschema)
+            .flat_map(SchemaIssue::from_jsonschema)
             .collect();
         if issues.is_empty() {
             Ok(())
@@ -191,9 +202,9 @@ pub fn schema_omit_properties(schema: &Value, fields: &[&str]) -> Value {
     out
 }
 
-/// Construction-time schema error. Tier-3 (`thiserror` + manual [`StackError`]
-/// + [`ErrorExt`]), mirroring `coco_context::ContextError`. Always classifies
-/// as [`StatusCode::InvalidArguments`] (non-retryable).
+/// Construction-time schema error. Tier-3 (`thiserror` plus a manual
+/// [`StackError`] / [`ErrorExt`] impl), mirroring `coco_context::ContextError`.
+/// Always classifies as [`StatusCode::InvalidArguments`] (non-retryable).
 #[derive(Debug, thiserror::Error)]
 pub enum SchemaError {
     #[error(
@@ -236,10 +247,8 @@ impl ErrorExt for SchemaError {
 #[cfg(any(test, feature = "testing"))]
 pub fn test_runtime_schema() -> &'static ToolInputSchema {
     static SCHEMA: std::sync::OnceLock<ToolInputSchema> = std::sync::OnceLock::new();
-    SCHEMA.get_or_init(|| {
-        ToolInputSchema::from_value(serde_json::json!({ "type": "object" }))
-            .expect("trivial object schema")
-    })
+    SCHEMA
+        .get_or_init(|| ToolInputSchema::from_static_value(serde_json::json!({ "type": "object" })))
 }
 
 /// Implement [`Tool::runtime_validation_schema`](crate::Tool) for a derive-only
@@ -285,43 +294,49 @@ pub enum SchemaIssue {
 }
 
 impl SchemaIssue {
-    /// Classify a `jsonschema::ValidationError` into a `SchemaIssue`.
-    fn from_jsonschema(err: jsonschema::ValidationError<'_>) -> Self {
+    /// Classify a `jsonschema::ValidationError` into one or more
+    /// `SchemaIssue`s. `additionalProperties` lumps every unexpected key into
+    /// a single `jsonschema` error, so it expands to one `UnexpectedField` per
+    /// key; every other kind maps to exactly one issue.
+    fn from_jsonschema(err: jsonschema::ValidationError<'_>) -> Vec<SchemaIssue> {
         use jsonschema::error::ValidationErrorKind;
 
         let path = err.instance_path().to_string();
         let message = err.to_string();
         let instance_type = json_type_name(err.instance());
         match err.kind() {
-            ValidationErrorKind::Required { property } => SchemaIssue::MissingRequired {
+            ValidationErrorKind::Required { property } => vec![SchemaIssue::MissingRequired {
                 path,
                 field: property
                     .as_str()
                     .map(str::to_owned)
                     .unwrap_or_else(|| property.to_string()),
-            },
+            }],
             ValidationErrorKind::AdditionalProperties { unexpected } => {
-                // jsonschema lumps unexpected keys into one error;
-                // split into one issue per key so the formatter can
-                // render them line-by-line.
-                if let Some(first) = unexpected.first() {
-                    SchemaIssue::UnexpectedField {
-                        path,
-                        field: first.clone(),
-                    }
+                // jsonschema reports every unexpected key in one error; expand
+                // to one issue per key so the formatter renders them
+                // line-by-line.
+                if unexpected.is_empty() {
+                    vec![SchemaIssue::Other { path, message }]
                 } else {
-                    SchemaIssue::Other { path, message }
+                    unexpected
+                        .iter()
+                        .map(|field| SchemaIssue::UnexpectedField {
+                            path: path.clone(),
+                            field: field.clone(),
+                        })
+                        .collect()
                 }
             }
             ValidationErrorKind::Type { kind } => {
                 let expected = format_type_kind(kind);
-                SchemaIssue::TypeMismatch {
+                vec![SchemaIssue::TypeMismatch {
                     path,
                     expected,
                     received: instance_type.into(),
-                }
+                }]
             }
-            _ => SchemaIssue::Other { path, message },
+            _ => vec![SchemaIssue::Other { path, message }],
         }
     }
 }
@@ -329,8 +344,16 @@ impl SchemaIssue {
 fn format_type_kind(kind: &jsonschema::error::TypeKind) -> String {
     use jsonschema::error::TypeKind;
     match kind {
-        TypeKind::Single(t) => format!("{t:?}").to_lowercase(),
-        TypeKind::Multiple(_) => "multiple".to_string(),
+        TypeKind::Single(t) => t.as_str().to_string(),
+        TypeKind::Multiple(set) => {
+            let names: Vec<&str> = set.iter().map(jsonschema::JsonType::as_str).collect();
+            // `jsonschema` never emits an empty type set; the guard is defensive.
+            if names.is_empty() {
+                "(no types)".to_string()
+            } else {
+                names.join(", ")
+            }
+        }
     }
 }
 

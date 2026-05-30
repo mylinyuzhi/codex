@@ -1375,6 +1375,9 @@ pub struct TodoWriteTool;
 #[async_trait::async_trait]
 impl Tool for TodoWriteTool {
     type Input = TodoWriteInput;
+    // Static schema from a literal `json!`; a parse failure means the literal
+    // is malformed (a programmer error), so panicking on first build is correct.
+    #[allow(clippy::expect_used)]
     fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
         static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
             std::sync::OnceLock::new();
@@ -1401,13 +1404,12 @@ impl Tool for TodoWriteTool {
                 .get("required")
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!([]));
-            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+            coco_tool_runtime::ToolInputSchema::from_static_value(serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": properties,
                 "required": required,
             }))
-            .expect("TodoWrite input schema must be a valid object schema")
         })
     }
     type Output = Value;

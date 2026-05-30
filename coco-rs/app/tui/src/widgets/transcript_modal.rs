@@ -20,7 +20,6 @@ use ratatui::widgets::Wrap;
 use crate::i18n::t;
 use crate::keybinding_bridge::KeybindingContext as TuiContext;
 use crate::presentation::layout::text_width;
-use crate::presentation::streaming::StreamingTailBlock;
 use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::format_duration_seconds;
@@ -35,7 +34,7 @@ use crate::presentation::transcript::TranscriptSourceCell;
 use crate::presentation::transcript::tool_output_preview;
 use crate::presentation::transcript::transcript_presentation_with_cells;
 use crate::state::AppState;
-use crate::state::derive::extract_tool_call_input_preview;
+use crate::state::derive::extract_tool_call_input;
 use crate::state::derive::tool_result_output;
 use crate::state::session::ToolExecution;
 use crate::state::transcript::TranscriptCellId;
@@ -46,6 +45,8 @@ use crate::state::transcript_view::RenderedCell;
 use crate::state::transcript_view::SystemCellKind;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
+use crate::widgets::chat::tool_result_render::ToolResultRenderCtx;
+use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -124,7 +125,7 @@ impl Widget for TranscriptStateWidget<'_> {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(t!("transcript.title").to_string())
-            .border_style(Style::default().fg(self.styles.primary()));
+            .border_style(Style::default().fg(self.styles.modal_border()));
         let inner = block.inner(area);
         block.render(area, buf);
         if inner.is_empty() {
@@ -252,6 +253,7 @@ struct TranscriptCellRenderer<'a> {
     thinking_toggle_hint: String,
     width: u16,
     styles: UiStyles<'a>,
+    syntax_highlighting: SyntaxHighlighting,
 }
 
 impl<'a> TranscriptCellRenderer<'a> {
@@ -269,6 +271,20 @@ impl<'a> TranscriptCellRenderer<'a> {
             thinking_toggle_hint: thinking_toggle_hint(state),
             width,
             styles,
+            syntax_highlighting: state.ui.display_settings.syntax_highlighting,
+        }
+    }
+
+    /// Surface context for the shared per-tool result renderer. The reader IS the
+    /// full-detail view, so `expanded` relaxes the inline row caps and no further
+    /// "ctrl+o to expand" hint is appended.
+    fn tool_result_ctx(&self, expanded: bool) -> ToolResultRenderCtx<'_> {
+        ToolResultRenderCtx {
+            styles: self.styles,
+            width: self.width,
+            syntax_highlighting: self.syntax_highlighting,
+            expand_hint: String::new(),
+            expanded,
         }
     }
 
@@ -338,27 +354,21 @@ impl<'a> TranscriptCellRenderer<'a> {
             }
             TranscriptSourceCell::Active(active) => match active {
                 crate::presentation::transcript::ActiveTranscriptCell::Streaming(view) => {
-                    for block in &view.blocks {
-                        match block {
-                            StreamingTailBlock::AssistantText(text) => {
-                                self.render_text_block("⏺", text, &mut lines);
-                            }
-                            StreamingTailBlock::Cursor => {
-                                lines.push(Line::from(Span::raw("▌").fg(self.styles.accent())));
-                            }
-                            StreamingTailBlock::ThinkingTokens { count } => {
-                                lines.extend(render_thinking_block(
-                                    ThinkingRenderInput {
-                                        content: "",
-                                        duration_ms: None,
-                                        reasoning_tokens: Some(*count),
-                                        toggle_hint: Some(&self.thinking_toggle_hint),
-                                        display: ThinkingDisplay::Collapsed,
-                                    },
-                                    self.styles,
-                                ));
-                            }
-                        }
+                    if let Some(text) = view.assistant_text {
+                        self.render_text_block("⏺", text, &mut lines);
+                        lines.push(Line::from(Span::raw("▌").fg(self.styles.accent())));
+                    }
+                    if let Some(count) = view.thinking_tokens {
+                        lines.extend(render_thinking_block(
+                            ThinkingRenderInput {
+                                content: "",
+                                duration_ms: None,
+                                reasoning_tokens: Some(count),
+                                toggle_hint: Some(&self.thinking_toggle_hint),
+                                display: ThinkingDisplay::Collapsed,
+                            },
+                            self.styles,
+                        ));
                     }
                 }
                 crate::presentation::transcript::ActiveTranscriptCell::BusySpinner => {
@@ -392,6 +402,13 @@ impl<'a> TranscriptCellRenderer<'a> {
         let invocation_cell = invocation.and_then(|index| self.cells.get(index));
         let result_cell = result.and_then(|index| self.cells.get(index));
 
+        // Issuing call's arguments, when the invocation cell is on hand — drives
+        // the rich input-derived views (diffs, code, web target) in the reader.
+        let input = invocation_cell.and_then(|cell| match &cell.kind {
+            CellKind::ToolUse { call_id, .. } => extract_tool_call_input(&cell.source, call_id),
+            _ => None,
+        });
+
         if expanded {
             if let Some(cell) = invocation_cell
                 && let CellKind::ToolUse { tool_name, call_id } = &cell.kind
@@ -399,7 +416,7 @@ impl<'a> TranscriptCellRenderer<'a> {
                 self.render_tool_call_header(tool_name, call_id, &cell.source, lines);
             }
             if let Some(rc) = result_cell {
-                self.render_tool_result_full(rc, lines);
+                self.render_tool_result_full(rc, input.as_ref(), lines);
             } else if let Some(cell) = invocation_cell {
                 self.render_cell_content(cell, expanded, lines);
             }
@@ -466,7 +483,7 @@ impl<'a> TranscriptCellRenderer<'a> {
             CellKind::ToolResult { .. } => {
                 self.render_tool_result_header(cell, lines);
                 if expanded {
-                    self.render_tool_result_full(cell, lines);
+                    self.render_tool_result_full(cell, None, lines);
                 } else {
                     self.render_tool_result_summary(cell, lines);
                 }
@@ -559,7 +576,8 @@ impl<'a> TranscriptCellRenderer<'a> {
             .tool_executions
             .iter()
             .find(|tool| tool.call_id == call_id);
-        let input_preview = extract_tool_call_input_preview(source, call_id);
+        let input_preview =
+            crate::state::derive::tool_call_header_preview(source, call_id, tool_name);
         let preview = single_line_capped(&input_preview, 96);
         let elapsed = execution
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
@@ -615,25 +633,30 @@ impl<'a> TranscriptCellRenderer<'a> {
         ]));
     }
 
-    fn render_tool_result_full(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
+    /// Expanded (full-detail) tool result. Shares the inline chat's per-tool
+    /// renderer so a diff / highlighted code / web target shows here too — this
+    /// is the view the inline "… (ctrl+o to expand)" hint defers to. `input` is
+    /// the issuing call's arguments when the invocation cell is on hand.
+    fn render_tool_result_full(
+        &self,
+        cell: &RenderedCell,
+        input: Option<&serde_json::Value>,
+        lines: &mut Vec<Line<'static>>,
+    ) {
         let Message::ToolResult(tr) = cell.source.as_ref() else {
             return;
         };
-        let Some((_tool_name, output)) = tool_result_output(cell.source.as_ref()) else {
+        let Some((tool_name, output)) = tool_result_output(cell.source.as_ref()) else {
             return;
         };
-        if tr.is_error {
-            lines.push(result_line(
-                format!("error: {}", transcript_safe_line(&output)),
-                self.styles.error(),
-            ));
-            return;
-        }
-        if output.is_empty() {
-            lines.push(result_line("(no output)".to_string(), self.styles.dim()));
-            return;
-        }
-        self.render_capped_lines("    ", &output, self.styles.text(), lines);
+        crate::widgets::chat::tool_result_render::render_tool_result_body(
+            &self.tool_result_ctx(/*expanded*/ true),
+            &tool_name,
+            input,
+            &output,
+            tr.is_error,
+            lines,
+        );
     }
 
     fn render_output_preview(&self, output: &str, lines: &mut Vec<Line<'static>>) {
@@ -1023,7 +1046,10 @@ fn cell_content_len(cell: &RenderedCell) -> usize {
         CellKind::ToolUse {
             call_id, tool_name, ..
         } => {
-            let preview = extract_tool_call_input_preview(&cell.source, call_id);
+            // Same header preview the renderer draws, so the invalidation hash
+            // tracks exactly what's painted.
+            let preview =
+                crate::state::derive::tool_call_header_preview(&cell.source, call_id, tool_name);
             tool_name.len() + call_id.len() + preview.len()
         }
         CellKind::ToolResult { call_id, .. } => {

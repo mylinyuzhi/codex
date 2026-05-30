@@ -8,7 +8,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // ── LSP data structures ──
@@ -153,7 +152,7 @@ pub struct OutgoingCall {
 }
 
 /// Structured output from an LSP operation.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LspOutput {
     #[serde(default)]
     pub operation: String,

@@ -9,7 +9,7 @@ expression: "render_transcript_text(&app_state, &state, 84, 12)"
 │    expanded-line-1997                                                            │
 │    expanded-line-1998                                                            │
 │    expanded-line-1999                                                            │
-│    … output truncated in UI                                                      │
+│    … +1 lines                                                                    │
 │                                                                                  │
 │ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jump                       │
 │Tab select · Enter expand/collapse · Esc/q quit                                   │

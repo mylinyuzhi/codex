@@ -10,6 +10,7 @@ use crate::env;
 use crate::error::ConfigError;
 use crate::error::ConfigField;
 use crate::secret::RedactedSecret;
+use coco_types::OAuthFlowId;
 use coco_types::ProviderApi;
 use coco_types::WireApi;
 use serde::Deserialize;
@@ -17,6 +18,23 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
+
+/// How a provider instance authenticates.
+///
+/// `ApiKey` (default) reads `env_key` / config `api_key` — the historical
+/// behavior. `OAuth` routes through `coco-provider-auth`: credentials are minted
+/// by `coco login`, persisted provider-scoped, and auto-refreshed; the owning
+/// `vercel-ai-<provider>` crate's `*Auth` wire mode consumes them. `env_key` /
+/// `api_key` are ignored under `OAuth`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProviderAuth {
+    #[default]
+    ApiKey,
+    OAuth {
+        flow: OAuthFlowId,
+    },
+}
 
 /// Wire format for `~/.coco/providers.json` and the per-user
 /// `settings.providers.<name>` overlay. Every field is `Option` so an
@@ -46,6 +64,10 @@ pub struct PartialProviderConfig {
     pub timeout_secs: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wire_api: Option<WireApi>,
+    /// Authentication mode. Defaults to `ApiKey`. `OAuth { flow }` selects a
+    /// subscription login managed by `coco-provider-auth`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<ProviderAuth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_options: Option<PartialProviderClientOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,6 +100,7 @@ impl fmt::Debug for PartialProviderConfig {
             .field("base_url", &self.base_url)
             .field("timeout_secs", &self.timeout_secs)
             .field("wire_api", &self.wire_api)
+            .field("auth", &self.auth)
             .field("client_options", &self.client_options)
             .field("models", &self.models)
             .field("provider_options", &self.provider_options)
@@ -107,6 +130,9 @@ pub struct ProviderConfig {
     pub base_url: String,
     pub timeout_secs: i64,
     pub wire_api: WireApi,
+    /// Authentication mode. `ApiKey` (default) uses `env_key` / `api_key`;
+    /// `OAuth { flow }` uses `coco-provider-auth`-managed subscription creds.
+    pub auth: ProviderAuth,
     pub client_options: ProviderClientOptions,
     /// Per-(provider, model) entries — `BTreeMap` so on-disk
     /// serialisation is byte-stable.
@@ -128,6 +154,7 @@ impl Default for ProviderConfig {
             base_url: String::new(),
             timeout_secs: DEFAULT_TIMEOUT_SECS,
             wire_api: WireApi::Chat,
+            auth: ProviderAuth::default(),
             client_options: ProviderClientOptions::default(),
             models: BTreeMap::new(),
             provider_options: BTreeMap::new(),
@@ -166,13 +193,21 @@ impl ProviderConfig {
             name: map_key.to_string(),
             field: ConfigField::Api,
         })?;
-        let env_key = partial
-            .env_key
-            .clone()
-            .ok_or(ConfigError::IncompleteProviderEntry {
-                name: map_key.to_string(),
-                field: ConfigField::EnvKey,
-            })?;
+        let auth = partial.auth.clone().unwrap_or_default();
+        // OAuth providers authenticate via `coco-provider-auth`, not an env var
+        // or config `api_key`, so `env_key` is irrelevant — default it to empty
+        // rather than rejecting the (otherwise valid) entry. ApiKey providers
+        // still require it.
+        let env_key = match partial.env_key.clone() {
+            Some(k) => k,
+            None if matches!(auth, ProviderAuth::OAuth { .. }) => String::new(),
+            None => {
+                return Err(ConfigError::IncompleteProviderEntry {
+                    name: map_key.to_string(),
+                    field: ConfigField::EnvKey,
+                });
+            }
+        };
         let base_url = partial
             .base_url
             .clone()
@@ -220,6 +255,7 @@ impl ProviderConfig {
             base_url,
             timeout_secs: partial.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
             wire_api: partial.wire_api.unwrap_or(WireApi::Chat),
+            auth,
             client_options,
             models,
             provider_options,
@@ -260,6 +296,9 @@ impl ProviderConfig {
         }
         if let Some(wire_api) = overlay.wire_api {
             self.wire_api = wire_api;
+        }
+        if let Some(auth) = &overlay.auth {
+            self.auth = auth.clone();
         }
         if let Some(client_opts) = &overlay.client_options {
             self.client_options.merge_partial(client_opts);

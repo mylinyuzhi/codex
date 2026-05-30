@@ -25,23 +25,30 @@ pub(super) fn try_render(
         return Some(());
     };
     let (tool_name, output) = tool_result_output(cell.source.as_ref())?;
-    if tr.is_error {
-        lines.push(Line::from(vec![
-            Span::raw("  ● ").fg(w.styles.tool_error()),
-            Span::raw(tool_name).fg(w.styles.text()).bold(),
-            Span::raw(": ").fg(w.styles.dim()),
-            Span::raw(output).fg(w.styles.error()),
-        ]));
+    // Header row mirrors the invocation: the `●` glyph groups call+result and
+    // its colour encodes status (red ⇒ error, green ⇒ completed).
+    let (glyph_color, name_suffix) = if tr.is_error {
+        (w.styles.tool_error(), ": ")
     } else {
-        // Mirror the invocation row: the result block reuses the `●`
-        // glyph so the eye groups call+result. Status is colour-encoded
-        // (green ⇒ completed). Body is indented four spaces past the
-        // gutter so column alignment matches the tool-use header.
-        lines.push(Line::from(vec![
-            Span::raw("  ● ").fg(w.styles.tool_completed()),
-            Span::raw(tool_name).fg(w.styles.text()).bold(),
-        ]));
-        w.render_output_preview(&output, lines);
+        (w.styles.tool_completed(), "")
+    };
+    let mut header = vec![
+        Span::raw("  ● ").fg(glyph_color),
+        Span::raw(tool_name.clone()).fg(w.styles.text()).bold(),
+    ];
+    if !name_suffix.is_empty() {
+        header.push(Span::raw(name_suffix).fg(w.styles.dim()));
     }
+    lines.push(Line::from(header));
+    // Standalone cell path — no invocation cell here, so the tool input is
+    // unavailable and input-derived views (diffs) degrade to output-only.
+    super::tool_result_render::render_tool_result_body(
+        &w.tool_result_ctx(),
+        &tool_name,
+        None,
+        &output,
+        tr.is_error,
+        lines,
+    );
     Some(())
 }

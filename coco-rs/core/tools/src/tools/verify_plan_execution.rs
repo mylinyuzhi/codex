@@ -41,7 +41,7 @@ pub struct VerifyPlanExecutionInput {
 }
 
 /// Status of the verification checkpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VerifyPlanExecutionStatus {
     /// A pending plan verification was active and we recorded it.
@@ -53,7 +53,7 @@ pub enum VerifyPlanExecutionStatus {
 /// Typed output. Wire fields use snake_case (no TS source to mirror —
 /// coco-rs-only tool); legacy `planFilePath` (camelCase) is dropped
 /// per the "disregard backward compatibility" directive.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct VerifyPlanExecutionOutput {
     pub status: VerifyPlanExecutionStatus,

@@ -20,13 +20,16 @@ coco-file-watch.workspace = true
 coco-git.workspace = true
 coco-keybindings = { workspace = true, features = ["crossterm", "loader"] }
 coco-subagent.workspace = true
+coco-tui-markdown = { workspace = true, features = ["mermaid"] }
 coco-tui-ui.workspace = true
 coco-utils-string.workspace = true
 dirs.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha2.workspace = true
 anyhow.workspace = true
+similar.workspace = true
 ratatui.workspace = true
 crossterm = { workspace = true, features = ["event-stream"] }
 tokio = { workspace = true, features = ["sync", "macros", "time", "process"] }
@@ -54,3 +57,14 @@ insta.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true
 vt100.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "native_replay"
+harness = false
+required-features = ["testing"]
+
+[[bench]]
+name = "native_surface_normal"
+harness = false
+required-features = ["testing"]

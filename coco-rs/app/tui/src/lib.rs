@@ -28,6 +28,7 @@ pub mod keybinding_dispatch;
 pub mod keybinding_resolver;
 pub mod keybinding_setup;
 pub mod keymap;
+mod perf;
 mod presentation;
 pub mod server_notification_handler;
 pub mod state;

@@ -17,7 +17,7 @@ fn native_draw_does_not_duplicate_header_across_streaming_redraws() {
     let mut state = AppState::new();
     state.session.provider = "deepseek-openai".to_string();
     state.session.model = "deepseek-v4-flash".to_string();
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
     let t0 = std::time::Instant::now();
 
     controller
@@ -84,7 +84,7 @@ fn native_draw_emits_session_header_on_startup() {
     let mut state = AppState::new();
     state.session.provider = "deepseek-openai".to_string();
     state.session.model = "deepseek-v4-flash".to_string();
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
 
     let outcome = controller.draw(&mut terminal, &state).expect("draw");
 
@@ -112,7 +112,7 @@ fn native_draw_appends_finalized_history_and_keeps_live_tail_in_viewport() {
     streaming.append_text("live response");
     streaming.reveal_all();
     state.ui.streaming = Some(streaming);
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
 
     let outcome = controller.draw(&mut terminal, &state).expect("draw");
 
@@ -130,13 +130,258 @@ fn native_draw_appends_finalized_history_and_keeps_live_tail_in_viewport() {
 }
 
 #[test]
+fn native_draw_provisionally_appends_stable_stream_and_consolidates_final_message() {
+    let backend = TestBackend::new(64, 18);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
+    let mut state = AppState::new();
+    let mut controller = NativeSurfaceController::default();
+    controller
+        .draw(&mut terminal, &state)
+        .expect("initial draw");
+
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\nbeta");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    controller.draw(&mut terminal, &state).expect("stream draw");
+
+    let streaming_text = plain_terminal_text(&terminal);
+    assert_eq!(
+        streaming_text.matches("alpha").count(),
+        1,
+        "{streaming_text}"
+    );
+    assert_eq!(
+        streaming_text.matches("beta").count(),
+        1,
+        "{streaming_text}"
+    );
+
+    state.ui.streaming = None;
+    test_helpers::push_assistant_text(&mut state.session, "alpha\n\nbeta");
+    controller
+        .draw(&mut terminal, &state)
+        .expect("final consolidation draw");
+
+    let final_text = plain_terminal_text(&terminal);
+    assert_eq!(final_text.matches("alpha").count(), 1, "{final_text}");
+    assert_eq!(final_text.matches("beta").count(), 1, "{final_text}");
+}
+
+#[test]
+fn native_draw_keeps_stable_stream_visible_when_provisional_append_writes_no_rows() {
+    let backend = TestBackend::new(64, 12);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 64, 12));
+    let mut state = AppState::new();
+    let mut controller = NativeSurfaceController::default();
+    let plan = SurfaceFramePlan {
+        modal_placement: None,
+        history_surface: HistorySurfaceMode::NativeScrollback,
+        attention_requested: false,
+    };
+
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\nbeta");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    controller
+        .draw_with_plan(&mut terminal, &state, plan, None)
+        .expect("stream draw");
+
+    assert_eq!(terminal.visible_history_rows(), 0);
+    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert_eq!(text.matches("alpha").count(), 1, "{text}");
+    assert_eq!(text.matches("beta").count(), 1, "{text}");
+}
+
+#[test]
+fn native_draw_repairs_provisional_append_after_mid_stream_resize() {
+    let backend = TestBackend::new(64, 18);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
+    let mut state = AppState::new();
+    let mut controller = NativeSurfaceController::default();
+    controller
+        .draw(&mut terminal, &state)
+        .expect("initial draw");
+
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\nbeta\ngamma");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    controller.draw(&mut terminal, &state).expect("stream draw");
+
+    terminal.set_viewport_area(Rect::new(0, 12, 32, 6));
+    controller
+        .draw(&mut terminal, &state)
+        .expect("resize stream draw");
+
+    let resized_text = plain_terminal_text(&terminal);
+    assert_eq!(resized_text.matches("alpha").count(), 1, "{resized_text}");
+    assert_eq!(resized_text.matches("gamma").count(), 1, "{resized_text}");
+
+    state.ui.streaming = None;
+    test_helpers::push_assistant_text(&mut state.session, "alpha\n\nbeta\ngamma");
+    let outcome = controller
+        .draw(&mut terminal, &state)
+        .expect("final consolidation draw");
+
+    assert!(matches!(
+        outcome.history,
+        HistoryEmissionOutcome::Replayed { .. } | HistoryEmissionOutcome::Appended { .. }
+    ));
+    let final_text = plain_terminal_text(&terminal);
+    assert_eq!(final_text.matches("alpha").count(), 1, "{final_text}");
+    assert_eq!(final_text.matches("beta").count(), 1, "{final_text}");
+    assert_eq!(final_text.matches("gamma").count(), 1, "{final_text}");
+}
+
+#[test]
+fn native_draw_replays_when_provisional_render_key_differs_on_finalize() {
+    let backend = TestBackend::new(64, 18);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
+    let mut state = AppState::new();
+    let mut controller = NativeSurfaceController::default();
+    controller
+        .draw(&mut terminal, &state)
+        .expect("initial draw");
+
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\nbeta");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    controller.draw(&mut terminal, &state).expect("stream draw");
+
+    state.ui.theme.accent = ratatui::style::Color::LightRed;
+    state.ui.streaming = None;
+    test_helpers::push_assistant_text(&mut state.session, "alpha\n\nbeta");
+    let outcome = controller
+        .draw(&mut terminal, &state)
+        .expect("final consolidation draw");
+
+    assert!(matches!(
+        outcome.history,
+        HistoryEmissionOutcome::Replayed { .. }
+    ));
+    let final_text = plain_terminal_text(&terminal);
+    assert_eq!(final_text.matches("alpha").count(), 1, "{final_text}");
+    assert_eq!(final_text.matches("beta").count(), 1, "{final_text}");
+}
+
+#[test]
+fn native_draw_fast_noops_when_transcript_revision_is_unchanged() {
+    let backend = TestBackend::new(48, 9);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 5, 48, 4));
+    let mut state = AppState::new();
+    test_helpers::push_assistant_text(&mut state.session, "stable");
+    let mut controller = NativeSurfaceController::default();
+    controller.draw(&mut terminal, &state).expect("first draw");
+    let revision = state.session.transcript.revision();
+
+    let outcome = controller.draw(&mut terminal, &state).expect("second draw");
+
+    assert_eq!(
+        outcome.history,
+        HistoryEmissionOutcome::FastNoop { revision }
+    );
+}
+
+#[test]
+fn native_draw_replays_finalized_history_when_theme_changes() {
+    let backend = TestBackend::new(48, 9);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 5, 48, 4));
+    let mut state = AppState::new();
+    test_helpers::push_assistant_text(&mut state.session, "stable");
+    let mut controller = NativeSurfaceController::default();
+    controller.draw(&mut terminal, &state).expect("first draw");
+
+    state.ui.theme.accent = ratatui::style::Color::LightRed;
+    let outcome = controller
+        .draw(&mut terminal, &state)
+        .expect("theme replay");
+
+    assert!(matches!(
+        outcome.history,
+        HistoryEmissionOutcome::Replayed { .. }
+    ));
+}
+
+#[test]
+fn native_draw_appends_after_transcript_revision_changes() {
+    let backend = TestBackend::new(48, 12);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 8, 48, 4));
+    let mut state = AppState::new();
+    test_helpers::push_assistant_text(&mut state.session, "one");
+    let mut controller = NativeSurfaceController::default();
+    controller.draw(&mut terminal, &state).expect("first draw");
+
+    test_helpers::push_assistant_text(&mut state.session, "two");
+    let outcome = controller.draw(&mut terminal, &state).expect("append draw");
+
+    assert!(matches!(
+        outcome.history,
+        HistoryEmissionOutcome::Appended {
+            message_count: 1,
+            ..
+        }
+    ));
+    let text = plain_terminal_text(&terminal);
+    assert!(text.contains("one"), "{text}");
+    assert!(text.contains("two"), "{text}");
+}
+
+#[test]
+fn native_draw_reappends_stable_stream_after_height_replay() {
+    let backend = TestBackend::new(64, 18);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
+    let mut state = AppState::new();
+    let mut controller = NativeSurfaceController::default();
+    controller
+        .draw(&mut terminal, &state)
+        .expect("initial draw");
+
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\nbeta");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    controller.draw(&mut terminal, &state).expect("stream draw");
+
+    terminal.set_viewport_area(Rect::new(0, 11, 64, 7));
+    controller
+        .draw(&mut terminal, &state)
+        .expect("schedule height replay");
+    let outcome = controller
+        .draw_at(
+            &mut terminal,
+            &state,
+            std::time::Instant::now() + std::time::Duration::from_millis(100),
+        )
+        .expect("height replay");
+
+    assert!(matches!(
+        outcome.history,
+        HistoryEmissionOutcome::Replayed { .. }
+    ));
+    let text = plain_terminal_text(&terminal);
+    assert_eq!(text.matches("alpha").count(), 1, "{text}");
+    assert_eq!(text.matches("beta").count(), 1, "{text}");
+}
+
+#[test]
 fn native_draw_replays_history_when_source_prefix_diverges() {
     let backend = TestBackend::new(48, 8);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 5, 48, 3));
     let mut state = AppState::new();
     test_helpers::push_assistant_text(&mut state.session, "one");
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
     controller.draw(&mut terminal, &state).expect("first draw");
 
     // Reset the engine-authoritative transcript so the prefix-divergence
@@ -164,7 +409,7 @@ fn native_draw_replays_history_when_thinking_display_changes() {
     terminal.set_viewport_area(Rect::new(0, 6, 64, 4));
     let mut state = AppState::new();
     test_helpers::push_assistant_thinking(&mut state.session, "Need to inspect files.", 1300, 15);
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
     controller.draw(&mut terminal, &state).expect("first draw");
 
     state.ui.show_thinking = true;
@@ -204,7 +449,7 @@ fn native_draw_replays_history_when_reasoning_metadata_changes() {
         .session
         .transcript
         .on_message_appended(std::sync::Arc::new(msg));
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
     controller.draw(&mut terminal, &state).expect("first draw");
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
     assert!(text.contains("F2 to expand"));
@@ -240,7 +485,7 @@ fn native_draw_replays_after_resize_requested_during_stream_finishes() {
     terminal.set_viewport_area(Rect::new(0, 5, 20, 3));
     let mut state = AppState::new();
     state.ui.streaming = Some(StreamingState::new());
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
 
     controller
         .draw(&mut terminal, &state)
@@ -269,7 +514,7 @@ fn native_draw_stream_finish_replay_does_not_leave_gap_before_input() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 26, 64, 4));
     let mut state = AppState::new();
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
 
     controller
         .draw(&mut terminal, &state)
@@ -310,7 +555,7 @@ fn native_draw_replays_after_viewport_height_change_debounce() {
     terminal.set_viewport_area(Rect::new(0, 7, 48, 3));
     let mut state = AppState::new();
     test_helpers::push_assistant_text(&mut state.session, "height replay");
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
     controller
         .draw(&mut terminal, &state)
         .expect("initial draw");
@@ -319,7 +564,10 @@ fn native_draw_replays_after_viewport_height_change_debounce() {
     let height_change = controller
         .draw(&mut terminal, &state)
         .expect("height change draw");
-    assert_eq!(height_change.history, HistoryEmissionOutcome::Noop);
+    assert!(matches!(
+        height_change.history,
+        HistoryEmissionOutcome::FastNoop { .. }
+    ));
 
     let outcome = controller
         .draw_at(
@@ -346,7 +594,7 @@ fn native_draw_defers_history_while_modal_is_open() {
     let mut state = AppState::new();
     test_helpers::push_assistant_text(&mut state.session, "deferred");
     state.ui.show_modal(crate::state::ModalState::Help);
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
 
     let outcome = controller.draw(&mut terminal, &state).expect("draw");
 
@@ -362,7 +610,7 @@ fn native_draw_renders_finalized_history_in_viewport_when_terminal_is_incompatib
     terminal.set_viewport_area(Rect::new(0, 0, 48, 12));
     let mut state = AppState::new();
     test_helpers::push_assistant_text(&mut state.session, "zellij deferred");
-    let mut controller = NativeSurfaceController::new();
+    let mut controller = NativeSurfaceController::default();
     let plan = SurfaceFramePlan {
         modal_placement: None,
         history_surface: HistorySurfaceMode::Viewport,
@@ -370,7 +618,7 @@ fn native_draw_renders_finalized_history_in_viewport_when_terminal_is_incompatib
     };
 
     let outcome = controller
-        .draw_with_plan(&mut terminal, &state, plan)
+        .draw_with_plan(&mut terminal, &state, plan, None)
         .expect("draw");
 
     assert_eq!(outcome.history, HistoryEmissionOutcome::Noop);

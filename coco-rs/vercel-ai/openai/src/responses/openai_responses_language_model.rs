@@ -316,7 +316,14 @@ impl OpenAIResponsesLanguageModel {
         {
             body["parallel_tool_calls"] = Value::Bool(parallel);
         }
-        if let Some(store) = openai_options.store {
+        // ChatGPT-subscription (codex backend) requires `store: false`; that
+        // same `store: false` is also what unlocks the
+        // `reasoning.encrypted_content` include below. An explicit user
+        // `store` still wins.
+        let effective_store = openai_options
+            .store
+            .or_else(|| self.config.chatgpt_subscription.then_some(false));
+        if let Some(store) = effective_store {
             body["store"] = Value::Bool(store);
         }
         if let Some(ref metadata) = openai_options.metadata {
@@ -408,7 +415,7 @@ impl OpenAIResponsesLanguageModel {
         }
 
         // Auto-include reasoning encrypted_content when store=false and reasoning model
-        if is_reasoning_model && openai_options.store == Some(false) {
+        if is_reasoning_model && effective_store == Some(false) {
             ensure_include_entry(&mut body, "reasoning.encrypted_content");
         }
 

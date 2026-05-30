@@ -23,6 +23,7 @@ coco-config-reload.workspace = true
 coco-hooks.workspace = true
 coco-session.workspace = true
 coco-inference.workspace = true
+coco-provider-auth.workspace = true
 coco-compact.workspace = true
 coco-memory.workspace = true
 coco-shell.workspace = true

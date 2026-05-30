@@ -5,12 +5,12 @@ expression: "render_transcript_text(&app_state, &state, 84, 14)"
 ┌ Transcript ──────────────────────────────────────────────────────────────────────┐
 │  ‖ 2 in parallel                                                                 │
 │                                                                                  │
-│🔧  Glob({"pattern":"**/*.rs"})                                                    │
-│    src/lib.rs                                                                    │
+│🔧  Glob(**/*.rs)                                                                  │
+│  └ src/lib.rs                                                                    │
 │    src/main.rs                                                                   │
 │                                                                                  │
-│🔧  Glob({"pattern":"**/*.md"})                                                    │
-│    README.md                                                                     │
+│🔧  Glob(**/*.md)                                                                  │
+│  └ README.md                                                                     │
 │    AGENTS.md                                                                     │
 │                                                                                  │
 │ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jump                       │

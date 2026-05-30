@@ -79,6 +79,7 @@ pub use prompt_cache_settings::PromptCacheRuntimeConfig;
 pub use provider::PartialProviderClientOptions;
 pub use provider::PartialProviderConfig;
 pub use provider::PartialProviderModelOverride;
+pub use provider::ProviderAuth;
 pub use provider::ProviderClientOptions;
 pub use provider::ProviderConfig;
 pub use provider::ProviderModelOverride;

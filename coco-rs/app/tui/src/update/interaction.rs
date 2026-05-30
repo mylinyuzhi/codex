@@ -1413,6 +1413,11 @@ fn unavailable_reason_label(reason: &ProviderUnavailableReason) -> String {
             env_key = env_key.as_str()
         )
         .to_string(),
+        ProviderUnavailableReason::NotLoggedIn { provider } => t!(
+            "dialog.model_picker_unavailable_not_logged_in",
+            provider = provider.as_str()
+        )
+        .to_string(),
         ProviderUnavailableReason::NoModels => {
             t!("dialog.model_picker_unavailable_no_models").to_string()
         }

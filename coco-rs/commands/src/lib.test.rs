@@ -87,12 +87,16 @@ fn test_register_builtins() {
     //   (/commit lives in register_ts_parity_handlers; /pr removed —
     //   TS uses /commit-push-pr; /review is now a Prompt-type command
     //   registered in implementations.rs to match TS).
-    // - /login, /logout, /bug, /ant-trace are deliberately not ported;
+    // - /bug, /ant-trace are deliberately not ported;
     //   see commands/CLAUDE.md "Deliberately Not Ported".
-    assert_eq!(registry.len(), 19);
+    // - /login + /logout are registered (multi-provider OAuth subscriptions);
+    //   the interactive flow is handled in app/cli::tui_runner.
+    assert_eq!(registry.len(), 21);
     assert!(registry.get("help").is_some());
     assert!(registry.get("clear").is_some());
     assert!(registry.get("compact").is_some());
+    assert!(registry.get("login").is_some());
+    assert!(registry.get("logout").is_some());
     assert!(registry.get("config").is_some());
     assert!(registry.get("status").is_some());
     assert!(registry.get("model").is_some());
@@ -192,6 +196,6 @@ fn test_all_builtins_are_visible() {
     register_builtins(&mut registry);
 
     // All built-in commands should be visible (not hidden). Count tracks
-    // register_builtins (19 after parity-trim — see test_register_builtins).
-    assert_eq!(registry.visible().len(), 19);
+    // register_builtins (21 incl. /login + /logout — see test_register_builtins).
+    assert_eq!(registry.visible().len(), 21);
 }

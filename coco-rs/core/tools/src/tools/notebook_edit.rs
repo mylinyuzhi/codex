@@ -95,7 +95,7 @@ pub struct NotebookEditInput {
 /// `edit_mode` so each variant carries only the id field it owns:
 /// `replace`/`delete` resolve the existing `cell_id`, `insert` emits a
 /// fresh `new_cell_id` (or `null` when nbformat < 4.5).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "edit_mode", rename_all = "snake_case")]
 pub enum NotebookEditOutput {
     Replace {

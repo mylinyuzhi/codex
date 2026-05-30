@@ -75,7 +75,11 @@ pub(super) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
                         error: s.error.to_string(),
                     })
                     .collect();
-                let tombstoned = r.tombstones.iter().map(|t| t.to_string()).collect();
+                let tombstoned = r
+                    .tombstones
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
                 (skipped, tombstoned)
             })
             .unwrap_or_default();

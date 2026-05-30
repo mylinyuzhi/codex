@@ -60,6 +60,12 @@ pub use google_generative_ai_image_model::GoogleGenerativeAIImageModel;
 pub use google_generative_ai_image_model::GoogleGenerativeAIImageModelConfig;
 pub use google_generative_ai_language_model::GoogleGenerativeAILanguageModel;
 pub use google_generative_ai_language_model::GoogleGenerativeAILanguageModelConfig;
+// Reusable Gemini-wire building blocks for sibling transports
+// (`vercel-ai-google-codeassist`): the parsed response type, the SSE stream
+// factory, and its envelope mode.
+pub use google_generative_ai_language_model::ChunkEnvelope;
+pub use google_generative_ai_language_model::GoogleGenerateContentResponse;
+pub use google_generative_ai_language_model::create_google_stream;
 pub use google_generative_ai_video_model::GoogleGenerativeAIVideoModel;
 pub use google_generative_ai_video_model::GoogleGenerativeAIVideoModelConfig;
 

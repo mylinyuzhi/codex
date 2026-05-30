@@ -36,7 +36,7 @@ pub fn create_provider_and_model(
     match cfg.provider.as_str() {
         "openai_chat" => {
             let settings = vercel_ai_openai::OpenAIProviderSettings {
-                api_key: Some(cfg.api_key.clone()),
+                auth: vercel_ai_openai::OpenAIAuth::ApiKey(Some(cfg.api_key.clone())),
                 base_url: cfg.base_url.clone(),
                 full_url: cfg.full_url,
                 headers,
@@ -48,7 +48,7 @@ pub fn create_provider_and_model(
         }
         "openai_responses" => {
             let settings = vercel_ai_openai::OpenAIProviderSettings {
-                api_key: Some(cfg.api_key.clone()),
+                auth: vercel_ai_openai::OpenAIAuth::ApiKey(Some(cfg.api_key.clone())),
                 base_url: cfg.base_url.clone(),
                 full_url: cfg.full_url,
                 headers,
@@ -64,7 +64,7 @@ pub fn create_provider_and_model(
     let provider: Arc<dyn ProviderV4> = match cfg.provider.as_str() {
         "openai" => {
             let settings = vercel_ai_openai::OpenAIProviderSettings {
-                api_key: Some(cfg.api_key.clone()),
+                auth: vercel_ai_openai::OpenAIAuth::ApiKey(Some(cfg.api_key.clone())),
                 base_url: cfg.base_url.clone(),
                 headers,
                 ..Default::default()

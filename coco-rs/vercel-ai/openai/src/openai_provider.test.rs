@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn creates_provider_with_defaults() {
     let provider = OpenAIProvider::new(OpenAIProviderSettings {
-        api_key: Some("sk-test".into()),
+        auth: crate::OpenAIAuth::ApiKey(Some("sk-test".into())),
         ..Default::default()
     });
     assert_eq!(provider.provider(), "openai");
@@ -13,7 +13,7 @@ fn creates_provider_with_defaults() {
 fn creates_provider_with_custom_name() {
     let provider = OpenAIProvider::new(OpenAIProviderSettings {
         name: Some("my-openai".into()),
-        api_key: Some("sk-test".into()),
+        auth: crate::OpenAIAuth::ApiKey(Some("sk-test".into())),
         ..Default::default()
     });
     assert_eq!(provider.provider(), "my-openai");
@@ -22,7 +22,7 @@ fn creates_provider_with_custom_name() {
 #[test]
 fn chat_model_has_correct_provider() {
     let provider = OpenAIProvider::new(OpenAIProviderSettings {
-        api_key: Some("sk-test".into()),
+        auth: crate::OpenAIAuth::ApiKey(Some("sk-test".into())),
         ..Default::default()
     });
     let model = provider.chat("gpt-4o");
@@ -33,7 +33,7 @@ fn chat_model_has_correct_provider() {
 #[test]
 fn responses_model_has_correct_provider() {
     let provider = OpenAIProvider::new(OpenAIProviderSettings {
-        api_key: Some("sk-test".into()),
+        auth: crate::OpenAIAuth::ApiKey(Some("sk-test".into())),
         ..Default::default()
     });
     let model = provider.responses("gpt-4o");
@@ -44,7 +44,7 @@ fn responses_model_has_correct_provider() {
 #[test]
 fn language_model_defaults_to_responses() {
     let provider = OpenAIProvider::new(OpenAIProviderSettings {
-        api_key: Some("sk-test".into()),
+        auth: crate::OpenAIAuth::ApiKey(Some("sk-test".into())),
         ..Default::default()
     });
     let model = provider.language_model("gpt-4o").expect("should succeed");
@@ -54,7 +54,7 @@ fn language_model_defaults_to_responses() {
 #[test]
 fn embedding_model_works() {
     let provider = OpenAIProvider::new(OpenAIProviderSettings {
-        api_key: Some("sk-test".into()),
+        auth: crate::OpenAIAuth::ApiKey(Some("sk-test".into())),
         ..Default::default()
     });
     let model = provider
@@ -66,7 +66,7 @@ fn embedding_model_works() {
 #[test]
 fn image_model_works() {
     let provider = OpenAIProvider::new(OpenAIProviderSettings {
-        api_key: Some("sk-test".into()),
+        auth: crate::OpenAIAuth::ApiKey(Some("sk-test".into())),
         ..Default::default()
     });
     let model = provider.image_model("dall-e-3").expect("should succeed");

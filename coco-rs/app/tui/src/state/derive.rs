@@ -128,35 +128,36 @@ fn assistant_cells(
     out
 }
 
-/// Extract a compact textual preview of the tool call's input JSON for
-/// the row labelled `🔧 <tool>(<preview>)`. Walks the wrapping assistant
-/// message's content parts for the `ToolCallPart` whose `tool_call_id`
-/// matches and renders its JSON input as a single-line string. Returns
-/// an empty string when the cell source isn't an assistant message or
-/// the matching tool call cannot be found.
-pub(crate) fn extract_tool_call_input_preview(msg: &Message, call_id: &str) -> String {
+/// Extract the raw input `Value` of the tool call `call_id` from the
+/// assistant message that issued it. Returns the structured value so renderers
+/// can pull typed fields — e.g. `old_string`/`new_string` for a diff or
+/// `command` for a shell invocation — and [`tool_call_header_preview`] can
+/// flatten it to the one-line header. `None` when the message isn't the issuing
+/// assistant turn or the call isn't found.
+pub(crate) fn extract_tool_call_input(msg: &Message, call_id: &str) -> Option<serde_json::Value> {
     let Message::Assistant(asst) = msg else {
-        return String::new();
+        return None;
     };
     let LlmMessage::Assistant { content, .. } = &asst.message else {
-        return String::new();
+        return None;
     };
-    content
-        .iter()
-        .find_map(|part| match part {
-            AssistantContent::ToolCall(tc) if tc.tool_call_id == call_id => {
-                // Render JSON-string inputs unwrapped so the
-                // `🔧 Bash(ls -la)` row reads naturally — the JSON
-                // representation would surface as `"ls -la"` with
-                // literal quotes, which is noise for the user.
-                Some(match &tc.input {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                })
-            }
-            _ => None,
-        })
-        .unwrap_or_default()
+    content.iter().find_map(|part| match part {
+        AssistantContent::ToolCall(tc) if tc.tool_call_id == call_id => Some(tc.input.clone()),
+        _ => None,
+    })
+}
+
+/// Header-friendly one-line preview of a tool call's input. An object input
+/// (the production shape) goes through the per-tool field picker so the header
+/// reads `Edit(Cargo.toml)` / `Bash(ls -la)` rather than a raw JSON blob; a bare
+/// string is shown unwrapped. Shared by every tool-invocation header (inline
+/// chat, expanded cell, transcript reader) so they never diverge.
+pub(crate) fn tool_call_header_preview(msg: &Message, call_id: &str, tool_name: &str) -> String {
+    match extract_tool_call_input(msg, call_id) {
+        Some(serde_json::Value::String(s)) => s,
+        Some(other) => crate::tool_display::single_line_tool_input(tool_name, &other),
+        None => String::new(),
+    }
 }
 
 /// Extract `(tool_name, output_text)` from a `Message::ToolResult`.
@@ -433,8 +434,8 @@ pub(crate) mod test_helpers {
     }
 
     /// Push an assistant tool-call invocation. `input_preview` is
-    /// encoded as a JSON string so `extract_tool_call_input_preview`
-    /// renders it unwrapped (matches what TS-side fixtures expect).
+    /// encoded as a JSON string so [`tool_call_header_preview`] renders it
+    /// unwrapped (matches what TS-side fixtures expect).
     #[allow(dead_code)]
     pub fn push_tool_use(
         state: &mut SessionState,
@@ -446,6 +447,30 @@ pub(crate) mod test_helpers {
         use coco_messages::ToolCallContent;
         use coco_messages::create_assistant_message;
         let input = serde_json::Value::String(input_preview.to_string());
+        let msg = create_assistant_message(
+            vec![AssistantContent::ToolCall(ToolCallContent::new(
+                call_id, tool_name, input,
+            ))],
+            "test-model",
+            coco_types::TokenUsage::default(),
+        );
+        push(state, msg);
+    }
+
+    /// Like [`push_tool_use`] but stores a structured object input (the
+    /// production shape) instead of a bare JSON string, so renderers that read
+    /// typed fields — diffs from `old_string`/`new_string`, the `$ command`
+    /// line — can be exercised in snapshot tests.
+    #[allow(dead_code)]
+    pub fn push_tool_use_input(
+        state: &mut SessionState,
+        call_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+    ) {
+        use coco_messages::AssistantContent;
+        use coco_messages::ToolCallContent;
+        use coco_messages::create_assistant_message;
         let msg = create_assistant_message(
             vec![AssistantContent::ToolCall(ToolCallContent::new(
                 call_id, tool_name, input,
@@ -487,23 +512,5 @@ pub(crate) mod test_helpers {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use coco_messages::AttachmentMessage;
-    use coco_messages::LlmMessage;
-    use coco_messages::Message;
-    use coco_types::AttachmentKind;
-
-    use super::message_to_cells;
-
-    #[test]
-    fn ui_hidden_attachment_derives_no_cells() {
-        let msg = Message::Attachment(AttachmentMessage::api(
-            AttachmentKind::DeferredToolsDelta,
-            LlmMessage::user_text("deferred tool reminder"),
-        ));
-
-        assert!(message_to_cells(Arc::new(msg)).is_empty());
-    }
-}
+#[path = "derive.test.rs"]
+mod tests;

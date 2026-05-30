@@ -21,6 +21,10 @@ pub enum ProviderUnavailableReason {
     /// No API key was resolved from the configured env var or fallback
     /// `providers.<name>.api_key` value.
     MissingApiKey { env_key: String },
+    /// An OAuth-subscription provider with no logged-in credential. Distinct
+    /// from `MissingApiKey` (whose hint names an env var) — the fix is
+    /// `coco login <provider>`, not setting a key.
+    NotLoggedIn { provider: String },
     /// The provider has no model rows visible to the picker.
     NoModels,
 }

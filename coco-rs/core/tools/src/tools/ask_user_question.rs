@@ -98,11 +98,14 @@ pub struct AskUserQuestionTool;
 #[async_trait::async_trait]
 impl Tool for AskUserQuestionTool {
     type Input = AskUserQuestionInput;
+    // Static schema from a literal `json!`; a parse failure means the literal
+    // is malformed (a programmer error), so panicking on first build is correct.
+    #[allow(clippy::expect_used)]
     fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
         static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
             std::sync::OnceLock::new();
         SCHEMA.get_or_init(|| {
-            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+            coco_tool_runtime::ToolInputSchema::from_static_value(serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
@@ -189,7 +192,6 @@ impl Tool for AskUserQuestionTool {
                 },
                 "required": []
             }))
-            .expect("AskUserQuestion input schema must be a valid object schema")
         })
     }
     /// Output stays on `Value`: `render_for_model` walks the

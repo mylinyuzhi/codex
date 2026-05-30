@@ -108,7 +108,13 @@ fn test_snapshot_with_tool_result() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
     test_helpers::push_user_text(&mut state.session, "1", "List files");
-    test_helpers::push_tool_use(&mut state.session, "c1", "Bash", "ls -la");
+    // Object input (production shape) so the header reads `Bash(ls -la)`.
+    test_helpers::push_tool_use_input(
+        &mut state.session,
+        "c1",
+        "Bash",
+        serde_json::json!({"command": "ls -la"}),
+    );
     test_helpers::push_tool_result(
         &mut state.session,
         "c1",
@@ -122,23 +128,63 @@ fn test_snapshot_with_tool_result() {
 }
 
 #[test]
+fn test_snapshot_edit_diff() {
+    // The headline feature: an Edit invocation renders a colored unified diff
+    // synthesized from old_string/new_string (not raw text).
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    test_helpers::push_user_text(&mut state.session, "1", "bump the version");
+    test_helpers::push_tool_use_input(
+        &mut state.session,
+        "c1",
+        "Edit",
+        serde_json::json!({
+            "file_path": "Cargo.toml",
+            "old_string": "version = \"0.1.0\"\nedition = \"2021\"",
+            "new_string": "version = \"0.2.0\"\nedition = \"2024\"",
+        }),
+    );
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "c1",
+        "Edit",
+        "updated Cargo.toml",
+        false,
+    );
+
+    let output = render_to_string(&state, 96, 24);
+    insta::assert_snapshot!("edit_diff", output);
+}
+
+#[test]
 fn test_snapshot_tool_result_middle_truncation() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
     test_helpers::push_user_text(&mut state.session, "1", "find the CLAUDE.md");
     test_helpers::push_tool_use(&mut state.session, "c1", "Glob", "**/CLAUDE.md");
+    // 18 paths exceed the Grep/Glob match-list cap so the renderer still
+    // exercises the head + "… +N lines" + tail middle-truncation path.
     test_helpers::push_tool_result(
         &mut state.session,
         "c1",
         "Glob",
-        "Found 8 files\n\
+        "Found 17 files\n\
          coco-rs/app/tui/CLAUDE.md\n\
          coco-rs/app/query/CLAUDE.md\n\
+         coco-rs/app/cli/CLAUDE.md\n\
+         coco-rs/app/state/CLAUDE.md\n\
          coco-rs/core/tools/CLAUDE.md\n\
          coco-rs/core/messages/CLAUDE.md\n\
+         coco-rs/core/permissions/CLAUDE.md\n\
+         coco-rs/core/context/CLAUDE.md\n\
          coco-rs/common/config/CLAUDE.md\n\
+         coco-rs/common/types/CLAUDE.md\n\
          coco-rs/services/inference/CLAUDE.md\n\
+         coco-rs/services/mcp/CLAUDE.md\n\
          coco-rs/utils/string/CLAUDE.md\n\
+         coco-rs/utils/git/CLAUDE.md\n\
+         coco-rs/vercel-ai/anthropic/CLAUDE.md\n\
+         coco-rs/vercel-ai/openai/CLAUDE.md\n\
          codex-rs/tui/CLAUDE.md",
         false,
     );
@@ -182,6 +228,55 @@ fn assistant_text_after_tool_result_keeps_dot_and_full_body() {
     assert!(output.contains("common/error/README.md"));
     assert!(output.contains("Error status codes"));
     assert!(!output.contains("… output truncated in UI"));
+}
+
+#[test]
+fn assistant_fenced_code_renders_with_border_end_to_end() {
+    // Proves the pulldown-cmark + syntect renderer (coco-tui-markdown) is wired
+    // through app/tui's surface path: a fenced block emits the boxed code-fence
+    // frame and preserves the source line.
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    test_helpers::push_assistant_text(
+        &mut state.session,
+        "Here is some code:\n\n```rust\nfn main() {}\n```",
+    );
+
+    let output = render_to_string(&state, 80, 24);
+    assert!(output.contains("fn main"), "code body missing:\n{output}");
+    assert!(
+        output.contains('┌') && output.contains('└'),
+        "code-fence border missing — markdown renderer not wired:\n{output}"
+    );
+}
+
+#[test]
+fn assistant_mermaid_fence_renders_as_diagram_end_to_end() {
+    // Proves coco-tui-mermaid is reachable through the finalized markdown path:
+    // a committed ```mermaid fence lays out as box-drawing cells (labels + box
+    // glyphs) rather than the verbatim `flowchart` source.
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    test_helpers::push_assistant_text(
+        &mut state.session,
+        "```mermaid\nflowchart LR\n  A[Start] --> B[Finish]\n```",
+    );
+
+    let output = render_to_string(&state, 96, 40);
+    assert!(
+        output.contains("Start") && output.contains("Finish"),
+        "diagram node labels missing:\n{output}"
+    );
+    assert!(
+        output
+            .chars()
+            .any(|c| matches!(c, '╭' | '╮' | '╰' | '╯' | '│' | '─')),
+        "expected box-drawing cells — mermaid not wired:\n{output}"
+    );
+    assert!(
+        !output.contains("flowchart LR"),
+        "fell back to verbatim source instead of a diagram:\n{output}"
+    );
 }
 
 #[test]

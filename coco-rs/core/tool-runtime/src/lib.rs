@@ -70,7 +70,6 @@ pub use can_use_tool::deny_all_handle;
 pub use context::ToolUseContext;
 pub use denial_tracking::DenialTracker;
 pub use derive::derive_input_schema_value;
-pub use derive::derive_output_schema;
 pub use error::SyntheticToolError;
 pub use error::ToolError;
 pub use error::ToolUseEvent;

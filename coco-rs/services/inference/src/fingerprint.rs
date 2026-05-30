@@ -178,6 +178,18 @@ fn digest_api_key_origin(cfg: &ProviderConfig) -> [u8; 32] {
     } else {
         update_optional_bytes(&mut hasher, None);
     }
+    // Auth mode: flipping ApiKey↔OAuth (or changing the OAuth flow) on the
+    // same provider name must rebuild the client — an OAuth provider resolves
+    // no api_key, so without this the two modes would digest identically when
+    // base_url / client_options match.
+    update_u8(&mut hasher, 0x12);
+    match cfg.auth {
+        coco_config::ProviderAuth::ApiKey => update_u8(&mut hasher, 0x00),
+        coco_config::ProviderAuth::OAuth { flow } => {
+            update_u8(&mut hasher, 0x01);
+            update_bytes(&mut hasher, flow.as_str().as_bytes());
+        }
+    }
     hasher.finalize().into()
 }
 

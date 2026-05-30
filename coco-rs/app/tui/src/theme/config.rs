@@ -310,6 +310,8 @@ pub struct PartialThemeColors {
     pub error: Option<String>,
     pub border: Option<String>,
     pub border_focused: Option<String>,
+    pub modal_border: Option<String>,
+    pub panel_border: Option<String>,
     pub scrollbar: Option<String>,
     pub plan_mode: Option<String>,
     pub selection_bg: Option<String>,
@@ -320,6 +322,14 @@ pub struct PartialThemeColors {
     pub code_string: Option<String>,
     pub code_comment: Option<String>,
     pub code_number: Option<String>,
+    pub code_function: Option<String>,
+    pub code_type: Option<String>,
+    pub code_operator: Option<String>,
+    pub code_bg: Option<String>,
+    pub blockquote: Option<String>,
+    pub heading: Option<String>,
+    pub hr: Option<String>,
+    pub strikethrough: Option<String>,
     pub hyperlink: Option<String>,
     pub table_border: Option<String>,
     pub table_header: Option<String>,
@@ -350,6 +360,8 @@ impl PartialThemeColors {
             && self.error.is_none()
             && self.border.is_none()
             && self.border_focused.is_none()
+            && self.modal_border.is_none()
+            && self.panel_border.is_none()
             && self.scrollbar.is_none()
             && self.plan_mode.is_none()
             && self.selection_bg.is_none()
@@ -360,6 +372,14 @@ impl PartialThemeColors {
             && self.code_string.is_none()
             && self.code_comment.is_none()
             && self.code_number.is_none()
+            && self.code_function.is_none()
+            && self.code_type.is_none()
+            && self.code_operator.is_none()
+            && self.code_bg.is_none()
+            && self.blockquote.is_none()
+            && self.heading.is_none()
+            && self.hr.is_none()
+            && self.strikethrough.is_none()
             && self.hyperlink.is_none()
             && self.table_border.is_none()
             && self.table_header.is_none()
@@ -375,7 +395,10 @@ pub fn theme_config_path() -> PathBuf {
 }
 
 pub fn load_theme_runtime_or_default() -> ThemeLoadResult {
-    let mut result = match ThemeRuntimeState::load_default_path() {
+    // Palette downsampling to the terminal's color depth happens at the single
+    // install chokepoint `UiState::apply_theme_runtime` (which also covers
+    // in-app theme switches), so it is intentionally NOT applied here.
+    match ThemeRuntimeState::load_default_path() {
         Ok(state) => ThemeLoadResult { state, error: None },
         Err(err) => ThemeLoadResult {
             state: ThemeRuntimeState::default(),
@@ -384,15 +407,7 @@ pub fn load_theme_runtime_or_default() -> ThemeLoadResult {
                 theme_config_path().display()
             )),
         },
-    };
-    // Quantize the active palette to the terminal's color depth (no-op on
-    // truecolor). Done at the app entry — NOT in `from_config`/`resolve` — so
-    // the loader's own tests keep asserting on true RGB values.
-    result
-        .state
-        .theme
-        .downsample(coco_tui_ui::color::color_capability());
-    result
+    }
 }
 
 pub fn save_theme_setting(setting: &ThemeSetting) -> Result<PathBuf> {
@@ -529,6 +544,16 @@ fn apply_colors(theme: &mut Theme, colors: &PartialThemeColors) -> Result<()> {
         "border_focused",
         &colors.border_focused,
     )?;
+    apply_color(
+        &mut theme.modal_border,
+        "modal_border",
+        &colors.modal_border,
+    )?;
+    apply_color(
+        &mut theme.panel_border,
+        "panel_border",
+        &colors.panel_border,
+    )?;
     apply_color(&mut theme.scrollbar, "scrollbar", &colors.scrollbar)?;
     apply_color(&mut theme.plan_mode, "plan_mode", &colors.plan_mode)?;
     apply_color(
@@ -559,6 +584,26 @@ fn apply_colors(theme: &mut Theme, colors: &PartialThemeColors) -> Result<()> {
         &colors.code_comment,
     )?;
     apply_color(&mut theme.code_number, "code_number", &colors.code_number)?;
+    apply_color(
+        &mut theme.code_function,
+        "code_function",
+        &colors.code_function,
+    )?;
+    apply_color(&mut theme.code_type, "code_type", &colors.code_type)?;
+    apply_color(
+        &mut theme.code_operator,
+        "code_operator",
+        &colors.code_operator,
+    )?;
+    apply_optional_color(&mut theme.code_bg, "code_bg", &colors.code_bg)?;
+    apply_color(&mut theme.blockquote, "blockquote", &colors.blockquote)?;
+    apply_color(&mut theme.heading, "heading", &colors.heading)?;
+    apply_color(&mut theme.hr, "hr", &colors.hr)?;
+    apply_color(
+        &mut theme.strikethrough,
+        "strikethrough",
+        &colors.strikethrough,
+    )?;
     apply_color(&mut theme.hyperlink, "hyperlink", &colors.hyperlink)?;
     apply_color(
         &mut theme.table_border,

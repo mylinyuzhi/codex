@@ -212,16 +212,23 @@ pub fn create_api_client(
 ) -> (Arc<ApiClient>, Option<coco_types::ProviderApi>, String) {
     use coco_types::ModelRole;
 
-    if let Some(main_spec) = runtime_config.model_roles.get(ModelRole::Main)
-        && runtime_config
-            .providers
-            .get(&main_spec.provider)
-            .and_then(coco_config::ProviderConfig::resolve_api_key)
-            .is_some()
-        && let Ok(client) = build_api_client(runtime_config, main_spec, retry.clone())
-    {
-        let model_id = main_spec.model_id.clone();
-        return (client, Some(main_spec.api), model_id);
+    if let Some(main_spec) = runtime_config.model_roles.get(ModelRole::Main) {
+        let provider_cfg = runtime_config.providers.get(&main_spec.provider);
+        // Always thread the session-shared `AuthService` resolver: it's a no-op
+        // for api-key providers and the live, auto-refreshed credential source
+        // for OAuth ones. `provider_credential_present` centralizes the
+        // "api-key present OR logged-in OAuth supplier" decision so this gate
+        // can't drift from `build_openai_auth`'s own auth-mode handling.
+        let resolver = crate::provider_login::shared_resolver();
+        let credentialed = provider_cfg.is_some_and(|p| {
+            coco_inference::model_factory::provider_credential_present(p, Some(&resolver))
+        });
+        if credentialed
+            && let Ok(client) =
+                build_api_client(runtime_config, main_spec, retry.clone(), Some(&resolver))
+        {
+            return (client, Some(main_spec.api), main_spec.model_id.clone());
+        }
     }
 
     let model: Arc<dyn LanguageModel> = Arc::new(MockModel::new());
@@ -667,8 +674,12 @@ pub async fn run_chat_with_options(
 
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
     let (client, provider_api, model_id) = create_api_client(&runtime_config, retry.clone());
-    let fallback_clients =
-        build_fallback_clients_for_role(&runtime_config, coco_types::ModelRole::Main, retry)?;
+    let fallback_clients = build_fallback_clients_for_role(
+        &runtime_config,
+        coco_types::ModelRole::Main,
+        retry,
+        Some(&crate::provider_login::shared_resolver()),
+    )?;
     let installed_fallback_count = fallback_clients.len();
     let recovery_policy = runtime_config
         .model_roles

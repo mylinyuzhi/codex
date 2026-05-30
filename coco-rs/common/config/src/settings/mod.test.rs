@@ -35,6 +35,58 @@ fn test_parse_settings_accepts_ts_permission_policy_key() {
 }
 
 #[test]
+fn test_parse_settings_accepts_tui_native_replay_cache_policy() {
+    let settings = parse_settings(
+        r#"{
+            "tui": {
+                "native_replay_cache": {
+                    "enabled": false,
+                    "max_entries": 7,
+                    "max_estimated_kb": 128,
+                    "min_cells": 3,
+                    "min_content_kb": 4,
+                    "admit_min_render_us": 99,
+                    "admit_min_result_kb": 5
+                }
+            }
+        }"#,
+    )
+    .expect("parse TUI settings");
+
+    let cache = settings.tui.native_replay_cache;
+    assert!(!cache.enabled);
+    assert_eq!(cache.max_entries, 7);
+    assert_eq!(cache.max_estimated_kb, 128);
+    assert_eq!(cache.min_cells, 3);
+    assert_eq!(cache.min_content_kb, 4);
+    assert_eq!(cache.admit_min_render_us, 99);
+    assert_eq!(cache.admit_min_result_kb, 5);
+}
+
+#[test]
+fn test_parse_settings_accepts_tui_performance_policy() {
+    let settings = parse_settings(
+        r#"{
+            "tui": {
+                "performance": {
+                    "enabled": true,
+                    "sample_every_n_frames": 10,
+                    "slow_frame_ms": 33,
+                    "slow_stage_us": 750
+                }
+            }
+        }"#,
+    )
+    .expect("parse TUI settings");
+
+    let performance = settings.tui.performance;
+    assert!(performance.enabled);
+    assert_eq!(performance.sample_every_n_frames, 10);
+    assert_eq!(performance.slow_frame_ms, 33);
+    assert_eq!(performance.slow_stage_us, 750);
+}
+
+#[test]
 fn test_load_settings_with_accepts_jsonc_layers() {
     let tmp = TempDir::new().expect("tempdir");
     let cwd = tmp.path().join("project");

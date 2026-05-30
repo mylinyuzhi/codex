@@ -128,7 +128,12 @@ pub fn build_engine_resources(
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
     let (client, provider_api, model_id) = create_api_client(runtime_config, retry.clone());
 
-    let fallback_clients = build_fallback_clients_for_role(runtime_config, ModelRole::Main, retry)?;
+    let fallback_clients = build_fallback_clients_for_role(
+        runtime_config,
+        ModelRole::Main,
+        retry,
+        Some(&crate::provider_login::shared_resolver()),
+    )?;
     let recovery_policy = runtime_config.model_roles.recovery(ModelRole::Main);
 
     let registry = ToolRegistry::new();
