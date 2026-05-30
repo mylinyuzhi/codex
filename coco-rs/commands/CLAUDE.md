@@ -34,8 +34,6 @@ account-management surface applies across providers.
 
 | Command | TS file | Reason |
 |---|---|---|
-| `/login` | `commands/login/index.ts` | OAuth flow tied to Anthropic accounts; multi-provider auth lives in `vercel-ai-*` per-provider crates. |
-| `/logout` | `commands/logout/index.ts` | Same as `/login`. |
 | `/feedback` (and its alias `/bug`) | `commands/feedback/index.ts` | Posts to Anthropic Statsig endpoint; gated on `DISABLE_FEEDBACK_COMMAND` + Bedrock/Vertex/Foundry env. The `/bug` alias is also not registered standalone — pointing users at the upstream Anthropic GitHub repo would mislead them about where to file coco-rs issues. |
 | `/fast` | `commands/fast/index.ts` | Claude.ai/console-only fast-mode picker; coco-rs exposes fast-mode via `FastModeState` + Ctrl+Shift+F keybind only. |
 | `/release-notes` | `commands/release-notes/index.ts` | Fetches Anthropic-hosted changelog; not slash-invoked in coco-rs (CLI subcommand only). |

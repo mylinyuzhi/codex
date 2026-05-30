@@ -15,6 +15,7 @@ pub mod display;
 pub mod double_press;
 pub mod engine;
 pub mod frame_rate_limiter;
+pub mod panic_guard;
 pub mod paste;
 pub mod style;
 pub mod theme;

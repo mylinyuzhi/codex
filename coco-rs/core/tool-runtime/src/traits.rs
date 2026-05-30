@@ -247,10 +247,9 @@ pub type ProgressReceiver = tokio::sync::mpsc::UnboundedReceiver<ToolProgress>;
 //
 // Tools whose schema is dynamic (e.g. `McpTool` — the schema comes
 // from the wire at runtime) use `type Input = Value; type Output =
-// Value;` on the typed `Tool` trait and override
-// `runtime_validation_schema` / `output_schema` manually. The blanket
-// then degrades to a no-op
-// round-trip at the boundary.
+// Value;` on the typed `Tool` trait and supply `runtime_validation_schema`
+// from the wire. The blanket then degrades to a no-op round-trip at the
+// boundary.
 //
 // ## Why two traits
 //
@@ -280,7 +279,6 @@ pub trait DynTool: Send + Sync + 'static {
 
     fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema;
     fn model_schema(&self, ctx: &SchemaContext) -> std::borrow::Cow<'_, Value>;
-    fn output_schema(&self) -> Option<Value>;
     fn strict(&self) -> bool;
 
     // -- Description --
@@ -360,7 +358,7 @@ pub trait DynTool: Send + Sync + 'static {
 //     pub limit: Option<i32>,
 // }
 //
-// #[derive(Serialize, Deserialize, JsonSchema)]
+// #[derive(Serialize, Deserialize)]
 // pub struct MyOutput { ... }
 //
 // #[async_trait]
@@ -387,13 +385,12 @@ pub trait Tool: Send + Sync + 'static {
     /// and override [`Tool::runtime_validation_schema`] manually.
     type Input: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static;
     /// Typed output — `render_for_model(&Self::Output)` reads fields
-    /// directly. Output also derives `JsonSchema` so the tool's
-    /// `output_schema()` flows from the same struct definition.
+    /// directly.
     ///
     /// Tools without a structured output (free-form text) set this to
     /// `String`; tools with rich shapes use `#[serde(tag = "...")]`
     /// tagged enums (the `AgentSpawnRenderResult` pattern).
-    type Output: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static;
+    type Output: Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static;
 
     // -- Identity --
 
@@ -435,14 +432,6 @@ pub trait Tool: Send + Sync + 'static {
     /// [`crate::schema::schema_omit_properties`].
     fn model_schema(&self, _ctx: &SchemaContext) -> std::borrow::Cow<'_, Value> {
         std::borrow::Cow::Borrowed(self.runtime_validation_schema().as_value())
-    }
-
-    /// Output schema. Default derives from `Self::Output`. Tools with
-    /// free-form text output (`type Output = String`) can override to
-    /// return `None` since string output doesn't benefit from structured
-    /// validation.
-    fn output_schema(&self) -> Option<Value> {
-        Some(crate::derive::derive_output_schema::<Self::Output>())
     }
 
     /// Whether to enforce strict schema validation.
@@ -852,9 +841,6 @@ impl<T: Tool> DynTool for T {
     }
     fn model_schema(&self, ctx: &SchemaContext) -> std::borrow::Cow<'_, Value> {
         Tool::model_schema(self, ctx)
-    }
-    fn output_schema(&self) -> Option<Value> {
-        Tool::output_schema(self)
     }
     fn strict(&self) -> bool {
         Tool::strict(self)

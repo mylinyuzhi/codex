@@ -81,9 +81,7 @@ def test_tool_invoke_sync():
         """Multiply."""
         return a * b
 
-    result = asyncio.get_event_loop().run_until_complete(
-        multiply.invoke({"a": 3, "b": 4})
-    )
+    result = asyncio.run(multiply.invoke({"a": 3, "b": 4}))
     assert result == 12
 
 
@@ -93,9 +91,7 @@ def test_tool_invoke_async():
         """Async add."""
         return a + b
 
-    result = asyncio.get_event_loop().run_until_complete(
-        async_add.invoke({"a": 5, "b": 7})
-    )
+    result = asyncio.run(async_add.invoke({"a": 5, "b": 7}))
     assert result == 12
 
 

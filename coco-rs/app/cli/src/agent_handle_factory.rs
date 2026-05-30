@@ -110,7 +110,14 @@ async fn resolve_explicit_client(
         model_id: selection.model_id.clone(),
     };
     let retry: coco_inference::RetryConfig = runtime.runtime_config.api.retry.clone().into();
-    match coco_inference::model_factory::build_api_client(&runtime.runtime_config, &spec, retry) {
+    // Subagents pointed at an OAuth-subscription provider authenticate via the
+    // session-shared resolver (same credential cells as Main / other roles).
+    match coco_inference::model_factory::build_api_client(
+        &runtime.runtime_config,
+        &spec,
+        retry,
+        Some(&crate::provider_login::shared_resolver()),
+    ) {
         Ok(client) => Some(client),
         Err(e) => {
             warn!(

@@ -93,7 +93,7 @@ struct LatchedModalSurface {
 }
 
 impl ModalSurfaceState {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn plan(
         &mut self,
         state: &AppState,

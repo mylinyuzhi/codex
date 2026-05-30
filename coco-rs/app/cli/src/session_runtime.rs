@@ -1190,10 +1190,15 @@ impl SessionRuntime {
         // this `Arc` — one cache means a given role's
         // `CacheBreakDetector` state stays continuous regardless of
         // which subsystem dispatched the call.
-        let role_client_cache = Arc::new(coco_inference::RoleClientCache::new(
-            runtime_config.clone(),
-            client.clone(),
-        ));
+        // Share the session's single `AuthService` resolver so non-Main roles
+        // pointed at an OAuth-subscription provider (e.g. `openai-chatgpt`)
+        // authenticate — and so a multi-provider/multi-role mix (Main on one
+        // logged-in provider, Explore on another, Fast on an api-key provider)
+        // all read from the same credential cells.
+        let role_client_cache = Arc::new(
+            coco_inference::RoleClientCache::new(runtime_config.clone(), client.clone())
+                .with_resolver(Some(crate::provider_login::shared_resolver())),
+        );
 
         // LLM-driven hook handler. `for_session` pre-resolves
         // `ModelRole::HookAgent` against the shared cache (spec-equality
@@ -1714,6 +1719,7 @@ impl SessionRuntime {
                 &self.runtime_config,
                 &spec,
                 retry,
+                Some(&crate::provider_login::shared_resolver()),
             )
             .map_err(anyhow::Error::from);
         }
@@ -1783,6 +1789,7 @@ impl SessionRuntime {
                 &self.runtime_config,
                 &ov.spec,
                 retry,
+                Some(&crate::provider_login::shared_resolver()),
             )
             .map_err(anyhow::Error::from)?;
             // Store the override first so concurrent readers (e.g. a

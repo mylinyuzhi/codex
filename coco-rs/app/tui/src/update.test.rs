@@ -218,6 +218,8 @@ fn toggle_syntax_highlighting_does_not_mutate_when_higher_priority_setting_wins(
         ),
         show_thinking: false,
         copy_full_response: false,
+        native_replay_cache: crate::surface::history_lines::HistoryReplayCachePolicy::default(),
+        ..DisplaySettings::default()
     };
 
     super::interaction::toggle_syntax_highlighting(&mut state);

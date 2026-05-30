@@ -88,7 +88,7 @@ impl ThemeName {
 /// - Avoid Blue for text (hard to read on dark terminals)
 /// - Avoid Yellow for backgrounds (invisible on light terminals)
 /// - Never use `.white()` — prefer Reset (inherits terminal foreground)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Theme {
     // ── Base ──
     pub primary: Color,
@@ -122,6 +122,11 @@ pub struct Theme {
     // ── UI Elements ──
     pub border: Color,
     pub border_focused: Color,
+    /// Border color for modal/overlay surfaces. Lets modals theme their frame
+    /// independently of the generic `border`.
+    pub modal_border: Color,
+    /// Border color for side/info panels.
+    pub panel_border: Color,
     pub scrollbar: Color,
     pub plan_mode: Color,
     pub selection_bg: Color,
@@ -136,6 +141,25 @@ pub struct Theme {
     pub code_string: Color,
     pub code_comment: Color,
     pub code_number: Color,
+    /// Function / method name highlight (syntect `entity.name.function.*`).
+    pub code_function: Color,
+    /// Type / class name highlight (syntect `storage.type.*`, `entity.name.type.*`).
+    pub code_type: Color,
+    /// Operator / punctuation highlight (syntect `keyword.operator.*`).
+    pub code_operator: Color,
+    /// Optional background fill behind fenced code blocks. `None` inherits the
+    /// terminal background.
+    pub code_bg: Option<Color>,
+
+    // ── Markdown blocks ──
+    /// Block-quote gutter / text color (plain quotes; GFM alerts reuse status colors).
+    pub blockquote: Color,
+    /// ATX heading foreground.
+    pub heading: Color,
+    /// Horizontal-rule color.
+    pub hr: Color,
+    /// Struck-through (`~~text~~`) foreground.
+    pub strikethrough: Color,
 
     // ── Extended UI ──
     pub hyperlink: Color,
@@ -170,6 +194,16 @@ impl Theme {
     #[allow(clippy::disallowed_methods)]
     fn default_theme() -> Self {
         Self {
+            modal_border: Color::DarkGray,
+            panel_border: Color::DarkGray,
+            code_function: Color::Cyan,
+            code_type: Color::Yellow,
+            code_operator: Color::DarkGray,
+            code_bg: None,
+            blockquote: Color::DarkGray,
+            heading: Color::Cyan,
+            hr: Color::DarkGray,
+            strikethrough: Color::DarkGray,
             primary: Color::Cyan,
             secondary: Color::DarkGray,
             accent: Color::Magenta,
@@ -221,6 +255,16 @@ impl Theme {
     #[allow(clippy::disallowed_methods)]
     fn dark_theme() -> Self {
         Self {
+            modal_border: Color::DarkGray,
+            panel_border: Color::DarkGray,
+            code_function: Color::LightCyan,
+            code_type: Color::LightYellow,
+            code_operator: Color::DarkGray,
+            code_bg: None,
+            blockquote: Color::DarkGray,
+            heading: Color::LightCyan,
+            hr: Color::DarkGray,
+            strikethrough: Color::DarkGray,
             primary: Color::LightCyan,
             secondary: Color::DarkGray,
             accent: Color::LightMagenta,
@@ -270,6 +314,16 @@ impl Theme {
     #[allow(clippy::disallowed_methods)]
     fn light_theme() -> Self {
         Self {
+            modal_border: Color::DarkGray,
+            panel_border: Color::DarkGray,
+            code_function: Color::Cyan,
+            code_type: Color::Magenta,
+            code_operator: Color::DarkGray,
+            code_bg: None,
+            blockquote: Color::DarkGray,
+            heading: Color::Cyan,
+            hr: Color::DarkGray,
+            strikethrough: Color::DarkGray,
             primary: Color::Cyan,
             secondary: Color::DarkGray,
             accent: Color::Magenta,
@@ -347,6 +401,16 @@ impl Theme {
 
     fn dark_ansi_theme() -> Self {
         Self {
+            modal_border: Color::DarkGray,
+            panel_border: Color::DarkGray,
+            code_function: Color::LightCyan,
+            code_type: Color::LightYellow,
+            code_operator: Color::DarkGray,
+            code_bg: None,
+            blockquote: Color::DarkGray,
+            heading: Color::LightCyan,
+            hr: Color::DarkGray,
+            strikethrough: Color::DarkGray,
             primary: Color::LightCyan,
             secondary: Color::DarkGray,
             accent: Color::LightMagenta,
@@ -398,6 +462,16 @@ impl Theme {
 
     fn light_ansi_theme() -> Self {
         Self {
+            modal_border: Color::DarkGray,
+            panel_border: Color::DarkGray,
+            code_function: Color::Cyan,
+            code_type: Color::Magenta,
+            code_operator: Color::DarkGray,
+            code_bg: None,
+            blockquote: Color::DarkGray,
+            heading: Color::Cyan,
+            hr: Color::DarkGray,
+            strikethrough: Color::DarkGray,
             primary: Color::Cyan,
             secondary: Color::DarkGray,
             accent: Color::Magenta,
@@ -453,6 +527,16 @@ impl Theme {
     #[allow(clippy::disallowed_methods)]
     fn dracula_theme() -> Self {
         Self {
+            modal_border: Color::Rgb(98, 114, 164),
+            panel_border: Color::Rgb(98, 114, 164),
+            code_function: Color::Rgb(80, 250, 123),  // green
+            code_type: Color::Rgb(139, 233, 253),     // cyan
+            code_operator: Color::Rgb(255, 121, 198), // pink
+            code_bg: None,
+            blockquote: Color::Rgb(98, 114, 164),
+            heading: Color::Rgb(139, 233, 253),
+            hr: Color::Rgb(98, 114, 164),
+            strikethrough: Color::Rgb(98, 114, 164),
             primary: Color::Rgb(139, 233, 253), // cyan
             secondary: Color::DarkGray,
             accent: Color::Rgb(255, 121, 198), // pink
@@ -507,6 +591,16 @@ impl Theme {
     #[allow(clippy::disallowed_methods)]
     fn nord_theme() -> Self {
         Self {
+            modal_border: Color::Rgb(76, 86, 106),
+            panel_border: Color::Rgb(76, 86, 106),
+            code_function: Color::Rgb(136, 192, 208), // nord8
+            code_type: Color::Rgb(143, 188, 187),     // nord7
+            code_operator: Color::Rgb(129, 161, 193), // nord9
+            code_bg: None,
+            blockquote: Color::Rgb(76, 86, 106),
+            heading: Color::Rgb(136, 192, 208),
+            hr: Color::Rgb(76, 86, 106),
+            strikethrough: Color::Rgb(76, 86, 106),
             primary: Color::Rgb(136, 192, 208), // nord8
             secondary: Color::DarkGray,
             accent: Color::Rgb(180, 142, 173), // nord15
@@ -589,6 +683,8 @@ impl Theme {
             error,
             border,
             border_focused,
+            modal_border,
+            panel_border,
             scrollbar,
             plan_mode,
             selection_bg,
@@ -599,6 +695,13 @@ impl Theme {
             code_string,
             code_comment,
             code_number,
+            code_function,
+            code_type,
+            code_operator,
+            blockquote,
+            heading,
+            hr,
+            strikethrough,
             hyperlink,
             table_border,
             table_header,
@@ -608,6 +711,7 @@ impl Theme {
             context_free,
         );
         self.user_message_bg = self.user_message_bg.map(|c| adapt_color(c, capability));
+        self.code_bg = self.code_bg.map(|c| adapt_color(c, capability));
     }
 }
 

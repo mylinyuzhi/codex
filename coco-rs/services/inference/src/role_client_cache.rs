@@ -40,6 +40,7 @@ use tokio::sync::RwLock;
 
 use crate::ApiClient;
 use crate::InferenceError;
+use crate::credentials::ProviderCredentialResolver;
 use crate::errors::inference_error::ModelRoleUnresolvedSnafu;
 use crate::model_factory::build_api_client;
 
@@ -52,6 +53,11 @@ pub struct RoleClientCache {
     runtime_config: Arc<RuntimeConfig>,
     main_client: Arc<ApiClient>,
     cache: RwLock<HashMap<ModelRole, Arc<ApiClient>>>,
+    /// Credential resolver for OAuth-subscription providers. Threaded into
+    /// `build_api_client` when resolving non-Main role clients so a role
+    /// pointed at an `openai-chatgpt`-style provider authenticates. `None`
+    /// when no subscription login is active.
+    resolver: Option<Arc<dyn ProviderCredentialResolver>>,
 }
 
 impl RoleClientCache {
@@ -63,7 +69,16 @@ impl RoleClientCache {
             runtime_config,
             main_client,
             cache: RwLock::new(HashMap::new()),
+            resolver: None,
         }
+    }
+
+    /// Attach a credential resolver so OAuth-subscription role clients
+    /// authenticate. Builder form so existing `new()` call sites are
+    /// unaffected.
+    pub fn with_resolver(mut self, resolver: Option<Arc<dyn ProviderCredentialResolver>>) -> Self {
+        self.resolver = resolver;
+        self
     }
 
     /// Borrow the canonical Main client. Useful when a caller needs a
@@ -107,7 +122,7 @@ impl RoleClientCache {
             return Ok(self.main_client.clone());
         }
         let retry: crate::RetryConfig = self.runtime_config.api.retry.clone().into();
-        let built = build_api_client(&self.runtime_config, &spec, retry)?;
+        let built = build_api_client(&self.runtime_config, &spec, retry, self.resolver.as_ref())?;
         let mut g = self.cache.write().await;
         if let Some(existing) = g.get(&role) {
             return Ok(existing.clone());

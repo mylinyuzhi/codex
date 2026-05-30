@@ -168,6 +168,20 @@ fn install_panic_hook_once() {
     INSTALLED.get_or_init(|| {
         let original_hook = panic::take_hook();
         panic::set_hook(Box::new(move |panic_info| {
+            // A panic inside a `PanicRestoreGuard` region (e.g. a contained
+            // mermaid-layout panic that the caller `catch_unwind`s and recovers
+            // from) must NOT tear down the terminal or print a backtrace — that
+            // would corrupt the live render for a fully-recovered panic. Still
+            // record it on the (off-screen) trace sink so a swallowed upstream
+            // bug stays diagnosable.
+            if coco_tui_ui::panic_guard::suppress_panic_restore() {
+                tracing::warn!(
+                    target: "tui::panic_guard",
+                    panic = %panic_info,
+                    "contained panic in catch_unwind region — recovering, terminal left intact"
+                );
+                return;
+            }
             let _ = restore_terminal();
             original_hook(panic_info);
         }));
@@ -211,11 +225,22 @@ impl Tui {
 
     /// Draw one native surface frame.
     pub fn draw(&mut self, state: &AppState) -> io::Result<TuiDrawOutcome> {
+        self.draw_with_frame_index(state, 0)
+    }
+
+    pub(crate) fn draw_with_frame_index(
+        &mut self,
+        state: &AppState,
+        frame_index: u64,
+    ) -> io::Result<TuiDrawOutcome> {
+        let perf_config = state.ui.display_settings.performance;
+        self.terminal.set_perf_stats_enabled(perf_config.enabled);
         if let Some(prepared) = self.suspend_context.prepare_resume_action() {
             prepared.apply(|| self.clear_surface_after_resume())?;
         }
 
         let size = self.terminal.size()?;
+        self.terminal.sync_screen_size(size);
         let plan = self.modal_surface.plan_for_native_viewport(
             state,
             self.compatibility,
@@ -223,10 +248,70 @@ impl Tui {
             size.width,
             NATIVE_VIEWPORT_MAX_HEIGHT,
         );
-        self.sync_surface_area(state, plan)?;
-        let outcome = self
-            .surface
-            .draw_with_plan(&mut self.terminal, state, plan)?;
+        // Build the interactive live tail exactly once per frame. The sizing
+        // pass (`sync_surface_area` → `interactive_viewport_desired_height`)
+        // and the paint pass (`render_live_viewport`) both consume it, so we
+        // compute it here and thread it through instead of rebuilding twice.
+        let live_start = perf_config.enabled.then(std::time::Instant::now);
+        let live =
+            (size.width > 0).then(|| self.surface.prepare_live_tail(state, size.width, plan));
+        let live_elapsed = live_start.map(|start| start.elapsed());
+        if let Some(elapsed) = live_elapsed
+            && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
+        {
+            tracing::debug!(
+                target: crate::perf::TARGET,
+                frame_index,
+                stage = "build_live_tail_lines",
+                duration_us = crate::perf::duration_us(elapsed),
+                lines = live.as_ref().map_or(0, Vec::len),
+                width = size.width,
+                "tui frame stage completed",
+            );
+        }
+        let live_height = live.as_ref().map(|lines| lines.len() as u16);
+        // Pass the size read above so the precomputed live tail (built at
+        // `size.width`) and the viewport area are derived from one consistent
+        // size, even if the terminal resizes mid-frame.
+        let sync_start = perf_config.enabled.then(std::time::Instant::now);
+        self.sync_surface_area(state, plan, size, live_height)?;
+        let sync_elapsed = sync_start.map(|start| start.elapsed());
+        if let Some(elapsed) = sync_elapsed
+            && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
+        {
+            tracing::debug!(
+                target: crate::perf::TARGET,
+                frame_index,
+                stage = "sync_surface_area",
+                duration_us = crate::perf::duration_us(elapsed),
+                width = size.width,
+                height = size.height,
+                viewport = ?self.terminal.viewport_area(),
+                "tui frame stage completed",
+            );
+        }
+        let surface_start = perf_config.enabled.then(std::time::Instant::now);
+        let outcome = self.surface.draw_with_plan_at_frame(
+            &mut self.terminal,
+            state,
+            plan,
+            live,
+            frame_index,
+        )?;
+        let surface_elapsed = surface_start.map(|start| start.elapsed());
+        if let Some(elapsed) = surface_elapsed
+            && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
+        {
+            tracing::debug!(
+                target: crate::perf::TARGET,
+                frame_index,
+                stage = "native_surface_draw",
+                duration_us = crate::perf::duration_us(elapsed),
+                viewport_updates = self.terminal.last_viewport_draw_stats().buffer_updates,
+                history_rows = self.terminal.last_history_insert_stats().wrapped_rows,
+                "tui frame stage completed",
+            );
+        }
         Ok(TuiDrawOutcome {
             layout: outcome.layout,
             retained_surface_visible: self.retained_surface_visible(),
@@ -292,8 +377,13 @@ impl Tui {
         std::io::Write::flush(self.terminal.backend_mut())
     }
 
-    fn sync_surface_area(&mut self, state: &AppState, plan: SurfaceFramePlan) -> io::Result<()> {
-        let size = self.terminal.size()?;
+    fn sync_surface_area(
+        &mut self,
+        state: &AppState,
+        plan: SurfaceFramePlan,
+        size: ratatui::layout::Size,
+        precomputed_live_height: Option<u16>,
+    ) -> io::Result<()> {
         let wants_alt = matches!(plan.modal_placement, Some(ModalSurfacePlacement::AltScreen));
 
         if wants_alt && !self.alt_screen_active {
@@ -318,6 +408,7 @@ impl Tui {
                 size.width,
                 NATIVE_VIEWPORT_MAX_HEIGHT,
                 plan,
+                precomputed_live_height,
             );
             native_viewport_area_with_max(
                 self.terminal.history_bottom_y(),

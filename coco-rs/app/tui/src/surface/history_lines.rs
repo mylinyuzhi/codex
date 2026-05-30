@@ -6,22 +6,62 @@
 //! truncation occurs at engine-message (not cell) boundaries — a
 //! single `Message::Assistant` with text + thinking + tool_use blocks
 //! contributes one increment, never three.
-// S2 adapter: this initially reuses the existing chat renderer in committed-only
-// mode while the native history cell renderer is carved out.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
+use coco_messages::Message;
+use coco_messages::SystemMessage;
+use coco_messages::SystemMessageLevel;
+use coco_types::CompactTrigger;
+use coco_types::TokenUsage;
 use ratatui::text::Line;
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::keybinding_resolver::KeybindingHandle;
 use crate::state::session::ReasoningMetadata;
+use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
+use crate::state::transcript_view::SystemCellKind;
 use crate::widgets::ChatWidget;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 
 pub(crate) const DEFAULT_MAX_REFLOW_ROWS: usize = 9_000;
+const DEFAULT_REPLAY_CACHE_ENTRIES: usize = 32;
+const DEFAULT_REPLAY_CACHE_BYTES: usize = 2 * 1024 * 1024;
+const REPLAY_CACHE_MIN_CELLS: usize = 32;
+const REPLAY_CACHE_MIN_CONTENT_BYTES: usize = 8 * 1024;
+const REPLAY_CACHE_ADMIT_MIN_ELAPSED: Duration = Duration::from_micros(250);
+const REPLAY_CACHE_ADMIT_MIN_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryReplayCachePolicy {
+    pub(crate) enabled: bool,
+    pub(crate) max_entries: usize,
+    pub(crate) max_estimated_bytes: usize,
+    pub(crate) min_cells: usize,
+    pub(crate) min_content_bytes: usize,
+    pub(crate) admit_min_render_elapsed: Duration,
+    pub(crate) admit_min_result_bytes: usize,
+}
+
+impl Default for HistoryReplayCachePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_entries: DEFAULT_REPLAY_CACHE_ENTRIES,
+            max_estimated_bytes: DEFAULT_REPLAY_CACHE_BYTES,
+            min_cells: REPLAY_CACHE_MIN_CELLS,
+            min_content_bytes: REPLAY_CACHE_MIN_CONTENT_BYTES,
+            admit_min_render_elapsed: REPLAY_CACHE_ADMIT_MIN_ELAPSED,
+            admit_min_result_bytes: REPLAY_CACHE_ADMIT_MIN_BYTES,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HistoryLineRenderOptions<'a> {
@@ -31,6 +71,7 @@ pub(crate) struct HistoryLineRenderOptions<'a> {
     pub(crate) show_system_reminders: bool,
     pub(crate) show_thinking: bool,
     pub(crate) kb_handle: Option<&'a KeybindingHandle>,
+    pub(crate) replay_cache_policy: HistoryReplayCachePolicy,
     /// TUI-side side-cache for reasoning metadata keyed by assistant
     /// message UUID. `None` ⇒ thinking cells render without the
     /// `· <duration> · <tokens>` badge (live append before
@@ -40,8 +81,188 @@ pub(crate) struct HistoryLineRenderOptions<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HistoryReplayLines {
-    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) lines: Arc<[Line<'static>]>,
     pub(crate) omitted_messages: usize,
+    pub(crate) stats: HistoryReplayRenderStats,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct HistoryReplayRenderStats {
+    pub(crate) finalized_render_calls: usize,
+    pub(crate) cells_rendered: usize,
+    pub(crate) cache_hit: bool,
+    pub(crate) cacheable: bool,
+    pub(crate) cache_lookup: HistoryReplayCacheLookup,
+    pub(crate) cache_skip_reason: Option<HistoryReplayCacheSkipReason>,
+    pub(crate) key_build_elapsed_us: u128,
+    pub(crate) cache_entries: usize,
+    pub(crate) cache_estimated_bytes: usize,
+    pub(crate) cell_content_estimated_bytes: usize,
+    pub(crate) replay_estimated_bytes: usize,
+    pub(crate) cache_evictions: usize,
+    pub(crate) cache_admitted: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum HistoryReplayCacheLookup {
+    #[default]
+    Skipped,
+    Hit,
+    Miss,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryReplayCacheSkipReason {
+    BelowReplayThreshold,
+    UnsupportedCell,
+    AdmissionTooSmall,
+    CacheDisabled,
+    EntryTooLarge,
+}
+
+#[derive(Debug, Clone)]
+struct HistoryReplayCacheEntry {
+    lines: Arc<[Line<'static>]>,
+    omitted_messages: usize,
+    bytes: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HistoryReplayCache {
+    entries: HashMap<HistoryReplayCacheKey, HistoryReplayCacheEntry>,
+    order: VecDeque<HistoryReplayCacheKey>,
+    max_entries: usize,
+    max_bytes: usize,
+    bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct HistoryReplayCacheKey {
+    max_rows: usize,
+    width: u16,
+    syntax_enabled: bool,
+    show_thinking: bool,
+    show_system_reminders: bool,
+    theme_hash: u64,
+    cell_count: usize,
+    content_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HistoryReplayCacheInsertOutcome {
+    inserted: bool,
+    estimated_bytes: usize,
+    evictions: usize,
+    skip_reason: Option<HistoryReplayCacheSkipReason>,
+}
+
+impl Default for HistoryReplayCache {
+    fn default() -> Self {
+        Self::with_limits(DEFAULT_REPLAY_CACHE_ENTRIES, DEFAULT_REPLAY_CACHE_BYTES)
+    }
+}
+
+impl HistoryReplayCache {
+    pub(crate) fn with_limits(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            max_entries,
+            max_bytes,
+            bytes: 0,
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.bytes = 0;
+    }
+
+    fn get(&self, key: HistoryReplayCacheKey) -> Option<&HistoryReplayCacheEntry> {
+        self.entries.get(&key)
+    }
+
+    fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        self.bytes
+    }
+
+    fn apply_policy(&mut self, policy: HistoryReplayCachePolicy) {
+        self.max_entries = policy.max_entries;
+        self.max_bytes = if policy.enabled {
+            policy.max_estimated_bytes
+        } else {
+            0
+        };
+        self.evict_over_limit();
+    }
+
+    fn insert(
+        &mut self,
+        key: HistoryReplayCacheKey,
+        lines: Arc<[Line<'static>]>,
+        omitted_messages: usize,
+    ) -> HistoryReplayCacheInsertOutcome {
+        let estimated_bytes = estimate_lines_bytes(&lines);
+        if self.max_entries == 0 || self.max_bytes == 0 {
+            return HistoryReplayCacheInsertOutcome {
+                inserted: false,
+                estimated_bytes,
+                evictions: 0,
+                skip_reason: Some(HistoryReplayCacheSkipReason::CacheDisabled),
+            };
+        }
+
+        if estimated_bytes > self.max_bytes {
+            return HistoryReplayCacheInsertOutcome {
+                inserted: false,
+                estimated_bytes,
+                evictions: 0,
+                skip_reason: Some(HistoryReplayCacheSkipReason::EntryTooLarge),
+            };
+        }
+
+        if let Some(previous) = self.entries.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(previous.bytes);
+            self.order.retain(|existing| existing != &key);
+        }
+
+        self.order.push_back(key);
+        self.bytes = self.bytes.saturating_add(estimated_bytes);
+        self.entries.insert(
+            key,
+            HistoryReplayCacheEntry {
+                lines,
+                omitted_messages,
+                bytes: estimated_bytes,
+            },
+        );
+        let evictions = self.evict_over_limit();
+        HistoryReplayCacheInsertOutcome {
+            inserted: true,
+            estimated_bytes,
+            evictions,
+            skip_reason: None,
+        }
+    }
+
+    fn evict_over_limit(&mut self) -> usize {
+        let mut evictions = 0;
+        while self.entries.len() > self.max_entries || self.bytes > self.max_bytes {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(entry.bytes);
+                evictions += 1;
+            }
+        }
+        evictions
+    }
 }
 
 pub(crate) fn render_finalized_history_lines(
@@ -67,9 +288,119 @@ pub(crate) fn render_replay_history_lines(
     options: HistoryLineRenderOptions<'_>,
     max_rows: usize,
 ) -> HistoryReplayLines {
-    let all_lines = render_finalized_history_lines(cells, options);
-    if all_lines.len() <= max_rows || cells.is_empty() {
+    let mut stats = HistoryReplayRenderStats::default();
+    let replay = render_replay_history_lines_uncached(cells, options, max_rows, &mut stats);
+    HistoryReplayLines {
+        lines: Arc::from(replay.lines),
+        omitted_messages: replay.omitted_messages,
+        stats,
+    }
+}
+
+pub(crate) fn render_replay_history_lines_cached(
+    cells: &[RenderedCell],
+    options: HistoryLineRenderOptions<'_>,
+    max_rows: usize,
+    cache: &mut HistoryReplayCache,
+) -> HistoryReplayLines {
+    let policy = options.replay_cache_policy;
+    cache.apply_policy(policy);
+    let content_bytes = estimate_cell_content_bytes(cells);
+    if !policy.enabled || policy.max_entries == 0 || policy.max_estimated_bytes == 0 {
+        let mut replay = render_replay_history_lines(cells, options, max_rows);
+        replay.stats.cacheable = false;
+        replay.stats.cache_skip_reason = Some(HistoryReplayCacheSkipReason::CacheDisabled);
+        replay.stats.cache_entries = cache.entry_count();
+        replay.stats.cache_estimated_bytes = cache.estimated_bytes();
+        replay.stats.cell_content_estimated_bytes = content_bytes;
+        replay.stats.replay_estimated_bytes = estimate_lines_bytes(&replay.lines);
+        return replay;
+    }
+
+    if cells.len() < policy.min_cells && content_bytes < policy.min_content_bytes {
+        let mut replay = render_replay_history_lines(cells, options, max_rows);
+        replay.stats.cacheable = false;
+        replay.stats.cache_skip_reason = Some(HistoryReplayCacheSkipReason::BelowReplayThreshold);
+        replay.stats.cache_entries = cache.entry_count();
+        replay.stats.cache_estimated_bytes = cache.estimated_bytes();
+        replay.stats.cell_content_estimated_bytes = content_bytes;
+        replay.stats.replay_estimated_bytes = estimate_lines_bytes(&replay.lines);
+        return replay;
+    };
+
+    let key_started = Instant::now();
+    let Some(key) = replay_cache_key(cells, options, max_rows) else {
+        let key_build_elapsed_us = key_started.elapsed().as_micros();
+        let mut replay = render_replay_history_lines(cells, options, max_rows);
+        replay.stats.cacheable = false;
+        replay.stats.cache_skip_reason = Some(HistoryReplayCacheSkipReason::UnsupportedCell);
+        replay.stats.key_build_elapsed_us = key_build_elapsed_us;
+        replay.stats.cache_entries = cache.entry_count();
+        replay.stats.cache_estimated_bytes = cache.estimated_bytes();
+        replay.stats.cell_content_estimated_bytes = content_bytes;
+        replay.stats.replay_estimated_bytes = estimate_lines_bytes(&replay.lines);
+        return replay;
+    };
+    let key_build_elapsed_us = key_started.elapsed().as_micros();
+
+    if let Some(hit) = cache.get(key) {
         return HistoryReplayLines {
+            lines: hit.lines.clone(),
+            omitted_messages: hit.omitted_messages,
+            stats: HistoryReplayRenderStats {
+                cache_hit: true,
+                cacheable: true,
+                cache_lookup: HistoryReplayCacheLookup::Hit,
+                key_build_elapsed_us,
+                cache_entries: cache.entry_count(),
+                cache_estimated_bytes: cache.estimated_bytes(),
+                cell_content_estimated_bytes: content_bytes,
+                replay_estimated_bytes: hit.bytes,
+                ..HistoryReplayRenderStats::default()
+            },
+        };
+    }
+
+    let render_started = Instant::now();
+    let mut replay = render_replay_history_lines(cells, options, max_rows);
+    let render_elapsed = render_started.elapsed();
+    let estimated_bytes = estimate_lines_bytes(&replay.lines);
+    replay.stats.cacheable = true;
+    replay.stats.cache_lookup = HistoryReplayCacheLookup::Miss;
+    replay.stats.key_build_elapsed_us = key_build_elapsed_us;
+    replay.stats.cell_content_estimated_bytes = content_bytes;
+    replay.stats.replay_estimated_bytes = estimated_bytes;
+    if render_elapsed >= policy.admit_min_render_elapsed
+        || estimated_bytes >= policy.admit_min_result_bytes
+    {
+        let outcome = cache.insert(key, replay.lines.clone(), replay.omitted_messages);
+        replay.stats.replay_estimated_bytes = outcome.estimated_bytes;
+        replay.stats.cache_admitted = outcome.inserted;
+        replay.stats.cache_evictions = outcome.evictions;
+        replay.stats.cache_skip_reason = outcome.skip_reason;
+    } else {
+        replay.stats.cache_skip_reason = Some(HistoryReplayCacheSkipReason::AdmissionTooSmall);
+    }
+    replay.stats.cache_entries = cache.entry_count();
+    replay.stats.cache_estimated_bytes = cache.estimated_bytes();
+    replay
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UncachedHistoryReplayLines {
+    lines: Vec<Line<'static>>,
+    omitted_messages: usize,
+}
+
+fn render_replay_history_lines_uncached(
+    cells: &[RenderedCell],
+    options: HistoryLineRenderOptions<'_>,
+    max_rows: usize,
+    stats: &mut HistoryReplayRenderStats,
+) -> UncachedHistoryReplayLines {
+    let all_lines = render_counted(cells, options, stats);
+    if all_lines.len() <= max_rows || cells.is_empty() {
+        return UncachedHistoryReplayLines {
             lines: all_lines,
             omitted_messages: 0,
         };
@@ -89,9 +420,9 @@ pub(crate) fn render_replay_history_lines(
     let marker_rows = replay_truncation_marker(0).len();
     let n = message_starts.len();
 
-    let fits = |omitted: usize| -> bool {
+    let mut fits = |omitted: usize| -> bool {
         let start = message_starts[omitted];
-        marker_rows + render_finalized_history_lines(&cells[start..], options).len() <= max_rows
+        marker_rows + render_counted(&cells[start..], options, stats).len() <= max_rows
     };
 
     // Smallest `omitted` in `1..n` whose suffix fits; `n` ⇒ none fits.
@@ -109,18 +440,369 @@ pub(crate) fn render_replay_history_lines(
     if lo < n {
         let start = message_starts[lo];
         let mut lines = replay_truncation_marker(lo);
-        lines.extend(render_finalized_history_lines(&cells[start..], options));
-        HistoryReplayLines {
+        lines.extend(render_counted(&cells[start..], options, stats));
+        UncachedHistoryReplayLines {
             lines,
             omitted_messages: lo,
         }
     } else {
         // Even keeping only the final message overflows the cap; emit just
         // the marker (matches the prior fallback behaviour).
-        HistoryReplayLines {
+        UncachedHistoryReplayLines {
             lines: replay_truncation_marker(n),
             omitted_messages: n,
         }
+    }
+}
+
+fn render_counted(
+    cells: &[RenderedCell],
+    options: HistoryLineRenderOptions<'_>,
+    stats: &mut HistoryReplayRenderStats,
+) -> Vec<Line<'static>> {
+    stats.finalized_render_calls += 1;
+    stats.cells_rendered += cells.len();
+    render_finalized_history_lines(cells, options)
+}
+
+fn replay_cache_key(
+    cells: &[RenderedCell],
+    options: HistoryLineRenderOptions<'_>,
+    max_rows: usize,
+) -> Option<HistoryReplayCacheKey> {
+    let compact_boundary_shortcut = cells
+        .iter()
+        .any(is_compact_boundary_cell)
+        .then(|| replay_compact_boundary_shortcut(options.kb_handle));
+    let compact_boundary_shortcut = compact_boundary_shortcut.as_deref();
+    let mut hasher = Sha256::new();
+    for cell in cells {
+        hash_cacheable_cell(cell, compact_boundary_shortcut, &mut hasher)?;
+    }
+    let content_digest: [u8; 32] = hasher.finalize().into();
+    Some(HistoryReplayCacheKey {
+        max_rows,
+        width: options.width,
+        syntax_enabled: options.syntax_highlighting.is_enabled(),
+        show_thinking: options.show_thinking,
+        show_system_reminders: options.show_system_reminders,
+        theme_hash: options.styles.theme_hash(),
+        cell_count: cells.len(),
+        content_digest,
+    })
+}
+
+fn hash_cacheable_cell(
+    cell: &RenderedCell,
+    compact_boundary_shortcut: Option<&str>,
+    hasher: &mut Sha256,
+) -> Option<()> {
+    hash_uuid(hasher, cell.message_uuid);
+    match &cell.kind {
+        CellKind::UserText { text } => {
+            hash_u8(hasher, 0);
+            hash_str(hasher, text);
+        }
+        CellKind::AssistantText { text, model } => {
+            hash_u8(hasher, 1);
+            hash_str(hasher, text);
+            hash_str(hasher, model);
+        }
+        CellKind::System(kind) => {
+            hash_u8(hasher, 2);
+            hash_system_cell(
+                kind,
+                cell.source.as_ref(),
+                compact_boundary_shortcut,
+                hasher,
+            )?;
+        }
+        _ => return None,
+    }
+    Some(())
+}
+
+fn hash_system_cell(
+    kind: &SystemCellKind,
+    source: &Message,
+    compact_boundary_shortcut: Option<&str>,
+    hasher: &mut Sha256,
+) -> Option<()> {
+    let Message::System(system) = source else {
+        return None;
+    };
+    match (kind, system) {
+        (SystemCellKind::Informational, SystemMessage::Informational(m)) => {
+            hash_u8(hasher, 0);
+            hash_system_level(hasher, m.level);
+            hash_str(hasher, &m.title);
+            hash_str(hasher, &m.message);
+        }
+        (SystemCellKind::ApiError, SystemMessage::ApiError(m)) => {
+            hash_u8(hasher, 1);
+            hash_str(hasher, &m.error);
+            hash_option_i32(hasher, m.status_code);
+        }
+        (SystemCellKind::MicrocompactBoundary, SystemMessage::MicrocompactBoundary(_)) => {
+            hash_u8(hasher, 2);
+        }
+        (SystemCellKind::PermissionRetry, SystemMessage::PermissionRetry(m)) => {
+            hash_u8(hasher, 3);
+            hash_str(hasher, &m.tool_name);
+            hash_str(hasher, &m.message);
+        }
+        (SystemCellKind::BridgeStatus, SystemMessage::BridgeStatus(m)) => {
+            hash_u8(hasher, 4);
+            hash_bool(hasher, m.connected);
+            hash_option_str(hasher, m.message.as_deref());
+        }
+        (SystemCellKind::MemorySaved, SystemMessage::MemorySaved(m)) => {
+            hash_u8(hasher, 5);
+            hash_str_vec(hasher, &m.written_paths);
+            hash_str(hasher, &m.verb);
+        }
+        (SystemCellKind::AwaySummary, SystemMessage::AwaySummary(m)) => {
+            hash_u8(hasher, 6);
+            hash_str(hasher, &m.summary);
+        }
+        (SystemCellKind::AgentsKilled, SystemMessage::AgentsKilled(m)) => {
+            hash_u8(hasher, 7);
+            hash_i32(hasher, m.count);
+        }
+        (SystemCellKind::ApiMetrics, SystemMessage::ApiMetrics(m)) => {
+            hash_u8(hasher, 8);
+            hash_token_usage(hasher, m.usage);
+            hash_str(hasher, &m.model);
+            hash_option_f64(hasher, m.cost_usd);
+        }
+        (SystemCellKind::StopHookSummary, SystemMessage::StopHookSummary(m)) => {
+            hash_u8(hasher, 9);
+            hash_str(hasher, &m.hook_name);
+            hash_str(hasher, &m.outcome);
+        }
+        (SystemCellKind::TurnDuration, SystemMessage::TurnDuration(m)) => {
+            hash_u8(hasher, 10);
+            hash_i64(hasher, m.duration_ms);
+        }
+        (SystemCellKind::ScheduledTaskFire, SystemMessage::ScheduledTaskFire(m)) => {
+            hash_u8(hasher, 11);
+            hash_str(hasher, &m.task_id);
+            hash_str(hasher, &m.schedule);
+        }
+        (SystemCellKind::UserInterruption { for_tool_use }, SystemMessage::UserInterruption(m))
+            if *for_tool_use == m.for_tool_use =>
+        {
+            hash_u8(hasher, 12);
+            hash_bool(hasher, m.for_tool_use);
+        }
+        (SystemCellKind::CompactBoundary, SystemMessage::CompactBoundary(m)) => {
+            hash_u8(hasher, 13);
+            hash_i64(hasher, m.tokens_before);
+            hash_i64(hasher, m.tokens_after);
+            hash_compact_trigger(hasher, m.trigger);
+            hash_option_str(hasher, m.user_context.as_deref());
+            hash_option_i32(hasher, m.messages_summarized);
+            hash_str_vec(hasher, &m.pre_compact_discovered_tools);
+            hash_bool(hasher, m.preserved_segment.is_some());
+            if let Some(segment) = &m.preserved_segment {
+                hash_uuid(hasher, segment.head_uuid);
+                hash_uuid(hasher, segment.anchor_uuid);
+                hash_uuid(hasher, segment.tail_uuid);
+            }
+            hash_str(hasher, compact_boundary_shortcut?);
+        }
+        // LocalCommand can contain large command output and is intentionally
+        // left on the uncached path for this pass.
+        (SystemCellKind::LocalCommand, SystemMessage::LocalCommand(_)) => return None,
+        _ => return None,
+    }
+    Some(())
+}
+
+fn is_compact_boundary_cell(cell: &RenderedCell) -> bool {
+    matches!(
+        &cell.kind,
+        CellKind::System(SystemCellKind::CompactBoundary)
+    )
+}
+
+fn replay_compact_boundary_shortcut(kb_handle: Option<&KeybindingHandle>) -> String {
+    kb_handle
+        .and_then(|handle| {
+            handle.display_for(
+                &coco_keybindings::KeybindingAction::AppToggleTranscript,
+                crate::keybinding_bridge::KeybindingContext::Chat,
+            )
+        })
+        .unwrap_or_else(|| "ctrl+o".to_string())
+}
+
+fn hash_system_level(hasher: &mut Sha256, level: SystemMessageLevel) {
+    hash_u8(
+        hasher,
+        match level {
+            SystemMessageLevel::Info => 0,
+            SystemMessageLevel::Warning => 1,
+            SystemMessageLevel::Error => 2,
+        },
+    );
+}
+
+fn hash_compact_trigger(hasher: &mut Sha256, trigger: CompactTrigger) {
+    hash_u8(
+        hasher,
+        match trigger {
+            CompactTrigger::Manual => 0,
+            CompactTrigger::Auto => 1,
+            CompactTrigger::Reactive => 2,
+            CompactTrigger::TimeBased => 3,
+            CompactTrigger::SessionMemory => 4,
+            CompactTrigger::ContextCollapse => 5,
+        },
+    );
+}
+
+fn hash_token_usage(hasher: &mut Sha256, usage: TokenUsage) {
+    hash_i64(hasher, usage.input_tokens.total);
+    hash_i64(hasher, usage.input_tokens.no_cache);
+    hash_i64(hasher, usage.input_tokens.cache_read);
+    hash_i64(hasher, usage.input_tokens.cache_write);
+    hash_i64(hasher, usage.output_tokens.total);
+    hash_i64(hasher, usage.output_tokens.text);
+    hash_i64(hasher, usage.output_tokens.reasoning);
+}
+
+fn hash_uuid(hasher: &mut Sha256, uuid: uuid::Uuid) {
+    hasher.update(uuid.as_bytes());
+}
+
+fn hash_str(hasher: &mut Sha256, value: &str) {
+    hash_usize(hasher, value.len());
+    hasher.update(value.as_bytes());
+}
+
+fn hash_option_str(hasher: &mut Sha256, value: Option<&str>) {
+    hash_bool(hasher, value.is_some());
+    if let Some(value) = value {
+        hash_str(hasher, value);
+    }
+}
+
+fn hash_str_vec(hasher: &mut Sha256, values: &[String]) {
+    hash_usize(hasher, values.len());
+    for value in values {
+        hash_str(hasher, value);
+    }
+}
+
+fn hash_option_i32(hasher: &mut Sha256, value: Option<i32>) {
+    hash_bool(hasher, value.is_some());
+    if let Some(value) = value {
+        hash_i32(hasher, value);
+    }
+}
+
+fn hash_option_f64(hasher: &mut Sha256, value: Option<f64>) {
+    hash_bool(hasher, value.is_some());
+    if let Some(value) = value {
+        hasher.update(value.to_bits().to_le_bytes());
+    }
+}
+
+fn hash_bool(hasher: &mut Sha256, value: bool) {
+    hash_u8(hasher, u8::from(value));
+}
+
+fn hash_u8(hasher: &mut Sha256, value: u8) {
+    hasher.update([value]);
+}
+
+fn hash_usize(hasher: &mut Sha256, value: usize) {
+    hasher.update((value as u64).to_le_bytes());
+}
+
+fn hash_i32(hasher: &mut Sha256, value: i32) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn hash_i64(hasher: &mut Sha256, value: i64) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn estimate_lines_bytes(lines: &[Line<'_>]) -> usize {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.len() + 16)
+                .sum::<usize>()
+                + 16
+        })
+        .sum()
+}
+
+fn estimate_cell_content_bytes(cells: &[RenderedCell]) -> usize {
+    cells.iter().map(estimate_cell_bytes).sum()
+}
+
+fn estimate_cell_bytes(cell: &RenderedCell) -> usize {
+    match &cell.kind {
+        CellKind::UserText { text }
+        | CellKind::AssistantText { text, .. }
+        | CellKind::AssistantThinking { text } => text.len(),
+        CellKind::ToolUse { call_id, tool_name } => call_id.len() + tool_name.len(),
+        CellKind::ToolResult { call_id } => call_id.len(),
+        CellKind::System(kind) => estimate_system_cell_bytes(kind, cell.source.as_ref()),
+        CellKind::UserAttachment
+        | CellKind::AssistantRedactedThinking
+        | CellKind::Attachment
+        | CellKind::Progress
+        | CellKind::Tombstone => 0,
+    }
+}
+
+fn estimate_system_cell_bytes(kind: &SystemCellKind, source: &Message) -> usize {
+    let Message::System(system) = source else {
+        return 0;
+    };
+    match (kind, system) {
+        (SystemCellKind::Informational, SystemMessage::Informational(m)) => {
+            m.title.len() + m.message.len()
+        }
+        (SystemCellKind::ApiError, SystemMessage::ApiError(m)) => m.error.len(),
+        (SystemCellKind::CompactBoundary, SystemMessage::CompactBoundary(m)) => {
+            m.user_context.as_ref().map_or(0, String::len)
+                + m.pre_compact_discovered_tools
+                    .iter()
+                    .map(String::len)
+                    .sum::<usize>()
+        }
+        (SystemCellKind::LocalCommand, SystemMessage::LocalCommand(m)) => {
+            m.command.len() + m.output.len()
+        }
+        (SystemCellKind::PermissionRetry, SystemMessage::PermissionRetry(m)) => {
+            m.tool_name.len() + m.message.len()
+        }
+        (SystemCellKind::BridgeStatus, SystemMessage::BridgeStatus(m)) => {
+            m.message.as_ref().map_or(0, String::len)
+        }
+        (SystemCellKind::MemorySaved, SystemMessage::MemorySaved(m)) => {
+            m.verb.len() + m.written_paths.iter().map(String::len).sum::<usize>()
+        }
+        (SystemCellKind::AwaySummary, SystemMessage::AwaySummary(m)) => m.summary.len(),
+        (SystemCellKind::ApiMetrics, SystemMessage::ApiMetrics(m)) => m.model.len(),
+        (SystemCellKind::StopHookSummary, SystemMessage::StopHookSummary(m)) => {
+            m.hook_name.len() + m.outcome.len()
+        }
+        (SystemCellKind::ScheduledTaskFire, SystemMessage::ScheduledTaskFire(m)) => {
+            m.task_id.len() + m.schedule.len()
+        }
+        (SystemCellKind::MicrocompactBoundary, SystemMessage::MicrocompactBoundary(_))
+        | (SystemCellKind::AgentsKilled, SystemMessage::AgentsKilled(_))
+        | (SystemCellKind::TurnDuration, SystemMessage::TurnDuration(_))
+        | (SystemCellKind::UserInterruption { .. }, SystemMessage::UserInterruption(_)) => 0,
+        _ => 0,
     }
 }
 

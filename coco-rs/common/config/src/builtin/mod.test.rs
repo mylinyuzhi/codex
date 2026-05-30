@@ -10,7 +10,7 @@ use super::*;
 #[test]
 fn builtin_provider_count() {
     let providers = builtin_providers().expect("builtin partials must resolve");
-    assert_eq!(providers.len(), 7);
+    assert_eq!(providers.len(), 9);
 }
 
 #[test]
@@ -44,10 +44,31 @@ fn builtin_openai_resolves_with_canonical_env_key() {
     let providers = builtin_providers().expect("builtin partials must resolve");
     let provider = providers
         .iter()
-        .find(|p| p.api == ProviderApi::Openai)
+        .find(|p| p.name == "openai")
         .expect("openai builtin");
-    assert_eq!(provider.name, "openai");
+    assert_eq!(provider.api, ProviderApi::Openai);
     assert_eq!(provider.env_key, "OPENAI_API_KEY");
+    assert_eq!(provider.auth, crate::provider::ProviderAuth::ApiKey);
+}
+
+#[test]
+fn builtin_openai_chatgpt_resolves_oauth_with_empty_env_key() {
+    // The OAuth subscription instance must resolve through `from_partial`
+    // despite omitting `env_key` (the relaxation), and carry the codex base.
+    let providers = builtin_providers().expect("builtin partials must resolve");
+    let provider = providers
+        .iter()
+        .find(|p| p.name == "openai-chatgpt")
+        .expect("openai-chatgpt builtin");
+    assert_eq!(provider.api, ProviderApi::Openai);
+    assert_eq!(provider.env_key, "");
+    assert_eq!(provider.base_url, "https://chatgpt.com/backend-api/codex");
+    assert_eq!(
+        provider.auth,
+        crate::provider::ProviderAuth::OAuth {
+            flow: coco_types::OAuthFlowId::OpenAiChatGpt
+        }
+    );
 }
 
 #[test]

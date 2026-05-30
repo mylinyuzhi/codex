@@ -115,7 +115,7 @@ fn enter_plan_mode_schema_has_no_parameters() {
     assert!(
         schema["properties"]
             .as_object()
-            .is_none_or(|p| p.is_empty()),
+            .is_none_or(serde_json::Map::is_empty),
         "EnterPlanMode takes no parameters"
     );
 }

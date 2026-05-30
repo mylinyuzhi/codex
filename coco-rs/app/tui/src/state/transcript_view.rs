@@ -25,6 +25,7 @@ use super::derive::message_to_cells;
 #[derive(Debug, Default)]
 pub struct TranscriptView {
     cells: Vec<RenderedCell>,
+    revision: u64,
     /// First cell index per source message UUID. One `Message` may
     /// derive multiple `RenderedCell`s (e.g. `Assistant` with text +
     /// thinking + tool_use blocks); the index points at the head cell
@@ -39,6 +40,10 @@ impl TranscriptView {
 
     pub fn cells(&self) -> &[RenderedCell] {
         &self.cells
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn len(&self) -> usize {
@@ -94,6 +99,7 @@ impl TranscriptView {
             self.by_uuid.insert(*uuid, head_idx);
         }
         self.cells.extend(derived);
+        self.bump_revision();
     }
 
     /// Truncate to the first `keep_count` ENGINE messages. Because one
@@ -124,15 +130,19 @@ impl TranscriptView {
                 seen_heads += 1;
             }
         }
-        if let Some(c) = cut {
+        if let Some(c) = cut
+            && c < self.cells.len()
+        {
             self.cells.truncate(c);
             self.rebuild_index();
+            self.bump_revision();
         }
     }
 
     pub fn on_session_reset(&mut self) {
         self.cells.clear();
         self.by_uuid.clear();
+        self.bump_revision();
     }
 
     /// Replace the entire derived view with cells derived from
@@ -157,6 +167,7 @@ impl TranscriptView {
             }
             self.cells.extend(derived);
         }
+        self.bump_revision();
     }
 
     fn rebuild_index(&mut self) {
@@ -168,6 +179,10 @@ impl TranscriptView {
                 last_uuid = Some(cell.message_uuid);
             }
         }
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.saturating_add(1);
     }
 }
 
@@ -309,3 +324,7 @@ impl From<&SystemMessage> for SystemCellKind {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "transcript_view.test.rs"]
+mod tests;

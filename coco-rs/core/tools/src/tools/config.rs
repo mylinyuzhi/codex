@@ -51,7 +51,7 @@ pub struct ConfigInput {
 /// Typed output. Mirrors the legacy flat JSON shape so transcript
 /// replay across the migration boundary round-trips without surprises;
 /// optional fields are only populated on the relevant action branches.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigOutput {
     /// Human-readable status / next-step instruction.
     pub message: String,

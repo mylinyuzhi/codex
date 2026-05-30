@@ -25,6 +25,7 @@
 //! ```
 
 // Foundation
+pub mod openai_auth;
 pub mod openai_capabilities;
 pub mod openai_config;
 pub mod openai_error;
@@ -43,6 +44,11 @@ pub mod transcription;
 pub mod tool;
 
 // Re-exports
+pub use openai_auth::CHATGPT_CODEX_BASE_URL;
+pub use openai_auth::ChatGptCreds;
+pub use openai_auth::ChatGptCredsSupplier;
+pub use openai_auth::DEFAULT_ORIGINATOR;
+pub use openai_auth::OpenAIAuth;
 pub use openai_capabilities::OpenAIModelCapabilities;
 pub use openai_capabilities::SystemMessageMode;
 pub use openai_capabilities::get_capabilities;

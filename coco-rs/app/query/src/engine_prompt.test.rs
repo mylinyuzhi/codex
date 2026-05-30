@@ -198,3 +198,24 @@ fn rewrite_into_arc_message_preserves_original_arc_in_history() {
     };
     assert_eq!(value, "PLACEHOLDER");
 }
+
+#[test]
+fn builtin_mcp_boundary_marks_last_builtin_only_when_mcp_follows() {
+    // Mixed set: built-ins [0..3) then MCP [3..5) ⇒ boundary on the last
+    // built-in (index 2).
+    assert_eq!(builtin_mcp_boundary_idx(3, 5), Some(2));
+    // Single built-in followed by MCP ⇒ index 0.
+    assert_eq!(builtin_mcp_boundary_idx(1, 4), Some(0));
+}
+
+#[test]
+fn builtin_mcp_boundary_is_none_without_a_real_split() {
+    // All built-in (no MCP tail to protect) ⇒ no breakpoint.
+    assert_eq!(builtin_mcp_boundary_idx(5, 5), None);
+    // All MCP (empty built-in prefix) ⇒ no breakpoint, and crucially must NOT
+    // evaluate `0 - 1` (the `then_some`-eager-eval underflow that previously
+    // panicked the no-built-in test paths).
+    assert_eq!(builtin_mcp_boundary_idx(0, 4), None);
+    // Empty tool set ⇒ no breakpoint, no underflow.
+    assert_eq!(builtin_mcp_boundary_idx(0, 0), None);
+}

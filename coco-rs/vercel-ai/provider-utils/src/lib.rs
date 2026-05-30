@@ -57,6 +57,7 @@ pub mod load_api_key;
 pub mod load_setting;
 pub mod map_reasoning_to_provider;
 pub mod media_type;
+pub mod openai_compatible_schema;
 pub mod parse_provider_options;
 pub mod resolve_full_media_type;
 pub mod resolve_provider_reference;
@@ -181,6 +182,8 @@ pub use json_schema_derive::add_required_fields;
 pub use json_schema_derive::json_schema_from_type;
 pub use json_schema_derive::merge_into_schema;
 pub use json_schema_derive::schema_from_type;
+
+pub use openai_compatible_schema::to_openai_compatible_schema;
 
 // Tool execution utilities
 pub use tool_execution::dynamic_tool;

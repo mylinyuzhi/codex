@@ -20,24 +20,82 @@ pub enum ColorCapability {
     Ansi256,
 }
 
+/// Environment signals consulted when detecting terminal color capability.
+///
+/// Kept as a plain struct (rather than reading env inside the detector) so the
+/// heuristics are unit-testable without mutating process env.
+#[derive(Debug, Default, Clone, Copy)]
+struct ColorEnv<'a> {
+    /// `COLORTERM` — the canonical truecolor advertisement.
+    colorterm: Option<&'a str>,
+    /// `TERM_PROGRAM` — GUI terminal identity; many truecolor terminals set
+    /// this but omit `COLORTERM` (notably on macOS app launches).
+    term_program: Option<&'a str>,
+    /// `TERM` — terminfo name, substring-matched as a last resort.
+    term: Option<&'a str>,
+    /// Set when a terminal-specific env var implying truecolor is present
+    /// (`GHOSTTY_*`, `WEZTERM_*`, `KITTY_WINDOW_ID`).
+    truecolor_env_marker: bool,
+}
+
 /// Detected color capability, cached for the process lifetime.
 pub fn color_capability() -> ColorCapability {
     static CAP: OnceLock<ColorCapability> = OnceLock::new();
-    *CAP.get_or_init(|| detect_from_env(std::env::var("COLORTERM").ok().as_deref()))
+    *CAP.get_or_init(|| {
+        let colorterm = std::env::var("COLORTERM").ok();
+        let term_program = std::env::var("TERM_PROGRAM").ok();
+        let term = std::env::var("TERM").ok();
+        let truecolor_env_marker = std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some()
+            || std::env::var_os("GHOSTTY_BIN_DIR").is_some()
+            || std::env::var_os("WEZTERM_EXECUTABLE").is_some()
+            || std::env::var_os("WEZTERM_PANE").is_some()
+            || std::env::var_os("KITTY_WINDOW_ID").is_some();
+        detect_from_env(ColorEnv {
+            colorterm: colorterm.as_deref(),
+            term_program: term_program.as_deref(),
+            term: term.as_deref(),
+            truecolor_env_marker,
+        })
+    })
 }
 
-fn detect_from_env(colorterm: Option<&str>) -> ColorCapability {
-    match colorterm {
-        Some(value) => {
-            let value = value.to_ascii_lowercase();
-            if value.contains("truecolor") || value.contains("24bit") {
-                ColorCapability::TrueColor
-            } else {
-                ColorCapability::Ansi256
-            }
+fn detect_from_env(env: ColorEnv<'_>) -> ColorCapability {
+    // 1. COLORTERM is the canonical signal when present.
+    if let Some(value) = env.colorterm {
+        let value = value.to_ascii_lowercase();
+        if value.contains("truecolor") || value.contains("24bit") {
+            return ColorCapability::TrueColor;
         }
-        None => ColorCapability::Ansi256,
     }
+    // 2. Trust the identity of known-truecolor GUI terminals, which frequently
+    //    omit COLORTERM when launched from a desktop environment.
+    if let Some(program) = env.term_program {
+        let program = program.to_ascii_lowercase();
+        const TRUECOLOR_PROGRAMS: [&str; 6] = [
+            "ghostty",
+            "iterm.app",
+            "wezterm",
+            "warp",
+            "alacritty",
+            "hyper",
+        ];
+        if TRUECOLOR_PROGRAMS.iter().any(|p| program.contains(p)) {
+            return ColorCapability::TrueColor;
+        }
+    }
+    // 3. Terminal-specific env markers (GHOSTTY_*, WEZTERM_*, KITTY_WINDOW_ID).
+    if env.truecolor_env_marker {
+        return ColorCapability::TrueColor;
+    }
+    // 4. TERM substring as a last resort.
+    if let Some(term) = env.term {
+        let term = term.to_ascii_lowercase();
+        const TRUECOLOR_TERMS: [&str; 4] = ["kitty", "ghostty", "alacritty", "wezterm"];
+        if TRUECOLOR_TERMS.iter().any(|t| term.contains(t)) {
+            return ColorCapability::TrueColor;
+        }
+    }
+    ColorCapability::Ansi256
 }
 
 /// Adapt a color to the given capability: pass truecolor through, otherwise
@@ -49,6 +107,25 @@ pub fn adapt_color(color: Color, capability: ColorCapability) -> Color {
         (ColorCapability::Ansi256, Color::Rgb(r, g, b)) => Color::Indexed(rgb_to_xterm256(r, g, b)),
         _ => color,
     }
+}
+
+/// Build an RGB color adapted to the terminal's detected capability *at call
+/// time*. On truecolor terminals this is `Color::Rgb`; otherwise it is
+/// downsampled to the nearest xterm-256 index.
+///
+/// Use this for render-time-*computed* colors (gradients, focus pulses, blended
+/// diff highlights) that never pass through the static-palette
+/// `Theme::downsample()` pass. Static theme colors are already adapted at load.
+#[allow(clippy::disallowed_methods)] // call-time downsampler; the point is to emit indices
+pub fn rgb(r: u8, g: u8, b: u8) -> Color {
+    adapt_color(Color::Rgb(r, g, b), color_capability())
+}
+
+/// Adapt an already-built color to the terminal's detected capability at call
+/// time. Truecolor passes through; `Color::Rgb` downsamples on Ansi256
+/// terminals; non-RGB colors are unchanged.
+pub fn adapt_runtime(color: Color) -> Color {
+    adapt_color(color, color_capability())
 }
 
 /// Map a 24-bit RGB triple to the nearest xterm-256 palette index, choosing the

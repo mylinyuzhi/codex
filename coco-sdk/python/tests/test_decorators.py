@@ -50,7 +50,5 @@ def test_hook_callable():
     async def my_hook(callback_id, event_type, input):
         return {"behavior": "deny", "message": "blocked"}
 
-    result = asyncio.get_event_loop().run_until_complete(
-        my_hook("cb_1", "PreToolUse", {"tool_name": "Bash"})
-    )
+    result = asyncio.run(my_hook("cb_1", "PreToolUse", {"tool_name": "Bash"}))
     assert result["behavior"] == "deny"

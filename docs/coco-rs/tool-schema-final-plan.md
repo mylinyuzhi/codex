@@ -1,5 +1,17 @@
 # Tool Input Schema — Source-of-Truth Refactor (v4.2, final)
 
+> **Follow-up (post-v4.3, superseding doc claims below):** a later refactor
+> **deleted the output-schema path entirely** — `Tool::output_schema` /
+> `derive_output_schema` are gone and the `Self::Output: JsonSchema` bound is
+> dropped (kept `Serialize + Deserialize`; output → JSON is `serde_json::to_value`,
+> never `JsonSchema`). So the "Output path untouched" non-goal and the
+> "`Self::Output: JsonSchema` — Kept" decision recorded below are **historical**.
+> Same follow-up: `SchemaIssue` now reports all unexpected keys + enumerates
+> multi-type mismatches; a strict-free `to_openai_compatible_schema`
+> (`oneOf→anyOf` + safe `allOf`-flatten) was added to the OpenAI-family wire
+> path; and the model-facing tools array is now name-sorted for prompt-cache
+> stability.
+
 > **Supersedes**:
 > - [`tool-schema-validated-newtype-plan.md`](tool-schema-validated-newtype-plan.md) (v1, deprecated) — Input↔Schema type binding plus reject-style strict subset; refuted by the measured tool distribution.
 > - [`tool-schema-source-plan.md`](tool-schema-source-plan.md) (v2, deprecated) — three-source-kind abstraction over-engineered.

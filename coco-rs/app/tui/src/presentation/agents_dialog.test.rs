@@ -31,6 +31,12 @@ fn wizard_with(step: CreateWizardStep) -> CreateWizardState {
 }
 
 fn body_only(state: &AgentsDialogState, subagents: &[SubagentInstance]) -> String {
+    // Pin the locale to `en` for the render. `cargo test` shares one process,
+    // so a concurrent locale-sensitive test can otherwise leave the global
+    // rust-i18n locale set to `zh-CN` and this dialog's translated strings
+    // ("Running", "built-in…") would render in the wrong language. The guard
+    // both sets `en` and serializes against other locale-sensitive tests.
+    let _locale = crate::i18n::locale_test_guard("en");
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
     let (_title, body, _color) = agents_dialog_content(state, subagents, styles);

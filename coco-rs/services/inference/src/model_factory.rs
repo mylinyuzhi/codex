@@ -45,6 +45,7 @@ use crate::LanguageModel;
 use crate::Provider;
 use crate::ProviderClientFingerprint;
 use crate::RetryConfig;
+use crate::credentials::ProviderCredentialResolver;
 
 /// Surface a `tracing::warn` when a `ProviderClientOptions` field is
 /// set to a non-default value but the chosen provider doesn't consume
@@ -97,9 +98,30 @@ fn warn_unused_client_options(provider_name: &str, api: ProviderApi, opts: &Prov
 /// `ProviderConfig.name` (closes §7.2). Per-model
 /// `info.timeout_secs` (when set) overrides the provider-level
 /// timeout for the HTTP client.
+/// Whether a usable credential is present for this provider: a non-empty API
+/// key for `ApiKey` providers, or a logged-in OAuth supplier for `OAuth`
+/// providers. The single source of truth for "is this provider credentialed?"
+/// — availability gates (`create_api_client`, the TUI model picker) consume it
+/// instead of re-deriving the auth-mode match + resolver consultation, which
+/// previously drifted between the two layers.
+pub fn provider_credential_present(
+    provider_cfg: &ProviderConfig,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+) -> bool {
+    match provider_cfg.auth {
+        coco_config::ProviderAuth::ApiKey => provider_cfg
+            .resolve_api_key()
+            .is_some_and(|k| !k.trim().is_empty()),
+        coco_config::ProviderAuth::OAuth { .. } => resolver
+            .and_then(|r| r.subscription_creds(&provider_cfg.name))
+            .is_some(),
+    }
+}
+
 pub fn build_language_model_from_runtime(
     runtime: &RuntimeConfig,
     spec: &ModelSpec,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let provider_cfg = runtime.providers.get(&spec.provider).ok_or_else(|| {
         crate::errors::UnknownProviderSnafu {
@@ -123,8 +145,8 @@ pub fn build_language_model_from_runtime(
             timeout_secs,
             model_info.as_ref(),
         ),
-        ProviderApi::Openai => build_openai(provider_cfg, &api_model_name, timeout_secs),
-        ProviderApi::Gemini => build_google(provider_cfg, &api_model_name),
+        ProviderApi::Openai => build_openai(provider_cfg, &api_model_name, timeout_secs, resolver),
+        ProviderApi::Gemini => build_google(provider_cfg, &api_model_name, resolver),
         ProviderApi::Volcengine | ProviderApi::Zai | ProviderApi::OpenaiCompat => {
             build_openai_compat(provider_cfg, &api_model_name, timeout_secs)
         }
@@ -146,6 +168,7 @@ pub fn build_api_client(
     runtime: &RuntimeConfig,
     spec: &ModelSpec,
     retry: RetryConfig,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
 ) -> Result<Arc<ApiClient>, InferenceError> {
     let provider_cfg = runtime.providers.get(&spec.provider).ok_or_else(|| {
         crate::errors::UnknownProviderSnafu {
@@ -158,7 +181,7 @@ pub fn build_api_client(
         .model_registry
         .resolve(&spec.provider, &spec.model_id)
         .map(|r| r.info.clone());
-    let model = build_language_model_from_runtime(runtime, spec)?;
+    let model = build_language_model_from_runtime(runtime, spec, resolver)?;
     let fingerprint = ProviderClientFingerprint::compute_with_runtime_state(
         provider_cfg,
         &api_model_name,
@@ -177,8 +200,18 @@ pub fn build_api_client(
         provider: spec.provider.clone(),
         model_id: spec.model_id.clone(),
     };
-    let client = ApiClient::new(model, fingerprint, model_info, model_identity, retry)
+    let mut client = ApiClient::new(model, fingerprint, model_info, model_identity, retry)
         .with_cache_break_detector(detector);
+    // Reactive-401 hook for OAuth-subscription providers: bind a
+    // `refresh_now(provider)` callback so an expired access token recovers
+    // (refresh + retry) instead of surfacing the 401.
+    if let coco_config::ProviderAuth::OAuth { .. } = provider_cfg.auth
+        && let Some(resolver) = resolver
+    {
+        let resolver = resolver.clone();
+        let provider_name = provider_cfg.name.clone();
+        client = client.with_refresh_hook(Arc::new(move || resolver.refresh_now(&provider_name)));
+    }
     Ok(Arc::new(client))
 }
 
@@ -193,12 +226,13 @@ pub fn build_fallback_clients_for_role(
     runtime: &RuntimeConfig,
     role: ModelRole,
     retry: RetryConfig,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
 ) -> Result<Vec<Arc<ApiClient>>, InferenceError> {
     runtime
         .model_roles
         .fallbacks(role)
         .iter()
-        .map(|spec| build_api_client(runtime, spec, retry.clone()))
+        .map(|spec| build_api_client(runtime, spec, retry.clone(), resolver))
         .collect()
 }
 
@@ -323,11 +357,13 @@ fn build_openai(
     provider_cfg: &ProviderConfig,
     api_model: &str,
     timeout_secs: i64,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
+    let auth = build_openai_auth(provider_cfg, resolver)?;
     let settings = vercel_ai_openai::OpenAIProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
-        api_key: provider_cfg.resolve_api_key(),
+        auth,
         organization: opts.organization_id.clone(),
         project: opts.project_id.clone(),
         headers: header_map(opts),
@@ -347,10 +383,71 @@ fn build_openai(
     Ok(model)
 }
 
+/// Map `ProviderConfig.auth` + the credential resolver into the OpenAI provider
+/// crate's wire-auth mode. This is the seam-legal neutral→wire conversion:
+/// `coco-inference` already depends on `vercel-ai-openai`, so the coco-neutral
+/// `SubscriptionCreds` supplier is wrapped here into the crate's
+/// `ChatGptCreds` closure — no `vercel-ai` type ever crosses into
+/// `coco-provider-auth`.
+fn build_openai_auth(
+    provider_cfg: &ProviderConfig,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+) -> Result<vercel_ai_openai::OpenAIAuth, InferenceError> {
+    match provider_cfg.auth {
+        coco_config::ProviderAuth::ApiKey => Ok(vercel_ai_openai::OpenAIAuth::ApiKey(
+            provider_cfg.resolve_api_key(),
+        )),
+        coco_config::ProviderAuth::OAuth { flow } => match flow {
+            coco_types::OAuthFlowId::OpenAiChatGpt => {
+                let supplier = resolver
+                    .and_then(|r| r.subscription_creds(&provider_cfg.name))
+                    .ok_or_else(|| {
+                        crate::errors::ProviderBuildFailedSnafu {
+                            provider: "openai",
+                            provider_name: provider_cfg.name.clone(),
+                            message: "ChatGPT subscription not logged in — run `coco login openai`"
+                                .to_string(),
+                        }
+                        .build()
+                    })?;
+                let creds: vercel_ai_openai::ChatGptCredsSupplier = Arc::new(move || {
+                    supplier().map(|c| vercel_ai_openai::ChatGptCreds {
+                        access_token: c.access_token,
+                        account_id: c.account_id,
+                    })
+                });
+                Ok(vercel_ai_openai::OpenAIAuth::ChatGptSubscription {
+                    creds,
+                    originator: vercel_ai_openai::DEFAULT_ORIGINATOR.into(),
+                })
+            }
+            // A Gemini flow on an OpenAI provider is a misconfiguration —
+            // GeminiCodeAssist routes through `build_google`, not here.
+            coco_types::OAuthFlowId::GeminiCodeAssist => {
+                Err(crate::errors::ProviderBuildFailedSnafu {
+                    provider: "openai",
+                    provider_name: provider_cfg.name.clone(),
+                    message: "GeminiCodeAssist OAuth is not valid for an OpenAI provider"
+                        .to_string(),
+                }
+                .build())
+            }
+        },
+    }
+}
+
 fn build_google(
     provider_cfg: &ProviderConfig,
     api_model: &str,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
+    // Gemini Code Assist subscription (`auth: OAuth`) uses a distinct wire
+    // contract (Bearer + `{project, request}` envelope + `:method` RPC +
+    // onboarding) served by `vercel-ai-google-codeassist`. API-key Gemini stays
+    // on the standard generativelanguage provider below.
+    if let coco_config::ProviderAuth::OAuth { flow } = provider_cfg.auth {
+        return build_google_code_assist(provider_cfg, api_model, flow, resolver);
+    }
     let opts = &provider_cfg.client_options;
     let settings = vercel_ai_google::GoogleGenerativeAIProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
@@ -359,6 +456,62 @@ fn build_google(
         name: Some(provider_cfg.name.clone()),
     };
     let provider = vercel_ai_google::create_google_generative_ai(settings);
+    provider.language_model(api_model).map_err(|e| {
+        crate::errors::ProviderBuildFailedSnafu {
+            provider: "google",
+            provider_name: provider_cfg.name.clone(),
+            message: e.to_string(),
+        }
+        .build()
+    })
+}
+
+/// Map a Code Assist OAuth provider config + the credential resolver into the
+/// `vercel-ai-google-codeassist` transport. The seam-legal neutral→wire
+/// conversion (mirrors `build_openai_auth`): the coco-neutral
+/// `SubscriptionCreds` supplier is wrapped into the crate's
+/// `CodeAssistCreds` closure — no `vercel-ai` type crosses into
+/// `coco-provider-auth`.
+fn build_google_code_assist(
+    provider_cfg: &ProviderConfig,
+    api_model: &str,
+    flow: coco_types::OAuthFlowId,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+) -> Result<Arc<dyn LanguageModel>, InferenceError> {
+    // Only the Gemini flow is valid on a Google provider.
+    if !matches!(flow, coco_types::OAuthFlowId::GeminiCodeAssist) {
+        return Err(crate::errors::ProviderBuildFailedSnafu {
+            provider: "google",
+            provider_name: provider_cfg.name.clone(),
+            message: format!("{flow} OAuth is not valid for a Google provider"),
+        }
+        .build());
+    }
+    let supplier = resolver
+        .and_then(|r| r.subscription_creds(&provider_cfg.name))
+        .ok_or_else(|| {
+            crate::errors::ProviderBuildFailedSnafu {
+                provider: "google",
+                provider_name: provider_cfg.name.clone(),
+                message: "Gemini Code Assist not logged in — run `coco login gemini`".to_string(),
+            }
+            .build()
+        })?;
+    let creds: vercel_ai_google_codeassist::CodeAssistCredsSupplier = Arc::new(move || {
+        supplier().map(|c| vercel_ai_google_codeassist::CodeAssistCreds {
+            access_token: c.access_token,
+            project_id: c.project_id,
+        })
+    });
+    let opts = &provider_cfg.client_options;
+    let settings = vercel_ai_google_codeassist::GoogleCodeAssistProviderSettings {
+        base_url: Some(provider_cfg.base_url.clone()),
+        creds,
+        headers: header_map(opts),
+        name: Some(provider_cfg.name.clone()),
+        client: None,
+    };
+    let provider = vercel_ai_google_codeassist::create_google_code_assist(settings);
     provider.language_model(api_model).map_err(|e| {
         crate::errors::ProviderBuildFailedSnafu {
             provider: "google",

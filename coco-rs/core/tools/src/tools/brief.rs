@@ -49,7 +49,7 @@ pub struct BriefInput {
 /// The shape stays close to the legacy `serde_json::json!({...})`
 /// envelope so transcript replay across the migration boundary
 /// round-trips without surprises.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BriefAttachment {
     pub path: String,
     pub exists: bool,
@@ -62,7 +62,7 @@ pub struct BriefAttachment {
 
 /// Typed output for [`BriefTool::execute`]. Mirrors the legacy JSON
 /// envelope (`message`/`status`/`attachments`/`timestamp`).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BriefOutput {
     pub message: String,
     pub status: BriefStatus,

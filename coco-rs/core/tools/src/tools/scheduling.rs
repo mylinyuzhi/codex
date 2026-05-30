@@ -128,7 +128,7 @@ fn default_true() -> bool {
 }
 
 /// Typed output for [`CronCreateTool`].
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronCreateOutput {
     pub id: String,
     /// Human-readable cron schedule (currently echoes back the cron
@@ -291,7 +291,7 @@ pub struct CronDeleteInput {
 /// transcript replay that provide partial envelopes (e.g.
 /// `{"id": "x"}`) still deserialize into a valid struct for
 /// `render_for_model`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CronDeleteOutput {
     #[serde(default)]
     pub id: String,
@@ -375,7 +375,7 @@ pub struct CronListInput {}
 /// All fields marked `#[serde(default)]` so partial test fixtures /
 /// transcript replay deserializes successfully into a struct the
 /// renderer can iterate.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CronListJob {
     #[serde(default)]
     pub id: String,
@@ -397,7 +397,7 @@ pub struct CronListJob {
 }
 
 /// Typed output for [`CronListTool`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CronListOutput {
     pub jobs: Vec<CronListJob>,
 }

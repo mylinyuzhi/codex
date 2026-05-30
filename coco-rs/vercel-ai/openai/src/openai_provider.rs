@@ -19,6 +19,10 @@ use crate::chat::OpenAIChatLanguageModel;
 use crate::completion::OpenAICompletionLanguageModel;
 use crate::embedding::OpenAIEmbeddingModel;
 use crate::image::OpenAIImageModel;
+use crate::openai_auth::CHATGPT_CODEX_BASE_URL;
+use crate::openai_auth::HDR_CHATGPT_ACCOUNT_ID;
+use crate::openai_auth::HDR_ORIGINATOR;
+use crate::openai_auth::OpenAIAuth;
 use crate::openai_config::OpenAIConfig;
 use crate::responses::OpenAIResponsesLanguageModel;
 use crate::speech::OpenAISpeechModel;
@@ -27,10 +31,12 @@ use crate::transcription::OpenAITranscriptionModel;
 /// Settings for creating an OpenAI provider.
 #[derive(Default)]
 pub struct OpenAIProviderSettings {
-    /// Base URL (default: "https://api.openai.com/v1").
+    /// Base URL. Default: `https://api.openai.com/v1` for `ApiKey`,
+    /// `https://chatgpt.com/backend-api/codex` for `ChatGptSubscription`.
     pub base_url: Option<String>,
-    /// API key. Falls back to `OPENAI_API_KEY` env var.
-    pub api_key: Option<String>,
+    /// How to authenticate each request. Default: `ApiKey(None)` (reads
+    /// `OPENAI_API_KEY`).
+    pub auth: OpenAIAuth,
     /// OpenAI organization ID.
     pub organization: Option<String>,
     /// OpenAI project ID.
@@ -56,19 +62,28 @@ pub struct OpenAIProvider {
     headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>,
     client: Option<Arc<reqwest::Client>>,
     full_url: Option<bool>,
+    chatgpt_subscription: bool,
 }
 
 impl OpenAIProvider {
     /// Create a new provider from settings.
     pub fn new(settings: OpenAIProviderSettings) -> Self {
         let provider_name = settings.name.unwrap_or_else(|| "openai".into());
+        let chatgpt_subscription = settings.auth.is_chatgpt_subscription();
+        // Late host resolution (mirrors codex `to_api_provider`): a
+        // subscription with no explicit base defaults to the codex backend.
+        let default_base = if chatgpt_subscription {
+            CHATGPT_CODEX_BASE_URL
+        } else {
+            "https://api.openai.com/v1"
+        };
         let base_url = settings
             .base_url
             .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
-            .unwrap_or_else(|| "https://api.openai.com/v1".into());
+            .unwrap_or_else(|| default_base.into());
         let base_url = without_trailing_slash(&base_url).to_string();
 
-        let api_key = settings.api_key;
+        let auth = settings.auth;
         let organization = settings.organization;
         let project = settings.project;
         let custom_headers = settings.headers.unwrap_or_default();
@@ -76,25 +91,40 @@ impl OpenAIProvider {
         let headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync> = Arc::new(move || {
             let mut h = HashMap::new();
 
-            // API key — loaded lazily per request
-            match load_api_key(api_key.as_deref(), "OPENAI_API_KEY", "OpenAI") {
-                Ok(key) if !key.is_empty() => {
-                    h.insert("Authorization".into(), format!("Bearer {key}"));
+            match &auth {
+                OpenAIAuth::ApiKey(api_key) => {
+                    // API key — loaded lazily per request.
+                    match load_api_key(api_key.as_deref(), "OPENAI_API_KEY", "OpenAI") {
+                        Ok(key) if !key.is_empty() => {
+                            h.insert("Authorization".into(), format!("Bearer {key}"));
+                        }
+                        Err(e) => tracing::warn!("OpenAI API key not configured: {e}"),
+                        _ => {}
+                    }
+                    if let Some(ref org) = organization {
+                        h.insert("OpenAI-Organization".into(), org.clone());
+                    }
+                    if let Some(ref proj) = project {
+                        h.insert("OpenAI-Project".into(), proj.clone());
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("OpenAI API key not configured: {e}");
+                OpenAIAuth::ChatGptSubscription { creds, originator } => {
+                    h.insert(HDR_ORIGINATOR.into(), originator.to_string());
+                    match creds() {
+                        Some(c) => {
+                            h.insert("Authorization".into(), format!("Bearer {}", c.access_token));
+                            if let Some(account_id) = c.account_id {
+                                h.insert(HDR_CHATGPT_ACCOUNT_ID.into(), account_id);
+                            }
+                        }
+                        None => tracing::warn!(
+                            "ChatGPT subscription not logged in — run `coco login openai`"
+                        ),
+                    }
                 }
-                _ => {}
             }
 
-            if let Some(ref org) = organization {
-                h.insert("OpenAI-Organization".into(), org.clone());
-            }
-            if let Some(ref proj) = project {
-                h.insert("OpenAI-Project".into(), proj.clone());
-            }
-
-            // Merge custom headers (custom overrides default)
+            // Merge custom headers (custom overrides default).
             for (k, v) in &custom_headers {
                 h.insert(k.clone(), v.clone());
             }
@@ -108,6 +138,7 @@ impl OpenAIProvider {
             headers,
             client: settings.client,
             full_url: settings.full_url,
+            chatgpt_subscription,
         }
     }
 
@@ -118,6 +149,7 @@ impl OpenAIProvider {
             headers: self.headers.clone(),
             client: self.client.clone(),
             full_url: self.full_url,
+            chatgpt_subscription: self.chatgpt_subscription,
         })
     }
 

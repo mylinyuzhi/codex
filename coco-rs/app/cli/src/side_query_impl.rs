@@ -78,6 +78,7 @@ impl SideQueryAdapter {
             &self.runtime_config,
             &spec,
             self.runtime_config.api.retry.clone().into(),
+            Some(&crate::provider_login::shared_resolver()),
         )
         .map_err(|e| anyhow::anyhow!("build_api_client for role {role:?}: {e}"))?;
         self.role_clients.write().await.insert(role, client.clone());

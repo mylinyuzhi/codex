@@ -68,7 +68,7 @@ fn permission_viewport_reserves_prompt_height() {
     };
 
     let height =
-        crate::surface::viewport::interactive_viewport_desired_height(&state, 80, 24, plan);
+        crate::surface::viewport::interactive_viewport_desired_height(&state, 80, 24, plan, None);
 
     assert!(height >= 8, "permission prompt should reserve pane rows");
 }

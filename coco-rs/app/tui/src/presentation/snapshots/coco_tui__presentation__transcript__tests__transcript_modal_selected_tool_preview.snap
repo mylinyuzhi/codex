@@ -5,8 +5,8 @@ expression: "render_transcript_text(&app_state, &state, 84, 14)"
 ┌ Transcript ──────────────────────────────────────────────────────────────────────┐
 │> inspect src/lib.rs                                                              │
 │                                                                                  │
-│▶ 🔧  Read({})                                                                     │
-│    pub fn alpha() {}                                                             │
+│▶ 🔧  Read                                                                         │
+│  └ pub fn alpha() {}                                                             │
 │    pub fn beta() {}                                                              │
 │    pub fn gamma() {}                                                             │
 │    pub fn delta() {}                                                             │

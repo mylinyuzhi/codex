@@ -367,3 +367,96 @@ fn tool_search_does_not_add_advanced_tool_use_beta() {
     let tools = result.tools.unwrap();
     assert_eq!(tools.len(), 2);
 }
+
+/// Build a function tool flagged with the engine's `cacheBoundary: true` hint.
+fn boundary_tool(name: &str) -> LanguageModelV4Tool {
+    let mut anthropic = HashMap::new();
+    anthropic.insert("cacheBoundary".to_string(), serde_json::json!(true));
+    let mut po_map = HashMap::new();
+    po_map.insert("anthropic".to_string(), anthropic);
+    LanguageModelV4Tool::Function(LanguageModelV4FunctionTool {
+        name: name.into(),
+        description: None,
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_examples: None,
+        strict: None,
+        provider_options: Some(vercel_ai_provider::ProviderOptions(po_map)),
+    })
+}
+
+/// The boundary breakpoint must use the SAME resolved marker (incl. TTL) the
+/// caller set on the validator — NOT a hard-coded 5-minute `{"type":"ephemeral"}`.
+/// This is the regression guard for the 1h/5m TTL mismatch.
+#[test]
+fn cache_boundary_emits_the_resolved_marker_ttl() {
+    let mut validator = CacheControlValidator::new();
+    validator.set_tool_boundary_marker(Some(serde_json::json!({
+        "type": "ephemeral", "ttl": "1h"
+    })));
+    let result = prepare_anthropic_tools(
+        &Some(vec![boundary_tool("Read")]),
+        &None,
+        None,
+        false,
+        /*context_management_eligible*/ true,
+        Some(&mut validator),
+    );
+    let tools = result.tools.unwrap();
+    assert_eq!(
+        tools[0]["cache_control"],
+        serde_json::json!({"type": "ephemeral", "ttl": "1h"}),
+        "boundary breakpoint must inherit the auto-marker's resolved TTL: {:?}",
+        tools[0]
+    );
+}
+
+/// When caching is inactive the caller leaves the boundary marker unset
+/// (`None`); a `cacheBoundary` tool must then NOT gain a lone breakpoint.
+#[test]
+fn cache_boundary_absent_when_caching_inactive() {
+    let mut validator = CacheControlValidator::new(); // no boundary marker set
+    let result = prepare_anthropic_tools(
+        &Some(vec![boundary_tool("Read")]),
+        &None,
+        None,
+        false,
+        /*context_management_eligible*/ true,
+        Some(&mut validator),
+    );
+    let tools = result.tools.unwrap();
+    assert!(
+        tools[0].get("cache_control").is_none(),
+        "no breakpoint may be emitted with caching off: {:?}",
+        tools[0]
+    );
+}
+
+/// Only the tool carrying the `cacheBoundary` hint gets the breakpoint; a
+/// plain tool alongside it stays uncached.
+#[test]
+fn cache_boundary_marks_only_the_flagged_tool() {
+    let plain = LanguageModelV4Tool::Function(LanguageModelV4FunctionTool {
+        name: "Glob".into(),
+        description: None,
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_examples: None,
+        strict: None,
+        provider_options: None,
+    });
+    let mut validator = CacheControlValidator::new();
+    validator.set_tool_boundary_marker(Some(serde_json::json!({"type": "ephemeral"})));
+    let result = prepare_anthropic_tools(
+        &Some(vec![boundary_tool("Read"), plain]),
+        &None,
+        None,
+        false,
+        /*context_management_eligible*/ true,
+        Some(&mut validator),
+    );
+    let tools = result.tools.unwrap();
+    assert_eq!(
+        tools[0]["cache_control"],
+        serde_json::json!({"type": "ephemeral"})
+    );
+    assert!(tools[1].get("cache_control").is_none());
+}

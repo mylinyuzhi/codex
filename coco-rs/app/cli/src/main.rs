@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
                 println!("coco-rs v0.0.0 ({mode} mode)");
                 println!("model: {model_id}");
                 println!("provider: {}", client.provider());
+                coco_cli::provider_login::print_auth_status(&runtime_config);
                 return Ok(());
             }
             Commands::Sessions => {
@@ -100,15 +101,17 @@ async fn main() -> Result<()> {
                 let (_client, provider_api, model_id) = create_api_client(&runtime_config, retry);
                 let mode = provider_api.map_or("mock", |api| api.as_str());
                 println!("[ok] Model: {model_id} ({mode})");
+                coco_cli::provider_login::print_auth_status(&runtime_config);
                 return Ok(());
             }
-            Commands::Login => {
-                println!("Authentication: set ANTHROPIC_API_KEY environment variable.");
-                return Ok(());
+            Commands::Login {
+                provider,
+                no_browser,
+            } => {
+                return coco_cli::provider_login::run_login(provider.clone(), *no_browser).await;
             }
-            Commands::Logout => {
-                println!("Credentials cleared.");
-                return Ok(());
+            Commands::Logout { provider } => {
+                return coco_cli::provider_login::run_logout(provider.clone()).await;
             }
             Commands::Init => {
                 let cwd = std::env::current_dir()?;

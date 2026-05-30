@@ -45,17 +45,18 @@ members = [
     "tests/harness",
     "tests/live",
 
-    # ─── vercel-ai/ (8) ───
+    # ─── vercel-ai/ (9) ───
     "vercel-ai/provider",
     "vercel-ai/provider-utils",
     "vercel-ai/ai",
     "vercel-ai/openai",
     "vercel-ai/openai-compatible",
     "vercel-ai/google",
+    "vercel-ai/google-codeassist",
     "vercel-ai/anthropic",
     "vercel-ai/bytedance",
 
-    # ─── services/ (7) ───
+    # ─── services/ (8) ───
     "services/inference",
     "services/mcp",
     "services/mcp-skills",
@@ -63,6 +64,7 @@ members = [
     "services/rmcp-client",
     "services/lsp",
     "services/compact",
+    "services/provider-auth",
 
     # ─── core/ (7) ───
     "core/messages",
@@ -107,8 +109,10 @@ members = [
     "bridge",
     "retrieval",
 
-    # ─── ui (1) ── pure presentational primitives, depended on by app/tui ───
+    # ─── ui (3) ── pure presentational primitives, depended on by app/tui ───
     "tui-ui",
+    "tui-markdown",
+    "tui-mermaid",
 ]
 resolver = "2"
 
@@ -165,11 +169,13 @@ vercel-ai = { path = "vercel-ai/ai" }
 vercel-ai-openai = { path = "vercel-ai/openai" }
 vercel-ai-openai-compatible = { path = "vercel-ai/openai-compatible" }
 vercel-ai-google = { path = "vercel-ai/google" }
+vercel-ai-google-codeassist = { path = "vercel-ai/google-codeassist" }
 vercel-ai-anthropic = { path = "vercel-ai/anthropic" }
 vercel-ai-bytedance = { path = "vercel-ai/bytedance" }
 
 # Internal - services
 coco-inference = { path = "services/inference" }
+coco-provider-auth = { path = "services/provider-auth" }
 coco-mcp = { path = "services/mcp" }
 coco-mcp-skills = { path = "services/mcp-skills" }
 coco-mcp-types = { path = "services/mcp-types" }
@@ -223,6 +229,8 @@ coco-retrieval = { path = "retrieval" }
 
 # Internal - ui
 coco-tui-ui = { path = "tui-ui" }
+coco-tui-markdown = { path = "tui-markdown" }
+coco-tui-mermaid = { path = "tui-mermaid" }
 
 # External (only those actually used by existing crates)
 anyhow = "1"
@@ -341,6 +349,22 @@ ratatui = { version = "0.30", features = [
     "unstable-widget-ref",
 ] }
 ratatui-macros = "0.7"
+# Markdown rendering (coco-tui-markdown): pulldown-cmark for parsing, syntect for
+# grammar-accurate code highlighting. syntect is pure-Rust (regex-fancy, no onig
+# C-dep) and ships the bundled syntax set; its .tmTheme themes are dropped — coco's
+# own Theme palette governs colors via a scope→UiStyles mapping.
+pulldown-cmark = { version = "0.13.4", default-features = false }
+syntect = { version = "5", default-features = false, features = [
+    "parsing",
+    "default-syntaxes",
+    "regex-fancy",
+] }
+# Mermaid layout engine (coco-tui-mermaid). `default-features = false` drops the
+# `cli` (clap) and `png` (resvg/usvg/tiny-skia) features — we consume only the
+# pure-Rust parse + geometric-layout core and project it to Unicode box-drawing
+# cells (no rasterization, no terminal graphics protocol). Pinned by rev for a
+# reproducible build (single-maintainer upstream); gated off by default.
+mermaid-rs-renderer = { git = "https://github.com/1jehuang/mermaid-rs-renderer.git", rev = "01e8304ffc670f04dd4a047595cfb8ea9c854ae7", default-features = false }
 textwrap = "0.16"
 tokio-test = "0.4"
 tracing-appender = "0.2"

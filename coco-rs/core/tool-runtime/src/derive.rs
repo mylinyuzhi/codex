@@ -26,15 +26,6 @@
 //! edge cases. For first-party parity with TS we set
 //! [`SchemaSettings::inline_subschemas`] = `true` so the generated
 //! schema is a single flat document.
-//!
-//! ## Contract direction
-//!
-//! Input schemas describe what we'll **deserialize FROM** the model
-//! (`for_deserialize`). Output schemas describe what the tool will
-//! **serialize INTO** the response (`for_serialize`). The distinction
-//! only matters for types that customise `JsonSchema` based on
-//! contract; for typical `#[derive]`-ed types the two contracts
-//! produce identical output.
 
 use schemars::JsonSchema;
 use schemars::generate::SchemaSettings;
@@ -53,31 +44,6 @@ pub fn derive_input_schema_value<T: JsonSchema>() -> Value {
             s.inline_subschemas = true;
         })
         .for_deserialize()
-        .into_generator();
-    let schema = generator.into_root_schema_for::<T>();
-    // `schemars::Schema` always round-trips through `serde_json::Value`
-    // by construction; on the off-chance a future schemars upgrade
-    // breaks that, surface as `Value::Null` rather than panicking the
-    // tool-listing path — the validator will then reject the empty
-    // schema and the model gets a clean error.
-    serde_json::to_value(&schema).unwrap_or(Value::Null)
-}
-
-/// Derive a JSON Schema document from `T: JsonSchema` for use as a
-/// tool's output schema (`Tool::output_schema()`). Inlines subschemas.
-///
-/// Uses the `serialize` contract — output schemas describe what the
-/// tool will emit to the model, not what gets deserialised from it.
-/// For trivially-derived types this is identical to the deserialize
-/// contract; types that vary their JsonSchema impl based on contract
-/// (rare in our codebase) get the correct direction.
-#[must_use]
-pub fn derive_output_schema<T: JsonSchema>() -> Value {
-    let generator = SchemaSettings::default()
-        .with(|s| {
-            s.inline_subschemas = true;
-        })
-        .for_serialize()
         .into_generator();
     let schema = generator.into_root_schema_for::<T>();
     // `schemars::Schema` always round-trips through `serde_json::Value`

@@ -6,16 +6,9 @@
 //! by one entry — the tracker collapses repeated UUIDs so the
 //! "previously emitted prefix" comparison works at engine-message
 //! granularity rather than per-cell.
-// S2 lands before production native scrollback wiring; keep this scoped while
-// `terminal::Tui` still owns the live UI.
-#![allow(dead_code)]
-
 use uuid::Uuid;
 
 use crate::state::transcript_view::RenderedCell;
-use coco_tui_ui::engine::terminal::SurfaceBackend;
-use coco_tui_ui::engine::terminal::SurfaceTerminal;
-use ratatui::text::Line;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HistoryEmissionPlan {
@@ -27,6 +20,9 @@ pub(crate) enum HistoryEmissionPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HistoryEmissionOutcome {
     Noop,
+    FastNoop {
+        revision: u64,
+    },
     Appended {
         start: usize,
         message_count: usize,
@@ -48,17 +44,12 @@ pub(crate) struct HistoryEmissionTracker {
 }
 
 impl HistoryEmissionTracker {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     pub(crate) fn emitted_count(&self) -> usize {
         self.emitted_message_uuids.len()
     }
 
     pub(crate) fn plan(&self, cells: &[RenderedCell]) -> HistoryEmissionPlan {
-        let cell_starts = engine_message_cell_starts(cells);
-        let total_messages = cell_starts.len();
+        let total_messages = engine_message_count(cells);
 
         if self.emitted_message_uuids.is_empty() {
             return if cells.is_empty() {
@@ -72,15 +63,26 @@ impl HistoryEmissionTracker {
             return HistoryEmissionPlan::ReplayRequired;
         }
 
-        let prefix_matches = self
-            .emitted_message_uuids
-            .iter()
-            .zip(cell_starts.iter())
-            .all(|(emitted_uuid, &start_idx)| {
-                cells
-                    .get(start_idx)
-                    .is_some_and(|cell| cell.message_uuid == *emitted_uuid)
-            });
+        let mut emitted_index = 0usize;
+        let mut next_start = None;
+        let mut prev = None;
+        let mut prefix_matches = true;
+        for (cell_index, cell) in cells.iter().enumerate() {
+            if Some(cell.message_uuid) == prev {
+                continue;
+            }
+            prev = Some(cell.message_uuid);
+            if let Some(emitted_uuid) = self.emitted_message_uuids.get(emitted_index) {
+                if *emitted_uuid != cell.message_uuid {
+                    prefix_matches = false;
+                    break;
+                }
+                emitted_index += 1;
+            } else {
+                next_start = Some(cell_index);
+                break;
+            }
+        }
         if !prefix_matches {
             return HistoryEmissionPlan::ReplayRequired;
         }
@@ -89,7 +91,7 @@ impl HistoryEmissionTracker {
             HistoryEmissionPlan::Noop
         } else {
             HistoryEmissionPlan::Append {
-                start: cell_starts[self.emitted_message_uuids.len()],
+                start: next_start.unwrap_or(cells.len()),
             }
         }
     }
@@ -107,19 +109,38 @@ impl HistoryEmissionTracker {
         self.emitted_message_uuids = uuids;
     }
 
+    pub(crate) fn mark_appended_from(&mut self, cells: &[RenderedCell], start: usize) {
+        let mut prev = cells
+            .get(start.wrapping_sub(1))
+            .map(|cell| cell.message_uuid);
+        for cell in cells.iter().skip(start) {
+            if Some(cell.message_uuid) != prev {
+                self.emitted_message_uuids.push(cell.message_uuid);
+                prev = Some(cell.message_uuid);
+            }
+        }
+    }
+
     pub(crate) fn reset(&mut self) {
         self.emitted_message_uuids.clear();
+    }
+}
+
+#[cfg(test)]
+impl HistoryEmissionTracker {
+    pub(crate) fn new() -> Self {
+        Self::default()
     }
 
     pub(crate) fn emit_append_only<B, F>(
         &mut self,
-        terminal: &mut SurfaceTerminal<B>,
+        terminal: &mut coco_tui_ui::engine::terminal::SurfaceTerminal<B>,
         cells: &[RenderedCell],
         render_tail: F,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
-        B: SurfaceBackend,
-        F: FnOnce(&[RenderedCell]) -> Vec<Line<'static>>,
+        B: coco_tui_ui::engine::terminal::SurfaceBackend,
+        F: FnOnce(&[RenderedCell]) -> Vec<ratatui::text::Line<'static>>,
     {
         let start = match self.plan(cells) {
             HistoryEmissionPlan::Noop => return Ok(HistoryEmissionOutcome::Noop),
@@ -140,13 +161,13 @@ impl HistoryEmissionTracker {
 
     pub(crate) fn replay_all<B, F>(
         &mut self,
-        terminal: &mut SurfaceTerminal<B>,
+        terminal: &mut coco_tui_ui::engine::terminal::SurfaceTerminal<B>,
         cells: &[RenderedCell],
         render_all: F,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
-        B: SurfaceBackend,
-        F: FnOnce(&[RenderedCell]) -> Vec<Line<'static>>,
+        B: coco_tui_ui::engine::terminal::SurfaceBackend,
+        F: FnOnce(&[RenderedCell]) -> Vec<ratatui::text::Line<'static>>,
     {
         terminal.clear_owned_scrollback()?;
         let rows = terminal.insert_history_lines(render_all(cells))?;
@@ -158,19 +179,16 @@ impl HistoryEmissionTracker {
     }
 }
 
-/// Indices where each distinct engine-message UUID starts within
-/// `cells`. Multiple cells sharing a UUID (assistant turn fanout)
-/// collapse to one entry.
-fn engine_message_cell_starts(cells: &[RenderedCell]) -> Vec<usize> {
-    let mut starts = Vec::new();
+fn engine_message_count(cells: &[RenderedCell]) -> usize {
+    let mut count = 0usize;
     let mut prev = None;
-    for (i, cell) in cells.iter().enumerate() {
+    for cell in cells {
         if Some(cell.message_uuid) != prev {
-            starts.push(i);
+            count += 1;
             prev = Some(cell.message_uuid);
         }
     }
-    starts
+    count
 }
 
 #[cfg(test)]

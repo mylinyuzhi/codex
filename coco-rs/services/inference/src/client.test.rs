@@ -217,3 +217,127 @@ fn stop_reason_flags_truncation_and_filter() {
         assert!(!abnormal.is_normal());
     }
 }
+
+/// Model that returns a 401 (with a downcastable `APICallError`) for the first
+/// `fail_calls` invocations, then succeeds. Drives the reactive-401 path.
+struct FlakyAuthModel {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    fail_calls: usize,
+}
+
+#[async_trait::async_trait]
+impl LanguageModelV4 for FlakyAuthModel {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+    fn model_id(&self) -> &str {
+        "flaky-auth"
+    }
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelV4GenerateResult, vercel_ai_provider::AISdkError> {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n < self.fail_calls {
+            return Err(
+                vercel_ai_provider::AISdkError::new("unauthorized").with_cause(Box::new(
+                    vercel_ai_provider::APICallError::new("unauthorized", "https://x")
+                        .with_status(401),
+                )),
+            );
+        }
+        Ok(LanguageModelV4GenerateResult {
+            content: vec![AssistantContentPart::Text(TextPart {
+                text: "recovered".to_string(),
+                provider_metadata: None,
+            })],
+            usage: Usage::new(1, 1),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+    async fn do_stream(
+        &self,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelV4StreamResult, vercel_ai_provider::AISdkError> {
+        Err(vercel_ai_provider::AISdkError::new("unsupported"))
+    }
+}
+
+#[tokio::test]
+async fn reactive_401_refreshes_then_retries_and_succeeds() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = Arc::new(FlakyAuthModel {
+        calls: calls.clone(),
+        fail_calls: 1,
+    });
+    let refreshes = Arc::new(AtomicUsize::new(0));
+    let r2 = refreshes.clone();
+    let hook: crate::credentials::RefreshHook = Arc::new(move || {
+        r2.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { true })
+    });
+    let client =
+        ApiClient::with_default_fingerprint(model, RetryConfig::default()).with_refresh_hook(hook);
+    let params = QueryParams {
+        prompt: vec![LlmMessage::user_text("hi")],
+        max_tokens: Some(100),
+        ..Default::default()
+    };
+    let result = client.query(&params).await.expect("recovers after refresh");
+    assert_eq!(
+        refreshes.load(Ordering::SeqCst),
+        1,
+        "refresh fires exactly once"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "model: 401 then success");
+    assert!(!result.content.is_empty());
+}
+
+#[tokio::test]
+async fn reactive_401_gives_up_when_refresh_fails() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = Arc::new(FlakyAuthModel {
+        calls: calls.clone(),
+        fail_calls: usize::MAX, // always 401
+    });
+    let refreshes = Arc::new(AtomicUsize::new(0));
+    let r2 = refreshes.clone();
+    // Refresh reports failure (e.g. not actually logged in) → no recovery.
+    let hook: crate::credentials::RefreshHook = Arc::new(move || {
+        r2.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { false })
+    });
+    let client =
+        ApiClient::with_default_fingerprint(model, RetryConfig::default()).with_refresh_hook(hook);
+    let params = QueryParams {
+        prompt: vec![LlmMessage::user_text("hi")],
+        max_tokens: Some(100),
+        ..Default::default()
+    };
+    let err = client
+        .query(&params)
+        .await
+        .expect_err("auth error must surface");
+    assert!(
+        crate::retry::RetryConfig::is_auth_error(&err),
+        "classified as auth: {err}"
+    );
+    assert_eq!(
+        refreshes.load(Ordering::SeqCst),
+        1,
+        "refresh attempted once"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "no retry when refresh fails"
+    );
+}

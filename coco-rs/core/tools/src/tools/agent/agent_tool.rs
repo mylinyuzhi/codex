@@ -75,7 +75,7 @@ pub struct AgentInput {
 /// `serde_json::Value` round-trip — both producer and consumer live in
 /// this crate, so a discriminated union is strictly type-safer and
 /// matches TS's tagged union (`AgentToolToolResultParam`).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AgentSpawnRenderResult {
     /// Synchronous spawn returned a final result.
@@ -140,13 +140,16 @@ impl Tool for AgentTool {
     type Input = AgentInput;
     type Output = AgentSpawnRenderResult;
 
+    // Static schema from a literal `json!`; a parse failure means the literal
+    // is malformed (a programmer error), so panicking on first build is correct.
+    #[allow(clippy::expect_used)]
     fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
         static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
             std::sync::OnceLock::new();
         SCHEMA.get_or_init(|| {
             // Runtime schema also accepts `mcp_servers` (permission/hook-injected,
             // never model-set); the model view omits it (see `model_schema`).
-            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({
+            coco_tool_runtime::ToolInputSchema::from_static_value(serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
@@ -220,7 +223,6 @@ impl Tool for AgentTool {
                 // `z.string()` without `.optional()`. All other fields are optional.
                 "required": ["description", "prompt"]
             }))
-            .expect("AgentTool input schema must be a valid object schema")
         })
     }
 

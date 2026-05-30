@@ -16,6 +16,11 @@ pub struct OpenAIConfig {
     /// Default (`None`/`false`): auto-detect — if `base_url` already ends
     /// with the path, appending is skipped automatically.
     pub full_url: Option<bool>,
+    /// `true` when this provider authenticates via the ChatGPT subscription
+    /// (codex backend). The Responses model defaults `store: false` in this
+    /// mode (the codex backend requires it; it also unlocks the
+    /// `reasoning.encrypted_content` include). Default `false`.
+    pub chatgpt_subscription: bool,
 }
 
 impl OpenAIConfig {

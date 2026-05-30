@@ -34,7 +34,7 @@ pub struct SkillInput {
 /// TS parity: `SkillTool.ts:301-326 outputSchema`. Wire field names
 /// preserved (`commandName`, `agentId`) via `rename` for cross-runtime
 /// transcript compatibility.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SkillOutput {
     /// Inline path — the resolved prompt was spliced into history via

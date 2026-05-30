@@ -2,17 +2,24 @@
 source: app/tui/src/widgets/mod.test.rs
 expression: output
 ---
- ╭─╮ ╭─╮  COCO v0.0.0                                                                           
- │●│ │●│  opus-4  *  auto                                                                       
  ╰─╯ ╰─╯                                                                                        
                                                                                                 
 ❯ find the CLAUDE.md                                                                            
                                                                                                 
 🔧  Glob(**/CLAUDE.md)                                                                           
-  └ Found 8 files                                                                               
+  └ Found 17 files                                                                              
     coco-rs/app/tui/CLAUDE.md                                                                   
+    coco-rs/app/query/CLAUDE.md                                                                 
+    coco-rs/app/cli/CLAUDE.md                                                                   
+    coco-rs/app/state/CLAUDE.md                                                                 
+    coco-rs/core/tools/CLAUDE.md                                                                
     … +5 lines (ctrl+o to expand)                                                               
+    coco-rs/services/inference/CLAUDE.md                                                        
+    coco-rs/services/mcp/CLAUDE.md                                                              
     coco-rs/utils/string/CLAUDE.md                                                              
+    coco-rs/utils/git/CLAUDE.md                                                                 
+    coco-rs/vercel-ai/anthropic/CLAUDE.md                                                       
+    coco-rs/vercel-ai/openai/CLAUDE.md                                                          
     codex-rs/tui/CLAUDE.md                                                                      
                                                                                                 
 ────────────────────────────────────────────────────────────────────────────────────────────────
