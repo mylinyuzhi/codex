@@ -3257,6 +3257,13 @@
       "description": "Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries\nthe resolved binding (model + provider + thinking effort) that the\nTUI applies to `state.session.model_by_role[role]` and, when\n`role == Main`, also to `state.session.{model, provider,\nthinking_effort}` for the status bar.\n\nEmitted by `tui_runner` after applying an in-memory override via\n`SessionRuntime::apply_role_override` / `apply_role_effort`. No\npersistence to settings.json — that's the user's job.",
       "type": "object",
       "properties": {
+        "context_window": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "effort": {
           "description": "`None` ⇒ engine falls back to the model's\n`default_thinking_level`. `Some(_)` ⇒ explicit user choice.",
           "anyOf": [
@@ -3523,7 +3530,7 @@
       "additionalProperties": true
     },
     "ProviderModelSelection": {
-      "description": "Unresolved provider/model selection from user-facing config.\n\nThis intentionally does not include [`ProviderApi`]: config surfaces\nwrite `provider/model_id`, and the runtime resolves `provider` through\nthe live provider catalog before constructing an `ApiClient`.",
+      "description": "Unresolved provider/model selection from user-facing config.\n\nThis intentionally does not include [`ProviderApi`]: config surfaces\nwrite `provider/model_id`, and the runtime resolves `provider` through\nthe live provider catalog before constructing a runtime slot.",
       "type": "object",
       "properties": {
         "model_id": {
@@ -4065,6 +4072,9 @@
         },
         "protocol_version": {
           "description": "coco-rs extension: protocol version negotiation.",
+          "type": "string"
+        },
+        "provider": {
           "type": "string"
         },
         "session_id": {

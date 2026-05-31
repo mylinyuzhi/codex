@@ -136,12 +136,16 @@ impl QueryEngine {
         // false in the registry and `deferred_tools` is empty — the
         // `deferred_tools_delta` reminder collapses to "nothing
         // searchable", which is the correct truth.
-        let supports_tool_reference = self.client.model_info().is_some_and(|info| {
-            info.has_capability(coco_types::Capability::ServerSideToolReference)
-        });
-        let supports_client_side_tool_search = self
-            .client
-            .model_info()
+        let snapshot = self.runtime_snapshot();
+        let supports_tool_reference = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.model_info.as_ref())
+            .is_some_and(|info| {
+                info.has_capability(coco_types::Capability::ServerSideToolReference)
+            });
+        let supports_client_side_tool_search = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.model_info.as_ref())
             .is_some_and(|info| info.has_capability(coco_types::Capability::ClientSideToolSearch));
         // Both partitions share the same filter context so they
         // cover disjoint halves of the registry — `loaded` includes

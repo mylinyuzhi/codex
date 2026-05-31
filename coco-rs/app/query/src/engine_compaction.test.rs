@@ -175,14 +175,11 @@ fn new_engine(
     model: Arc<CapturingModel>,
     dispatcher: Option<Arc<dyn ForkDispatcher>>,
 ) -> QueryEngine {
-    let client = Arc::new(coco_inference::ApiClient::with_default_fingerprint(
-        model,
-        coco_inference::RetryConfig::default(),
-    ));
+    let model_runtimes = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
     let mut engine = QueryEngine::new(
         QueryEngineConfig::default(),
-        client,
+        model_runtimes,
         tools,
         CancellationToken::new(),
         None,
@@ -194,14 +191,11 @@ fn new_engine(
 }
 
 fn new_engine_for_model(model: Arc<dyn coco_inference::LanguageModel>) -> QueryEngine {
-    let client = Arc::new(coco_inference::ApiClient::with_default_fingerprint(
-        model,
-        coco_inference::RetryConfig::default(),
-    ));
+    let model_runtimes = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
     QueryEngine::new(
         QueryEngineConfig::default(),
-        client,
+        model_runtimes,
         tools,
         CancellationToken::new(),
         None,
@@ -214,14 +208,11 @@ fn new_engine_with_hooks(
     sync_hook_buffer: coco_hooks::SyncHookEventBuffer,
     side_effect_sink: Option<crate::session_start_hooks::SessionStartHookSideEffectSinkRef>,
 ) -> QueryEngine {
-    let client = Arc::new(coco_inference::ApiClient::with_default_fingerprint(
-        model,
-        coco_inference::RetryConfig::default(),
-    ));
+    let model_runtimes = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
     let mut engine = QueryEngine::new(
         QueryEngineConfig::default(),
-        client,
+        model_runtimes,
         tools,
         CancellationToken::new(),
         Some(hooks),

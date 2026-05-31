@@ -20,8 +20,6 @@
 
 use std::sync::Arc;
 
-use coco_inference::ApiClient;
-use coco_inference::RetryConfig;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::PermissionBehavior;
 use coco_types::PermissionRule;
@@ -82,10 +80,7 @@ impl coco_inference::LanguageModel for StubModel {
 
 fn make_engine() -> QueryEngine {
     let model = Arc::new(StubModel);
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)

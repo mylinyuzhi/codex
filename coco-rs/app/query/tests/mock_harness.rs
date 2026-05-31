@@ -20,12 +20,12 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::RetryConfig;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::PrebuiltLanguageModelSlot;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::StopReason;
@@ -49,6 +49,7 @@ use coco_tools::GlobTool;
 use coco_tools::GrepTool;
 use coco_tools::ReadTool;
 use coco_tools::WriteTool;
+use coco_types::ModelRole;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
 use tokio::sync::RwLock;
@@ -561,10 +562,6 @@ pub async fn run_plan_mode_turn(
     model: Arc<dyn LanguageModel>,
     params: PlanModeTurnParams,
 ) -> QueryResult {
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
         model_id: "scripted-mock".into(),
@@ -573,19 +570,22 @@ pub async fn run_plan_mode_turn(
         session_id: params.session_id,
         ..Default::default()
     };
-    let mut engine = QueryEngine::new(config, client, params.tools, cancel, None)
+    let main_slot = PrebuiltLanguageModelSlot::new(model, coco_inference::RetryConfig::default());
+    let mut registry_runtimes = vec![(ModelRole::Main, main_slot, Vec::new())];
+    if let Some(plan_model) = params.plan_role_model {
+        let plan_slot =
+            PrebuiltLanguageModelSlot::new(plan_model, coco_inference::RetryConfig::default());
+        registry_runtimes.push((ModelRole::Plan, plan_slot, Vec::new()));
+    }
+    let model_runtimes = Arc::new(ModelRuntimeRegistry::from_prebuilt_language_model_roles(
+        registry_runtimes,
+    ));
+    let engine = QueryEngine::new(config, model_runtimes, params.tools, cancel, None)
         .with_app_state(params.app_state)
         .with_config_home(params.config_home)
         // Auto-approve any `Ask` decision (ExitPlanMode, etc.) — tests
         // script the model flow, not user interaction.
         .with_permission_bridge(allow_all_bridge());
-    if let Some(plan_model) = params.plan_role_model {
-        let plan_client = Arc::new(ApiClient::with_default_fingerprint(
-            plan_model,
-            RetryConfig::default(),
-        ));
-        engine = engine.with_plan_role_client(Some(plan_client));
-    }
 
     if params.messages.is_empty() {
         engine
@@ -610,10 +610,7 @@ pub async fn run_with_mock(
     prompt: &str,
     tools: Arc<ToolRegistry>,
 ) -> QueryResult {
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
         model_id: "scripted-mock".into(),

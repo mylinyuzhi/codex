@@ -153,10 +153,20 @@ pub(crate) fn extract_tool_call_input(msg: &Message, call_id: &str) -> Option<se
 /// string is shown unwrapped. Shared by every tool-invocation header (inline
 /// chat, expanded cell, transcript reader) so they never diverge.
 pub(crate) fn tool_call_header_preview(msg: &Message, call_id: &str, tool_name: &str) -> String {
+    tool_call_header_preview_model(msg, call_id, tool_name)
+        .plain_text()
+        .to_string()
+}
+
+pub(crate) fn tool_call_header_preview_model(
+    msg: &Message,
+    call_id: &str,
+    tool_name: &str,
+) -> crate::tool_display::ToolInputPreview {
     match extract_tool_call_input(msg, call_id) {
-        Some(serde_json::Value::String(s)) => s,
-        Some(other) => crate::tool_display::single_line_tool_input(tool_name, &other),
-        None => String::new(),
+        Some(serde_json::Value::String(s)) => crate::tool_display::ToolInputPreview::Plain(s),
+        Some(other) => crate::tool_display::tool_input_semantic_preview(tool_name, &other),
+        None => crate::tool_display::ToolInputPreview::Plain(String::new()),
     }
 }
 

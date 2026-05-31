@@ -7,7 +7,7 @@
 pub(crate) mod activity;
 pub(crate) mod agents_dialog;
 pub(crate) mod confirm;
-pub(crate) mod footer;
+pub(crate) mod context_usage;
 pub(crate) mod header;
 pub(crate) mod help;
 pub(crate) mod information;

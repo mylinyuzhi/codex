@@ -154,6 +154,7 @@ pub use event::PersistedFileInfo;
 pub use event::PlanApprovalRequestedParams;
 pub use event::PlanModeChangedParams;
 pub use event::PluginInit;
+pub use event::QueuedCommandEditImage;
 pub use event::RateLimitParams;
 pub use event::RateLimitStatus;
 pub use event::ReasoningMetadataAttachedParams;
@@ -238,6 +239,10 @@ pub use sdk_hook_output::SdkHookOutput;
 pub use server_request::ApiProvider as SdkApiProvider;
 pub use server_request::AskForApprovalParams as ServerAskForApprovalParams;
 pub use server_request::ConfigReadResult;
+pub use server_request::ContextAgent;
+pub use server_request::ContextMcpTool;
+pub use server_request::ContextMemoryFile;
+pub use server_request::ContextSkill;
 pub use server_request::ContextUsageCategory;
 pub use server_request::ContextUsageResult;
 pub use server_request::EffortLevel as SdkEffortLevel;
@@ -278,6 +283,7 @@ pub use jsonrpc::RequestId;
 pub use jsonrpc::error_codes;
 
 // Command types
+pub use command::CommandArgumentKind;
 pub use command::CommandAvailability;
 pub use command::CommandBase;
 pub use command::CommandContext;

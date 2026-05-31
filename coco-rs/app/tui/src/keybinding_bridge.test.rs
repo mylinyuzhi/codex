@@ -194,7 +194,7 @@ fn test_settings_theme_tab_uses_theme_picker_context() {
     state.ui.show_modal(crate::state::ModalState::Settings(
         crate::widgets::settings_panel::SettingsPanelState::new(
             &state.ui.theme_state,
-            state.ui.display_settings,
+            state.ui.display_settings.clone(),
         ),
     ));
     assert_eq!(active_context(&state), KeybindingContext::ThemePicker);
@@ -206,7 +206,7 @@ fn test_theme_picker_ctrl_t_toggles_syntax_highlighting() {
     state.ui.show_modal(crate::state::ModalState::Settings(
         crate::widgets::settings_panel::SettingsPanelState::new(
             &state.ui.theme_state,
-            state.ui.display_settings,
+            state.ui.display_settings.clone(),
         ),
     ));
     let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
@@ -469,7 +469,7 @@ fn test_autocomplete_context_not_activated_with_empty_items() {
     // empty. Arrow keys must keep passing through to input editing so the
     // user can navigate history while search runs.
     let mut state = AppState::new();
-    state.ui.active_suggestions = Some(crate::state::ActiveSuggestions {
+    state.ui.completion.active = Some(crate::state::ActiveSuggestions {
         kind: crate::state::SuggestionKind::At,
         items: Vec::new(),
         selected: 0,
@@ -482,10 +482,10 @@ fn test_autocomplete_context_not_activated_with_empty_items() {
 #[test]
 fn test_autocomplete_context_when_suggestions_active() {
     // Spec: crate-coco-tui.md §Autocomplete Systems — once suggestions are
-    // visible, key dispatch must route Up/Down/Tab/Esc through the
+    // visible, key dispatch must route Up/Down/Tab/Enter/Esc through the
     // Autocomplete context.
     let mut state = AppState::new();
-    state.ui.active_suggestions = Some(crate::state::ActiveSuggestions {
+    state.ui.completion.active = Some(crate::state::ActiveSuggestions {
         kind: crate::state::SuggestionKind::SlashCommand,
         items: vec![crate::widgets::suggestion_popup::SuggestionItem {
             label: "/help".into(),
@@ -499,15 +499,54 @@ fn test_autocomplete_context_when_suggestions_active() {
     assert_eq!(active_context(&state), KeybindingContext::Autocomplete);
 
     let tab = map_key(&state, press(KeyCode::Tab));
-    assert!(matches!(tab, Some(TuiCommand::SurfaceConfirm)));
+    assert!(matches!(tab, Some(TuiCommand::AutocompleteAccept)));
+
+    let enter = map_key(&state, press(KeyCode::Enter));
+    assert!(matches!(enter, Some(TuiCommand::AutocompleteSubmit)));
 
     let up = map_key(&state, press(KeyCode::Up));
     assert!(matches!(up, Some(TuiCommand::SurfacePrev)));
+
+    let ctrl_n = map_key(&state, ctrl(KeyCode::Char('n')));
+    assert!(matches!(ctrl_n, Some(TuiCommand::SurfaceNext)));
 
     // Typing a character should fall through to input editing, not be
     // swallowed by the autocomplete context.
     let ch = map_key(&state, press(KeyCode::Char('x')));
     assert!(matches!(ch, Some(TuiCommand::InsertChar('x'))));
+}
+
+#[test]
+fn test_tab_accepts_inline_ghost_before_plan_toggle() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("then /cl");
+    state.ui.input.textarea.set_cursor("then /cl".len());
+    state.ui.input.set_inline_ghost(crate::state::InlineGhost {
+        text: "ear".into(),
+        insert_position: "then /cl".len(),
+        replace_start: "then /cl".len(),
+        replace_end: "then /cl".len(),
+        replacement: "ear".into(),
+        cursor_after_accept: "then /clear".len(),
+    });
+
+    let tab = map_key(&state, press(KeyCode::Tab));
+
+    assert!(matches!(tab, Some(TuiCommand::AutocompleteAccept)));
+}
+
+#[test]
+fn test_prompt_suggestion_keys_win_when_input_empty() {
+    let mut state = AppState::new();
+    state.session.prompt_suggestions = vec!["Run tests".into()];
+
+    let tab = map_key(&state, press(KeyCode::Tab));
+    let right = map_key(&state, press(KeyCode::Right));
+    let enter = map_key(&state, press(KeyCode::Enter));
+
+    assert!(matches!(tab, Some(TuiCommand::AcceptPromptSuggestion)));
+    assert!(matches!(right, Some(TuiCommand::AcceptPromptSuggestion)));
+    assert!(matches!(enter, Some(TuiCommand::SubmitPromptSuggestion)));
 }
 
 #[test]

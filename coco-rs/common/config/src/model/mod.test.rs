@@ -296,16 +296,16 @@ fn test_model_roles_fallbacks_does_not_walk_to_main() {
 }
 
 #[test]
-fn test_model_roles_recovery_is_per_role() {
+fn test_model_roles_policy_is_per_role() {
     let mut roles = ModelRoles::default();
     roles.roles.insert(
         ModelRole::Main,
         RoleSlots::new(spec("anthropic", "opus"))
             .with_fallback(spec("anthropic", "sonnet"))
-            .with_recovery(FallbackRecoveryPolicy::default()),
+            .with_policy(FallbackPolicy::default()),
     );
-    assert!(roles.recovery(ModelRole::Main).is_some());
-    // Plan has no binding → no recovery policy even though Main has
+    assert!(roles.policy(ModelRole::Main).is_some());
+    // Plan has no binding → no fallback policy even though Main has
     // one. Matches the "no fallback-walk to Main" contract.
-    assert!(roles.recovery(ModelRole::Plan).is_none());
+    assert!(roles.policy(ModelRole::Plan).is_none());
 }

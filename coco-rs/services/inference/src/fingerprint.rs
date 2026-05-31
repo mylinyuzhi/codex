@@ -1,9 +1,8 @@
 //! `ProviderClientFingerprint` — turn-boundary coherence check.
 //!
-//! At the start of every turn, `QueryEngine` computes a fresh
-//! fingerprint from `RuntimeConfig` and compares against
-//! `ApiClient::fingerprint()`. Mismatch → rebuild the
-//! `Arc<dyn LanguageModelV4>`.
+//! Runtime slots carry a fingerprint computed from `RuntimeConfig`; a
+//! mismatch on reload means the slot's `Arc<dyn LanguageModelV4>` must be
+//! rebuilt.
 //!
 //! Properties:
 //!
@@ -58,7 +57,7 @@ pub struct ProviderClientFingerprint {
     /// SHA-256 over the prompt-cache-relevant `RuntimeConfig` sections
     /// (`account`, `prompt_cache`) plus this provider instance's own
     /// `provider_options` map. Mutating any of these via settings
-    /// reload invalidates the cached `ApiClient` so the next turn
+    /// reload invalidates the cached runtime slot so the next turn
     /// picks up the new `AnthropicConfig`. Per-provider scoping
     /// (rather than a workspace-wide knob hash) means a settings
     /// flip on one Anthropic instance doesn't churn an unrelated

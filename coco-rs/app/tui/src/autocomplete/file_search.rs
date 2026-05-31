@@ -12,6 +12,7 @@ use coco_file_search::SharedFileIndex;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use crate::completion::CompletionRequestKey;
 use crate::widgets::suggestion_popup::SuggestionItem;
 use crate::widgets::suggestion_popup::SuggestionMeta;
 
@@ -26,10 +27,7 @@ const MAX_SUGGESTIONS: i32 = 15;
 pub enum FileSearchEvent {
     /// Search results ready.
     SearchResult {
-        query: String,
-        /// Byte offset where the `@` trigger started (sentinel; the
-        /// receiver matches by `query` + `kind`, not by position).
-        start_pos: usize,
+        key: CompletionRequestKey,
         suggestions: Vec<SuggestionItem>,
     },
 }
@@ -52,7 +50,7 @@ impl FileSearchManager {
     }
 
     /// Schedule a debounced search.
-    pub fn search(&mut self, query: String, start_pos: usize) {
+    pub fn search(&mut self, key: CompletionRequestKey) {
         if let Some(handle) = self.pending.take() {
             handle.abort();
         }
@@ -62,6 +60,7 @@ impl FileSearchManager {
 
         self.pending = Some(tokio::spawn(async move {
             tokio::time::sleep(DEBOUNCE).await;
+            let query = key.query.clone();
 
             let suggestions = {
                 let mut guard = index.write().await;
@@ -80,11 +79,7 @@ impl FileSearchManager {
             };
 
             let _ = tx
-                .send(FileSearchEvent::SearchResult {
-                    query,
-                    start_pos,
-                    suggestions,
-                })
+                .send(FileSearchEvent::SearchResult { key, suggestions })
                 .await;
         }));
     }

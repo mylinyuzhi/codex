@@ -11,7 +11,7 @@ async fn empty_registry_returns_empty_commands() {
 #[tokio::test]
 async fn commands_walks_registry_visible_list() {
     use coco_commands::{BuiltinCommand, RegisteredCommand};
-    use coco_types::{CommandBase, CommandSafety, CommandType};
+    use coco_types::{CommandArgumentKind, CommandBase, CommandSafety, CommandType};
 
     let mut registry = CommandRegistry::new();
     registry.register(RegisteredCommand {
@@ -22,6 +22,7 @@ async fn commands_walks_registry_visible_list() {
             availability: Vec::new(),
             is_hidden: false,
             argument_hint: Some("<arg>".into()),
+            argument_kind: CommandArgumentKind::FreeText,
             when_to_use: None,
             user_invocable: true,
             is_sensitive: false,
@@ -45,6 +46,7 @@ async fn commands_walks_registry_visible_list() {
             availability: Vec::new(),
             is_hidden: true,
             argument_hint: None,
+            argument_kind: CommandArgumentKind::None,
             when_to_use: None,
             user_invocable: false,
             is_sensitive: false,
@@ -73,7 +75,7 @@ async fn commands_walks_registry_visible_list() {
 #[tokio::test]
 async fn commands_filters_sensitive_commands() {
     use coco_commands::{BuiltinCommand, RegisteredCommand};
-    use coco_types::{CommandBase, CommandSafety, CommandType};
+    use coco_types::{CommandArgumentKind, CommandBase, CommandSafety, CommandType};
 
     let mut registry = CommandRegistry::new();
     // Non-sensitive: must appear.
@@ -85,6 +87,7 @@ async fn commands_filters_sensitive_commands() {
             availability: Vec::new(),
             is_hidden: false,
             argument_hint: None,
+            argument_kind: CommandArgumentKind::None,
             when_to_use: None,
             user_invocable: true,
             is_sensitive: false,
@@ -110,6 +113,7 @@ async fn commands_filters_sensitive_commands() {
             availability: Vec::new(),
             is_hidden: false,
             argument_hint: None,
+            argument_kind: CommandArgumentKind::None,
             when_to_use: None,
             user_invocable: true,
             is_sensitive: true,
@@ -140,7 +144,7 @@ async fn commands_filters_sensitive_commands() {
 #[tokio::test]
 async fn missing_argument_hint_becomes_empty_string() {
     use coco_commands::{BuiltinCommand, RegisteredCommand};
-    use coco_types::{CommandBase, CommandSafety, CommandType};
+    use coco_types::{CommandArgumentKind, CommandBase, CommandSafety, CommandType};
 
     let mut registry = CommandRegistry::new();
     registry.register(RegisteredCommand {
@@ -151,6 +155,7 @@ async fn missing_argument_hint_becomes_empty_string() {
             availability: Vec::new(),
             is_hidden: false,
             argument_hint: None,
+            argument_kind: CommandArgumentKind::None,
             when_to_use: None,
             user_invocable: true,
             is_sensitive: false,

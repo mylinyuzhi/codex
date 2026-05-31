@@ -214,7 +214,14 @@ pub async fn run_session(
         ..QueryEngineConfig::default()
     };
 
-    let mut engine = QueryEngine::new(config, api_client, tools, cancel, session_cfg.hooks.clone());
+    let model_runtimes = api_client.registry();
+    let mut engine = QueryEngine::new(
+        config,
+        model_runtimes,
+        tools,
+        cancel,
+        session_cfg.hooks.clone(),
+    );
     if let Some(bootstrap) = session_cfg.session_bootstrap.clone() {
         engine = engine.with_session_bootstrap(bootstrap);
     }
@@ -320,7 +327,14 @@ pub async fn run_session_with_steering(
         ..QueryEngineConfig::default()
     };
 
-    let mut engine = QueryEngine::new(config, api_client, tools, cancel, session_cfg.hooks.clone());
+    let model_runtimes = api_client.registry();
+    let mut engine = QueryEngine::new(
+        config,
+        model_runtimes,
+        tools,
+        cancel,
+        session_cfg.hooks.clone(),
+    );
     if let Some(bootstrap) = session_cfg.session_bootstrap.clone() {
         engine = engine.with_session_bootstrap(bootstrap);
     }

@@ -293,7 +293,7 @@ pub fn build_runtime_config_with(
 /// resolves in the registry. Surfaces both `IncompleteModelEntry`
 /// (partial `models.json` entries) and `UnknownModel` (typos) at
 /// config-build time instead of letting them silently disable
-/// Layer-2 plumbing inside `ApiClient`.
+/// Layer-2 runtime plumbing.
 fn validate_roles_against_registry(
     roles: &ModelRoles,
     registry: &ModelRegistry,
@@ -462,7 +462,7 @@ fn resolve_model_roles(
         main_slots = RoleSlots {
             primary: main_slots.primary,
             fallbacks,
-            recovery: main_slots.recovery,
+            policy: main_slots.policy,
         };
         ensure_chain_unique(ModelRole::Main, &main_slots)?;
     }

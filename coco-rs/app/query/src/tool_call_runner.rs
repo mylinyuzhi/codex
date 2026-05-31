@@ -28,7 +28,7 @@ use std::sync::Arc;
 use coco_hooks::HookExecutionEvent;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
-use coco_inference::ApiClient;
+use coco_inference::ModelRuntimeRegistry;
 use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
@@ -88,7 +88,7 @@ pub(crate) struct ToolCallRunner<'a> {
     pub cancel: &'a CancellationToken,
     pub auto_mode_state: Option<&'a Arc<coco_permissions::AutoModeState>>,
     pub denial_tracker: Option<&'a Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
-    pub client: &'a Arc<ApiClient>,
+    pub model_runtimes: &'a Arc<ModelRuntimeRegistry>,
     pub auto_mode_rules: &'a AutoModeRules,
     pub app_state: Option<&'a Arc<RwLock<ToolAppState>>>,
     pub permission_rule_handle: &'a coco_tool_runtime::PermissionRuleHandleRef,
@@ -130,7 +130,7 @@ impl<'a> ToolCallRunner<'a> {
             cancel: self.cancel,
             auto_mode_state: self.auto_mode_state,
             denial_tracker: self.denial_tracker,
-            client: self.client,
+            model_runtimes: self.model_runtimes,
             auto_mode_rules: self.auto_mode_rules,
             completion_event_mode: ToolCompletionEventMode::Emit,
         })

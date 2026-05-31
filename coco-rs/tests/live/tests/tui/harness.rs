@@ -47,9 +47,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use coco_hooks::HookDefinition;
 use coco_hooks::HookRegistry;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
-use coco_inference::RetryConfig;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_tool_runtime::ToolRegistry;
@@ -229,12 +227,11 @@ impl TuiHarness {
         };
         let workdir_path = workdir.path().to_path_buf();
 
-        // Engine plumbing: ScriptedModel → ApiClient → QueryEngine.
+        // Engine plumbing: ScriptedModel → ModelRuntimeRegistry → QueryEngine.
         let model = ScriptedModel::new(cfg.replies);
-        let api_client = Arc::new(ApiClient::with_default_fingerprint(
-            model.clone() as Arc<dyn LanguageModel>,
-            RetryConfig::default(),
-        ));
+        let model_runtimes = coco_query::test_support::model_runtime_registry(
+            model.clone() as Arc<dyn LanguageModel>
+        );
 
         // Tool registry: the same curated subset the cli/sdk_server live
         // suites use. Keeps the harness focused on agent-loop + TUI
@@ -298,7 +295,7 @@ impl TuiHarness {
                 event_tx.clone(),
                 pending_approvals.clone(),
             ));
-        let engine = QueryEngine::new(engine_cfg, api_client, tools, cancel.clone(), hooks)
+        let engine = QueryEngine::new(engine_cfg, model_runtimes, tools, cancel.clone(), hooks)
             .with_permission_bridge(bridge);
         let engine = Arc::new(engine);
         let engine_for_driver = engine.clone();

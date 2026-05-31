@@ -74,10 +74,9 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // exactly once at startup. Drop on `_reloader` aborts the spawned
     // task when `run_tui` returns.
     //
-    // **Subscriber wiring is deferred.** The QueryEngine integration
-    // that re-reads `tool_overrides` + `api_client` per turn off the
-    // publisher lands as a separate change. Until then the published
-    // updates are observed only via tracing.
+    // Model runtime and sandbox subscribers attach below after
+    // SessionRuntime is built, so published snapshots update the live
+    // runtime registry without restarting the TUI.
     //
     // **Reloader spawn failure → fall back to a one-shot static
     // build.** Outside a Tokio runtime `RuntimeReloader::spawn`
@@ -120,8 +119,8 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         .as_ref()
         .map(coco_config_reload::RuntimeReloader::subscribe_errors)
         .map(spawn_config_reload_error_toasts);
-    // Engine resources (client, fallbacks, recovery, tools, system
-    // prompt, command registry, startup-permission state) shared with
+    // Engine resources (client, tools, system prompt, command registry,
+    // startup-permission state) shared with
     // SDK / headless via `session_bootstrap::build_engine_resources`.
     // The slash-command registry uses the full TS-parity load order
     // (builtins → extended → skills → plugin contributions → TS-parity
@@ -133,9 +132,6 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let permission_mode = resources.startup.mode;
     let bypass_permissions_available = resources.startup.bypass_available;
     let startup_notification = resources.startup.notification.clone();
-    let client = resources.client;
-    let fallback_clients = resources.fallback_clients;
-    let recovery_policy = resources.recovery_policy;
     let tools = resources.tools;
     let system_prompt = resources.system_prompt;
     let command_registry = resources.command_registry.clone();
@@ -239,9 +235,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             system_prompt,
             bypass_permissions_available,
             permission_mode,
-            client,
-            fallback_clients,
-            recovery_policy,
+            model_runtimes: None,
             tools,
             session_manager,
             fast_model_spec,
@@ -303,6 +297,13 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             state,
             &reloader.publisher(),
             cwd.clone(),
+        ));
+    }
+
+    if let Some(reloader) = _reloader.as_ref() {
+        std::mem::drop(spawn_model_runtime_reload(
+            runtime.model_runtimes(),
+            &reloader.publisher(),
         ));
     }
 
@@ -608,6 +609,30 @@ fn spawn_display_settings_reload(
         }
     });
     out_rx
+}
+
+fn spawn_model_runtime_reload(
+    registry: Arc<coco_inference::ModelRuntimeRegistry>,
+    publisher: &coco_config::RuntimePublisher,
+) -> tokio::task::JoinHandle<()> {
+    let mut rx = publisher.subscribe();
+    let _initial = rx.borrow_and_update();
+    drop(_initial);
+    tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            let snapshot = rx.borrow_and_update().clone();
+            match registry.reconcile(snapshot) {
+                Ok(()) => tracing::debug!("model runtime registry hot-reloaded"),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "model runtime registry hot-reload failed; keeping prior runtimes"
+                    );
+                }
+            }
+        }
+        tracing::debug!("model runtime reload subscriber: publisher closed; exiting");
+    })
 }
 
 fn spawn_config_reload_error_toasts(
@@ -1215,6 +1240,48 @@ async fn run_agent_driver(
                     .send(CoreEvent::Protocol(ServerNotification::CommandQueued {
                         id: id.to_string(),
                         preview,
+                    }))
+                    .await;
+            }
+
+            UserCommand::EditQueuedCommand { id } => {
+                let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditUnavailable {
+                            id,
+                            reason: "invalid queued command id".to_string(),
+                        }))
+                        .await;
+                    continue;
+                };
+                let Some(queued) = runtime.command_queue().remove_by_id(uuid).await else {
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditUnavailable {
+                            id,
+                            reason: "queued command was already processed".to_string(),
+                        }))
+                        .await;
+                    continue;
+                };
+                let id = queued.id.to_string();
+                let images = queued
+                    .images
+                    .into_iter()
+                    .map(|image| coco_types::QueuedCommandEditImage {
+                        media_type: image.media_type,
+                        data_base64: image.data_base64,
+                    })
+                    .collect();
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
+                        id: id.clone(),
+                    }))
+                    .await;
+                let _ = event_tx
+                    .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditReady {
+                        id,
+                        prompt: queued.prompt,
+                        images,
                     }))
                     .await;
             }
@@ -2454,6 +2521,9 @@ async fn dispatch_slash_command(
     if name == "clear" {
         return SlashOutcome::TriggerClear;
     }
+    if name == "context" {
+        return dispatch_context(runtime, event_tx).await;
+    }
     if name == "resume" {
         return dispatch_resume(args, runtime, event_tx).await;
     }
@@ -3502,6 +3572,29 @@ async fn emit_slash_text(event_tx: &mpsc::Sender<CoreEvent>, name: &str, text: &
         .await;
 }
 
+async fn dispatch_context(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> SlashOutcome {
+    match runtime.analyze_main_context().await {
+        Ok(report) => {
+            let text = coco_query::context_analysis::format_markdown(&report);
+            emit_slash_text(event_tx, "context", &text).await;
+        }
+        Err(e) => {
+            emit_slash_status(
+                event_tx,
+                "context",
+                SlashCommandStatusKind::Failed {
+                    error: e.to_string(),
+                },
+            )
+            .await;
+        }
+    }
+    SlashOutcome::Handled
+}
+
 /// Optional `/login <provider>` arg → instance name. Empty → builtin default.
 fn slash_provider_arg(args: &str) -> Option<String> {
     let a = args.trim();
@@ -3752,10 +3845,7 @@ async fn process_submit_turn(
         Ok(result) => {
             engine_observed_cancel = result.cancelled;
             let mut h = runtime.history.lock().await;
-            h.clear();
-            for arc in result.final_messages {
-                h.push_arc(arc);
-            }
+            *h = result.final_history;
         }
         Err(e) => {
             engine_observed_cancel = false;
@@ -5006,11 +5096,16 @@ fn build_model_by_role(
     let mut out = std::collections::HashMap::new();
     for role in ROLES {
         if let Some(spec) = runtime_config.model_roles.get(role) {
+            let context_window = runtime_config
+                .model_registry
+                .resolve(&spec.provider, &spec.model_id)
+                .map(|resolved| resolved.info.context_window.get() as i64);
             out.insert(
                 role,
                 ModelBinding {
                     model_id: spec.model_id.clone(),
                     provider: spec.provider.clone(),
+                    context_window,
                     effort: None,
                 },
             );
@@ -5072,6 +5167,11 @@ async fn apply_role_in_memory(
                 .unwrap_or_else(|| model_id.clone())
         })
         .unwrap_or_else(|| model_id.clone());
+    let context_window = runtime
+        .runtime_config
+        .model_registry
+        .resolve(&provider, &model_id)
+        .map(|resolved| resolved.info.context_window.get() as i64);
     let api = runtime
         .runtime_config
         .providers
@@ -5084,9 +5184,9 @@ async fn apply_role_in_memory(
         model_id: model_id.clone(),
         display_name,
     };
-    // Main: this rebuilds + hot-swaps the live `ApiClient`. The
-    // build can fail (e.g. provider unregistered, model_factory
-    // error) — surface that as an `Error` notification so the TUI
+    // Main: this rebinds the registry runtime. The build can fail
+    // (e.g. provider unregistered, model_factory error) — surface
+    // that as an `Error` notification so the TUI
     // raises a toast / dialog and the user's status bar reverts
     // along with `ModelRoleChanged` not firing. Non-Main: build is
     // lazy (`client_for_role`), so install always succeeds.
@@ -5128,6 +5228,7 @@ async fn apply_role_in_memory(
                 role,
                 model_id,
                 provider,
+                context_window,
                 effort,
             },
         )))
@@ -5158,12 +5259,18 @@ async fn apply_main_effort_in_memory(
     let Some(resolved) = runtime.resolve_role(coco_types::ModelRole::Main).await else {
         return;
     };
+    let context_window = runtime
+        .runtime_config
+        .model_registry
+        .resolve(&resolved.spec.provider, &resolved.spec.model_id)
+        .map(|model| model.info.context_window.get() as i64);
     let _ = event_tx
         .send(CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
             coco_types::ModelRoleChangedParams {
                 role: coco_types::ModelRole::Main,
                 model_id: resolved.spec.model_id,
                 provider: resolved.spec.provider,
+                context_window,
                 effort,
             },
         )))

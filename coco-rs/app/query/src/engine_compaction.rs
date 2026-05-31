@@ -19,6 +19,8 @@ use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
 
+use coco_inference::ModelRuntimeQueryOutcome;
+use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
 use coco_messages::AssistantContent;
 use coco_messages::AttachmentMessage;
@@ -321,9 +323,7 @@ impl QueryEngine {
                     .notify_post_compact(&new_messages)
                     .await;
                 let qs = self.query_source_label();
-                self.client
-                    .notify_compaction(qs, self.config.agent_id.as_deref())
-                    .await;
+                self.notify_model_compaction(qs).await;
                 // See `try_session_memory_compact` for the matching
                 // reset on the SM-first path. The partial-compact path
                 // rewrites history just like full LLM compact does, so
@@ -566,9 +566,7 @@ impl QueryEngine {
         // cache-break baseline so the post-compact drop in cache_read
         // tokens doesn't false-positive as a break.
         let qs = self.query_source_label();
-        self.client
-            .notify_compaction(qs, self.config.agent_id.as_deref())
-            .await;
+        self.notify_model_compaction(qs).await;
         // Reset the memory recall state — TS gets this for free because
         // `collectSurfacedMemories(messages)` re-derives the dedup set
         // and 60 KB budget from message history each call, and compact
@@ -614,7 +612,10 @@ impl QueryEngine {
                 coco_types::CacheSafeParams {
                     rendered_system_prompt: self.config.system_prompt.clone().unwrap_or_default(),
                     model_id: self.config.model_id.clone(),
-                    provider: self.client.provider().to_string(),
+                    provider: self
+                        .runtime_snapshot()
+                        .map(|snapshot| snapshot.provider)
+                        .unwrap_or_default(),
                     prompt_cache: self.config.prompt_cache.clone(),
                     fork_context_messages: Vec::new(),
                 }
@@ -755,68 +756,78 @@ impl QueryEngine {
 
         let mut prompt = coco_messages::normalize_messages_for_api(&attempt.context_messages);
         prompt.push(LlmMessage::user_text(&attempt.summary_request));
-        let params = QueryParams {
-            prompt,
-            max_tokens: Some(attempt.max_summary_tokens),
-            thinking_level: None,
-            fast_mode: false,
-            tools: None,
-            tool_choice: None,
-            context_management: None,
-            query_source: None,
-            agent_id: None,
-            time_since_last_assistant_ms: None,
-            agentic: false,
-            cache: None,
-            stop_sequences: None,
-            response_format: None,
-        };
 
-        match self.client.query(&params).await {
-            Ok(result) => {
-                let stop = result.stop_reason.as_ref();
-                let stop_abnormal = stop.is_some_and(coco_messages::FinishReason::is_abnormal);
-                // TS parity (`services/compact/compact.ts:493-515`): a
-                // truncated / content-filtered / refused summary is
-                // unusable — it would silently contaminate every
-                // subsequent turn with partial XML. Match TS's
-                // `throw new Error('Failed to generate conversation
-                // summary…')` by returning an `Err` whose message
-                // carries the `compact_summary_aborted:` prefix; the
-                // upper layer at `coco_compact::compact.rs:898-902`
-                // routes this prefix into `CompactError::LlmCallFailed`,
-                // which the user sees as "Error compacting conversation".
-                // Multi-provider note: the Anthropic stream layer in TS
-                // (`services/api/claude.ts:2266`) already converts
-                // `max_tokens` into a synthetic API-error message —
-                // coco-rs runs across providers that don't do that
-                // transform, so the side-fork caller has to defend
-                // itself by inspecting `stop_reason` directly here.
-                if stop_abnormal {
-                    warn!(
-                        stop_reason = ?stop,
-                        tokens_out = result.usage.output_tokens.total,
-                        "compaction aborted: non-normal stop_reason — \
-                         dropping truncated summary to avoid contaminating future turns"
-                    );
-                    return Err(format!(
-                        "compact_summary_aborted: model stopped with stop_reason={} \
+        loop {
+            let params = QueryParams {
+                prompt: prompt.clone(),
+                max_tokens: Some(attempt.max_summary_tokens),
+                thinking_level: None,
+                fast_mode: false,
+                tools: None,
+                tool_choice: None,
+                context_management: None,
+                query_source: None,
+                agent_id: None,
+                time_since_last_assistant_ms: None,
+                agentic: false,
+                cache: None,
+                stop_sequences: None,
+                response_format: None,
+            };
+            match self
+                .model_runtimes
+                .query_once(
+                    ModelRuntimeSource::Role(coco_types::ModelRole::Main),
+                    &params,
+                )
+                .await
+            {
+                ModelRuntimeQueryOutcome::Success { result, .. } => {
+                    let stop = result.stop_reason.as_ref();
+                    let stop_abnormal = stop.is_some_and(coco_messages::FinishReason::is_abnormal);
+                    // TS parity (`services/compact/compact.ts:493-515`): a
+                    // truncated / content-filtered / refused summary is
+                    // unusable — it would silently contaminate every
+                    // subsequent turn with partial XML. Match TS's
+                    // `throw new Error('Failed to generate conversation
+                    // summary…')` by returning an `Err` whose message
+                    // carries the `compact_summary_aborted:` prefix; the
+                    // upper layer at `coco_compact::compact.rs:898-902`
+                    // routes this prefix into `CompactError::LlmCallFailed`,
+                    // which the user sees as "Error compacting conversation".
+                    // Multi-provider note: the Anthropic stream layer in TS
+                    // (`services/api/claude.ts:2266`) already converts
+                    // `max_tokens` into a synthetic API-error message —
+                    // coco-rs runs across providers that don't do that
+                    // transform, so the side-fork caller has to defend
+                    // itself by inspecting `stop_reason` directly here.
+                    if stop_abnormal {
+                        warn!(
+                            stop_reason = ?stop,
+                            tokens_out = result.usage.output_tokens.total,
+                            "compaction aborted: non-normal stop_reason — \
+                             dropping truncated summary to avoid contaminating future turns"
+                        );
+                        return Err(format!(
+                            "compact_summary_aborted: model stopped with stop_reason={} \
                          (truncated or filtered summary discarded)",
-                        stop.map(|f| f.unified.as_wire_str()).unwrap_or("unknown")
-                    ));
+                            stop.map(|f| f.unified.as_wire_str()).unwrap_or("unknown")
+                        ));
+                    }
+                    let summary_res = extract_compact_summary_from_content(&result.content);
+                    if summary_res.is_err() {
+                        warn!(
+                            stop_reason = ?stop,
+                            tokens_out = result.usage.output_tokens.total,
+                            "compaction summary parse failed — XML extractor rejected response"
+                        );
+                    }
+                    let summary = summary_res?;
+                    break Ok(coco_compact::CompactSummaryResponse { summary });
                 }
-                let summary_res = extract_compact_summary_from_content(&result.content);
-                if summary_res.is_err() {
-                    warn!(
-                        stop_reason = ?stop,
-                        tokens_out = result.usage.output_tokens.total,
-                        "compaction summary parse failed — XML extractor rejected response"
-                    );
-                }
-                let summary = summary_res?;
-                Ok(coco_compact::CompactSummaryResponse { summary })
+                ModelRuntimeQueryOutcome::Retry { .. } => continue,
+                ModelRuntimeQueryOutcome::Failed { error, .. } => break Err(error.to_string()),
             }
-            Err(e) => Err(e.to_string()),
         }
     }
 
@@ -945,12 +956,16 @@ impl QueryEngine {
         app_state: &coco_types::ToolAppState,
     ) -> (Vec<String>, Vec<String>) {
         let discovered = std::sync::Arc::new(app_state.discovered_tool_names.clone());
-        let supports_tool_reference = self.client.model_info().is_some_and(|info| {
-            info.has_capability(coco_types::Capability::ServerSideToolReference)
-        });
-        let supports_client_side_tool_search = self
-            .client
-            .model_info()
+        let snapshot = self.runtime_snapshot();
+        let supports_tool_reference = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.model_info.as_ref())
+            .is_some_and(|info| {
+                info.has_capability(coco_types::Capability::ServerSideToolReference)
+            });
+        let supports_client_side_tool_search = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.model_info.as_ref())
             .is_some_and(|info| info.has_capability(coco_types::Capability::ClientSideToolSearch));
         let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
             self.config.features.clone(),
@@ -1573,9 +1588,7 @@ impl QueryEngine {
                 // baseline must not be compared against pre-compact
                 // cache_read tokens.
                 let qs = self.query_source_label();
-                self.client
-                    .notify_compaction(qs, self.config.agent_id.as_deref())
-                    .await;
+                self.notify_model_compaction(qs).await;
                 // Full LLM-summarized compact path — same reasoning as
                 // the SM-first and partial paths: relevant-memory
                 // attachments are dropped from history, so the recall

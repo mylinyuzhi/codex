@@ -8,9 +8,8 @@
 //! Scope of this test: pure protocol-level verification that
 //! `control/setModel` returns `Ok` mid-session and the session keeps
 //! processing turns afterwards. We deliberately don't cross provider
-//! adapters — the SessionRuntime's `ApiClient` is built once at
-//! bootstrap, so a true cross-provider swap needs a different
-//! `role_clients` test setup. That's a follow-up.
+//! adapters — this path only exercises the control-plane rebind, not a
+//! distinct cross-provider runtime setup. That's a follow-up.
 
 use anyhow::Result;
 use anyhow::anyhow;
@@ -39,8 +38,8 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
     );
 
     // Re-issue setModel with the same model id. This is the cheapest
-    // path through the handler that doesn't require a second ApiClient
-    // on the runtime.
+    // path through the handler that doesn't require a second provider
+    // runtime.
     let model_arg = format!("{provider}/{model}");
     server
         .client

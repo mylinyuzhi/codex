@@ -69,7 +69,7 @@
 //! `isApiErrorMessage` short-circuit in commit 5 prevents Stop hooks
 //! from cycling on the refusal.
 
-use coco_inference::ApiClient;
+use coco_inference::ModelRuntimeSnapshot;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::StopReason;
@@ -77,19 +77,16 @@ use coco_tool_runtime::PreparedToolCall;
 use coco_tool_runtime::RunOneRuntime;
 use coco_tool_runtime::StreamingHandle;
 use coco_tool_runtime::UnstampedToolCallOutcome;
-use std::sync::Arc;
 use tracing::warn;
 
 use crate::config::ContinueReason;
 use crate::config::MAX_OUTPUT_TOKENS_RECOVERY_LIMIT;
-use crate::engine::MAX_CONSECUTIVE_CAPACITY_ERRORS;
 use crate::engine::QueryEngine;
 use crate::engine_helpers::emit_model_fallback_notice;
 use crate::engine_helpers::extract_streaming_result_text;
 use crate::engine_loop_state::LoopServices;
 use crate::engine_loop_state::LoopTurnState;
 use crate::engine_stream_consume::WithheldReason;
-use crate::model_runtime::ModelRuntime;
 
 #[cfg(test)]
 #[path = "engine_recovery.test.rs"]
@@ -105,6 +102,12 @@ pub(crate) enum StreamErrorOutcome {
     /// Unrecoverable error — caller returns this as the session
     /// loop's `Err(_)`.
     Bail(coco_error::BoxedError),
+}
+
+pub(crate) struct OpenedTurnStream {
+    pub(crate) rx: tokio::sync::mpsc::Receiver<coco_inference::StreamEvent>,
+    pub(crate) token: coco_inference::ModelCallHandle,
+    pub(crate) snapshot: ModelRuntimeSnapshot,
 }
 
 /// Outcome of [`QueryEngine::handle_context_overflow`]: tell the caller
@@ -258,7 +261,7 @@ pub(crate) enum RecoveryDisposition {
 /// TS-Anthropic-only-port residue that couldn't survive the
 /// `ModelRole` × multi-LLM swap surface.
 pub(crate) fn effective_max_tokens(
-    active_client: &Arc<ApiClient>,
+    active_snapshot: &ModelRuntimeSnapshot,
     turn_state: &LoopTurnState,
 ) -> Option<i64> {
     let escalating = matches!(
@@ -266,8 +269,9 @@ pub(crate) fn effective_max_tokens(
         Some(ContinueReason::MaxOutputTokensEscalate)
     );
     if escalating {
-        active_client
-            .model_info()
+        active_snapshot
+            .model_info
+            .as_ref()
             .and_then(|info| info.max_output_tokens_escalate)
             .map(i64::from)
     } else {
@@ -277,12 +281,12 @@ pub(crate) fn effective_max_tokens(
 
 impl QueryEngine {
     /// Cross-provider housekeeping after [`ModelRuntime::advance`]
-    /// returns [`crate::model_runtime::AdvanceOutcome::Switched`].
+    /// reports a fallback switch.
     ///
-    /// **Finding N2**: when `advance()` crosses providers (Anthropic →
-    /// OpenAI, Google → Anthropic, etc.) the new `ApiClient` carries
+    /// **Finding N2**: when fallback switches providers (Anthropic →
+    /// OpenAI, Google → Anthropic, etc.) the new runtime slot carries
     /// its own [`coco_inference::cache_detection::CacheBreakDetector`].
-    /// If the new slot was the active client earlier in this session
+    /// If the new slot was active earlier in this session
     /// (e.g. probe scenarios), its detector may hold stale prompt-state
     /// hashes from before the switch. `cache_break_reset()` clears
     /// them so the post-switch request establishes a fresh baseline
@@ -324,10 +328,10 @@ impl QueryEngine {
     pub(crate) async fn post_advance_side_effects(
         &self,
         original_provider: &str,
-        runtime: &ModelRuntime,
+        services: &LoopServices,
     ) {
-        let new_client = runtime.current_client();
-        let new_provider = new_client.provider();
+        let snapshot = services.snapshot();
+        let new_provider = snapshot.provider.as_str();
         if new_provider != original_provider {
             tracing::info!(
                 from_provider = original_provider,
@@ -335,7 +339,7 @@ impl QueryEngine {
                 "cross-provider fallback advance: resetting CacheBreakDetector",
             );
         }
-        new_client.cache_break_reset().await;
+        services.reset_active_cache_break_detector().await;
     }
 
     /// Pre-API blocking-limit check (Finding **C15**). Computes an
@@ -378,7 +382,7 @@ impl QueryEngine {
     pub(crate) fn check_blocking_limit(
         &self,
         history: &MessageHistory,
-        active_client: &Arc<ApiClient>,
+        active_snapshot: &ModelRuntimeSnapshot,
         turn_state: &LoopTurnState,
         effective_max_tokens: Option<i64>,
     ) -> BlockingLimitDecision {
@@ -411,7 +415,7 @@ impl QueryEngine {
             return BlockingLimitDecision::Proceed;
         }
 
-        let model_info = active_client.model_info();
+        let model_info = active_snapshot.model_info.as_ref();
         let context_window = model_info
             .map(|info| i64::from(info.context_window))
             .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW);
@@ -463,7 +467,7 @@ impl QueryEngine {
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         turn_state: &mut LoopTurnState,
-        active_client: &Arc<ApiClient>,
+        active_snapshot: &ModelRuntimeSnapshot,
     ) -> RecoveryDisposition {
         let disposition = match withheld {
             WithheldReason::PromptTooLong => {
@@ -476,7 +480,7 @@ impl QueryEngine {
                     history,
                     event_tx,
                     turn_state,
-                    active_client,
+                    active_snapshot,
                 )
                 .await
             }
@@ -596,7 +600,7 @@ impl QueryEngine {
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         turn_state: &mut LoopTurnState,
-        active_client: &Arc<ApiClient>,
+        active_snapshot: &ModelRuntimeSnapshot,
     ) -> RecoveryDisposition {
         // Phase 1: opt-in escalate. Gate on (a) the active model
         // declares an escalate ceiling > baseline, AND (b) this turn
@@ -617,7 +621,7 @@ impl QueryEngine {
             turn_state.transition,
             Some(ContinueReason::MaxOutputTokensEscalate)
         );
-        let model_info = active_client.model_info();
+        let model_info = active_snapshot.model_info.as_ref();
         let baseline = model_info.map(|info| i64::from(info.max_output_tokens));
         let escalate_ceiling = model_info
             .and_then(|info| info.max_output_tokens_escalate)
@@ -631,8 +635,8 @@ impl QueryEngine {
             warn!(
                 escalated_to = escalate_ceiling,
                 baseline = baseline,
-                provider = active_client.provider(),
-                model_id = active_client.model_id(),
+                provider = active_snapshot.provider,
+                model_id = active_snapshot.model_id,
                 "max_tokens hit, escalating to ModelInfo.max_output_tokens_escalate ceiling",
             );
             // No pushes — the retry produces a fresh assistant message
@@ -701,7 +705,7 @@ impl QueryEngine {
     /// points stay in lock-step (Finding **A1**).
     async fn record_capacity_observation(
         &self,
-        active_client: &Arc<ApiClient>,
+        active_snapshot: &ModelRuntimeSnapshot,
         kind: CapacityKind,
     ) {
         let Some(app_state) = self.app_state.as_ref() else {
@@ -709,80 +713,15 @@ impl QueryEngine {
         };
         crate::engine_helpers::record_rate_limit_observation(
             app_state,
-            active_client.provider(),
-            active_client.fingerprint().api,
+            &active_snapshot.provider,
+            active_snapshot.provider_api,
             kind.retry_after_ms,
         )
         .await;
     }
 
-    /// Capacity-streak fallback advance shared between stream-open and
-    /// mid-stream paths. Returns `Some(Continue)` after a successful
-    /// `Switched` advance (the caller `continue`s the outer loop) and
-    /// `None` when the chain is exhausted (the caller falls through to
-    /// its own bail/Err synthesis); the rate-limit observation should
-    /// already have been recorded by [`Self::record_capacity_observation`]
-    /// at the call site so this method only owns the advance + notice.
-    async fn advance_after_capacity_streak(
-        &self,
-        services: &mut LoopServices,
-        turn_state: &mut LoopTurnState,
-        event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
-        site: &'static str,
-    ) -> Option<StreamErrorOutcome> {
-        if !services.runtime.has_fallback() {
-            return None;
-        }
-        let original = services.runtime.current_model_id().to_string();
-        let original_provider = services.runtime.current_client().provider().to_string();
-        match services.runtime.advance() {
-            crate::model_runtime::AdvanceOutcome::Switched(new_model) => {
-                warn!(
-                    site,
-                    original,
-                    fallback = new_model,
-                    consecutive = turn_state.consecutive_capacity_errors,
-                    "advanced to next fallback slot after capacity streak",
-                );
-                turn_state.consecutive_capacity_errors = 0;
-                // Finding N2: cross-provider cache reset on advance.
-                self.post_advance_side_effects(&original_provider, &services.runtime)
-                    .await;
-                emit_model_fallback_notice(
-                    event_tx,
-                    &original,
-                    &new_model,
-                    &self.config.session_id,
-                    crate::model_runtime::ModelFallbackReason::CapacityDegrade {
-                        consecutive_errors: MAX_CONSECUTIVE_CAPACITY_ERRORS,
-                    },
-                )
-                .await;
-                Some(StreamErrorOutcome::Continue)
-            }
-            crate::model_runtime::AdvanceOutcome::Exhausted => {
-                warn!(
-                    site,
-                    active = original,
-                    "fallback chain exhausted on capacity streak",
-                );
-                emit_model_fallback_notice(
-                    event_tx,
-                    &original,
-                    /*new_model*/ "",
-                    &self.config.session_id,
-                    crate::model_runtime::ModelFallbackReason::ChainExhausted,
-                )
-                .await;
-                None
-            }
-        }
-    }
-
-    /// Open the per-turn LLM stream and bundle the post-open
-    /// housekeeping (capacity-streak reset, rate-limit observation
-    /// clear, probe finalize + recovery notice) along with the typed
-    /// error route into [`Self::handle_stream_open_error`].
+    /// Open the per-turn LLM stream and return the runtime call token
+    /// that must be fed back after the stream is consumed.
     ///
     /// Returns `Ok(receiver)` for the success path or
     /// `Err(StreamErrorOutcome)` for both recoverable + unrecoverable
@@ -792,82 +731,91 @@ impl QueryEngine {
     /// Extraction motivated by R6 cleanup — the main loop's Ok/Err
     /// match block (74 LoC) collapses to a 5-LoC three-arm match here
     /// because the housekeeping naturally lives alongside the recovery
-    /// dispatcher that shares state with it (capacity streak, probe
-    /// finalization). `services` and `turn_state` are `&mut` for the
-    /// same reason `handle_stream_open_error` is — probe finalize and
-    /// streak reset write to them.
+    /// dispatcher that shares state with it. `services` and
+    /// `turn_state` are `&mut` for the same reason
+    /// `handle_stream_open_error` is.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn open_turn_stream(
         &self,
-        active_client: &Arc<ApiClient>,
+        active_snapshot: &ModelRuntimeSnapshot,
         params: &coco_inference::QueryParams,
-        was_probing: bool,
         services: &mut LoopServices,
         turn_state: &mut LoopTurnState,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         turn_id: &str,
-    ) -> Result<tokio::sync::mpsc::Receiver<coco_inference::StreamEvent>, StreamErrorOutcome> {
-        match active_client.query_stream(params).await {
-            Ok(rx) => {
-                // Success resets the capacity-error streak — isolated
-                // 529s must not accumulate across turns.
-                turn_state.consecutive_capacity_errors = 0;
-                if let Some(app_state) = self.app_state.as_ref() {
-                    crate::engine_helpers::clear_rate_limit_observation(
-                        app_state,
-                        active_client.provider(),
-                    )
-                    .await;
-                }
+    ) -> Result<OpenedTurnStream, StreamErrorOutcome> {
+        match self
+            .model_runtimes
+            .open_stream_for_runtime(
+                services.runtime.clone(),
+                services.runtime_source.clone(),
+                params,
+            )
+            .await
+        {
+            coco_inference::ModelStreamOpenOutcome::Opened {
+                rx,
+                token,
+                snapshot,
+                ..
+            } => {
                 tracing::debug!(
                     turn = turn_state.turn,
                     turn_id = %turn_id,
-                    provider = active_client.provider(),
-                    model_id = active_client.model_id(),
+                    provider = snapshot.provider,
+                    model_id = snapshot.model_id,
                     "LLM stream opened"
                 );
-                // Probe succeeded at stream-open — clear recovery state
-                // and announce the switch-back.
-                if was_probing {
-                    let recovered = services.runtime.current_model_id().to_string();
-                    services.runtime.finalize_probe(
-                        crate::model_runtime::ProbeOutcome::Success,
-                        std::time::Instant::now(),
-                    );
-                    emit_model_fallback_notice(
-                        event_tx,
-                        /*original*/ "",
-                        &recovered,
-                        &self.config.session_id,
-                        crate::model_runtime::ModelFallbackReason::ProbeRecovery,
-                    )
-                    .await;
+                Ok(OpenedTurnStream {
+                    rx,
+                    token,
+                    snapshot: *snapshot,
+                })
+            }
+            coco_inference::ModelStreamOpenOutcome::Retry { events } => {
+                turn_state.count_next_iteration_as_turn = false;
+                self.record_capacity_observation(
+                    active_snapshot,
+                    CapacityKind {
+                        retry_after_ms: None,
+                    },
+                )
+                .await;
+                for event in events {
+                    if let coco_inference::ModelRuntimeEvent::FallbackSwitched {
+                        from_model_id,
+                        to_model_id,
+                        ..
+                    } = event
+                    {
+                        self.post_advance_side_effects(&active_snapshot.provider, services)
+                            .await;
+                        emit_model_fallback_notice(
+                            event_tx,
+                            &from_model_id,
+                            &to_model_id,
+                            &self.config.session_id,
+                            crate::model_runtime::ModelFallbackReason::CapacityDegrade {
+                                consecutive_errors: 1,
+                            },
+                        )
+                        .await;
+                    }
                 }
-                Ok(rx)
+                Err(StreamErrorOutcome::Continue)
             }
-            Err(e) => {
-                // Stream-open error dispatcher (Finding **A1**). Bundles
-                // probe revert + ContextWindowExceeded reactive compact
-                // + capacity-streak fallback advance (sharing
-                // `record_capacity_observation` and
-                // `advance_after_capacity_streak` with the mid-stream
-                // sibling `handle_stream_error`) + Bail synthesis.
-                // `active_client` is the post-plan-swap client that
-                // actually served the failed request so the rate-limit
-                // observation keys against the right provider.
-                Err(self
-                    .handle_stream_open_error(
-                        e,
-                        active_client,
-                        was_probing,
-                        services,
-                        turn_state,
-                        history,
-                        event_tx,
-                    )
-                    .await)
-            }
+            coco_inference::ModelStreamOpenOutcome::Failed { error, events } => Err(self
+                .handle_stream_open_error(
+                    error,
+                    active_snapshot,
+                    events,
+                    services,
+                    turn_state,
+                    history,
+                    event_tx,
+                )
+                .await),
         }
     }
 
@@ -883,9 +831,8 @@ impl QueryEngine {
     /// 3. capacity (typed `Overloaded` / `RateLimited`, OR string
     ///    fallback via [`crate::engine_helpers::is_capacity_error_message`]
     ///    for the `ProviderError`-wrapped path the vercel-ai retry layer
-    ///    occasionally produces): record rate-limit observation, increment
-    ///    the consecutive-capacity streak, retry below threshold, advance
-    ///    to fallback at threshold, fall through on exhausted.
+    ///    occasionally produces): record rate-limit observation, then
+    ///    consume the runtime's fallback switch or final failure.
     /// 4. anything else ⇒ `Bail` with a `ProviderError`-classified
     ///    [`coco_error::PlainError`].
     ///
@@ -900,29 +847,14 @@ impl QueryEngine {
     pub(crate) async fn handle_stream_open_error(
         &self,
         e: coco_inference::InferenceError,
-        active_client: &Arc<ApiClient>,
-        was_probing: bool,
+        active_snapshot: &ModelRuntimeSnapshot,
+        runtime_events: Vec<coco_inference::ModelRuntimeEvent>,
         services: &mut LoopServices,
         turn_state: &mut LoopTurnState,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
     ) -> StreamErrorOutcome {
         let err_msg = e.to_string();
-        // Probe failure: transparently revert to the fallback, then
-        // retry the turn. A probe is OPTIONAL — failing one must NOT
-        // surface as a user-visible error.
-        if was_probing {
-            services.runtime.finalize_probe(
-                crate::model_runtime::ProbeOutcome::Failure,
-                std::time::Instant::now(),
-            );
-            warn!(
-                active = services.runtime.current_model_id(),
-                error = %err_msg,
-                "probe failed at stream-open; reverting to fallback and retrying",
-            );
-            return StreamErrorOutcome::Continue;
-        }
         // Typed enum match only — `coco-inference`'s provider seam maps
         // every multi-provider context-overflow signal into this
         // variant. String fallback removed (C1 fix).
@@ -978,30 +910,43 @@ impl QueryEngine {
             }
         });
         if let Some(kind) = capacity_kind {
-            self.record_capacity_observation(active_client, kind).await;
-            turn_state.consecutive_capacity_errors += 1;
-            if turn_state.consecutive_capacity_errors < MAX_CONSECUTIVE_CAPACITY_ERRORS {
+            self.record_capacity_observation(active_snapshot, kind)
+                .await;
+            let original_provider = active_snapshot.provider.clone();
+            let events = runtime_events;
+            if events.is_empty() {
                 warn!(
-                    consecutive = turn_state.consecutive_capacity_errors,
-                    threshold = MAX_CONSECUTIVE_CAPACITY_ERRORS,
-                    active = services.runtime.current_model_id(),
-                    "capacity error below threshold; retrying on same slot",
+                    active = services.current_model_id(),
+                    "capacity error recorded by model runtime; surfacing error",
                 );
-                return StreamErrorOutcome::Continue;
+                return StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
+                    format!("LLM stream open failed: {e}"),
+                    coco_error::StatusCode::ProviderError,
+                )));
             }
-            if let Some(outcome) = self
-                .advance_after_capacity_streak(
-                    services,
-                    turn_state,
-                    event_tx,
-                    /*site*/ "stream-open",
-                )
-                .await
-            {
-                return outcome;
+            for event in events {
+                if let coco_inference::ModelRuntimeEvent::FallbackSwitched {
+                    from_model_id,
+                    to_model_id,
+                    ..
+                } = event
+                {
+                    self.post_advance_side_effects(&original_provider, services)
+                        .await;
+                    emit_model_fallback_notice(
+                        event_tx,
+                        &from_model_id,
+                        &to_model_id,
+                        &self.config.session_id,
+                        crate::model_runtime::ModelFallbackReason::CapacityDegrade {
+                            consecutive_errors: 1,
+                        },
+                    )
+                    .await;
+                    turn_state.count_next_iteration_as_turn = false;
+                    return StreamErrorOutcome::Continue;
+                }
             }
-            // Exhausted: fall through to Bail. The advance helper
-            // already emitted `ChainExhausted` notice.
         }
         StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
             format!("LLM stream open failed: {e}"),
@@ -1014,16 +959,15 @@ impl QueryEngine {
     /// `run_session_loop` directly after `consume_stream` returned —
     /// classifies the error string into a typed
     /// [`coco_inference::InferenceError`], routes to the appropriate
-    /// recovery (probe revert / reactive compact / capacity-streak
-    /// fallback advance), and either signals
+    /// recovery (reactive compact / runtime fallback), and either signals
     /// [`StreamErrorOutcome::Continue`] for the outer loop or
     /// [`StreamErrorOutcome::Bail`] with a typed `BoxedError`.
     ///
     /// Side effects bundled here (matching the previous inline form):
-    /// * `services.runtime.finalize_probe(Failure)` on probe failure
+    /// * runtime-owned model communication feedback
     /// * `turn_state.budget` mutation via `handle_context_overflow`
-    /// * `turn_state.consecutive_capacity_errors` increment + reset
-    /// * `services.runtime.advance()` on capacity-streak cap
+    /// * runtime-owned capacity feedback
+    /// * runtime-owned fallback switch
     /// * `cache_break_reset` via `post_advance_side_effects`
     /// * `emit_model_fallback_notice` for both Switched + Exhausted
     /// * `streaming_handle.discard()` with per-outcome
@@ -1037,6 +981,7 @@ impl QueryEngine {
         &self,
         err_msg: String,
         services: &mut LoopServices,
+        token: &coco_inference::ModelCallHandle,
         turn_state: &mut LoopTurnState,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
@@ -1047,21 +992,6 @@ impl QueryEngine {
         F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = UnstampedToolCallOutcome> + Send + 'static,
     {
-        // Probe failure mid-stream: transparently revert and retry —
-        // same rule as stream-open. Probes are optional; their
-        // failures must never be user-visible.
-        if services.runtime.probe_in_flight() {
-            services.runtime.finalize_probe(
-                crate::model_runtime::ProbeOutcome::Failure,
-                std::time::Instant::now(),
-            );
-            warn!(
-                active = services.runtime.current_model_id(),
-                error = %err_msg,
-                "probe failed mid-stream; reverting to fallback and retrying",
-            );
-            return StreamErrorOutcome::Continue;
-        }
         // Classify the mid-stream error via the typed `InferenceError`
         // taxonomy. The provider-specific keyword sniffing lives in
         // `coco_inference::errors` — the engine layer matches on the
@@ -1111,30 +1041,53 @@ impl QueryEngine {
             // mid-stream 429 / 529 must also propagate to
             // `ToolAppState.rate_limits` so post-turn forks
             // (prompt-suggestion) see the throttle.
-            let current_client = services.runtime.current_client();
-            self.record_capacity_observation(&current_client, capacity)
-                .await;
-            turn_state.consecutive_capacity_errors += 1;
-            if turn_state.consecutive_capacity_errors < MAX_CONSECUTIVE_CAPACITY_ERRORS {
-                warn!(
-                    consecutive = turn_state.consecutive_capacity_errors,
-                    threshold = MAX_CONSECUTIVE_CAPACITY_ERRORS,
-                    active = services.runtime.current_model_id(),
-                    "capacity error mid-stream below threshold; retrying on same slot",
-                );
-                return StreamErrorOutcome::Continue;
-            }
-            if let Some(outcome) = self
-                .advance_after_capacity_streak(
-                    services,
-                    turn_state,
-                    event_tx,
-                    /*site*/ "mid-stream",
+            let snapshot = services.snapshot();
+            self.record_capacity_observation(&snapshot, capacity).await;
+            let original_provider = snapshot.provider;
+            let feedback = self
+                .model_runtimes
+                .finish_call_for_retry(
+                    token,
+                    coco_inference::ModelCommunicationOutcome::Capacity {
+                        retry_after_ms: capacity.retry_after_ms,
+                    },
                 )
-                .await
-            {
-                return outcome;
+                .await;
+            let coco_inference::ModelRuntimeFeedbackOutcome::Retry { events } = feedback else {
+                warn!(
+                    active = services.current_model_id(),
+                    "capacity error mid-stream recorded by model runtime; surfacing error",
+                );
+                return StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
+                    format!("LLM stream failed: {err_msg}"),
+                    coco_error::StatusCode::ProviderError,
+                )));
+            };
+            for event in events {
+                if let coco_inference::ModelRuntimeEvent::FallbackSwitched {
+                    from_model_id,
+                    to_model_id,
+                    ..
+                } = event
+                {
+                    self.post_advance_side_effects(&original_provider, services)
+                        .await;
+                    emit_model_fallback_notice(
+                        event_tx,
+                        &from_model_id,
+                        &to_model_id,
+                        &self.config.session_id,
+                        crate::model_runtime::ModelFallbackReason::CapacityDegrade {
+                            consecutive_errors: 1,
+                        },
+                    )
+                    .await;
+                    turn_state.count_next_iteration_as_turn = false;
+                    return StreamErrorOutcome::Continue;
+                }
             }
+            turn_state.count_next_iteration_as_turn = false;
+            return StreamErrorOutcome::Continue;
         }
         // Surface streaming-discard outcomes for telemetry before
         // bailing out. The assistant message hasn't committed yet on
@@ -1172,6 +1125,8 @@ impl QueryEngine {
                 );
             }
         }
+        self.model_runtimes
+            .finish_call(token, coco_inference::ModelCommunicationOutcome::Failure);
         StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
             format!("LLM stream failed: {err_msg}"),
             coco_error::StatusCode::ProviderError,

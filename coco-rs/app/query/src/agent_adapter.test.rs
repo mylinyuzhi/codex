@@ -46,7 +46,7 @@ async fn test_no_op_engine_returns_error() {
 /// Test-only factory variant that observes the role argument and
 /// returns an error via a synthetic `QueryEngine`-less path. We
 /// can't return a `QueryEngine` here without building a whole
-/// `ApiClient` + `ToolRegistry`; instead we use
+/// runtime registry + `ToolRegistry`; instead we use
 /// [`std::panic::catch_unwind`] to trap a controlled panic INSIDE
 /// the factory closure, leaving the assertion on `observed` the
 /// durable check. This avoids depending on tokio spawn semantics

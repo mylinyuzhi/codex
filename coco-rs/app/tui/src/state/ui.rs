@@ -23,7 +23,6 @@ use crate::state::modal::ModalState;
 use crate::theme::Theme;
 use crate::theme::ThemeRuntimeState;
 use crate::theme::ThemeSetting;
-use crate::widgets::suggestion_popup::SuggestionItem;
 use coco_tui_ui::constants;
 use coco_tui_ui::double_press::DoublePressTracker;
 
@@ -88,6 +87,8 @@ pub struct UiState {
     pub theme_state: ThemeRuntimeState,
     /// Display preferences derived from settings.json.
     pub display_settings: DisplaySettings,
+    /// Runtime state for command-backed `statusLine` output.
+    pub(crate) status_line: crate::status_bar::StatusLineRuntime,
     /// Active toast notifications.
     pub toasts: VecDeque<Toast>,
     /// `/skills` dialog Enter → CLI write-local round-trip is in
@@ -137,11 +138,12 @@ pub struct UiState {
     /// would wipe the copied text. The lease is `None` on other platforms
     /// and on the OSC 52 path where no in-process ownership is required.
     pub clipboard_lease: Option<coco_tui_ui::clipboard_copy::ClipboardLease>,
-    /// Active autocomplete suggestions (slash commands, @-mentions, etc.).
-    /// `Some(_)` drives the keybinding bridge into `Autocomplete` context
-    /// and renders a popup above the input. Recomputed after every input
-    /// mutation in `autocomplete::refresh_suggestions`.
-    pub active_suggestions: Option<ActiveSuggestions>,
+    /// Active autocomplete suggestions and request-key bookkeeping.
+    ///
+    /// `completion.active` drives the keybinding bridge into `Autocomplete`
+    /// context and renders a popup above the input. Recomputed after every
+    /// input mutation in `autocomplete::refresh_suggestions`.
+    pub completion: crate::completion::CompletionState,
     /// Keybinding resolver + warnings + display platform. Cheap to clone
     /// (`Arc` internally). Defaults to a from-defaults handle; the
     /// CLI bootstrap (`tui_runner`) replaces it with a watcher-backed
@@ -215,6 +217,7 @@ impl UiState {
             theme: theme_state.theme.clone(),
             theme_state,
             display_settings: DisplaySettings::default(),
+            status_line: crate::status_bar::StatusLineRuntime::default(),
             toasts: VecDeque::new(),
             pending_skills_save_edits: None,
             terminal_compatibility_warning: None,
@@ -228,7 +231,7 @@ impl UiState {
             surface_visibility_known_at: None,
             surface_visibility_confirmation_pending: false,
             clipboard_lease: None,
-            active_suggestions: None,
+            completion: crate::completion::CompletionState::default(),
             kb_handle: KeybindingHandle::from_defaults(),
             stashed_input: None,
             show_teammate_message_preview: false,
@@ -261,12 +264,13 @@ impl UiState {
     pub fn apply_display_settings(&mut self, display_settings: DisplaySettings) {
         let show_thinking_changed =
             self.display_settings.show_thinking != display_settings.show_thinking;
+        let show_thinking = display_settings.show_thinking;
         self.display_settings = display_settings;
         if show_thinking_changed {
-            self.show_thinking = display_settings.show_thinking;
+            self.show_thinking = show_thinking;
         }
         if let Some(ModalState::Settings(settings)) = self.modal.as_mut() {
-            settings.set_display_settings(display_settings);
+            settings.set_display_settings(self.display_settings.clone());
         }
     }
 
@@ -297,7 +301,7 @@ impl UiState {
 
     pub fn push_prompt(&mut self, prompt: PanePromptState) {
         let had_active = self.interaction.active_prompt.is_some();
-        self.active_suggestions = None;
+        self.completion.clear_active();
         self.interaction.popup = None;
         self.interaction.push_prompt(prompt);
         if !had_active {
@@ -369,12 +373,22 @@ impl UiState {
         self.interaction.popup = if self.interaction.active_prompt.is_some() {
             None
         } else {
-            self.active_suggestions
+            self.completion
+                .active
                 .as_ref()
                 .map(|suggestions| match suggestions.kind {
-                    SuggestionKind::SlashCommand => ComposerPopupState::Slash(SlashPopupState),
-                    SuggestionKind::At => ComposerPopupState::At(AtPopupState),
-                    SuggestionKind::Symbol => ComposerPopupState::Symbol(SymbolPopupState),
+                    crate::completion::SuggestionKind::SlashCommand => {
+                        ComposerPopupState::Slash(SlashPopupState)
+                    }
+                    crate::completion::SuggestionKind::At
+                    | crate::completion::SuggestionKind::Path
+                    | crate::completion::SuggestionKind::Directory
+                    | crate::completion::SuggestionKind::CustomTitle => {
+                        ComposerPopupState::At(AtPopupState)
+                    }
+                    crate::completion::SuggestionKind::Symbol => {
+                        ComposerPopupState::Symbol(SymbolPopupState)
+                    }
                 })
         };
     }
@@ -395,7 +409,7 @@ impl UiState {
         self.interaction.active_prompt = None;
         self.interaction.prompt_queue.clear();
         self.interaction.popup = None;
-        self.active_suggestions = None;
+        self.completion.clear_all();
         if had_surface {
             self.bump_surface_generation();
         }
@@ -489,47 +503,6 @@ pub enum FocusTarget {
     #[default]
     Input,
     Chat,
-}
-
-/// Which autocomplete trigger produced the active suggestions.
-///
-/// Determines the popup title, the source of suggestion items, and how the
-/// accepted item is substituted back into the input. Kinds map to TS's
-/// unified `@` mention trigger plus the leading `/` slash-command trigger.
-///
-/// TS parity: `src/hooks/unifiedSuggestions.ts` produces a single ranked
-/// list for `@` containing agents + file paths + MCP resources. There is no
-/// `@agent-` sub-prefix in TS — agents fall out of the unified pool by
-/// fuzzy-matching the bare query. The popup distinguishes kinds visually
-/// (icon prefix + per-row metadata) rather than by trigger string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SuggestionKind {
-    /// Leading `/` — populated from `session.available_commands`.
-    SlashCommand,
-    /// `@query` — unified popup combining agents (synchronous, from
-    /// `session.available_agents`), file paths (async via
-    /// `FileSearchManager`), and MCP resources. Per-row kind is carried
-    /// on `SuggestionItem::metadata`.
-    At,
-    /// `@#symbol` — populated asynchronously by `SymbolSearchManager` (LSP).
-    Symbol,
-}
-
-/// Active autocomplete session: popup rendered above input, intercepts
-/// `Up/Down/Tab/Esc` while letting regular typing pass through.
-#[derive(Debug, Clone)]
-pub struct ActiveSuggestions {
-    pub kind: SuggestionKind,
-    /// Items to show in the popup — filtered by `query` before display.
-    pub items: Vec<SuggestionItem>,
-    /// Currently selected index into the filtered list.
-    pub selected: usize,
-    /// The filter text the user has typed after the trigger.
-    pub query: String,
-    /// Byte offset in `input.text` where the trigger started (the `/`
-    /// or `@`). Used when accepting a suggestion to splice the selection
-    /// back into the input via `textarea.replace_range`.
-    pub trigger_pos: usize,
 }
 
 /// A single history entry with frecency metadata.
@@ -640,6 +613,13 @@ pub struct InputState {
     /// The editable buffer + cursor. Edit it directly for byte-offset
     /// access; the surrounding `InputState` API only owns history + vim.
     pub textarea: coco_tui_ui::widgets::TextArea,
+    /// Dim, non-editable text rendered after the input cursor. Used for
+    /// slash-command argument hints after accepting a command completion.
+    pub inline_hint: Option<String>,
+    /// Dim ghost text rendered at the cursor. It is not part of the
+    /// editable buffer; accepting it applies [`InlineGhost::replacement`]
+    /// over [`InlineGhost::replace_start`]..[`InlineGhost::replace_end`].
+    pub inline_ghost: Option<InlineGhost>,
     /// Command history ordered by frecency (most-relevant first).
     pub history: Vec<HistoryEntry>,
     /// Current history navigation index into `history` (None = live draft).
@@ -648,11 +628,24 @@ pub struct InputState {
     pub vim: crate::vim::VimRuntime,
 }
 
+/// Inline typeahead completion rendered inside the editable input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineGhost {
+    pub text: String,
+    pub insert_position: usize,
+    pub replace_start: usize,
+    pub replace_end: usize,
+    pub replacement: String,
+    pub cursor_after_accept: usize,
+}
+
 impl InputState {
     /// Create empty input.
     pub fn new() -> Self {
         Self {
             textarea: coco_tui_ui::widgets::TextArea::new(),
+            inline_hint: None,
+            inline_ghost: None,
             history: Vec::new(),
             history_index: None,
             vim: crate::vim::VimRuntime::new(),
@@ -668,13 +661,55 @@ impl InputState {
     /// Up/Down navigation restarts from the live draft.
     pub fn set_text(&mut self, text: &str) {
         self.textarea.set_text(text);
+        self.inline_hint = None;
+        self.inline_ghost = None;
         self.history_index = None;
     }
 
     /// Take the current input, clearing the buffer.
     pub fn take_input(&mut self) -> String {
         self.history_index = None;
+        self.inline_hint = None;
+        self.inline_ghost = None;
         self.textarea.take_text()
+    }
+
+    /// Set a dim inline hint rendered after the cursor. The hint is not
+    /// part of the editable buffer or submitted text.
+    pub fn set_inline_hint(&mut self, hint: impl Into<String>) {
+        let hint = hint.into();
+        self.inline_hint = (!hint.is_empty()).then_some(hint);
+    }
+
+    /// Clear any dim inline hint shown after the editable input.
+    pub fn clear_inline_hint(&mut self) {
+        self.inline_hint = None;
+    }
+
+    pub fn set_inline_ghost(&mut self, ghost: InlineGhost) {
+        self.inline_ghost = (!ghost.text.is_empty()).then_some(ghost);
+    }
+
+    pub fn clear_inline_ghost(&mut self) {
+        self.inline_ghost = None;
+    }
+
+    pub fn active_inline_ghost(&self) -> Option<&InlineGhost> {
+        self.inline_ghost
+            .as_ref()
+            .filter(|ghost| ghost.insert_position == self.textarea.cursor())
+    }
+
+    pub fn accept_inline_ghost(&mut self) -> bool {
+        let Some(ghost) = self.active_inline_ghost().cloned() else {
+            self.clear_inline_ghost();
+            return false;
+        };
+        self.textarea
+            .replace_range(ghost.replace_start..ghost.replace_end, &ghost.replacement);
+        self.textarea.set_cursor(ghost.cursor_after_accept);
+        self.clear_inline_ghost();
+        true
     }
 
     /// Whether the input is empty.

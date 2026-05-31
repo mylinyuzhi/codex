@@ -32,12 +32,13 @@ impl DisplaySettingEditability {
 }
 
 /// Display-only preferences consumed by TUI renderers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DisplaySettings {
     pub syntax_highlighting: SyntaxHighlighting,
     pub syntax_highlighting_editability: DisplaySettingEditability,
     pub show_thinking: bool,
     pub copy_full_response: bool,
+    pub status_line: Option<coco_config::StatusLineSettings>,
     pub native_replay_cache: HistoryReplayCachePolicy,
     pub performance: TuiPerformanceConfig,
 }
@@ -65,6 +66,7 @@ impl DisplaySettings {
             syntax_highlighting_editability: DisplaySettingEditability::Editable,
             show_thinking: settings.show_thinking,
             copy_full_response: settings.copy_full_response,
+            status_line: settings.status_line.clone(),
             native_replay_cache: replay_cache_policy(settings.tui.native_replay_cache),
             performance: performance_config(settings.tui.performance),
         }
@@ -78,6 +80,7 @@ impl DisplaySettings {
             syntax_highlighting_editability: syntax_highlighting_editability(settings),
             show_thinking: settings.merged.show_thinking,
             copy_full_response: settings.merged.copy_full_response,
+            status_line: settings.merged.status_line.clone(),
             native_replay_cache: replay_cache_policy(settings.merged.tui.native_replay_cache),
             performance: performance_config(settings.merged.tui.performance),
         }

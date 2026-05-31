@@ -146,8 +146,8 @@ pub struct ToolUseContext {
 
     /// Whether the current model supports Anthropic's server-side
     /// `tool_reference` expansion (`tool-search-tool-2025-10-19`).
-    /// Populated by `ToolContextFactory::build` from
-    /// `ApiClient::model_info().has_capability(ServerSideToolReference)`.
+    /// Populated by `ToolContextFactory::build` from the active runtime
+    /// snapshot's `ModelInfo`.
     ///
     /// When `true`, `ToolSearchTool::execute` emits matches as
     /// `tool_reference` content blocks (via
@@ -223,9 +223,8 @@ pub struct ToolUseContext {
     pub agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
 
     /// Snapshot of the parent session's resolved provider+API+model
-    /// identity. Captured at engine bootstrap via
-    /// `ApiClient::fingerprint().to_snapshot()` and threaded onto every
-    /// `ToolUseContext`.
+    /// identity. Captured at engine bootstrap from the runtime registry
+    /// snapshot and threaded onto every `ToolUseContext`.
     ///
     /// `AgentTool::execute` reads this to construct
     /// `SpawnMode::Fork { parent_snapshot, .. }` — the snapshot lives

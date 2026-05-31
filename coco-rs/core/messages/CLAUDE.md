@@ -96,7 +96,7 @@ refactor — production uses `normalize::filter_by_options` directly
 
 `coco-messages` does **not** depend on `coco-inference`. DTO content
 shapes reach this crate via `coco-types` (which depends on
-`coco-llm-types`). Runtime types (`LanguageModel` trait, `ApiClient`,
+`coco-llm-types`). Runtime types (`LanguageModel` trait, model runtime,
 etc.) are inference's domain and not needed for ops-layer work.
 
 ## Architecture

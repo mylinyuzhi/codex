@@ -5,8 +5,8 @@
 //! `app/query/src/model_runtime.test.rs`; these tests exercise the
 //! engine's integration points: constructing the runtime with a
 //! chain, walking slots on capacity errors, transparently
-//! recovering from probe failures, and emitting
-//! `ModelFallbackReason::ChainExhausted` when all slots are spent.
+//! recovering from probe failures, and surfacing the final provider
+//! error when all configured cycles are spent.
 //!
 //! The mock model is deliberately minimal — it returns either a
 //! capacity error or a text response based on a per-call counter.
@@ -19,11 +19,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::PrebuiltLanguageModelSlot;
 use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
@@ -117,26 +118,34 @@ impl LanguageModel for ScriptedCapacityMock {
     }
 }
 
-/// Build an ApiClient with NO internal retries — each engine-level
+/// Build a prebuilt runtime slot with NO internal retries — each engine-level
 /// `query_stream` corresponds to exactly one mock `do_generate`
-/// call, so the engine's capacity-streak counter ticks 1-to-1 with
-/// scripted capacity outcomes. The default `max_retries=3` would
+/// call, so runtime fallback decisions map 1-to-1 to scripted
+/// capacity outcomes. The default `max_retries=3` would
 /// swallow 3 capacity outcomes per engine call and make the test
 /// non-deterministic without more outcomes to burn.
-fn api_client(model: Arc<dyn LanguageModel>) -> Arc<ApiClient> {
+fn runtime_slot(model: Arc<dyn LanguageModel>) -> PrebuiltLanguageModelSlot {
     let retry = RetryConfig {
         max_retries: 0,
         ..RetryConfig::default()
     };
-    Arc::new(ApiClient::with_default_fingerprint(model, retry))
+    PrebuiltLanguageModelSlot::new(model, retry)
+}
+
+fn registry_with_main_slots(
+    primary: PrebuiltLanguageModelSlot,
+    fallback: PrebuiltLanguageModelSlot,
+) -> Arc<ModelRuntimeRegistry> {
+    Arc::new(ModelRuntimeRegistry::from_prebuilt_language_models(
+        coco_types::ModelRole::Main,
+        primary,
+        vec![fallback],
+    ))
 }
 
 fn minimal_config(model_id: &str) -> QueryEngineConfig {
-    // `max_turns` bounds retry iterations — the capacity streak can
-    // use up to MAX_CONSECUTIVE_CAPACITY_ERRORS=3 iterations per
-    // slot before advance fires, plus 1 successful call. 20 is
-    // plenty to let a 2-slot chain walk through 3+3+1 iterations
-    // without budget-exhausting.
+    // `max_turns` bounds retry iterations. Keep it high enough for
+    // two full fallback-chain cycles plus a successful call.
     QueryEngineConfig {
         model_id: model_id.to_string(),
         max_turns: 20,
@@ -151,75 +160,62 @@ fn minimal_config(model_id: &str) -> QueryEngineConfig {
 }
 
 #[tokio::test]
-async fn test_engine_advances_to_fallback_after_capacity_streak() {
-    // Primary returns 3 capacity errors, then a text response.
-    // With `MAX_CONSECUTIVE_CAPACITY_ERRORS = 3`, the 3rd error
-    // triggers `advance()` to the fallback, which succeeds.
-    let primary = ScriptedCapacityMock::new(
-        "primary-model",
-        vec![
-            CallOutcome::Capacity,
-            CallOutcome::Capacity,
-            CallOutcome::Capacity,
-        ],
-    );
+async fn test_engine_advances_to_fallback_after_capacity_failure() {
+    // ApiClient owns same-slot retry. Once a capacity error reaches
+    // the runtime, the runtime immediately advances to fallback.
+    let primary = ScriptedCapacityMock::new("primary-model", vec![CallOutcome::Capacity]);
     let fallback = ScriptedCapacityMock::new("fallback-model", vec![CallOutcome::Text("done")]);
 
-    let primary_client = api_client(primary.clone());
-    let fallback_client = api_client(fallback.clone());
+    let primary_slot = runtime_slot(primary.clone());
+    let fallback_slot = runtime_slot(fallback.clone());
 
+    let model_runtimes = registry_with_main_slots(primary_slot, fallback_slot);
     let engine = QueryEngine::new(
         minimal_config("primary-model"),
-        primary_client,
+        model_runtimes,
         Arc::new(ToolRegistry::new()),
         CancellationToken::new(),
         None,
-    )
-    .with_fallback_clients(vec![fallback_client]);
+    );
 
     let result = engine.run("hello").await.expect("engine must recover");
-    // Primary saw 3 capacity errors (no retry — engine short-
-    // circuits after streak); fallback served 1 call.
-    assert_eq!(primary.call_count(), 3, "primary must hit 3-strike streak");
+    assert_eq!(
+        primary.call_count(),
+        1,
+        "primary fails once before fallback"
+    );
     assert_eq!(fallback.call_count(), 1, "fallback must serve recovery");
     assert_eq!(result.response_text, "done");
 }
 
 #[tokio::test]
 async fn test_engine_surfaces_error_when_chain_exhausted() {
-    // Primary + fallback both return capacity errors indefinitely.
-    // After 3 strikes on primary + advance + 3 strikes on
-    // fallback, advance returns Exhausted and the engine surfaces
-    // an error. A ChainExhausted notice must be emitted.
+    // Primary + fallback both return capacity errors. The default
+    // policy allows two full chain cycles; after that, the runtime
+    // surfaces the last provider limit error with no caller-facing
+    // fallback-exhausted event.
     let primary = ScriptedCapacityMock::new(
         "primary",
-        vec![
-            CallOutcome::Capacity,
-            CallOutcome::Capacity,
-            CallOutcome::Capacity,
-        ],
+        vec![CallOutcome::Capacity, CallOutcome::Capacity],
     );
     let fallback = ScriptedCapacityMock::new(
         "fallback",
-        vec![
-            CallOutcome::Capacity,
-            CallOutcome::Capacity,
-            CallOutcome::Capacity,
-        ],
+        vec![CallOutcome::Capacity, CallOutcome::Capacity],
     );
-    let primary_client = api_client(primary.clone());
-    let fallback_client = api_client(fallback.clone());
+    let primary_slot = runtime_slot(primary.clone());
+    let fallback_slot = runtime_slot(fallback.clone());
 
+    let model_runtimes = registry_with_main_slots(primary_slot, fallback_slot);
     let engine = QueryEngine::new(
         minimal_config("primary"),
-        primary_client,
+        model_runtimes,
         Arc::new(ToolRegistry::new()),
         CancellationToken::new(),
         None,
-    )
-    .with_fallback_clients(vec![fallback_client]);
+    );
 
-    // Capture emitted events to check for the ChainExhausted notice.
+    // Capture emitted events to verify chain exhaustion is not a
+    // user-facing notice.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<coco_query::CoreEvent>(64);
     let events_handle = tokio::spawn(async move {
         let mut collected = Vec::new();
@@ -239,6 +235,8 @@ async fn test_engine_surfaces_error_when_chain_exhausted() {
         )
         .await;
     assert!(result.is_err(), "exhausted chain must surface error");
+    assert_eq!(primary.call_count(), 2);
+    assert_eq!(fallback.call_count(), 2);
 
     let events = events_handle.await.unwrap();
     let saw_exhausted = events.iter().any(|e| {
@@ -249,7 +247,7 @@ async fn test_engine_surfaces_error_when_chain_exhausted() {
         )
     });
     assert!(
-        saw_exhausted,
-        "ChainExhausted notice must be emitted; events: {events:?}"
+        !saw_exhausted,
+        "chain exhaustion must not emit a user-facing exhausted notice; events: {events:?}"
     );
 }

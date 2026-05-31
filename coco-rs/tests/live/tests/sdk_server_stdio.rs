@@ -122,9 +122,8 @@ async fn serve(args: Args) -> Result<()> {
     let sessions_dir = tempfile::tempdir().context("create sessions tmpdir")?;
 
     let runtime_config = headless::build_runtime_config_for_cli(&cli, &cwd)?;
-    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let (client_api, _provider_api, model_id) =
-        headless::create_api_client(&runtime_config, retry.clone());
+    let main_model = headless::resolve_main_model(&runtime_config);
+    let model_id = main_model.model_id.clone();
     if model_id == "mock-model" {
         return Err(anyhow!(
             "no live provider configured (api key for `{}` missing); \
@@ -132,15 +131,6 @@ async fn serve(args: Args) -> Result<()> {
             args.provider
         ));
     }
-    let fallback_clients = coco_inference::model_factory::build_fallback_clients_for_role(
-        &runtime_config,
-        coco_types::ModelRole::Main,
-        retry,
-        None,
-    )?;
-    let recovery_policy = runtime_config
-        .model_roles
-        .recovery(coco_types::ModelRole::Main);
 
     // Curated tool subset matches the `sdk_server_deepseek` harness:
     // some builtins emit non-strict schemas DeepSeek rejects.
@@ -155,7 +145,7 @@ async fn serve(args: Args) -> Result<()> {
     let system_prompt = headless::build_system_prompt_for_model(
         &cwd,
         &runtime_config,
-        client_api.provider(),
+        &main_model.provider,
         &model_id,
         None,
         &[],
@@ -180,9 +170,7 @@ async fn serve(args: Args) -> Result<()> {
         system_prompt: system_prompt.clone(),
         bypass_permissions_available: startup.bypass_available,
         permission_mode: startup.mode,
-        client: client_api,
-        fallback_clients,
-        recovery_policy,
+        model_runtimes: None,
         tools,
         session_manager: session_manager.clone(),
         fast_model_spec: None,

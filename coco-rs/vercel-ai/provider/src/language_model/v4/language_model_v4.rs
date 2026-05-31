@@ -23,7 +23,7 @@ use crate::errors::AISdkError;
 /// `LanguageModelV4CallOptions` is a **read-only request specification**
 /// — prompt, tools, parameters. Providers only read these fields to
 /// build the HTTP body, never mutate. Passing by `&` lets callers
-/// (notably `coco-inference::ApiClient::query` for retry loops) reuse
+/// (notably coco-inference runtime retry loops) reuse
 /// the same options for multiple attempts without per-attempt
 /// `Vec<LlmMessage>::clone`.
 ///

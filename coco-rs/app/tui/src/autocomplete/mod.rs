@@ -30,6 +30,7 @@ pub use skill_search::SkillSearchManager;
 pub use symbol_search::SymbolSearchEvent;
 pub use symbol_search::SymbolSearchManager;
 pub use trigger::apply_async_result;
+pub use trigger::apply_async_result_for_key;
 pub use trigger::refresh_suggestions;
 
 use crate::widgets::suggestion_popup::SuggestionItem;

@@ -1,66 +1,17 @@
-//! Footer/status-bar presentation model.
-
 use std::collections::HashSet;
 
 use coco_types::ModelRole;
 use coco_types::PermissionMode;
 
 use crate::i18n::t;
+use crate::presentation::context_usage::render_context_usage;
 use crate::state::AppState;
-use crate::state::ExitKey;
 use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
+use crate::status_bar::StatusSpan;
+use crate::status_bar::StatusTone;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FooterTone {
-    Primary,
-    Dim,
-    Border,
-    Warning,
-    Accent,
-    Plan,
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FooterSpan {
-    pub(crate) text: String,
-    pub(crate) tone: FooterTone,
-    pub(crate) bold: bool,
-}
-
-impl FooterSpan {
-    fn new(text: impl Into<String>, tone: FooterTone) -> Self {
-        Self {
-            text: text.into(),
-            tone,
-            bold: false,
-        }
-    }
-
-    fn bold(text: impl Into<String>, tone: FooterTone) -> Self {
-        Self {
-            text: text.into(),
-            tone,
-            bold: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FooterView {
-    ExitPrompt { key: ExitKey, text: String },
-    Status { spans: Vec<FooterSpan> },
-}
-
-pub(crate) fn footer_view(state: &AppState) -> FooterView {
-    if let Some(key) = state.ui.pending_exit_hint() {
-        return FooterView::ExitPrompt {
-            key,
-            text: t!("status.exit_prompt", key = key.label()).to_string(),
-        };
-    }
-
+pub(crate) fn built_in_status_spans(state: &AppState) -> Vec<StatusSpan> {
     let mut spans = Vec::new();
     let (provider, model_id) = state
         .session
@@ -77,37 +28,37 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
     };
     let has_model = !model_display.is_empty();
     if has_model {
-        spans.push(FooterSpan::bold(
+        spans.push(StatusSpan::bold(
             format!(" {model_display}"),
-            FooterTone::Primary,
+            StatusTone::Primary,
         ));
         if state.session.fast_mode {
-            spans.push(FooterSpan::new(" ⚡", FooterTone::Warning));
+            spans.push(StatusSpan::new(" ⚡", StatusTone::Warning));
         }
     }
 
     let join = if has_model { " * " } else { " " };
-    spans.push(FooterSpan::new(join, FooterTone::Dim));
-    spans.push(FooterSpan::new(
+    spans.push(StatusSpan::new(join, StatusTone::Dim));
+    spans.push(StatusSpan::new(
         state.session.thinking_effort.to_string(),
-        FooterTone::Dim,
+        StatusTone::Dim,
     ));
 
     if let Some((mode_label, mode_tone)) =
         permission_mode_status_label(state.session.permission_mode)
     {
         separator(&mut spans);
-        spans.push(FooterSpan::new(mode_label, mode_tone));
+        spans.push(StatusSpan::new(mode_label, mode_tone));
     }
 
     if let Some(hint) = state.ui.kb_handle.pending_display() {
         separator(&mut spans);
-        spans.push(FooterSpan::bold(hint, FooterTone::Warning));
+        spans.push(StatusSpan::bold(hint, StatusTone::Warning));
     }
 
     if let Some(warning) = state.ui.terminal_compatibility_warning.as_ref() {
         separator(&mut spans);
-        spans.push(FooterSpan::bold(warning.clone(), FooterTone::Warning));
+        spans.push(StatusSpan::bold(warning.clone(), StatusTone::Warning));
     }
 
     let tokens = &state.session.token_usage;
@@ -126,7 +77,7 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
         )
     });
     separator(&mut spans);
-    spans.push(FooterSpan::new(
+    spans.push(StatusSpan::new(
         match usage_costs {
             Some((_, _, true, _)) => format!(
                 "↑{}/$? ↓{}/$?",
@@ -146,66 +97,67 @@ pub(crate) fn footer_view(state: &AppState) -> FooterView {
                 format_token_count(tokens.output_tokens)
             ),
         },
-        FooterTone::Dim,
+        StatusTone::Dim,
     ));
     let cache_pct = if tokens.input_tokens > 0 {
         (tokens.cache_read_tokens.max(0) * 100 / tokens.input_tokens).clamp(0, 100)
     } else {
         0
     };
-    spans.push(FooterSpan::new(
+    spans.push(StatusSpan::new(
         format!(
             " · cache {}/{}%",
             format_token_count(tokens.cache_read_tokens),
             cache_pct
         ),
-        FooterTone::Dim,
+        StatusTone::Dim,
     ));
     if let Some((_, _, false, unpriced_count)) = usage_costs
         && unpriced_count > 0
     {
-        spans.push(FooterSpan::new(
+        spans.push(StatusSpan::new(
             format!(" · unpriced {unpriced_count}"),
-            FooterTone::Warning,
+            StatusTone::Warning,
         ));
     }
 
-    let ctx_pct = if state.session.context_window_total > 0 {
-        let used = state.session.context_window_used as i64;
-        let total = state.session.context_window_total as i64;
-        (used * 100 / total.max(1)).clamp(0, 100)
-    } else {
-        0
-    };
     separator(&mut spans);
-    spans.push(FooterSpan {
-        text: format!("ctx {ctx_pct}%"),
-        tone: if ctx_pct > 90 {
-            FooterTone::Error
-        } else if ctx_pct > 70 {
-            FooterTone::Warning
-        } else {
-            FooterTone::Dim
-        },
-        bold: ctx_pct > 90,
-    });
+    if let Some(ctx_pct) = render_context_usage(state).map(|u| u.percent) {
+        spans.push(StatusSpan {
+            text: format!("ctx {ctx_pct}%"),
+            tone: if ctx_pct > 90 {
+                StatusTone::Error
+            } else if ctx_pct > 70 {
+                StatusTone::Warning
+            } else {
+                StatusTone::Dim
+            },
+            bold: ctx_pct > 90,
+        });
+    } else {
+        spans.push(StatusSpan::new("ctx --", StatusTone::Dim));
+    }
 
     let mcp_count = state.session.connected_mcp_count();
     if mcp_count > 0 {
         separator(&mut spans);
-        spans.push(FooterSpan::new(
+        spans.push(StatusSpan::new(
             t!("status.mcp", count = mcp_count).to_string(),
-            FooterTone::Dim,
+            StatusTone::Dim,
         ));
     }
 
-    separator(&mut spans);
-    spans.push(FooterSpan::new(
-        transcript_count_status(state.session.transcript.cells()),
-        FooterTone::Dim,
-    ));
+    if state.session.lsp_active {
+        separator(&mut spans);
+        spans.push(StatusSpan::new("LSP", StatusTone::Dim));
+    }
 
-    FooterView::Status { spans }
+    separator(&mut spans);
+    spans.push(StatusSpan::new(
+        transcript_count_status(state.session.transcript.cells()),
+        StatusTone::Dim,
+    ));
+    spans
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -258,19 +210,19 @@ fn transcript_counts(cells: &[RenderedCell]) -> TranscriptCounts {
     counts
 }
 
-fn separator(spans: &mut Vec<FooterSpan>) {
-    spans.push(FooterSpan::new(" | ", FooterTone::Border));
+fn separator(spans: &mut Vec<StatusSpan>) {
+    spans.push(StatusSpan::new(" | ", StatusTone::Border));
 }
 
-fn permission_mode_status_label(mode: PermissionMode) -> Option<(String, FooterTone)> {
+fn permission_mode_status_label(mode: PermissionMode) -> Option<(String, StatusTone)> {
     let (key, tone) = match mode {
         PermissionMode::Default => return None,
-        PermissionMode::AcceptEdits => ("permission_mode.status.accept_edits", FooterTone::Accent),
-        PermissionMode::Plan => ("permission_mode.status.plan", FooterTone::Plan),
-        PermissionMode::BypassPermissions => ("permission_mode.status.bypass", FooterTone::Error),
-        PermissionMode::DontAsk => ("permission_mode.status.dont_ask", FooterTone::Error),
-        PermissionMode::Auto => ("permission_mode.status.auto", FooterTone::Warning),
-        PermissionMode::Bubble => ("permission_mode.status.bubble", FooterTone::Dim),
+        PermissionMode::AcceptEdits => ("permission_mode.status.accept_edits", StatusTone::Accent),
+        PermissionMode::Plan => ("permission_mode.status.plan", StatusTone::Plan),
+        PermissionMode::BypassPermissions => ("permission_mode.status.bypass", StatusTone::Error),
+        PermissionMode::DontAsk => ("permission_mode.status.dont_ask", StatusTone::Error),
+        PermissionMode::Auto => ("permission_mode.status.auto", StatusTone::Warning),
+        PermissionMode::Bubble => ("permission_mode.status.bubble", StatusTone::Dim),
     };
     Some((t!(key).to_string(), tone))
 }
@@ -285,10 +237,6 @@ pub(crate) fn format_token_count(count: i64) -> String {
     }
 }
 
-pub(crate) fn format_cost(cost_usd: f64) -> String {
+fn format_cost(cost_usd: f64) -> String {
     coco_messages::format_cost(cost_usd)
 }
-
-#[cfg(test)]
-#[path = "footer.test.rs"]
-mod tests;

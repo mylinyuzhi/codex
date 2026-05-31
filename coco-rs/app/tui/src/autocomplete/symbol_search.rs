@@ -2,24 +2,37 @@
 //!
 //! Debounced async search against LSP symbol index.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use crate::completion::CompletionRequestKey;
 use crate::widgets::suggestion_popup::SuggestionItem;
 
 /// Debounce delay for symbol search.
 const DEBOUNCE: Duration = Duration::from_millis(150);
+
+pub trait SymbolCompletionSource: Send + Sync {
+    fn search(&self, query: &str) -> Vec<SuggestionItem>;
+}
+
+#[derive(Debug, Default)]
+pub struct NoopSymbolCompletionSource;
+
+impl SymbolCompletionSource for NoopSymbolCompletionSource {
+    fn search(&self, _query: &str) -> Vec<SuggestionItem> {
+        Vec::new()
+    }
+}
 
 /// Events from symbol search to TUI.
 #[derive(Debug, Clone)]
 pub enum SymbolSearchEvent {
     /// Search results ready.
     SearchResult {
-        query: String,
-        /// Byte offset where the `@#` trigger started (sentinel).
-        start_pos: usize,
+        key: CompletionRequestKey,
         suggestions: Vec<SuggestionItem>,
     },
 }
@@ -28,41 +41,42 @@ pub enum SymbolSearchEvent {
 pub struct SymbolSearchManager {
     pending: Option<JoinHandle<()>>,
     event_tx: mpsc::Sender<SymbolSearchEvent>,
+    source: Arc<dyn SymbolCompletionSource>,
 }
 
 impl SymbolSearchManager {
     /// Create a new symbol search manager.
     pub fn new(event_tx: mpsc::Sender<SymbolSearchEvent>) -> Self {
+        Self::with_source(event_tx, Arc::new(NoopSymbolCompletionSource))
+    }
+
+    pub fn with_source(
+        event_tx: mpsc::Sender<SymbolSearchEvent>,
+        source: Arc<dyn SymbolCompletionSource>,
+    ) -> Self {
         Self {
             pending: None,
             event_tx,
+            source,
         }
     }
 
     /// Schedule a debounced search.
-    pub fn search(&mut self, query: String, start_pos: usize) {
+    pub fn search(&mut self, key: CompletionRequestKey) {
         if let Some(handle) = self.pending.take() {
             handle.abort();
         }
 
         let tx = self.event_tx.clone();
+        let source = Arc::clone(&self.source);
 
         self.pending = Some(tokio::spawn(async move {
             tokio::time::sleep(DEBOUNCE).await;
-
-            // Placeholder — real impl queries LSP workspace/symbol
-            let suggestions = vec![SuggestionItem {
-                label: query.clone(),
-                description: Some("(LSP lookup pending)".to_string()),
-                metadata: None,
-            }];
+            let query = key.query.clone();
+            let suggestions = source.search(&query);
 
             let _ = tx
-                .send(SymbolSearchEvent::SearchResult {
-                    query,
-                    start_pos,
-                    suggestions,
-                })
+                .send(SymbolSearchEvent::SearchResult { key, suggestions })
                 .await;
         }));
     }
@@ -82,3 +96,7 @@ pub fn create_symbol_search_channel() -> (
 ) {
     mpsc::channel(16)
 }
+
+#[cfg(test)]
+#[path = "symbol_search.test.rs"]
+mod tests;

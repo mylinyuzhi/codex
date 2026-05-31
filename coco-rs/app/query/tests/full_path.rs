@@ -9,12 +9,10 @@ use std::sync::atomic::Ordering;
 
 use coco_hooks::HookRegistry;
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::StopReason;
@@ -170,10 +168,7 @@ async fn test_full_path_write_then_read() {
         call_count: AtomicI32::new(0),
         test_dir: test_dir.clone(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 
@@ -215,10 +210,7 @@ async fn test_full_path_with_hooks() {
         call_count: AtomicI32::new(0),
         test_dir,
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 
@@ -248,10 +240,7 @@ async fn test_full_path_budget_exhaustion() {
         call_count: AtomicI32::new(0),
         test_dir,
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 
@@ -348,10 +337,7 @@ async fn test_full_path_with_bash_safety() {
     }
 
     let model = Arc::new(DestructiveBashMock);
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 
@@ -532,10 +518,7 @@ async fn test_full_path_glob_and_grep() {
         call_count: AtomicI32::new(0),
         test_dir,
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 

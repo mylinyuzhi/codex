@@ -19,6 +19,7 @@ use coco_llm_types::LlmMessage;
 
 use crate::common::LiveTarget;
 use crate::common::extract_text;
+use crate::common::query_client;
 use crate::common::usage_report;
 
 fn factual_params(prompt: Vec<LlmMessage>, scenario: &str) -> QueryParams {
@@ -51,10 +52,11 @@ pub async fn run(openai_target: &LiveTarget, anthropic_target: &LiveTarget) -> R
         ]
     };
 
-    let openai_result = openai_target
-        .client
-        .query(&factual_params(prompt(), "run.openai"))
-        .await?;
+    let openai_result = query_client(
+        &openai_target.client,
+        factual_params(prompt(), "run.openai"),
+    )
+    .await?;
     usage_report::record(
         openai_target.provider,
         &openai_target.model,
@@ -62,10 +64,11 @@ pub async fn run(openai_target: &LiveTarget, anthropic_target: &LiveTarget) -> R
         &openai_result.usage,
     );
 
-    let anthropic_result = anthropic_target
-        .client
-        .query(&factual_params(prompt(), "run.anthropic"))
-        .await?;
+    let anthropic_result = query_client(
+        &anthropic_target.client,
+        factual_params(prompt(), "run.anthropic"),
+    )
+    .await?;
     usage_report::record(
         anthropic_target.provider,
         &anthropic_target.model,
@@ -109,10 +112,11 @@ pub async fn run_session_switch(
         LlmMessage::system(system),
         LlmMessage::user_text("What is the capital of France? Respond with just the city name."),
     ];
-    let r1 = openai_target
-        .client
-        .query(&factual_params(history.clone(), "switch.t1.openai"))
-        .await?;
+    let r1 = query_client(
+        &openai_target.client,
+        factual_params(history.clone(), "switch.t1.openai"),
+    )
+    .await?;
     usage_report::record(
         openai_target.provider,
         &openai_target.model,
@@ -132,10 +136,11 @@ pub async fn run_session_switch(
     history.push(LlmMessage::user_text(
         "Now: what is the capital of Portugal? Respond with just the city name.",
     ));
-    let r2 = anthropic_target
-        .client
-        .query(&factual_params(history.clone(), "switch.t2.anthropic"))
-        .await?;
+    let r2 = query_client(
+        &anthropic_target.client,
+        factual_params(history.clone(), "switch.t2.anthropic"),
+    )
+    .await?;
     usage_report::record(
         anthropic_target.provider,
         &anthropic_target.model,
@@ -156,10 +161,11 @@ pub async fn run_session_switch(
         "List the two capitals you just told me, separated by a comma. \
          Respond with just `<city1>, <city2>` and nothing else.",
     ));
-    let r3 = openai_target
-        .client
-        .query(&factual_params(history, "switch.t3.openai"))
-        .await?;
+    let r3 = query_client(
+        &openai_target.client,
+        factual_params(history, "switch.t3.openai"),
+    )
+    .await?;
     usage_report::record(
         openai_target.provider,
         &openai_target.model,

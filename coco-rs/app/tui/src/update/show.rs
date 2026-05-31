@@ -214,7 +214,10 @@ pub(super) fn command_palette(state: &mut AppState) {
         query: String::new(),
         trigger_pos: 0,
     };
-    state.ui.active_suggestions = Some(suggestions);
+    state
+        .ui
+        .completion
+        .set_active(suggestions, 0..0, String::new());
     state.ui.interaction.popup = Some(ComposerPopupState::Slash(SlashPopupState));
 }
 
@@ -366,7 +369,7 @@ pub(super) fn settings(state: &mut AppState) {
     state.ui.show_modal(ModalState::Settings(
         crate::widgets::settings_panel::SettingsPanelState::new(
             &state.ui.theme_state,
-            state.ui.display_settings,
+            state.ui.display_settings.clone(),
         ),
     ));
 }

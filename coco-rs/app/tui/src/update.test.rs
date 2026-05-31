@@ -12,6 +12,7 @@ use crate::command::UserCommand;
 use crate::display_settings::DisplaySettingEditability;
 use crate::display_settings::DisplaySettings;
 use crate::events::TuiCommand;
+use crate::state::ActiveSuggestions;
 use crate::state::AppState;
 use crate::state::MemoryDialogEntry;
 use crate::state::MemoryDialogRowKind;
@@ -21,9 +22,14 @@ use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
+use crate::state::SlashCommandInfo;
 use crate::state::SlashCommandName;
+use crate::state::SuggestionKind;
 use crate::state::ui::ToastSeverity;
+use crate::widgets::suggestion_popup::SuggestionItem;
+use crate::widgets::suggestion_popup::SuggestionMeta;
 use coco_tui_ui::display::SyntaxHighlighting;
+use coco_types::CommandArgumentKind;
 
 fn drained_channel() -> (mpsc::Sender<UserCommand>, mpsc::Receiver<UserCommand>) {
     mpsc::channel(8)
@@ -128,6 +134,609 @@ async fn submit_slash_dispatches_typed_command_without_chat_echo() {
 }
 
 #[tokio::test]
+async fn autocomplete_tab_completes_selected_slash_without_submitting() {
+    let mut state = AppState::new();
+    state.session.available_commands = vec![SlashCommandInfo {
+        name: "clear".into(),
+        ..SlashCommandInfo::default()
+    }];
+    state.ui.input.textarea.set_text("/cl");
+    state.ui.input.textarea.set_cursor(3);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: vec![SuggestionItem {
+            label: "/clear".into(),
+            description: None,
+            metadata: None,
+        }],
+        selected: 0,
+        query: "cl".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "/clear ");
+    assert!(
+        rx.try_recv().is_err(),
+        "Tab accepts the suggestion but does not submit it"
+    );
+}
+
+#[tokio::test]
+async fn autocomplete_enter_completes_and_submits_no_arg_slash_command() {
+    let mut state = AppState::new();
+    state.session.available_commands = vec![SlashCommandInfo {
+        name: "clear".into(),
+        ..SlashCommandInfo::default()
+    }];
+    state.ui.input.textarea.set_text("/cl");
+    state.ui.input.textarea.set_cursor(3);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: vec![SuggestionItem {
+            label: "/clear".into(),
+            description: None,
+            metadata: None,
+        }],
+        selected: 0,
+        query: "cl".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert!(
+        state.ui.input.is_empty(),
+        "submitted command consumes input"
+    );
+    match rx.try_recv() {
+        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+            assert_eq!(name, "clear");
+            assert!(args.is_empty());
+        }
+        other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn autocomplete_enter_completes_arg_slash_command_without_submitting() {
+    let mut state = AppState::new();
+    state.session.available_commands = vec![SlashCommandInfo {
+        name: "add-dir".into(),
+        argument_hint: Some("<path>".into()),
+        argument_kind: CommandArgumentKind::DirectoryPath,
+        ..SlashCommandInfo::default()
+    }];
+    state.ui.input.textarea.set_text("/add");
+    state.ui.input.textarea.set_cursor(4);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: vec![SuggestionItem {
+            label: "/add-dir".into(),
+            description: None,
+            metadata: None,
+        }],
+        selected: 0,
+        query: "add".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "/add-dir ");
+    assert_eq!(state.ui.input.inline_hint.as_deref(), Some(" <path>"));
+    assert!(
+        rx.try_recv().is_err(),
+        "commands with argument hints should wait for user args"
+    );
+}
+
+#[tokio::test]
+async fn typing_after_arg_slash_completion_clears_inline_hint() {
+    let mut state = AppState::new();
+    state.session.available_commands = vec![SlashCommandInfo {
+        name: "add-dir".into(),
+        argument_hint: Some("<path>".into()),
+        argument_kind: CommandArgumentKind::DirectoryPath,
+        ..SlashCommandInfo::default()
+    }];
+    state.ui.input.textarea.set_text("/add");
+    state.ui.input.textarea.set_cursor(4);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: vec![SuggestionItem {
+            label: "/add-dir".into(),
+            description: None,
+            metadata: None,
+        }],
+        selected: 0,
+        query: "add".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+    assert_eq!(state.ui.input.text(), "/add-dir ");
+    assert_eq!(state.ui.input.inline_hint.as_deref(), Some(" <path>"));
+
+    handle_command(&mut state, TuiCommand::InsertChar('s'), &tx).await;
+
+    assert_eq!(state.ui.input.text(), "/add-dir s");
+    assert!(state.ui.input.inline_hint.is_none());
+}
+
+#[tokio::test]
+async fn autocomplete_tab_accepts_inline_ghost() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("then /cl");
+    state.ui.input.textarea.set_cursor("then /cl".len());
+    state.ui.input.set_inline_ghost(crate::state::InlineGhost {
+        text: "ear".into(),
+        insert_position: "then /cl".len(),
+        replace_start: "then /cl".len(),
+        replace_end: "then /cl".len(),
+        replacement: "ear".into(),
+        cursor_after_accept: "then /clear".len(),
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "then /clear");
+    assert_eq!(state.ui.input.textarea.cursor(), "then /clear".len());
+}
+
+#[tokio::test]
+async fn esc_dismisses_completion_until_token_changes() {
+    let mut state = AppState::new();
+    state.session.available_commands = vec![SlashCommandInfo {
+        name: "clear".into(),
+        ..SlashCommandInfo::default()
+    }];
+    state.ui.input.textarea.set_text("/cl");
+    state.ui.input.textarea.set_cursor(3);
+    crate::autocomplete::refresh_suggestions(&mut state);
+    assert!(state.ui.completion.active.is_some());
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+    assert!(state.ui.completion.active.is_none());
+
+    crate::autocomplete::refresh_suggestions(&mut state);
+    assert!(state.ui.completion.active.is_none());
+
+    state.ui.input.textarea.set_text("/cle");
+    state.ui.input.textarea.set_cursor(4);
+    crate::autocomplete::refresh_suggestions(&mut state);
+    assert!(state.ui.completion.active.is_some());
+}
+
+#[tokio::test]
+async fn prompt_suggestion_enter_submits_visible_suggestion() {
+    let mut state = AppState::new();
+    state.session.prompt_suggestions = vec!["Run the failing tests".into()];
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitPromptSuggestion, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::SubmitInput { content, .. }) => {
+            assert_eq!(content, "Run the failing tests");
+        }
+        other => panic!("expected SubmitInput on the wire, got {other:?}"),
+    }
+    assert!(state.ui.input.is_empty());
+    assert!(state.session.prompt_suggestions.is_empty());
+}
+
+#[tokio::test]
+async fn autocomplete_tab_completes_common_file_prefix() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@s");
+    state.ui.input.textarea.set_cursor(2);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::At,
+        items: vec![
+            SuggestionItem {
+                label: "src/lib.rs".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+            SuggestionItem {
+                label: "src/main.rs".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+        ],
+        selected: 0,
+        query: "s".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@src/");
+    assert_eq!(state.ui.input.textarea.cursor(), "@src/".len());
+}
+
+#[tokio::test]
+async fn autocomplete_tab_does_not_invent_slash_for_partial_common_prefix() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@s");
+    state.ui.input.textarea.set_cursor(2);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::At,
+        items: vec![
+            SuggestionItem {
+                label: "src/main.rs".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+            SuggestionItem {
+                label: "src/match.rs".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+        ],
+        selected: 0,
+        query: "s".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@src/ma");
+    assert_eq!(state.ui.input.textarea.cursor(), "@src/ma".len());
+}
+
+#[tokio::test]
+async fn autocomplete_tab_completes_common_quoted_file_prefix() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@\"/tmp/my pro");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::Path,
+        items: vec![
+            SuggestionItem {
+                label: "/tmp/my project/src/lib.rs".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+            SuggestionItem {
+                label: "/tmp/my project/src/main.rs".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+        ],
+        selected: 0,
+        query: "\"/tmp/my pro".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@\"/tmp/my project/src/\"");
+    assert_eq!(
+        state.ui.input.textarea.cursor(),
+        "@\"/tmp/my project/src/".len(),
+        "cursor stays inside the quotes while drilling down"
+    );
+}
+
+#[tokio::test]
+async fn autocomplete_tab_keeps_directory_common_prefix_slash_inside_quotes() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@\"/tmp/my pro");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::Path,
+        items: vec![
+            SuggestionItem {
+                label: "/tmp/my project/api/lib".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+            SuggestionItem {
+                label: "/tmp/my project/api/main".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+        ],
+        selected: 0,
+        query: "\"/tmp/my pro".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@\"/tmp/my project/api/\"");
+    assert_eq!(
+        state.ui.input.textarea.cursor(),
+        "@\"/tmp/my project/api/".len()
+    );
+}
+
+#[tokio::test]
+async fn autocomplete_enter_accepts_selected_path_not_common_prefix() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@s");
+    state.ui.input.textarea.set_cursor(2);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::At,
+        items: vec![
+            SuggestionItem {
+                label: "src/lib.rs".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+            SuggestionItem {
+                label: "src/main.rs".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            },
+        ],
+        selected: 1,
+        query: "s".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@src/main.rs ");
+}
+
+#[tokio::test]
+async fn final_quoted_file_accept_closes_quote_and_appends_space() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@\"/tmp/my pro");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::Path,
+        items: vec![SuggestionItem {
+            label: "/tmp/my project/main.rs".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path {
+                is_directory: false,
+            }),
+        }],
+        selected: 0,
+        query: "\"/tmp/my pro".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@\"/tmp/my project/main.rs\" ");
+    assert_eq!(
+        state.ui.input.textarea.cursor(),
+        state.ui.input.text().len()
+    );
+}
+
+#[tokio::test]
+async fn final_quoted_file_accept_replaces_drilldown_closing_quote() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@\"/tmp/my project/\"");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor("@\"/tmp/my project/".len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::Path,
+        items: vec![SuggestionItem {
+            label: "/tmp/my project/main.rs".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path {
+                is_directory: false,
+            }),
+        }],
+        selected: 0,
+        query: "\"/tmp/my project/".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@\"/tmp/my project/main.rs\" ");
+}
+
+#[tokio::test]
+async fn quoted_path_accept_escapes_quote_and_backslash() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@\"/tmp/a");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::Path,
+        items: vec![SuggestionItem {
+            label: "/tmp/a\"b\\c.txt".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path {
+                is_directory: false,
+            }),
+        }],
+        selected: 0,
+        query: "\"/tmp/a".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@\"/tmp/a\\\"b\\\\c.txt\" ");
+}
+
+#[tokio::test]
+async fn directory_command_enter_submits_current_input() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("/add-dir ./src");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::Directory,
+        items: vec![SuggestionItem {
+            label: "./src".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path { is_directory: true }),
+        }],
+        selected: 0,
+        query: "./src".into(),
+        trigger_pos: "/add-dir ".len(),
+    });
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+            assert_eq!(name, "add-dir");
+            assert_eq!(args, "./src");
+        }
+        other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn resume_completion_inserts_session_id_and_submits() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("/resume aut");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::CustomTitle,
+        items: vec![SuggestionItem {
+            label: "session-123".into(),
+            description: Some("Auth refactor".into()),
+            metadata: None,
+        }],
+        selected: 0,
+        query: "aut".into(),
+        trigger_pos: "/resume ".len(),
+    });
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+            assert_eq!(name, "resume");
+            assert_eq!(args, "session-123");
+        }
+        other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn mcp_resource_completion_preserves_server_name_on_insert() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@guide");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::At,
+        items: vec![SuggestionItem {
+            label: "Guide".into(),
+            description: Some("Project guide".into()),
+            metadata: Some(SuggestionMeta::McpResource {
+                server: "docs-server".into(),
+                uri: "file://guide".into(),
+            }),
+        }],
+        selected: 0,
+        query: "guide".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@docs-server:file://guide ");
+}
+
+#[tokio::test]
+async fn directory_insertion_quotes_trailing_slash_inside_quotes() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@\"/tmp/my pro");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::Path,
+        items: vec![SuggestionItem {
+            label: "/tmp/my project".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path { is_directory: true }),
+        }],
+        selected: 0,
+        query: "\"/tmp/my pro".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@\"/tmp/my project/\"");
+}
+
+#[tokio::test]
 async fn submit_rewind_undo_alias_dispatches_typed_command() {
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("/undo");
@@ -205,6 +814,26 @@ async fn queue_input_of_plain_text_still_queues() {
             assert!(images.is_empty());
         }
         other => panic!("expected QueueCommand on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn up_on_empty_input_requests_edit_for_first_queued_command() {
+    let mut state = AppState::new();
+    state
+        .session
+        .queued_commands
+        .push_back(crate::state::QueuedCommandDisplay {
+            id: "queued-1".to_string(),
+            preview: "first queued".to_string(),
+        });
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::EditQueuedCommand { id }) => assert_eq!(id, "queued-1"),
+        other => panic!("expected EditQueuedCommand on the wire, got {other:?}"),
     }
 }
 

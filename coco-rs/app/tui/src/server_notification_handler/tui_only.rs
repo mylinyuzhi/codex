@@ -172,6 +172,49 @@ pub(super) fn handle(
             crate::autocomplete::refresh_suggestions(state);
             true
         }
+        TuiOnlyEvent::QueuedCommandEditReady {
+            id: _,
+            prompt,
+            images,
+        } => {
+            state.ui.paste_manager.clear();
+            let mut text = prompt;
+            for image in images {
+                match base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    image.data_base64.as_bytes(),
+                ) {
+                    Ok(bytes) => {
+                        let pill = state
+                            .ui
+                            .paste_manager
+                            .add_image_data(bytes, image.media_type);
+                        if !text.is_empty() {
+                            text.push(' ');
+                        }
+                        text.push_str(&pill);
+                    }
+                    Err(e) => {
+                        state.ui.add_toast(Toast::warning(
+                            t!(
+                                "toast.queued_edit_image_failed",
+                                error = e.to_string().as_str()
+                            )
+                            .to_string(),
+                        ));
+                    }
+                }
+            }
+            state.ui.input.set_text(&text);
+            state.ui.input.textarea.set_cursor(text.len());
+            true
+        }
+        TuiOnlyEvent::QueuedCommandEditUnavailable { id: _, reason } => {
+            state.ui.add_toast(Toast::warning(
+                t!("toast.queued_edit_unavailable", reason = reason.as_str()).to_string(),
+            ));
+            true
+        }
         TuiOnlyEvent::OpenSessionBrowser { sessions } => {
             let saved_sessions = sessions
                 .into_iter()

@@ -174,12 +174,14 @@ fn concurrent_writes_are_serialized() {
     use std::sync::Arc;
     use std::sync::Barrier;
 
+    const WRITER_COUNT: usize = 20;
+
     let tmp = tempfile::tempdir().unwrap();
     let inbox = tmp.path().join("inbox.json");
 
-    let barrier = Arc::new(Barrier::new(20));
+    let barrier = Arc::new(Barrier::new(WRITER_COUNT));
     let mut handles = Vec::new();
-    for i in 0..20 {
+    for i in 0..WRITER_COUNT {
         let inbox = inbox.clone();
         let barrier = barrier.clone();
         handles.push(std::thread::spawn(move || {
@@ -197,25 +199,25 @@ fn concurrent_writes_are_serialized() {
                 std::fs::write(path, serde_json::to_string_pretty(&msgs).unwrap())?;
                 Ok(())
             })
-            .unwrap();
+            .map_err(|err| format!("writer-{i} failed to append: {err}"))
         }));
     }
     for h in handles {
-        h.join().unwrap();
+        h.join().expect("writer thread panicked").unwrap();
     }
 
     let content = std::fs::read_to_string(&inbox).unwrap();
     let msgs: Vec<TeammateMessage> = serde_json::from_str(&content).unwrap();
     assert_eq!(
         msgs.len(),
-        20,
-        "all 20 concurrent writes must land; got {}",
+        WRITER_COUNT,
+        "all {WRITER_COUNT} concurrent writes must land; got {}",
         msgs.len()
     );
-    let mut ids: Vec<i32> = msgs
+    let mut ids: Vec<usize> = msgs
         .iter()
         .filter_map(|m| m.from.strip_prefix("writer-").and_then(|s| s.parse().ok()))
         .collect();
     ids.sort();
-    assert_eq!(ids, (0..20).collect::<Vec<_>>());
+    assert_eq!(ids, (0..WRITER_COUNT).collect::<Vec<_>>());
 }

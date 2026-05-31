@@ -3278,10 +3278,11 @@ async fn agent_interrupt_current_work_errors_without_team_runtime() {
 }
 
 #[tokio::test]
-async fn context_usage_reports_accumulated_session_stats() {
-    // Install a StatsEmittingRunner so we can fold synthetic stats
-    // into session.stats, then call context/usage and verify the
-    // totals match.
+async fn context_usage_requires_runtime_analyzer_instead_of_session_stats() {
+    // Synthetic SessionResult stats still update cumulative accounting,
+    // but context/usage must use the runtime-backed context analyzer.
+    // This handler-level server has no SessionRuntime, so it should not
+    // fall back to accumulated session stats.
     let runner = Arc::new(StatsEmittingRunner {
         cost_usd: 0.03,
         input_tokens: 3000,
@@ -3300,23 +3301,20 @@ async fn context_usage_reports_accumulated_session_stats() {
     let _ = client.recv().await.unwrap().unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Query context/usage.
     client
         .send(req(3, "context/usage", serde_json::json!({})))
         .await
         .unwrap();
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
-        JsonRpcMessage::Response(r) => {
-            assert_eq!(r.result["total_tokens"], 4500);
-            assert_eq!(r.result["max_tokens"], 200000);
-            assert_eq!(r.result["model"], "claude-opus-4-6");
-            assert_eq!(r.result["is_auto_compact_enabled"], true);
-            // 4500 / 200000 = 2.25%
-            let pct = r.result["percentage"].as_f64().unwrap();
-            assert!((pct - 2.25).abs() < 0.01);
+        JsonRpcMessage::Error(e) => {
+            assert_eq!(e.code, error_codes::INVALID_REQUEST);
+            assert!(
+                e.message
+                    .contains("context usage requires an active session runtime")
+            );
         }
-        other => panic!("expected Response, got {other:?}"),
+        other => panic!("expected Error, got {other:?}"),
     }
 
     drop(client);

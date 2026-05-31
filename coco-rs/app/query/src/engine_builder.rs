@@ -18,7 +18,8 @@ use tokio_util::sync::CancellationToken;
 
 use coco_context::FileHistoryState;
 use coco_hooks::HookRegistry;
-use coco_inference::ApiClient;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::ModelRuntimeSource;
 use coco_messages::CostTracker;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolRegistry;
@@ -37,7 +38,7 @@ impl QueryEngine {
 
     pub fn new(
         config: QueryEngineConfig,
-        client: Arc<ApiClient>,
+        model_runtimes: Arc<ModelRuntimeRegistry>,
         tools: Arc<ToolRegistry>,
         cancel: CancellationToken,
         hooks: Option<Arc<HookRegistry>>,
@@ -55,16 +56,13 @@ impl QueryEngine {
         );
         Self {
             config,
-            client,
-            fallback_clients: Vec::new(),
-            plan_role_client: None,
-            recovery_policy: None,
             tools,
             cancel,
             hooks,
             async_hook_registry: None,
             hook_llm_handle: None,
-            role_client_cache: None,
+            model_runtimes,
+            model_runtime_source: ModelRuntimeSource::Role(coco_types::ModelRole::Main),
             pending_tool_use_summary: Arc::new(tokio::sync::Mutex::new(None)),
             command_queue: CommandQueue::new(),
             file_read_state: None,
@@ -157,7 +155,7 @@ impl QueryEngine {
     }
 
     /// Install the LLM-driven hook handler so `Prompt` / `Agent` hook
-    /// handlers route through `ApiClient` instead of falling back to
+    /// handlers route through the runtime registry instead of falling back to
     /// passthrough text. `SessionRuntime` builds one
     /// `Arc<dyn HookLlmHandle>` per session and clones it onto every
     /// engine via this method.
@@ -166,17 +164,50 @@ impl QueryEngine {
         self
     }
 
-    /// Install the shared `RoleClientCache` so `finalize_turn_post_tools`
-    /// can resolve `ModelRole::Fast` for the post-tool-batch summary
-    /// fork (TS `generateToolUseSummary`).
-    ///
-    /// Without this set, the engine never spawns a tool-use summary
-    /// fork — silent skip, no error. `SessionRuntime` builds one
-    /// `Arc<RoleClientCache>` per session and clones it onto every
-    /// engine via this method.
-    pub fn with_role_client_cache(mut self, cache: Arc<coco_inference::RoleClientCache>) -> Self {
-        self.role_client_cache = Some(cache);
+    /// Install the shared model runtime registry for helper LLM calls.
+    pub fn with_model_runtimes(mut self, registry: Arc<ModelRuntimeRegistry>) -> Self {
+        self.model_runtimes = registry;
         self
+    }
+
+    /// Select the runtime source used by this engine's agent loop.
+    pub fn with_model_runtime_source(mut self, source: ModelRuntimeSource) -> Self {
+        self.model_runtime_source = source;
+        self
+    }
+
+    pub(crate) fn runtime_snapshot(&self) -> Option<coco_inference::ModelRuntimeSnapshot> {
+        self.model_runtimes
+            .snapshot_for_source(self.model_runtime_source.clone())
+            .ok()
+    }
+
+    pub(crate) async fn notify_model_compaction(&self, query_source: &str) {
+        if let Ok(runtime) = self
+            .model_runtimes
+            .runtime_for_source(self.model_runtime_source.clone())
+        {
+            coco_inference::ModelRuntime::notify_active_compaction(
+                runtime,
+                query_source,
+                self.config.agent_id.as_deref(),
+            )
+            .await;
+        }
+    }
+
+    pub(crate) async fn notify_model_cache_deletion(&self, query_source: &str) {
+        if let Ok(runtime) = self
+            .model_runtimes
+            .runtime_for_source(self.model_runtime_source.clone())
+        {
+            coco_inference::ModelRuntime::notify_active_cache_deletion(
+                runtime,
+                query_source,
+                self.config.agent_id.as_deref(),
+            )
+            .await;
+        }
     }
 
     /// Install a transcript store for marble-origami persistence and
@@ -370,11 +401,10 @@ impl QueryEngine {
         let fork_messages: Vec<std::sync::Arc<coco_messages::Message>> =
             history.as_slice().to_vec();
         let rendered_system_prompt = self.config.system_prompt.clone().unwrap_or_default();
-        // Provider instance name is captured at the same point as `model_id`
-        // so post-turn forks can perform fast-mode-aware rate-limit selectivity
-        // (TS-parity gap closed by Phase 7). `ApiClient::provider()` returns
-        // the resolved provider name from `ProviderClientFingerprint`.
-        let provider = self.client.provider().to_string();
+        let provider = self
+            .runtime_snapshot()
+            .map(|snapshot| snapshot.provider)
+            .unwrap_or_default();
         self.save_cache_safe_params(coco_types::CacheSafeParams {
             rendered_system_prompt,
             model_id: self.config.model_id.clone(),
@@ -755,65 +785,6 @@ impl QueryEngine {
     /// "no task runtime configured" error.
     pub fn with_task_handle(mut self, handle: coco_tool_runtime::BackgroundTaskHandleRef) -> Self {
         self.task_handle = Some(handle);
-        self
-    }
-
-    /// Install a single fallback [`ApiClient`]. Convenience wrapper
-    /// for the common one-tier case; equivalent to
-    /// Replace the engine's primary `ApiClient`. Used by the
-    /// subagent factory in [`crate::agent_adapter::QueryEngineAdapter`]
-    /// to inject a per-`ModelRole` client when spawning a child:
-    /// the factory rebuilds the engine via
-    /// `SessionRuntime::build_engine_from_config`, then overrides the
-    /// client to the role-resolved one before handing the engine to
-    /// the runner. (P1)
-    ///
-    /// Production callers go through the factory; manual use is
-    /// rare. The method preserves all other engine state (config,
-    /// hooks, registries, fallback chain).
-    #[must_use]
-    pub fn with_client(mut self, client: Arc<ApiClient>) -> Self {
-        self.client = client;
-        self
-    }
-
-    /// `.with_fallback_clients(vec![client])`.
-    pub fn with_fallback_client(mut self, client: Arc<ApiClient>) -> Self {
-        self.fallback_clients = vec![client];
-        self
-    }
-
-    /// Install an ordered chain of fallback [`ApiClient`]s. The
-    /// engine walks slot 0 → slot 1 → … on capacity-error streaks
-    /// via [`ModelRuntime::advance`]. Empty input = no fallback.
-    pub fn with_fallback_clients(mut self, clients: Vec<Arc<ApiClient>>) -> Self {
-        self.fallback_clients = clients;
-        self
-    }
-
-    /// Install a half-open recovery policy for the session. Enables
-    /// periodic probes back to primary after a fallback switch;
-    /// see [`coco_config::FallbackRecoveryPolicy`]. Omitting this
-    /// call keeps the default sticky-fallback behavior.
-    pub fn with_recovery_policy(mut self, policy: coco_config::FallbackRecoveryPolicy) -> Self {
-        self.recovery_policy = Some(policy);
-        self
-    }
-
-    /// Install the pre-resolved `ApiClient` for `ModelRole::Plan` so
-    /// the main loop can swap to it when `permission_mode == Plan`.
-    ///
-    /// Wired by `SessionRuntime::wire_engine` from
-    /// `client_for_role(ModelRole::Plan)`. Pass `None` (the default)
-    /// to keep the main loop on the Main client across all permission
-    /// modes — preserves pre-feature behaviour.
-    ///
-    /// TS parity behaviour: `getRuntimeMainLoopModel`
-    /// (utils/model/model.ts:145-167) — but encoded as a generic role
-    /// slot rather than alias-conditional logic, since coco-rs is
-    /// multi-LLM.
-    pub fn with_plan_role_client(mut self, client: Option<Arc<ApiClient>>) -> Self {
-        self.plan_role_client = client;
         self
     }
 

@@ -693,6 +693,8 @@ pub struct SessionStartedParams {
     pub protocol_version: String,
     pub cwd: String,
     pub model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provider: String,
     pub permission_mode: String,
     /// Builtin + MCP tool names.
     #[serde(default)]
@@ -1453,6 +1455,8 @@ pub struct ModelRoleChangedParams {
     pub role: crate::ModelRole,
     pub model_id: String,
     pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
     /// `None` ⇒ engine falls back to the model's
     /// `default_thinking_level`. `Some(_)` ⇒ explicit user choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1761,6 +1765,16 @@ pub enum TuiOnlyEvent {
     AvailableCommandsRefreshed {
         commands: Vec<crate::SlashCommandInfo>,
     },
+    /// Queued command was removed from the engine queue and is ready to
+    /// restore into the composer for editing.
+    QueuedCommandEditReady {
+        id: String,
+        prompt: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<QueuedCommandEditImage>,
+    },
+    /// The requested queued command could not be restored.
+    QueuedCommandEditUnavailable { id: String, reason: String },
     /// Open the resume picker inside the running TUI session.
     ///
     /// TS parity: `/resume` with no args opens the saved-chat picker;
@@ -1991,6 +2005,14 @@ pub enum TuiOnlyEvent {
     /// `Updated N / No changes / Failed: …` toast — keeping all
     /// user-visible text generation on the UI side.
     SkillOverridesSaved { result: SkillOverridesSaveResult },
+}
+
+/// Image payload paired with a queued command edit restore.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedCommandEditImage {
+    pub media_type: String,
+    pub data_base64: String,
 }
 
 /// Outcome of a `/skills` dialog save dispatch. CLI bridge populates

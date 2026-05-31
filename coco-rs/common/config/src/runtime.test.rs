@@ -455,8 +455,8 @@ fn settings_inline_provider_block_equals_providers_json_split() {
 #[test]
 fn test_role_validation_rejects_unknown_model_id() {
     // Plan §11: typo'd model_id in `settings.models.main` must
-    // surface at config build, not silently degrade ApiClient to the
-    // legacy mock path.
+    // surface at config build, not silently degrade runtime construction
+    // to the legacy mock path.
     let settings = settings_with(Settings {
         model: Some("openai/gpt-typo".into()),
         ..Default::default()

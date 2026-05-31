@@ -48,6 +48,7 @@ pub(super) fn handle(
         // === Session lifecycle ===
         ServerNotification::SessionStarted(p) => {
             state.session.session_id = Some(p.session_id);
+            state.session.output_style = p.output_style;
             state.session.session_usage = None;
             state.session.token_usage = crate::state::session::TokenUsage::default();
             // Initialise thinking_effort from the model's registered
@@ -59,6 +60,9 @@ pub(super) fn handle(
                 .and_then(|info| info.default_thinking_level)
                 .unwrap_or(coco_types::ReasoningEffort::Auto);
             state.session.model = p.model;
+            if !p.provider.is_empty() {
+                state.session.provider = p.provider;
+            }
             // Resolve the current git branch before storing cwd so a
             // failure (cwd outside a repo, detached HEAD) leaves
             // `git_branch = None` rather than a stale value. Stdout
@@ -191,7 +195,6 @@ pub(super) fn handle(
             true
         }
         ServerNotification::ContextUsageWarning(p) => {
-            state.session.context_usage_percent = Some(p.percent_left);
             // The next API response will deliver an accurate token count;
             // until then, drop the warning so we don't show a stale value.
             // TS: `compactWarningHook.ts` gates on `compactWarningStore`.
@@ -493,6 +496,7 @@ pub(super) fn handle(
                 crate::state::ModelBinding {
                     model_id: p.model_id.clone(),
                     provider: p.provider.clone(),
+                    context_window: p.context_window,
                     effort: p.effort,
                 },
             );

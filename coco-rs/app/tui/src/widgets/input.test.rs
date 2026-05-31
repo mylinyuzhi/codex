@@ -72,3 +72,54 @@ fn input_render_model_streaming_forces_queue_title_and_normal_prompt() {
     assert_eq!(model.display_text, "! cargo test");
     assert_eq!(model.title, " Queue Input ");
 }
+
+#[test]
+fn input_render_model_appends_inline_hint_after_text() {
+    let mut input = input("/add-dir ");
+    input.set_inline_hint(" <path>");
+
+    let model = InputRenderModel::build(&input, false, false, None, false, None);
+
+    assert_eq!(model.display_text, "/add-dir ");
+    assert_eq!(model.inline_hint.as_deref(), Some(" <path>"));
+    assert!(!model.is_placeholder);
+}
+
+#[test]
+fn input_render_model_places_inline_ghost_at_cursor() {
+    let mut input = input("abc xyz");
+    input.textarea.set_cursor(3);
+    input.set_inline_ghost(crate::state::InlineGhost {
+        text: "def".into(),
+        insert_position: 3,
+        replace_start: 3,
+        replace_end: 3,
+        replacement: "def".into(),
+        cursor_after_accept: 6,
+    });
+
+    let model = InputRenderModel::build(&input, false, false, None, false, None);
+
+    assert_eq!(model.display_text, "abc xyz");
+    let ghost = model.inline_ghost.expect("rendered ghost");
+    assert_eq!(ghost.byte_pos, 3);
+    assert_eq!(ghost.text, "def");
+}
+
+#[test]
+fn input_render_model_hides_stale_inline_ghost() {
+    let mut input = input("abc");
+    input.textarea.set_cursor(2);
+    input.set_inline_ghost(crate::state::InlineGhost {
+        text: "d".into(),
+        insert_position: 3,
+        replace_start: 3,
+        replace_end: 3,
+        replacement: "d".into(),
+        cursor_after_accept: 4,
+    });
+
+    let model = InputRenderModel::build(&input, false, false, None, false, None);
+
+    assert!(model.inline_ghost.is_none());
+}

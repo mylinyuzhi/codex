@@ -95,15 +95,17 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
         return KeybindingContext::Confirmation;
     }
 
-    // Autocomplete popup active: Up/Down/Tab/Esc route to suggestion
-    // navigation; all other keys fall through to normal input editing.
+    // Autocomplete popup active: Up/Down/Tab/Enter/Esc route to
+    // suggestion navigation; all other keys fall through to normal input
+    // editing.
     //
     // Gate on non-empty items — async triggers (File/Symbol) install the
     // query before search results arrive, and we must not hijack arrow
     // keys during that window.
     if state
         .ui
-        .active_suggestions
+        .completion
+        .active
         .as_ref()
         .is_some_and(|s| !s.items.is_empty())
     {
@@ -209,6 +211,27 @@ fn resolve_key(
         return (Some(TuiCommand::CopyPickerWriteToFile), "copy_picker");
     }
 
+    if matches!(ctx, KeybindingContext::Chat)
+        && key.modifiers == KeyModifiers::NONE
+        && prompt_suggestion_visible(state)
+    {
+        match key.code {
+            KeyCode::Tab | KeyCode::Right => {
+                return (
+                    Some(TuiCommand::AcceptPromptSuggestion),
+                    "prompt_suggestion",
+                );
+            }
+            KeyCode::Enter => {
+                return (
+                    Some(TuiCommand::SubmitPromptSuggestion),
+                    "prompt_suggestion",
+                );
+            }
+            _ => {}
+        }
+    }
+
     // Layer 1: TS-defined bindings via the resolver.
     match state.ui.kb_handle.resolve_key(key, ctx) {
         crate::keybinding_resolver::ResolverResult::Action(action) => {
@@ -222,9 +245,8 @@ fn resolve_key(
             return (None, "resolver_no_handler");
         }
         crate::keybinding_resolver::ResolverResult::Pending => {
-            // Caller should render a "ctrl+x …" chord status hint.
-            // We don't have a dedicated TuiCommand for that yet, so
-            // swallow the keystroke. Status-bar wiring is P8 follow-up.
+            // The status bar reads the pending chord directly from
+            // `kb_handle`, so no TuiCommand is needed for this key.
             return (None, "chord_pending");
         }
         crate::keybinding_resolver::ResolverResult::Consumed => return (None, "consumed"),
@@ -383,7 +405,14 @@ fn map_autocomplete_key(key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
         KeyCode::Up => Some(TuiCommand::SurfacePrev),
         KeyCode::Down => Some(TuiCommand::SurfaceNext),
-        KeyCode::Tab | KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(TuiCommand::SurfacePrev)
+        }
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(TuiCommand::SurfaceNext)
+        }
+        KeyCode::Tab => Some(TuiCommand::AutocompleteAccept),
+        KeyCode::Enter => Some(TuiCommand::AutocompleteSubmit),
         KeyCode::Esc => Some(TuiCommand::Cancel),
         _ => None,
     }
@@ -443,6 +472,12 @@ fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char(',') if ctrl => Some(TuiCommand::ShowSettings),
 
         // Tab
+        KeyCode::Tab if state.ui.input.active_inline_ghost().is_some() => {
+            Some(TuiCommand::AutocompleteAccept)
+        }
+        KeyCode::Tab if prompt_suggestion_visible(state) => {
+            Some(TuiCommand::AcceptPromptSuggestion)
+        }
         KeyCode::Tab => Some(TuiCommand::TogglePlanMode),
         KeyCode::BackTab => Some(TuiCommand::CyclePermissionMode),
 
@@ -476,6 +511,9 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         // keymap = "input:newline"
         KeyCode::Enter if shift || alt => Some(TuiCommand::InsertNewline),
         KeyCode::Enter if is_streaming => Some(TuiCommand::QueueInput),
+        KeyCode::Enter if prompt_suggestion_visible(state) => {
+            Some(TuiCommand::SubmitPromptSuggestion)
+        }
         // keymap = "input:submit"
         KeyCode::Enter => Some(TuiCommand::SubmitInput),
 
@@ -499,6 +537,9 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Left => Some(TuiCommand::CursorLeft),
         // keymap = "input:word_right" (alternate combo)
         KeyCode::Right if ctrl || alt => Some(TuiCommand::WordRight),
+        KeyCode::Right if prompt_suggestion_visible(state) => {
+            Some(TuiCommand::AcceptPromptSuggestion)
+        }
         // keymap = "input:cursor_right" (alternate combo)
         KeyCode::Right => Some(TuiCommand::CursorRight),
         KeyCode::Up if alt => Some(TuiCommand::ScrollUp),
@@ -550,6 +591,16 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
 
         _ => None,
     }
+}
+
+fn prompt_suggestion_visible(state: &AppState) -> bool {
+    state.ui.input.is_empty()
+        && state.session.queued_commands.is_empty()
+        && state
+            .session
+            .prompt_suggestions
+            .last()
+            .is_some_and(|s| !s.is_empty())
 }
 
 #[cfg(test)]

@@ -31,13 +31,11 @@ use tracing::info;
 use tracing::warn;
 
 use coco_commands::CommandRegistry;
-use coco_config::FallbackRecoveryPolicy;
 use coco_config::RuntimeConfig;
 use coco_context::FileHistorySnapshotSink;
 use coco_context::FileHistoryState;
 use coco_context::FileReadState;
 use coco_hooks::HookRegistry;
-use coco_inference::ApiClient;
 use coco_memory::SessionMemoryService;
 use coco_messages::CostTracker;
 use coco_messages::Message;
@@ -313,9 +311,7 @@ pub struct SessionRuntimeBuildOpts<'a> {
     pub system_prompt: String,
     pub bypass_permissions_available: bool,
     pub permission_mode: PermissionMode,
-    pub client: Arc<ApiClient>,
-    pub fallback_clients: Vec<Arc<ApiClient>>,
-    pub recovery_policy: Option<FallbackRecoveryPolicy>,
+    pub model_runtimes: Option<Arc<coco_inference::ModelRuntimeRegistry>>,
     pub tools: Arc<ToolRegistry>,
     pub session_manager: Arc<SessionManager>,
     pub fast_model_spec: Option<ModelSpec>,
@@ -397,27 +393,6 @@ pub struct RoleOverride {
 /// assembled via [`SessionRuntime::build_engine`].
 pub struct SessionRuntime {
     // ── immutable resources (never change after build) ─────────────────
-    /// Live Main-role [`ApiClient`]. Wrapped in [`RwLock`] so
-    /// [`Self::apply_role_override`] can hot-swap it to a freshly-built
-    /// client when the TUI picker selects a new Main model — without
-    /// restarting the session. Read via [`Self::main_client`], which
-    /// clones the inner `Arc` under a brief read lock.
-    ///
-    /// In-flight turns are unaffected: each turn's [`QueryEngine`]
-    /// captures a clone of the current `Arc<ApiClient>` at build time
-    /// (`build_engine` / `build_engine_from_config`), so a mid-turn
-    /// swap only takes effect on the **next** turn build.
-    client: Arc<RwLock<Arc<ApiClient>>>,
-    /// Main-role fallback chain. Read by [`Self::wire_engine`] to install
-    /// `with_fallback_clients` on every per-turn engine. **Not** swapped
-    /// when the Main client hot-swaps via [`Self::apply_role_override`]:
-    /// fallbacks are a recovery mechanism tied to the user's configured
-    /// fallback specs in `~/.coco/settings.json`, independent of an
-    /// in-session Main picker selection.
-    fallback_clients: Vec<Arc<ApiClient>>,
-    /// Half-open recovery policy for the Main role. `None` ⇒ sticky
-    /// fallback semantics. Read by [`Self::wire_engine`].
-    recovery_policy: Option<FallbackRecoveryPolicy>,
     /// Tool registry shared by every engine instance. Read by
     /// [`Self::build_engine`] / [`Self::build_engine_from_config`].
     tools: Arc<ToolRegistry>,
@@ -439,6 +414,7 @@ pub struct SessionRuntime {
     pub runtime_config: Arc<RuntimeConfig>,
     pub session_manager: Arc<SessionManager>,
     pub fast_model_spec: Option<ModelSpec>,
+    model_runtimes: Arc<coco_inference::ModelRuntimeRegistry>,
     side_query: coco_tool_runtime::SideQueryHandle,
     pub auto_title_enabled: bool,
     /// SwarmMailbox handle installed on every engine via `with_mailbox`.
@@ -565,15 +541,6 @@ pub struct SessionRuntime {
     /// session's jsonl on the next snapshot. `None` when
     /// file_checkpointing is disabled.
     file_history_sink_session_id: Option<Arc<std::sync::RwLock<String>>>,
-    /// Shared per-role `ApiClient` cache. The same `Arc` is handed to
-    /// every subsystem that needs role-aware dispatch (hook LLM, fork
-    /// dispatcher, side query, …) so a given role resolves to one
-    /// `ApiClient` instance with a single `CacheBreakDetector` regardless
-    /// of caller. Required so per-role-configured users (e.g.
-    /// `models.subagent = openai/gpt-5` while `models.main =
-    /// anthropic/...`) actually route subagents through their
-    /// configured provider instead of silently reusing Main's client.
-    role_client_cache: Arc<coco_inference::RoleClientCache>,
     /// Agent-spawn handle used by `AgentTool` / coordinator-mode
     /// workers. Late-bound after `TaskRuntime` is attached because
     /// `SwarmAgentHandle` requires the canonical TaskManager-backed
@@ -738,9 +705,7 @@ impl SessionRuntime {
             system_prompt,
             bypass_permissions_available,
             permission_mode,
-            client,
-            fallback_clients,
-            recovery_policy,
+            model_runtimes,
             tools,
             session_manager,
             fast_model_spec,
@@ -777,8 +742,15 @@ impl SessionRuntime {
 
         // FileReadState — @mention dedup + Read tool dedup.
         let file_read_state = Arc::new(RwLock::new(FileReadState::new()));
+        let model_runtimes = match model_runtimes {
+            Some(model_runtimes) => model_runtimes,
+            None => Arc::new(coco_inference::ModelRuntimeRegistry::new(
+                runtime_config.clone(),
+                Some(crate::provider_login::shared_resolver()),
+            )?),
+        };
         let side_query: coco_tool_runtime::SideQueryHandle = Arc::new(
-            crate::side_query_impl::SideQueryAdapter::new(client.clone(), runtime_config.clone()),
+            crate::side_query_impl::SideQueryAdapter::new(model_runtimes.clone(), model_id.clone()),
         );
 
         // Per-project filesystem layout — one `Arc<ProjectPaths>` shared
@@ -1145,8 +1117,10 @@ impl SessionRuntime {
             total_token_budget: cli
                 .max_tokens
                 .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
-            prompt_cache: client
-                .supports_prompt_cache()
+            prompt_cache: model_runtimes
+                .snapshot_for_role(ModelRole::Main)
+                .ok()
+                .is_some_and(|snapshot| snapshot.supports_prompt_cache)
                 .then(|| coco_types::PromptCacheConfig {
                     mode: coco_types::PromptCacheMode::Auto,
                     ttl: coco_types::CacheTtl::OneHour,
@@ -1185,31 +1159,12 @@ impl SessionRuntime {
 
         let auto_title_enabled = runtime_config.settings.merged.session.auto_title;
 
-        // Shared per-role `ApiClient` cache. Both
-        // `SessionRuntime::client_for_role` and `QueryHookLlm` consume
-        // this `Arc` — one cache means a given role's
-        // `CacheBreakDetector` state stays continuous regardless of
-        // which subsystem dispatched the call.
-        // Share the session's single `AuthService` resolver so non-Main roles
-        // pointed at an OAuth-subscription provider (e.g. `openai-chatgpt`)
-        // authenticate — and so a multi-provider/multi-role mix (Main on one
-        // logged-in provider, Explore on another, Fast on an api-key provider)
-        // all read from the same credential cells.
-        let role_client_cache = Arc::new(
-            coco_inference::RoleClientCache::new(runtime_config.clone(), client.clone())
-                .with_resolver(Some(crate::provider_login::shared_resolver())),
-        );
-
-        // LLM-driven hook handler. `for_session` pre-resolves
-        // `ModelRole::HookAgent` against the shared cache (spec-equality
-        // shortcut reuses the Main `Arc` when the role is unconfigured),
-        // so users who set `models.hook_agent` in settings.json get that
-        // model for hook evaluations. Per-hook `model` overrides parse
-        // as `ModelRole` and route through the same cache. TS parity:
-        // `execPromptHook` / `execAgentHook` with `hook.model` override.
-        let hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle> = Arc::new(
-            coco_query::hook_llm::QueryHookLlm::for_session(role_client_cache.clone()).await,
-        );
+        // LLM-driven hook handler. It resolves HookAgent and per-hook
+        // role overrides through the shared ModelRuntimeRegistry.
+        // TS parity: `execPromptHook` / `execAgentHook` with
+        // `hook.model` override.
+        let hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle> =
+            Arc::new(coco_query::hook_llm::QueryHookLlm::for_session(model_runtimes.clone()).await);
         // Main-session transcript store. Constructed once so the
         // file-history sink, the per-turn message append in
         // `engine_finalize_turn`, and the agent-transcript persistence
@@ -1300,9 +1255,6 @@ impl SessionRuntime {
         Ok(Arc::new(Self {
             original_cwd: session_original_cwd,
             current_cwd: session_current_cwd,
-            client: Arc::new(RwLock::new(client)),
-            fallback_clients,
-            recovery_policy,
             tools,
             command_registry,
             skill_manager,
@@ -1310,6 +1262,7 @@ impl SessionRuntime {
             runtime_config,
             session_manager,
             fast_model_spec,
+            model_runtimes,
             side_query,
             auto_title_enabled,
             mailbox,
@@ -1344,7 +1297,6 @@ impl SessionRuntime {
                 h
             })),
             file_history_sink_session_id,
-            role_client_cache,
             // Late-bound — `attach_agent_handle()` installs after the
             // Arc<SessionRuntime> is constructed so the
             // QueryEngineAdapter factory can close over Arc<Self>.
@@ -1585,6 +1537,10 @@ impl SessionRuntime {
         self.side_query.clone()
     }
 
+    pub fn model_runtimes(&self) -> Arc<coco_inference::ModelRuntimeRegistry> {
+        self.model_runtimes.clone()
+    }
+
     /// Best-effort PID-registry live patch — push the human-readable
     /// session name into the `<config_home>/sessions/<pid>.json` file
     /// that `coco ps` reads. Silently no-ops when the session isn't
@@ -1663,72 +1619,6 @@ impl SessionRuntime {
         self.memory_runtime.as_ref()
     }
 
-    /// Snapshot the current Main-role [`ApiClient`]. Cloning is cheap
-    /// (single `Arc` increment under a brief read lock). Callers
-    /// retain the snapshot for the duration of one operation — a
-    /// concurrent [`Self::apply_role_override`] for Main may swap the
-    /// inner `Arc`, but a held snapshot keeps the old client alive
-    /// until its last reference drops, so in-flight turns finish
-    /// against their captured client without interruption.
-    pub async fn main_client(&self) -> Arc<ApiClient> {
-        self.client.read().await.clone()
-    }
-
-    /// Resolve an `ApiClient` for the given `ModelRole`. Consults the
-    /// in-memory [`Self::role_overrides`] first; falls back to the
-    /// shared [`coco_inference::RoleClientCache`] (which reads
-    /// `runtime_config.model_roles`) on miss.
-    ///
-    /// Why this exists: the previous design assumed every model call
-    /// went through `runtime.client` (= Main). Multi-provider configs
-    /// like `models.subagent = openai/gpt-5` would silently reuse
-    /// Main's client, defeating the user's per-role routing. Layered
-    /// overrides extend that path with session-local TUI picker
-    /// selections without touching settings.json.
-    ///
-    /// ## Main role
-    ///
-    /// For `role == Main` this always returns the live main client
-    /// (see [`Self::main_client`]). When an override is installed via
-    /// [`Self::apply_role_override`], the swap happens inside that
-    /// method so the next call here sees the new client — there's
-    /// no second build-and-swap on the read path.
-    ///
-    /// ## Known gap: unconfigured non-Main role fallback
-    ///
-    /// When a non-Main role like Plan has no `model_roles.<role>`
-    /// entry, `resolve_model_roles` plants Main's spec as its
-    /// fallback. The shared [`coco_inference::RoleClientCache`]
-    /// captures the Main client at session bootstrap and continues to
-    /// return that snapshot for the spec-equality fallback path —
-    /// even after a Main hot-swap. Most users configure each role
-    /// explicitly, so this affects only the unconfigured-fallback
-    /// case. Tracked as a follow-up to plumb the live main handle
-    /// into `RoleClientCache`.
-    pub async fn client_for_role(&self, role: ModelRole) -> anyhow::Result<Arc<ApiClient>> {
-        if role == ModelRole::Main {
-            return Ok(self.main_client().await);
-        }
-        let override_spec = {
-            let overrides = self.role_overrides.read().await;
-            overrides.get(&role).map(|ov| ov.spec.clone())
-        };
-        if let Some(spec) = override_spec {
-            let retry: coco_inference::RetryConfig = self.runtime_config.api.retry.clone().into();
-            return coco_inference::model_factory::build_api_client(
-                &self.runtime_config,
-                &spec,
-                retry,
-                Some(&crate::provider_login::shared_resolver()),
-            )
-            .map_err(anyhow::Error::from);
-        }
-        self.role_client_cache
-            .resolve(role)
-            .await
-            .map_err(anyhow::Error::from)
-    }
-
     /// Resolve a role to `(spec, effort)`, layering overrides above
     /// `runtime_config.model_roles`. Returns `None` only when the role
     /// is not configured anywhere (model picker / engine consumers
@@ -1758,71 +1648,40 @@ impl SessionRuntime {
     /// picker, or edit settings to make the change durable.
     ///
     /// For `role == Main` this also rewrites
-    /// `engine_config.{model_id, thinking_level}` AND hot-swaps the
-    /// runtime's live Main [`ApiClient`] (see [`Self::main_client`])
-    /// so the next turn's API calls hit the picked provider/model,
-    /// not the bootstrap-resolved one. In-flight turns are unaffected
-    /// — they captured the old `Arc<ApiClient>` at engine-build time.
-    ///
-    /// Returns `Err` when the new Main spec can't be built into an
-    /// `ApiClient` (e.g. provider not registered, model factory
-    /// error). In that case the override IS NOT stored — the picker's
-    /// optimistic mirror should revert and a toast should surface the
-    /// failure. Non-Main role builds happen lazily in
-    /// [`Self::client_for_role`], so non-Main overrides always
-    /// succeed at install time.
+    /// `engine_config.{model_id, thinking_level}` so UI and tool
+    /// context mirrors see the new identity on the next turn.
     pub async fn apply_role_override(
         &self,
         role: ModelRole,
         ov: RoleOverride,
     ) -> anyhow::Result<()> {
         let effort = ov.effort;
+        let spec = ov.spec.clone();
         let model_id = ov.spec.model_id.clone();
 
         if role == ModelRole::Main {
-            // Build the replacement client BEFORE mutating any state.
-            // Fail-fast: if the spec is invalid the override never
-            // lands, so the picker / status bar stay coherent with
-            // the still-bootstrap-resolved Main client.
-            let retry: coco_inference::RetryConfig = self.runtime_config.api.retry.clone().into();
-            let new_client = coco_inference::model_factory::build_api_client(
-                &self.runtime_config,
-                &ov.spec,
-                retry,
-                Some(&crate::provider_login::shared_resolver()),
-            )
-            .map_err(anyhow::Error::from)?;
-            // Store the override first so concurrent readers (e.g. a
-            // turn finishing at the same instant) see the new spec
-            // when they consult `role_overrides`.
+            self.model_runtimes
+                .rebind_role_primary(role, spec)
+                .map_err(anyhow::Error::from)?;
+            // Store the override only after the registry accepted the
+            // replacement runtime.
             {
                 let mut overrides = self.role_overrides.write().await;
                 overrides.insert(role, ov);
             }
-            // Engine config: project new model_id + effort budget.
-            // The Arc<ApiClient> swap below makes the actual wire
-            // call route through the new model; this projection makes
-            // every config consumer (`tool_context`, finalize hooks,
-            // SDK params) see the new identity too.
             self.update_engine_config(move |cfg| {
                 cfg.model_id = model_id;
                 cfg.thinking_level =
                     effort.map(|e| thinking_level_for_effort_from(&cfg.model_id, e));
             })
             .await;
-            // Atomic-ish swap of the live Main client. Concurrent
-            // turn-build readers either see the old (snapshot via
-            // `main_client()` before the lock acquires) or the new
-            // — never a torn state.
-            {
-                let mut g = self.client.write().await;
-                *g = new_client;
-            }
             return Ok(());
         }
 
-        // Non-Main: storage-only. `client_for_role` builds the
-        // override's client lazily on demand.
+        let spec = ov.spec.clone();
+        self.model_runtimes
+            .rebind_role_primary(role, spec)
+            .map_err(anyhow::Error::from)?;
         let mut overrides = self.role_overrides.write().await;
         overrides.insert(role, ov);
         Ok(())
@@ -1830,9 +1689,7 @@ impl SessionRuntime {
 
     /// Update only the `effort` on an existing role override, preserving
     /// the spec. The Main role's `engine_config.thinking_level` is
-    /// rewritten so the next turn picks up the change. **No client
-    /// rebuild** — effort lives at the call-options layer, so the
-    /// current Main `Arc<ApiClient>` keeps applying.
+    /// rewritten so the next turn picks up the change.
     ///
     /// When the role has no prior override, the current
     /// `runtime_config.model_roles` spec is captured and stored
@@ -1859,40 +1716,6 @@ impl SessionRuntime {
         }
     }
 
-    /// Select the `ApiClient` to use for the *current turn* when
-    /// `permission_mode == Plan`. Returns `None` when no swap is needed
-    /// — callers stay on the engine's default Main client.
-    ///
-    /// TS parity behaviour: `getRuntimeMainLoopModel`
-    /// (utils/model/model.ts:145-167). TS encodes the plan-mode swap
-    /// via the `opusplan`/`haiku` aliases on the user's main model;
-    /// coco-rs is multi-LLM and instead extends the `ModelRole::Plan`
-    /// slot (previously subagent-only) to also drive the main-session
-    /// model choice when in plan mode. Users opt in by setting
-    /// `models.plan = <provider>/<model_id>` in their settings.json;
-    /// without a Plan slot, the fallback chain (`runtime.rs:507`)
-    /// returns the Main client and this returns `Some(main)` — same
-    /// observable behaviour as the pre-change path.
-    ///
-    /// `exceeds_threshold` is the live "most recent assistant message
-    /// context > N" flag computed at the engine turn entry. TS bypasses
-    /// the swap when this is true to avoid truncation; the Rust
-    /// counterpart honours the same intent — returning `None` here is
-    /// equivalent to TS returning `mainLoopModel` unchanged.
-    pub async fn resolve_plan_mode_client(
-        &self,
-        permission_mode: PermissionMode,
-        exceeds_threshold: bool,
-    ) -> Option<Arc<ApiClient>> {
-        if permission_mode != PermissionMode::Plan {
-            return None;
-        }
-        if exceeds_threshold {
-            return None;
-        }
-        self.client_for_role(ModelRole::Plan).await.ok()
-    }
-
     /// Snapshot the current `QueryEngineConfig` (clones the inner struct).
     /// Per-turn engine builds use this so mid-session mutations
     /// (`set_permission_mode`, `/clear` regen) propagate immediately.
@@ -1904,21 +1727,47 @@ impl SessionRuntime {
     /// stored `engine_config`. Both runners share this so the wiring
     /// can never drift. The session-memory text is refreshed from disk
     /// before each build so a fresh extraction shows up on the next turn.
-    ///
-    /// The Main client is snapshotted via [`Self::main_client`] so a
-    /// hot-swap that landed between turns is picked up here — each
-    /// per-turn engine captures the current `Arc<ApiClient>` and
-    /// keeps it for the duration of the turn.
     pub async fn build_engine(&self, cancel: CancellationToken) -> QueryEngine {
         let engine_config = self.current_engine_config().await;
         let engine = QueryEngine::new(
             engine_config,
-            self.main_client().await,
+            self.model_runtimes.clone(),
             self.tools.clone(),
             cancel,
             Some(self.hook_registry.clone()),
         );
         self.wire_engine(engine, None).await
+    }
+
+    pub async fn analyze_main_context(
+        &self,
+    ) -> coco_query::context_analysis::Result<coco_query::context_analysis::ContextUsageReport>
+    {
+        let history = {
+            let guard = self.history.lock().await;
+            guard.snapshot()
+        };
+        self.analyze_context_snapshot(history, None).await
+    }
+
+    pub async fn analyze_context_snapshot(
+        &self,
+        history: MessageHistory,
+        app_state_override: Option<Arc<RwLock<ToolAppState>>>,
+    ) -> coco_query::context_analysis::Result<coco_query::context_analysis::ContextUsageReport>
+    {
+        let engine = self.build_engine(CancellationToken::new()).await;
+        let engine = if let Some(app_state) = app_state_override {
+            engine.with_app_state(app_state)
+        } else {
+            engine
+        };
+        coco_query::context_analysis::analyze_engine_context_with_sources(
+            &engine,
+            &history,
+            Some(self.skill_manager.clone()),
+        )
+        .await
     }
 
     /// Public accessor for the hook registry. Same `Arc` as the one
@@ -2010,7 +1859,7 @@ impl SessionRuntime {
     ) -> QueryEngine {
         let engine = QueryEngine::new(
             config,
-            self.main_client().await,
+            self.model_runtimes.clone(),
             self.tools.clone(),
             cancel,
             Some(self.hook_registry.clone()),
@@ -2036,33 +1885,6 @@ impl SessionRuntime {
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
     ) -> QueryEngine {
         let app_state = app_state_override.unwrap_or_else(|| self.app_state.clone());
-        if !self.fallback_clients.is_empty() {
-            engine = engine.with_fallback_clients(self.fallback_clients.clone());
-        }
-        if let Some(policy) = self.recovery_policy {
-            engine = engine.with_recovery_policy(policy);
-        }
-        // Pre-resolve the `ModelRole::Plan` client so the engine can
-        // swap it in for `permission_mode == Plan` turns. We use the
-        // same `client_for_role` cache as subagent routing — when
-        // `models.plan` is unconfigured the fallback chain at
-        // `runtime.rs:507` returns the Main spec, so the call returns
-        // an `ApiClient` equivalent to Main and the swap becomes a
-        // no-op (same observable behaviour as not installing this).
-        //
-        // Build failures are non-fatal — log and skip; the session
-        // still works, plan mode just doesn't get a swap.
-        let plan_client = match self.client_for_role(ModelRole::Plan).await {
-            Ok(c) => Some(c),
-            Err(e) => {
-                tracing::debug!(
-                    error = %e,
-                    "client_for_role(Plan) failed during wire_engine; plan-mode swap disabled this session"
-                );
-                None
-            }
-        };
-        engine = engine.with_plan_role_client(plan_client);
         engine = engine.with_file_read_state(self.file_read_state.clone());
         engine = engine.with_app_state(app_state.clone());
         let auto_active = app_state
@@ -2124,13 +1946,7 @@ impl SessionRuntime {
         // `orchestration_ctx` carries it on every fired event — Prompt
         // / Agent settings hooks reach the LLM via `QueryHookLlm`.
         engine = engine.with_hook_llm_handle(self.hook_llm_handle.clone());
-        // Wire the shared `RoleClientCache` so the engine's
-        // `finalize_turn_post_tools` can resolve `ModelRole::Fast` for
-        // the post-tool-batch summary fork (TS `generateToolUseSummary`).
-        // Same cache instance the hook_llm handle uses — keeps
-        // `CacheBreakDetector` state continuous across Fast-role calls
-        // regardless of caller.
-        engine = engine.with_role_client_cache(self.role_client_cache.clone());
+        engine = engine.with_model_runtimes(self.model_runtimes.clone());
         engine =
             engine.with_session_start_hook_side_effect_sink(Arc::new(QuerySessionStartHookSink {
                 file_watch: self.file_watch_registration_context(),
@@ -2370,7 +2186,7 @@ impl SessionRuntime {
     ///   @mention dedup doesn't leak)
     /// - `runtime.file_history_sink_session_id` Arc (next snapshot
     ///   targets new session's transcript jsonl)
-    /// - cache-break detector on `client` + each `fallback_clients`
+    /// - cache-break detectors on registry-owned model runtimes
     ///   (baseline drop on first new-session call won't false-positive)
     ///
     /// Fire SessionStart hooks with the given `source` string ("startup",
@@ -2795,16 +2611,13 @@ impl SessionRuntime {
         }
     }
 
-    /// Clear cache-break tracking on Main + every Main-fallback client.
+    /// Clear cache-break tracking on every registry-owned runtime client.
     /// Called whenever the agent transcript is being reset (new SDK
     /// session, full `/clear`, history-only `/clear`) so the next
     /// outbound prompt establishes a fresh baseline rather than
     /// false-positive-firing against the prior session's snapshot.
     async fn reset_cache_break_detectors(&self) {
-        self.main_client().await.cache_break_reset().await;
-        for fb in &self.fallback_clients {
-            fb.cache_break_reset().await;
-        }
+        self.model_runtimes.reset_cache_break_detectors().await;
     }
 
     /// Mutate `engine_config` under lock. Use for mid-session updates

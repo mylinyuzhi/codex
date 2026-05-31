@@ -20,14 +20,30 @@ pub(crate) fn inline_popup_view(state: &AppState) -> Option<InlinePopupView> {
         return None;
     }
     let popup = state.ui.interaction.popup.as_ref()?;
-    let suggestions = state.ui.active_suggestions.as_ref()?;
-    if popup.kind() != suggestions.kind || suggestions.items.is_empty() {
+    let suggestions = state.ui.completion.active.as_ref()?;
+    if !popup_matches_suggestions(popup.kind(), suggestions.kind) || suggestions.items.is_empty() {
         return None;
     }
     Some(InlinePopupView {
         items: suggestions.items.clone(),
         selected: suggestions.selected,
     })
+}
+
+fn popup_matches_suggestions(
+    popup: crate::state::SuggestionKind,
+    suggestions: crate::state::SuggestionKind,
+) -> bool {
+    popup == suggestions
+        || matches!(
+            (popup, suggestions),
+            (
+                crate::state::SuggestionKind::At,
+                crate::state::SuggestionKind::Path
+                    | crate::state::SuggestionKind::Directory
+                    | crate::state::SuggestionKind::CustomTitle
+            )
+        )
 }
 
 #[cfg(test)]

@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use coco_config::EnvKey;
 use coco_config::env;
+use coco_inference::ModelRuntime;
 use coco_messages::CostTracker;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
@@ -43,7 +44,6 @@ use crate::engine::QueryEngine;
 use crate::engine::RunArtifacts;
 use crate::engine_helpers::ProgressThrottle;
 use crate::engine_helpers::drain_one_progress;
-use crate::model_runtime::ModelRuntime;
 use crate::plan_mode_reminder::PlanModeReminder;
 
 /// Alias mirroring TS `Continue` type-union. The Rust enum carrying these
@@ -82,10 +82,14 @@ pub(crate) struct LoopAccumulator {
 /// Construct via [`Self::new`]; the `BudgetTracker` field requires
 /// config-derived arguments that no `Default` impl could supply.
 pub(crate) struct LoopTurnState {
-    /// 1-based turn counter inside this `run_session_loop` invocation.
-    /// Distinct from `session_turn` (the workspace-wide human-turn
-    /// count over the whole conversation). Resets per user submit.
+    /// 1-based user-visible agent turn counter inside this
+    /// `run_session_loop` invocation. Retries that rebuild the same
+    /// agent turn (fallback, compaction, max-output recovery, stop-hook
+    /// blocking, token-budget continuation) do not increment this.
     pub(crate) turn: i32,
+    /// 1-based internal loop-attempt counter used for log correlation.
+    /// Unlike `turn`, this increments for every loop iteration.
+    pub(crate) attempt: i32,
     /// Why the previous iteration `continue`d (or `None` on the first
     /// iteration / first error path). Surfaced in
     /// [`crate::QueryResult::last_continue_reason`] for SDK consumers
@@ -99,17 +103,6 @@ pub(crate) struct LoopTurnState {
     /// far in this session. Capped at
     /// [`crate::config::MAX_OUTPUT_TOKENS_RECOVERY_LIMIT`].
     pub(crate) max_tokens_recovery_count: i32,
-    /// Consecutive capacity errors (529/503/Overloaded/RateLimited)
-    /// observed on the active model slot. Counts from 0; on the third
-    /// streak event the runtime advances to the next fallback slot
-    /// (TS: `MAX_529_RETRIES = 3`). Reset on any successful stream
-    /// open (which covers the probe-recovery success path by virtue
-    /// of running through the same `query_stream` `Ok` arm) and on
-    /// fallback advance. Probe-failure revert intentionally does NOT
-    /// reset — the counter tracks the active slot's streak, and
-    /// reverting to fallback preserves the streak that originally
-    /// triggered the advance.
-    pub(crate) consecutive_capacity_errors: i32,
     /// TS `input`-parameter parity: the UUID of the last user message
     /// already handed to UserPrompt-tier reminders. Prevents duplicate
     /// `at_mentioned_files` / `agent_mentions` / `ultrathink_effort`
@@ -118,6 +111,10 @@ pub(crate) struct LoopTurnState {
     pub(crate) reminder_last_user_input_uuid: Option<uuid::Uuid>,
     /// Token / turn / continuation budget gate.
     pub(crate) budget: BudgetTracker,
+    /// Internal retry latch for continuations that are not represented
+    /// by `ContinueReason` because they are runtime-policy retries
+    /// rather than query-control transitions.
+    pub(crate) count_next_iteration_as_turn: bool,
 }
 
 impl LoopTurnState {
@@ -131,12 +128,13 @@ impl LoopTurnState {
     ) -> Self {
         Self {
             turn: 0,
+            attempt: 0,
             transition: None,
             stop_hook_active: false,
             max_tokens_recovery_count: 0,
-            consecutive_capacity_errors: 0,
             reminder_last_user_input_uuid: None,
             budget: BudgetTracker::new(total_token_budget, max_turns, max_continuations),
+            count_next_iteration_as_turn: true,
         }
     }
 }
@@ -148,10 +146,15 @@ impl LoopTurnState {
 /// noise when accessed through a struct path.
 pub(crate) struct LoopServices {
     /// Multi-slot model runtime. Walks the fallback chain on capacity
-    /// streaks; runs the half-open probe back to the primary when a
-    /// recovery policy is installed. Multi-provider — slots may carry
-    /// different providers, and `advance()` is a provider switch.
-    pub(crate) runtime: ModelRuntime,
+    /// errors; runs the half-open probe back to the primary when a
+    /// recovery policy enables it. Multi-provider — slots may carry
+    /// different providers, and fallback can be a provider switch.
+    pub(crate) runtime: Arc<std::sync::Mutex<ModelRuntime>>,
+    pub(crate) runtime_source: coco_inference::ModelRuntimeSource,
+    /// Main-role runtime to return to when a turn does not explicitly
+    /// select a different role runtime.
+    pub(crate) main_runtime: Arc<std::sync::Mutex<ModelRuntime>>,
+    pub(crate) main_source: coco_inference::ModelRuntimeSource,
     /// Sender side of the per-session progress-event channel. Cloned
     /// into every `ToolUseContext` built for this loop; the receiver
     /// is owned by the spawned drain task (whose `JoinHandle` is
@@ -165,6 +168,32 @@ pub(crate) struct LoopServices {
     /// critical / compaction / date-change reminders). Holds
     /// per-attachment throttle state across turns.
     pub(crate) reminders: SystemReminderOrchestrator,
+}
+
+impl LoopServices {
+    pub(crate) fn set_active_runtime(
+        &mut self,
+        runtime: Arc<std::sync::Mutex<ModelRuntime>>,
+        source: coco_inference::ModelRuntimeSource,
+    ) {
+        self.runtime = runtime;
+        self.runtime_source = source;
+    }
+
+    pub(crate) fn snapshot(&self) -> coco_inference::ModelRuntimeSnapshot {
+        self.runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot(self.runtime_source.clone())
+    }
+
+    pub(crate) fn current_model_id(&self) -> String {
+        self.snapshot().model_id
+    }
+
+    pub(crate) async fn reset_active_cache_break_detector(&self) {
+        coco_inference::ModelRuntime::reset_active_cache_break_detector(self.runtime.clone()).await;
+    }
 }
 
 /// Entry-derived immutable values. Set once at the top of
@@ -275,22 +304,12 @@ impl QueryEngine {
             /*max_continuations*/ 3,
         );
 
-        // Build the per-session ModelRuntime. When the caller installed
-        // fallback clients via `with_fallback_client(s)`, the runtime
-        // holds a multi-slot chain and walks it on capacity-error
-        // streaks via `advance()`.
-        //
-        // Fallback trigger (TS parity, `services/api/withRetry.ts:335`):
-        // after `MAX_529_RETRIES` consecutive `Overloaded` (529/503)
-        // responses from the active slot, the next turn advances to
-        // the next slot. The engine tracks consecutive capacity errors
-        // because provider-layer retries are internal to the
-        // vercel-ai crates — this counter only ticks when the retry
-        // layer gives up and surfaces an error to us.
-        let mut mr_init = ModelRuntime::new(self.client.clone(), self.fallback_clients.clone());
-        if let Some(policy) = self.recovery_policy {
-            mr_init = mr_init.with_recovery_policy(policy);
-        }
+        let main_source = self.model_runtime_source.clone();
+        let mr_init = match self.model_runtimes.runtime_for_source(main_source.clone()) {
+            Ok(runtime) => runtime,
+            Err(err) => panic!("model runtime source must be registered: {err}"),
+        };
+        let main_runtime = mr_init.clone();
 
         // ── Progress-event forwarder ──
         //
@@ -369,6 +388,9 @@ impl QueryEngine {
 
         let services = LoopServices {
             runtime: mr_init,
+            runtime_source: main_source.clone(),
+            main_runtime,
+            main_source,
             progress_tx: progress_tx_init,
             plan: pr_init,
             reminders: ro_init,

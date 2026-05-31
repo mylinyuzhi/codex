@@ -58,7 +58,7 @@ pub(crate) fn settings_surface_content(
             } else {
                 "  "
             };
-            let status = syntax_highlighting_status_for_display(s.display_settings);
+            let status = syntax_highlighting_status_for_display(s.display_settings.clone());
             items.push(String::new());
             items.push(format!(
                 "{marker}{active}{}: {status}",

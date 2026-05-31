@@ -146,6 +146,10 @@ fn context_usage_result_roundtrip() {
         is_auto_compact_enabled: true,
         auto_compact_threshold: Some(180_000),
         message_breakdown: None,
+        memory_files: Vec::new(),
+        mcp_tools: Vec::new(),
+        agents: Vec::new(),
+        skills: Vec::new(),
     };
     let j = serde_json::to_value(&r).unwrap();
     assert_eq!(j["total_tokens"], 50_000);

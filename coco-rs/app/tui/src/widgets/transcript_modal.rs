@@ -577,8 +577,13 @@ impl<'a> TranscriptCellRenderer<'a> {
             .iter()
             .find(|tool| tool.call_id == call_id);
         let input_preview =
-            crate::state::derive::tool_call_header_preview(source, call_id, tool_name);
-        let preview = single_line_capped(&input_preview, 96);
+            crate::state::derive::tool_call_header_preview_model(source, call_id, tool_name);
+        let preview_spans = crate::tool_display::render_tool_input_preview_spans(
+            &input_preview,
+            self.styles,
+            self.syntax_highlighting,
+            96,
+        );
         let elapsed = execution
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
@@ -588,8 +593,10 @@ impl<'a> TranscriptCellRenderer<'a> {
                 .fg(tool_tone_color(tool_name_tone(tool_name), self.styles))
                 .bold(),
         ];
-        if !preview.is_empty() {
-            spans.push(Span::raw(format!("({preview})")).fg(self.styles.text()));
+        if !preview_spans.is_empty() {
+            spans.push(Span::raw("(").fg(self.styles.text()));
+            spans.extend(preview_spans);
+            spans.push(Span::raw(")").fg(self.styles.text()));
         }
         spans.push(Span::raw(elapsed).fg(self.styles.dim()).dim());
         lines.push(Line::from(spans));

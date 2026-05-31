@@ -154,7 +154,7 @@ const CATEGORIES: &[Category] = &[
             },
             CommandEntry {
                 name: "context",
-                aliases: &["ctx"],
+                aliases: &[],
                 description: "Show context window usage breakdown",
                 usage: "/context",
             },

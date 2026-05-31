@@ -22,12 +22,10 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::StopReason;
@@ -415,10 +413,7 @@ async fn run_with_events(
     tools: Arc<ToolRegistry>,
     config_overrides: &ScenarioConfig,
 ) -> ScenarioRunResult {
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
         model_id: "json-scripted-mock".into(),

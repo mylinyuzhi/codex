@@ -3,7 +3,9 @@
 //! TS: query.ts (1.7K LOC) — one-shot query without multi-turn loop.
 //! Used for compaction summaries, memory extraction, etc.
 
-use coco_inference::ApiClient;
+use coco_inference::ModelRuntimeQueryOutcome;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
 use coco_llm_types::LlmPrompt;
 use coco_types::TokenUsage;
@@ -23,7 +25,8 @@ pub struct SingleTurnResult {
 /// Used for side-queries like compaction summaries, memory extraction,
 /// and classifier calls.
 pub async fn single_turn_query(
-    client: &Arc<ApiClient>,
+    model_runtimes: &Arc<ModelRuntimeRegistry>,
+    source: ModelRuntimeSource,
     system_prompt: &str,
     user_message: &str,
     max_tokens: Option<i64>,
@@ -35,31 +38,38 @@ pub async fn single_turn_query(
         coco_llm_types::LlmMessage::user_text(user_message),
     ];
 
-    let params = QueryParams {
-        prompt,
-        max_tokens,
-        thinking_level: None,
-        fast_mode: false,
-        tools: None,
-        tool_choice: None,
-        context_management: None,
-        query_source: None,
-        agent_id: None,
-        time_since_last_assistant_ms: None,
-        // One-shot helper call: not part of an agent loop, no cache
-        // strategy plumbed at this layer.
-        agentic: false,
-        cache: None,
-        stop_sequences: None,
-        response_format: None,
+    let (result, snapshot) = loop {
+        let params = QueryParams {
+            prompt: prompt.clone(),
+            max_tokens,
+            thinking_level: None,
+            fast_mode: false,
+            tools: None,
+            tool_choice: None,
+            context_management: None,
+            query_source: None,
+            agent_id: None,
+            time_since_last_assistant_ms: None,
+            // One-shot helper call: not part of an agent loop, no cache
+            // strategy plumbed at this layer.
+            agentic: false,
+            cache: None,
+            stop_sequences: None,
+            response_format: None,
+        };
+        match model_runtimes.query_once(source.clone(), &params).await {
+            ModelRuntimeQueryOutcome::Success {
+                result, snapshot, ..
+            } => break (result, snapshot),
+            ModelRuntimeQueryOutcome::Retry { .. } => continue,
+            ModelRuntimeQueryOutcome::Failed { error, .. } => {
+                return Err(Box::new(coco_error::PlainError::new(
+                    format!("single-turn query failed: {error}"),
+                    coco_error::StatusCode::ProviderError,
+                )) as coco_error::BoxedError);
+            }
+        }
     };
-
-    let result = client.query(&params).await.map_err(|e| {
-        Box::new(coco_error::PlainError::new(
-            format!("single-turn query failed: {e}"),
-            coco_error::StatusCode::ProviderError,
-        )) as coco_error::BoxedError
-    })?;
 
     // Extract text from response
     let text = result
@@ -94,7 +104,7 @@ pub async fn single_turn_query(
     Ok(SingleTurnResult {
         text,
         usage: result.usage,
-        model: result.model,
+        model: snapshot.model_id,
         duration_ms,
     })
 }
@@ -103,10 +113,18 @@ pub async fn single_turn_query(
 ///
 /// TS: sideQuery.ts — uses a smaller/faster model for non-critical queries.
 pub async fn side_query(
-    client: &Arc<ApiClient>,
+    model_runtimes: &Arc<ModelRuntimeRegistry>,
+    source: ModelRuntimeSource,
     system_prompt: &str,
     user_message: &str,
 ) -> Result<String, coco_error::BoxedError> {
-    let result = single_turn_query(client, system_prompt, user_message, Some(4096)).await?;
+    let result = single_turn_query(
+        model_runtimes,
+        source,
+        system_prompt,
+        user_message,
+        Some(4096),
+    )
+    .await?;
     Ok(result.text)
 }

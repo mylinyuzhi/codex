@@ -9,7 +9,7 @@
 //! message before the next API call.
 //!
 //! Engine wiring: PostToolUse fires after `Tool::execute()` returns
-//! and before the next `ApiClient.query` call. The injected text is
+//! and before the next runtime query call. The injected text is
 //! visible to the model as part of its next-turn context, so a
 //! prompt asking it to echo a marker that ONLY exists in the hook
 //! injection proves the wiring end-to-end.

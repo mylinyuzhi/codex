@@ -227,7 +227,10 @@ impl QueryEngine {
         // API clears tool results in place and the prompt cache stays
         // intact. On other providers, fall back to the original
         // client-side mutation path (cache-invalidating but universal).
-        if self.client.supports_server_side_context_edits() {
+        if self
+            .runtime_snapshot()
+            .is_some_and(|snapshot| snapshot.supports_server_side_context_edits)
+        {
             // Build aggressive ApiContextOptions from current state.
             // `trigger_threshold = pre_tokens` ensures the server applies
             // clearing for the current oversized prompt; `keep_target`
@@ -348,9 +351,7 @@ impl QueryEngine {
         // the next response's lower cache_read tokens won't false-positive
         // as a break.
         let qs = self.query_source_label();
-        self.client
-            .notify_compaction(qs, self.config.agent_id.as_deref())
-            .await;
+        self.notify_model_compaction(qs).await;
 
         // Reactive compact also rewrites history (peels oldest API-round
         // groups, drops attachments) — so it must reset the memory
@@ -441,7 +442,7 @@ impl QueryEngine {
         // Gated on:
         //   * `Feature::ToolUseSummary` enabled (default off — UX polish
         //     that silently degrades on reasoning Fast models)
-        //   * `role_client_cache` wired (Fast role configured)
+        //   * model runtime registry wired (Fast role configured)
         //   * `agent_id.is_none()` (subagent skip — TS query.ts:1419)
         //   * tool batch non-empty (handled inside the spawn helper)
         // Never blocks; failure modes degrade to `None`.
@@ -477,7 +478,7 @@ impl QueryEngine {
             history,
             event_tx,
             QueuePriority::Later,
-            None,
+            self.config.agent_id.as_deref(),
         )
         .await;
 
@@ -547,9 +548,7 @@ impl QueryEngine {
                     // break. Use the same query_source attribution as the
                     // main API call so they share the tracking key.
                     let qs = self.query_source_label();
-                    self.client
-                        .notify_cache_deletion(qs, self.config.agent_id.as_deref())
-                        .await;
+                    self.notify_model_cache_deletion(qs).await;
                 }
             }
         }
@@ -692,9 +691,7 @@ impl QueryEngine {
                 // notifyCacheDeletion semantics. Suppresses the false-
                 // positive cache-break warning on the next API call.
                 let qs = self.query_source_label();
-                self.client
-                    .notify_cache_deletion(qs, self.config.agent_id.as_deref())
-                    .await;
+                self.notify_model_cache_deletion(qs).await;
             }
 
             let still_over_threshold = coco_compact::should_auto_compact_guarded_with_collapse(
@@ -1022,7 +1019,7 @@ impl QueryEngine {
     /// Silently no-ops when:
     ///   * `Feature::ToolUseSummary` is disabled (default — see
     ///     `coco_types::features` for the rationale)
-    ///   * `role_client_cache` is `None` (no Fast role wired)
+    ///   * `model_runtimes` is `None` (no registry wired)
     ///   * `agent_id` is `Some` (subagent skip — mirrors TS
     ///     `!toolUseContext.agentId` at query.ts:1419)
     ///   * `history` has no tool calls in the last assistant turn
@@ -1042,9 +1039,7 @@ impl QueryEngine {
         if self.config.agent_id.is_some() {
             return;
         }
-        let Some(role_cache) = self.role_client_cache.clone() else {
-            return;
-        };
+        let model_runtimes = self.model_runtimes.clone();
         let Some(input) = crate::tool_use_summary::build_input_from_history(history.as_slice())
         else {
             return;
@@ -1060,7 +1055,7 @@ impl QueryEngine {
             // turn loop exits.
             tokio::select! {
                 _ = cancel.cancelled() => None,
-                result = crate::tool_use_summary::generate_tool_use_summary(input, role_cache) => result,
+                result = crate::tool_use_summary::generate_tool_use_summary(input, model_runtimes) => result,
             }
         });
 

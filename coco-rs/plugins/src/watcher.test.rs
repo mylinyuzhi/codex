@@ -46,22 +46,47 @@ fn derive_reason_falls_back_to_first_filename() {
     );
 }
 
-#[tokio::test]
-async fn watcher_emits_on_file_change() {
+#[test]
+fn classify_emits_plugin_change_for_interesting_paths() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let dir = tmp.path().to_path_buf();
-    let detector = PluginChangeDetector::new(vec![dir.clone()]).expect("watcher");
-    let mut rx = detector.subscribe();
+    let target = tmp.path().join("PLUGIN.toml");
+    let event =
+        coco_file_watch::Event::new(coco_file_watch::EventKind::Any).add_path(target.clone());
 
-    // Race-free signal: write a file inside the watched dir; the
-    // watcher's debounce is 300ms, give it a 2s recv timeout.
-    let target = dir.join("PLUGIN.toml");
-    std::fs::write(&target, b"[plugin]\nname = \"x\"").expect("write");
+    let changed = classify(&event).expect("interesting plugin path");
+    assert_eq!(changed.changed_paths, vec![target]);
+    assert_eq!(changed.reason, "PLUGIN.toml changed");
+}
 
-    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("watcher did not fire")
-        .expect("recv error");
-    assert!(!event.changed_paths.is_empty(), "no paths in event");
-    assert_eq!(event.reason, "PLUGIN.toml changed");
+#[test]
+fn classify_ignores_editor_temp_paths() {
+    let event = coco_file_watch::Event::new(coco_file_watch::EventKind::Any)
+        .add_path(PathBuf::from("/x/.#PLUGIN.toml"))
+        .add_path(PathBuf::from("/x/PLUGIN.toml~"))
+        .add_path(PathBuf::from("/x/.PLUGIN.toml.swp"));
+
+    assert!(classify(&event).is_none());
+}
+
+#[test]
+fn merge_preserves_first_reason_and_appends_paths() {
+    let merged = merge(
+        PluginsChanged {
+            changed_paths: vec![PathBuf::from("/x/PLUGIN.toml")],
+            reason: "PLUGIN.toml changed".to_string(),
+        },
+        PluginsChanged {
+            changed_paths: vec![PathBuf::from("/x/skill.md")],
+            reason: "skill.md changed".to_string(),
+        },
+    );
+
+    assert_eq!(merged.reason, "PLUGIN.toml changed");
+    assert_eq!(
+        merged.changed_paths,
+        vec![
+            PathBuf::from("/x/PLUGIN.toml"),
+            PathBuf::from("/x/skill.md")
+        ]
+    );
 }

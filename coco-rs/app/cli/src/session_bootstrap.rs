@@ -6,8 +6,8 @@
 //! the two runners cannot drift apart on what gets installed.
 //!
 //! Two stages:
-//! 1. [`build_engine_resources`] resolves the model client, fallback
-//!    chain, recovery policy, tool registry, and system prompt from
+//! 1. [`build_engine_resources`] resolves the model client, tool
+//!    registry, and system prompt from
 //!    the already-built [`coco_config::RuntimeConfig`].
 //! 2. [`install_session_late_binds`] performs the post-`SessionRuntime::build`
 //!    wirings (task runtime, agent transcript store, agent-team
@@ -22,13 +22,9 @@ use anyhow::Result;
 
 use coco_commands::CommandRegistry;
 use coco_commands::build_command_registry;
-use coco_config::FallbackRecoveryPolicy;
 use coco_config::RuntimeConfig;
 use coco_config::global_config;
-use coco_inference::ApiClient;
-use coco_inference::model_factory::build_fallback_clients_for_role;
 use coco_tool_runtime::ToolRegistry;
-use coco_types::ModelRole;
 use coco_types::ProviderApi;
 use coco_types::UserType;
 
@@ -36,17 +32,14 @@ use crate::Cli;
 use crate::headless::StartupPermissionState;
 use crate::headless::build_output_style_manager;
 use crate::headless::build_system_prompt_for_model;
-use crate::headless::create_api_client;
 use crate::headless::resolve_additional_dirs_display;
+use crate::headless::resolve_main_model;
 use crate::headless::resolve_startup_permission_state;
 use crate::session_runtime::SessionRuntime;
 
 /// Resources produced by [`build_engine_resources`]. Caller threads
 /// these through into [`crate::session_runtime::SessionRuntimeBuildOpts`].
 pub struct EngineResources {
-    pub client: Arc<ApiClient>,
-    pub fallback_clients: Vec<Arc<ApiClient>>,
-    pub recovery_policy: Option<FallbackRecoveryPolicy>,
     pub tools: Arc<ToolRegistry>,
     pub system_prompt: String,
     pub model_id: String,
@@ -125,16 +118,9 @@ pub fn build_engine_resources(
         "building engine resources"
     );
 
-    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let (client, provider_api, model_id) = create_api_client(runtime_config, retry.clone());
-
-    let fallback_clients = build_fallback_clients_for_role(
-        runtime_config,
-        ModelRole::Main,
-        retry,
-        Some(&crate::provider_login::shared_resolver()),
-    )?;
-    let recovery_policy = runtime_config.model_roles.recovery(ModelRole::Main);
+    let main_model = resolve_main_model(runtime_config);
+    let provider_api = main_model.provider_api;
+    let model_id = main_model.model_id.clone();
 
     let registry = ToolRegistry::new();
     coco_tools::register_all_tools(&registry);
@@ -154,7 +140,7 @@ pub fn build_engine_resources(
     let system_prompt = build_system_prompt_for_model(
         cwd,
         runtime_config,
-        client.provider(),
+        &main_model.provider,
         &model_id,
         output_style_manager.active(),
         &additional_working_directories,
@@ -168,11 +154,14 @@ pub fn build_engine_resources(
 
     tracing::info!(
         target: "coco_cli::session_bootstrap",
-        provider = client.provider(),
+        provider = main_model.provider,
         model_id = %model_id,
         real_provider = provider_api.is_some(),
-        fallback_count = fallback_clients.len(),
-        recovery_policy_set = recovery_policy.is_some(),
+        fallback_count = runtime_config.model_roles.fallbacks(coco_types::ModelRole::Main).len(),
+        fallback_policy_set = runtime_config
+            .model_roles
+            .policy(coco_types::ModelRole::Main)
+            .is_some(),
         tool_count,
         command_count,
         skill_count,
@@ -197,9 +186,6 @@ pub fn build_engine_resources(
     );
 
     Ok(EngineResources {
-        client,
-        fallback_clients,
-        recovery_policy,
         tools,
         system_prompt,
         model_id,

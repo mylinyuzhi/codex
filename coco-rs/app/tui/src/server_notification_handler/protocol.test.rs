@@ -10,6 +10,8 @@
 use pretty_assertions::assert_eq;
 
 use coco_types::CancelReason;
+use coco_types::ServerNotification;
+use coco_types::SessionStartedParams;
 
 use super::on_turn_interrupted_outcome;
 use crate::state::AppState;
@@ -73,6 +75,29 @@ fn channel() -> (
     tokio::sync::mpsc::channel(16)
 }
 
+fn session_started(provider: &str) -> ServerNotification {
+    ServerNotification::SessionStarted(SessionStartedParams {
+        session_id: "s1".into(),
+        protocol_version: "1.0".into(),
+        cwd: "/tmp".into(),
+        model: "model-a".into(),
+        provider: provider.into(),
+        permission_mode: "default".into(),
+        tools: Vec::new(),
+        slash_commands: Vec::new(),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        mcp_servers: Vec::new(),
+        plugins: Vec::new(),
+        api_key_source: None,
+        betas: Vec::new(),
+        version: "0.0.1".into(),
+        output_style: None,
+        fast_mode_state: None,
+        lsp_active: false,
+    })
+}
+
 /// True if the receiver got a `Rewind { mode: AutoRestore }`. Drains
 /// the channel; tests that need to inspect the message id should call
 /// `rx.try_recv()` directly.
@@ -89,6 +114,28 @@ fn drained_auto_restore(
         }
     }
     None
+}
+
+#[test]
+fn session_started_updates_provider_when_present() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    super::handle(&mut state, session_started("openai"), &tx);
+
+    assert_eq!(state.session.model, "model-a");
+    assert_eq!(state.session.provider, "openai");
+}
+
+#[test]
+fn session_started_preserves_provider_when_wire_field_is_absent() {
+    let mut state = AppState::new();
+    state.session.provider = "existing".into();
+    let (tx, _rx) = channel();
+
+    super::handle(&mut state, session_started(""), &tx);
+
+    assert_eq!(state.session.provider, "existing");
 }
 
 #[test]

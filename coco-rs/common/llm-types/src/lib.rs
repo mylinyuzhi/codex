@@ -2,7 +2,7 @@
 //!
 //! Scope: the message / content schema that domain crates name. Strictly
 //! **data shapes only**. Provider runtime interfaces — `LanguageModelV4`
-//! trait, `Provider` trait, `ApiClient`, retry, auth, prompt-cache
+//! trait, `Provider` trait, model runtime/client machinery, retry, auth, prompt-cache
 //! detection — intentionally live in `services/inference` and stay there.
 //!
 //! Two crates directly depend on `vercel-ai-provider` by design:

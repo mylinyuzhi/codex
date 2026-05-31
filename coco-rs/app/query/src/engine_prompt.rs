@@ -29,6 +29,28 @@ use coco_types::ToolAppState;
 
 use crate::engine::QueryEngine;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PromptMemoryFile {
+    pub path: String,
+    pub source: coco_context::MemoryFileSource,
+    pub tokens: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModelToolSource {
+    BuiltIn,
+    Mcp { server_name: String },
+    Agent,
+    Skill,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BuiltToolDefinition {
+    pub tool: LanguageModelTool,
+    pub source: ModelToolSource,
+    pub deferred: bool,
+}
+
 /// Per-turn prompt + the post-budget message snapshot the engine threads
 /// into every tool invocation's `ctx.messages`.
 ///
@@ -43,6 +65,8 @@ pub(crate) struct BuiltPrompt {
     /// Same working copy as `Vec<Arc<Message>>`, shared via outer `Arc` so
     /// every tool ctx in this turn observes byte-identical history.
     pub messages_snapshot: Arc<Vec<Arc<Message>>>,
+    /// Source-aware memory file sections included in the system prompt.
+    pub memory_files: Vec<PromptMemoryFile>,
 }
 
 impl QueryEngine {
@@ -62,6 +86,7 @@ impl QueryEngine {
         //      `EnvKey::CocoSimple` and narrows the worker tool list.
         //   2. Otherwise: explicit config override > built-in default +
         //      CLAUDE.md discovery.
+        let mut memory_files = Vec::new();
         let system_text = if coco_subagent::is_coordinator_mode(&self.config.features) {
             let simple_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoSimple);
             coco_subagent::coordinator_system_prompt(simple_mode)
@@ -73,7 +98,13 @@ impl QueryEngine {
             let cwd = std::env::current_dir().unwrap_or_default();
             let claude_files = coco_context::discover_memory_files(&cwd);
             for f in &claude_files {
-                text.push_str(&format!("# {}\n{}\n\n", f.path.display(), f.content));
+                let segment = format!("# {}\n{}\n\n", f.path.display(), f.content);
+                memory_files.push(PromptMemoryFile {
+                    path: f.path.display().to_string(),
+                    source: f.source,
+                    tokens: coco_messages::estimate_text_tokens(&segment),
+                });
+                text.push_str(&segment);
             }
             text
         };
@@ -125,6 +156,7 @@ impl QueryEngine {
         BuiltPrompt {
             prompt,
             messages_snapshot: Arc::new(messages_for_api),
+            memory_files,
         }
     }
 
@@ -295,6 +327,17 @@ impl QueryEngine {
         &self,
         app_state: &ToolAppState,
     ) -> Vec<LanguageModelTool> {
+        self.build_tool_definitions_detailed(app_state)
+            .await
+            .into_iter()
+            .map(|d| d.tool)
+            .collect()
+    }
+
+    pub(crate) async fn build_tool_definitions_detailed(
+        &self,
+        app_state: &ToolAppState,
+    ) -> Vec<BuiltToolDefinition> {
         // Carry the `ToolSearch` discovery set into the filter pipeline
         // so deferred tools the model has unlocked get their schema in
         // this turn's request.
@@ -317,12 +360,16 @@ impl QueryEngine {
         //     either capability): the registry filter auto-disables
         //     deferral via `tool_search_active`, so every enabled
         //     tool's full schema lands on turn 1 (safe default).
-        let supports_tool_reference = self.client.model_info().is_some_and(|info| {
-            info.has_capability(coco_types::Capability::ServerSideToolReference)
-        });
-        let supports_client_side_tool_search = self
-            .client
-            .model_info()
+        let snapshot = self.runtime_snapshot();
+        let supports_tool_reference = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.model_info.as_ref())
+            .is_some_and(|info| {
+                info.has_capability(coco_types::Capability::ServerSideToolReference)
+            });
+        let supports_client_side_tool_search = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.model_info.as_ref())
             .is_some_and(|info| info.has_capability(coco_types::Capability::ClientSideToolSearch));
 
         let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
@@ -529,6 +576,18 @@ impl QueryEngine {
             if Some(idx) == cache_boundary_idx {
                 anthropic.insert("cacheBoundary".to_string(), serde_json::Value::Bool(true));
             }
+            let deferred = deferred_marker.contains(tool_name);
+            let source = if let Some(info) = tool.mcp_info() {
+                ModelToolSource::Mcp {
+                    server_name: info.server_name.clone(),
+                }
+            } else if tool_name == coco_types::ToolName::Agent.as_str() {
+                ModelToolSource::Agent
+            } else if tool_name == coco_types::ToolName::Skill.as_str() {
+                ModelToolSource::Skill
+            } else {
+                ModelToolSource::BuiltIn
+            };
             let provider_options = if anthropic.is_empty() {
                 None
             } else {
@@ -536,14 +595,18 @@ impl QueryEngine {
                 po_map.insert("anthropic".to_string(), anthropic);
                 Some(coco_llm_types::ProviderOptions(po_map))
             };
-            out.push(LanguageModelTool::Function(LanguageModelFunctionTool {
-                name: tool_name.to_string(),
-                description: Some(description),
-                input_schema: json_schema,
-                input_examples: None,
-                strict: None,
-                provider_options,
-            }));
+            out.push(BuiltToolDefinition {
+                tool: LanguageModelTool::Function(LanguageModelFunctionTool {
+                    name: tool_name.to_string(),
+                    description: Some(description),
+                    input_schema: json_schema,
+                    input_examples: None,
+                    strict: None,
+                    provider_options,
+                }),
+                source,
+                deferred,
+            });
         }
         out
     }
@@ -573,6 +636,7 @@ impl QueryEngine {
         &self,
         hook_tx: Option<&tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
     ) -> crate::tool_context::ToolContextFactory {
+        let snapshot = self.runtime_snapshot();
         // Build the structured hook handle here — every tool call built
         // through this factory gets the same `QueryHookHandle`, so
         // PreToolUse/PostToolUse/PostToolUseFailure fire consistently
@@ -633,16 +697,11 @@ impl QueryEngine {
             // AgentTool reads `subagent_type → AgentDefinition` from
             // here at the spawn boundary.
             agent_catalog: self.agent_catalog.clone(),
-            // Missed-2 fix: parent runtime snapshot captured at engine
-            // bootstrap from `ApiClient::fingerprint().to_snapshot()`.
-            // Threaded onto every ToolUseContext for AgentTool to pin
-            // Fork-mode prompt-cache parity. Always populated when
-            // engine has an ApiClient — uses primary client's
-            // fingerprint (post-fallback would shift; that's
-            // acceptable since fork mode predates fallback).
-            parent_runtime_snapshot: Some(std::sync::Arc::new(
-                self.client.fingerprint().to_snapshot(),
-            )),
+            // Parent runtime snapshot captured from the runtime registry
+            // and threaded onto every ToolUseContext for AgentTool to pin
+            // Fork-mode prompt-cache parity.
+            parent_runtime_snapshot: snapshot
+                .map(|snapshot| std::sync::Arc::new(snapshot.runtime_snapshot)),
             // Per-engine live Command-source rule store. Same Arc as
             // `QueryEngine.live_command_rules` and the
             // `EngineLiveRulesHandle` installed on the executor —

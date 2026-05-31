@@ -152,14 +152,15 @@ pub(super) fn try_render(
             Some(())
         }
         CellKind::ToolUse { call_id, tool_name } => {
-            let input_preview =
-                crate::state::derive::tool_call_header_preview(&cell.source, call_id, tool_name);
-            // Char-boundary- and display-width-safe truncation (appends the
-            // ellipsis itself) — a raw byte slice here panics when the cut lands
-            // mid-codepoint (CJK/emoji in paths/args), exactly the render-path
-            // panic this refactor exists to eliminate.
-            let preview = coco_tui_ui::truncate::truncate_to_width(
+            let input_preview = crate::state::derive::tool_call_header_preview_model(
+                &cell.source,
+                call_id,
+                tool_name,
+            );
+            let preview_spans = crate::tool_display::render_tool_input_preview_spans(
                 &input_preview,
+                w.styles,
+                w.syntax_highlighting,
                 constants::TOOL_DESCRIPTION_MAX_CHARS as usize,
             );
             // Elapsed time badge: `(250ms)` / `(1.2s)` / `(3m 4s)`
@@ -179,8 +180,10 @@ pub(super) fn try_render(
                     .fg(tool_tone_color(tool_name_tone(tool_name), w.styles))
                     .bold(),
             ];
-            if !preview.is_empty() {
-                spans.push(Span::raw(format!("({preview})")).fg(w.styles.text()));
+            if !preview_spans.is_empty() {
+                spans.push(Span::raw("(").fg(w.styles.text()));
+                spans.extend(preview_spans);
+                spans.push(Span::raw(")").fg(w.styles.text()));
             }
             spans.push(Span::raw(elapsed_badge).fg(w.styles.dim()).dim());
             lines.push(Line::from(spans));

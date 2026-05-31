@@ -174,6 +174,9 @@ pub struct CommandMetadata {
     /// Argument hint override (e.g., "[file]").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
+    /// Typed argument shape for completion behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_kind: Option<coco_types::CommandArgumentKind>,
     /// Default model for this command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,

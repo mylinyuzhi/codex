@@ -1,7 +1,7 @@
 //! Unit tests for the TUI driver's pure helpers.
 //!
-//! `run_agent_driver` itself is an integration point (talks to an
-//! `ApiClient`, spawns tokio tasks, etc.) so we exercise only the
+//! `run_agent_driver` itself is an integration point (talks to model
+//! runtimes, spawns tokio tasks, etc.) so we exercise only the
 //! decomposed pure logic here.
 
 #[cfg(test)]
