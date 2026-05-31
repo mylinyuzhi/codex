@@ -661,7 +661,7 @@ async fn test_coco_cli_fallback_chain_installs_count() -> Result<()> {
     record_outcome("coco_cli.fallback_chain_install_count", &outcome);
     assert_eq!(
         outcome.installed_fallback_count, 1,
-        "one --fallback-model should install 1 fallback ApiClient, got {}",
+        "one --fallback-model should install 1 fallback runtime, got {}",
         outcome.installed_fallback_count
     );
     Ok(())

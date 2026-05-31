@@ -261,8 +261,12 @@ impl QueryEngine {
         // doesn't accumulate stale subagent snapshots that would push
         // out the main thread's entry under the LRU cap. TS:
         // runAgent.ts:18 `cleanupAgentTracking(agentId)`.
-        if let Some(agent_id) = self.config.agent_id.as_deref() {
-            self.client.cache_break_cleanup_agent(agent_id).await;
+        if let Some(agent_id) = self.config.agent_id.as_deref()
+            && let Ok(runtime) = self
+                .model_runtimes
+                .runtime_for_source(self.model_runtime_source.clone())
+        {
+            coco_inference::ModelRuntime::cleanup_active_agent(runtime, agent_id).await;
         }
 
         // TurnEnded(Failed) — wire-protocol terminator on the error path
@@ -404,6 +408,10 @@ impl QueryEngine {
                 protocol_version: bootstrap.protocol_version.clone(),
                 cwd: bootstrap.cwd.clone(),
                 model: self.config.model_id.clone(),
+                provider: self
+                    .runtime_snapshot()
+                    .map(|snapshot| snapshot.provider)
+                    .unwrap_or_default(),
                 permission_mode,
                 tools,
                 slash_commands: bootstrap.slash_commands.clone(),

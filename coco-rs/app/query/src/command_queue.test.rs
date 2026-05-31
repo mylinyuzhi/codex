@@ -93,6 +93,25 @@ async fn test_remove_commands() {
 }
 
 #[tokio::test]
+async fn test_remove_by_id_returns_removed_command() {
+    let queue = CommandQueue::new();
+    let keep = QueuedCommand::new("keep".into(), QueuePriority::Next);
+    let edit = QueuedCommand::new("edit me".into(), QueuePriority::Next);
+    let edit_id = edit.id;
+    queue.enqueue(keep).await;
+    queue.enqueue(edit).await;
+
+    let removed = queue
+        .remove_by_id(edit_id)
+        .await
+        .expect("queued command removed");
+
+    assert_eq!(removed.prompt, "edit me");
+    assert_eq!(queue.len().await, 1);
+    assert!(queue.remove_by_id(edit_id).await.is_none());
+}
+
+#[tokio::test]
 async fn test_peek_does_not_remove() {
     let queue = CommandQueue::new();
     queue

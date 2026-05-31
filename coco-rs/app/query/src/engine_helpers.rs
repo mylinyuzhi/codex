@@ -71,8 +71,8 @@ pub(crate) fn is_capacity_error_message(msg: &str) -> bool {
 /// Matches the read site at `engine_finalize_turn::build_suggestion_context`,
 /// which is keyed on `cache.provider` (set when the parent turn ran). The
 /// `provider` parameter here MUST match the `provider` recorded on the
-/// post-turn cache slot — both come from `ApiClient::provider()`, so this
-/// is true by construction. Asserted in `prompt_suggestion.test.rs`'s
+/// post-turn cache slot — both come from the active runtime snapshot, so
+/// this is true by construction. Asserted in `prompt_suggestion.test.rs`'s
 /// selectivity matrix.
 ///
 /// Idempotent: a second 429 from the same provider replaces the entry
@@ -129,7 +129,6 @@ pub(crate) async fn clear_rate_limit_observation(
 /// Templates are direction-aware:
 /// - `CapacityDegrade` → "Switched to {new} due to high demand for {original}."
 /// - `ProbeRecovery`   → "Recovered to primary {new} after probe."
-/// - `ChainExhausted`  → "All provider slots exhausted (last tried: {original})."
 ///
 /// `original` may be empty if the previous slot never identified
 /// itself — the message degrades gracefully on each branch.
@@ -150,13 +149,6 @@ pub(crate) async fn emit_model_fallback_notice(
         }
         ModelFallbackReason::ProbeRecovery => {
             format!("[system] Recovered to primary {new_model} after probe.\n")
-        }
-        ModelFallbackReason::ChainExhausted => {
-            if original.is_empty() {
-                "[system] All provider slots exhausted.\n".to_string()
-            } else {
-                format!("[system] All provider slots exhausted (last tried: {original}).\n")
-            }
         }
     };
     let _ = emit_stream(

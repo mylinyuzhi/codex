@@ -12,6 +12,7 @@ use crate::CommandRegistry;
 use crate::RegisteredCommand;
 use crate::builtin_base_ext;
 use crate::handlers;
+use coco_types::CommandArgumentKind;
 use coco_types::CommandSafety;
 use coco_types::CommandType;
 use coco_types::LocalCommandData;
@@ -379,8 +380,10 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
                 handler: name.to_string(),
             })
         };
+        let mut base = builtin_base_ext(name, description, aliases, safety, arg_hint);
+        base.argument_kind = builtin_argument_kind(name, base.argument_kind);
         registry.register(RegisteredCommand {
-            base: builtin_base_ext(name, description, aliases, safety, arg_hint),
+            base,
             command_type,
             handler: Some(handler),
             is_enabled: None,
@@ -407,7 +410,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         (
             names::CONTEXT,
             "Show context window usage breakdown",
-            &["ctx"],
+            &[],
             handlers::context::handler,
             /*overlay*/ true,
             LocalOnly,
@@ -603,8 +606,10 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
                 handler: name.to_string(),
             })
         };
+        let mut base = builtin_base_ext(name, description, aliases, safety, arg_hint);
+        base.argument_kind = builtin_argument_kind(name, base.argument_kind);
         registry.register(RegisteredCommand {
-            base: builtin_base_ext(name, description, aliases, safety, arg_hint),
+            base,
             command_type,
             handler: Some(handler),
             is_enabled: None,
@@ -626,6 +631,15 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
     // (Earlier this block held handler-less Prompt stubs; they were dead
     // weight because `register_ts_parity_handlers` runs after and replaces
     // them via `register_static_prompt`.)
+}
+
+fn builtin_argument_kind(name: &str, fallback: CommandArgumentKind) -> CommandArgumentKind {
+    match name {
+        names::ADD_DIR => CommandArgumentKind::DirectoryPath,
+        names::RESUME => CommandArgumentKind::SessionId,
+        names::EXPORT => CommandArgumentKind::FilePath,
+        _ => fallback,
+    }
 }
 
 // ── Sync handlers ──

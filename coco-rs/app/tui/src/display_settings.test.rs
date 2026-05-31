@@ -107,6 +107,23 @@ fn from_settings_converts_tui_performance_defaults_and_overrides() {
 }
 
 #[test]
+fn from_settings_carries_status_line_config() {
+    let settings = Settings {
+        status_line: Some(coco_config::StatusLineSettings::Command(
+            coco_config::StatusLineCommandSettings {
+                command: "printf ready".to_string(),
+                padding: 0,
+            },
+        )),
+        ..Settings::default()
+    };
+
+    let display = DisplaySettings::from_settings(&settings);
+
+    assert_eq!(display.status_line, settings.status_line);
+}
+
+#[test]
 fn from_settings_with_sources_marks_higher_priority_syntax_highlighting_as_overridden() {
     let mut per_source = HashMap::new();
     per_source.insert(SettingSource::Project, raw_syntax_highlighting(true));

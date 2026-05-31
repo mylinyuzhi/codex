@@ -37,6 +37,7 @@ chrono.workspace = true
 lru.workspace = true
 once_cell.workspace = true
 regex.workspace = true
+snafu.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -56,3 +57,4 @@ coco-tool-runtime = { workspace = true, features = ["testing"] }
 coco-hooks.workspace = true
 tempfile.workspace = true
 async-trait.workspace = true
+futures.workspace = true

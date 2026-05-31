@@ -178,6 +178,8 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::PluginDataReady { .. } => "plugin_data_ready",
         TuiOnlyEvent::OutputStylesReady { .. } => "output_styles_ready",
         TuiOnlyEvent::AvailableCommandsRefreshed { .. } => "available_commands_refreshed",
+        TuiOnlyEvent::QueuedCommandEditReady { .. } => "queued_command_edit_ready",
+        TuiOnlyEvent::QueuedCommandEditUnavailable { .. } => "queued_command_edit_unavailable",
         TuiOnlyEvent::OpenSessionBrowser { .. } => "open_session_browser",
         TuiOnlyEvent::RewindRowMetadataReady { .. } => "rewind_row_metadata_ready",
         TuiOnlyEvent::RewindRestorePreviewReady { .. } => "rewind_restore_preview_ready",

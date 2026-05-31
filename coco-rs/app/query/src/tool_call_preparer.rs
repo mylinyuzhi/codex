@@ -4,7 +4,9 @@ use std::sync::Arc;
 use coco_hooks::HookExecutionEvent;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
-use coco_inference::ApiClient;
+use coco_inference::ModelRuntimeQueryOutcome;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
 use coco_llm_types::ToolCallPart;
 use coco_llm_types::ToolInputInvalidReason;
@@ -19,6 +21,7 @@ use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
+use coco_types::ModelRole;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDenialInfo;
 use coco_types::ToolId;
@@ -65,7 +68,7 @@ pub(crate) struct PendingToolPreparation<'a> {
     pub cancel: &'a CancellationToken,
     pub auto_mode_state: Option<&'a Arc<coco_permissions::AutoModeState>>,
     pub denial_tracker: Option<&'a Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
-    pub client: &'a Arc<ApiClient>,
+    pub model_runtimes: &'a Arc<ModelRuntimeRegistry>,
     pub auto_mode_rules: &'a AutoModeRules,
     pub completion_event_mode: ToolCompletionEventMode,
 }
@@ -209,7 +212,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         (hook_permission_behavior, hook_permission_reason),
         args.auto_mode_state,
         args.denial_tracker,
-        args.client,
+        args.model_runtimes,
         args.auto_mode_rules,
     )
     .await;
@@ -314,7 +317,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     hook_permission: (Option<coco_types::PermissionBehavior>, Option<String>),
     auto_mode_state: Option<&Arc<coco_permissions::AutoModeState>>,
     denial_tracker: Option<&Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
-    client: &Arc<ApiClient>,
+    model_runtimes: &Arc<ModelRuntimeRegistry>,
     auto_mode_rules: &AutoModeRules,
 ) -> PermissionDecision {
     let (hook_permission_behavior, hook_permission_reason) = hook_permission;
@@ -384,7 +387,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
             state,
             &mut tracker_guard,
             history_messages,
-            client,
+            model_runtimes,
             auto_mode_rules,
         )
         .await;
@@ -534,12 +537,12 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
     state: &coco_permissions::AutoModeState,
     tracker: &mut coco_permissions::DenialTracker,
     messages: &[M],
-    client: &Arc<ApiClient>,
+    model_runtimes: &Arc<ModelRuntimeRegistry>,
     auto_mode_rules: &AutoModeRules,
 ) -> Option<PermissionDecision> {
-    let client = Arc::clone(client);
+    let model_runtimes = model_runtimes.clone();
     let classify_fn = move |req: coco_permissions::ClassifyRequest| {
-        let client = Arc::clone(&client);
+        let model_runtimes = Arc::clone(&model_runtimes);
         async move {
             let prompt: coco_llm_types::LlmPrompt = vec![
                 coco_llm_types::LlmMessage::System {
@@ -561,72 +564,80 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     provider_options: None,
                 },
             ];
-            let params = QueryParams {
-                prompt,
-                max_tokens: Some(req.max_tokens),
-                thinking_level: None,
-                fast_mode: req.stage == 1,
-                tools: None,
-                tool_choice: None,
-                context_management: None,
-                query_source: None,
-                agent_id: None,
-                time_since_last_assistant_ms: None,
-                // Auto-mode classifier helper call — not the agent loop.
-                agentic: false,
-                cache: None,
-                // Stage 1 in `both` mode passes ["</block>"] so the model
-                // terminates immediately after the verdict tag, saving
-                // tokens and latency. Stage 2 leaves this `None` so it can
-                // emit `<thinking>` and `<reason>` freely. TS parity:
-                // `yoloClassifier.ts:792`.
-                stop_sequences: req.stop_sequences,
-                response_format: None,
-            };
-            match client.query(&params).await {
-                Ok(result) => {
-                    // auto-mode classifier input — preserve tool-call
-                    // boundary markers so permission decisions see the
-                    // structural transitions (otherwise multi-text +
-                    // tool calls collapse to a single blob and the
-                    // classifier can misclassify).
-                    let mut chunks: Vec<String> = Vec::new();
-                    for p in &result.content {
-                        match p {
-                            coco_llm_types::AssistantContentPart::Text(t) if !t.text.is_empty() => {
-                                chunks.push(t.text.clone());
+            loop {
+                let params = QueryParams {
+                    prompt: prompt.clone(),
+                    max_tokens: Some(req.max_tokens),
+                    thinking_level: None,
+                    fast_mode: req.stage == 1,
+                    tools: None,
+                    tool_choice: None,
+                    context_management: None,
+                    query_source: None,
+                    agent_id: None,
+                    time_since_last_assistant_ms: None,
+                    // Auto-mode classifier helper call — not the agent loop.
+                    agentic: false,
+                    cache: None,
+                    // Stage 1 in `both` mode passes ["</block>"] so the model
+                    // terminates immediately after the verdict tag, saving
+                    // tokens and latency. Stage 2 leaves this `None` so it can
+                    // emit `<thinking>` and `<reason>` freely. TS parity:
+                    // `yoloClassifier.ts:792`.
+                    stop_sequences: req.stop_sequences.clone(),
+                    response_format: None,
+                };
+                match model_runtimes
+                    .query_once(ModelRuntimeSource::Role(ModelRole::Main), &params)
+                    .await
+                {
+                    ModelRuntimeQueryOutcome::Success { result, .. } => {
+                        // auto-mode classifier input — preserve tool-call
+                        // boundary markers so permission decisions see the
+                        // structural transitions (otherwise multi-text +
+                        // tool calls collapse to a single blob and the
+                        // classifier can misclassify).
+                        let mut chunks: Vec<String> = Vec::new();
+                        for p in &result.content {
+                            match p {
+                                coco_llm_types::AssistantContentPart::Text(t)
+                                    if !t.text.is_empty() =>
+                                {
+                                    chunks.push(t.text.clone());
+                                }
+                                coco_llm_types::AssistantContentPart::ToolCall(tc) => {
+                                    chunks.push(format!("[tool: {}]", tc.tool_name));
+                                }
+                                _ => {}
                             }
-                            coco_llm_types::AssistantContentPart::ToolCall(tc) => {
-                                chunks.push(format!("[tool: {}]", tc.tool_name));
-                            }
-                            _ => {}
                         }
+                        // Stage 1 uses `["</block>"]` as a stop sequence, so a
+                        // `stop_sequence` stop_reason is expected and stays
+                        // in the happy-path set of `is_abnormal_stop_reason`.
+                        // The danger is `length` (verdict truncated mid-XML)
+                        // or `content-filter` — both yield a structurally
+                        // incomplete classifier output that downstream
+                        // permission parsing may silently mis-interpret as
+                        // "allow". Warn so the permission misroute is
+                        // discoverable.
+                        let stop = result.stop_reason.as_ref();
+                        if stop.is_some_and(coco_messages::FinishReason::is_abnormal)
+                            || chunks.is_empty()
+                        {
+                            tracing::warn!(
+                                stop_reason = ?stop,
+                                tokens_out = result.usage.output_tokens.total,
+                                chunks = chunks.len(),
+                                stage = req.stage,
+                                "auto-mode classifier unexpected outcome — \
+                                 permission decision may use a truncated verdict"
+                            );
+                        }
+                        break Ok(chunks.join("\n"));
                     }
-                    // Stage 1 uses `["</block>"]` as a stop sequence, so a
-                    // `stop_sequence` stop_reason is expected and stays
-                    // in the happy-path set of `is_abnormal_stop_reason`.
-                    // The danger is `length` (verdict truncated mid-XML)
-                    // or `content-filter` — both yield a structurally
-                    // incomplete classifier output that downstream
-                    // permission parsing may silently mis-interpret as
-                    // "allow". Warn so the permission misroute is
-                    // discoverable.
-                    let stop = result.stop_reason.as_ref();
-                    if stop.is_some_and(coco_messages::FinishReason::is_abnormal)
-                        || chunks.is_empty()
-                    {
-                        tracing::warn!(
-                            stop_reason = ?stop,
-                            tokens_out = result.usage.output_tokens.total,
-                            chunks = chunks.len(),
-                            stage = req.stage,
-                            "auto-mode classifier unexpected outcome — \
-                             permission decision may use a truncated verdict"
-                        );
-                    }
-                    Ok(chunks.join("\n"))
+                    ModelRuntimeQueryOutcome::Retry { .. } => continue,
+                    ModelRuntimeQueryOutcome::Failed { error, .. } => break Err(error.to_string()),
                 }
-                Err(e) => Err(e.to_string()),
             }
         }
     };

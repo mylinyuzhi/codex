@@ -19,109 +19,10 @@ use crate::state::PanePromptState;
 use crate::state::ProviderUnavailableReason;
 use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
-use crate::state::SuggestionKind;
 use crate::state::surface_payloads::PermissionAction;
 use crate::state::ui::Toast;
 use crate::update_rewind;
-use crate::widgets::suggestion_popup::SuggestionMeta;
 use coco_tui_ui::constants;
-
-/// Splice the currently selected suggestion back into the input buffer.
-///
-/// Replaces everything from `trigger_pos` to the cursor with a formatted
-/// rendering of the selection. Mirrors TS `formatReplacementValue` +
-/// `applyDirectorySuggestion` (`useTypeahead.tsx:148,237`) and the
-/// unified popup's per-kind insertion (`unifiedSuggestions.ts`):
-///   - slash command → `<label> ` (label already has `/` prefix)
-///   - symbol        → `@#<sym> `
-///   - At + Path (file) → `@<path> ` (auto-quoted if whitespace)
-///   - At + Path (directory) → `@<path>/` and **leave the popup open**
-///   - At + Agent    → `@<name> (agent) ` (suffix form; submit-side
-///     parser at `coco_context::user_input::extract_mentions:152`
-///     accepts the suffix and strips it via `strip_agent_suffix`)
-///   - At + McpResource → `@<server>:<uri> `
-fn accept_suggestion(state: &mut AppState) {
-    let Some(sug) = state.ui.active_suggestions.take() else {
-        return;
-    };
-    let Some(item) = sug.items.get(sug.selected).cloned() else {
-        state.ui.active_suggestions = None;
-        state.ui.sync_popup_from_active_suggestions();
-        return;
-    };
-
-    let (insertion, keep_popup) = match sug.kind {
-        SuggestionKind::SlashCommand => (format!("{} ", item.label), false),
-        SuggestionKind::Symbol => (format!("@#{} ", item.label), false),
-        SuggestionKind::At => format_at_insertion(&item),
-    };
-
-    // Byte-offset splice via TextArea so multi-byte text before the
-    // trigger doesn't shift the insertion point. Mirrors the TS pattern
-    // where trigger pos and cursor are both UTF-16 code-unit offsets and
-    // `text.slice(start, cursor).replace(...)` does the splice directly.
-    let text_len = state.ui.input.text().len();
-    let start = sug.trigger_pos.min(text_len);
-    let end = state.ui.input.textarea.cursor().min(text_len);
-    state
-        .ui
-        .input
-        .textarea
-        .replace_range(start..end, &insertion);
-    state.ui.input.textarea.set_cursor(start + insertion.len());
-
-    // For directory completions, re-trigger the popup so the next
-    // search runs against the new prefix. `accept_suggestion` already
-    // took `active_suggestions`; let `refresh_suggestions` install a
-    // fresh popup keyed off the new query.
-    if keep_popup {
-        crate::autocomplete::refresh_suggestions(state);
-    } else {
-        state.ui.sync_popup_from_active_suggestions();
-    }
-}
-
-/// Format the splice text for an item from the unified `@` popup.
-///
-/// Returns `(insertion, keep_popup)` — directory completions keep the
-/// popup open so the user can drill in. All other kinds dismiss.
-fn format_at_insertion(item: &crate::widgets::suggestion_popup::SuggestionItem) -> (String, bool) {
-    match item.metadata.as_ref() {
-        Some(SuggestionMeta::Path { is_directory: true }) => {
-            let body = quote_if_whitespace(&item.label);
-            (format!("@{body}/"), true)
-        }
-        Some(SuggestionMeta::Path {
-            is_directory: false,
-        }) => {
-            let body = quote_if_whitespace(&item.label);
-            (format!("@{body} "), false)
-        }
-        Some(SuggestionMeta::Agent { .. }) => {
-            // Label already carries the `" (agent)"` suffix from
-            // `unified::seed_agent_items`, so a direct splice produces
-            // the canonical `@<name> (agent) ` form the submit parser
-            // recognises.
-            (format!("@{} ", item.label), false)
-        }
-        Some(SuggestionMeta::McpResource { server, uri }) => (format!("@{server}:{uri} "), false),
-        // No metadata: treat as a bare file path for backwards-safe
-        // splicing — preserves the legacy `@<text>` behaviour while
-        // surfacing a callsite to inspect should it ever fire.
-        None => {
-            let body = quote_if_whitespace(&item.label);
-            (format!("@{body} "), false)
-        }
-    }
-}
-
-fn quote_if_whitespace(s: &str) -> String {
-    if s.contains(char::is_whitespace) {
-        format!("\"{s}\"")
-    } else {
-        s.to_string()
-    }
-}
 
 /// Handle `Approve` for the current prompt/modal.
 pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
@@ -673,7 +574,7 @@ pub(super) fn filter_backspace(state: &mut AppState) {
 pub(super) fn nav(state: &mut AppState, delta: i32) {
     // Autocomplete takes precedence over (non-existent) state.
     if !state.ui.has_blocking_interaction()
-        && let Some(ref mut sug) = state.ui.active_suggestions
+        && let Some(ref mut sug) = state.ui.completion.active
     {
         if sug.items.is_empty() {
             sug.selected = 0;
@@ -805,8 +706,11 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
 
 /// Confirm the currently selected item in the active prompt/modal.
 pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    if !state.ui.has_blocking_interaction() && state.ui.active_suggestions.is_some() {
-        accept_suggestion(state);
+    if !state.ui.has_blocking_interaction() && state.ui.completion.active.is_some() {
+        let _ = crate::completion::accept_suggestion(
+            state,
+            crate::completion::AcceptMode::AcceptSelected,
+        );
         return;
     }
 
@@ -941,10 +845,10 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                         }
                     } else if s.is_syntax_highlighting_selected() {
                         toggle_syntax_highlighting(state);
-                        s.set_display_settings(state.ui.display_settings);
+                        s.set_display_settings(state.ui.display_settings.clone());
                     } else if s.is_copy_full_response_selected() {
                         toggle_copy_full_response(state);
-                        s.set_display_settings(state.ui.display_settings);
+                        s.set_display_settings(state.ui.display_settings.clone());
                     }
                 }
                 // Keep settings open after selection — user may want to try
@@ -1452,6 +1356,7 @@ pub(super) fn toggle_syntax_highlighting(state: &mut AppState) {
     let next = state
         .ui
         .display_settings
+        .clone()
         .with_syntax_highlighting(state.ui.display_settings.syntax_highlighting.toggle());
 
     let disabled = next.syntax_highlighting.is_disabled();
@@ -1460,10 +1365,10 @@ pub(super) fn toggle_syntax_highlighting(state: &mut AppState) {
         serde_json::json!(disabled),
     ) {
         Ok(path) => {
-            state.ui.apply_display_settings(next);
             let status = crate::widgets::settings_panel::syntax_highlighting_status(
                 next.syntax_highlighting,
             );
+            state.ui.apply_display_settings(next);
             let path_text = path.display().to_string();
             state.ui.add_toast(Toast::success(
                 t!(
@@ -1486,7 +1391,11 @@ pub(super) fn toggle_syntax_highlighting(state: &mut AppState) {
 
 fn toggle_copy_full_response(state: &mut AppState) {
     let enabled = !state.ui.display_settings.copy_full_response;
-    let next = state.ui.display_settings.with_copy_full_response(enabled);
+    let next = state
+        .ui
+        .display_settings
+        .clone()
+        .with_copy_full_response(enabled);
 
     match coco_config::global_config::write_user_setting(
         coco_config::settings::COPY_FULL_RESPONSE_KEY,

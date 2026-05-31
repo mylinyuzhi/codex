@@ -601,7 +601,7 @@ impl TranscriptStore {
 
     /// `<project>/<session_id>/usage.json` — cumulative session usage snapshot.
     pub fn usage_snapshot_path(&self, session_id: &str) -> PathBuf {
-        self.paths.session_usage(session_id)
+        self.paths.session_dir(session_id).join("usage.json")
     }
 
     /// Atomically overwrite the cumulative usage snapshot for a session.

@@ -14,8 +14,8 @@ use coco_provider_auth::LoginOptions;
 use coco_types::OAuthFlowId;
 
 /// Process-wide, lazily-built `AuthService` shared by every client-construction
-/// site (Main via `create_api_client`, all non-Main roles via `RoleClientCache`,
-/// subagents, side-queries). One instance per process means exactly one
+/// site (Main via `create_api_client`, role runtimes, subagents,
+/// side-queries). One instance per process means exactly one
 /// `TokenCell` and one serialized refresher per provider — the single-cell
 /// invariant that keeps a rotating, single-use refresh token from being
 /// double-spent by two `AuthService`s. The strong ref held here keeps the
@@ -31,7 +31,7 @@ pub fn shared_auth_service() -> Arc<AuthService> {
 }
 
 /// The shared service as a `ProviderCredentialResolver` trait object, for
-/// `model_factory` / `RoleClientCache` / subagent / side-query client builds.
+/// `model_factory` / `ModelRuntimeRegistry` / subagent / side-query client builds.
 pub fn shared_resolver() -> Arc<dyn ProviderCredentialResolver> {
     shared_auth_service()
 }

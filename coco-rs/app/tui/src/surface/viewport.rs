@@ -4,9 +4,7 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
@@ -17,10 +15,6 @@ use crate::FrameLayout;
 use crate::presentation::activity::TurnActivityView;
 use crate::presentation::activity::inline_activity_height;
 use crate::presentation::activity::turn_activity_view;
-use crate::presentation::footer::FooterSpan;
-use crate::presentation::footer::FooterTone;
-use crate::presentation::footer::FooterView;
-use crate::presentation::footer::footer_view;
 use crate::presentation::input::InlinePopupView;
 use crate::presentation::input::inline_popup_view;
 use crate::state::AppState;
@@ -388,7 +382,10 @@ fn render_live_viewport(
             frame.render_widget(popup, anchor);
         }
     } else if bottom_height > 0 {
-        render_status_bar(frame, bottom, state, styles);
+        frame.render_widget(
+            crate::status_bar::StatusBarWidget::new(state, styles),
+            bottom,
+        );
     }
 }
 
@@ -555,50 +552,6 @@ fn compact_prompt_body(body: &str, max_lines: usize) -> String {
     compact.push("...");
     compact.extend(lines.iter().rev().take(tail_count).rev().copied());
     compact.join("\n")
-}
-
-fn render_status_bar(
-    frame: &mut SurfaceFrame<'_>,
-    area: Rect,
-    state: &AppState,
-    styles: UiStyles<'_>,
-) {
-    let view = footer_view(state);
-    let line = match view {
-        FooterView::ExitPrompt { key, text } => {
-            tracing::info!(
-                key = key.label(),
-                prompt = %text,
-                width = area.width,
-                "status bar rendering exit prompt"
-            );
-            Line::from(Span::styled(
-                text,
-                Style::default().fg(styles.warning()).bold(),
-            ))
-        }
-        FooterView::Status { spans } => Line::from(
-            spans
-                .iter()
-                .map(|span| footer_span(span, styles))
-                .collect::<Vec<_>>(),
-        ),
-    };
-    frame.render_widget(Paragraph::new(line), area);
-}
-
-fn footer_span(span: &FooterSpan, styles: UiStyles<'_>) -> Span<'static> {
-    let color = match span.tone {
-        FooterTone::Primary => styles.primary(),
-        FooterTone::Dim => styles.dim(),
-        FooterTone::Border => styles.border(),
-        FooterTone::Warning => styles.warning(),
-        FooterTone::Accent => styles.accent(),
-        FooterTone::Plan => styles.plan(),
-        FooterTone::Error => styles.error(),
-    };
-    let rendered = Span::styled(span.text.clone(), Style::default().fg(color));
-    if span.bold { rendered.bold() } else { rendered }
 }
 
 fn render_toasts(

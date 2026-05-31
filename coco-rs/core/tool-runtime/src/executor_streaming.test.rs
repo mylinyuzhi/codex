@@ -300,6 +300,67 @@ async fn test_discard_converts_pending_to_streaming_discarded() {
     assert_eq!(started.load(Ordering::SeqCst), 0);
 }
 
+// ── terminal_drain: budget-stop semantics ────────────────────────
+
+#[tokio::test]
+async fn test_terminal_drain_commits_ready_safe_and_skips_pending_serial() {
+    let executor = Arc::new(StreamingToolExecutor::new());
+    let started = Arc::new(AtomicI32::new(0));
+    let mut handle = executor.streaming_handle(stub_run_one);
+
+    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+        "safe_done",
+        0,
+        /*safe*/ true,
+        started.clone(),
+        0,
+    )));
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+        "unsafe_pending",
+        1,
+        /*safe*/ false,
+        started.clone(),
+        0,
+    )));
+
+    let mut ids: Vec<String> = Vec::new();
+    handle
+        .terminal_drain(0, |o| ids.push(o.tool_use_id().to_string()))
+        .await;
+
+    assert_eq!(ids, vec!["safe_done"]);
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        1,
+        "queued unsafe plan must not run during terminal drain"
+    );
+}
+
+#[tokio::test]
+async fn test_terminal_drain_aborts_unfinished_safe_tool() {
+    let executor = Arc::new(StreamingToolExecutor::new());
+    let started = Arc::new(AtomicI32::new(0));
+    let mut handle = executor.streaming_handle(stub_run_one);
+
+    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+        "safe_slow",
+        0,
+        /*safe*/ true,
+        started.clone(),
+        50,
+    )));
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let mut ids: Vec<String> = Vec::new();
+    handle
+        .terminal_drain(0, |o| ids.push(o.tool_use_id().to_string()))
+        .await;
+
+    assert!(ids.is_empty());
+    assert_eq!(started.load(Ordering::SeqCst), 1);
+}
+
 // ── commit_flush: completion_seq monotonic across the stream ──────
 
 #[tokio::test]

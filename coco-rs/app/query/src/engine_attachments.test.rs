@@ -2,12 +2,10 @@ use std::fs;
 use std::sync::Arc;
 
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::StopReason;
@@ -68,10 +66,7 @@ impl LanguageModel for StubModel {
 
 fn make_test_engine() -> QueryEngine {
     let model = Arc::new(StubModel);
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)

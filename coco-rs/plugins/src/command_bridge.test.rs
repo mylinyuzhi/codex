@@ -186,6 +186,7 @@ fn test_load_v2_commands_from_manifest_object_inline_content() {
                     content: Some("Say hello to the user.".to_string()),
                     description: Some("Greeting command".to_string()),
                     argument_hint: None,
+                    argument_kind: None,
                     model: None,
                     allowed_tools: None,
                 },
@@ -228,6 +229,7 @@ fn test_load_v2_commands_from_manifest_object_source_path() {
                     content: None,
                     description: Some("Overridden description".to_string()),
                     argument_hint: None,
+                    argument_kind: None,
                     model: None,
                     allowed_tools: None,
                 },
@@ -252,6 +254,7 @@ fn test_command_metadata_deserialize() {
         "source": "cmd.md",
         "description": "A command",
         "argument_hint": "[file]",
+        "argument_kind": "file_path",
         "model": "opus",
         "allowed_tools": ["Read", "Write"]
     });
@@ -260,6 +263,10 @@ fn test_command_metadata_deserialize() {
     assert_eq!(meta.source.as_deref(), Some("cmd.md"));
     assert_eq!(meta.description.as_deref(), Some("A command"));
     assert_eq!(meta.argument_hint.as_deref(), Some("[file]"));
+    assert_eq!(
+        meta.argument_kind,
+        Some(coco_types::CommandArgumentKind::FilePath)
+    );
     assert_eq!(meta.model.as_deref(), Some("opus"));
     assert_eq!(
         meta.allowed_tools.as_deref(),
@@ -291,6 +298,7 @@ fn test_command_metadata_overrides() {
                     content: None,
                     description: Some("Override desc".to_string()),
                     argument_hint: Some("[file]".to_string()),
+                    argument_kind: Some(coco_types::CommandArgumentKind::FilePath),
                     model: Some("opus".to_string()),
                     allowed_tools: Some(vec!["Read".to_string()]),
                 },
@@ -307,6 +315,10 @@ fn test_command_metadata_overrides() {
     let cmd = &commands[0];
     assert_eq!(cmd.base.description, "Override desc");
     assert_eq!(cmd.base.argument_hint.as_deref(), Some("[file]"));
+    assert_eq!(
+        cmd.base.argument_kind,
+        coco_types::CommandArgumentKind::FilePath
+    );
 
     if let coco_types::CommandType::Prompt(ref data) = cmd.command_type {
         assert_eq!(data.model.as_deref(), Some("opus"));

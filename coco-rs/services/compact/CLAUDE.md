@@ -192,17 +192,16 @@ Three layers, picked at runtime based on provider capability:
    `vercel-ai-anthropic`'s `transform_context_management` expects.
    Preserves the prompt cache because the API applies edits in place.
    Dispatch gate:
-   `coco_inference::ApiClient::supports_server_side_context_edits()`
-   returns true only when `ProviderApi::Anthropic`.
+   The active runtime snapshot reports server-side context-edit support
+   only when the resolved provider API is Anthropic.
 
 3. **Full LLM summarization** (`compact::compact_conversation`). Final
    fallback when neither layer can recover enough budget. Provider-agnostic.
 
 `coco-compact` itself never inspects providers — it produces strategy
 descriptions and exposes the encoder. `coco-query` checks
-`ApiClient::supports_server_side_context_edits()` before populating
-`QueryParams.context_management`; non-Anthropic clients always see
-`None` there and rely on layer 1 / 3.
+the active runtime snapshot before populating `QueryParams.context_management`;
+non-Anthropic runtime slots always see `None` there and rely on layer 1 / 3.
 
 ## QueryEngine Integration
 

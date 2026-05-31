@@ -298,7 +298,7 @@ impl SkillHandle for QuerySkillRuntime {
                     // (they're a separate first-class workflow type).
                     definition: None,
                     // Skills inherit the parent's permission bridge by
-                    // construction (they reuse the parent ApiClient).
+                    // construction (they reuse the parent runtime).
                     // Setting this to `None` keeps the engine factory's
                     // wire_engine path on the parent's bridge.
                     permission_bridge: None,

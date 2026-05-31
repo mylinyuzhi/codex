@@ -616,7 +616,7 @@ async fn test_set_runtime_config_replaces_main_model_resolver() {
                 display_name: "Claude Opus 4.7".into(),
             },
             fallbacks: Vec::new(),
-            recovery: None,
+            policy: coco_config::FallbackPolicy::default(),
         },
     );
     handle.set_runtime_config(Arc::new(runtime));

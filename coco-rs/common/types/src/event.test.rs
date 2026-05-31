@@ -629,6 +629,7 @@ fn session_started_has_all_init_fields() {
         protocol_version: "1.0".into(),
         cwd: "/tmp".into(),
         model: "claude-opus".into(),
+        provider: "anthropic".into(),
         permission_mode: "default".into(),
         tools: vec!["Bash".into(), "Read".into()],
         slash_commands: vec!["/help".into()],
@@ -648,6 +649,7 @@ fn session_started_has_all_init_fields() {
     };
     let j = serde_json::to_value(&p).unwrap();
     assert_eq!(j["cwd"], "/tmp");
+    assert_eq!(j["provider"], "anthropic");
     assert_eq!(j["tools"].as_array().unwrap().len(), 2);
     assert_eq!(j["mcp_servers"][0]["name"], "github");
 }

@@ -26,10 +26,18 @@ pub(crate) struct InputRenderModel {
     pub(crate) prompt_mode: PromptMode,
     pub(crate) prefix_consumed: usize,
     pub(crate) display_text: String,
+    pub(crate) inline_hint: Option<String>,
+    pub(crate) inline_ghost: Option<InlineGhostRender>,
     pub(crate) title: String,
     pub(crate) command_palette_filter: Option<String>,
     pub(crate) is_placeholder: bool,
     pub(crate) is_streaming: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InlineGhostRender {
+    pub(crate) byte_pos: usize,
+    pub(crate) text: String,
 }
 
 impl InputRenderModel {
@@ -58,20 +66,36 @@ impl InputRenderModel {
             1 + if body.starts_with(' ') { 1 } else { 0 }
         };
 
-        let (display_text, is_placeholder, command_palette_filter) =
+        let (display_text, inline_hint, is_placeholder, command_palette_filter) =
             if let Some(filter) = command_palette_filter {
-                (format!("/{filter}"), false, Some(filter.to_string()))
+                (format!("/{filter}"), None, false, Some(filter.to_string()))
             } else if is_empty {
                 if has_editable_queue {
-                    (t!("input.placeholder_queued").to_string(), true, None)
+                    (t!("input.placeholder_queued").to_string(), None, true, None)
                 } else if let Some(suggestion) = prompt_suggestion {
-                    (suggestion.to_string(), true, None)
+                    (suggestion.to_string(), None, true, None)
                 } else {
-                    (String::new(), false, None)
+                    (String::new(), None, false, None)
                 }
             } else {
-                (input.text()[prefix_consumed..].to_string(), false, None)
+                (
+                    input.text()[prefix_consumed..].to_string(),
+                    input.inline_hint.clone(),
+                    false,
+                    None,
+                )
             };
+        let inline_ghost = if is_placeholder || command_palette_filter.is_some() {
+            None
+        } else {
+            input.active_inline_ghost().and_then(|ghost| {
+                let byte_pos = ghost.insert_position.checked_sub(prefix_consumed)?;
+                (byte_pos <= display_text.len()).then(|| InlineGhostRender {
+                    byte_pos,
+                    text: ghost.text.clone(),
+                })
+            })
+        };
 
         let title = if is_streaming {
             format!(" {} ", t!("input.title_queue"))
@@ -93,6 +117,8 @@ impl InputRenderModel {
             prompt_mode,
             prefix_consumed,
             display_text,
+            inline_hint,
+            inline_ghost,
             title,
             command_palette_filter,
             is_placeholder,
@@ -192,10 +218,27 @@ impl Widget for InputWidget<'_> {
         } else {
             Style::default().fg(self.styles.text())
         };
-        let input_line = Line::from(vec![
-            indicator,
-            Span::styled(model.display_text.clone(), text_style),
-        ]);
+        let mut spans = vec![indicator];
+        if let Some(ghost) = model.inline_ghost.as_ref() {
+            let split = ghost.byte_pos.min(model.display_text.len());
+            let before = model.display_text[..split].to_string();
+            let after = model.display_text[split..].to_string();
+            spans.push(Span::styled(before, text_style));
+            spans.push(Span::styled(
+                ghost.text.clone(),
+                Style::default().fg(self.styles.dim()),
+            ));
+            spans.push(Span::styled(after, text_style));
+        } else {
+            spans.push(Span::styled(model.display_text.clone(), text_style));
+        }
+        if let Some(hint) = model.inline_hint.as_ref() {
+            spans.push(Span::styled(
+                hint.clone(),
+                Style::default().fg(self.styles.dim()),
+            ));
+        }
+        let input_line = Line::from(spans);
         let input = Paragraph::new(input_line).block(
             Block::default()
                 .borders(Borders::TOP | Borders::BOTTOM)

@@ -30,12 +30,32 @@ fn general_purpose_prompt_includes_shared_prefix_and_guidelines() {
 
 #[test]
 fn statusline_setup_prompt_carries_ps1_pattern() {
-    // TS `statuslineSetup.ts:12` regex. The literal backslashes survive
-    // the Rust raw-string (no `\\n` escape collapse).
     let p = STATUSLINE_SETUP_SYSTEM_PROMPT;
+    // The literal backslashes survive the Rust raw-string (no `\\n`
+    // escape collapse).
     assert!(p.contains(r#"/(?:^|\n)\s*(?:export\s+)?PS1\s*=\s*["']([^"']+)["']/m"#));
     assert!(p.contains("\\u → $(whoami)"));
     assert!(p.contains("ANSI color codes"));
+    assert!(p.starts_with("You are a status line setup agent for Coco"));
+    assert!(p.contains("~/.coco/settings.json"));
+    assert!(p.contains("~/.coco/statusline-command.sh"));
+    assert!(p.contains("\"provider\": \"string\""));
+    assert!(p.contains("\"cost\": {"));
+    assert!(p.contains("\"context_window\": {"));
+    assert!(p.contains("\"used\": number | null"));
+    assert!(p.contains("\"total\": number | null"));
+    assert!(p.contains("\"percent\": number | null"));
+    assert!(p.contains("\"exceeds_200k_tokens\": boolean"));
+    assert!(p.contains("\"permission_mode\": \"string\""));
+    assert!(p.contains("\"lsp\": {"));
+    assert!(p.contains("\"connected_servers\": [\"string\"]"));
+    assert!(!p.contains("~/.claude"));
+    assert!(!p.contains("\"session_name\""));
+    assert!(!p.contains("\"transcript_path\""));
+    assert!(!p.contains("\"rate_limits\""));
+    assert!(!p.contains("\"vim\""));
+    assert!(!p.contains("\"agent\""));
+    assert!(!p.contains("\"worktree\""));
 }
 
 #[test]

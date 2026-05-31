@@ -60,7 +60,7 @@ pub struct QueryParams {
     pub tool_choice: Option<vercel_ai_provider::LanguageModelV4ToolChoice>,
     /// Anthropic `context_management` payload (camelCase shape) attached
     /// to this request. Producers should call
-    /// [`crate::ApiClient::supports_server_side_context_edits`] before
+    /// [`Self::supports_server_side_context_edits`] before
     /// populating; non-Anthropic providers ignore the field but the
     /// inference layer still preserves the value through
     /// `PerCallOverrides`. Built by
@@ -165,8 +165,8 @@ pub struct QueryResult {
 /// `info.default_thinking()` / `temperature` / `top_p` / `top_k`, and
 /// per-call thinking overrides. When `model_info` is `None` (test /
 /// mock constructor) the legacy direct construction is used.
-pub struct ApiClient {
-    /// The underlying model (real or mock — ApiClient doesn't care).
+pub(crate) struct ApiClient {
+    /// The underlying model (real or mock).
     model: Arc<dyn LanguageModelV4>,
     /// Identity of the underlying client. Updated when
     /// `with_fingerprint` is called; matched against
@@ -208,7 +208,7 @@ impl ApiClient {
     /// (provider, model_id) pair so [`Self::query`] / [`Self::query_stream`]
     /// route through [`build_call_options`] — without this, the
     /// `extra_body` / typed-sampling / thinking machinery is inert.
-    pub fn new(
+    pub(crate) fn new(
         model: Arc<dyn LanguageModelV4>,
         fingerprint: ProviderClientFingerprint,
         model_info: Option<ModelInfo>,
@@ -232,7 +232,7 @@ impl ApiClient {
     /// refresh, then retries — so an expired OAuth-subscription access token
     /// recovers transparently instead of surfacing to the user.
     #[must_use]
-    pub fn with_refresh_hook(mut self, hook: crate::credentials::RefreshHook) -> Self {
+    pub(crate) fn with_refresh_hook(mut self, hook: crate::credentials::RefreshHook) -> Self {
         self.refresh_hook = Some(hook);
         self
     }
@@ -240,25 +240,22 @@ impl ApiClient {
     /// Install a shared `CacheBreakDetector`. When present, every
     /// `query` invocation snapshots the pre-call prompt state and
     /// checks the post-call response for cache breaks. Multiple
-    /// `ApiClient` instances on the same conversation can share one
+    /// Runtime slots on the same conversation can share one
     /// detector to keep tracking continuous across fallback model
     /// swaps.
     #[must_use]
-    pub fn with_cache_break_detector(mut self, detector: Arc<Mutex<CacheBreakDetector>>) -> Self {
+    pub(crate) fn with_cache_break_detector(
+        mut self,
+        detector: Arc<Mutex<CacheBreakDetector>>,
+    ) -> Self {
         self.cache_break_detector = Some(detector);
         self
-    }
-
-    /// Whether this client has a cache-break detector installed.
-    #[must_use]
-    pub fn has_cache_break_detector(&self) -> bool {
-        self.cache_break_detector.is_some()
     }
 
     /// Notify the detector that compaction occurred — resets the
     /// previous-cache-read baseline so the next call doesn't trigger
     /// a false-positive cache break.
-    pub async fn notify_compaction(&self, query_source: &str, agent_id: Option<&str>) {
+    pub(crate) async fn notify_compaction(&self, query_source: &str, agent_id: Option<&str>) {
         if let Some(d) = &self.cache_break_detector {
             d.lock().await.notify_compaction(query_source, agent_id);
         }
@@ -266,7 +263,7 @@ impl ApiClient {
 
     /// Notify the detector that a cache_edits deletion was issued —
     /// the next response's cache_read drop is expected, not a break.
-    pub async fn notify_cache_deletion(&self, query_source: &str, agent_id: Option<&str>) {
+    pub(crate) async fn notify_cache_deletion(&self, query_source: &str, agent_id: Option<&str>) {
         if let Some(d) = &self.cache_break_detector {
             d.lock().await.notify_cache_deletion(query_source, agent_id);
         }
@@ -275,14 +272,14 @@ impl ApiClient {
     /// Drop the detector's tracking entry for an agent that has
     /// finished. Called by the AgentTool finalize path so a long-lived
     /// session doesn't accumulate stale subagent state.
-    pub async fn cache_break_cleanup_agent(&self, agent_id: &str) {
+    pub(crate) async fn cache_break_cleanup_agent(&self, agent_id: &str) {
         if let Some(d) = &self.cache_break_detector {
             d.lock().await.cleanup_agent(agent_id);
         }
     }
 
     /// Reset all cache-break detector state. Wired to `/clear caches`.
-    pub async fn cache_break_reset(&self) {
+    pub(crate) async fn cache_break_reset(&self) {
         if let Some(d) = &self.cache_break_detector {
             d.lock().await.reset();
         }
@@ -294,7 +291,10 @@ impl ApiClient {
     /// match any rebuild and skip the swap. `model_info` is `None`,
     /// so Layer-2 `build_call_options` is skipped (no `extra_body`,
     /// no thinking translation, no typed sampling).
-    pub fn with_default_fingerprint(model: Arc<dyn LanguageModelV4>, retry: RetryConfig) -> Self {
+    pub(crate) fn with_default_fingerprint(
+        model: Arc<dyn LanguageModelV4>,
+        retry: RetryConfig,
+    ) -> Self {
         let fingerprint = ProviderClientFingerprint {
             provider: model.provider().to_string(),
             // Mock implements the OpenAI-compat wire shape; the field
@@ -321,23 +321,34 @@ impl ApiClient {
         )
     }
 
+    pub(crate) fn with_model_info(mut self, model_info: ModelInfo) -> Self {
+        self.model_info = Some(model_info);
+        self
+    }
+
+    pub(crate) fn with_model_identity(mut self, model_identity: ProviderModelSelection) -> Self {
+        self.model_identity = model_identity;
+        self
+    }
+
     /// Identity of the underlying client.
-    pub fn fingerprint(&self) -> &ProviderClientFingerprint {
+    pub(crate) fn fingerprint(&self) -> &ProviderClientFingerprint {
         &self.fingerprint
     }
 
     /// The provider name.
-    pub fn provider(&self) -> &str {
+    #[cfg(test)]
+    pub(crate) fn provider(&self) -> &str {
         self.model.provider()
     }
 
     /// The model ID.
-    pub fn model_id(&self) -> &str {
+    pub(crate) fn model_id(&self) -> &str {
         self.model.model_id()
     }
 
     /// Logical provider/model identity from config.
-    pub fn model_identity(&self) -> &ProviderModelSelection {
+    pub(crate) fn model_identity(&self) -> &ProviderModelSelection {
         &self.model_identity
     }
 
@@ -351,7 +362,7 @@ impl ApiClient {
     /// configuration tree, so post-fallback model swaps surface
     /// immediately on the next turn.
     #[must_use]
-    pub fn model_info(&self) -> Option<&ModelInfo> {
+    pub(crate) fn model_info(&self) -> Option<&ModelInfo> {
         self.model_info.as_ref()
     }
 
@@ -364,7 +375,7 @@ impl ApiClient {
     /// Used by `coco-query` to gate whether to encode and attach
     /// `coco_compact::ContextEditStrategy` to outgoing requests.
     #[must_use]
-    pub fn supports_server_side_context_edits(&self) -> bool {
+    pub(crate) fn supports_server_side_context_edits(&self) -> bool {
         matches!(self.fingerprint.api, coco_types::ProviderApi::Anthropic)
     }
 
@@ -376,7 +387,7 @@ impl ApiClient {
     /// `None` model info is reserved for tests/mocks, where we stay
     /// permissive so call-shape tests can exercise the path.
     #[must_use]
-    pub fn supports_prompt_cache(&self) -> bool {
+    pub(crate) fn supports_prompt_cache(&self) -> bool {
         if !matches!(self.fingerprint.api, coco_types::ProviderApi::Anthropic) {
             return false;
         }
@@ -388,23 +399,6 @@ impl ApiClient {
                     .is_some_and(|caps| caps.contains(&Capability::PromptCache))
             })
             .unwrap_or(true)
-    }
-
-    /// Provider-options namespace key for this client (e.g. `"anthropic"`,
-    /// `"openai"`). Equivalent to the lookup `build_call_options` does
-    /// internally; exposed so callers building their own
-    /// `LanguageModelV4CallOptions` can place provider-specific blobs
-    /// under the right key.
-    #[must_use]
-    pub fn provider_options_namespace(&self) -> &'static str {
-        match self.fingerprint.api {
-            coco_types::ProviderApi::Anthropic => "anthropic",
-            coco_types::ProviderApi::Openai => "openai",
-            coco_types::ProviderApi::Gemini => "google",
-            coco_types::ProviderApi::Volcengine => "volcengine",
-            coco_types::ProviderApi::Zai => "zai",
-            coco_types::ProviderApi::OpenaiCompat => "openai-compatible",
-        }
     }
 
     /// Execute a query with retry logic.
@@ -432,7 +426,7 @@ impl ApiClient {
             prompt_messages = params.prompt.len(),
         ),
     )]
-    pub async fn query(&self, params: &QueryParams) -> Result<QueryResult, InferenceError> {
+    pub(crate) async fn query(&self, params: &QueryParams) -> Result<QueryResult, InferenceError> {
         let start = std::time::Instant::now();
         let mut attempt = 0;
         // Reactive-401 recovery fires at most once per call.
@@ -509,7 +503,7 @@ impl ApiClient {
 
                     let mut usage = self.usage.lock().await;
                     // Aggregate per the (provider, model_id) identity
-                    // cached on ApiClient — not the raw `result.model`
+                    // cached on this client — not the raw `result.model`
                     // string, which lacks the provider qualifier and
                     // would conflate cross-provider models of the same
                     // name. See `UsageAccumulator` doc for wire format.
@@ -640,7 +634,7 @@ impl ApiClient {
     }
 
     /// Execute a streaming query. Returns a channel receiver for stream events.
-    pub async fn query_stream(
+    pub(crate) async fn query_stream(
         &self,
         params: &QueryParams,
     ) -> Result<tokio::sync::mpsc::Receiver<crate::stream::StreamEvent>, InferenceError> {
@@ -663,7 +657,7 @@ impl ApiClient {
             prompt_messages = params.prompt.len(),
         ),
     )]
-    pub async fn query_stream_with_config(
+    pub(crate) async fn query_stream_with_config(
         &self,
         params: &QueryParams,
         stream_config: crate::stream::StreamProcessorConfig,
@@ -706,7 +700,7 @@ impl ApiClient {
     }
 
     /// Get accumulated usage across all calls.
-    pub async fn accumulated_usage(&self) -> UsageAccumulator {
+    pub(crate) async fn accumulated_usage(&self) -> UsageAccumulator {
         self.usage.lock().await.clone()
     }
 

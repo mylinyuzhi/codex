@@ -359,7 +359,11 @@ pub(crate) fn confirm_picker_selection(
         serde_json::json!(true),
     ) {
         Ok(_) => {
-            let next = state.ui.display_settings.with_copy_full_response(true);
+            let next = state
+                .ui
+                .display_settings
+                .clone()
+                .with_copy_full_response(true);
             state.ui.apply_display_settings(next);
             let message = t!("toast.copy_preference_saved").to_string();
             state.ui.add_toast(Toast::info(message.clone()));

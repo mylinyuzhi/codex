@@ -189,6 +189,58 @@ where
         discarded
     }
 
+    /// Terminal budget drain: surface work that is already complete
+    /// without starting any queued serial tools or waiting for still-
+    /// running safe tools.
+    ///
+    /// This is used after the assistant message has committed but the
+    /// caller has decided no more paid work may run. Early outcomes
+    /// and ready safe-task outcomes are real transcript facts and must
+    /// be paired. Queued serial plans and still-running safe tasks are
+    /// left unpaired so the caller can synthesize a terminal skip
+    /// result for those tool_use ids.
+    pub async fn terminal_drain<H>(mut self, seq_start: usize, mut on_outcome: H)
+    where
+        H: FnMut(ToolCallOutcome),
+    {
+        let mut completion_seq = seq_start;
+
+        for unstamped in std::mem::take(&mut self.pending_early) {
+            let (outcome, _effects) = unstamped.stamp_and_extract_effects(completion_seq);
+            completion_seq += 1;
+            on_outcome(outcome);
+        }
+
+        let mut safe_effects: Vec<(usize, ToolSideEffects)> = Vec::new();
+        while let Some(join_res) = self.inflight.try_join_next() {
+            let unstamped = match join_res {
+                Ok(u) => u,
+                Err(e) => join_error_outcome(e, completion_seq),
+            };
+            let model_index = unstamped.model_index;
+            let (outcome, effects) = unstamped.stamp_and_extract_effects(completion_seq);
+            completion_seq += 1;
+            safe_effects.push((model_index, effects));
+            on_outcome(outcome);
+        }
+        safe_effects.sort_by_key(|(idx, _)| *idx);
+        let (patches, update_lists): (Vec<_>, Vec<_>) = safe_effects
+            .into_iter()
+            .map(|(_, e)| (e.app_state_patch, e.permission_updates))
+            .unzip();
+        let combined_safe = ToolSideEffects {
+            app_state_patch: crate::executor::coalesce_patches(patches.into_iter().flatten()),
+            permission_updates: update_lists.into_iter().flatten().collect(),
+        };
+        self.executor.apply_side_effects(combined_safe).await;
+
+        // Abort any remaining safe tasks and drop pending serial plans.
+        // The engine pairs their tool_use ids with the budget-skip
+        // result after observing which ids are still missing.
+        self.inflight.shutdown().await;
+        self.pending_serial.clear();
+    }
+
     /// Commit point: drain spawned safe tasks, run queued serial
     /// plans, stamp all outcomes with monotonic `completion_seq`
     /// starting at `seq_start`, and hand each to `on_outcome`.

@@ -88,6 +88,7 @@ pub use coco_types::SlashCommandInfo;
 pub struct ModelBinding {
     pub model_id: String,
     pub provider: String,
+    pub context_window: Option<i64>,
     /// `None` ⇒ engine uses the model's `default_thinking_level`.
     pub effort: Option<ReasoningEffort>,
 }
@@ -229,10 +230,6 @@ pub struct SessionState {
     pub working_dir: Option<String>,
     /// Turn counter.
     pub turn_count: i32,
-    /// Context window usage.
-    pub context_window_used: i32,
-    /// Context window total capacity.
-    pub context_window_total: i32,
     /// Estimated cost in cents.
     pub estimated_cost_cents: i32,
     /// Whether fast mode is active.
@@ -292,6 +289,12 @@ pub struct SessionState {
     pub available_agents: Vec<crate::autocomplete::AgentInfo>,
     /// Saved sessions for session browser.
     pub saved_sessions: Vec<SavedSession>,
+    /// MCP resources available to unified `@` completion. Empty until a
+    /// typed source is wired by the TUI bootstrap/runtime.
+    pub available_mcp_resources: Vec<crate::completion::McpResourceCompletion>,
+    /// Slack channels available to channel completion. Empty by default; the
+    /// completion layer must not guess rows without a typed source.
+    pub available_slack_channels: Vec<crate::completion::SlackChannelCompletion>,
 
     // === WS-3: new fields for full event coverage ===
     /// Session state visible to SDK consumers (idle/running/requires_action).
@@ -314,8 +317,6 @@ pub struct SessionState {
     pub model_fallback_banner: Option<String>,
     /// Rate limit status (set by RateLimit notification).
     pub rate_limit_info: Option<RateLimitInfo>,
-    /// Context usage percentage (set by ContextUsageWarning).
-    pub context_usage_percent: Option<f64>,
     /// Sandbox active state (set by SandboxStateChanged).
     pub sandbox_active: bool,
     /// Stream health: stall detected (set by StreamStallDetected, cleared on next turn).
@@ -340,6 +341,8 @@ pub struct SessionState {
     pub local_command_output: VecDeque<String>,
     /// Available output styles for picker (set by OutputStylesReady).
     pub available_output_styles: Vec<String>,
+    /// Active output style name from session bootstrap.
+    pub output_style: Option<String>,
     /// Available plugins for picker (set by PluginDataReady).
     pub available_plugins: Vec<serde_json::Value>,
     /// Raw markdown of the most recent completed agent response. Populated on
@@ -533,8 +536,6 @@ impl Default for SessionState {
             conversation_id: None,
             working_dir: None,
             turn_count: 0,
-            context_window_used: 0,
-            context_window_total: 0,
             estimated_cost_cents: 0,
             fast_mode: false,
             busy: false,
@@ -553,13 +554,14 @@ impl Default for SessionState {
             available_commands: Vec::new(),
             available_agents: Vec::new(),
             saved_sessions: Vec::new(),
+            available_mcp_resources: Vec::new(),
+            available_slack_channels: Vec::new(),
             session_state: coco_types::SessionState::Idle,
             worktree_path: None,
             git_branch: None,
             thinking_effort: coco_types::ReasoningEffort::Auto,
             model_fallback_banner: None,
             rate_limit_info: None,
-            context_usage_percent: None,
             sandbox_active: false,
             stream_stall: false,
             active_tasks: Vec::new(),
@@ -571,6 +573,7 @@ impl Default for SessionState {
             prompt_suggestions: Vec::new(),
             local_command_output: VecDeque::new(),
             available_output_styles: Vec::new(),
+            output_style: None,
             available_plugins: Vec::new(),
             last_agent_markdown: None,
             ide_selection: None,

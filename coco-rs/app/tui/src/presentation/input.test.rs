@@ -16,7 +16,7 @@ fn item(label: &str) -> SuggestionItem {
 #[test]
 fn inline_popup_view_reads_interaction_popup() {
     let mut state = AppState::default();
-    state.ui.active_suggestions = Some(ActiveSuggestions {
+    state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![item("/help")],
         selected: 2,
@@ -35,7 +35,7 @@ fn inline_popup_view_reads_interaction_popup() {
 #[test]
 fn inline_popup_view_filters_command_palette_items() {
     let mut state = AppState::default();
-    state.ui.active_suggestions = Some(ActiveSuggestions {
+    state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
             label: "/clear".into(),
@@ -59,7 +59,7 @@ fn inline_popup_view_filters_command_palette_items() {
 #[test]
 fn inline_popup_view_returns_none_when_no_rows_match() {
     let mut state = AppState::default();
-    state.ui.active_suggestions = Some(ActiveSuggestions {
+    state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: Vec::new(),
         selected: 0,

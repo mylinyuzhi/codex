@@ -32,9 +32,9 @@ use crate::engine::QueryEngineConfig;
 ///
 /// Each agent query gets a fresh engine with its own config plus an
 /// typed model selection that the factory uses to select the right
-/// primary `ApiClient` + fallback chain. `InheritMain` defaults to
-/// the parent session's model (TS parity: `runAgent.ts` inherits the
-/// parent client unless the agent definition specifies a model).
+/// runtime source. `InheritMain` defaults to the parent session's model
+/// (TS parity: `runAgent.ts` inherits the parent client unless the agent
+/// definition specifies a model).
 ///
 /// The factory is async because production implementations (see
 /// `app/cli/src/agent_handle_factory.rs`) need to call into the
@@ -276,8 +276,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
 
         // Model resolution: the adapter threads the subagent's typed
         // selection through to the factory so concrete provider/model
-        // selections build their own ApiClient and role selections
-        // install the role-specific client.
+        // selections use explicit runtimes and role selections install
+        // the role-specific runtime.
         let mut engine =
             (self.engine_factory)(engine_config, model_selection, config.cancel.clone()).await;
         // D3: install the per-spawn permission bridge if one was

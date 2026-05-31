@@ -288,8 +288,8 @@ pub async fn handle_command(
             // Esc dismisses autocomplete first (so the user can escape out
             // of a trigger without losing their typed input) before
             // touching any state.
-            if !state.ui.has_blocking_interaction() && state.ui.active_suggestions.is_some() {
-                state.ui.active_suggestions = None;
+            if !state.ui.has_blocking_interaction() && state.ui.completion.active.is_some() {
+                state.ui.completion.dismiss_active();
                 state.ui.sync_popup_from_active_suggestions();
                 return true;
             }
@@ -318,7 +318,7 @@ pub async fn handle_command(
             // `useTextInput.ts:126-153`: single Esc shows a toast; second
             // Esc within `DOUBLE_PRESS_TIMEOUT` clears.
             if !state.ui.has_blocking_interaction()
-                && state.ui.active_suggestions.is_none()
+                && state.ui.completion.active.is_none()
                 && !state.ui.input.is_empty()
             {
                 use coco_tui_ui::double_press::Outcome;
@@ -386,6 +386,7 @@ pub async fn handle_command(
 
         // ── Text editing ──
         TuiCommand::InsertChar(c) => {
+            state.ui.input.clear_inline_hint();
             // Route into the rewind summarize-feedback box when that
             // state phase is active so typing builds the feedback
             // string instead of leaking to the input bar.
@@ -421,10 +422,12 @@ pub async fn handle_command(
             true
         }
         TuiCommand::InsertNewline => {
+            state.ui.input.clear_inline_hint();
             state.ui.input.textarea.insert_str("\n");
             true
         }
         TuiCommand::DeleteBackward => {
+            state.ui.input.clear_inline_hint();
             if let Some(ModalState::Rewind(r)) = state.ui.modal.as_mut()
                 && r.phase == crate::state::rewind::RewindPhase::SummarizeFeedback
             {
@@ -435,48 +438,69 @@ pub async fn handle_command(
             true
         }
         TuiCommand::DeleteForward => {
+            state.ui.input.clear_inline_hint();
             state.ui.input.textarea.delete_forward(1);
             true
         }
         TuiCommand::DeleteWordBackward => {
+            state.ui.input.clear_inline_hint();
             edit::delete_word_backward(state);
             true
         }
         TuiCommand::DeleteWordForward => {
+            state.ui.input.clear_inline_hint();
             edit::delete_word_forward(state);
             true
         }
         TuiCommand::KillToEndOfLine => {
+            state.ui.input.clear_inline_hint();
             edit::kill_to_end_of_line(state);
             true
         }
         TuiCommand::KillToBeginningOfLine => {
+            state.ui.input.clear_inline_hint();
             edit::kill_to_beginning_of_line(state);
             true
         }
         TuiCommand::Yank => {
+            state.ui.input.clear_inline_hint();
             edit::yank(state);
             true
         }
 
         // ── Cursor movement ──
         TuiCommand::CursorLeft => {
+            state.ui.input.clear_inline_hint();
             state.ui.input.textarea.move_cursor_left();
             true
         }
         TuiCommand::CursorRight => {
+            state.ui.input.clear_inline_hint();
             state.ui.input.textarea.move_cursor_right();
             true
         }
         TuiCommand::CursorUp => {
+            state.ui.input.clear_inline_hint();
+            if state.ui.input.is_empty()
+                && let Some(first) = state.session.queued_commands.front()
+            {
+                let _ = command_tx
+                    .send(UserCommand::EditQueuedCommand {
+                        id: first.id.clone(),
+                    })
+                    .await;
+                return true;
+            }
             edit::history_prev(state);
             true
         }
         TuiCommand::CursorDown => {
+            state.ui.input.clear_inline_hint();
             edit::history_next(state);
             true
         }
         TuiCommand::CursorHome => {
+            state.ui.input.clear_inline_hint();
             state
                 .ui
                 .input
@@ -485,6 +509,7 @@ pub async fn handle_command(
             true
         }
         TuiCommand::CursorEnd => {
+            state.ui.input.clear_inline_hint();
             state
                 .ui
                 .input
@@ -493,10 +518,12 @@ pub async fn handle_command(
             true
         }
         TuiCommand::WordLeft => {
+            state.ui.input.clear_inline_hint();
             edit::word_left(state);
             true
         }
         TuiCommand::WordRight => {
+            state.ui.input.clear_inline_hint();
             edit::word_right(state);
             true
         }
@@ -569,6 +596,36 @@ pub async fn handle_command(
         } => {
             interaction::classifier_auto_approve(state, command_tx, request_id).await;
             true
+        }
+        TuiCommand::AutocompleteAccept => {
+            let _ = crate::completion::accept_suggestion(
+                state,
+                crate::completion::AcceptMode::ExtendCommonPrefix,
+            );
+            true
+        }
+        TuiCommand::AcceptPromptSuggestion => {
+            accept_prompt_suggestion(state);
+            true
+        }
+        TuiCommand::SubmitPromptSuggestion => {
+            if accept_prompt_suggestion(state) {
+                edit::submit(state, command_tx).await
+            } else {
+                true
+            }
+        }
+        TuiCommand::AutocompleteSubmit => {
+            if crate::completion::accept_suggestion(
+                state,
+                crate::completion::AcceptMode::SubmitSelected,
+            )
+            .is_some_and(|a| a.should_submit)
+            {
+                edit::submit(state, command_tx).await
+            } else {
+                true
+            }
         }
 
         // ── Surface navigation ──
@@ -855,6 +912,26 @@ pub async fn handle_command(
         crate::autocomplete::refresh_suggestions(state);
     }
     changed
+}
+
+fn accept_prompt_suggestion(state: &mut AppState) -> bool {
+    if !state.ui.input.is_empty() || !state.session.queued_commands.is_empty() {
+        return false;
+    }
+    let Some(suggestion) = state.session.prompt_suggestions.last().cloned() else {
+        return false;
+    };
+    if suggestion.is_empty() {
+        return false;
+    }
+    state.ui.input.set_text(&suggestion);
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    state.session.prompt_suggestions.clear();
+    true
 }
 
 #[derive(Debug, Clone, Copy)]

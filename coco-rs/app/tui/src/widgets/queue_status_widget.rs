@@ -59,6 +59,10 @@ impl Widget for QueueStatusWidget<'_> {
                     Style::default().fg(self.styles.dim()),
                 ));
             }
+            parts.push(Span::styled(
+                t!("queue_status.edit_hint").to_string(),
+                Style::default().fg(self.styles.accent()),
+            ));
         }
         Paragraph::new(Line::from(parts))
             .style(Style::default().bg(self.styles.border()))

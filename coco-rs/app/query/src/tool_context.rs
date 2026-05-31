@@ -126,11 +126,11 @@ pub(crate) struct ToolContextFactory {
     /// path — AgentTool degrades to subagent_type→role mapping alone.
     pub(crate) agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
     /// Parent's resolved runtime identity (provider + API + model). Set
-    /// at engine bootstrap from `ApiClient::fingerprint().to_snapshot()`
-    /// and threaded onto every `ToolUseContext` so subagent spawns can
-    /// pin Fork-mode prompt cache to the parent's model. `None` is the
-    /// legacy/test path; AgentTool degrades to coordinator's
-    /// `current_main_model_id()` which can drift on hot-reload.
+    /// from the runtime registry snapshot and threaded onto every
+    /// `ToolUseContext` so subagent spawns can pin Fork-mode prompt cache
+    /// to the parent's model. `None` is the legacy/test path; AgentTool
+    /// degrades to coordinator's `current_main_model_id()` which can
+    /// drift on hot-reload.
     pub(crate) parent_runtime_snapshot: Option<Arc<coco_types::SubagentRuntimeSnapshot>>,
     /// Per-engine skill-emitted Command-source rule store, shared by
     /// `Arc` with `QueryEngine.live_command_rules` and the
@@ -166,7 +166,7 @@ pub(crate) struct ToolContextOverrides {
     pub(crate) current_model_id: Option<String>,
     /// `true` when the post-fallback active model declares
     /// [`coco_types::Capability::ServerSideToolReference`]. Engine
-    /// resolves this from `ApiClient::model_info()` so a model swap
+    /// resolves this from the active runtime snapshot so a model swap
     /// (primary → fallback) changes the ToolSearch envelope shape
     /// without a context-factory rebuild. Default `false` keeps the
     /// non-Anthropic / non-capable path (client-side promotion).
@@ -433,7 +433,7 @@ impl ToolContextFactory {
             // prompt-cache parity survives `RuntimeConfig` hot-reload.
             // Installed at engine bootstrap via
             // `ToolContextFactory::with_parent_runtime_snapshot` from
-            // `ApiClient::fingerprint().to_snapshot()`.
+            // the runtime registry snapshot.
             parent_runtime_snapshot: self.parent_runtime_snapshot.clone(),
             file_reading_limits: Default::default(),
             glob_limits: Default::default(),

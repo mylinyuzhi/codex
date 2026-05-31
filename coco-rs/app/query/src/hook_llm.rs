@@ -1,14 +1,14 @@
 //! `coco-query`'s implementation of [`coco_hooks::HookLlmHandle`].
 //!
 //! Bridges the `Prompt` and `Agent` hook handler types to the parent
-//! session's `ApiClient`. Hooks-crate sits at L4; inference at L2 —
+//! session's model runtime registry. Hooks-crate sits at L4; inference at L2 —
 //! the trait lives in `coco-hooks` and is implemented here so the
 //! L4 → L2 dependency arrow is reversed.
 //!
 //! # Status
 //!
 //! - **Prompt path**: full implementation. Builds a single-turn
-//!   `QueryParams`, calls `ApiClient::query`, parses the assistant
+//!   `QueryParams`, calls the registry runtime, parses the assistant
 //!   text as `{ok: bool, reason?: string}` JSON. Recursion-safe:
 //!   bypasses the `QueryEngine` turn loop entirely so
 //!   `UserPromptSubmit` hooks don't fire from within a hook
@@ -39,9 +39,9 @@
 //! project rule "never bare model string; route via `ModelRole`"
 //! (see root `CLAUDE.md`).
 //!
-//! - **Default client** — [`QueryHookLlm::for_session`] pre-resolves
+//! - **Default runtime** — [`QueryHookLlm::for_session`] snapshots
 //!   `ModelRole::HookAgent` from the shared
-//!   [`coco_inference::RoleClientCache`] at session bootstrap. Users
+//!   [`coco_inference::ModelRuntimeRegistry`] at session bootstrap. Users
 //!   who set `models.hook_agent` in settings.json get that model for
 //!   every hook evaluation. Unconfigured roles inherit Main's spec
 //!   via the cache's spec-equality shortcut (no redundant client
@@ -64,9 +64,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use coco_hooks::HookEvaluationResult;
 use coco_hooks::HookLlmHandle;
-use coco_inference::ApiClient;
+use coco_inference::ModelRuntimeQueryOutcome;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
-use coco_inference::RoleClientCache;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::LlmMessage;
 use coco_llm_types::UserContentPart;
@@ -94,27 +95,18 @@ struct HookResponse {
 }
 
 /// `coco-query`'s `HookLlmHandle` implementation. Single struct for
-/// both Prompt and Agent paths — they share `default_client` and the
+/// both Prompt and Agent paths — they share `model_runtimes` and the
 /// `Cancelled`/`NonBlockingError` mapping logic.
-///
-/// `role_cache` is the per-call role-override gateway and the source
-/// of `default_client` — sharing one `Arc<RoleClientCache>` across
-/// `SessionRuntime` and the hook handle means a given role's
-/// `CacheBreakDetector` state stays continuous regardless of caller.
-///
-/// Manual `Debug` because `ApiClient` itself doesn't derive `Debug`
-/// (provider state is non-trivial); we surface only the default
-/// client's model id which is what diagnostics actually want.
+/// Manual `Debug` surfaces only the default model id.
 pub struct QueryHookLlm {
-    default_client: Arc<ApiClient>,
-    role_cache: Arc<RoleClientCache>,
+    model_runtimes: Arc<ModelRuntimeRegistry>,
+    default_model_id: String,
 }
 
 impl std::fmt::Debug for QueryHookLlm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QueryHookLlm")
-            .field("default_model_id", &self.default_client.model_id())
-            .field("default_provider", &self.default_client.provider())
+            .field("default_model_id", &self.default_model_id)
             .finish()
     }
 }
@@ -122,31 +114,32 @@ impl std::fmt::Debug for QueryHookLlm {
 impl QueryHookLlm {
     /// Build a session-wired hook handler. Pre-resolves
     /// `ModelRole::HookAgent` against the shared cache as the default
-    /// client and stores the `Arc<RoleClientCache>` so per-call `model`
-    /// overrides reach the user-configured role clients.
+    /// runtime and stores the registry so per-call `model` overrides
+    /// reach the user-configured role runtimes.
     ///
     /// When `HookAgent` is unconfigured the fallback chain in
     /// `runtime.rs:resolve_model_roles` populates it with Main's spec;
     /// the cache's spec-equality shortcut reuses the Main `Arc` so the
     /// common case stays zero-extra-allocation.
-    pub async fn for_session(role_cache: Arc<RoleClientCache>) -> Self {
-        let default_client = match role_cache.resolve(ModelRole::HookAgent).await {
-            Ok(c) => c,
-            Err(e) => {
+    pub async fn for_session(model_runtimes: Arc<ModelRuntimeRegistry>) -> Self {
+        let default_model_id = model_runtimes
+            .snapshot_for_role(ModelRole::HookAgent)
+            .or_else(|e| {
                 tracing::warn!(
                     error = %e,
-                    "HookAgent role unresolved at hook-handle bootstrap; falling back to Main client"
+                    "HookAgent role unresolved at hook-handle bootstrap; falling back to Main role"
                 );
-                role_cache.main_client()
-            }
-        };
+                model_runtimes.snapshot_for_role(ModelRole::Main)
+            })
+            .map(|snapshot| snapshot.model_id)
+            .unwrap_or_else(|_| "unknown".to_string());
         Self {
-            default_client,
-            role_cache,
+            model_runtimes,
+            default_model_id,
         }
     }
 
-    /// Pick the `ApiClient` for a single hook invocation.
+    /// Pick the runtime source for a single hook invocation.
     ///
     /// Precedence (mirrors TS `hook.model` semantics, adapted to
     /// coco-rs's `ModelRole` indirection):
@@ -157,12 +150,12 @@ impl QueryHookLlm {
     ///    and use `default_client`. The warn message tells the user
     ///    that `hook.model` accepts role names, not bare model ids.
     /// 3. `model = None` → `default_client` (= HookAgent role).
-    async fn pick_client(&self, model: Option<&str>) -> Arc<ApiClient> {
+    fn pick_source(&self, model: Option<&str>) -> ModelRuntimeSource {
         let Some(m) = model else {
-            return self.default_client.clone();
+            return ModelRuntimeSource::Role(ModelRole::HookAgent);
         };
-        let role = match ModelRole::from_str(m) {
-            Ok(r) => r,
+        match ModelRole::from_str(m) {
+            Ok(role) => ModelRuntimeSource::Role(role),
             Err(_) => {
                 tracing::warn!(
                     requested_model = m,
@@ -171,18 +164,7 @@ impl QueryHookLlm {
                      set `models.hook_agent` in settings.json and omit `model`, \
                      or pass a role name. Falling back to HookAgent default."
                 );
-                return self.default_client.clone();
-            }
-        };
-        match self.role_cache.resolve(role).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(
-                    requested_role = %role,
-                    error = %e,
-                    "hook `model` role resolution failed; using HookAgent default"
-                );
-                self.default_client.clone()
+                ModelRuntimeSource::Role(ModelRole::HookAgent)
             }
         }
     }
@@ -196,34 +178,47 @@ impl HookLlmHandle for QueryHookLlm {
         model: Option<&str>,
         timeout: Duration,
     ) -> HookEvaluationResult {
-        let client = self.pick_client(model).await;
+        let source = self.pick_source(model);
 
         let prompt = build_prompt(prompt);
-        let params = QueryParams {
-            prompt,
-            max_tokens: Some(1024),
-            thinking_level: None,
-            fast_mode: false,
-            tools: None,
-            tool_choice: None,
-            context_management: None,
-            query_source: Some("hook_prompt".into()),
-            agent_id: None,
-            time_since_last_assistant_ms: None,
-            cache: None,
-            agentic: false,
-            stop_sequences: None,
-            response_format: None,
-        };
 
-        let result = tokio::time::timeout(timeout, client.query(&params)).await;
+        let result = async {
+            loop {
+                let params = QueryParams {
+                    prompt: prompt.clone(),
+                    max_tokens: Some(1024),
+                    thinking_level: None,
+                    fast_mode: false,
+                    tools: None,
+                    tool_choice: None,
+                    context_management: None,
+                    query_source: Some("hook_prompt".into()),
+                    agent_id: None,
+                    time_since_last_assistant_ms: None,
+                    cache: None,
+                    agentic: false,
+                    stop_sequences: None,
+                    response_format: None,
+                };
+                match self
+                    .model_runtimes
+                    .query_once(source.clone(), &params)
+                    .await
+                {
+                    ModelRuntimeQueryOutcome::Success { result, .. } => return Ok(result),
+                    ModelRuntimeQueryOutcome::Retry { .. } => continue,
+                    ModelRuntimeQueryOutcome::Failed { error, .. } => {
+                        return Err(format!("hook prompt API error: {error}"));
+                    }
+                }
+            }
+        };
+        let result = tokio::time::timeout(timeout, result).await;
 
         match result {
             // TS treats timeout as `cancelled` — silent, no UI error.
             Err(_elapsed) => HookEvaluationResult::Cancelled,
-            Ok(Err(e)) => HookEvaluationResult::NonBlockingError {
-                error: format!("hook prompt API error: {e}"),
-            },
+            Ok(Err(error)) => HookEvaluationResult::NonBlockingError { error },
             Ok(Ok(query_result)) => {
                 // Hook evaluation that silently `Cancelled`s on a
                 // truncated / content-filtered verdict would leave the
@@ -249,13 +244,10 @@ impl HookLlmHandle for QueryHookLlm {
         model: Option<&str>,
         _timeout: Duration,
     ) -> HookEvaluationResult {
-        // Resolve the client even though we don't yet use it — this
-        // keeps the per-hook `model` routing parity wired so the model
-        // role is observable in telemetry, and when the full agent
-        // impl lands (StructuredOutputTool + forked engine + max_turns
-        // enforcement) it inherits the resolved client without any
-        // re-wiring. `_client` is intentionally unused for now.
-        let _client = self.pick_client(model).await;
+        // Resolve the source even though we don't yet use it. This keeps
+        // the per-hook `model` routing validation wired for the future
+        // full agent implementation.
+        let _source = self.pick_source(model);
 
         // Stub: full multi-turn agent evaluation requires a forked
         // `QueryEngine`, `StructuredOutputTool`, transcript-read

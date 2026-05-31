@@ -1,32 +1,32 @@
-//! `coco-inference::ApiClient` plumbing smoke test.
+//! `coco-inference` model-runtime plumbing smoke test.
 //!
 //! Verifies fingerprint round-trip and usage accumulation. Builds its
-//! own `ApiClient` rather than reusing `LiveTarget.client` so the
-//! fingerprint-against-`(provider, model)` assertion stays a real
-//! check rather than a tautology against the cached client.
+//! own runtime client rather than reusing `LiveTarget.client` so the
+//! snapshot-against-`(provider, model)` assertion stays a real check
+//! rather than a tautology against the cached client.
 
 use anyhow::Result;
 use coco_inference::QueryParams;
 use coco_llm_types::LlmMessage;
 
 use crate::common::build_client;
+use crate::common::query_client;
 use crate::common::usage_report;
 
-/// Builds an `ApiClient` for `(provider, model)` and runs one
+/// Builds a runtime client for `(provider, model)` and runs one
 /// non-streaming query through it. Asserts: response text non-empty,
-/// usage accumulator updated, fingerprint matches the provider name.
+/// usage accumulator updated, snapshot matches the provider name.
 pub async fn run(provider: &str, model_id: &str) -> Result<()> {
     let client = build_client(provider, model_id)?;
+    let snapshot = client.snapshot()?;
 
     assert_eq!(
-        client.fingerprint().provider,
-        provider,
-        "fingerprint provider should match"
+        snapshot.provider, provider,
+        "runtime snapshot provider should match"
     );
     assert_eq!(
-        client.fingerprint().api_model_name,
-        model_id,
-        "fingerprint api_model_name should match"
+        snapshot.runtime_snapshot.api_model_name, model_id,
+        "runtime snapshot api_model_name should match"
     );
 
     let prompt = vec![
@@ -53,10 +53,10 @@ pub async fn run(provider: &str, model_id: &str) -> Result<()> {
         response_format: None,
     };
 
-    let result = client.query(&params).await?;
+    let result = query_client(&client, params).await?;
     usage_report::record(provider, model_id, "inference_smoke.run", &result.usage);
 
-    let usage = client.accumulated_usage().await;
+    let usage = client.accumulated_usage().await?;
     assert!(
         usage.total.input_tokens.total > 0,
         "{provider}/{model_id}: usage accumulator did not record input tokens"

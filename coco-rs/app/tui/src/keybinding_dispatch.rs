@@ -122,7 +122,7 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         ChatMessageActions => return None,
 
         // ── Autocomplete ────────────────────────────────────────────
-        AutocompleteAccept => TuiCommand::SurfaceConfirm,
+        AutocompleteAccept => TuiCommand::AutocompleteAccept,
         AutocompleteDismiss => TuiCommand::Cancel,
         AutocompletePrevious => TuiCommand::SurfacePrev,
         AutocompleteNext => TuiCommand::SurfaceNext,

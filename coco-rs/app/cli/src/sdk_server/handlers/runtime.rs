@@ -278,51 +278,39 @@ pub(super) async fn handle_agent_interrupt_current_work(
     }
 }
 
-/// `context/usage` — return the active session's token usage
-/// breakdown.
-///
-/// Derived from `SessionHandle.stats` which is folded from per-turn
-/// `SessionResult` events. This is a coarse total — the rich per-
-/// category breakdown from TS (system prompt, tools, history, etc.) is
-/// not yet computed; `categories` is empty. A follow-up could wire this
-/// via engine-level accounting.
-///
-/// Errors:
-/// - `INVALID_REQUEST` if no session is active
+/// `context/usage` — return the active session's current Main context view.
 pub(super) async fn handle_context_usage(ctx: &HandlerContext) -> HandlerResult {
-    let slot = ctx.state.session.read().await;
-    let Some(session) = slot.as_ref() else {
+    let (history_handle, app_state) = {
+        let slot = ctx.state.session.read().await;
+        let Some(session) = slot.as_ref() else {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "no active session; call session/start first".into(),
+                data: None,
+            };
+        };
+        (session.history.clone(), session.app_state.clone())
+    };
+    let history_arcs = history_handle.lock().await.clone();
+    let Some(runtime) = ctx.state.session_runtime.read().await.clone() else {
         return HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
-            message: "no active session; call session/start first".into(),
+            message: "context usage requires an active session runtime".into(),
             data: None,
         };
     };
-    let stats = &session.stats;
-    // Default context window used by QueryEngineRunner. A future
-    // refactor can make this dynamic per-model.
-    let max_tokens: i64 = 200_000;
-    let total = stats
-        .usage
-        .input_tokens
-        .total
-        .saturating_add(stats.usage.output_tokens.total);
-    let percentage = if max_tokens > 0 {
-        (total as f64 / max_tokens as f64) * 100.0
-    } else {
-        0.0
-    };
-    HandlerResult::ok(coco_types::ContextUsageResult {
-        total_tokens: total,
-        max_tokens,
-        raw_max_tokens: max_tokens,
-        percentage,
-        model: session.model.clone(),
-        categories: Vec::new(),
-        is_auto_compact_enabled: true,
-        auto_compact_threshold: None,
-        message_breakdown: None,
-    })
+    let history = coco_messages::MessageHistory::from_arcs_preserving_latest_usage(history_arcs);
+    match runtime
+        .analyze_context_snapshot(history, Some(app_state))
+        .await
+    {
+        Ok(report) => HandlerResult::ok(report.to_wire()),
+        Err(err) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: err.to_string(),
+            data: None,
+        },
+    }
 }
 
 /// `plugin/reload` — hot-reload plugins.

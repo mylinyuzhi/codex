@@ -22,10 +22,10 @@ use crate::{PermissionMode, ProviderApi, WireApi};
 /// Carried on `AgentSpawnRequest` / `AgentQueryConfig` (in-process; not
 /// serialized at the JSON boundary) so the child's runner can:
 ///
-/// - **Detect drift after hot-reload.** The parent built its `ApiClient`
-///   from one `Arc<RuntimeConfig>`; if a settings change publishes a new
-///   `Arc<RuntimeConfig>` between the parent's last turn and the child's
-///   first turn, the child's freshly resolved client may target a
+/// - **Detect drift after hot-reload.** The parent ran on one runtime
+///   snapshot; if a settings change publishes a new `Arc<RuntimeConfig>`
+///   between the parent's last turn and the child's first turn, the
+///   child's freshly resolved runtime may target a
 ///   different model/provider. Comparing the child's resolved identity
 ///   against this snapshot surfaces the drift.
 ///

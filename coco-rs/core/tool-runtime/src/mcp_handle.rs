@@ -9,6 +9,7 @@ use std::sync::Arc;
 /// A resource from an MCP server.
 #[derive(Debug, Clone)]
 pub struct McpResourceInfo {
+    pub server_name: String,
     pub uri: String,
     pub name: String,
     pub description: Option<String>,

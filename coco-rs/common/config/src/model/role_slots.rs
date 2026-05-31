@@ -1,4 +1,4 @@
-//! Per-role fallback chain + recovery policy.
+//! Per-role fallback chain + fallback policy.
 //!
 //! Each `ModelRole` binds to a `RoleSlots<T>`: a primary plus an
 //! ordered list of fallbacks the runtime walks on capacity errors.
@@ -16,11 +16,11 @@
 //! 1. Bare string: `"anthropic/claude-opus-4-6"` — splits on `/` into
 //!    `(provider, model_id)`.
 //! 2. Single fallback:
-//!    `{ "primary": { "provider": …, "model_id": … }, "fallback": …, "recovery": …? }`.
+//!    `{ "primary": { "provider": …, "model_id": … }, "fallback": …, "policy": …? }`.
 //! 3. Plural fallbacks:
-//!    `{ "primary": { "provider": …, "model_id": … }, "fallbacks": [ … ], "recovery": …? }`.
+//!    `{ "primary": { "provider": …, "model_id": … }, "fallbacks": [ … ], "policy": …? }`.
 //!
-//! Shape (1) produces `RoleSlots { primary, fallbacks: vec![], recovery: None }`.
+//! Shape (1) produces `RoleSlots { primary, fallbacks: vec![], policy: default }`.
 //! Shapes (2) and (3) cannot be combined in the same entry — specifying
 //! both `fallback` and `fallbacks` is a hard deserialization error. The
 //! nested form uses `deny_unknown_fields` so typos in field names
@@ -39,7 +39,7 @@ use serde_json::Value;
 
 use coco_types::ProviderModelSelection;
 
-/// Per-role primary + ordered fallback chain + optional recovery policy.
+/// Per-role primary + ordered fallback chain + fallback policy.
 ///
 /// Generic over `T` so the config-facing (`ProviderModelSelection`) and
 /// runtime-facing (`ModelSpec`) instantiations share code. Keeping a
@@ -50,8 +50,8 @@ pub struct RoleSlots<T> {
     pub primary: T,
     /// Ordered fallbacks. Empty = no fallback configured.
     pub fallbacks: Vec<T>,
-    /// Recovery policy; `None` = sticky (no auto-return to primary).
-    pub recovery: Option<FallbackRecoveryPolicy>,
+    /// Policy for fallback-chain exhaustion and primary recovery probes.
+    pub policy: FallbackPolicy,
 }
 
 impl<T> RoleSlots<T> {
@@ -59,7 +59,7 @@ impl<T> RoleSlots<T> {
         Self {
             primary,
             fallbacks: Vec::new(),
-            recovery: None,
+            policy: FallbackPolicy::default(),
         }
     }
 
@@ -73,8 +73,8 @@ impl<T> RoleSlots<T> {
         self
     }
 
-    pub fn with_recovery(mut self, policy: FallbackRecoveryPolicy) -> Self {
-        self.recovery = Some(policy);
+    pub fn with_policy(mut self, policy: FallbackPolicy) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -97,40 +97,47 @@ impl<T> RoleSlots<T> {
         Ok(RoleSlots {
             primary,
             fallbacks,
-            recovery: self.recovery,
+            policy: self.policy,
         })
     }
 }
 
-/// Half-open recovery policy: after switching to a fallback, periodically
-/// probe the primary. Backoff doubles on each probe failure up to
-/// `max_backoff`; `max_attempts` caps total probes per session.
-///
-/// Wire format uses seconds (humans edit these in settings.json); the
-/// runtime converts to `Duration` via the getter methods.
+/// Complete fallback policy for a role runtime.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FallbackPolicy {
+    pub exhausted_retry: ExhaustedRetryPolicy,
+    pub recovery: RecoveryProbePolicy,
+}
+
+/// Controlled retry after every slot in a fallback chain has failed.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct FallbackRecoveryPolicy {
-    /// Seconds before the first probe. Also the initial backoff.
+pub struct ExhaustedRetryPolicy {
+    /// Total number of full-chain cycles before surfacing the last
+    /// capacity/rate-limit error. Clamped to at least 1.
+    pub max_cycles: i32,
+    /// Seconds before the first retry cycle.
     pub initial_backoff_secs: u64,
     /// Upper bound on backoff in seconds.
     pub max_backoff_secs: u64,
-    /// Maximum probe attempts per session.
-    pub max_attempts: i32,
 }
 
-impl Default for FallbackRecoveryPolicy {
+impl Default for ExhaustedRetryPolicy {
     fn default() -> Self {
-        // 60 s initial → 30 min cap, 10 attempts.
         Self {
-            initial_backoff_secs: 60,
-            max_backoff_secs: 1_800,
-            max_attempts: 10,
+            max_cycles: 2,
+            initial_backoff_secs: 2,
+            max_backoff_secs: 30,
         }
     }
 }
 
-impl FallbackRecoveryPolicy {
+impl ExhaustedRetryPolicy {
+    pub fn max_cycles(&self) -> i32 {
+        self.max_cycles.max(1)
+    }
+
     pub fn initial_backoff(&self) -> Duration {
         Duration::from_secs(self.initial_backoff_secs)
     }
@@ -140,13 +147,52 @@ impl FallbackRecoveryPolicy {
     }
 }
 
+/// Half-open recovery probe policy: after switching to a fallback,
+/// periodically probe the primary. Backoff doubles on each probe
+/// failure up to `max_backoff`; `max_attempts` caps total probes per
+/// session. `max_attempts = 0` disables recovery probes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RecoveryProbePolicy {
+    /// Seconds before the first probe. Also the initial backoff.
+    pub initial_backoff_secs: u64,
+    /// Upper bound on backoff in seconds.
+    pub max_backoff_secs: u64,
+    /// Maximum probe attempts per session. Clamped to at least 0.
+    pub max_attempts: i32,
+}
+
+impl Default for RecoveryProbePolicy {
+    fn default() -> Self {
+        Self {
+            initial_backoff_secs: 60,
+            max_backoff_secs: 1_800,
+            max_attempts: 10,
+        }
+    }
+}
+
+impl RecoveryProbePolicy {
+    pub fn initial_backoff(&self) -> Duration {
+        Duration::from_secs(self.initial_backoff_secs)
+    }
+
+    pub fn max_backoff(&self) -> Duration {
+        Duration::from_secs(self.max_backoff_secs.max(self.initial_backoff_secs))
+    }
+
+    pub fn max_attempts(&self) -> i32 {
+        self.max_attempts.max(0)
+    }
+}
+
 // ─── Deserializer for RoleSlots<ProviderModelSelection> ─────────────────────
 
 impl<'de> Deserialize<'de> for RoleSlots<ProviderModelSelection> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // Dispatch explicitly on the observed JSON shape instead of
         // relying on serde's untagged fallthrough. Routing on presence of
-        // `primary`/`fallback`/`fallbacks`/`recovery` keys is
+        // `primary`/`fallback`/`fallbacks`/`policy` keys is
         // deterministic and yields actionable error messages.
         let value = Value::deserialize(d)?;
 
@@ -161,12 +207,13 @@ impl<'de> Deserialize<'de> for RoleSlots<ProviderModelSelection> {
         let has_nested_keys = obj.contains_key("primary")
             || obj.contains_key("fallback")
             || obj.contains_key("fallbacks")
+            || obj.contains_key("policy")
             || obj.contains_key("recovery");
 
         if has_nested_keys {
             reject_unknown_fields::<D::Error>(
                 obj,
-                &["primary", "fallback", "fallbacks", "recovery"],
+                &["primary", "fallback", "fallbacks", "policy"],
                 "nested role selection",
             )?;
             let primary = obj
@@ -181,10 +228,11 @@ impl<'de> Deserialize<'de> for RoleSlots<ProviderModelSelection> {
                 .get("fallbacks")
                 .map(parse_fallbacks::<D::Error>)
                 .transpose()?;
-            let recovery = obj
-                .get("recovery")
+            let policy = obj
+                .get("policy")
                 .map(|v| serde_json::from_value(v.clone()).map_err(D::Error::custom))
-                .transpose()?;
+                .transpose()?
+                .unwrap_or_default();
             let fallbacks = match (fallback, fallback_list) {
                 (Some(_), Some(_)) => {
                     return Err(D::Error::custom(
@@ -198,7 +246,7 @@ impl<'de> Deserialize<'de> for RoleSlots<ProviderModelSelection> {
             Ok(RoleSlots {
                 primary,
                 fallbacks,
-                recovery,
+                policy,
             })
         } else {
             Err(D::Error::custom(
@@ -221,10 +269,10 @@ impl Serialize for RoleSlots<ProviderModelSelection> {
         } else {
             st.skip_field("fallbacks")?;
         }
-        if let Some(r) = self.recovery {
-            st.serialize_field("recovery", &r)?;
+        if self.policy != FallbackPolicy::default() {
+            st.serialize_field("policy", &self.policy)?;
         } else {
-            st.skip_field("recovery")?;
+            st.skip_field("policy")?;
         }
         st.end()
     }

@@ -19,7 +19,7 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 
 | Type | Purpose |
 |------|---------|
-| `QueryEngine` | Orchestrator: owns tool/command registries, `ApiClient`, state |
+| `QueryEngine` | Orchestrator: owns tool/command registries, model runtime registry, state |
 | `QueryEngineConfig` | max_turns, total_token_budget (session cap), permission_mode, context_window, streaming_tool_execution, bypass_permissions_available, fallback_model, plan_mode_settings. Per-call `max_output_tokens` lives on `ModelInfo`, not here. |
 | `QueryResult`, `ContinueReason` | Loop control: `NextTurn`, `ReactiveCompactRetry`, `MaxOutputTokensEscalate`, `MaxOutputTokensRecovery`, `StopHookBlocking`, `TokenBudgetContinuation`, `CollapseDrainRetry` |
 | `SessionBootstrap` | Initial system prompt, messages, cost tracker |
@@ -36,7 +36,7 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 ```
 1.  Build system prompt (context)                  [coco-context]
 2.  Normalize messages for API                     [coco-messages]
-3.  ApiClient.query_streaming(QueryParams)         [coco-inference]
+3.  ModelRuntime.open_stream(QueryParams)          [coco-inference]
 4.  Parse response; extract tool calls             [engine.rs]
 5.  StreamingToolExecutor: safe concurrent / unsafe queued  [coco-tool-runtime]
 6.  HookRegistry PreToolUse / PostToolUse          [coco-hooks]
@@ -265,7 +265,7 @@ enforced in `spawn_tool_use_summary`:
    visible text — the call returns `stop_reason=length` with empty
    text. Users opt in via `settings.json` `features.tool_use_summary =
    true` once their Fast role is wired to a non-reasoning model.
-2. `role_client_cache` wired (Fast role configured).
+2. model runtime registry wired (Fast role configured).
 3. `agent_id.is_none()` — subagents don't surface in the mobile UI
    (TS `!toolUseContext.agentId` at `query.ts:1419`).
 4. Tool batch non-empty.

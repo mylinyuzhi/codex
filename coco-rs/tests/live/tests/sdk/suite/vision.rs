@@ -1,4 +1,4 @@
-//! Multimodal (image-input) tests via `coco_inference::ApiClient::query`.
+//! Multimodal (image-input) tests via `coco_inference::ModelRuntimeClient::query`.
 //!
 //! Mirrors the OpenAI Responses curl example:
 //!
@@ -22,6 +22,7 @@ use coco_llm_types::UserContentPart;
 
 use crate::common::LiveTarget;
 use crate::common::extract_text;
+use crate::common::query_client;
 use crate::common::usage_report;
 
 const SYSTEM: &str = "You are a helpful assistant. Be concise.";
@@ -67,10 +68,11 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         ]),
     ];
 
-    let result = target
-        .client
-        .query(&params_for(prompt, "coco-tests-live::sdk::vision::run"))
-        .await?;
+    let result = query_client(
+        &target.client,
+        params_for(prompt, "coco-tests-live::sdk::vision::run"),
+    )
+    .await?;
     usage_report::record(target.provider, &target.model, "vision.run", &result.usage);
 
     let text = extract_text(&result);

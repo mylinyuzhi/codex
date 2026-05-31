@@ -1421,9 +1421,8 @@ pub struct OrchestrationContext {
     /// Callback the orchestration uses to drive `Prompt` / `Agent`
     /// hook handlers through the parent session's LLM. `None` falls
     /// back to a passthrough that returns the prompt text verbatim
-    /// and logs a warning. Implementations live in `coco-query` (where
-    /// `ApiClient` is reachable) and are installed by
-    /// `coco-cli::session_runtime`.
+    /// and logs a warning. Implementations live in `coco-query` and are
+    /// installed by `coco-cli::session_runtime`.
     pub llm_handle: Option<std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
 }
 

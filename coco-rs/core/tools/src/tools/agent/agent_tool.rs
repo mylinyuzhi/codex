@@ -522,7 +522,7 @@ impl Tool for AgentTool {
                     message: "Fork mode requested but parent's runtime snapshot is \
                               unavailable. The engine must populate \
                               `ToolUseContext.parent_runtime_snapshot` from \
-                              `ApiClient::fingerprint().to_snapshot()` at bootstrap — \
+                              the runtime registry snapshot at bootstrap — \
                               without it Fork-mode prompt-cache parity cannot be guaranteed."
                         .into(),
                     source: None,

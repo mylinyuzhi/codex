@@ -3,10 +3,11 @@
 use ratatui::prelude::Color;
 
 use crate::i18n::t;
-use crate::presentation::footer::format_token_count;
+use crate::presentation::context_usage::render_context_usage;
 use crate::presentation::pager;
 use crate::state::AppState;
 use crate::state::DiffViewState;
+use crate::status_bar::format_token_count;
 use coco_tui_ui::style::UiStyles;
 
 pub(crate) fn diff_view_content(
@@ -50,9 +51,10 @@ pub(crate) fn context_viz_content(
     state: &AppState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    let used = state.session.context_window_used;
-    let total = state.session.context_window_total.max(1);
-    let pct = (used * 100) / total;
+    let usage = render_context_usage(state);
+    let (used, total, pct) = usage
+        .map(|u| (u.used, u.total, u.percent))
+        .unwrap_or((0, 1, 0));
     let bar_width = 40;
     let filled = ((bar_width * pct / 100).clamp(0, bar_width)) as usize;
     let empty = bar_width as usize - filled;
@@ -75,8 +77,8 @@ pub(crate) fn context_viz_content(
         ),
         t!(
             "dialog.context_used",
-            used = format_token_count(used as i64),
-            total = format_token_count(total as i64)
+            used = format_token_count(used),
+            total = format_token_count(total)
         ),
     );
 

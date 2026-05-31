@@ -28,8 +28,6 @@ mod mock_harness;
 use std::sync::Arc;
 use std::time::Duration;
 
-use coco_inference::ApiClient;
-use coco_inference::RetryConfig;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_tool_runtime::ToolPermissionBridge;
@@ -83,10 +81,7 @@ fn mock_model_calling_bash() -> Arc<dyn coco_inference::LanguageModel> {
 async fn cancelled_permission_synthesizes_error_tool_result() {
     let cancel = CancellationToken::new();
     let model = mock_model_calling_bash();
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let config = QueryEngineConfig {
         model_id: "scripted-mock".into(),
         // Default mode forces Bash through Ask — exactly what triggers

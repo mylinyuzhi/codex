@@ -284,13 +284,10 @@ impl RealTuiHarness {
         let runtime_config = build_runtime_config_for_cli(&cli, &cwd)
             .with_context(|| "build_runtime_config_for_cli")?;
 
-        // Stage 2: shared engine resources (real ApiClient, full
-        // ToolRegistry, system prompt with CLAUDE.md, command registry,
-        // startup permission state).
+        // Stage 2: shared engine resources (full ToolRegistry, system
+        // prompt with CLAUDE.md, command registry, startup permission
+        // state).
         let EngineResources {
-            client,
-            fallback_clients,
-            recovery_policy,
             tools,
             system_prompt,
             model_id,
@@ -334,9 +331,7 @@ impl RealTuiHarness {
             system_prompt,
             bypass_permissions_available: startup.bypass_available,
             permission_mode: startup.mode,
-            client,
-            fallback_clients,
-            recovery_policy,
+            model_runtimes: None,
             tools,
             session_manager,
             fast_model_spec: None,

@@ -42,10 +42,8 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     )
     .expect("runtime config");
 
-    // Resources via `headless::create_api_client` — falls back to
-    // mock when no provider key is configured.
-    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let (client, _provider, model_id) = crate::headless::create_api_client(&runtime_config, retry);
+    // Resolve the model identity the runtime config will bind.
+    let model_id = crate::headless::resolve_main_model(&runtime_config).model_id;
 
     let registry = coco_tool_runtime::ToolRegistry::new();
     let tools = Arc::new(registry);
@@ -67,9 +65,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         system_prompt: "test".to_string(),
         bypass_permissions_available: false,
         permission_mode: coco_types::PermissionMode::default(),
-        client,
-        fallback_clients: Vec::new(),
-        recovery_policy: None,
+        model_runtimes: None,
         tools,
         session_manager,
         fast_model_spec: None,

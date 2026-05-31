@@ -5,6 +5,7 @@
 
 use pretty_assertions::assert_eq;
 
+use base64::Engine;
 use coco_types::SdkSessionSummary;
 use coco_types::SlashCommandInfo;
 use coco_types::TuiOnlyEvent;
@@ -80,6 +81,35 @@ fn available_commands_refreshed_overwrites_slot() {
 }
 
 #[test]
+fn queued_command_edit_ready_restores_prompt_and_image_pill() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::QueuedCommandEditReady {
+            id: "queued-1".to_string(),
+            prompt: "look at this".to_string(),
+            images: vec![coco_types::QueuedCommandEditImage {
+                media_type: "image/png".to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(b"img"),
+            }],
+        },
+        &tx,
+    );
+
+    assert!(consumed);
+    assert_eq!(state.ui.input.text(), "look at this [Image #1]");
+    let resolved = state
+        .ui
+        .paste_manager
+        .resolve_structured(state.ui.input.text());
+    assert_eq!(resolved.text, "look at this");
+    assert_eq!(resolved.images.len(), 1);
+    assert_eq!(resolved.images[0].bytes, b"img");
+}
+
+#[test]
 fn available_commands_refreshed_repopulates_open_popup() {
     // User had `/` popup open against the old catalogue. After reload,
     // the handler should re-run `refresh_suggestions` so the popup
@@ -93,7 +123,8 @@ fn available_commands_refreshed_repopulates_open_popup() {
     // Sanity check: the old list is shown.
     let initial_labels: Vec<String> = state
         .ui
-        .active_suggestions
+        .completion
+        .active
         .as_ref()
         .expect("popup installed")
         .items
@@ -112,7 +143,8 @@ fn available_commands_refreshed_repopulates_open_popup() {
 
     let sug = state
         .ui
-        .active_suggestions
+        .completion
+        .active
         .as_ref()
         .expect("popup re-installed after refresh");
     assert_eq!(sug.kind, SuggestionKind::SlashCommand);
@@ -481,7 +513,7 @@ fn available_commands_refreshed_with_no_open_popup_is_noop_for_popup_state() {
     // doesn't conjure a popup out of nowhere.
     let mut state = AppState::new();
     let (tx, _rx) = channel();
-    assert!(state.ui.active_suggestions.is_none());
+    assert!(state.ui.completion.active.is_none());
 
     handle(
         &mut state,
@@ -492,7 +524,7 @@ fn available_commands_refreshed_with_no_open_popup_is_noop_for_popup_state() {
     );
 
     assert_eq!(state.session.available_commands.len(), 1);
-    assert!(state.ui.active_suggestions.is_none());
+    assert!(state.ui.completion.active.is_none());
 }
 
 #[test]

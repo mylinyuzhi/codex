@@ -9,7 +9,7 @@
 //! `sdk_server::sdk_runner` all reuse it without duplicating the
 //! "id vs jsonl path vs --continue most-recent" rules.
 //!
-//! The resolver is filesystem-only; it never touches an `ApiClient`,
+//! The resolver is filesystem-only; it never touches model runtimes,
 //! `SessionManager`, or runtime state. Callers thread the resulting
 //! `ResumePlan` into either:
 //! - `RunChatOptions::prior_messages` (headless path) +

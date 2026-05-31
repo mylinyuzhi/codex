@@ -7,7 +7,7 @@ use coco_cli::Cli;
 use coco_cli::Commands;
 use coco_cli::McpAction;
 use coco_cli::headless::build_runtime_config_for_cli;
-use coco_cli::headless::create_api_client;
+use coco_cli::headless::resolve_main_model;
 use coco_cli::paths::standard_agent_search_paths;
 use coco_cli::resume_resolver;
 use coco_cli::resume_resolver::ResumePlan;
@@ -50,12 +50,11 @@ async fn main() -> Result<()> {
                 let cwd = std::env::current_dir()?;
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
                 coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
-                let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-                let (client, provider_api, model_id) = create_api_client(&runtime_config, retry);
-                let mode = provider_api.map_or("mock", |api| api.as_str());
+                let main_model = resolve_main_model(&runtime_config);
+                let mode = main_model.provider_api.map_or("mock", |api| api.as_str());
                 println!("coco-rs v0.0.0 ({mode} mode)");
-                println!("model: {model_id}");
-                println!("provider: {}", client.provider());
+                println!("model: {}", main_model.model_id);
+                println!("provider: {}", main_model.provider);
                 coco_cli::provider_login::print_auth_status(&runtime_config);
                 return Ok(());
             }
@@ -97,10 +96,9 @@ async fn main() -> Result<()> {
                 let cwd = std::env::current_dir()?;
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
                 coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
-                let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-                let (_client, provider_api, model_id) = create_api_client(&runtime_config, retry);
-                let mode = provider_api.map_or("mock", |api| api.as_str());
-                println!("[ok] Model: {model_id} ({mode})");
+                let main_model = resolve_main_model(&runtime_config);
+                let mode = main_model.provider_api.map_or("mock", |api| api.as_str());
+                println!("[ok] Model: {} ({mode})", main_model.model_id);
                 coco_cli::provider_login::print_auth_status(&runtime_config);
                 return Ok(());
             }
@@ -464,9 +462,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             system_prompt: system_prompt.clone().unwrap_or_default(),
             bypass_permissions_available,
             permission_mode,
-            client: resources.client,
-            fallback_clients: resources.fallback_clients,
-            recovery_policy: resources.recovery_policy,
+            model_runtimes: None,
             tools: resources.tools,
             session_manager: session_manager_for_runtime,
             fast_model_spec: None,

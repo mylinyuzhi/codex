@@ -307,6 +307,9 @@ pub enum UserCommand {
         prompt: String,
         images: Vec<coco_tui_ui::paste::ImageData>,
     },
+    /// Remove a queued command from the engine queue and return it to
+    /// the composer for editing.
+    EditQueuedCommand { id: String },
     /// Background all foreground tasks. Sent by the live single-press
     /// Ctrl+B path (`TuiCommand::BackgroundAllTasks` in update.rs).
     BackgroundAllTasks,

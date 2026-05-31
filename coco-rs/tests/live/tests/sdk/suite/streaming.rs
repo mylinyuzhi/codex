@@ -1,14 +1,16 @@
-//! Streaming tests via `coco_inference::ApiClient::query_stream`.
+//! Streaming tests via `coco_inference::ModelRuntimeClient::query_stream`.
 
 use anyhow::Result;
 use coco_inference::LanguageModelFunctionTool;
 use coco_inference::LanguageModelTool;
+use coco_inference::ModelCommunicationOutcome;
 use coco_inference::QueryParams;
 use coco_inference::StreamEvent;
 use coco_llm_types::LlmMessage;
 use coco_types::ThinkingLevel;
 
 use crate::common::LiveTarget;
+use crate::common::open_stream_client;
 use crate::common::usage_report;
 use crate::common::weather_tool_def;
 
@@ -40,7 +42,7 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         response_format: None,
     };
 
-    let mut rx = target.client.query_stream(&params).await?;
+    let (mut rx, token) = open_stream_client(&target.client, params).await?;
     let mut text = String::new();
     let mut events = 0usize;
     let mut saw_finish = false;
@@ -57,6 +59,14 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
             _ => {}
         }
     }
+    target.client.finish_call(
+        &token,
+        if saw_finish {
+            ModelCommunicationOutcome::Success
+        } else {
+            ModelCommunicationOutcome::Failure
+        },
+    );
     usage_report::record(
         target.provider,
         &target.model,
@@ -118,7 +128,7 @@ pub async fn run_with_tools(target: &LiveTarget) -> Result<()> {
         response_format: None,
     };
 
-    let mut rx = target.client.query_stream(&params).await?;
+    let (mut rx, token) = open_stream_client(&target.client, params).await?;
     let mut tool_name = String::new();
     let mut saw_tool_call_start = false;
     let mut text = String::new();
@@ -147,6 +157,14 @@ pub async fn run_with_tools(target: &LiveTarget) -> Result<()> {
             _ => {}
         }
     }
+    target.client.finish_call(
+        &token,
+        if stop_reason.is_some() {
+            ModelCommunicationOutcome::Success
+        } else {
+            ModelCommunicationOutcome::Failure
+        },
+    );
     usage_report::record(
         target.provider,
         &target.model,
@@ -275,7 +293,7 @@ pub async fn run_thinking_with_option_typed_tools(target: &LiveTarget) -> Result
         response_format: None,
     };
 
-    let mut rx = target.client.query_stream(&params).await?;
+    let (mut rx, token) = open_stream_client(&target.client, params).await?;
     let mut saw_tool_call_start = false;
     let mut tool_name = String::new();
     let mut text = String::new();
@@ -304,6 +322,14 @@ pub async fn run_thinking_with_option_typed_tools(target: &LiveTarget) -> Result
             _ => {}
         }
     }
+    target.client.finish_call(
+        &token,
+        if stop_reason.is_some() {
+            ModelCommunicationOutcome::Success
+        } else {
+            ModelCommunicationOutcome::Failure
+        },
+    );
     usage_report::record(
         target.provider,
         &target.model,

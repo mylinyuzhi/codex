@@ -258,6 +258,14 @@ pub struct ContextUsageResult {
     pub auto_compact_threshold: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_breakdown: Option<MessageBreakdown>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory_files: Vec<ContextMemoryFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_tools: Vec<ContextMcpTool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<ContextAgent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<ContextSkill>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -275,6 +283,39 @@ pub struct MessageBreakdown {
     pub attachment_tokens: i64,
     pub assistant_message_tokens: i64,
     pub user_message_tokens: i64,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextMemoryFile {
+    pub path: String,
+    pub source: String,
+    pub tokens: i64,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextMcpTool {
+    pub name: String,
+    pub server_name: String,
+    pub tokens: i64,
+    pub is_loaded: bool,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextAgent {
+    pub agent_type: String,
+    pub source: String,
+    pub tokens: i64,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextSkill {
+    pub name: String,
+    pub source: String,
+    pub tokens: i64,
 }
 
 /// Response to `ClientRequest::McpSetServers`.

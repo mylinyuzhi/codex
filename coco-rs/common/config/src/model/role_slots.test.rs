@@ -16,7 +16,7 @@ fn test_deserialize_bare_string_form() {
         serde_json::from_value(json!("anthropic/claude-opus-4-6")).unwrap();
     assert_eq!(slots.primary, sel("anthropic", "claude-opus-4-6"));
     assert!(slots.fallbacks.is_empty());
-    assert!(slots.recovery.is_none());
+    assert_eq!(slots.policy, FallbackPolicy::default());
 }
 
 #[test]
@@ -130,38 +130,88 @@ fn test_deserialize_nested_rejects_unknown_field() {
 }
 
 #[test]
-fn test_deserialize_recovery_policy_optional() {
+fn test_deserialize_policy_optional() {
     let slots: RoleSlots<ProviderModelSelection> = serde_json::from_value(json!({
+        "primary":  { "provider": "anthropic", "model_id": "opus" },
+        "policy": {
+            "exhausted_retry": {
+                "max_cycles": 4,
+                "initial_backoff_secs": 3,
+                "max_backoff_secs": 20
+            },
+            "recovery": {
+                "initial_backoff_secs": 30,
+                "max_backoff_secs": 600,
+                "max_attempts": 5
+            }
+        }
+    }))
+    .unwrap();
+    assert_eq!(slots.policy.exhausted_retry.max_cycles, 4);
+    assert_eq!(slots.policy.exhausted_retry.initial_backoff_secs, 3);
+    assert_eq!(slots.policy.exhausted_retry.max_backoff_secs, 20);
+    assert_eq!(slots.policy.recovery.initial_backoff_secs, 30);
+    assert_eq!(slots.policy.recovery.max_backoff_secs, 600);
+    assert_eq!(slots.policy.recovery.max_attempts, 5);
+}
+
+#[test]
+fn test_deserialize_rejects_old_recovery_field() {
+    let err = serde_json::from_value::<RoleSlots<ProviderModelSelection>>(json!({
         "primary":  { "provider": "anthropic", "model_id": "opus" },
         "recovery": { "initial_backoff_secs": 30, "max_backoff_secs": 600, "max_attempts": 5 }
     }))
-    .unwrap();
-    let r = slots.recovery.unwrap();
-    assert_eq!(r.initial_backoff_secs, 30);
-    assert_eq!(r.max_backoff_secs, 600);
-    assert_eq!(r.max_attempts, 5);
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("unknown field `recovery`"),
+        "expected unknown recovery field, got: {err}"
+    );
 }
 
 #[test]
-fn test_recovery_policy_default_values() {
-    let p = FallbackRecoveryPolicy::default();
-    assert_eq!(p.initial_backoff_secs, 60);
-    assert_eq!(p.max_backoff_secs, 1_800);
-    assert_eq!(p.max_attempts, 10);
-    assert_eq!(p.initial_backoff(), std::time::Duration::from_secs(60));
-    assert_eq!(p.max_backoff(), std::time::Duration::from_secs(1_800));
+fn test_fallback_policy_default_values() {
+    let p = FallbackPolicy::default();
+    assert_eq!(p.exhausted_retry.max_cycles, 2);
+    assert_eq!(p.exhausted_retry.initial_backoff_secs, 2);
+    assert_eq!(p.exhausted_retry.max_backoff_secs, 30);
+    assert_eq!(p.recovery.initial_backoff_secs, 60);
+    assert_eq!(p.recovery.max_backoff_secs, 1_800);
+    assert_eq!(p.recovery.max_attempts, 10);
+    assert_eq!(
+        p.exhausted_retry.initial_backoff(),
+        std::time::Duration::from_secs(2)
+    );
+    assert_eq!(
+        p.exhausted_retry.max_backoff(),
+        std::time::Duration::from_secs(30)
+    );
+    assert_eq!(
+        p.recovery.initial_backoff(),
+        std::time::Duration::from_secs(60)
+    );
+    assert_eq!(
+        p.recovery.max_backoff(),
+        std::time::Duration::from_secs(1_800)
+    );
 }
 
 #[test]
-fn test_recovery_policy_max_backoff_never_below_initial() {
-    // Guard: if a user configures max < initial (invalid), the
-    // getter clamps max up to initial so we never shrink backoff.
-    let p = FallbackRecoveryPolicy {
-        initial_backoff_secs: 300,
-        max_backoff_secs: 60, // nonsense
-        max_attempts: 3,
+fn test_fallback_policy_clamps_values() {
+    let exhausted = ExhaustedRetryPolicy {
+        max_cycles: 0,
+        initial_backoff_secs: 10,
+        max_backoff_secs: 1,
     };
-    assert_eq!(p.max_backoff(), std::time::Duration::from_secs(300));
+    assert_eq!(exhausted.max_cycles(), 1);
+    assert_eq!(exhausted.max_backoff(), std::time::Duration::from_secs(10));
+
+    let recovery = RecoveryProbePolicy {
+        initial_backoff_secs: 300,
+        max_backoff_secs: 60,
+        max_attempts: -1,
+    };
+    assert_eq!(recovery.max_attempts(), 0);
+    assert_eq!(recovery.max_backoff(), std::time::Duration::from_secs(300));
 }
 
 #[test]
@@ -213,9 +263,21 @@ fn test_serialize_nested_form_skips_empty_fallbacks_and_recovery() {
 
 #[test]
 fn test_serialize_roundtrip_preserves_multi_fallback_and_recovery() {
+    let policy = FallbackPolicy {
+        exhausted_retry: ExhaustedRetryPolicy {
+            max_cycles: 3,
+            initial_backoff_secs: 1,
+            max_backoff_secs: 8,
+        },
+        recovery: RecoveryProbePolicy {
+            initial_backoff_secs: 10,
+            max_backoff_secs: 100,
+            max_attempts: 2,
+        },
+    };
     let orig = RoleSlots::new(sel("anthropic", "opus"))
         .with_fallbacks(vec![sel("anthropic", "sonnet"), sel("openai", "gpt-5")])
-        .with_recovery(FallbackRecoveryPolicy::default());
+        .with_policy(policy);
     let json_val = serde_json::to_value(&orig).unwrap();
     let back: RoleSlots<ProviderModelSelection> = serde_json::from_value(json_val).unwrap();
     assert_eq!(back, orig);

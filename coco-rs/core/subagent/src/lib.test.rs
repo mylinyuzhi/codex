@@ -1130,7 +1130,7 @@ fn prompt_lists_active_agents_in_alphabetical_order() {
         vec![
             "- build: Build verification (Tools: Bash, Read)",
             "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: All tools)",
-            "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)",
+            "- statusline-setup: Use this agent to configure the user's Coco status line setting. (Tools: Read, Edit)",
         ]
     );
 }
