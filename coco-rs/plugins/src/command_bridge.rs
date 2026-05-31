@@ -14,6 +14,7 @@
 use std::path::Path;
 
 use coco_skills::load_skill_from_file;
+use coco_types::CommandArgumentKind;
 use coco_types::CommandBase;
 use coco_types::CommandSafety;
 use coco_types::CommandSource;
@@ -137,15 +138,16 @@ fn load_command_from_file(
     match load_skill_from_file(path) {
         Ok(skill) => {
             let namespaced = format!("{plugin_name}:{command_name}");
-            out.push(build_plugin_command(
-                &namespaced,
+            out.push(build_plugin_command(PluginCommandBuild {
+                namespaced_name: &namespaced,
                 plugin_name,
-                &skill.description,
-                &skill.prompt,
-                skill.argument_hint.as_deref(),
-                skill.model.as_deref(),
-                skill.allowed_tools.as_deref(),
-            ));
+                description: &skill.description,
+                prompt: &skill.prompt,
+                argument_hint: skill.argument_hint.as_deref(),
+                argument_kind: None,
+                model: skill.model.as_deref(),
+                allowed_tools: skill.allowed_tools.as_deref(),
+            }));
         }
         Err(e) => {
             tracing::warn!(
@@ -229,19 +231,22 @@ fn load_manifest_object_entry(
         let resolved = plugin_path.join(source_path);
         match load_skill_from_file(&resolved) {
             Ok(skill) => {
-                out.push(build_plugin_command(
-                    &namespaced,
+                out.push(build_plugin_command(PluginCommandBuild {
+                    namespaced_name: &namespaced,
                     plugin_name,
-                    meta.description.as_deref().unwrap_or(&skill.description),
-                    &skill.prompt,
-                    meta.argument_hint
+                    description: meta.description.as_deref().unwrap_or(&skill.description),
+                    prompt: &skill.prompt,
+                    argument_hint: meta
+                        .argument_hint
                         .as_deref()
                         .or(skill.argument_hint.as_deref()),
-                    meta.model.as_deref().or(skill.model.as_deref()),
-                    meta.allowed_tools
+                    argument_kind: meta.argument_kind,
+                    model: meta.model.as_deref().or(skill.model.as_deref()),
+                    allowed_tools: meta
+                        .allowed_tools
                         .as_deref()
                         .or(skill.allowed_tools.as_deref()),
-                ));
+                }));
             }
             Err(e) => {
                 tracing::warn!(
@@ -253,15 +258,16 @@ fn load_manifest_object_entry(
             }
         }
     } else if let Some(ref content) = meta.content {
-        out.push(build_plugin_command(
-            &namespaced,
+        out.push(build_plugin_command(PluginCommandBuild {
+            namespaced_name: &namespaced,
             plugin_name,
-            meta.description.as_deref().unwrap_or("Plugin command"),
-            content,
-            meta.argument_hint.as_deref(),
-            meta.model.as_deref(),
-            meta.allowed_tools.as_deref(),
-        ));
+            description: meta.description.as_deref().unwrap_or("Plugin command"),
+            prompt: content,
+            argument_hint: meta.argument_hint.as_deref(),
+            argument_kind: meta.argument_kind,
+            model: meta.model.as_deref(),
+            allowed_tools: meta.allowed_tools.as_deref(),
+        }));
     } else {
         tracing::warn!(
             plugin = %plugin_name,
@@ -276,43 +282,52 @@ fn load_manifest_object_entry(
 // ---------------------------------------------------------------------------
 
 /// Build a `PluginCommand` from parsed data.
-fn build_plugin_command(
-    namespaced_name: &str,
-    plugin_name: &str,
-    description: &str,
-    prompt: &str,
-    argument_hint: Option<&str>,
-    model: Option<&str>,
-    allowed_tools: Option<&[String]>,
-) -> PluginCommand {
+struct PluginCommandBuild<'a> {
+    namespaced_name: &'a str,
+    plugin_name: &'a str,
+    description: &'a str,
+    prompt: &'a str,
+    argument_hint: Option<&'a str>,
+    argument_kind: Option<CommandArgumentKind>,
+    model: Option<&'a str>,
+    allowed_tools: Option<&'a [String]>,
+}
+
+fn build_plugin_command(input: PluginCommandBuild<'_>) -> PluginCommand {
     PluginCommand {
         base: CommandBase {
-            name: namespaced_name.to_string(),
-            description: description.to_string(),
+            name: input.namespaced_name.to_string(),
+            description: input.description.to_string(),
             aliases: vec![],
             availability: vec![],
             is_hidden: false,
-            argument_hint: argument_hint.map(ToString::to_string),
+            argument_hint: input.argument_hint.map(ToString::to_string),
+            argument_kind: input.argument_kind.unwrap_or_else(|| {
+                input
+                    .argument_hint
+                    .map(|_| CommandArgumentKind::FreeText)
+                    .unwrap_or(CommandArgumentKind::None)
+            }),
             when_to_use: None,
             user_invocable: true,
             is_sensitive: false,
             loaded_from: Some(CommandSource::Plugin {
-                name: plugin_name.to_string(),
+                name: input.plugin_name.to_string(),
             }),
             safety: CommandSafety::default(),
             supports_non_interactive: false,
         },
         command_type: CommandType::Prompt(PromptCommandData {
-            progress_message: format!("Running {namespaced_name}..."),
-            content_length: prompt.len() as i64,
-            allowed_tools: allowed_tools.map(<[String]>::to_vec),
-            model: model.map(ToString::to_string),
+            progress_message: format!("Running {}...", input.namespaced_name),
+            content_length: input.prompt.len() as i64,
+            allowed_tools: input.allowed_tools.map(<[String]>::to_vec),
+            model: input.model.map(ToString::to_string),
             context: Default::default(),
             agent: None,
             thinking_level: None,
             hooks: None,
         }),
-        prompt: prompt.to_string(),
+        prompt: input.prompt.to_string(),
     }
 }
 

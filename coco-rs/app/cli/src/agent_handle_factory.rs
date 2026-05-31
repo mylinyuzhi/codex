@@ -9,8 +9,8 @@
 //!
 //! The factory closure inside [`coco_query::QueryEngineAdapter`] is
 //! the trickiest piece — it needs to spawn a fresh `QueryEngine` per
-//! subagent call, route the call's `ModelRole` to the right
-//! `ApiClient`, and thread it back through `SessionRuntime`'s
+//! subagent call, route the call's model selection to the right
+//! `ModelRuntimeSource`, and thread it back through `SessionRuntime`'s
 //! standard wiring (compaction observers, mailbox, hooks, etc.). This
 //! module owns the closure construction so `app/cli/main.rs` doesn't
 //! grow a 50-line lambda.
@@ -31,8 +31,6 @@ use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentQueryEngineRef;
 use coco_types::LlmModelSelection;
 use coco_types::ModelRole;
-use coco_types::ModelSpec;
-use coco_types::ProviderModelSelection;
 use tokio::sync::RwLock;
 use tracing::warn;
 
@@ -45,88 +43,18 @@ pub struct AgentTeamWiring {
     pub agent_handle: AgentHandleRef,
 }
 
-async fn resolve_agent_client(
-    runtime: &Arc<SessionRuntime>,
+fn resolve_agent_runtime_source(
     selection: &LlmModelSelection,
-) -> Arc<coco_inference::ApiClient> {
+) -> coco_inference::ModelRuntimeSource {
     match selection {
         LlmModelSelection::InheritMain
         | LlmModelSelection::Role {
             role: ModelRole::Main,
-        } => runtime.main_client().await,
-        LlmModelSelection::Role { role } => resolve_role_client(runtime, *role).await,
-        LlmModelSelection::Explicit { primary } => {
-            match resolve_explicit_client(runtime, primary).await {
-                Some(client) => client,
-                None => runtime.main_client().await,
-            }
-        }
-        LlmModelSelection::ExplicitWithFallbackRole {
-            primary,
-            fallback_role,
-        } => match resolve_explicit_client(runtime, primary).await {
-            Some(client) => client,
-            None => resolve_role_client(runtime, *fallback_role).await,
-        },
-    }
-}
-
-async fn resolve_role_client(
-    runtime: &Arc<SessionRuntime>,
-    role: ModelRole,
-) -> Arc<coco_inference::ApiClient> {
-    if role == ModelRole::Main {
-        return runtime.main_client().await;
-    }
-
-    match runtime.client_for_role(role).await {
-        Ok(client) => client,
-        Err(e) => {
-            warn!(?role, error = %e, "client_for_role failed; falling back to Main");
-            runtime.main_client().await
-        }
-    }
-}
-
-async fn resolve_explicit_client(
-    runtime: &Arc<SessionRuntime>,
-    selection: &ProviderModelSelection,
-) -> Option<Arc<coco_inference::ApiClient>> {
-    let provider = match runtime.runtime_config.providers.get(&selection.provider) {
-        Some(provider) => provider,
-        None => {
-            warn!(
-                provider = %selection.provider,
-                model = %selection.model_id,
-                "explicit model references unknown provider; falling back"
-            );
-            return None;
-        }
-    };
-    let spec = ModelSpec {
-        provider: selection.provider.clone(),
-        api: provider.api,
-        display_name: selection.model_id.clone(),
-        model_id: selection.model_id.clone(),
-    };
-    let retry: coco_inference::RetryConfig = runtime.runtime_config.api.retry.clone().into();
-    // Subagents pointed at an OAuth-subscription provider authenticate via the
-    // session-shared resolver (same credential cells as Main / other roles).
-    match coco_inference::model_factory::build_api_client(
-        &runtime.runtime_config,
-        &spec,
-        retry,
-        Some(&crate::provider_login::shared_resolver()),
-    ) {
-        Ok(client) => Some(client),
-        Err(e) => {
-            warn!(
-                provider = %selection.provider,
-                model = %selection.model_id,
-                error = %e,
-                "failed to build explicit model ApiClient; falling back"
-            );
-            None
+        } => coco_inference::ModelRuntimeSource::Role(ModelRole::Main),
+        LlmModelSelection::Role { role } => coco_inference::ModelRuntimeSource::Role(*role),
+        LlmModelSelection::Explicit { primary }
+        | LlmModelSelection::ExplicitWithFallbackRole { primary, .. } => {
+            coco_inference::ModelRuntimeSource::Explicit(primary.clone())
         }
     }
 }
@@ -257,9 +185,9 @@ pub async fn build_agent_team_wiring(
                 engine_config.plan_mode_settings =
                     runtime.runtime_config.settings.merged.plan_mode.clone();
 
-                let client = resolve_agent_client(&runtime, &role).await;
+                let runtime_source = resolve_agent_runtime_source(&role);
                 // Build a fresh engine via the runtime's standard
-                // path, then swap in the role-resolved client.
+                // path, then select the role/explicit runtime source.
                 // `wire_engine` (called inside `build_engine_from_config`)
                 // installs all the same observers / mailbox / hooks
                 // the top-level engine gets so subagent execution
@@ -277,7 +205,7 @@ pub async fn build_agent_team_wiring(
                 // cannot leak to the parent — different Arcs. No
                 // NoOp override needed: TS parity stays without an
                 // explicit isolation seam.
-                engine.with_client(client)
+                engine.with_model_runtime_source(runtime_source)
             })
         })
     };

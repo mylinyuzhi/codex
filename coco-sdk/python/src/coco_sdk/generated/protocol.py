@@ -151,6 +151,13 @@ class Capability(str, Enum):
     server_side_tool_reference = 'server_side_tool_reference'
     client_side_tool_search = 'client_side_tool_search'
 
+class CommandArgumentKind(str, Enum):
+    none = 'none'
+    free_text = 'free_text'
+    file_path = 'file_path'
+    directory_path = 'directory_path'
+    session_id = 'session_id'
+
 class CommandTypeTag(str, Enum):
     prompt = 'prompt'
     local = 'local'
@@ -1599,6 +1606,19 @@ class TuiOnlyEventAvailableCommandsRefreshed(BaseModel):
     type_: Literal['available_commands_refreshed'] = Field(default='available_commands_refreshed', alias='type')
     commands: list[SlashCommandInfo]
 
+class TuiOnlyEventQueuedCommandEditReady(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['queued_command_edit_ready'] = Field(default='queued_command_edit_ready', alias='type')
+    id: str
+    prompt: str
+    images: list[QueuedCommandEditImage] | None = None
+
+class TuiOnlyEventQueuedCommandEditUnavailable(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['queued_command_edit_unavailable'] = Field(default='queued_command_edit_unavailable', alias='type')
+    id: str
+    reason: str
+
 class TuiOnlyEventOpenSessionBrowser(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['open_session_browser'] = Field(default='open_session_browser', alias='type')
@@ -1775,7 +1795,7 @@ class TuiOnlyEventSkillOverridesSaved(BaseModel):
     result: SkillOverridesSaveResult
 
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventSkillOverridesSaved],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventSkillOverridesSaved],
     Field(discriminator='type_'),
 ]
 
@@ -1985,6 +2005,7 @@ class ModelRoleChangedParams(BaseModel):
     model_id: str
     provider: str
     role: ModelRole
+    context_window: int | None = None
     effort: ReasoningEffort | None = None
 
 class PermissionModeChangedParams(BaseModel):
@@ -2060,6 +2081,7 @@ class SessionStartedParams(BaseModel):
     mcp_servers: list[McpServerInit] = []
     output_style: str | None = None
     plugins: list[PluginInit] = []
+    provider: str | None = None
     skills: list[str] = []
     slash_commands: list[str] = []
     tools: list[str] = []
@@ -2908,6 +2930,27 @@ class ConfigReadResult(BaseModel):
     config: Any
     sources: dict[str, Any] = {}
 
+class ContextAgent(BaseModel):
+    agent_type: str
+    source: str
+    tokens: int
+
+class ContextMcpTool(BaseModel):
+    is_loaded: bool
+    name: str
+    server_name: str
+    tokens: int
+
+class ContextMemoryFile(BaseModel):
+    path: str
+    source: str
+    tokens: int
+
+class ContextSkill(BaseModel):
+    name: str
+    source: str
+    tokens: int
+
 class ContextUsageCategory(BaseModel):
     name: str
     tokens: int
@@ -2920,8 +2963,12 @@ class ContextUsageResult(BaseModel):
     percentage: float
     raw_max_tokens: int
     total_tokens: int
+    agents: list[ContextAgent] | None = None
     auto_compact_threshold: int | None = None
+    mcp_tools: list[ContextMcpTool] | None = None
+    memory_files: list[ContextMemoryFile] | None = None
     message_breakdown: MessageBreakdown | None = None
+    skills: list[ContextSkill] | None = None
 
 class CustomPart(BaseModel):
     kind: str
@@ -3312,6 +3359,10 @@ class ProviderModelSelection(BaseModel):
 class ProviderOptions(BaseModel):
     pass
 
+class QueuedCommandEditImage(BaseModel):
+    data_base64: str
+    media_type: str
+
 class ReasoningFilePart(BaseModel):
     data: LanguageModelV4FileData
     media_type: str = Field(alias='mediaType')
@@ -3524,6 +3575,7 @@ class SlashCommandInfo(BaseModel):
     name: str
     aliases: list[str] | None = None
     argument_hint: str | None = None
+    argument_kind: CommandArgumentKind = 'none'
     description: str | None = None
     kind: CommandTypeTag = 'local'
     source: CommandSource | None = None

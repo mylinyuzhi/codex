@@ -1,11 +1,11 @@
-//! SDK-layer live tests for DeepSeek (`coco-inference::ApiClient`, no agent loop).
+//! SDK-layer live tests for DeepSeek (`coco-inference model runtime`, no agent loop).
 //!
 //! Each test exercises the **provider construction chain** plus the inference call:
 //!
 //! ```text
 //! builtin_providers()  →  RuntimeConfig  →  ModelRegistry
 //!     →  model_factory::build_api_client
-//!     →  coco_inference::ApiClient.query / .query_stream
+//!     →  coco_inference::ModelRuntimeClient.query / .query_stream
 //!     →  api.deepseek.com (real HTTP)
 //! ```
 //!

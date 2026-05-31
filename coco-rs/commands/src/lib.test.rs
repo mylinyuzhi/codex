@@ -1,3 +1,4 @@
+use coco_types::CommandArgumentKind;
 use coco_types::CommandBase;
 use coco_types::CommandContext;
 use coco_types::CommandSafety;
@@ -15,6 +16,7 @@ fn test_base(name: &str, description: &str, aliases: Vec<String>) -> CommandBase
         availability: vec![],
         is_hidden: false,
         argument_hint: None,
+        argument_kind: CommandArgumentKind::None,
         when_to_use: None,
         user_invocable: true,
         is_sensitive: false,

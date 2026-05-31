@@ -510,6 +510,7 @@ slash.permissions.usage_deny: "Usage: /permissions deny <tool>"
 queue_status.count: " ⋯ %{count} queued"
 queue_status.next_preview: " — next: %{preview}"
 queue_status.more: "  (+%{count} more)"
+queue_status.edit_hint: "  ↑ edit next"
 
 # ─── Input widget ────────────────────────────────────────────
 input.title: "Input"
@@ -522,6 +523,8 @@ input.stash_label: "Stashed"
 
 # ─── Toast notifications ─────────────────────────────────────
 toast.not_implemented: "Not yet implemented"
+toast.queued_edit_unavailable: "Queued message unavailable: %{reason}"
+toast.queued_edit_image_failed: "Could not restore queued image: %{error}"
 toast.compacting: "Compacting context..."
 toast.max_turns_reached: "Max turns reached (%{n})"
 toast.api_error: "API error%{status}: %{error}%{retry}"

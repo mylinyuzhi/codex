@@ -1,4 +1,4 @@
-//! Tool-calling tests via `coco_inference::ApiClient::query`.
+//! Tool-calling tests via `coco_inference::ModelRuntimeClient::query`.
 //!
 //! Validates the model emits a `get_weather` tool call. Full multi-step
 //! tool-execution flow (call → execute → respond) is not covered here:
@@ -12,6 +12,7 @@ use coco_llm_types::LlmMessage;
 
 use crate::common::LiveTarget;
 use crate::common::has_tool_call_named;
+use crate::common::query_client;
 use crate::common::usage_report;
 use crate::common::weather_tool_def;
 
@@ -52,7 +53,7 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         stop_sequences: None,
         response_format: None,
     };
-    let result = target.client.query(&params).await?;
+    let result = query_client(&target.client, params).await?;
     usage_report::record(target.provider, &target.model, "tools.run", &result.usage);
 
     // Surface the full `FinishReason` (typed `unified` + provider wire

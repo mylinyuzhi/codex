@@ -43,7 +43,7 @@ vercel-ai-provider (3rd-party SDK)
    │
    └── services/inference        ← runtime/client seam
          owns: LanguageModelV4 trait, CallOptions, GenerateResult,
-               StreamResult, Provider trait, ApiClient, retry, auth,
+               StreamResult, Provider trait, model runtime, retry, auth,
                prompt-cache detection, thinking-level conversion
          consumers: app/query, app/cli, model_factory
 ```

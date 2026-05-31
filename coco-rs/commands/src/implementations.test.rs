@@ -170,6 +170,20 @@ fn test_plan_handler_subcommands() {
     assert!(plan_handler("refactor the auth module").contains("EnterPlanMode"));
 }
 
+#[test]
+fn statusline_prompt_describes_coco_runtime_fields() {
+    assert!(STATUSLINE_PROMPT.contains("Configure my Coco status line."));
+    assert!(STATUSLINE_PROMPT.contains("~/.coco/settings.json"));
+    assert!(STATUSLINE_PROMPT.contains("model.{id,display_name,provider}"));
+    assert!(STATUSLINE_PROMPT.contains("context_window.{used,total,percent}"));
+    assert!(STATUSLINE_PROMPT.contains("mcp.connected_servers"));
+    assert!(!STATUSLINE_PROMPT.contains("~/.claude"));
+    assert!(!STATUSLINE_PROMPT.contains("session_name"));
+    assert!(!STATUSLINE_PROMPT.contains("transcript_path"));
+    assert!(!STATUSLINE_PROMPT.contains("rate_limits"));
+    assert!(!STATUSLINE_PROMPT.contains("worktree"));
+}
+
 #[tokio::test]
 async fn test_memory_handler() {
     let output = super::handlers::memory::handler("".to_string())
@@ -450,9 +464,8 @@ async fn test_cost_handler() {
 #[tokio::test]
 async fn test_context_handler() {
     let output = handlers::context::handler(String::new()).await.unwrap();
-    assert!(output.contains("Context Window Usage"));
-    assert!(output.contains("System prompt"));
-    assert!(output.contains("Free"));
+    assert!(output.contains("active session runtime"));
+    assert!(!output.contains("200,000"));
 }
 
 #[tokio::test]
@@ -569,10 +582,10 @@ fn test_alias_lookups_in_extended() {
     let mut registry = CommandRegistry::new();
     register_extended_builtins(&mut registry);
 
-    // Check aliases
-    let by_alias = registry.get("ctx");
-    assert!(by_alias.is_some());
-    assert_eq!(by_alias.unwrap().base.name, "context");
+    assert!(
+        registry.get("ctx").is_none(),
+        "/ctx alias removed; use canonical /context"
+    );
 
     assert!(
         registry.get("continue").is_none(),

@@ -141,9 +141,10 @@ impl TurnRunner for QueryEngineRunner {
                 },
                 total_token_budget: runtime_config.loop_config.total_token_budget.map(i64::from),
                 prompt_cache: runtime
-                    .main_client()
-                    .await
-                    .supports_prompt_cache()
+                    .model_runtimes()
+                    .snapshot_for_role(coco_types::ModelRole::Main)
+                    .ok()
+                    .is_some_and(|snapshot| snapshot.supports_prompt_cache)
                     .then(|| coco_types::PromptCacheConfig {
                         mode: coco_types::PromptCacheMode::Auto,
                         ttl: coco_types::CacheTtl::OneHour,

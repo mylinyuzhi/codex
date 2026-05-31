@@ -186,7 +186,7 @@ fn statusline_setup() -> AgentDefinition {
         system_prompt: Some(STATUSLINE_SETUP_SYSTEM_PROMPT.into()),
         ..base(
             SubagentType::StatusLine,
-            "Use this agent to configure the user's Claude Code status line setting.",
+            "Use this agent to configure the user's Coco status line setting.",
         )
     }
 }

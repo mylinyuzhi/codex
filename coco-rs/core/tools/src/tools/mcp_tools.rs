@@ -185,6 +185,7 @@ impl Tool for ListMcpResourcesTool {
                     .iter()
                     .map(|r| {
                         serde_json::json!({
+                            "server_name": r.server_name,
                             "uri": r.uri,
                             "name": r.name,
                             "description": r.description,

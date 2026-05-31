@@ -1,7 +1,7 @@
 # coco-cli
 
 Top-level CLI: clap parser, binary entry, SDK (NDJSON over stdio), subcommand dispatch.
-Depends on everything — wires registries, builds `ApiClient`, starts TUI or SDK server.
+Depends on everything — wires registries, builds model runtime registry, starts TUI or SDK server.
 
 ## TS Source
 
@@ -36,7 +36,7 @@ Depends on everything — wires registries, builds `ApiClient`, starts TUI or SD
 
 1. `Cli::parse()` — clap parses argv (subcommand or default chat)
 2. Fast-path subcommands (Config, Doctor, ReleaseNotes, Sessions, Upgrade) bypass QueryEngine
-3. Interactive/print/SDK paths: load config, build `ApiClient` via `model_factory`, register tools + commands
+3. Interactive/print/SDK paths: load config, build `ModelRuntimeRegistry`, register tools + commands
 4. `Sdk` → `sdk_server` (NDJSON over stdio, `initialize`/`interrupt`/`can_use_tool`/`set_permission_mode`/...)
 5. `--non-interactive` (print mode) → single `QueryEngine::run` + `output::*` formatter
 6. Interactive → `tui_runner::run` (launches `coco-tui`)

@@ -6,7 +6,9 @@ pub use partial::PartialModelInfo;
 pub use registry::ModelRegistry;
 pub use registry::ResolvedModel;
 pub use registry::build_model_registry;
-pub use role_slots::FallbackRecoveryPolicy;
+pub use role_slots::ExhaustedRetryPolicy;
+pub use role_slots::FallbackPolicy;
+pub use role_slots::RecoveryProbePolicy;
 pub use role_slots::RoleSlots;
 
 use crate::error::ConfigError;
@@ -258,7 +260,7 @@ impl PartialEq for ModelInfo {
     }
 }
 
-/// Role -> (primary + fallback chain + recovery policy).
+/// Role -> (primary + fallback chain + fallback policy).
 ///
 /// The JSON-facing side uses `RoleSlots<ProviderModelSelection>` (see
 /// `ModelSelectionSettings`); this runtime-facing side stores the
@@ -287,9 +289,9 @@ impl ModelRoles {
             .unwrap_or(&[])
     }
 
-    /// Recovery policy for a role. `None` = sticky.
-    pub fn recovery(&self, role: ModelRole) -> Option<FallbackRecoveryPolicy> {
-        self.roles.get(&role).and_then(|s| s.recovery)
+    /// Fallback policy for a role.
+    pub fn policy(&self, role: ModelRole) -> Option<FallbackPolicy> {
+        self.roles.get(&role).map(|s| s.policy)
     }
 
     /// Full `RoleSlots` for a role.

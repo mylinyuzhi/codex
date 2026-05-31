@@ -8,7 +8,7 @@
 //! and wires them together at CLI startup.
 //!
 //! Fields that require richer cross-crate plumbing (agent discovery,
-//! ApiClient auth exposure) return stub values today and will be
+//! provider auth exposure) return stub values today and will be
 //! filled in as their data sources grow an accessor.
 
 use std::sync::Arc;

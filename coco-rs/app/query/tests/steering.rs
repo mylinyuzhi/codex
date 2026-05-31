@@ -33,12 +33,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::LlmMessage;
@@ -256,10 +254,7 @@ fn extract_all_text(msg: &LlmMessage) -> String {
 async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
     let captured: Arc<Mutex<Vec<Vec<LlmMessage>>>> = Arc::new(Mutex::new(Vec::new()));
     let model = Arc::new(SteeringMock::new(captured.clone()));
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
         model_id: "steering-mock".into(),

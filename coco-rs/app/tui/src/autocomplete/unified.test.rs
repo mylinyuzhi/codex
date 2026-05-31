@@ -71,3 +71,31 @@ fn merge_keeps_agents_before_files_and_caps_at_15() {
             .all(|s| matches!(s.metadata, Some(SuggestionMeta::Path { .. })))
     );
 }
+
+#[test]
+fn seeded_provider_merge_reserves_room_for_mcp_when_agents_fill_cap() {
+    let agents: Vec<SuggestionItem> = (0..20)
+        .map(|i| SuggestionItem {
+            label: format!("a{i} (agent)"),
+            description: None,
+            metadata: Some(SuggestionMeta::Agent { color: None }),
+        })
+        .collect();
+    let resources = vec![SuggestionItem {
+        label: "Guide".into(),
+        description: None,
+        metadata: Some(SuggestionMeta::McpResource {
+            server: "docs".into(),
+            uri: "file://guide".into(),
+        }),
+    }];
+
+    let merged = merge_seeded_provider_items(agents, resources);
+
+    assert_eq!(merged.len(), 15);
+    assert!(matches!(
+        merged.last().and_then(|item| item.metadata.as_ref()),
+        Some(SuggestionMeta::McpResource { server, uri })
+            if server == "docs" && uri == "file://guide"
+    ));
+}

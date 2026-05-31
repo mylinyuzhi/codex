@@ -5,7 +5,7 @@
 //! ```text
 //!  builtin_providers()  →  RuntimeConfig  →  ModelRegistry
 //!     →  model_factory::build_language_model_from_runtime
-//!     →  vercel-ai SDK / coco_inference::ApiClient
+//!     →  vercel-ai SDK / coco_inference::ModelRuntimeClient
 //!     →  real provider HTTP API
 //! ```
 //!

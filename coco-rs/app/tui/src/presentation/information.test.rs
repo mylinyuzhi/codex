@@ -1,6 +1,13 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+use std::sync::Arc;
+
+use coco_messages::AssistantContent;
+use coco_messages::TextContent;
+use coco_messages::create_assistant_message;
+use coco_types::ModelRole;
+
 use crate::i18n::locale_test_guard;
 use crate::state::DiffViewState;
 use crate::theme::Theme;
@@ -61,8 +68,35 @@ fn context_viz_content_caps_bar_when_usage_exceeds_total() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut state = AppState::default();
-    state.session.context_window_used = 150;
-    state.session.context_window_total = 100;
+    state.session.model_by_role.insert(
+        ModelRole::Main,
+        crate::state::ModelBinding {
+            provider: "openai".into(),
+            model_id: "gpt-5.2".into(),
+            context_window: Some(100),
+            effort: None,
+        },
+    );
+    state
+        .session
+        .transcript
+        .on_message_appended(Arc::new(create_assistant_message(
+            vec![AssistantContent::Text(TextContent {
+                text: "done".into(),
+                provider_metadata: None,
+            })],
+            "gpt-5.2",
+            coco_types::TokenUsage {
+                input_tokens: coco_types::InputTokens {
+                    total: 140,
+                    ..Default::default()
+                },
+                output_tokens: coco_types::OutputTokens {
+                    total: 10,
+                    ..Default::default()
+                },
+            },
+        )));
     state.session.token_usage.input_tokens = 42;
     state.session.token_usage.output_tokens = 8;
     state.session.token_usage.cache_read_tokens = 5;
@@ -71,7 +105,7 @@ fn context_viz_content_caps_bar_when_usage_exceeds_total() {
 
     assert_eq!(title, " Context Window ");
     assert_eq!(border, theme.primary);
-    assert!(body.contains("[████████████████████████████████████████] 150%"));
+    assert!(body.contains("[████████████████████████████████████████] 100%"));
     assert!(body.contains("Input:  42"));
     assert!(body.contains("Output: 8"));
     assert!(body.contains("Cache:  5"));

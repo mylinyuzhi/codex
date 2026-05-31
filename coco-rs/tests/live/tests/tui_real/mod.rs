@@ -8,7 +8,7 @@
 //! ```text
 //! Cli::parse_from(argv)
 //!   → headless::build_runtime_config_for_cli       (settings + env + flags)
-//!   → session_bootstrap::build_engine_resources    (real ApiClient, full ToolRegistry,
+//!   → session_bootstrap::build_engine_resources    (RuntimeConfig, full ToolRegistry,
 //!                                                    system prompt, command registry,
 //!                                                    startup permission state)
 //!   → session_runtime::SessionRuntime::build        (per-session subsystems:

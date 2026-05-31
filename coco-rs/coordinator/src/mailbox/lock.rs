@@ -9,10 +9,11 @@
 //! critical section lives in [`read_messages_no_lock`].
 //!
 //! TS parity: `proper-lockfile` configured at `teammateMailbox.ts:36-41`
-//! with `retries: 10, minTimeout: 5, maxTimeout: 100` (exponential between
-//! the two). We mirror that envelope: 10 retries, 5 ms initial, doubling
-//! up to 100 ms cap. Jitter (`[0.5×, 1.5×)`) is added on each backoff to
-//! break thundering-herd wake-ups when many writers contend — TS's
+//! with `minTimeout: 5, maxTimeout: 100` (exponential between the two).
+//! We use the same delay envelope with 30 attempts, matching this crate's
+//! documented mailbox invariant and giving native test/process bursts
+//! enough turns to drain. Jitter (`[0.5×, 1.5×)`) is added on each backoff
+//! to break thundering-herd wake-ups when many writers contend — TS's
 //! `proper-lockfile` does this internally via `randomize: true` (default).
 
 use super::io::TeammateMessage;
@@ -34,12 +35,12 @@ where
         .truncate(true)
         .open(&lock_path)?;
 
-    // TS-parity envelope: 10 retries × exponential 5 → 100 ms with jitter,
-    // worst-case ~1 s under contention. Jitter scales each backoff by
+    // Retry envelope: 30 attempts × exponential 5 → 100 ms with jitter.
+    // Jitter scales each backoff by
     // [0.5, 1.5) to break thundering-herd wake-ups when many writers
     // contend at once (pure exponential backoff syncs all retry-waves
     // across threads).
-    const MAX_RETRIES: u32 = 10;
+    const MAX_RETRIES: u32 = 30;
     const MIN_DELAY_MS: u64 = 5;
     const MAX_DELAY_MS: u64 = 100;
     let mut delay_ms: u64 = MIN_DELAY_MS;

@@ -1,26 +1,14 @@
-//! Concrete `SideQuery` implementation that routes through `ApiClient`.
-//!
-//! Lives in `app/cli` (the binding layer) because it composes the two
-//! halves: the `SideQuery` trait owned by `coco-tool-runtime` and the
-//! `ApiClient` owned by `coco-inference`. Layer rules forbid the impl
-//! from living in either of those crates (would create a back-edge).
-//!
-//! The adapter holds a `RuntimeConfig` Arc so `request.model_role` can
-//! resolve through `ModelRoles::get(...)` — operator's
-//! `settings.models.<role>` choice flows unchanged. When a role is set
-//! and a different `ApiClient` is needed (e.g. `ModelRole::Memory`
-//! pointing at a separate provider), the adapter builds a fresh client
-//! via the same `coco_inference::model_factory` path the main session
-//! uses; otherwise it falls through to the default client.
+//! Concrete `SideQuery` implementation backed by `ModelRuntimeRegistry`.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use coco_config::RuntimeConfig;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModelFunctionTool;
 use coco_inference::LanguageModelTool;
 use coco_inference::LanguageModelToolChoice;
+use coco_inference::ModelRuntimeQueryOutcome;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
 use coco_inference::ResponseFormat;
 use coco_messages::AssistantContent;
@@ -28,6 +16,7 @@ use coco_messages::LlmMessage;
 use coco_tool_runtime::SideQuery;
 use coco_types::Capability;
 use coco_types::ModelRole;
+use coco_types::ProviderModelSelection;
 use coco_types::SideQueryRequest;
 use coco_types::SideQueryResponse;
 use coco_types::SideQueryRole;
@@ -35,54 +24,34 @@ use coco_types::SideQueryStopReason;
 use coco_types::SideQueryToolUse;
 use coco_types::SideQueryUsage;
 
-/// `SideQuery` adapter wrapping an `ApiClient` plus a `RuntimeConfig`
-/// for role resolution. When `request.model_role` is set, the adapter
-/// builds a per-role client; otherwise it uses the default. Per-role
-/// clients are cached for the session — `build_api_client` is
-/// non-trivial (auth resolution, retry config, fingerprint) and the
-/// recall ranker hits this path on every turn.
+/// `SideQuery` adapter that resolves every call through the session's
+/// model runtime registry. `model_role` takes precedence; otherwise a
+/// `provider/model` request uses an explicit primary-only runtime.
 pub struct SideQueryAdapter {
-    default_client: Arc<ApiClient>,
-    runtime_config: Arc<RuntimeConfig>,
-    role_clients:
-        tokio::sync::RwLock<std::collections::HashMap<coco_types::ModelRole, Arc<ApiClient>>>,
+    model_runtimes: Arc<ModelRuntimeRegistry>,
+    default_model_id: String,
 }
 
 impl SideQueryAdapter {
-    pub fn new(default_client: Arc<ApiClient>, runtime_config: Arc<RuntimeConfig>) -> Self {
+    pub fn new(model_runtimes: Arc<ModelRuntimeRegistry>, default_model_id: String) -> Self {
         Self {
-            default_client,
-            runtime_config,
-            role_clients: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            model_runtimes,
+            default_model_id,
         }
     }
 
-    async fn resolve_client(
-        &self,
-        request: &SideQueryRequest,
-    ) -> Result<Arc<ApiClient>, anyhow::Error> {
-        // Role wins over `model` string — operator picks the provider
-        // via `settings.models.<role>`.
-        let Some(role) = request.model_role else {
-            return Ok(self.default_client.clone());
-        };
-        // Fast path: cached client.
-        if let Some(client) = self.role_clients.read().await.get(&role) {
-            return Ok(client.clone());
+    fn resolve_source(request: &SideQueryRequest) -> ModelRuntimeSource {
+        if let Some(role) = request.model_role {
+            return ModelRuntimeSource::Role(role);
         }
-        // Slow path: build, then cache.
-        let Some(spec) = self.runtime_config.model_roles.get(role).cloned() else {
-            return Ok(self.default_client.clone());
-        };
-        let client = coco_inference::model_factory::build_api_client(
-            &self.runtime_config,
-            &spec,
-            self.runtime_config.api.retry.clone().into(),
-            Some(&crate::provider_login::shared_resolver()),
-        )
-        .map_err(|e| anyhow::anyhow!("build_api_client for role {role:?}: {e}"))?;
-        self.role_clients.write().await.insert(role, client.clone());
-        Ok(client)
+        if let Some(selection) = request
+            .model
+            .as_deref()
+            .and_then(|raw| ProviderModelSelection::from_slash_str(raw).ok())
+        {
+            return ModelRuntimeSource::Explicit(selection);
+        }
+        ModelRuntimeSource::Role(ModelRole::Main)
     }
 }
 
@@ -99,124 +68,101 @@ fn forced_tool_choice(request: &SideQueryRequest) -> Option<LanguageModelToolCho
         .map(|name| LanguageModelToolChoice::tool(name.clone()))
 }
 
+fn build_query_params(request: &SideQueryRequest) -> QueryParams {
+    let mut prompt: Vec<LlmMessage> = Vec::with_capacity(request.messages.len() + 1);
+    if !request.system.is_empty() {
+        prompt.push(LlmMessage::system(&request.system));
+    }
+    for m in &request.messages {
+        match m.role {
+            SideQueryRole::User => prompt.push(LlmMessage::user_text(&m.content)),
+            SideQueryRole::Assistant => prompt.push(LlmMessage::assistant_text(&m.content)),
+        }
+    }
+
+    let tools = if request.tools.is_empty() {
+        None
+    } else {
+        Some(
+            request
+                .tools
+                .iter()
+                .map(|t| {
+                    LanguageModelTool::Function(LanguageModelFunctionTool {
+                        name: t.name.clone(),
+                        description: Some(t.description.clone()),
+                        input_schema: t.input_schema.clone(),
+                        input_examples: None,
+                        strict: None,
+                        provider_options: None,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+
+    let response_format = request
+        .output_format
+        .as_ref()
+        .map(|fmt| ResponseFormat::Json {
+            schema: Some(fmt.schema.clone()),
+            name: fmt.name.clone(),
+            description: fmt.description.clone(),
+        });
+
+    QueryParams {
+        prompt,
+        max_tokens: request.max_tokens.map(i64::from),
+        thinking_level: None,
+        fast_mode: false,
+        tools,
+        tool_choice: forced_tool_choice(request),
+        context_management: None,
+        query_source: Some(request.query_source.clone()),
+        agent_id: None,
+        time_since_last_assistant_ms: None,
+        agentic: false,
+        cache: None,
+        stop_sequences: None,
+        response_format,
+    }
+}
+
 #[async_trait]
 impl SideQuery for SideQueryAdapter {
     async fn query(
         &self,
         request: SideQueryRequest,
     ) -> Result<SideQueryResponse, coco_error::BoxedError> {
-        let client = self.resolve_client(&request).await.map_err(|e| {
-            Box::new(coco_error::PlainError::new(
-                e.to_string(),
-                coco_error::StatusCode::Internal,
-            )) as coco_error::BoxedError
-        })?;
+        let source = Self::resolve_source(&request);
 
-        // Build the prompt: system message + user/assistant turns from
-        // `request.messages`. Tool definitions are forwarded when
-        // `forced_tool` is set (TS structured-output path).
-        let mut prompt: Vec<LlmMessage> = Vec::with_capacity(request.messages.len() + 1);
-        if !request.system.is_empty() {
-            prompt.push(LlmMessage::system(&request.system));
-        }
-        for m in &request.messages {
-            match m.role {
-                SideQueryRole::User => {
-                    prompt.push(LlmMessage::user_text(&m.content));
-                }
-                SideQueryRole::Assistant => {
-                    prompt.push(LlmMessage::assistant_text(&m.content));
+        let result = loop {
+            let params = build_query_params(&request);
+            match self
+                .model_runtimes
+                .query_once(source.clone(), &params)
+                .await
+            {
+                ModelRuntimeQueryOutcome::Success { result, .. } => break result,
+                ModelRuntimeQueryOutcome::Retry { .. } => continue,
+                ModelRuntimeQueryOutcome::Failed { error, .. } => {
+                    return Err(Box::new(coco_error::PlainError::new(
+                        error.to_string(),
+                        coco_error::StatusCode::ProviderError,
+                    )) as coco_error::BoxedError);
                 }
             }
-        }
-
-        // Convert `request.tools` (`SideQueryToolDef`) into the vercel-ai
-        // tool shape via the version-agnostic re-exports owned by
-        // `coco-inference`. Only the function-tool subset is used —
-        // that's all `SideQuery` exposes.
-        let tools = if request.tools.is_empty() {
-            None
-        } else {
-            Some(
-                request
-                    .tools
-                    .iter()
-                    .map(|t| {
-                        LanguageModelTool::Function(LanguageModelFunctionTool {
-                            name: t.name.clone(),
-                            description: Some(t.description.clone()),
-                            input_schema: t.input_schema.clone(),
-                            input_examples: None,
-                            strict: None,
-                            provider_options: None,
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            )
         };
 
-        // Native structured-output spec. Translated into
-        // `vercel_ai_provider::ResponseFormat::Json`; the inference
-        // layer drops it when the resolved model lacks
-        // [`Capability::StructuredOutput`] (see
-        // `coco_inference::client::build_options_with_extra`), so the
-        // caller's `forced_tool` / `tools` path acts as the multi-LLM
-        // fallback.
-        let response_format = request
-            .output_format
-            .as_ref()
-            .map(|fmt| ResponseFormat::Json {
-                schema: Some(fmt.schema.clone()),
-                name: fmt.name.clone(),
-                description: fmt.description.clone(),
-            });
-        let tool_choice = forced_tool_choice(&request);
-
-        let params = QueryParams {
-            prompt,
-            max_tokens: request.max_tokens.map(i64::from),
-            thinking_level: None,
-            fast_mode: false,
-            tools,
-            tool_choice,
-            context_management: None,
-            query_source: Some(request.query_source.clone()),
-            agent_id: None,
-            time_since_last_assistant_ms: None,
-            // SDK side-query helper — not the agent loop. Per-call cache
-            // strategy could be wired through `request` later if SDK
-            // surface adds it.
-            agentic: false,
-            cache: None,
-            stop_sequences: None,
-            response_format,
-        };
-
-        let result = client.query(&params).await.map_err(|e| {
-            Box::new(coco_error::PlainError::new(
-                e.to_string(),
-                coco_error::StatusCode::ProviderError,
-            )) as coco_error::BoxedError
-        })?;
-
-        // Marshal the `AssistantContent` blocks back into the
-        // structured `SideQueryResponse` shape. Text blocks
-        // concatenate; `tool-call` blocks become `tool_uses`.
         let mut text_buf = String::new();
         let mut tool_uses = Vec::new();
         for c in &result.content {
             match c {
-                AssistantContent::Text(t) => {
-                    text_buf.push_str(&t.text);
-                }
+                AssistantContent::Text(t) => text_buf.push_str(&t.text),
                 AssistantContent::ToolCall(tc) => {
                     tool_uses.push(SideQueryToolUse {
                         name: tc.tool_name.clone(),
                         input: tc.input.clone(),
-                        // Propagate the adapter's parse-failure flag.
-                        // Recall (and any future caller) treats
-                        // `invalid: true` as a wire-malformed
-                        // response and falls back accordingly.
                         invalid: tc.invalid,
                     });
                 }
@@ -224,15 +170,6 @@ impl SideQuery for SideQueryAdapter {
             }
         }
 
-        // Map the typed `FinishReason` (set once at the
-        // vercel-ai-provider seam) to the SDK wire enum.
-        // `ContextWindowExceeded` folds into `MaxTokens` because the
-        // wire type doesn't split them. For the `Other(_)` payload we
-        // surface the **provider-original raw** string (e.g.
-        // `"compaction"`, an unknown OpenAI reason) — not the lossy
-        // `as_wire_str()` projection that would emit a useless
-        // `"other"`. Falls back to the unified wire name only when the
-        // reason was synthesized (no provider raw).
         use coco_llm_types::StopReason;
         let stop_reason = match result.stop_reason.as_ref() {
             None => SideQueryStopReason::EndTurn,
@@ -270,35 +207,17 @@ impl SideQuery for SideQueryAdapter {
     }
 
     fn model_id(&self) -> &str {
-        self.default_client.model_id()
+        &self.default_model_id
     }
 
-    /// Resolve the model for `role` (or the Main role when `role` is
-    /// `None`) through the live registry and check its declared
-    /// capabilities. Returns `false` on any resolution failure so
-    /// callers degrade to the multi-LLM-safe path.
-    ///
-    /// Read-only `RwLock` access via `try_read` — the role-client
-    /// cache is only mutated by `resolve_client` during a hot-path
-    /// build, and that write is fast enough that contention here
-    /// would surface as a behavioral bug rather than a hot-loop;
-    /// blocking with `read()` is fine here because this method is
-    /// only called from preparation paths, not the streaming loop.
     fn supports_capability(&self, role: Option<ModelRole>, capability: Capability) -> bool {
-        let resolved_role = role.unwrap_or(ModelRole::Main);
-        let Some(spec) = self.runtime_config.model_roles.get(resolved_role) else {
+        let role = role.unwrap_or(ModelRole::Main);
+        let Ok(snapshot) = self.model_runtimes.snapshot_for_role(role) else {
             return false;
         };
-        let Some(model) = self
-            .runtime_config
-            .model_registry
-            .resolve(&spec.provider, &spec.model_id)
-        else {
-            return false;
-        };
-        model
-            .info
-            .capabilities
+        snapshot
+            .model_info
+            .and_then(|info| info.capabilities)
             .as_deref()
             .unwrap_or(&[])
             .contains(&capability)

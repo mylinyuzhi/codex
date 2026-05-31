@@ -29,7 +29,16 @@ fn test_snapshot_empty_state() {
 
 #[test]
 fn test_snapshot_status_bar_full() {
+    use std::sync::Arc;
+
+    use coco_messages::AssistantContent;
+    use coco_messages::TextContent;
+    use coco_messages::create_assistant_message;
+    use coco_types::ModelRole;
+
+    use crate::state::ModelBinding;
     use crate::state::session::TokenUsage;
+
     let mut state = AppState::new();
     state.session.model = "deepseek-v4-flash".to_string();
     state.session.provider = "deepseek".to_string();
@@ -40,8 +49,35 @@ fn test_snapshot_status_bar_full() {
         cache_read_tokens: 10_700,
         cache_creation_tokens: 0,
     };
-    state.session.context_window_used = 28_000;
-    state.session.context_window_total = 200_000;
+    state.session.model_by_role.insert(
+        ModelRole::Main,
+        ModelBinding {
+            provider: "deepseek".to_string(),
+            model_id: "deepseek-v4-flash".to_string(),
+            context_window: Some(200_000),
+            effort: None,
+        },
+    );
+    state
+        .session
+        .transcript
+        .on_message_appended(Arc::new(create_assistant_message(
+            vec![AssistantContent::Text(TextContent {
+                text: "ready".into(),
+                provider_metadata: None,
+            })],
+            "deepseek-v4-flash",
+            coco_types::TokenUsage {
+                input_tokens: coco_types::InputTokens {
+                    total: 20_000,
+                    ..Default::default()
+                },
+                output_tokens: coco_types::OutputTokens {
+                    total: 8_000,
+                    ..Default::default()
+                },
+            },
+        )));
     let output = render_to_string(&state, 100, 24);
     insta::assert_snapshot!("status_bar_full", output);
 }
@@ -616,7 +652,7 @@ fn test_snapshot_command_palette_inline_popup() {
     state.session.model = "opus-4".to_string();
     state.ui.input.textarea.set_text("/c");
     state.ui.input.textarea.set_cursor(2);
-    state.ui.active_suggestions = Some(crate::state::ActiveSuggestions {
+    state.ui.completion.active = Some(crate::state::ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![
             crate::widgets::suggestion_popup::SuggestionItem {

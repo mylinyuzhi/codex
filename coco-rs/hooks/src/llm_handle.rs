@@ -3,7 +3,7 @@
 //! `Prompt` and `Agent` hook handlers need an LLM. The hooks crate sits
 //! at L4 in the dependency graph and cannot reach `coco-inference`
 //! directly without violating layer rules. Callers (typically `coco-cli`
-//! / `coco-query`) implement [`HookLlmHandle`] over their `ApiClient`
+//! / `coco-query`) implement [`HookLlmHandle`] over model runtimes
 //! and install it on [`crate::orchestration::OrchestrationContext`].
 //!
 //! TS source:
@@ -27,7 +27,7 @@
 //! HookHandler::Prompt / HookHandler::Agent → handle.evaluate_*()
 //! ```
 //!
-//! Implementations live in `coco-query` (sees `ApiClient`), wired by
+//! Implementations live in `coco-query`, wired by
 //! `coco-cli::session_runtime`.
 
 use std::time::Duration;
@@ -56,7 +56,7 @@ pub enum HookEvaluationResult {
 }
 
 /// Handle that evaluates `Prompt` / `Agent` hooks through the parent
-/// session's `ApiClient`. Implemented in `coco-query`; wired via
+/// session's model runtime. Implemented in `coco-query`; wired via
 /// [`crate::orchestration::OrchestrationContext::llm_handle`].
 #[async_trait::async_trait]
 pub trait HookLlmHandle: Send + Sync + std::fmt::Debug {

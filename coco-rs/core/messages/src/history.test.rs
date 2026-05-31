@@ -4,6 +4,7 @@ use coco_types::OutputTokens;
 use coco_types::ProviderModelSelection;
 use coco_types::TokenUsage;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use super::*;
@@ -356,4 +357,25 @@ fn re_anchoring_overwrites_previous_marker() {
     let marker = history.last_usage().expect("marker");
     assert_eq!(marker.usage.input_tokens.total, 2000);
     assert!(history.messages_since_last_usage().is_empty());
+}
+
+#[test]
+fn from_arcs_preserving_latest_usage_restores_tail_anchor() {
+    let mut assistant = assistant_msg("metered");
+    if let Message::Assistant(a) = &mut assistant {
+        a.usage = Some(sample_usage(700, 80));
+        a.model = "claude-haiku-4-5".into();
+    }
+    let messages = vec![
+        Arc::new(user_msg("before")),
+        Arc::new(assistant),
+        Arc::new(user_msg("tail")),
+    ];
+
+    let history = MessageHistory::from_arcs_preserving_latest_usage(messages);
+
+    let marker = history.last_usage().expect("marker restored");
+    assert_eq!(marker.usage.total(), 780);
+    assert_eq!(marker.model.model_id, "claude-haiku-4-5");
+    assert_eq!(history.messages_since_last_usage().len(), 1);
 }

@@ -175,6 +175,54 @@
       ]
     },
     {
+      "description": "Queued command was removed from the engine queue and is ready to\nrestore into the composer for editing.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedCommandEditImage"
+          }
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "queued_command_edit_ready"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "prompt"
+      ]
+    },
+    {
+      "description": "The requested queued command could not be restored.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "queued_command_edit_unavailable"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "reason"
+      ]
+    },
+    {
       "description": "Open the resume picker inside the running TUI session.\n\nTS parity: `/resume` with no args opens the saved-chat picker;\n`/resume <id-or-name>` bypasses this and resumes directly.",
       "type": "object",
       "properties": {
@@ -923,6 +971,36 @@
         "entries"
       ]
     },
+    "CommandArgumentKind": {
+      "description": "Typed command argument shape used by UI completion and submit semantics.",
+      "oneOf": [
+        {
+          "description": "Command takes no argument and may execute immediately after selection.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Command accepts arbitrary text; UI shows a hint but no typed completion.",
+          "type": "string",
+          "const": "free_text"
+        },
+        {
+          "description": "Command expects a file path.",
+          "type": "string",
+          "const": "file_path"
+        },
+        {
+          "description": "Command expects a directory path.",
+          "type": "string",
+          "const": "directory_path"
+        },
+        {
+          "description": "Command expects a saved session id.",
+          "type": "string",
+          "const": "session_id"
+        }
+      ]
+    },
     "CommandSource": {
       "description": "How a command was loaded.\n\nTS: `Command.source` field union (`SettingSource | 'plugin' | 'mcp'`).\nRust port tags the payload-carrying variants (`Plugin { name }`,\n`Mcp { server_name }`) so the source and its attribution can never\ndisagree. This replaces the older `loaded_from + plugin_name` dual-\nfield layout, which allowed nonsensical states (e.g. `loaded_from =\nBuiltin` paired with `plugin_name = Some(...)`).",
       "oneOf": [
@@ -1557,6 +1635,22 @@
         }
       ]
     },
+    "QueuedCommandEditImage": {
+      "description": "Image payload paired with a queued command edit restore.",
+      "type": "object",
+      "properties": {
+        "data_base64": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "data_base64"
+      ]
+    },
     "RewindDiffStatsPayload": {
       "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n\nTS: `DiffStats` from `utils/fileHistory.ts:55-61`. `file_paths`\nmatches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels at\n`MessageSelector.tsx:481-523`.\n\n# Two semantics, one wire type\n\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n\n- [`TuiOnlyEvent::RewindRowMetadataReady`] — **forward-time**.\n  `insertions` = lines added between two adjacent user-message\n  checkpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\n  to mirror TS `computeDiffStatsBetweenMessages`\n  (`MessageSelector.tsx:722-765`), which counts `+` lines from\n  `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] — **rewind-direction**.\n  `insertions` = lines that rewind would add back; `deletions` =\n  lines that rewind would remove. Computed via\n  [`FileHistoryState::get_diff_stats`] to mirror TS\n  `computeDiffStatsForFile` (`fileHistory.ts:705`)'s\n  `diffLines(originalContent, backupContent)` direction.\n\nTS itself returns the same `DiffStats` shape from both call sites\nand lets context disambiguate — Rust matches that contract.",
       "type": "object",
@@ -1917,6 +2011,11 @@
             "string",
             "null"
           ]
+        },
+        "argument_kind": {
+          "description": "Typed argument shape. Drives argument completion and whether Enter\nexecutes immediately after accepting a slash suggestion.",
+          "$ref": "#/$defs/CommandArgumentKind",
+          "default": "none"
         },
         "description": {
           "description": "Short description shown dimmed in the popup. `None` when the\nsource command registered without one.",

@@ -228,12 +228,10 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
         ModelPicker => vec![KbContext::ModelPicker, KbContext::Select, KbContext::Global],
         Scrollable => vec![KbContext::Help, KbContext::Transcript, KbContext::Global],
         Transcript => vec![KbContext::Transcript, KbContext::Global],
-        Autocomplete => vec![
-            KbContext::Autocomplete,
-            KbContext::Chat,
-            KbContext::Task,
-            KbContext::Global,
-        ],
+        // Do not include Chat here: Chat binds Enter to submit, but TS
+        // `useTypeahead` handles Return before ordinary input submission
+        // while suggestions are visible.
+        Autocomplete => vec![KbContext::Autocomplete, KbContext::Task, KbContext::Global],
         ThemePicker => vec![
             KbContext::ThemePicker,
             KbContext::Settings,

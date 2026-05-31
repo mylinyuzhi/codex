@@ -27,6 +27,9 @@ use crate::autocomplete::SymbolSearchManager;
 use crate::autocomplete::file_search::create_file_search_channel;
 use crate::autocomplete::symbol_search::create_symbol_search_channel;
 use crate::command::UserCommand;
+use crate::completion::PathCompletionEvent;
+use crate::completion::PathCompletionManager;
+use crate::completion::create_path_completion_channel;
 use crate::events::TuiEvent;
 use crate::git_index_watcher;
 use crate::keybinding_bridge;
@@ -89,12 +92,10 @@ pub struct App {
     notification_rx: mpsc::Receiver<CoreEvent>,
     file_search: FileSearchManager,
     file_search_rx: mpsc::Receiver<FileSearchEvent>,
+    path_completion: PathCompletionManager,
+    path_completion_rx: mpsc::Receiver<PathCompletionEvent>,
     symbol_search: SymbolSearchManager,
     symbol_search_rx: mpsc::Receiver<SymbolSearchEvent>,
-    /// Last (kind, query) dispatched to a search manager. Guards against
-    /// firing a duplicate search when only the cursor moved within the
-    /// same query window.
-    last_dispatched: Option<(SuggestionKind, String)>,
     /// Optional channel of keybinding-validation issues. The bootstrap
     /// (in `app/cli::tui_runner`) wires a tokio task that subscribes
     /// to `KeybindingsWatcher` and forwards every reload's warnings
@@ -107,6 +108,8 @@ pub struct App {
     display_settings_rx: Option<mpsc::Receiver<crate::display_settings::DisplaySettings>>,
     /// Optional channel of config hot-reload failure messages.
     config_reload_errors_rx: Option<mpsc::Receiver<String>>,
+    status_line_tx: mpsc::Sender<crate::status_bar::StatusLineUpdate>,
+    status_line_rx: mpsc::Receiver<crate::status_bar::StatusLineUpdate>,
     /// External editor request currently owns the foreground terminal.
     /// While set, terminal input is not polled and unrelated core events
     /// are buffered until the editor completion event restores TUI modes.
@@ -139,10 +142,12 @@ impl App {
         // commits or checks out a different branch.
         git_index_watcher::spawn(cwd, index.clone());
         let (file_tx, file_rx) = create_file_search_channel();
+        let (path_tx, path_rx) = create_path_completion_channel();
         let (sym_tx, sym_rx) = create_symbol_search_channel();
 
         let (draw_tx, draw_rx) = tokio::sync::broadcast::channel(1);
         let frame_requester = crate::frame_requester::FrameRequester::new(draw_tx);
+        let (status_line_tx, status_line_rx) = mpsc::channel(16);
         Ok(Self {
             tui,
             state,
@@ -152,13 +157,16 @@ impl App {
             notification_rx,
             file_search: FileSearchManager::new(index, file_tx),
             file_search_rx: file_rx,
+            path_completion: PathCompletionManager::new(path_tx),
+            path_completion_rx: path_rx,
             symbol_search: SymbolSearchManager::new(sym_tx),
             symbol_search_rx: sym_rx,
-            last_dispatched: None,
             kb_warnings_rx: None,
             theme_reload_rx: None,
             display_settings_rx: None,
             config_reload_errors_rx: None,
+            status_line_tx,
+            status_line_rx,
             external_editor_active: None,
             deferred_core_events: VecDeque::new(),
             pending_frame_inputs: crate::perf::FrameInputStats::default(),
@@ -175,11 +183,13 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let index = create_shared_index(cwd);
         let (file_tx, file_rx) = create_file_search_channel();
+        let (path_tx, path_rx) = create_path_completion_channel();
         let (sym_tx, sym_rx) = create_symbol_search_channel();
         let mut state = AppState::new();
         apply_terminal_compatibility_status(&mut state, &tui);
         let (draw_tx, draw_rx) = tokio::sync::broadcast::channel(1);
         let frame_requester = crate::frame_requester::FrameRequester::new(draw_tx);
+        let (status_line_tx, status_line_rx) = mpsc::channel(16);
         Self {
             tui,
             state,
@@ -189,13 +199,16 @@ impl App {
             notification_rx,
             file_search: FileSearchManager::new(index, file_tx),
             file_search_rx: file_rx,
+            path_completion: PathCompletionManager::new(path_tx),
+            path_completion_rx: path_rx,
             symbol_search: SymbolSearchManager::new(sym_tx),
             symbol_search_rx: sym_rx,
-            last_dispatched: None,
             kb_warnings_rx: None,
             theme_reload_rx: None,
             display_settings_rx: None,
             config_reload_errors_rx: None,
+            status_line_tx,
+            status_line_rx,
             external_editor_active: None,
             deferred_core_events: VecDeque::new(),
             pending_frame_inputs: crate::perf::FrameInputStats::default(),
@@ -267,6 +280,7 @@ impl App {
             terminal_size = ?self.state.ui.terminal_size,
             "TUI run loop start",
         );
+        self.refresh_status_line();
         // Initial render
         self.redraw()?;
 
@@ -315,6 +329,10 @@ impl App {
                 Some(evt) = self.file_search_rx.recv() => {
                     needs_redraw = handle_file_search_event(&mut self.state, evt);
                 }
+                // Async explicit path completion results.
+                Some(evt) = self.path_completion_rx.recv() => {
+                    needs_redraw = handle_path_completion_event(&mut self.state, evt);
+                }
                 // Async symbol-search results (from @#symbol triggers).
                 Some(evt) = self.symbol_search_rx.recv() => {
                     needs_redraw = handle_symbol_search_event(&mut self.state, evt);
@@ -343,6 +361,9 @@ impl App {
                     ));
                     needs_redraw = true;
                 }
+                Some(update) = self.status_line_rx.recv() => {
+                    needs_redraw = self.state.ui.status_line.apply_update(update);
+                }
                 // Coalesced draw notification — the FrameRequester
                 // task fires this when one or more `schedule_frame()`
                 // calls have settled. Renders unconditionally; nothing
@@ -370,6 +391,7 @@ impl App {
             // based on the current trigger. Cheap no-op when the query is
             // unchanged since the last dispatch.
             self.dispatch_pending_search();
+            self.refresh_status_line();
 
             // Route every state-mutating handler's redraw signal
             // through the FrameRequester so multiple events in one
@@ -385,6 +407,12 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn refresh_status_line(&mut self) {
+        let mut runtime = std::mem::take(&mut self.state.ui.status_line);
+        runtime.request_refresh(&self.state, &self.status_line_tx);
+        self.state.ui.status_line = runtime;
     }
 
     /// Run a single draw cycle.
@@ -576,50 +604,68 @@ impl App {
         Ok(needs_redraw)
     }
 
-    /// Fire a file/symbol search if the active trigger's (kind, query) pair
-    /// has changed since the last dispatch. Clears pending when no async
-    /// trigger is active.
+    /// Fire a file/symbol/path search if the active request key has changed
+    /// since the last dispatch. Clears pending when no async trigger is active.
     fn dispatch_pending_search(&mut self) {
-        let next = match self.state.ui.active_suggestions {
-            Some(ref sug) if matches!(sug.kind, SuggestionKind::At | SuggestionKind::Symbol) => {
-                Some((sug.kind, sug.query.clone(), sug.trigger_pos))
+        let next = match self.state.ui.completion.active_key.clone() {
+            Some(ref sug)
+                if matches!(
+                    sug.kind,
+                    SuggestionKind::At
+                        | SuggestionKind::Path
+                        | SuggestionKind::Directory
+                        | SuggestionKind::Symbol
+                ) =>
+            {
+                Some(sug.clone())
             }
             _ => None,
         };
-        let (kind, query, pos) = match next {
+        let key = match next {
             Some(v) => v,
             None => {
-                if self.last_dispatched.is_some() {
+                if self.state.ui.completion.last_dispatched.is_some() {
                     self.file_search.cancel();
+                    self.path_completion.cancel();
                     self.symbol_search.cancel();
-                    self.last_dispatched = None;
+                    self.state.ui.completion.last_dispatched = None;
                 }
                 return;
             }
         };
         let unchanged = self
+            .state
+            .ui
+            .completion
             .last_dispatched
             .as_ref()
-            .is_some_and(|(k, q)| *k == kind && q == &query);
+            .is_some_and(|dispatched| dispatched == &key);
         if unchanged {
             return;
         }
-        match kind {
+        match key.kind {
             SuggestionKind::At => {
                 // Unified `@` popup dispatches a file search; agent
                 // matches are already seeded synchronously into the
                 // popup by `unified::seed_agent_items`. MCP resource
                 // search would also dispatch here once wired.
                 self.symbol_search.cancel();
-                self.file_search.search(query.clone(), pos);
+                self.path_completion.cancel();
+                self.file_search.search(key.clone());
+            }
+            SuggestionKind::Path | SuggestionKind::Directory => {
+                self.file_search.cancel();
+                self.symbol_search.cancel();
+                self.path_completion.search(key.clone());
             }
             SuggestionKind::Symbol => {
                 self.file_search.cancel();
-                self.symbol_search.search(query.clone(), pos);
+                self.path_completion.cancel();
+                self.symbol_search.search(key.clone());
             }
-            _ => return,
+            SuggestionKind::SlashCommand | SuggestionKind::CustomTitle => return,
         }
-        self.last_dispatched = Some((kind, query));
+        self.state.ui.completion.last_dispatched = Some(key);
     }
 
     /// Convert a crossterm event to a TuiEvent.
@@ -878,21 +924,29 @@ fn apply_terminal_compatibility_status(state: &mut AppState, tui: &Tui) {
 /// clobber the state after they've backspaced past the trigger.
 fn handle_file_search_event(state: &mut AppState, evt: FileSearchEvent) -> bool {
     match evt {
-        FileSearchEvent::SearchResult {
-            query, suggestions, ..
-        } => apply_async_result(state, SuggestionKind::At, &query, suggestions),
+        FileSearchEvent::SearchResult { key, suggestions } => {
+            apply_async_result_for_key(state, &key, suggestions)
+        }
+    }
+}
+
+fn handle_path_completion_event(state: &mut AppState, evt: PathCompletionEvent) -> bool {
+    match evt {
+        PathCompletionEvent::SearchResult { key, suggestions } => {
+            apply_async_result_for_key(state, &key, suggestions)
+        }
     }
 }
 
 fn handle_symbol_search_event(state: &mut AppState, evt: SymbolSearchEvent) -> bool {
     match evt {
-        SymbolSearchEvent::SearchResult {
-            query, suggestions, ..
-        } => apply_async_result(state, SuggestionKind::Symbol, &query, suggestions),
+        SymbolSearchEvent::SearchResult { key, suggestions } => {
+            apply_async_result_for_key(state, &key, suggestions)
+        }
     }
 }
 
-use crate::autocomplete::apply_async_result;
+use crate::autocomplete::apply_async_result_for_key;
 
 /// Helper: receive from an `Option<Receiver<T>>`. Returns `None`
 /// (the receiver-closed case) when the option itself is None — the

@@ -32,19 +32,18 @@ use coco_config::ProviderClientOptions;
 use coco_config::ProviderConfig;
 use coco_config::RuntimeConfig;
 use coco_types::Capability;
-use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::ProviderApi;
 use coco_types::ProviderModelSelection;
 use coco_types::WireApi;
 use tracing::warn;
 
-use crate::ApiClient;
 use crate::InferenceError;
 use crate::LanguageModel;
 use crate::Provider;
 use crate::ProviderClientFingerprint;
 use crate::RetryConfig;
+use crate::client::ApiClient;
 use crate::credentials::ProviderCredentialResolver;
 
 /// Surface a `tracing::warn` when a `ProviderClientOptions` field is
@@ -164,7 +163,7 @@ pub fn build_language_model_from_runtime(
 ///   route through `build_call_options` — without this, every
 ///   `extra_body` / typed-sampling / thinking config the user
 ///   wrote in `models.json` would be silently dropped.
-pub fn build_api_client(
+pub(crate) fn build_api_client(
     runtime: &RuntimeConfig,
     spec: &ModelSpec,
     retry: RetryConfig,
@@ -213,27 +212,6 @@ pub fn build_api_client(
         client = client.with_refresh_hook(Arc::new(move || resolver.refresh_now(&provider_name)));
     }
     Ok(Arc::new(client))
-}
-
-/// Resolve the fallback chain for a role and build one `ApiClient`
-/// per tier. Returns an empty vec when the role has no configured
-/// fallbacks.
-///
-/// Fail-fast on any tier that can't construct: silently dropping a
-/// fallback would only surface under outage, which is exactly when
-/// the user can least afford to discover it.
-pub fn build_fallback_clients_for_role(
-    runtime: &RuntimeConfig,
-    role: ModelRole,
-    retry: RetryConfig,
-    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
-) -> Result<Vec<Arc<ApiClient>>, InferenceError> {
-    runtime
-        .model_roles
-        .fallbacks(role)
-        .iter()
-        .map(|spec| build_api_client(runtime, spec, retry.clone(), resolver))
-        .collect()
 }
 
 /// Resolve the wire-side model name from the per-(provider, model)

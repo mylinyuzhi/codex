@@ -12,6 +12,86 @@ use tempfile::TempDir;
 use crate::Cli;
 use crate::session_runtime::SessionRuntimeBuildOpts;
 
+struct ForkMockModel;
+
+#[async_trait::async_trait]
+impl coco_inference::LanguageModel for ForkMockModel {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "mock-model"
+    }
+
+    async fn do_generate(
+        &self,
+        options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
+        let text = options
+            .prompt
+            .iter()
+            .flat_map(|message| match message {
+                coco_llm_types::LlmMessage::System { content, .. }
+                | coco_llm_types::LlmMessage::Developer { content, .. }
+                | coco_llm_types::LlmMessage::User { content, .. } => content
+                    .iter()
+                    .filter_map(|part| match part {
+                        coco_llm_types::UserContentPart::Text(text) => Some(text.text.as_str()),
+                        coco_llm_types::UserContentPart::File(_) => None,
+                    })
+                    .collect::<Vec<_>>(),
+                coco_llm_types::LlmMessage::Assistant { content, .. } => content
+                    .iter()
+                    .filter_map(|part| match part {
+                        coco_llm_types::AssistantContentPart::Text(text) => {
+                            Some(text.text.as_str())
+                        }
+                        coco_llm_types::AssistantContentPart::File(_)
+                        | coco_llm_types::AssistantContentPart::Reasoning(_)
+                        | coco_llm_types::AssistantContentPart::ReasoningFile(_)
+                        | coco_llm_types::AssistantContentPart::Custom(_)
+                        | coco_llm_types::AssistantContentPart::ToolCall(_)
+                        | coco_llm_types::AssistantContentPart::ToolResult(_)
+                        | coco_llm_types::AssistantContentPart::Source(_)
+                        | coco_llm_types::AssistantContentPart::ToolApprovalRequest(_) => None,
+                    })
+                    .collect::<Vec<_>>(),
+                coco_llm_types::LlmMessage::Tool { .. } => Vec::new(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(coco_inference::LanguageModelGenerateResult {
+            content: vec![coco_llm_types::AssistantContentPart::Text(
+                coco_llm_types::TextPart {
+                    text,
+                    provider_metadata: None,
+                },
+            )],
+            usage: coco_llm_types::Usage::new(1, 1),
+            finish_reason: coco_llm_types::FinishReason::new(coco_llm_types::StopReason::EndTurn),
+            warnings: Vec::new(),
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
+    async fn do_stream(
+        &self,
+        options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<coco_inference::LanguageModelStreamResult, coco_inference::AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
 async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     let settings = SettingsWithSource {
         merged: Settings {
@@ -28,12 +108,17 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         CatalogPaths::empty_in(home.path()),
     )
     .expect("runtime config");
-    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let model: Arc<dyn coco_inference::LanguageModel> = Arc::new(crate::headless::MockModel::new());
-    let client = Arc::new(coco_inference::ApiClient::with_default_fingerprint(
-        model, retry,
-    ));
+
     let cli = Cli::try_parse_from(["coco"]).expect("parse default cli");
+    let model_runtimes = Arc::new(
+        coco_inference::ModelRuntimeRegistry::from_prebuilt_language_model(
+            coco_types::ModelRole::Main,
+            coco_inference::PrebuiltLanguageModelSlot::new(
+                Arc::new(ForkMockModel),
+                coco_inference::RetryConfig::default(),
+            ),
+        ),
+    );
 
     SessionRuntime::build(SessionRuntimeBuildOpts {
         cli: &cli,
@@ -43,9 +128,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         system_prompt: "test".to_string(),
         bypass_permissions_available: false,
         permission_mode: coco_types::PermissionMode::default(),
-        client,
-        fallback_clients: Vec::new(),
-        recovery_policy: None,
+        model_runtimes: Some(model_runtimes),
         tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
         session_manager: Arc::new(coco_session::SessionManager::new(
             home.path().join("sessions"),

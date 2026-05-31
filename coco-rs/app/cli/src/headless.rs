@@ -7,7 +7,7 @@
 //! formats stdout from the outcome.
 //!
 //! Helpers shared by `run_chat` and the SDK runner (`MockModel`,
-//! `create_api_client`, `cli_runtime_overrides`,
+//! `resolve_main_model`, `cli_runtime_overrides`,
 //! `build_runtime_config_for_cli`, `build_system_prompt[_for_model]`,
 //! `resolve_startup_permission_state`) live here as well, so a test
 //! can drive any of them in isolation.
@@ -20,13 +20,10 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::model_factory::build_api_client;
-use coco_inference::model_factory::build_fallback_clients_for_role;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::StopReason;
@@ -139,7 +136,7 @@ impl LanguageModel for MockModel {
     }
 }
 
-// ─── RuntimeConfig + ApiClient construction ──────────────────────────
+// ─── RuntimeConfig + model resolution ────────────────────────────────
 
 /// Derive `RuntimeOverrides` from the parsed CLI flags.
 ///
@@ -201,43 +198,44 @@ pub fn build_runtime_config_for_cli(cli: &Cli, cwd: &Path) -> Result<coco_config
     Ok(builder.build()?)
 }
 
-/// Build the primary `ApiClient` for the session.
-///
-/// Returns `(client, provider_api, model_id)`. `provider_api` is `None`
-/// for the mock fallback, `Some(api)` for real providers. `model_id` is
-/// the wire-side identifier threaded through `QueryEngineConfig.model_id`.
-pub fn create_api_client(
-    runtime_config: &coco_config::RuntimeConfig,
-    retry: coco_inference::RetryConfig,
-) -> (Arc<ApiClient>, Option<coco_types::ProviderApi>, String) {
+#[derive(Debug, Clone)]
+pub struct ResolvedMainModel {
+    pub provider: String,
+    pub provider_api: Option<coco_types::ProviderApi>,
+    pub model_id: String,
+    pub supports_prompt_cache: bool,
+}
+
+pub fn resolve_main_model(runtime_config: &coco_config::RuntimeConfig) -> ResolvedMainModel {
     use coco_types::ModelRole;
 
     if let Some(main_spec) = runtime_config.model_roles.get(ModelRole::Main) {
-        let provider_cfg = runtime_config.providers.get(&main_spec.provider);
-        // Always thread the session-shared `AuthService` resolver: it's a no-op
-        // for api-key providers and the live, auto-refreshed credential source
-        // for OAuth ones. `provider_credential_present` centralizes the
-        // "api-key present OR logged-in OAuth supplier" decision so this gate
-        // can't drift from `build_openai_auth`'s own auth-mode handling.
-        let resolver = crate::provider_login::shared_resolver();
-        let credentialed = provider_cfg.is_some_and(|p| {
-            coco_inference::model_factory::provider_credential_present(p, Some(&resolver))
-        });
-        if credentialed
-            && let Ok(client) =
-                build_api_client(runtime_config, main_spec, retry.clone(), Some(&resolver))
-        {
-            return (client, Some(main_spec.api), main_spec.model_id.clone());
-        }
+        let supports_prompt_cache = matches!(main_spec.api, coco_types::ProviderApi::Anthropic)
+            && runtime_config
+                .model_registry
+                .resolve(&main_spec.provider, &main_spec.model_id)
+                .is_some_and(|model| {
+                    model
+                        .info
+                        .capabilities
+                        .as_ref()
+                        .is_some_and(|caps| caps.contains(&coco_types::Capability::PromptCache))
+                });
+        return ResolvedMainModel {
+            provider: main_spec.provider.clone(),
+            provider_api: Some(main_spec.api),
+            model_id: main_spec.model_id.clone(),
+            supports_prompt_cache,
+        };
     }
 
-    let model: Arc<dyn LanguageModel> = Arc::new(MockModel::new());
-    let model_id = model.model_id().to_string();
-    (
-        Arc::new(ApiClient::with_default_fingerprint(model, retry)),
-        None,
-        model_id,
-    )
+    let model = MockModel::new();
+    ResolvedMainModel {
+        provider: model.provider().to_string(),
+        provider_api: None,
+        model_id: model.model_id().to_string(),
+        supports_prompt_cache: false,
+    }
 }
 
 // ─── Output style manager ────────────────────────────────────────────
@@ -555,7 +553,7 @@ pub struct RunChatOutcome {
     pub cancelled: bool,
     /// Last continue reason from the engine loop.
     pub last_continue_reason: Option<ContinueReason>,
-    /// Number of fallback ApiClients installed on the engine
+    /// Number of fallback runtime slots installed on the engine.
     /// (from `--fallback-model` flags + `models.<role>.fallbacks`).
     pub installed_fallback_count: usize,
     /// Final message history at session end, including the user prompt,
@@ -672,25 +670,27 @@ pub async fn run_chat_with_options(
     let output_style_manager = build_output_style_manager(&runtime_config, &cwd, &[]);
     let active_output_style = output_style_manager.active().cloned();
 
-    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let (client, provider_api, model_id) = create_api_client(&runtime_config, retry.clone());
-    let fallback_clients = build_fallback_clients_for_role(
-        &runtime_config,
-        coco_types::ModelRole::Main,
-        retry,
-        Some(&crate::provider_login::shared_resolver()),
-    )?;
-    let installed_fallback_count = fallback_clients.len();
-    let recovery_policy = runtime_config
+    let main_model = resolve_main_model(&runtime_config);
+    let provider_api = main_model.provider_api;
+    let model_id = main_model.model_id.clone();
+    let model_runtimes = Arc::new(coco_inference::ModelRuntimeRegistry::new(
+        Arc::new(runtime_config.clone()),
+        Some(crate::provider_login::shared_resolver()),
+    )?);
+    let installed_fallback_count = runtime_config
         .model_roles
-        .recovery(coco_types::ModelRole::Main);
+        .fallbacks(coco_types::ModelRole::Main)
+        .len();
+    let fallback_policy = runtime_config
+        .model_roles
+        .policy(coco_types::ModelRole::Main);
     tracing::info!(
         target: "coco_cli::headless",
-        provider = client.provider(),
+        provider = main_model.provider,
         model_id = %model_id,
         real_provider = provider_api.is_some(),
         fallback_count = installed_fallback_count,
-        recovery_policy_set = recovery_policy.is_some(),
+        fallback_policy_set = fallback_policy.is_some(),
         "model client resolved"
     );
 
@@ -732,7 +732,7 @@ pub async fn run_chat_with_options(
         cli,
         &cwd,
         &runtime_config,
-        client.provider(),
+        &main_model.provider,
         &model_id,
         active_output_style.as_ref(),
     )?;
@@ -771,8 +771,8 @@ pub async fn run_chat_with_options(
         total_token_budget: cli
             .max_tokens
             .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
-        prompt_cache: client
-            .supports_prompt_cache()
+        prompt_cache: main_model
+            .supports_prompt_cache
             .then(|| coco_types::PromptCacheConfig {
                 mode: coco_types::PromptCacheMode::Auto,
                 ttl: coco_types::CacheTtl::OneHour,
@@ -826,13 +826,9 @@ pub async fn run_chat_with_options(
 
     let session_id_for_engine = config.session_id.clone();
     let agent_id_for_engine = config.agent_id.clone();
-    let mut engine = QueryEngine::new(config, client, tools, cancel, Some(hook_registry))
-        .with_fallback_clients(fallback_clients)
+    let mut engine = QueryEngine::new(config, model_runtimes, tools, cancel, Some(hook_registry))
         .with_file_read_state(file_read_state.clone());
     let mut session_usage_flush = None;
-    if let Some(policy) = recovery_policy {
-        engine = engine.with_recovery_policy(policy);
-    }
     // Wire the JSONL transcript writer for resume / continue runs so
     // headless turns persist into the same `<sessions_dir>/<id>.jsonl`
     // the TUI / SDK paths use. Pre-populate the dedup set with the

@@ -170,6 +170,17 @@ pub enum TuiCommand {
         request_id: String,
         matched_rule: Option<String>,
     },
+    /// Accept the selected autocomplete suggestion without submitting.
+    /// Used by Tab in the autocomplete context.
+    AutocompleteAccept,
+    /// Accept the visible prompt suggestion into the editable input.
+    AcceptPromptSuggestion,
+    /// Accept the visible prompt suggestion and submit it immediately.
+    SubmitPromptSuggestion,
+    /// Accept the selected autocomplete suggestion and submit it when the
+    /// accepted slash command takes no arguments. Used by Enter in the
+    /// autocomplete context.
+    AutocompleteSubmit,
 
     // ── Commands & surfaces ──
     /// Execute a skill.

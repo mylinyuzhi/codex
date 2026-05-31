@@ -3,12 +3,10 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::ReasoningPart;
@@ -83,6 +81,207 @@ impl LanguageModel for TextMock {
             result.usage,
             result.finish_reason,
         ))
+    }
+}
+
+struct PricedTextMock {
+    text: String,
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for PricedTextMock {
+    fn provider(&self) -> &str {
+        "openai"
+    }
+    fn model_id(&self) -> &str {
+        "gpt-4"
+    }
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        Ok(LanguageModelGenerateResult {
+            content: vec![AssistantContentPart::Text(TextPart {
+                text: self.text.clone(),
+                provider_metadata: None,
+            })],
+            usage: Usage::new(10, 5),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+    async fn do_stream(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+struct PricedToolCallMock;
+
+#[async_trait::async_trait]
+impl LanguageModel for PricedToolCallMock {
+    fn provider(&self) -> &str {
+        "openai"
+    }
+    fn model_id(&self) -> &str {
+        "gpt-4"
+    }
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        Ok(LanguageModelGenerateResult {
+            content: vec![
+                AssistantContentPart::Text(TextPart {
+                    text: "I need to read it.".into(),
+                    provider_metadata: None,
+                }),
+                AssistantContentPart::ToolCall(ToolCallPart {
+                    tool_call_id: "budget_unsafe_1".into(),
+                    tool_name: "budget_unsafe".into(),
+                    input: serde_json::json!({}),
+                    provider_executed: None,
+                    provider_metadata: None,
+                    invalid: false,
+                    invalid_reason: None,
+                }),
+            ],
+            usage: Usage::new(10, 5),
+            finish_reason: FinishReason::new(StopReason::ToolUse),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+    async fn do_stream(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+struct BudgetUnsafeTool {
+    started: Arc<AtomicI32>,
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::Tool for BudgetUnsafeTool {
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
+    fn id(&self) -> coco_types::ToolId {
+        coco_types::ToolId::Custom("budget_unsafe".into())
+    }
+
+    fn name(&self) -> &str {
+        "budget_unsafe"
+    }
+
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
+    }
+
+    fn description(
+        &self,
+        _input: &serde_json::Value,
+        _options: &coco_tool_runtime::DescriptionOptions,
+    ) -> String {
+        "budget unsafe test tool".into()
+    }
+
+    fn is_concurrency_safe(&self, _input: &serde_json::Value) -> bool {
+        false
+    }
+
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        Ok(coco_messages::ToolResult::data(
+            serde_json::json!({"ran": true}),
+        ))
+    }
+}
+
+struct CapacityErrorMock;
+
+#[async_trait::async_trait]
+impl LanguageModel for CapacityErrorMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+    fn model_id(&self) -> &str {
+        "mock-capacity"
+    }
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        Err(AISdkError::new("status: 503 provider overloaded"))
+    }
+    async fn do_stream(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        Err(AISdkError::new("status: 503 provider overloaded"))
+    }
+}
+
+struct PrematureCloseMock;
+
+#[async_trait::async_trait]
+impl LanguageModel for PrematureCloseMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+    fn model_id(&self) -> &str {
+        "mock-premature-close"
+    }
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        Err(AISdkError::new("streaming only"))
+    }
+    async fn do_stream(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        Ok(LanguageModelStreamResult::new(Box::pin(
+            futures::stream::empty(),
+        )))
     }
 }
 
@@ -505,10 +704,7 @@ async fn test_single_turn_text_only() {
     let model = Arc::new(TextMock {
         text: "Hello!".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -527,10 +723,7 @@ async fn text_only_end_turn_emits_reasoning_metadata() {
         text: "Hello!".into(),
         reasoning_tokens: 3,
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
@@ -564,10 +757,7 @@ async fn text_only_end_turn_emits_reasoning_metadata() {
 #[tokio::test]
 async fn test_cache_safe_params_unset_before_first_turn() {
     let model = Arc::new(TextMock { text: "_".into() });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
@@ -587,10 +777,7 @@ async fn test_cache_safe_params_populated_after_turn() {
     let model = Arc::new(TextMock {
         text: "Hello!".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
@@ -622,10 +809,7 @@ async fn test_clear_cache_safe_params_drops_slot() {
     let model = Arc::new(TextMock {
         text: "Hello!".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
@@ -648,10 +832,7 @@ async fn test_cache_safe_params_handle_observes_writer_side() {
     let model = Arc::new(TextMock {
         text: "Hello!".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
@@ -679,19 +860,18 @@ async fn test_with_fallback_client_does_not_break_primary_path() {
     let fallback_model = Arc::new(TextMock {
         text: "fallback-answer".into(),
     });
-    let primary = Arc::new(ApiClient::with_default_fingerprint(
-        primary_model,
-        RetryConfig::default(),
-    ));
-    let fallback = Arc::new(ApiClient::with_default_fingerprint(
-        fallback_model,
-        RetryConfig::default(),
-    ));
+    let model_runtimes =
+        crate::test_support::model_runtime_registry_with_fallback(primary_model, fallback_model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), primary, tools, cancel, None)
-        .with_fallback_client(fallback);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        model_runtimes,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("hi").await.expect("should succeed");
 
     // Primary succeeded ⇒ fallback never activates; response comes
@@ -700,15 +880,35 @@ async fn test_with_fallback_client_does_not_break_primary_path() {
 }
 
 #[tokio::test]
+async fn test_fallback_retry_does_not_consume_max_turns() {
+    let primary_model = Arc::new(CapacityErrorMock);
+    let fallback_model = Arc::new(TextMock {
+        text: "fallback-answer".into(),
+    });
+    let model_runtimes =
+        crate::test_support::model_runtime_registry_with_fallback(primary_model, fallback_model);
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let config = QueryEngineConfig {
+        max_turns: 1,
+        ..Default::default()
+    };
+
+    let engine = QueryEngine::new(config, model_runtimes, tools, cancel, None);
+    let result = engine.run("hi").await.expect("fallback should succeed");
+
+    assert_eq!(result.response_text, "fallback-answer");
+    assert_eq!(result.turns, 1);
+    assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
+}
+
+#[tokio::test]
 async fn test_multi_turn_tool_call_then_text() {
     // Mock: call 1 → tool_call(Read), call 2 → text
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     // Register ReadTool so it can be found and executed
     let registry = ToolRegistry::new();
@@ -735,15 +935,64 @@ async fn test_multi_turn_tool_call_then_text() {
 }
 
 #[tokio::test]
+async fn test_subagent_command_queue_drain_keeps_main_commands_queued() {
+    let model = Arc::new(ToolCallThenTextMock {
+        call_count: AtomicI32::new(0),
+    });
+    let client = crate::test_support::model_runtime_registry(model);
+
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(ReadTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+    let queue = crate::command_queue::CommandQueue::new();
+    queue
+        .enqueue(crate::command_queue::QueuedCommand::new(
+            "main queued".into(),
+            crate::command_queue::QueuePriority::Next,
+        ))
+        .await;
+    queue
+        .enqueue(
+            crate::command_queue::QueuedCommand::new(
+                "agent queued".into(),
+                crate::command_queue::QueuePriority::Next,
+            )
+            .with_agent("agent-1".into()),
+        )
+        .await;
+
+    let config = QueryEngineConfig {
+        agent_id: Some("agent-1".into()),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(config, client, tools, cancel, None).with_command_queue(queue);
+    let queue = engine.command_queue().clone();
+
+    let result = engine
+        .run("read /tmp/nonexistent.txt")
+        .await
+        .expect("should succeed");
+
+    assert_eq!(result.turns, 2);
+    assert!(
+        queue.dequeue(Some("agent-1")).await.is_none(),
+        "agent-scoped command should have drained"
+    );
+    let remaining = queue
+        .dequeue(None)
+        .await
+        .expect("main command must remain queued");
+    assert_eq!(remaining.prompt, "main queued");
+}
+
+#[tokio::test]
 async fn test_multi_tool_calls_in_one_response() {
     // Mock: call 1 → 2 tool_calls(Read, Read), call 2 → text
     let model = Arc::new(MultiToolMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -765,10 +1014,7 @@ async fn test_cancellation() {
     let model = Arc::new(TextMock {
         text: "nope".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     cancel.cancel();
@@ -785,10 +1031,7 @@ async fn test_system_prompt_included() {
     let model = Arc::new(TextMock {
         text: "I am helpful.".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -842,12 +1085,86 @@ async fn test_max_turns_limit() {
 }
 
 #[tokio::test]
+async fn test_max_budget_usd_stops_after_recording_usage() {
+    let model = Arc::new(PricedTextMock {
+        text: "done".into(),
+    });
+    let client = crate::test_support::model_runtime_registry(model);
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let config = QueryEngineConfig {
+        max_budget_usd: Some(0.0),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(config, client, tools, cancel, None);
+
+    let result = engine.run("hi").await.expect("budget stop is a result");
+
+    assert_eq!(result.stop_reason.as_deref(), Some("error_max_budget_usd"));
+    assert!(result.budget_exhausted);
+    assert!(result.cost_tracker.total_cost_usd() > 0.0);
+    assert_eq!(result.total_usage.input_tokens.total, 10);
+    assert_eq!(result.total_usage.output_tokens.total, 5);
+    assert!(
+        assistant_text_contains(&result.final_messages, "done"),
+        "paid assistant response must remain in final_messages"
+    );
+}
+
+#[tokio::test]
+async fn test_max_budget_usd_tool_call_preserves_pairing_without_execution() {
+    let model = Arc::new(PricedToolCallMock);
+    let client = crate::test_support::model_runtime_registry(model);
+    let started = Arc::new(AtomicI32::new(0));
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(BudgetUnsafeTool {
+        started: started.clone(),
+    }));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+    let config = QueryEngineConfig {
+        max_budget_usd: Some(0.0),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(config, client, tools, cancel, None);
+
+    let result = engine.run("hi").await.expect("budget stop is a result");
+
+    assert_eq!(result.stop_reason.as_deref(), Some("error_max_budget_usd"));
+    assert_eq!(started.load(Ordering::SeqCst), 0);
+    assert!(assistant_tool_input(&result.final_messages, "budget_unsafe_1").is_some());
+    let output = tool_result_error_text(&result.final_messages, "budget_unsafe_1")
+        .expect("budget stop must synthesize a paired tool_result");
+    assert_eq!(
+        output,
+        "Tool execution skipped because maximum USD budget was reached."
+    );
+    assert_no_dangling_tool_uses(&result.final_messages);
+}
+
+#[tokio::test]
+async fn test_premature_stream_close_without_cancel_fails() {
+    let model = Arc::new(PrematureCloseMock);
+    let client = crate::test_support::model_runtime_registry(model);
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+
+    let err = engine
+        .run("hi")
+        .await
+        .expect_err("premature close must fail");
+
+    assert!(
+        err.to_string().contains("closed before finish event"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
 async fn test_permission_mode_passed_to_context() {
     let model = Arc::new(TextMock { text: "ok".into() });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -941,10 +1258,7 @@ async fn test_tool_execution_with_real_tools() {
         call_count: AtomicI32::new(0),
         file_path: test_file.to_str().unwrap().to_string(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -1041,10 +1355,7 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
         call_count: AtomicI32::new(0),
         file_path: test_file.to_str().unwrap().to_string(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -1175,10 +1486,7 @@ async fn test_budget_exhausted_in_engine() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -1207,10 +1515,7 @@ async fn collect_events_from_run(
     bootstrap: Option<SessionBootstrap>,
     prompt: &str,
 ) -> (QueryResult, Vec<CoreEvent>) {
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let mut engine = QueryEngine::new(config, client, tools, cancel, None);
     if let Some(b) = bootstrap {
@@ -1291,6 +1596,47 @@ fn tool_result_text<M: std::borrow::Borrow<coco_messages::Message>>(
             }
         })
     })
+}
+
+fn assistant_text_contains<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
+    needle: &str,
+) -> bool {
+    messages.iter().any(|message| {
+        let coco_messages::Message::Assistant(assistant) = message.borrow() else {
+            return false;
+        };
+        let coco_messages::LlmMessage::Assistant { content, .. } = &assistant.message else {
+            return false;
+        };
+        content.iter().any(
+            |part| matches!(part, AssistantContentPart::Text(text) if text.text.contains(needle)),
+        )
+    })
+}
+
+fn assert_no_dangling_tool_uses<M: std::borrow::Borrow<coco_messages::Message>>(messages: &[M]) {
+    let mut tool_use_ids = Vec::new();
+    for message in messages {
+        let coco_messages::Message::Assistant(assistant) = message.borrow() else {
+            continue;
+        };
+        let coco_messages::LlmMessage::Assistant { content, .. } = &assistant.message else {
+            continue;
+        };
+        for part in content {
+            if let AssistantContentPart::ToolCall(tool_call) = part {
+                tool_use_ids.push(tool_call.tool_call_id.clone());
+            }
+        }
+    }
+    for tool_use_id in tool_use_ids {
+        assert!(
+            tool_result_error_text(messages, &tool_use_id).is_some()
+                || tool_result_text(messages, &tool_use_id).is_some(),
+            "tool_use {tool_use_id} has no paired tool_result"
+        );
+    }
 }
 
 fn assistant_tool_input<M: std::borrow::Borrow<coco_messages::Message>>(
@@ -1566,10 +1912,7 @@ async fn exit_plan_mode_observable_input_includes_disk_plan() {
         ..Default::default()
     };
 
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let engine = QueryEngine::new(config, client, tools, cancel, None)
         .with_config_home(tmp.path().to_path_buf());
@@ -1983,10 +2326,7 @@ async fn pre_tool_use_updated_input_reaches_execution() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -2038,10 +2378,7 @@ async fn post_tool_use_receives_effective_input() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -2106,10 +2443,7 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
         input: serde_json::json!({}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookMcpTool));
     let tools = Arc::new(registry);
@@ -2185,10 +2519,7 @@ async fn post_tool_use_updated_mcp_output_is_ignored_for_non_mcp_tool() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -2241,10 +2572,7 @@ async fn post_tool_use_additional_context_is_injected() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -2298,10 +2626,7 @@ async fn post_tool_use_prevent_continuation_stops_next_turn() {
         final_text: "should not happen".into(),
     });
     let model_for_client: Arc<dyn LanguageModel> = model.clone();
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model_for_client,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model_for_client);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -2355,10 +2680,7 @@ async fn non_mcp_success_path_orders_post_hook_messages_before_new_messages() {
         input: serde_json::json!({}),
         final_text: "should not happen".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookOrderingTool));
     let tools = Arc::new(registry);
@@ -2422,10 +2744,7 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
         input: serde_json::json!({}),
         final_text: "should not happen".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookOrderingMcpTool));
     let tools = Arc::new(registry);
@@ -2489,10 +2808,7 @@ async fn failure_path_orders_error_result_before_post_tool_use_failure_context()
         input: serde_json::json!({}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookFailTool));
     let tools = Arc::new(registry);
@@ -2557,10 +2873,7 @@ async fn failure_path_completed_event_matches_error_tool_result_text() {
         input: serde_json::json!({}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookFailTool));
     let tools = Arc::new(registry);
@@ -2601,10 +2914,7 @@ async fn pre_tool_use_permission_deny_records_denial() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -2678,6 +2988,7 @@ async fn test_session_started_emitted_with_bootstrap() {
     let p = started.expect("SessionStarted should be emitted");
     assert_eq!(p.session_id, "session-1");
     assert_eq!(p.model, "test-model");
+    assert_eq!(p.provider, "mock");
     assert_eq!(p.cwd, "/tmp");
     assert_eq!(p.version, "0.0.1");
     assert_eq!(p.permission_mode, "acceptEdits");
@@ -2760,10 +3071,7 @@ async fn test_session_usage_updated_emits_cumulative_snapshot() {
         session_id: "s-usage".into(),
         ..Default::default()
     };
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tracker = Arc::new(tokio::sync::Mutex::new(coco_messages::CostTracker::new()));
     let engine = QueryEngine::new(config, client, tools, CancellationToken::new(), None)
         .with_session_usage_tracker(tracker.clone());
@@ -3110,10 +3418,7 @@ async fn test_query_result_has_permission_denials_field() {
 async fn test_session_result_cancelled_marks_is_error() {
     // Cancellation path: cancelled flag → is_error=true, stop_reason="cancelled".
     let model = Arc::new(TextMock { text: "ok".into() });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     cancel.cancel(); // Pre-cancel before running
@@ -3331,10 +3636,7 @@ async fn ask_branch_consults_bridge_and_executes_on_approved() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
@@ -3365,10 +3667,7 @@ async fn ask_branch_consults_bridge_and_records_denial_on_rejected() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
@@ -3399,10 +3698,7 @@ async fn pre_tool_use_block_runs_before_permission_ask() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
@@ -3461,10 +3757,7 @@ async fn ask_branch_without_bridge_falls_back_to_auto_allow() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
@@ -3486,10 +3779,7 @@ async fn query_result_final_messages_contains_full_roundtrip() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -3526,10 +3816,7 @@ async fn transcript_records_final_assistant_after_tool_roundtrip() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -3581,10 +3868,7 @@ async fn stop_hook_prevent_continuation_matches_ts_terminal_reason() {
         text: "done".into(),
     });
     let model_for_client: Arc<dyn LanguageModel> = model.clone();
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model_for_client,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model_for_client);
     let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::Stop,
@@ -3646,10 +3930,7 @@ async fn stop_hook_blocking_flushes_transcript_before_retry() {
         call_count: AtomicI32::new(0),
         text: "first answer".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::Stop,
@@ -3720,10 +4001,7 @@ async fn query_result_final_messages_populated_on_cancel() {
     // final_messages should be set — may be empty if cancelled
     // before the first message, but the field must exist.
     let model = Arc::new(TextMock { text: "hi".into() });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     cancel.cancel();
@@ -3753,10 +4031,7 @@ async fn run_with_messages_uses_last_user_message_for_history_key() {
     // this test is more of a smoke test that `run_with_messages` still
     // works with multi-user-message inputs.
     let model = Arc::new(TextMock { text: "ack".into() });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -3782,10 +4057,7 @@ async fn run_with_messages_uses_last_user_message_for_history_key() {
 #[tokio::test]
 async fn run_with_messages_no_events_accepts_prebuilt_messages() {
     let model = Arc::new(TextMock { text: "ack".into() });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -3849,10 +4121,7 @@ async fn ask_branch_aborts_bridge_await_on_cancel() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
 
     let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
@@ -4251,31 +4520,6 @@ async fn test_emit_model_fallback_notice_probe_recovery_template() {
 }
 
 #[tokio::test]
-async fn test_emit_model_fallback_notice_chain_exhausted_template() {
-    // ChainExhausted is terminal — announces no successor model.
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(4);
-    emit_model_fallback_notice(
-        &Some(tx),
-        /*original*/ "gpt-5",
-        /*new_model*/ "",
-        /*session_id*/ "s-3",
-        crate::model_runtime::ModelFallbackReason::ChainExhausted,
-    )
-    .await;
-    let evt = rx.recv().await.expect("one event emitted");
-    match evt {
-        CoreEvent::Stream(crate::AgentStreamEvent::TextDelta { delta, .. }) => {
-            assert!(
-                delta.contains("exhausted"),
-                "chain-exhausted template missing: {delta}"
-            );
-            assert!(delta.contains("gpt-5"), "last-tried model missing: {delta}");
-        }
-        other => panic!("expected Stream(TextDelta), got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn test_hook_forwarder_exits_on_cancel() {
     // Cancellation path: the forwarder must exit within a short deadline
     // even while the sender side is still open. Simulates the drain-timeout
@@ -4356,10 +4600,8 @@ async fn turn_completed_fires_once_per_user_prompt_cycle() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model.clone() as Arc<dyn LanguageModel>,
-        RetryConfig::default(),
-    ));
+    let client =
+        crate::test_support::model_runtime_registry(model.clone() as Arc<dyn LanguageModel>);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
@@ -4441,10 +4683,7 @@ async fn cancellation_returns_cancelled_without_engine_turn_ended() {
     let model = Arc::new(TextMock {
         text: "nope".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     cancel.cancel();
@@ -4473,10 +4712,7 @@ async fn turn_budget_stop_emits_completed_or_max_turns_reached() {
     let model = Arc::new(TextMock {
         text: "unused".into(),
     });
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
@@ -4548,10 +4784,7 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
         }
     }
     let model: Arc<dyn LanguageModel> = Arc::new(FailingStreamMock);
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);

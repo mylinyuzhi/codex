@@ -58,6 +58,10 @@ pub enum SuggestionMeta {
     /// MCP resource — `server` carries the binding name, `uri` the
     /// resource path. Insertion produces `@<server>:<uri>`.
     McpResource { server: String, uri: String },
+    /// Workspace symbol row from a typed symbol source.
+    Symbol,
+    /// Saved session row for `/resume`.
+    Session,
 }
 
 impl SuggestionMeta {
@@ -76,6 +80,8 @@ impl SuggestionMeta {
             Self::Agent { .. } => '*',
             Self::McpResource { .. } => '◇',
             Self::Path { .. } => '+',
+            Self::Symbol => '#',
+            Self::Session => '↻',
         }
     }
 }

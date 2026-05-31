@@ -1,11 +1,12 @@
 //! LLM inference client via vercel-ai, retry engine, auth, rate limiting.
 //!
-//! `ApiClient` wraps any `Arc<dyn LanguageModel>` — real provider or mock.
+//! `ModelRuntimeRegistry` wraps provider models and owns all LLM call
+//! policy: retries, fallback, recovery, prompt-cache detection.
 //!
 //! This crate is the **runtime seam** for vercel-ai. It owns the runtime
 //! contract (`LanguageModelV4` trait, `LanguageModelCallOptions`,
 //! GenerateResult / StreamResult, `Provider` trait) and the client
-//! machinery (`ApiClient`, retry, auth, prompt-cache detection).
+//! machinery (private client, retry, auth, prompt-cache detection).
 //!
 //! DTOs (message envelope, content parts, ProviderOptions, StopReason,
 //! Usage, …) live in `coco-llm-types`. Together they form the
@@ -17,16 +18,16 @@ pub mod auth;
 pub mod build_call_options;
 pub mod cache_convert;
 pub mod cache_detection;
-pub mod client;
+mod client;
 pub mod credentials;
 pub mod errors;
 pub mod fingerprint;
 pub mod logging;
 pub mod lsp_integration;
 pub mod model_factory;
+pub mod model_runtime;
 pub mod prompt_layout;
 pub mod retry;
-pub mod role_client_cache;
 pub mod stream;
 pub mod thinking_convert;
 pub mod usage;
@@ -38,7 +39,6 @@ pub use cache_detection::CacheBreakDetector;
 pub use cache_detection::CacheBreakResult;
 pub use cache_detection::CacheState;
 pub use cache_detection::PromptStateInput;
-pub use client::ApiClient;
 pub use client::QueryParams;
 pub use client::QueryResult;
 pub use credentials::ProviderCredentialResolver;
@@ -55,6 +55,19 @@ pub use logging::ResponseLog;
 pub use logging::detect_gateway;
 pub use logging::format_request_log;
 pub use logging::format_response_log;
+pub use model_runtime::ModelCallHandle;
+pub use model_runtime::ModelCommunicationOutcome;
+pub use model_runtime::ModelFallbackReason;
+pub use model_runtime::ModelRuntime;
+pub use model_runtime::ModelRuntimeClient;
+pub use model_runtime::ModelRuntimeEvent;
+pub use model_runtime::ModelRuntimeFeedbackOutcome;
+pub use model_runtime::ModelRuntimeQueryOutcome;
+pub use model_runtime::ModelRuntimeRegistry;
+pub use model_runtime::ModelRuntimeSnapshot;
+pub use model_runtime::ModelRuntimeSource;
+pub use model_runtime::ModelStreamOpenOutcome;
+pub use model_runtime::PrebuiltLanguageModelSlot;
 pub use prompt_layout::AnthropicCacheControl;
 pub use prompt_layout::AnthropicSystemBlock;
 pub use prompt_layout::CacheHint;
@@ -70,7 +83,6 @@ pub use prompt_layout::build_prompt_layout_from_prompt;
 pub use prompt_layout::put_layout_options;
 pub use prompt_layout::take_layout_options;
 pub use retry::RetryConfig;
-pub use role_client_cache::RoleClientCache;
 pub use stream::AssistantTurnSnapshot;
 pub use stream::CustomSegment;
 pub use stream::FileSegment;
@@ -91,7 +103,7 @@ pub use usage::UsageAccumulator;
 
 // ─── Vercel-ai re-export hub ──────────────────────────────────────────────
 //
-// Runtime / client contract: things callers of `ApiClient` and the
+// Runtime contract: things callers of the model runtime and the
 // generic agent loop name (`LanguageModel` trait, call options, results,
 // errors, usage). DTOs (message envelope, content parts, ProviderOptions)
 // live in `coco-llm-types` and are NOT re-exported here — see the
@@ -124,9 +136,8 @@ pub use vercel_ai_provider::AISdkError;
 pub use vercel_ai_provider::JSONValue;
 
 /// One-line `use coco_inference::prelude::*;` to bring the common subset
-/// of API client + LLM types into scope. Mirrors `cocode-inference::prelude`.
+/// of model-runtime + LLM types into scope.
 pub mod prelude {
-    pub use crate::ApiClient;
     pub use crate::LanguageModel;
     pub use crate::LanguageModelCallOptions;
     pub use crate::LanguageModelGenerateResult;

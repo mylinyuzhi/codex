@@ -12,7 +12,7 @@
 //!
 //! TS hardcodes `queryHaiku()`. In coco-rs's multi-provider port the
 //! equivalent is `ModelRole::Fast`, resolved via the shared
-//! `RoleClientCache`. For Anthropic users this maps to Haiku; for OpenAI
+//! `ModelRuntimeRegistry`. For Anthropic users this maps to Haiku; for OpenAI
 //! to `gpt-4o-mini` (or whatever the user configured); for Google to
 //! Gemini Flash. **Never hardcode `"Haiku"` or any provider-specific
 //! model id here** — the resolver is the only entry point.
@@ -45,11 +45,12 @@
 //! from `ModelInfo` lets reasoning models budget their own thinking,
 //! and lets `coco-config` cap costs per-role.
 
-use std::sync::Arc;
 use std::time::Duration;
 
+use coco_inference::ModelRuntimeQueryOutcome;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
-use coco_inference::RoleClientCache;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::LlmMessage;
 use coco_llm_types::UserContentPart;
@@ -222,8 +223,8 @@ pub fn build_input_from_history<M: std::borrow::Borrow<coco_messages::Message>>(
 
 /// Generate a single tool-use-summary message via `ModelRole::Fast`.
 ///
-/// Resolves the Fast-role client through the shared
-/// [`RoleClientCache`]. When `Fast` is unconfigured the resolver
+/// Resolves the Fast-role runtime through the shared
+/// [`ModelRuntimeRegistry`]. When `Fast` is unconfigured the resolver
 /// returns `Err`; we log at `tracing::debug` and return `None`. **Do
 /// not fall back to `Main`** — silently spending Main-tier tokens on
 /// non-critical UX polish would surprise users.
@@ -233,45 +234,52 @@ pub fn build_input_from_history<M: std::borrow::Borrow<coco_messages::Message>>(
 /// parent turn never observes the side-fork.
 pub async fn generate_tool_use_summary(
     input: ToolUseSummaryInput,
-    role_cache: Arc<RoleClientCache>,
+    model_runtimes: std::sync::Arc<ModelRuntimeRegistry>,
 ) -> Option<ToolUseSummaryParams> {
     if !input.has_tools() {
         return None;
     }
 
-    let client = match role_cache.resolve(ModelRole::Fast).await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::debug!(
-                error = %e,
-                "ModelRole::Fast unresolved; skipping tool_use_summary generation"
-            );
-            return None;
-        }
-    };
+    let source = ModelRuntimeSource::Role(ModelRole::Fast);
+    if let Err(e) = model_runtimes.snapshot_for_source(source.clone()) {
+        tracing::debug!(
+            error = %e,
+            "ModelRole::Fast runtime unresolved; skipping tool_use_summary generation"
+        );
+        return None;
+    }
 
     let prompt = build_prompt(&input);
-    let params = QueryParams {
-        prompt,
-        // Intentionally `None`: defer to the Fast model's own
-        // `max_output_tokens` (resolved from `ModelInfo` via
-        // `coco-config`). See module docs "Max-tokens policy".
-        max_tokens: None,
-        thinking_level: None,
-        fast_mode: false,
-        tools: None,
-        tool_choice: None,
-        context_management: None,
-        query_source: Some("tool_use_summary_generation".into()),
-        agent_id: None,
-        time_since_last_assistant_ms: None,
-        cache: None,
-        agentic: false,
-        stop_sequences: None,
-        response_format: None,
-    };
 
-    let result = tokio::time::timeout(TOOL_USE_SUMMARY_TIMEOUT, client.query(&params)).await;
+    let result = tokio::time::timeout(TOOL_USE_SUMMARY_TIMEOUT, async {
+        loop {
+            let params = QueryParams {
+                prompt: prompt.clone(),
+                // Intentionally `None`: defer to the Fast model's own
+                // `max_output_tokens` (resolved from `ModelInfo` via
+                // `coco-config`). See module docs "Max-tokens policy".
+                max_tokens: None,
+                thinking_level: None,
+                fast_mode: false,
+                tools: None,
+                tool_choice: None,
+                context_management: None,
+                query_source: Some("tool_use_summary_generation".into()),
+                agent_id: None,
+                time_since_last_assistant_ms: None,
+                cache: None,
+                agentic: false,
+                stop_sequences: None,
+                response_format: None,
+            };
+            match model_runtimes.query_once(source.clone(), &params).await {
+                ModelRuntimeQueryOutcome::Success { result, .. } => return Ok(result),
+                ModelRuntimeQueryOutcome::Retry { .. } => continue,
+                ModelRuntimeQueryOutcome::Failed { error, .. } => return Err(error),
+            }
+        }
+    })
+    .await;
 
     let query_result = match result {
         Err(_elapsed) => {

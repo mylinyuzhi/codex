@@ -51,11 +51,11 @@ pub type SubscriptionCredsSupplier = Arc<dyn Fn() -> Option<SubscriptionCreds> +
 /// Future returned by [`ProviderCredentialResolver::refresh_now`]. Resolves to
 /// `true` when a refresh was actually performed (token possibly updated),
 /// `false` otherwise (not OAuth / not logged in / refresh failed). Boxed +
-/// `'static` so it can be driven from the `ApiClient` retry loop.
+/// `'static` so it can be driven from the private client retry loop.
 pub type RefreshFuture = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 
-/// A bound reactive-refresh callback for one provider instance, installed on an
-/// [`crate::ApiClient`] so a 401/403 can force a token refresh + retry.
+/// A bound reactive-refresh callback for one provider instance, installed on a
+/// private runtime slot so a 401/403 can force a token refresh + retry.
 pub type RefreshHook = Arc<dyn Fn() -> RefreshFuture + Send + Sync>;
 
 /// Resolves live subscription credentials for OAuth-backed provider instances.

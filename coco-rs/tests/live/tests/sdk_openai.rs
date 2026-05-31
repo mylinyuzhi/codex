@@ -1,10 +1,10 @@
 //! SDK-layer live tests for the builtin `openai` provider via the
-//! OpenAI Responses API (`coco-inference::ApiClient`, no agent loop).
+//! OpenAI Responses API (`coco-inference model runtime`, no agent loop).
 //!
 //! ```text
 //! builtin_providers()  →  RuntimeConfig (overlay = COCO_LIVE_TEST_OPENAI_*)
 //!     →  ModelRegistry  →  model_factory::build_api_client
-//!     →  coco_inference::ApiClient.query / .query_stream
+//!     →  coco_inference::ModelRuntimeClient.query / .query_stream
 //!     →  <COCO_LIVE_TEST_OPENAI_BASE_URL or api.openai.com>/responses
 //! ```
 //!

@@ -1,8 +1,8 @@
 //! Build a `RuntimeConfig` populated only with builtin providers and
-//! resolve a `(provider, model)` pair into an `Arc<ApiClient>` — the
-//! single seam-approved entry point into the AI SDK chain. Tests call
-//! `client.query` / `client.query_stream` directly; provider-direct
-//! `vercel-ai` SDK access is forbidden by the seam guard.
+//! resolve a `(provider, model)` pair into a `ModelRuntimeClient` —
+//! the single seam-approved entry point into the AI SDK chain. Tests
+//! call `client.query` / `client.query_stream` through the runtime;
+//! provider-direct `vercel-ai` SDK access is forbidden by the seam guard.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,9 +15,9 @@ use coco_config::CatalogPaths;
 use coco_config::ProviderConfig;
 use coco_config::RuntimeConfig;
 use coco_config::RuntimeConfigBuilder;
-use coco_inference::ApiClient;
-use coco_inference::RetryConfig;
-use coco_inference::model_factory::build_api_client;
+use coco_inference::ModelRuntimeClient;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::ModelRuntimeSource;
 use coco_types::ModelSpec;
 
 use crate::common::env::ensure_env_loaded;
@@ -212,27 +212,27 @@ pub fn provider_has_credentials(provider_name: &str) -> bool {
         .is_some()
 }
 
-/// Build an `ApiClient` for `(provider, model)` so suites can exercise
+/// Build a model-runtime client for `(provider, model)` so suites can exercise
 /// `coco-inference` retry, usage accumulation, and cache-break wiring.
 /// All AI SDK access flows through this — direct `vercel-ai` use is
 /// blocked by the workspace seam guard.
-pub fn build_client(provider_name: &str, model_id: &str) -> Result<Arc<ApiClient>> {
+pub fn build_client(provider_name: &str, model_id: &str) -> Result<Arc<ModelRuntimeClient>> {
     let runtime = shared_runtime();
-    let spec = spec_for(provider_name, model_id)?;
-    Ok(build_api_client(
-        runtime,
-        &spec,
-        RetryConfig::default(),
-        None,
-    )?)
+    let _spec = spec_for(provider_name, model_id)?;
+    let registry = Arc::new(ModelRuntimeRegistry::new(runtime.clone(), None)?);
+    let source = ModelRuntimeSource::Explicit(coco_types::ProviderModelSelection {
+        provider: provider_name.to_string(),
+        model_id: model_id.to_string(),
+    });
+    Ok(Arc::new(ModelRuntimeClient::new(registry, source)))
 }
 
 /// Resolved test target — provider name, the model-id under test, and a
-/// pre-built `Arc<ApiClient>`.
+/// pre-built runtime client.
 pub struct LiveTarget {
     pub provider: &'static str,
     pub model: String,
-    pub client: Arc<ApiClient>,
+    pub client: Arc<ModelRuntimeClient>,
 }
 
 impl LiveTarget {

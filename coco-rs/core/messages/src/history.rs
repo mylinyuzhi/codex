@@ -146,6 +146,42 @@ impl MessageHistory {
         arc
     }
 
+    /// Rebuild a history from shared transcript messages and preserve
+    /// the latest assistant usage marker when the source was flattened
+    /// to `Vec<Arc<Message>>`.
+    pub fn from_arcs_preserving_latest_usage(messages: Vec<Arc<Message>>) -> Self {
+        let latest_usage =
+            messages
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(idx, arc)| match arc.as_ref() {
+                    Message::Assistant(a) => a.usage.map(|usage| {
+                        (
+                            idx,
+                            usage,
+                            ProviderModelSelection {
+                                provider: String::new(),
+                                model_id: a.model.clone(),
+                            },
+                        )
+                    }),
+                    _ => None,
+                });
+
+        let mut history = Self::new();
+        for (idx, arc) in messages.into_iter().enumerate() {
+            if let Some((usage_idx, usage, model)) = latest_usage.as_ref()
+                && idx == *usage_idx
+            {
+                history.push_arc_assistant_with_usage(arc, *usage, model.clone());
+                continue;
+            }
+            history.push_arc(arc);
+        }
+        history
+    }
+
     /// Raw mutable access to the backing message vector. **Bypasses
     /// the controlled API.** Callers MUST:
     ///
@@ -197,6 +233,21 @@ impl MessageHistory {
     /// deep `Message` clone.
     pub fn to_vec(&self) -> Vec<Arc<Message>> {
         self.messages.clone()
+    }
+
+    /// Shallow clone preserving usage-marker state.
+    ///
+    /// Intended for read-only analyzers that need a stable snapshot of
+    /// history without holding the session lock across async work. Message
+    /// bodies stay shared by `Arc`; marker and index metadata are cloned.
+    pub fn snapshot(&self) -> Self {
+        Self {
+            messages: self.messages.clone(),
+            index: self.index.clone(),
+            session_id: self.session_id.clone(),
+            agent_id: self.agent_id.clone(),
+            last_usage: self.last_usage.clone(),
+        }
     }
 
     /// Drain messages pushed since `since_len` and rebuild the UUID index.

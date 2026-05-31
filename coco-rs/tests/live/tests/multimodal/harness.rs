@@ -16,9 +16,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
-use coco_inference::RetryConfig;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueryResult;
@@ -73,10 +71,8 @@ pub async fn run_multimodal_scenario(
     let workdir_path = workdir.path().to_path_buf();
 
     let model = CapturingScriptedModel::new(replies);
-    let api_client = Arc::new(ApiClient::with_default_fingerprint(
-        model.clone() as Arc<dyn LanguageModel>,
-        RetryConfig::default(),
-    ));
+    let model_runtimes =
+        coco_query::test_support::model_runtime_registry(model.clone() as Arc<dyn LanguageModel>);
 
     let tool_registry = ToolRegistry::new();
     tool_registry.register(Arc::new(coco_tools::BashTool));
@@ -106,7 +102,7 @@ pub async fn run_multimodal_scenario(
         ..QueryEngineConfig::default()
     };
 
-    let engine = QueryEngine::new(cfg, api_client, tools, cancel, /*hooks*/ None);
+    let engine = QueryEngine::new(cfg, model_runtimes, tools, cancel, /*hooks*/ None);
 
     let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(512);
     let drainer = tokio::spawn(async move {

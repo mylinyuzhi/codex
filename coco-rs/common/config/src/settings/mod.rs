@@ -171,6 +171,16 @@ pub struct Settings {
     /// "Always copy full response" option.
     #[serde(default)]
     pub copy_full_response: bool,
+    /// Claude-compatible command-backed status line. `statusLine` is
+    /// the canonical on-disk key; `status_line` is accepted for users
+    /// who prefer snake_case in Coco settings.
+    #[serde(
+        default,
+        rename = "statusLine",
+        alias = "status_line",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub status_line: Option<StatusLineSettings>,
     /// TUI-only rendering/performance knobs. These are deliberately not part
     /// of `RuntimeConfig`: they do not affect agent behavior or protocol
     /// semantics, only the terminal renderer.
@@ -313,6 +323,29 @@ impl Default for NativeReplayCacheSettings {
             admit_min_result_kb: 32,
         }
     }
+}
+
+/// User-configured status line integration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StatusLineSettings {
+    Command(StatusLineCommandSettings),
+}
+
+impl StatusLineSettings {
+    pub fn as_command(&self) -> &StatusLineCommandSettings {
+        match self {
+            Self::Command(command) => command,
+        }
+    }
+}
+
+/// Command-backed status line configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct StatusLineCommandSettings {
+    pub command: String,
+    pub padding: i32,
 }
 
 /// Permission rules configuration within settings.

@@ -87,6 +87,62 @@ fn test_parse_settings_accepts_tui_performance_policy() {
 }
 
 #[test]
+fn test_parse_settings_accepts_status_line_camel_case() {
+    let settings = parse_settings(
+        r#"{
+            "statusLine": {
+                "type": "command",
+                "command": "printf ok",
+                "padding": 1
+            }
+        }"#,
+    )
+    .expect("parse statusLine settings");
+
+    let status_line = settings.status_line.expect("statusLine parsed");
+    let command = status_line.as_command();
+    assert_eq!(command.command, "printf ok");
+    assert_eq!(command.padding, 1);
+}
+
+#[test]
+fn test_parse_settings_accepts_status_line_snake_case_alias() {
+    let settings = parse_settings(
+        r#"{
+            "status_line": {
+                "type": "command",
+                "command": "printf snake"
+            }
+        }"#,
+    )
+    .expect("parse status_line settings");
+
+    assert_eq!(
+        settings
+            .status_line
+            .expect("status_line parsed")
+            .as_command()
+            .command,
+        "printf snake"
+    );
+}
+
+#[test]
+fn test_parse_settings_rejects_unknown_status_line_type() {
+    let err = parse_settings(
+        r#"{
+            "statusLine": {
+                "type": "template",
+                "command": "ignored"
+            }
+        }"#,
+    )
+    .expect_err("unknown statusLine type should fail");
+
+    assert!(err.to_string().contains("template"));
+}
+
+#[test]
 fn test_load_settings_with_accepts_jsonc_layers() {
     let tmp = TempDir::new().expect("tempdir");
     let cwd = tmp.path().join("project");

@@ -14,6 +14,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use coco_types::CommandArgumentKind;
 use coco_types::CommandBase;
 use coco_types::CommandSafety;
 use coco_types::CommandSource;
@@ -332,6 +333,7 @@ impl CommandRegistry {
                         .then(|| cmd.base.description.clone()),
                     aliases: cmd.base.aliases.clone(),
                     argument_hint: cmd.base.argument_hint.clone(),
+                    argument_kind: cmd.base.argument_kind,
                     source: cmd.base.loaded_from.clone(),
                     // CommandType::tag() is the single projection point —
                     // any future variant in CommandType forces an update
@@ -572,6 +574,11 @@ fn register_skills_as_commands(
         base.is_hidden = skill.is_hidden;
         base.user_invocable = skill.user_invocable;
         base.argument_hint = skill.argument_hint.clone();
+        base.argument_kind = skill
+            .argument_hint
+            .as_ref()
+            .map(|_| CommandArgumentKind::FreeText)
+            .unwrap_or(CommandArgumentKind::None);
         base.when_to_use = skill.when_to_use.clone();
         let prompt = skill.prompt.clone();
         let progress_message = "running".to_string();
@@ -869,6 +876,7 @@ pub fn builtin_base(name: &str, description: &str, aliases: &[&str]) -> CommandB
         availability: vec![],
         is_hidden: false,
         argument_hint: None,
+        argument_kind: CommandArgumentKind::None,
         when_to_use: None,
         user_invocable: true,
         is_sensitive: false,
@@ -893,6 +901,9 @@ pub fn builtin_base_ext(
         availability: vec![],
         is_hidden: false,
         argument_hint: argument_hint.map(ToString::to_string),
+        argument_kind: argument_hint
+            .map(|_| CommandArgumentKind::FreeText)
+            .unwrap_or(CommandArgumentKind::None),
         when_to_use: None,
         user_invocable: true,
         is_sensitive: false,
@@ -979,12 +990,7 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
             &[],
             cost_handler,
         ),
-        (
-            "context",
-            "Show context window usage",
-            &["ctx"],
-            context_handler,
-        ),
+        ("context", "Show context window usage", &[], context_handler),
         // ── Development ──
         (
             "diff",

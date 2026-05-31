@@ -90,6 +90,8 @@ pub struct CommandBase {
     pub is_hidden: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
+    #[serde(default)]
+    pub argument_kind: CommandArgumentKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_to_use: Option<String>,
     #[serde(default)]
@@ -180,6 +182,30 @@ pub enum CommandTypeTag {
     LocalOverlay,
 }
 
+/// Typed command argument shape used by UI completion and submit semantics.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandArgumentKind {
+    /// Command takes no argument and may execute immediately after selection.
+    #[default]
+    None,
+    /// Command accepts arbitrary text; UI shows a hint but no typed completion.
+    FreeText,
+    /// Command expects a file path.
+    FilePath,
+    /// Command expects a directory path.
+    DirectoryPath,
+    /// Command expects a saved session id.
+    SessionId,
+}
+
+impl CommandArgumentKind {
+    pub const fn accepts_arguments(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
 /// Context for prompt command execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -245,6 +271,10 @@ pub struct SlashCommandInfo {
     /// [`CommandBase::argument_hint`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
+    /// Typed argument shape. Drives argument completion and whether Enter
+    /// executes immediately after accepting a slash suggestion.
+    #[serde(default)]
+    pub argument_kind: CommandArgumentKind,
     /// Where this command came from. Drives empty-query source grouping
     /// in the `/` popup and the `(user)` / `(project)` / `(plugin)`
     /// suffix on descriptions. Mirrors TS `Command.source` consumed by

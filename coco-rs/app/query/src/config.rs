@@ -12,6 +12,7 @@ use coco_config::WebFetchConfig;
 use coco_config::WebSearchConfig;
 use coco_messages::CostTracker;
 use coco_messages::Message;
+use coco_messages::MessageHistory;
 use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::PermissionRule;
@@ -502,6 +503,9 @@ pub struct QueryResult {
     /// re-Arc allocation across the engine→runtime seam (plan §11
     /// F8 follow-up).
     pub final_messages: Vec<std::sync::Arc<Message>>,
+    /// Same final transcript as [`Self::final_messages`], preserving
+    /// `MessageHistory` state such as the latest provider usage marker.
+    pub final_history: MessageHistory,
     /// Structured output captured from a TS `structured_output` attachment.
     pub structured_output: Option<serde_json::Value>,
     /// Max-turn terminal signal captured from this engine invocation.

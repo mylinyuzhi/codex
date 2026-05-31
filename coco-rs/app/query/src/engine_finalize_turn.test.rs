@@ -284,16 +284,13 @@ async fn build_suggestion_context_rate_limit_empty_provider_fails_open() {
 #[tokio::test]
 async fn maybe_spawn_prompt_suggestion_records_and_emits_protocol_event() {
     let model = Arc::new(DummyModel);
-    let client = Arc::new(coco_inference::ApiClient::with_default_fingerprint(
-        model,
-        coco_inference::RetryConfig::default(),
-    ));
+    let model_runtimes = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
     let dispatcher = Arc::new(CapturingSuggestionDispatcher::default());
     let app_state = Arc::new(RwLock::new(ToolAppState::default()));
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
-        client,
+        model_runtimes,
         tools,
         CancellationToken::new(),
         None,

@@ -125,7 +125,7 @@ impl FromStr for ModelRole {
 ///
 /// This intentionally does not include [`ProviderApi`]: config surfaces
 /// write `provider/model_id`, and the runtime resolves `provider` through
-/// the live provider catalog before constructing an `ApiClient`.
+/// the live provider catalog before constructing a runtime slot.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProviderModelSelection {
@@ -156,7 +156,7 @@ impl ProviderModelSelection {
 ///
 /// `Role` and `InheritMain` preserve role-based routing. `Explicit`
 /// carries the full provider/model pair so the execution factory can
-/// build the actual `ApiClient` instead of only changing a display
+/// resolve the actual runtime slot instead of only changing a display
 /// `model_id`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

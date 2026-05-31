@@ -116,21 +116,6 @@ pub enum InferenceError {
         #[snafu(implicit)]
         location: Location,
     },
-
-    /// `RoleClientCache::resolve` could not find a `ModelSpec` for the
-    /// requested role. `RuntimeConfig::resolve_model_roles` is supposed
-    /// to insert Main's spec as the fallback for every unconfigured
-    /// role, so this surfaces only when the runtime config was built
-    /// by a path that bypassed the normal layering.
-    #[snafu(display(
-        "model role `{role}` not configured in RuntimeConfig.model_roles \
-         (no Main fallback either)"
-    ))]
-    ModelRoleUnresolved {
-        role: String,
-        #[snafu(implicit)]
-        location: Location,
-    },
 }
 
 impl InferenceError {
@@ -260,7 +245,6 @@ impl InferenceError {
             Self::InvalidRequest { .. } => "invalid_request",
             Self::UnknownProvider { .. } => "unknown_provider",
             Self::ProviderBuildFailed { .. } => "provider_build_failed",
-            Self::ModelRoleUnresolved { .. } => "model_role_unresolved",
         }
     }
 }
@@ -279,7 +263,6 @@ impl ErrorExt for InferenceError {
             Self::InvalidRequest { .. } => StatusCode::InvalidRequest,
             Self::UnknownProvider { .. } => StatusCode::ProviderNotFound,
             Self::ProviderBuildFailed { .. } => StatusCode::ProviderError,
-            Self::ModelRoleUnresolved { .. } => StatusCode::InvalidConfig,
         }
     }
 

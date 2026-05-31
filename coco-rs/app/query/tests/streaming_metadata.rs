@@ -20,12 +20,10 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::ProviderMetadata;
@@ -137,10 +135,7 @@ impl LanguageModel for MetadataMock {
 /// persisted assistant message's `AssistantContent` vector for inspection.
 async fn capture_assistant_content(content: Vec<AssistantContentPart>) -> Vec<AssistantContent> {
     let model = Arc::new(MetadataMock::new(content));
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = coco_query::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {

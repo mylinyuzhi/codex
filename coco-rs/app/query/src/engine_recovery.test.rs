@@ -10,12 +10,13 @@ use std::sync::Arc;
 use coco_config::ModelInfo;
 use coco_config::PositiveTokens;
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::CacheBreakDetector;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
+use coco_inference::ModelRuntimeRegistry;
+use coco_inference::PrebuiltLanguageModelSlot;
 use coco_inference::ProviderClientFingerprint;
 use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
@@ -40,12 +41,10 @@ use super::RecoveryDisposition;
 use super::StreamErrorOutcome;
 use crate::config::ContinueReason;
 use crate::config::QueryEngineConfig;
-use crate::engine::MAX_CONSECUTIVE_CAPACITY_ERRORS;
 use crate::engine::QueryEngine;
 use crate::engine_loop_state::LoopServices;
 use crate::engine_loop_state::LoopTurnState;
 use crate::engine_stream_consume::WithheldReason;
-use crate::model_runtime::ModelRuntime;
 
 // ──────────────────────────────────────────────────────────────────────
 // Mock building blocks
@@ -91,7 +90,11 @@ impl LanguageModel for StubModel {
     }
 }
 
-fn client_with_info(provider: &'static str, model_id: &'static str, info: ModelInfo) -> ApiClient {
+fn slot_with_info(
+    provider: &'static str,
+    model_id: &'static str,
+    info: ModelInfo,
+) -> PrebuiltLanguageModelSlot {
     let model: Arc<dyn LanguageModel> = Arc::new(StubModel {
         provider,
         id: model_id,
@@ -111,27 +114,37 @@ fn client_with_info(provider: &'static str, model_id: &'static str, info: ModelI
         provider: provider.to_string(),
         model_id: model_id.to_string(),
     };
-    ApiClient::new(
-        model,
-        fingerprint,
-        Some(info),
-        identity,
-        RetryConfig::default(),
-    )
+    PrebuiltLanguageModelSlot::new(model, RetryConfig::default())
+        .with_fingerprint(fingerprint)
+        .with_model_info(info)
+        .with_model_identity(identity)
 }
 
-fn client_default(provider: &'static str, model_id: &'static str) -> ApiClient {
+fn slot_default(provider: &'static str, model_id: &'static str) -> PrebuiltLanguageModelSlot {
     let model: Arc<dyn LanguageModel> = Arc::new(StubModel {
         provider,
         id: model_id,
     });
-    ApiClient::with_default_fingerprint(model, RetryConfig::default())
+    PrebuiltLanguageModelSlot::new(model, RetryConfig::default())
 }
 
-fn test_engine(config: QueryEngineConfig, client: Arc<ApiClient>) -> QueryEngine {
+fn registry_from_slot(slot: PrebuiltLanguageModelSlot) -> Arc<ModelRuntimeRegistry> {
+    Arc::new(ModelRuntimeRegistry::from_prebuilt_language_model(
+        coco_types::ModelRole::Main,
+        slot,
+    ))
+}
+
+fn slot_snapshot(slot: &PrebuiltLanguageModelSlot) -> coco_inference::ModelRuntimeSnapshot {
+    registry_from_slot(slot.clone())
+        .snapshot_for_role(coco_types::ModelRole::Main)
+        .expect("snapshot")
+}
+
+fn test_engine(config: QueryEngineConfig, slot: PrebuiltLanguageModelSlot) -> QueryEngine {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    QueryEngine::new(config, client, tools, cancel, None)
+    QueryEngine::new(config, registry_from_slot(slot), tools, cancel, None)
 }
 
 fn loop_turn_state() -> LoopTurnState {
@@ -172,7 +185,7 @@ async fn c15_empty_history_proceeds() {
         max_output_tokens: PositiveTokens::new(4_096),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("anthropic", "claude-3", small));
+    let client = slot_with_info("anthropic", "claude-3", small);
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     let history = MessageHistory::new();
@@ -180,7 +193,7 @@ async fn c15_empty_history_proceeds() {
 
     match engine.check_blocking_limit(
         &history,
-        &client,
+        &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
     ) {
@@ -205,7 +218,7 @@ async fn c15_overlimit_history_blocks() {
         max_output_tokens: PositiveTokens::new(4_096),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("anthropic", "claude-3", small));
+    let client = slot_with_info("anthropic", "claude-3", small);
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     let huge_text = "x".repeat(40_000);
@@ -215,7 +228,7 @@ async fn c15_overlimit_history_blocks() {
     let turn_state = loop_turn_state();
     match engine.check_blocking_limit(
         &history,
-        &client,
+        &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
     ) {
@@ -243,7 +256,7 @@ async fn c15_skips_post_compact() {
         max_output_tokens: PositiveTokens::new(4_096),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("anthropic", "claude-3", small));
+    let client = slot_with_info("anthropic", "claude-3", small);
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     // Same overlimit history as `c15_overlimit_history_blocks`.
@@ -260,7 +273,7 @@ async fn c15_skips_post_compact() {
     // caller's behavior is identical: proceed to `query_stream`.
     match engine.check_blocking_limit(
         &history,
-        &client,
+        &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
     ) {
@@ -274,7 +287,7 @@ async fn c15_skips_post_compact() {
 /// rather than panicking on `None`. A typical history must pass.
 #[tokio::test]
 async fn c15_no_model_info_uses_default_window() {
-    let client = Arc::new(client_default("anthropic", "claude-3"));
+    let client = slot_default("anthropic", "claude-3");
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     let mut history = MessageHistory::new();
@@ -283,7 +296,7 @@ async fn c15_no_model_info_uses_default_window() {
     let turn_state = loop_turn_state();
     match engine.check_blocking_limit(
         &history,
-        &client,
+        &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
     ) {
@@ -318,7 +331,7 @@ async fn escalate_fires_when_model_opts_in() {
         max_output_tokens_escalate: Some(PositiveTokens::new(16_384)),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("openai", "gpt-4", info));
+    let client = slot_with_info("openai", "gpt-4", info);
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     let mut history = MessageHistory::new();
@@ -333,7 +346,7 @@ async fn escalate_fires_when_model_opts_in() {
             &mut history,
             &event_tx,
             &mut turn_state,
-            &client,
+            &slot_snapshot(&client),
         )
         .await;
 
@@ -346,7 +359,7 @@ async fn escalate_fires_when_model_opts_in() {
     // state field involved.
     turn_state.transition = Some(ContinueReason::MaxOutputTokensEscalate);
     assert_eq!(
-        super::effective_max_tokens(&client, &turn_state),
+        super::effective_max_tokens(&slot_snapshot(&client), &turn_state),
         Some(16_384),
         "effective_max_tokens during escalate retry must return the ModelInfo ceiling",
     );
@@ -365,7 +378,7 @@ async fn escalate_skipped_when_model_does_not_opt_in() {
         max_output_tokens_escalate: None,
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("openai", "gpt-4", info));
+    let client = slot_with_info("openai", "gpt-4", info);
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     let mut history = MessageHistory::new();
@@ -380,7 +393,7 @@ async fn escalate_skipped_when_model_does_not_opt_in() {
             &mut history,
             &event_tx,
             &mut turn_state,
-            &client,
+            &slot_snapshot(&client),
         )
         .await;
 
@@ -406,7 +419,7 @@ async fn escalate_not_re_entered_on_consecutive_max_tokens() {
         max_output_tokens_escalate: Some(PositiveTokens::new(16_384)),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("openai", "gpt-4", info));
+    let client = slot_with_info("openai", "gpt-4", info);
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     let mut history = MessageHistory::new();
@@ -424,7 +437,7 @@ async fn escalate_not_re_entered_on_consecutive_max_tokens() {
             &mut history,
             &event_tx,
             &mut turn_state,
-            &client,
+            &slot_snapshot(&client),
         )
         .await;
 
@@ -446,20 +459,26 @@ async fn effective_max_tokens_returns_none_outside_escalate_retry() {
         max_output_tokens_escalate: Some(PositiveTokens::new(16_384)),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("openai", "gpt-4", info));
+    let client = slot_with_info("openai", "gpt-4", info);
     let mut turn_state = loop_turn_state();
 
     // Normal turn: no transition set → defer to ModelInfo.
-    assert_eq!(super::effective_max_tokens(&client, &turn_state), None);
+    assert_eq!(
+        super::effective_max_tokens(&slot_snapshot(&client), &turn_state),
+        None
+    );
 
     // Reactive compact retry: not the escalate path → still None.
     turn_state.transition = Some(ContinueReason::ReactiveCompactRetry);
-    assert_eq!(super::effective_max_tokens(&client, &turn_state), None);
+    assert_eq!(
+        super::effective_max_tokens(&slot_snapshot(&client), &turn_state),
+        None
+    );
 
     // Escalate retry: returns the ceiling.
     turn_state.transition = Some(ContinueReason::MaxOutputTokensEscalate);
     assert_eq!(
-        super::effective_max_tokens(&client, &turn_state),
+        super::effective_max_tokens(&slot_snapshot(&client), &turn_state),
         Some(16_384),
     );
 }
@@ -477,11 +496,14 @@ async fn effective_max_tokens_returns_none_when_opted_out() {
         max_output_tokens_escalate: None,
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("openai", "gpt-4", info));
+    let client = slot_with_info("openai", "gpt-4", info);
     let mut turn_state = loop_turn_state();
     turn_state.transition = Some(ContinueReason::MaxOutputTokensEscalate);
 
-    assert_eq!(super::effective_max_tokens(&client, &turn_state), None);
+    assert_eq!(
+        super::effective_max_tokens(&slot_snapshot(&client), &turn_state),
+        None
+    );
 }
 
 /// **H3 regression** — the recovery dispatcher reads its escalate
@@ -505,7 +527,7 @@ async fn h3_recovery_reads_active_client_not_runtime_main() {
         max_output_tokens_escalate: Some(PositiveTokens::new(64_000)),
         ..Default::default()
     };
-    let main_client = Arc::new(client_with_info("anthropic", "opus", main_info));
+    let main_client = slot_with_info("anthropic", "opus", main_info);
     let engine = test_engine(QueryEngineConfig::default(), main_client.clone());
 
     // Plan client (the active client this turn): no escalate ceiling
@@ -516,7 +538,7 @@ async fn h3_recovery_reads_active_client_not_runtime_main() {
         max_output_tokens_escalate: None,
         ..Default::default()
     };
-    let plan_client = Arc::new(client_with_info("anthropic", "haiku", plan_info));
+    let plan_client = slot_with_info("anthropic", "haiku", plan_info);
 
     let mut history = MessageHistory::new();
     let mut turn_state = loop_turn_state();
@@ -533,7 +555,7 @@ async fn h3_recovery_reads_active_client_not_runtime_main() {
             &mut history,
             &event_tx,
             &mut turn_state,
-            &plan_client,
+            &slot_snapshot(&plan_client),
         )
         .await;
 
@@ -558,7 +580,7 @@ async fn h3_recovery_reads_active_client_not_runtime_main() {
 // ──────────────────────────────────────────────────────────────────────
 
 /// N2 finding: when `ModelRuntime::advance` returns `Switched` and
-/// crosses providers, the new `ApiClient`'s `CacheBreakDetector`
+/// crosses providers, the new slot's `CacheBreakDetector`
 /// must be reset so it doesn't carry stale prompt-state hashes from
 /// before the switch. `post_advance_side_effects` is the centralized
 /// hook.
@@ -567,8 +589,7 @@ async fn n2_post_advance_resets_cache_break_detector() {
     // Detector with one tracked state entry — proxy for "had cached
     // prompt history before the switch."
     let detector = Arc::new(Mutex::new(CacheBreakDetector::new()));
-    let new_client =
-        Arc::new(client_default("openai", "gpt-4").with_cache_break_detector(detector.clone()));
+    let new_client = slot_default("openai", "gpt-4").with_cache_break_detector(detector.clone());
 
     // Pre-populate by running phase 1 of the detector.
     {
@@ -585,10 +606,10 @@ async fn n2_post_advance_resets_cache_break_detector() {
     );
 
     let engine = test_engine(QueryEngineConfig::default(), new_client.clone());
-    let runtime = ModelRuntime::new(new_client, Vec::new());
+    let services = loop_services(new_client);
 
     engine
-        .post_advance_side_effects("anthropic", &runtime)
+        .post_advance_side_effects("anthropic", &services)
         .await;
 
     assert!(
@@ -605,9 +626,8 @@ async fn n2_post_advance_resets_cache_break_detector() {
 #[tokio::test]
 async fn n2_post_advance_resets_even_within_provider() {
     let detector = Arc::new(Mutex::new(CacheBreakDetector::new()));
-    let new_client = Arc::new(
-        client_default("anthropic", "claude-3").with_cache_break_detector(detector.clone()),
-    );
+    let new_client =
+        slot_default("anthropic", "claude-3").with_cache_break_detector(detector.clone());
 
     {
         let mut d = detector.lock().await;
@@ -620,12 +640,12 @@ async fn n2_post_advance_resets_even_within_provider() {
     assert!(!detector.lock().await.is_empty());
 
     let engine = test_engine(QueryEngineConfig::default(), new_client.clone());
-    let runtime = ModelRuntime::new(new_client, Vec::new());
+    let services = loop_services(new_client);
 
     // Same provider — no cross-provider log line, but reset still
     // fires (conservative invariant).
     engine
-        .post_advance_side_effects("anthropic", &runtime)
+        .post_advance_side_effects("anthropic", &services)
         .await;
 
     assert!(
@@ -638,13 +658,20 @@ async fn n2_post_advance_resets_even_within_provider() {
 // A1 — handle_stream_open_error dispatcher
 // ──────────────────────────────────────────────────────────────────────
 
-/// Build a `LoopServices` whose `runtime` wraps `client` with no
+/// Build a `LoopServices` whose `runtime` wraps `slot` with no
 /// fallback slots. Used by the A1 handle_stream_open_error tests.
-fn loop_services(client: Arc<ApiClient>) -> LoopServices {
+fn loop_services(slot: PrebuiltLanguageModelSlot) -> LoopServices {
     let (progress_tx, _progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<coco_tool_runtime::ToolProgress>();
+    let registry = registry_from_slot(slot);
+    let runtime = registry
+        .runtime_for_role(coco_types::ModelRole::Main)
+        .expect("runtime");
     LoopServices {
-        runtime: ModelRuntime::new(client, Vec::new()),
+        runtime: runtime.clone(),
+        runtime_source: coco_inference::ModelRuntimeSource::Role(coco_types::ModelRole::Main),
+        main_runtime: runtime,
+        main_source: coco_inference::ModelRuntimeSource::Role(coco_types::ModelRole::Main),
         progress_tx,
         plan: crate::plan_mode_reminder::PlanModeReminder::new(
             coco_types::PermissionMode::Default,
@@ -661,23 +688,22 @@ fn loop_services(client: Arc<ApiClient>) -> LoopServices {
 
 fn engine_with_app_state(
     config: QueryEngineConfig,
-    client: Arc<ApiClient>,
+    slot: PrebuiltLanguageModelSlot,
     app_state: Arc<tokio::sync::RwLock<coco_types::ToolAppState>>,
 ) -> QueryEngine {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    QueryEngine::new(config, client, tools, cancel, None).with_app_state(app_state)
+    QueryEngine::new(config, registry_from_slot(slot), tools, cancel, None)
+        .with_app_state(app_state)
 }
 
-/// A1 finding (stream-open path): a typed `Overloaded` error below
-/// the capacity-streak threshold must short-circuit to `Continue`
-/// after recording the rate-limit observation onto `app_state.rate_limits`
-/// (so post-turn forks see the throttle on the first 429 — there is
-/// no second-chance observation point if the engine doesn't capture
-/// it here) and incrementing the consecutive-capacity streak.
+/// A1 finding (stream-open path): a typed `Overloaded` error on a
+/// primary-only runtime must surface as `Bail` after recording the
+/// rate-limit observation onto `app_state.rate_limits` (so post-turn
+/// forks see the throttle on the first 429).
 #[tokio::test]
-async fn a1_handle_stream_open_error_overloaded_below_threshold_records_observation() {
-    let client = Arc::new(client_default("openai", "gpt-4"));
+async fn a1_handle_stream_open_error_overloaded_records_observation() {
+    let client = slot_default("openai", "gpt-4");
     let app_state = Arc::new(tokio::sync::RwLock::new(coco_types::ToolAppState::default()));
     let engine = engine_with_app_state(
         QueryEngineConfig::default(),
@@ -696,8 +722,8 @@ async fn a1_handle_stream_open_error_overloaded_below_threshold_records_observat
     let outcome = engine
         .handle_stream_open_error(
             err,
-            &client,
-            /*was_probing*/ false,
+            &slot_snapshot(&client),
+            Vec::new(),
             &mut services,
             &mut turn_state,
             &mut history,
@@ -706,12 +732,8 @@ async fn a1_handle_stream_open_error_overloaded_below_threshold_records_observat
         .await;
 
     assert!(
-        matches!(outcome, StreamErrorOutcome::Continue),
-        "below-threshold capacity must Continue, got {outcome:?}",
-    );
-    assert_eq!(
-        turn_state.consecutive_capacity_errors, 1,
-        "streak counter must increment on every capacity hit",
+        matches!(outcome, StreamErrorOutcome::Bail(_)),
+        "primary-only capacity must Bail, got {outcome:?}",
     );
     let snap = app_state.read().await;
     let entry = snap
@@ -727,11 +749,11 @@ async fn a1_handle_stream_open_error_overloaded_below_threshold_records_observat
 
 /// A1 finding (stream-open path): a generic non-capacity / non-overflow
 /// error must surface as `Bail` so the outer loop returns `Err(_)`. The
-/// observation map stays empty (no throttle to report) and the streak
-/// counter is NOT incremented.
+/// observation map stays empty (no throttle to report) and capacity
+/// bookkeeping is not touched.
 #[tokio::test]
 async fn a1_handle_stream_open_error_unrelated_error_bails() {
-    let client = Arc::new(client_default("openai", "gpt-4"));
+    let client = slot_default("openai", "gpt-4");
     let app_state = Arc::new(tokio::sync::RwLock::new(coco_types::ToolAppState::default()));
     let engine = engine_with_app_state(
         QueryEngineConfig::default(),
@@ -750,8 +772,8 @@ async fn a1_handle_stream_open_error_unrelated_error_bails() {
     let outcome = engine
         .handle_stream_open_error(
             err,
-            &client,
-            /*was_probing*/ false,
+            &slot_snapshot(&client),
+            Vec::new(),
             &mut services,
             &mut turn_state,
             &mut history,
@@ -762,10 +784,6 @@ async fn a1_handle_stream_open_error_unrelated_error_bails() {
     assert!(
         matches!(outcome, StreamErrorOutcome::Bail(_)),
         "auth failure must surface as Bail so the caller returns Err, got {outcome:?}",
-    );
-    assert_eq!(
-        turn_state.consecutive_capacity_errors, 0,
-        "non-capacity errors must NOT count toward the capacity streak",
     );
     let snap = app_state.read().await;
     assert!(
@@ -778,11 +796,11 @@ async fn a1_handle_stream_open_error_unrelated_error_bails() {
 /// catch every capacity surface — vercel-ai's retry layer occasionally
 /// wraps Overloaded/RateLimited as a generic `ProviderError`. The
 /// string-fallback via `is_capacity_error_message` must still drive
-/// the dispatcher into the capacity branch so observation + streak
-/// stay accurate even on the un-typed path.
+/// the dispatcher into the capacity branch so observation stays
+/// accurate even on the un-typed path.
 #[tokio::test]
 async fn a1_handle_stream_open_error_capacity_string_fallback_still_records() {
-    let client = Arc::new(client_default("openai", "gpt-4"));
+    let client = slot_default("openai", "gpt-4");
     let app_state = Arc::new(tokio::sync::RwLock::new(coco_types::ToolAppState::default()));
     let engine = engine_with_app_state(
         QueryEngineConfig::default(),
@@ -804,8 +822,8 @@ async fn a1_handle_stream_open_error_capacity_string_fallback_still_records() {
     let outcome = engine
         .handle_stream_open_error(
             err,
-            &client,
-            /*was_probing*/ false,
+            &slot_snapshot(&client),
+            Vec::new(),
             &mut services,
             &mut turn_state,
             &mut history,
@@ -814,12 +832,8 @@ async fn a1_handle_stream_open_error_capacity_string_fallback_still_records() {
         .await;
 
     assert!(
-        matches!(outcome, StreamErrorOutcome::Continue),
-        "string-fallback capacity must still Continue, got {outcome:?}",
-    );
-    assert_eq!(
-        turn_state.consecutive_capacity_errors, 1,
-        "string-fallback capacity must still tick the streak",
+        matches!(outcome, StreamErrorOutcome::Bail(_)),
+        "primary-only string-fallback capacity must Bail, got {outcome:?}",
     );
     let snap = app_state.read().await;
     assert!(
@@ -829,15 +843,14 @@ async fn a1_handle_stream_open_error_capacity_string_fallback_still_records() {
     );
 }
 
-/// A1 finding (stream-open path): below-threshold runs accumulate the
-/// streak; at the boundary (`MAX_CONSECUTIVE_CAPACITY_ERRORS`) with no
-/// fallback chain configured, the dispatcher falls through to `Bail`
-/// after recording the observation. Verifies the "no fallback" exit
-/// path is correctly wired — without it, callers without a fallback
-/// chain would spin forever on a saturated provider.
+/// A1 finding (stream-open path): with no fallback chain configured,
+/// the dispatcher falls through to `Bail` after recording the
+/// observation. Verifies the "no fallback" exit path is correctly
+/// wired — without it, callers without a fallback chain would spin
+/// forever on a saturated provider.
 #[tokio::test]
-async fn a1_handle_stream_open_error_capacity_streak_without_fallback_bails() {
-    let client = Arc::new(client_default("openai", "gpt-4"));
+async fn a1_handle_stream_open_error_capacity_without_fallback_bails() {
+    let client = slot_default("openai", "gpt-4");
     let app_state = Arc::new(tokio::sync::RwLock::new(coco_types::ToolAppState::default()));
     let engine = engine_with_app_state(
         QueryEngineConfig::default(),
@@ -846,10 +859,6 @@ async fn a1_handle_stream_open_error_capacity_streak_without_fallback_bails() {
     );
     let mut services = loop_services(client.clone()); // no fallbacks
     let mut turn_state = loop_turn_state();
-    // Prime the streak to one-below-threshold so the next call lands
-    // ON the threshold; with `has_fallback() == false` the advance
-    // helper returns `None` and the dispatcher falls through to Bail.
-    turn_state.consecutive_capacity_errors = MAX_CONSECUTIVE_CAPACITY_ERRORS - 1;
     let mut history = MessageHistory::new();
 
     let err = coco_inference::errors::OverloadedSnafu {
@@ -860,8 +869,8 @@ async fn a1_handle_stream_open_error_capacity_streak_without_fallback_bails() {
     let outcome = engine
         .handle_stream_open_error(
             err,
-            &client,
-            /*was_probing*/ false,
+            &slot_snapshot(&client),
+            Vec::new(),
             &mut services,
             &mut turn_state,
             &mut history,
@@ -871,7 +880,7 @@ async fn a1_handle_stream_open_error_capacity_streak_without_fallback_bails() {
 
     assert!(
         matches!(outcome, StreamErrorOutcome::Bail(_)),
-        "at-threshold + no fallback must Bail, got {outcome:?}",
+        "capacity + no fallback must Bail, got {outcome:?}",
     );
     let snap = app_state.read().await;
     assert!(
@@ -900,7 +909,7 @@ async fn a1_handle_stream_open_error_capacity_streak_without_fallback_bails() {
 /// Exhausted.
 #[tokio::test]
 async fn r1_recover_prompt_too_long_exhausted_pushes_synthetic_and_terminates() {
-    let client = Arc::new(client_default("anthropic", "claude-3"));
+    let client = slot_default("anthropic", "claude-3");
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     // Trip the circuit-breaker before invoking recovery so
@@ -929,7 +938,7 @@ async fn r1_recover_prompt_too_long_exhausted_pushes_synthetic_and_terminates() 
             &mut history,
             &event_tx,
             &mut turn_state,
-            &client,
+            &slot_snapshot(&client),
         )
         .await;
 
@@ -993,7 +1002,7 @@ async fn r5_check_blocking_limit_skips_compact_fork_even_when_overlimit() {
         max_output_tokens: PositiveTokens::new(4_096),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("anthropic", "claude-3", small));
+    let client = slot_with_info("anthropic", "claude-3", small);
     let config = QueryEngineConfig {
         query_source_override: Some("compact".into()),
         ..Default::default()
@@ -1008,7 +1017,7 @@ async fn r5_check_blocking_limit_skips_compact_fork_even_when_overlimit() {
 
     match engine.check_blocking_limit(
         &history,
-        &client,
+        &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
     ) {
@@ -1031,7 +1040,7 @@ async fn r5_check_blocking_limit_skips_session_memory_fork() {
         max_output_tokens: PositiveTokens::new(4_096),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("anthropic", "claude-3", small));
+    let client = slot_with_info("anthropic", "claude-3", small);
     for label in [
         "session_memory",
         "session_memory_auto",
@@ -1051,7 +1060,7 @@ async fn r5_check_blocking_limit_skips_session_memory_fork() {
 
         match engine.check_blocking_limit(
             &history,
-            &client,
+            &slot_snapshot(&client),
             &turn_state,
             /*effective_max_tokens*/ None,
         ) {
@@ -1071,7 +1080,7 @@ async fn r5_check_blocking_limit_does_not_skip_prompt_suggestion_fork() {
         max_output_tokens: PositiveTokens::new(4_096),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("anthropic", "claude-3", small));
+    let client = slot_with_info("anthropic", "claude-3", small);
     let config = QueryEngineConfig {
         query_source_override: Some("prompt_suggestion".into()),
         ..Default::default()
@@ -1085,7 +1094,7 @@ async fn r5_check_blocking_limit_does_not_skip_prompt_suggestion_fork() {
 
     match engine.check_blocking_limit(
         &history,
-        &client,
+        &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
     ) {
@@ -1114,7 +1123,7 @@ async fn r8_check_blocking_limit_uses_effective_max_tokens_threshold() {
         max_output_tokens: PositiveTokens::new(64_000),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("anthropic", "claude-3", big));
+    let client = slot_with_info("anthropic", "claude-3", big);
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     // 560_000 chars / 4 = ~140k estimated tokens. Above 136k threshold
@@ -1127,7 +1136,7 @@ async fn r8_check_blocking_limit_uses_effective_max_tokens_threshold() {
 
     match engine.check_blocking_limit(
         &history,
-        &client,
+        &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ Some(64_000),
     ) {
@@ -1164,7 +1173,7 @@ async fn r8_check_blocking_limit_falls_back_to_model_info_baseline() {
         max_output_tokens: PositiveTokens::new(64_000),
         ..Default::default()
     };
-    let client = Arc::new(client_with_info("anthropic", "claude-3", info));
+    let client = slot_with_info("anthropic", "claude-3", info);
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     let huge_text = "x".repeat(560_000); // ~140k tokens
@@ -1174,7 +1183,7 @@ async fn r8_check_blocking_limit_falls_back_to_model_info_baseline() {
 
     match engine.check_blocking_limit(
         &history,
-        &client,
+        &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
     ) {
@@ -1201,9 +1210,9 @@ async fn r8_check_blocking_limit_falls_back_to_model_info_baseline() {
 /// resolution chain stays intact.
 #[tokio::test]
 async fn r8_check_blocking_limit_falls_back_to_10pct_without_model_info() {
-    // `client_default` builds an ApiClient with NO ModelInfo wired,
+    // `slot_default` builds a runtime slot with NO ModelInfo wired,
     // so `model_info()` returns None.
-    let client = Arc::new(client_default("anthropic", "claude-3"));
+    let client = slot_default("anthropic", "claude-3");
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     let huge_text = "x".repeat(560_000); // ~140k tokens
@@ -1216,7 +1225,7 @@ async fn r8_check_blocking_limit_falls_back_to_10pct_without_model_info() {
     // threshold = 180k. 140k < 180k → Proceed.
     match engine.check_blocking_limit(
         &history,
-        &client,
+        &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
     ) {
@@ -1234,7 +1243,7 @@ async fn r8_check_blocking_limit_falls_back_to_10pct_without_model_info() {
 /// TerminateExhausted exit must not regress the existing happy path.
 #[tokio::test]
 async fn r1_recover_prompt_too_long_compacted_keeps_continue_disposition() {
-    let client = Arc::new(client_default("anthropic", "claude-3"));
+    let client = slot_default("anthropic", "claude-3");
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
     // Circuit-breaker NOT tripped — fresh state. do_reactive_compact
@@ -1278,7 +1287,7 @@ async fn r1_recover_prompt_too_long_compacted_keeps_continue_disposition() {
             &mut history,
             &event_tx,
             &mut turn_state,
-            &client,
+            &slot_snapshot(&client),
         )
         .await;
 

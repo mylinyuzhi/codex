@@ -28,8 +28,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         CatalogPaths::empty_in(home.path()),
     )
     .expect("runtime config");
-    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let (client, _provider, model_id) = crate::headless::create_api_client(&runtime_config, retry);
+    let model_id = crate::headless::resolve_main_model(&runtime_config).model_id;
     let cli = Cli::try_parse_from(["coco"]).expect("parse default cli");
 
     SessionRuntime::build(SessionRuntimeBuildOpts {
@@ -40,9 +39,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         system_prompt: "test".to_string(),
         bypass_permissions_available: false,
         permission_mode: coco_types::PermissionMode::default(),
-        client,
-        fallback_clients: Vec::new(),
-        recovery_policy: None,
+        model_runtimes: None,
         tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
         session_manager: Arc::new(coco_session::SessionManager::new(
             home.path().join("sessions"),

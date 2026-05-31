@@ -202,6 +202,15 @@ impl CommandQueue {
         queue.retain(|c| !ids_to_remove.contains(&c.id));
     }
 
+    /// Remove one queued command by id and return it to the caller.
+    pub async fn remove_by_id(&self, id: Uuid) -> Option<QueuedCommand> {
+        let mut queue = self.inner.lock().await;
+        let idx = queue.iter().position(|c| c.id == id)?;
+        let removed = queue.remove(idx);
+        self.changed.notify_waiters();
+        Some(removed)
+    }
+
     /// Check if the queue is empty.
     pub async fn is_empty(&self) -> bool {
         self.inner.lock().await.is_empty()

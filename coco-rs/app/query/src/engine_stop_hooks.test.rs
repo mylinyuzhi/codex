@@ -7,12 +7,10 @@ use std::sync::Arc;
 
 use coco_hooks::HookRegistry;
 use coco_inference::AISdkError;
-use coco_inference::ApiClient;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
 use coco_inference::LanguageModelGenerateResult;
 use coco_inference::LanguageModelStreamResult;
-use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::StopReason as LlmStopReason;
@@ -76,10 +74,9 @@ fn history_from(messages: Vec<Arc<Message>>) -> MessageHistory {
     h
 }
 
-/// Minimal `LanguageModel` stub so the test can build an `ApiClient`
-/// (which in turn lets `QueryEngine::new` succeed) without spinning up
-/// a real provider. `run_stop_hooks` never reaches the model, so the
-/// methods just need to satisfy the trait.
+/// Minimal `LanguageModel` stub so the test can build a model runtime
+/// without spinning up a real provider. `run_stop_hooks` never reaches
+/// the model, so the methods just need to satisfy the trait.
 struct StubModel;
 
 #[async_trait::async_trait]
@@ -119,10 +116,7 @@ impl LanguageModel for StubModel {
 
 fn engine_with_hooks(hooks: Option<Arc<HookRegistry>>) -> QueryEngine {
     let model: Arc<dyn LanguageModel> = Arc::new(StubModel);
-    let client = Arc::new(ApiClient::with_default_fingerprint(
-        model,
-        RetryConfig::default(),
-    ));
+    let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, hooks)

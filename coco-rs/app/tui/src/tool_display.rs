@@ -1,10 +1,16 @@
 //! Tool input display helpers shared by permission prompts and chat previews.
 
+use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::style::UiStyles;
 use coco_types::MCP_TOOL_SEPARATOR;
 use coco_types::PermissionDisplayInput;
 use coco_types::ToolName;
+use ratatui::style::Stylize;
+use ratatui::text::Span;
 use serde_json::Value;
 use std::str::FromStr;
+use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 const TOOL_INPUT_PREVIEW_MAX_CHARS: usize = 512;
 const PERMISSION_DISPLAY_MAX_CHARS: usize = 1_200;
@@ -17,6 +23,23 @@ pub enum ToolNameTone {
     Agent,
     Plan,
     Utility,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolInputPreview {
+    Plain(String),
+    ShellCommand { command: String, syntax: String },
+    Code { text: String, lang: String },
+}
+
+impl ToolInputPreview {
+    pub fn plain_text(&self) -> &str {
+        match self {
+            Self::Plain(text) => text,
+            Self::ShellCommand { command, .. } => command,
+            Self::Code { text, .. } => text,
+        }
+    }
 }
 
 pub fn permission_display_input(tool_name: &str, input: &Value) -> PermissionDisplayInput {
@@ -39,9 +62,56 @@ pub fn permission_display_input(tool_name: &str, input: &Value) -> PermissionDis
 
 pub fn tool_input_preview(tool_name: &str, input: &Value) -> String {
     single_line_capped(
-        &single_line_tool_input(tool_name, input),
+        tool_input_semantic_preview(tool_name, input).plain_text(),
         TOOL_INPUT_PREVIEW_MAX_CHARS,
     )
+}
+
+pub(crate) fn tool_input_semantic_preview(tool_name: &str, input: &Value) -> ToolInputPreview {
+    let Some(tool) = normalized_builtin_tool(tool_name) else {
+        return ToolInputPreview::Plain(object_summary(input));
+    };
+    if matches!(tool, ToolName::Bash | ToolName::PowerShell)
+        && let Some(command) = input.get("command").and_then(Value::as_str)
+    {
+        let syntax = if matches!(tool, ToolName::PowerShell) {
+            "powershell"
+        } else {
+            "bash"
+        };
+        return ToolInputPreview::ShellCommand {
+            command: command.to_string(),
+            syntax: syntax.to_string(),
+        };
+    }
+    ToolInputPreview::Plain(single_line_tool_input(tool_name, input))
+}
+
+pub(crate) fn render_tool_input_preview_spans(
+    preview: &ToolInputPreview,
+    styles: UiStyles<'_>,
+    syntax_highlighting: SyntaxHighlighting,
+    max_width: usize,
+) -> Vec<Span<'static>> {
+    if preview.plain_text().is_empty() {
+        return Vec::new();
+    }
+    let spans = match preview {
+        ToolInputPreview::ShellCommand { command, syntax } => {
+            coco_tui_markdown::highlight_code_lines(command, syntax, styles, syntax_highlighting)
+                .and_then(|lines| lines.first().cloned())
+                .filter(|line| !line.is_empty())
+                .unwrap_or_else(|| vec![Span::raw(command.clone()).fg(styles.text())])
+        }
+        ToolInputPreview::Code { text, lang } => {
+            coco_tui_markdown::highlight_code_lines(text, lang, styles, syntax_highlighting)
+                .and_then(|lines| lines.first().cloned())
+                .filter(|line| !line.is_empty())
+                .unwrap_or_else(|| vec![Span::raw(text.clone()).fg(styles.text())])
+        }
+        ToolInputPreview::Plain(text) => vec![Span::raw(text.clone()).fg(styles.text())],
+    };
+    truncate_spans_to_width(spans, max_width)
 }
 
 pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
@@ -98,6 +168,44 @@ fn is_shell_tool(tool_name: &str) -> bool {
         normalized_builtin_tool(tool_name),
         Some(ToolName::Bash | ToolName::PowerShell)
     )
+}
+
+fn truncate_spans_to_width(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Span<'static>> {
+    if max_width == 0 {
+        return Vec::new();
+    }
+    let total = spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum::<usize>();
+    if total <= max_width {
+        return spans;
+    }
+
+    let content_width = max_width.saturating_sub(1);
+    let mut used = 0usize;
+    let mut out = Vec::new();
+    let mut last_style = spans.last().map(|span| span.style).unwrap_or_default();
+    for span in spans {
+        if used >= content_width {
+            break;
+        }
+        last_style = span.style;
+        let mut content = String::new();
+        for ch in span.content.chars() {
+            let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + width > content_width {
+                break;
+            }
+            content.push(ch);
+            used += width;
+        }
+        if !content.is_empty() {
+            out.push(Span::styled(content, span.style));
+        }
+    }
+    out.push(Span::styled("…", last_style));
+    out
 }
 
 fn normalized_builtin_tool(tool_name: &str) -> Option<ToolName> {

@@ -172,6 +172,7 @@ impl McpHandle for McpManagerAdapter {
             }
             for r in &server.resources {
                 out.push(McpResourceInfo {
+                    server_name: server.name.clone(),
                     uri: r.uri.clone(),
                     name: r.name.clone(),
                     description: r.description.clone(),

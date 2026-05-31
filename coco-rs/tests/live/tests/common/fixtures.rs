@@ -2,14 +2,18 @@
 //!
 //! Tools are surfaced as `LanguageModelTool` (provider-protocol shape via
 //! the `coco_inference` seam) rather than executable `vercel-ai` `Tool`s.
-//! The SDK suite calls `ApiClient.query` / `query_stream` directly and
-//! only inspects whether the model emits a tool call — actual tool
-//! execution is covered end-to-end by the `cli_deepseek` suite.
+//! The SDK suite calls the model-runtime client directly and only
+//! inspects whether the model emits a tool call — actual tool execution
+//! is covered end-to-end by the `cli_deepseek` suite.
 
 use coco_inference::LanguageModelFunctionTool;
 use coco_inference::LanguageModelTool;
+use coco_inference::ModelCallHandle;
+use coco_inference::ModelRuntimeClient;
 use coco_inference::QueryResult;
+use coco_inference::StreamEvent;
 use coco_llm_types::AssistantContentPart;
+use std::sync::Arc;
 
 /// `LanguageModelTool::Function` definition for a one-arg `get_weather`
 /// tool. Consumers feed this into `QueryParams.tools`.
@@ -50,4 +54,21 @@ pub fn extract_text(result: &QueryResult) -> String {
         }
     }
     out
+}
+
+pub async fn query_client(
+    client: &Arc<ModelRuntimeClient>,
+    params: coco_inference::QueryParams,
+) -> Result<QueryResult, coco_inference::InferenceError> {
+    client.query_with_rebuild(|_| params.clone()).await
+}
+
+pub async fn open_stream_client(
+    client: &Arc<ModelRuntimeClient>,
+    params: coco_inference::QueryParams,
+) -> Result<
+    (tokio::sync::mpsc::Receiver<StreamEvent>, ModelCallHandle),
+    coco_inference::InferenceError,
+> {
+    client.open_stream_with_rebuild(|_| params.clone()).await
 }
