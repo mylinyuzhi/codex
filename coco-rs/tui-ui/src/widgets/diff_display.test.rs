@@ -1,6 +1,27 @@
 use super::*;
 use crate::style::UiStyles;
 use crate::theme::Theme;
+use unicode_width::UnicodeWidthStr;
+
+fn text_of(lines: &[Line<'static>]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn line_width(line: &Line<'static>) -> usize {
+    line.spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
 
 #[test]
 fn test_render_diff_lines_basic() {
@@ -47,6 +68,24 @@ fn test_render_structured_diff_negative_scroll() {
 }
 
 #[test]
+fn test_render_structured_diff_rows_stay_within_requested_width() {
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let diff = format!("+{}", "abcdef".repeat(20));
+    let width = 32;
+    let lines = render_structured_diff("test.rs", &diff, styles, width, 0);
+    let text = text_of(&lines);
+
+    assert!(!lines.is_empty(), "structured diff should render");
+    assert!(
+        lines
+            .iter()
+            .all(|line| line_width(line) <= usize::from(width)),
+        "all rows must fit width {width}:\n{text}"
+    );
+}
+
+#[test]
 fn test_truncate_path_short() {
     assert_eq!(truncate_path("foo.rs", 20), "foo.rs");
 }
@@ -72,4 +111,41 @@ fn test_fmt_line_no_some() {
 #[test]
 fn test_fmt_line_no_none() {
     assert_eq!(fmt_line_no(None, 4), "    ");
+}
+
+#[test]
+fn test_render_diff_lines_wraps_long_signed_lines() {
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let long = format!("+{}", "abcdef".repeat(8));
+    let lines = render_diff_lines(&long, styles, 20);
+
+    assert!(lines.len() > 1, "long diff line should wrap");
+    assert!(
+        text_of(&lines)
+            .lines()
+            .skip(1)
+            .all(|line| !line.contains('+')),
+        "continuation rows should not repeat the sign: {}",
+        text_of(&lines)
+    );
+}
+
+#[test]
+fn test_render_diff_preview_lines_caps_without_full_render() {
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let diff = (0..50)
+        .map(|i| format!("+line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lines = render_diff_preview_lines(&diff, styles, 80, 5, |omitted| {
+        Line::from(Span::raw(format!("… +{omitted} lines")))
+    });
+    let text = text_of(&lines);
+
+    assert_eq!(lines.len(), 5);
+    assert!(text.contains("line 0"), "{text}");
+    assert!(text.contains("line 49"), "{text}");
+    assert!(text.contains("… +"), "{text}");
 }

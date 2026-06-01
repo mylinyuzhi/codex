@@ -158,6 +158,7 @@ impl Tool for EditTool {
         if !path.exists() {
             return Err(ToolError::ExecutionFailed {
                 message: format!("File not found: {file_path}"),
+                display_data: None,
                 source: None,
             });
         }
@@ -189,6 +190,7 @@ impl Tool for EditTool {
                             "{file_path} has been modified since it was last read \
                              (mtime changed). Read it again before editing."
                         ),
+                        display_data: None,
                         source: None,
                     });
                 }
@@ -208,6 +210,7 @@ impl Tool for EditTool {
                                 "{file_path} has been modified since it was last read \
                                  (content changed). Read it again before editing."
                             ),
+                            display_data: None,
                             source: None,
                         });
                     }
@@ -230,6 +233,7 @@ impl Tool for EditTool {
         let content =
             std::fs::read_to_string(file_path).map_err(|e| ToolError::ExecutionFailed {
                 message: format!("failed to read {file_path}: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -314,6 +318,7 @@ impl Tool for EditTool {
         if let Some(err) = crate::check_write_root_fence(ctx, path) {
             return Err(ToolError::ExecutionFailed {
                 message: err,
+                display_data: None,
                 source: None,
             });
         }
@@ -325,12 +330,14 @@ impl Tool for EditTool {
         if let Some(err) = crate::check_team_mem_secret(ctx, path, &new_content) {
             return Err(ToolError::ExecutionFailed {
                 message: err,
+                display_data: None,
                 source: None,
             });
         }
 
         std::fs::write(file_path, &new_content).map_err(|e| ToolError::ExecutionFailed {
             message: format!("failed to write {file_path}: {e}"),
+            display_data: None,
             source: None,
         })?;
 
@@ -359,6 +366,7 @@ impl Tool for EditTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

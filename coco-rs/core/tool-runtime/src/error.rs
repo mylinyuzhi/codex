@@ -1,3 +1,4 @@
+use coco_types::ToolDisplayData;
 use coco_types::ToolId;
 use serde::Deserialize;
 use serde::Serialize;
@@ -16,6 +17,7 @@ pub enum ToolError {
     /// Execution failed.
     ExecutionFailed {
         message: String,
+        display_data: Option<ToolDisplayData>,
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
     /// Permission denied.
@@ -26,12 +28,35 @@ pub enum ToolError {
     Cancelled,
 }
 
+impl ToolError {
+    pub fn execution_failed(message: impl Into<String>) -> Self {
+        Self::ExecutionFailed {
+            message: message.into(),
+            display_data: None,
+            source: None,
+        }
+    }
+
+    pub fn execution_failed_with_display_data(
+        message: impl Into<String>,
+        display_data: ToolDisplayData,
+    ) -> Self {
+        Self::ExecutionFailed {
+            message: message.into(),
+            display_data: Some(display_data),
+            source: None,
+        }
+    }
+}
+
 impl fmt::Display for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound { tool_id } => write!(f, "tool not found: {tool_id}"),
             Self::InvalidInput { message, .. } => write!(f, "invalid input: {message}"),
-            Self::ExecutionFailed { message, .. } => write!(f, "execution failed: {message}"),
+            Self::ExecutionFailed { message, .. } => {
+                write!(f, "execution failed: {message}")
+            }
             Self::PermissionDenied { message } => write!(f, "permission denied: {message}"),
             Self::Timeout { timeout_ms } => write!(f, "timed out after {timeout_ms}ms"),
             Self::Cancelled => write!(f, "cancelled"),
@@ -95,8 +120,8 @@ pub fn format_tool_error(error: &ToolError) -> String {
 
     // TS: first 5k + "... [N truncated] ..." + last 5k
     if msg.len() > 10_000 {
-        let first = &msg[..5_000];
-        let last = &msg[msg.len() - 5_000..];
+        let first = coco_utils_string::take_bytes_at_char_boundary(&msg, 5_000);
+        let last = coco_utils_string::take_last_bytes_at_char_boundary(&msg, 5_000);
         let truncated = msg.len() - 10_000;
         format!("{first}\n... [{truncated} chars truncated] ...\n{last}")
     } else {
@@ -163,3 +188,7 @@ pub struct ToolUseEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_depth: Option<i32>,
 }
+
+#[cfg(test)]
+#[path = "error.test.rs"]
+mod tests;

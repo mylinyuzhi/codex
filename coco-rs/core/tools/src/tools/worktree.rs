@@ -106,6 +106,7 @@ impl Tool for EnterWorktreeTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to run git worktree add: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -117,6 +118,7 @@ impl Tool for EnterWorktreeTool {
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: format!("Failed to run git worktree add: {e}"),
+                    display_data: None,
                     source: None,
                 })?;
 
@@ -124,6 +126,7 @@ impl Tool for EnterWorktreeTool {
                 let stderr = String::from_utf8_lossy(&output2.stderr);
                 return Err(ToolError::ExecutionFailed {
                     message: format!("git worktree add failed: {stderr}"),
+                    display_data: None,
                     source: None,
                 });
             }
@@ -138,6 +141,7 @@ impl Tool for EnterWorktreeTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -293,6 +297,7 @@ impl Tool for ExitWorktreeTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to run git worktree remove: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -300,6 +305,7 @@ impl Tool for ExitWorktreeTool {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ToolError::ExecutionFailed {
                 message: format!("git worktree remove failed: {stderr}"),
+                display_data: None,
                 source: None,
             });
         }
@@ -363,6 +369,7 @@ impl Tool for ExitWorktreeTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

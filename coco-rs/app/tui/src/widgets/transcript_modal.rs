@@ -606,27 +606,27 @@ impl<'a> TranscriptCellRenderer<'a> {
         let Message::ToolResult(tr) = cell.source.as_ref() else {
             return;
         };
-        let Some((_tool_name, output)) = tool_result_output(cell.source.as_ref()) else {
+        let Some(projection) = tool_result_output(cell.source.as_ref()) else {
             return;
         };
         if tr.is_error {
             lines.push(result_line(
                 format!(
                     "error: {}",
-                    single_line_capped(&output, TRANSCRIPT_LINE_CHAR_CAP)
+                    single_line_capped(&projection.output, TRANSCRIPT_LINE_CHAR_CAP)
                 ),
                 self.styles.error(),
             ));
             return;
         }
-        self.render_output_preview(&output, lines);
+        self.render_output_preview(&projection.output, lines);
     }
 
     fn render_tool_result_header(&self, cell: &RenderedCell, lines: &mut Vec<Line<'static>>) {
         let Message::ToolResult(tr) = cell.source.as_ref() else {
             return;
         };
-        let Some((tool_name, _)) = tool_result_output(cell.source.as_ref()) else {
+        let Some(projection) = tool_result_output(cell.source.as_ref()) else {
             return;
         };
         let glyph = if tr.is_error {
@@ -636,7 +636,9 @@ impl<'a> TranscriptCellRenderer<'a> {
         };
         lines.push(Line::from(vec![
             Span::raw(glyph.0).fg(glyph.1),
-            Span::raw(tool_name).fg(self.styles.text()).bold(),
+            Span::raw(projection.tool_name)
+                .fg(self.styles.text())
+                .bold(),
         ]));
     }
 
@@ -653,14 +655,15 @@ impl<'a> TranscriptCellRenderer<'a> {
         let Message::ToolResult(tr) = cell.source.as_ref() else {
             return;
         };
-        let Some((tool_name, output)) = tool_result_output(cell.source.as_ref()) else {
+        let Some(projection) = tool_result_output(cell.source.as_ref()) else {
             return;
         };
         crate::widgets::chat::tool_result_render::render_tool_result_body(
             &self.tool_result_ctx(/*expanded*/ true),
-            &tool_name,
+            &projection.tool_name,
             input,
-            &output,
+            &projection.output,
+            projection.display_data,
             tr.is_error,
             lines,
         );
@@ -1061,7 +1064,7 @@ fn cell_content_len(cell: &RenderedCell) -> usize {
         }
         CellKind::ToolResult { call_id, .. } => {
             let len = tool_result_output(&cell.source)
-                .map(|(name, output)| name.len() + output.len())
+                .map(|projection| projection.tool_name.len() + projection.output.len())
                 .unwrap_or(0);
             call_id.len() + len
         }

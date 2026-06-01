@@ -229,6 +229,7 @@ impl Tool for NotebookEditTool {
                     message: format!(
                         "{notebook_path} has not been read yet. Read it first before editing it."
                     ),
+                    display_data: None,
                     source: None,
                 });
             }
@@ -244,6 +245,7 @@ impl Tool for NotebookEditTool {
                         "{notebook_path} has been modified since it was last read. \
                          Read it again before editing."
                     ),
+                    display_data: None,
                     source: None,
                 });
             }
@@ -254,12 +256,14 @@ impl Tool for NotebookEditTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to read notebook '{notebook_path}': {e}"),
+                display_data: None,
                 source: None,
             })?;
 
         let mut notebook: Value =
             serde_json::from_str(&content).map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to parse notebook JSON: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -278,6 +282,7 @@ impl Tool for NotebookEditTool {
             .and_then(|v| v.as_array_mut())
             .ok_or_else(|| ToolError::ExecutionFailed {
                 message: "Notebook does not contain a 'cells' array".into(),
+                display_data: None,
                 source: None,
             })?;
 
@@ -398,6 +403,7 @@ impl Tool for NotebookEditTool {
         let updated =
             serde_json::to_string_pretty(&notebook).map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to serialize notebook: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -406,6 +412,7 @@ impl Tool for NotebookEditTool {
         if let Some(err) = crate::check_write_root_fence(ctx, std::path::Path::new(notebook_path)) {
             return Err(ToolError::ExecutionFailed {
                 message: err,
+                display_data: None,
                 source: None,
             });
         }
@@ -419,6 +426,7 @@ impl Tool for NotebookEditTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to write notebook '{notebook_path}': {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -460,6 +468,7 @@ impl Tool for NotebookEditTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

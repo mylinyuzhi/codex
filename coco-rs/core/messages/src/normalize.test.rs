@@ -645,6 +645,7 @@ fn normalize_synthesizes_missing_tool_result() {
     let tool_result_tc1 = Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
         source_assistant_uuid: None,
+        display_data: None,
         message: LlmMessage::Tool {
             content: vec![ToolContentPart::ToolResult(
                 coco_llm_types::ToolResultPart {
@@ -774,6 +775,7 @@ fn normalize_synthesizes_for_multiple_assistants() {
     let unrelated = Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
         source_assistant_uuid: None,
+        display_data: None,
         message: LlmMessage::Tool {
             content: vec![ToolContentPart::ToolResult(
                 coco_llm_types::ToolResultPart {

@@ -153,6 +153,7 @@ impl Tool for SkillTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to resolve skill '{skill_name}': {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -197,6 +198,7 @@ impl Tool for SkillTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates,
+            display_data: None,
         })
     }
 }

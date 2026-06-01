@@ -3,6 +3,7 @@ mod parser;
 mod seek_sequence;
 mod standalone_executable;
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
@@ -175,6 +176,69 @@ impl ApplyPatchAction {
             patch,
         }
     }
+}
+
+/// Absolute paths affected by parsed apply-patch hunks, grouped by consumer.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct ApplyPatchPathEffects {
+    /// Paths that require write permission before applying the patch.
+    pub permission_paths: Vec<PathBuf>,
+    /// Paths whose pre-mutation state should be captured for file history.
+    pub history_paths: Vec<PathBuf>,
+    /// Paths to notify LSP about after a successful patch.
+    pub lsp_notify_paths: Vec<PathBuf>,
+}
+
+/// Collect path effects from parsed hunks using the same move/source semantics
+/// as the patch applier.
+pub fn collect_path_effects(hunks: &[Hunk], cwd: &AbsolutePathBuf) -> ApplyPatchPathEffects {
+    let mut permission_paths = BTreeSet::new();
+    let mut history_paths = BTreeSet::new();
+    let mut lsp_notify_paths = BTreeSet::new();
+
+    for hunk in hunks {
+        match hunk {
+            Hunk::AddFile { path, .. } => {
+                let target = resolve_patch_path(path, cwd);
+                permission_paths.insert(target.clone());
+                history_paths.insert(target.clone());
+                lsp_notify_paths.insert(target);
+            }
+            Hunk::DeleteFile { path } => {
+                let source = resolve_patch_path(path, cwd);
+                permission_paths.insert(source.clone());
+                history_paths.insert(source.clone());
+                lsp_notify_paths.insert(source);
+            }
+            Hunk::UpdateFile {
+                path, move_path, ..
+            } => {
+                let source = resolve_patch_path(path, cwd);
+                permission_paths.insert(source.clone());
+                history_paths.insert(source.clone());
+                lsp_notify_paths.insert(source);
+
+                if let Some(move_path) = move_path {
+                    let destination = resolve_patch_path(move_path, cwd);
+                    permission_paths.insert(destination.clone());
+                    history_paths.insert(destination.clone());
+                    lsp_notify_paths.insert(destination);
+                }
+            }
+        }
+    }
+
+    ApplyPatchPathEffects {
+        permission_paths: permission_paths.into_iter().collect(),
+        history_paths: history_paths.into_iter().collect(),
+        lsp_notify_paths: lsp_notify_paths.into_iter().collect(),
+    }
+}
+
+fn resolve_patch_path(path: &Path, cwd: &AbsolutePathBuf) -> PathBuf {
+    AbsolutePathBuf::resolve_path_against_base(path, cwd)
+        .as_path()
+        .to_path_buf()
 }
 
 /// Applies the patch and prints the result to stdout/stderr.
@@ -534,6 +598,16 @@ fn apply_replacements(
 pub struct ApplyPatchFileUpdate {
     unified_diff: String,
     content: String,
+}
+
+impl ApplyPatchFileUpdate {
+    pub fn unified_diff(&self) -> &str {
+        &self.unified_diff
+    }
+
+    pub fn content(&self) -> &str {
+        &self.content
+    }
 }
 
 pub async fn unified_diff_from_chunks(

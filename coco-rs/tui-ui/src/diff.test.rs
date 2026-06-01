@@ -120,3 +120,47 @@ fn test_diff_line_views_keeps_invalid_hunk_raw() {
         }]
     );
 }
+
+#[test]
+fn test_diff_line_view_window_keeps_head_and_tail() {
+    let diff = "\
++one
++two
++three
++four
++five
++six";
+    let window = diff_line_view_window(diff, 4);
+
+    assert_eq!(window.omitted, 2);
+    assert_eq!(
+        window.head,
+        vec![
+            DiffLineViewRef::Added {
+                new_line: 1,
+                content: "one",
+                compare_to: None,
+            },
+            DiffLineViewRef::Added {
+                new_line: 2,
+                content: "two",
+                compare_to: None,
+            },
+        ]
+    );
+    assert_eq!(
+        window.tail,
+        vec![
+            DiffLineViewRef::Added {
+                new_line: 5,
+                content: "five",
+                compare_to: None,
+            },
+            DiffLineViewRef::Added {
+                new_line: 6,
+                content: "six",
+                compare_to: None,
+            },
+        ]
+    );
+}

@@ -23,9 +23,11 @@ use coco_system_reminder::SystemReminder;
 use coco_system_reminder::inject_reminders;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolCallErrorKind;
+use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolMessagePath;
 use coco_tool_runtime::ToolSideEffects;
 use coco_tool_runtime::UnstampedToolCallOutcome;
+use coco_types::ToolDisplayData;
 use coco_types::ToolId;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -111,6 +113,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 new_messages,
                 app_state_patch,
                 permission_updates,
+                display_data,
             } = tool_result;
             let mut output_data = data;
 
@@ -151,7 +154,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             // OpenAI-Compatible degrade non-Text parts to a visible
             // marker.
             let text_only_output = plain_text_parts(&parts);
-            let tool_result_msg = match text_only_output {
+            let mut tool_result_msg = match text_only_output {
                 Some(rendered_text) => {
                     let rendered_output_raw = if rendered_text.trim().is_empty() {
                         coco_tool_runtime::tool_result_storage::empty_tool_result_message(
@@ -233,6 +236,11 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                     tool_result_is_error,
                 ),
             };
+            if let Some(display_data) = display_data
+                && let Message::ToolResult(tr) = &mut tool_result_msg
+            {
+                tr.display_data = Some(display_data);
+            }
 
             // Collect post-hook additional_contexts into message
             // form. TS emits them wrapped via system-reminder; we do
@@ -289,6 +297,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             }
         }
         Err(error) => {
+            let display_data = display_data_from_tool_error(&error).cloned();
             let error_message = error.to_string();
             let rendered_error = format!("Error: {error_message}");
             warn!(tool = %tool_name, error = %error, "tool execution failed");
@@ -309,12 +318,18 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 )
                 .await;
 
-            let tool_result_msg = create_error_tool_result(
+            let mut tool_result_msg = create_error_tool_result(
                 &tool_use_id,
                 &tool_name,
                 tool_id.clone(),
                 &rendered_error,
             );
+            if let Some(display_data) = display_data
+                && let Message::ToolResult(tr) = &mut tool_result_msg
+            {
+                // Some failed tools can still provide bounded UI context.
+                tr.display_data = Some(display_data);
+            }
             let post_hook_msgs = render_hook_context_messages(
                 &tool_name,
                 &post.additional_contexts,
@@ -354,6 +369,17 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 effects: ToolSideEffects::none(),
             }
         }
+    }
+}
+
+fn display_data_from_tool_error(error: &ToolError) -> Option<&ToolDisplayData> {
+    match error {
+        ToolError::ExecutionFailed { display_data, .. } => display_data.as_ref(),
+        ToolError::NotFound { .. }
+        | ToolError::InvalidInput { .. }
+        | ToolError::PermissionDenied { .. }
+        | ToolError::Timeout { .. }
+        | ToolError::Cancelled => None,
     }
 }
 

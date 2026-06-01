@@ -438,6 +438,7 @@ impl Tool for GrepTool {
         if !search_path.exists() {
             return Err(ToolError::ExecutionFailed {
                 message: format!("search path does not exist: {}", search_path.display()),
+                display_data: None,
                 source: None,
             });
         }
@@ -530,6 +531,7 @@ impl Tool for GrepTool {
             })?
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("grep search task failed: {e}"),
+                display_data: None,
                 source: None,
             })?
             .map_err(|e| ToolError::InvalidInput {
@@ -545,6 +547,7 @@ impl Tool for GrepTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

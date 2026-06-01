@@ -5,20 +5,31 @@
 //!
 //! Backed by [`coco_apply_patch::apply_patch`] + [`coco_exec_server::LOCAL_FS`].
 
+use std::collections::VecDeque;
+
 use async_trait::async_trait;
+use coco_apply_patch::Hunk as ApplyPatchHunk;
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::error::ToolError;
+use coco_types::ApplyPatchPreview;
+use coco_types::ApplyPatchPreviewAction;
+use coco_types::ApplyPatchPreviewRow;
+use coco_types::ApplyPatchPreviewSign;
 use coco_types::ToolCheckResult;
+use coco_types::ToolDisplayData;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use coco_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+
+const APPLY_PATCH_PREVIEW_ROWS: usize = 200;
+const APPLY_PATCH_PREVIEW_ROW_CHARS: usize = 512;
 
 /// Typed input for [`ApplyPatchTool`].
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -77,16 +88,17 @@ impl Tool for ApplyPatchTool {
         let Ok(cwd) = apply_patch_cwd(ctx) else {
             return ToolCheckResult::Passthrough;
         };
-        let Ok(paths) = affected_paths_from_patch(&input.patch, &cwd) else {
+        let Ok(parsed) = coco_apply_patch::parse_patch(&input.patch) else {
             return ToolCheckResult::Passthrough;
         };
-        if paths.is_empty() {
+        let path_effects = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd);
+        if path_effects.permission_paths.is_empty() {
             return ToolCheckResult::Passthrough;
         }
 
         let cwd_str = cwd.as_path().to_string_lossy().to_string();
         let mut all_paths_to_check = Vec::new();
-        for path in &paths {
+        for path in &path_effects.permission_paths {
             if let Some(message) = crate::check_write_root_fence(ctx, path.as_path()) {
                 return ToolCheckResult::Deny { message };
             }
@@ -126,70 +138,324 @@ impl Tool for ApplyPatchTool {
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<ApplyPatchOutput>, ToolError> {
         let patch = &input.patch;
+        let preview = build_apply_patch_preview(patch);
+        let display_data = preview.clone().map(ToolDisplayData::ApplyPatchPreview);
 
         let cwd_path = ctx
             .cwd_override
             .clone()
             .or_else(|| std::env::current_dir().ok())
-            .ok_or_else(|| ToolError::ExecutionFailed {
-                message: "no working directory available for apply_patch".into(),
-                source: None,
+            .ok_or_else(|| {
+                execution_failed_with_preview(
+                    "no working directory available for apply_patch",
+                    display_data.clone(),
+                )
             })?;
         let cwd = AbsolutePathBuf::from_absolute_path(&cwd_path).map_err(|e| {
-            ToolError::ExecutionFailed {
-                message: format!("cwd `{}` is not absolute: {e}", cwd_path.display()),
-                source: None,
-            }
+            execution_failed_with_preview(
+                format!("cwd `{}` is not absolute: {e}", cwd_path.display()),
+                display_data.clone(),
+            )
         })?;
-
-        // Pre-flight: parse the patch to extract affected paths so we
-        // can record file-history snapshots BEFORE the mutation and
-        // notify the LSP AFTER. Errors here are not fatal —
-        // `apply_patch` below will produce its own (more descriptive)
-        // parse error in that case. Mirrors the per-tool track_file_edit
-        // ordering used by Edit/Write.
-        let affected_paths: Vec<std::path::PathBuf> = coco_apply_patch::parse_patch(patch)
-            .map(|parsed| {
-                parsed
-                    .hunks
-                    .iter()
-                    .map(|hunk| hunk.resolve_path(&cwd).as_path().to_path_buf())
-                    .collect()
-            })
-            .unwrap_or_default();
-        for path in &affected_paths {
-            crate::track_file_edit(ctx, path.as_path()).await;
-        }
 
         let mut stdout: Vec<u8> = Vec::new();
         let mut stderr: Vec<u8> = Vec::new();
         let fs: &dyn coco_exec_server::ExecutorFileSystem = coco_exec_server::LOCAL_FS.as_ref();
-        coco_apply_patch::apply_patch(patch, &cwd, &mut stdout, &mut stderr, fs)
+
+        let parsed = match coco_apply_patch::parse_patch(patch) {
+            Ok(parsed) => Some(parsed),
+            Err(_) => {
+                coco_apply_patch::apply_patch(patch, &cwd, &mut stdout, &mut stderr, fs)
+                    .await
+                    .map_err(|e| {
+                        apply_patch_error_with_preview(&stderr, e, display_data.clone())
+                    })?;
+                None
+            }
+        };
+        let Some(parsed) = parsed else {
+            return Ok(result_with_preview(stdout, stderr, display_data));
+        };
+        let path_effects = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd);
+
+        // Execute-time guard: `canUseTool` Allow skips built-in permission
+        // checks, so re-enforce the write fence immediately before mutation.
+        for path in &path_effects.permission_paths {
+            if let Some(message) = crate::check_write_root_fence(ctx, path.as_path()) {
+                return Err(execution_failed_with_preview(message, display_data));
+            }
+        }
+
+        enforce_team_memory_secret_guard(ctx, &parsed.hunks, &cwd, fs)
             .await
-            .map_err(|e| ToolError::ExecutionFailed {
-                message: format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&stderr),
-                    if stderr.is_empty() {
-                        e.to_string()
-                    } else {
-                        String::new()
-                    },
-                ),
-                source: None,
-            })?;
+            .map_err(|message| execution_failed_with_preview(message, display_data.clone()))?;
+
+        // Capture file-history snapshots before mutation, mirroring Edit/Write.
+        for path in &path_effects.history_paths {
+            crate::track_file_edit(ctx, path.as_path()).await;
+        }
+
+        coco_apply_patch::apply_hunks(&parsed.hunks, &cwd, &mut stdout, &mut stderr, fs)
+            .await
+            .map_err(|e| apply_patch_error_with_preview(&stderr, e, display_data.clone()))?;
 
         // TS parity with Write/Edit — notify LSP of `didSave` per file
         // touched so diagnostics refresh. Best-effort, errors swallowed.
-        for path in &affected_paths {
+        for path in &path_effects.lsp_notify_paths {
             ctx.lsp.notify_save(path.as_path()).await;
         }
 
-        Ok(ToolResult::data(ApplyPatchOutput {
-            stdout: String::from_utf8_lossy(&stdout).to_string(),
-            stderr: String::from_utf8_lossy(&stderr).to_string(),
-        }))
+        Ok(result_with_preview(stdout, stderr, display_data))
     }
+}
+
+async fn enforce_team_memory_secret_guard(
+    ctx: &ToolUseContext,
+    hunks: &[ApplyPatchHunk],
+    cwd: &AbsolutePathBuf,
+    fs: &dyn coco_exec_server::ExecutorFileSystem,
+) -> Result<(), String> {
+    for hunk in hunks {
+        match hunk {
+            ApplyPatchHunk::AddFile { path, contents } => {
+                let target = resolve_patch_path(path, cwd);
+                if let Some(message) = crate::check_team_mem_secret(ctx, &target, contents) {
+                    return Err(message);
+                }
+            }
+            ApplyPatchHunk::DeleteFile { .. } => {}
+            ApplyPatchHunk::UpdateFile {
+                path,
+                move_path,
+                chunks,
+            } => {
+                let source = AbsolutePathBuf::resolve_path_against_base(path, cwd);
+                let update = coco_apply_patch::unified_diff_from_chunks(&source, chunks, fs)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let target = resolve_patch_path(move_path.as_deref().unwrap_or(path), cwd);
+                if let Some(message) = crate::check_team_mem_secret(ctx, &target, update.content())
+                {
+                    return Err(message);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_patch_error_with_preview(
+    stderr: &[u8],
+    error: coco_apply_patch::ApplyPatchError,
+    display_data: Option<ToolDisplayData>,
+) -> ToolError {
+    // The patch may be invalid, but the bounded preview still helps the UI show
+    // what the model attempted.
+    let message = format!(
+        "{}{}",
+        String::from_utf8_lossy(stderr),
+        if stderr.is_empty() {
+            error.to_string()
+        } else {
+            String::new()
+        },
+    );
+    execution_failed_with_preview(message, display_data)
+}
+
+fn execution_failed_with_preview(
+    message: impl Into<String>,
+    display_data: Option<ToolDisplayData>,
+) -> ToolError {
+    if let Some(display_data) = display_data {
+        ToolError::execution_failed_with_display_data(message, display_data)
+    } else {
+        ToolError::execution_failed(message)
+    }
+}
+
+fn result_with_preview(
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    display_data: Option<ToolDisplayData>,
+) -> ToolResult<ApplyPatchOutput> {
+    let result = ToolResult::data(ApplyPatchOutput {
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+    });
+    if let Some(display_data) = display_data {
+        result.with_display_data(display_data)
+    } else {
+        result
+    }
+}
+
+fn build_apply_patch_preview(patch: &str) -> Option<ApplyPatchPreview> {
+    if patch.trim().is_empty() {
+        return None;
+    }
+
+    let mut rows = BoundedPreviewRows::new(APPLY_PATCH_PREVIEW_ROWS);
+    match coco_apply_patch::parse_patch(patch) {
+        Ok(parsed) => {
+            for hunk in parsed.hunks {
+                push_hunk_preview(hunk, &mut rows);
+            }
+        }
+        Err(_) => {
+            for raw in patch.lines() {
+                match raw.as_bytes().first() {
+                    Some(b'+') => rows.push(ApplyPatchPreviewRow::Line {
+                        sign: ApplyPatchPreviewSign::Added,
+                        content: cap_preview_text(&raw[1..]),
+                    }),
+                    Some(b'-') => rows.push(ApplyPatchPreviewRow::Line {
+                        sign: ApplyPatchPreviewSign::Removed,
+                        content: cap_preview_text(&raw[1..]),
+                    }),
+                    _ => rows.push(ApplyPatchPreviewRow::Raw {
+                        content: cap_preview_text(raw),
+                    }),
+                }
+            }
+        }
+    }
+
+    Some(rows.into_preview())
+}
+
+fn push_hunk_preview(hunk: ApplyPatchHunk, rows: &mut BoundedPreviewRows) {
+    match hunk {
+        ApplyPatchHunk::AddFile { path, contents } => {
+            rows.push(ApplyPatchPreviewRow::Header {
+                action: ApplyPatchPreviewAction::Add,
+                target: cap_preview_text(&path.display().to_string()),
+            });
+            for line in contents.lines() {
+                rows.push(ApplyPatchPreviewRow::Line {
+                    sign: ApplyPatchPreviewSign::Added,
+                    content: cap_preview_text(line),
+                });
+            }
+        }
+        ApplyPatchHunk::DeleteFile { path } => {
+            rows.push(ApplyPatchPreviewRow::Header {
+                action: ApplyPatchPreviewAction::Delete,
+                target: cap_preview_text(&path.display().to_string()),
+            });
+        }
+        ApplyPatchHunk::UpdateFile {
+            path,
+            move_path,
+            chunks,
+        } => {
+            let target = if let Some(move_path) = move_path {
+                format!("{} -> {}", path.display(), move_path.display())
+            } else {
+                path.display().to_string()
+            };
+            rows.push(ApplyPatchPreviewRow::Header {
+                action: ApplyPatchPreviewAction::Update,
+                target: cap_preview_text(&target),
+            });
+            for chunk in chunks {
+                push_update_chunk_preview(&chunk.old_lines, &chunk.new_lines, rows);
+            }
+        }
+    }
+}
+
+fn push_update_chunk_preview(
+    old_lines: &[String],
+    new_lines: &[String],
+    rows: &mut BoundedPreviewRows,
+) {
+    let old = patch_lines_text(old_lines);
+    let new = patch_lines_text(new_lines);
+    if old == new {
+        return;
+    }
+
+    let diff = similar::TextDiff::from_lines(&old, &new);
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            similar::ChangeTag::Delete => ApplyPatchPreviewSign::Removed,
+            similar::ChangeTag::Insert => ApplyPatchPreviewSign::Added,
+            similar::ChangeTag::Equal => ApplyPatchPreviewSign::Context,
+        };
+        rows.push(ApplyPatchPreviewRow::Line {
+            sign,
+            content: cap_preview_text(change.value().trim_end_matches('\n')),
+        });
+    }
+}
+
+fn patch_lines_text(lines: &[String]) -> String {
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lines.join("\n"))
+    }
+}
+
+struct BoundedPreviewRows {
+    limit: usize,
+    head: Vec<ApplyPatchPreviewRow>,
+    tail: VecDeque<ApplyPatchPreviewRow>,
+    total: usize,
+}
+
+impl BoundedPreviewRows {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            head: Vec::with_capacity(limit / 2),
+            tail: VecDeque::with_capacity(limit / 2),
+            total: 0,
+        }
+    }
+
+    fn push(&mut self, row: ApplyPatchPreviewRow) {
+        if self.limit == 0 {
+            self.total += 1;
+            return;
+        }
+
+        let head_limit = self.limit.div_ceil(2);
+        let tail_limit = self.limit / 2;
+        if self.head.len() < head_limit {
+            self.head.push(row);
+        } else if tail_limit > 0 {
+            if self.tail.len() == tail_limit {
+                self.tail.pop_front();
+            }
+            self.tail.push_back(row);
+        }
+        self.total += 1;
+    }
+
+    fn into_preview(mut self) -> ApplyPatchPreview {
+        let kept = self.head.len() + self.tail.len();
+        let mut omitted = self.total.saturating_sub(kept);
+        if omitted > 0 && kept + 1 > self.limit {
+            let removed = self.tail.pop_front().is_some() || self.head.pop().is_some();
+            if removed {
+                omitted += 1;
+            }
+        }
+        let mut rows = self.head;
+        if omitted > 0 {
+            rows.push(ApplyPatchPreviewRow::Omitted {
+                rows: preview_rows_to_dto(omitted),
+            });
+        }
+        rows.extend(self.tail);
+        ApplyPatchPreview { rows }
+    }
+}
+
+fn cap_preview_text(text: &str) -> String {
+    text.chars().take(APPLY_PATCH_PREVIEW_ROW_CHARS).collect()
 }
 
 fn apply_patch_cwd(ctx: &ToolUseContext) -> Result<AbsolutePathBuf, String> {
@@ -202,19 +468,14 @@ fn apply_patch_cwd(ctx: &ToolUseContext) -> Result<AbsolutePathBuf, String> {
         .map_err(|e| format!("cwd `{}` is not absolute: {e}", cwd_path.display()))
 }
 
-fn affected_paths_from_patch(
-    patch: &str,
-    cwd: &AbsolutePathBuf,
-) -> Result<Vec<std::path::PathBuf>, String> {
-    coco_apply_patch::parse_patch(patch)
-        .map(|parsed| {
-            parsed
-                .hunks
-                .iter()
-                .map(|hunk| hunk.resolve_path(cwd).as_path().to_path_buf())
-                .collect()
-        })
-        .map_err(|e| e.to_string())
+fn resolve_patch_path(path: &std::path::Path, cwd: &AbsolutePathBuf) -> std::path::PathBuf {
+    AbsolutePathBuf::resolve_path_against_base(path, cwd)
+        .as_path()
+        .to_path_buf()
+}
+
+fn preview_rows_to_dto(rows: usize) -> i64 {
+    i64::try_from(rows).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]

@@ -214,6 +214,7 @@ Note: LSP servers must be configured for the file type. If no server is availabl
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -260,6 +261,7 @@ async fn dispatch(
         .await
         .map_err(|e| ToolError::ExecutionFailed {
             message: format!("LSP request failed: {e}"),
+            display_data: None,
             source: None,
         })?;
 
@@ -282,6 +284,7 @@ async fn dispatch(
 
     let item_value = serde_json::to_value(&first).map_err(|e| ToolError::ExecutionFailed {
         message: format!("failed to serialize call hierarchy item: {e}"),
+        display_data: None,
         source: None,
     })?;
     ctx.lsp
@@ -289,6 +292,7 @@ async fn dispatch(
         .await
         .map_err(|e| ToolError::ExecutionFailed {
             message: format!("LSP request failed: {e}"),
+            display_data: None,
             source: None,
         })
 }

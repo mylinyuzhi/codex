@@ -143,6 +143,7 @@ impl Tool for StructuredOutputTool {
                 .join("; ");
             return Err(ToolError::ExecutionFailed {
                 message: format!("Output does not match required schema: {detail}"),
+                display_data: None,
                 source: None,
             });
         }

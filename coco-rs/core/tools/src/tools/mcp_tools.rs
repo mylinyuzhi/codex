@@ -95,6 +95,7 @@ impl Tool for McpAuthTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -179,6 +180,7 @@ impl Tool for ListMcpResourcesTool {
                         new_messages: vec![],
                         app_state_patch: None,
                         permission_updates: Vec::new(),
+                        display_data: None,
                     });
                 }
                 let items: Vec<Value> = resources
@@ -198,6 +200,7 @@ impl Tool for ListMcpResourcesTool {
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 })
             }
             Err(e) => Ok(ToolResult {
@@ -205,6 +208,7 @@ impl Tool for ListMcpResourcesTool {
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             }),
         }
     }
@@ -318,6 +322,7 @@ impl Tool for ReadMcpResourceTool {
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 })
             }
             Err(e) => Ok(ToolResult {
@@ -329,6 +334,7 @@ impl Tool for ReadMcpResourceTool {
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             }),
         }
     }
@@ -603,6 +609,7 @@ impl Tool for McpTool {
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 })
             }
             Err(e) => Err(ToolError::ExecutionFailed {
@@ -610,6 +617,7 @@ impl Tool for McpTool {
                     "MCP tool call failed: {}.{}: {e}",
                     self.info.server_name, self.info.tool_name
                 ),
+                display_data: None,
                 source: None,
             }),
         }

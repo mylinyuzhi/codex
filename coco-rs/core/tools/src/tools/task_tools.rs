@@ -315,6 +315,7 @@ impl Tool for TaskCreateTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("task_list.create_task failed: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -339,6 +340,7 @@ impl Tool for TaskCreateTool {
                 let _ = ctx.task_list.delete_task(&task.id).await;
                 return Err(ToolError::ExecutionFailed {
                     message: format!("TaskCreated hook feedback:\n{reason}"),
+                    display_data: None,
                     source: None,
                 });
             }
@@ -351,6 +353,7 @@ impl Tool for TaskCreateTool {
             new_messages: vec![],
             app_state_patch: Some(patch),
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -435,6 +438,7 @@ impl Tool for TaskGetTool {
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: format!("task_list.get_task failed: {e}"),
+                    display_data: None,
                     source: None,
                 })?;
         Ok(ToolResult {
@@ -442,6 +446,7 @@ impl Tool for TaskGetTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -575,6 +580,7 @@ impl Tool for TaskListTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("task_list.list_tasks failed: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -598,6 +604,7 @@ impl Tool for TaskListTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -744,11 +751,13 @@ impl Tool for TaskUpdateTool {
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 });
             }
             Err(e) => {
                 return Err(ToolError::ExecutionFailed {
                     message: format!("task_list.get_task failed: {e}"),
+                    display_data: None,
                     source: None,
                 });
             }
@@ -762,6 +771,7 @@ impl Tool for TaskUpdateTool {
             let deleted = ctx.task_list.delete_task(&task_id).await.map_err(|e| {
                 ToolError::ExecutionFailed {
                     message: format!("task_list.delete_task failed: {e}"),
+                    display_data: None,
                     source: None,
                 }
             })?;
@@ -784,6 +794,7 @@ impl Tool for TaskUpdateTool {
                 new_messages: vec![],
                 app_state_patch: Some(patch),
                 permission_updates: Vec::new(),
+                display_data: None,
             });
         }
 
@@ -895,6 +906,7 @@ impl Tool for TaskUpdateTool {
             if let Some(reason) = outcome.blocking_reason {
                 return Err(ToolError::ExecutionFailed {
                     message: format!("TaskCompleted hook feedback:\n{reason}"),
+                    display_data: None,
                     source: None,
                 });
             }
@@ -907,6 +919,7 @@ impl Tool for TaskUpdateTool {
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: format!("task_list.update_task failed: {e}"),
+                    display_data: None,
                     source: None,
                 })?;
         }
@@ -1003,6 +1016,7 @@ impl Tool for TaskUpdateTool {
             new_messages: vec![],
             app_state_patch: Some(patch),
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -1111,6 +1125,7 @@ impl Tool for TaskStopTool {
                 message: format!(
                     "No running task found with ID: {task_id} (no task runtime configured)"
                 ),
+                display_data: None,
                 source: None,
             });
         };
@@ -1124,9 +1139,11 @@ impl Tool for TaskStopTool {
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             }),
             Err(e) => Err(ToolError::ExecutionFailed {
                 message: format!("No running task found with ID: {task_id} ({e})"),
+                display_data: None,
                 source: None,
             }),
         }
@@ -1291,6 +1308,7 @@ impl Tool for TaskOutputTool {
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             });
         }
 
@@ -1307,6 +1325,7 @@ impl Tool for TaskOutputTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -1525,6 +1544,7 @@ impl Tool for TodoWriteTool {
             new_messages: vec![],
             app_state_patch: Some(patch),
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

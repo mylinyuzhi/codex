@@ -98,6 +98,7 @@ impl Tool for SleepTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -166,6 +167,7 @@ impl Tool for ReplTool {
                       Use the Bash tool to run language-specific commands instead \
                       (e.g., `python3 -c \"...\"` or `node -e \"...\"`)."
                 .into(),
+            display_data: None,
             source: None,
         })
     }

@@ -333,6 +333,7 @@ async fn execute_background(
         .as_ref()
         .ok_or_else(|| ToolError::ExecutionFailed {
             message: "Background task execution is not available in this context.".into(),
+            display_data: None,
             source: None,
         })?;
 
@@ -372,6 +373,7 @@ async fn execute_background(
         .await
         .map_err(|e| ToolError::ExecutionFailed {
             message: format!("Failed to spawn background task: {e}"),
+            display_data: None,
             source: None,
         })?;
 
@@ -387,6 +389,7 @@ async fn execute_background(
         new_messages: vec![],
         app_state_patch: None,
         permission_updates: Vec::new(),
+        display_data: None,
     })
 }
 
@@ -425,6 +428,7 @@ async fn execute_foreground(
     let pwsh_shell = coco_shell::get_shell(coco_shell::ShellType::PowerShell, None).ok_or(
         ToolError::ExecutionFailed {
             message: "pwsh not found on PATH. Install PowerShell to use this tool.".into(),
+            display_data: None,
             source: None,
         },
     )?;
@@ -452,6 +456,7 @@ async fn execute_foreground(
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("PowerShell execution failed: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -504,6 +509,7 @@ async fn execute_foreground(
         new_messages: vec![],
         app_state_patch: None,
         permission_updates: Vec::new(),
+        display_data: None,
     })
 }
 

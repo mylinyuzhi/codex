@@ -68,6 +68,7 @@ impl crate::traits::Tool for ConfigurableTool {
             new_messages: Vec::new(),
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
