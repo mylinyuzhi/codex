@@ -32,11 +32,20 @@ pub(super) fn try_render(
             let Message::System(SystemMessage::Informational(info)) = cell.source.as_ref() else {
                 return Some(());
             };
-            let body = if info.title.is_empty() {
-                info.message.clone()
-            } else {
-                format!("{}: {}", info.title, info.message)
-            };
+            if info.title.is_empty() {
+                let opts = coco_tui_markdown::MarkdownOptions::new(
+                    w.styles,
+                    w.width,
+                    w.syntax_highlighting,
+                );
+                lines.extend(coco_tui_markdown::render_markdown(
+                    &info.message,
+                    opts,
+                    None,
+                ));
+                return Some(());
+            }
+            let body = format!("{}: {}", info.title, info.message);
             for line in body.lines() {
                 lines.push(Line::from(
                     Span::raw(format!("  # {line}")).fg(w.styles.system_message()),

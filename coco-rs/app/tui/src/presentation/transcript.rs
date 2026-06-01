@@ -19,6 +19,7 @@ use crate::state::session::ToolStatus;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
+use crate::state::transcript_view::SystemCellKind;
 use crate::state::ui::StreamingState;
 
 pub(crate) const TRANSCRIPT_COLLAPSED_PREVIEW_LINES: usize = 5;
@@ -254,9 +255,23 @@ pub(crate) fn active_transcript_cell<'a>(
 }
 
 fn is_meta(cell: &RenderedCell) -> bool {
-    // System cells are meta. Attachments (e.g. tool-summary) ride
-    // through but render dim; treat them as meta by default.
-    matches!(cell.kind, CellKind::System(_) | CellKind::Attachment)
+    // Attachments (e.g. tool-summary) ride through but render dim; treat them
+    // as meta by default. Slash-command output is an empty-title informational
+    // system message, and should remain fully visible instead of collapsing to
+    // a one-line "# [system]" preview.
+    match &cell.kind {
+        CellKind::Attachment => true,
+        CellKind::System(SystemCellKind::Informational) => {
+            let coco_messages::Message::System(coco_messages::SystemMessage::Informational(info)) =
+                cell.source.as_ref()
+            else {
+                return true;
+            };
+            !info.title.is_empty()
+        }
+        CellKind::System(_) => true,
+        _ => false,
+    }
 }
 
 fn tool_batch_end(cells: &[RenderedCell], start: usize) -> usize {
