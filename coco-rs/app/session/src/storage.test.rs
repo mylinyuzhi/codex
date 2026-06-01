@@ -769,6 +769,47 @@ fn test_tool_result_transcript_serializes_as_user_message_with_tool_result_block
 }
 
 #[test]
+fn test_transcript_only_flag_survives_jsonl_round_trip() {
+    // Regression guard: a slash-command result is transcript-only (never
+    // sent to the model). If the flag is dropped on persist, it resumes as
+    // a model-visible user message — an API leak on resume. Round-trip it
+    // and assert the gate survives.
+    let messages = coco_messages::build_slash_command_messages("model", "", "Set Main → x", false);
+    let coco_messages::Message::User(original) = &messages[1] else {
+        panic!("expected user result message");
+    };
+    assert!(original.is_visible_in_transcript_only);
+
+    let entries = transcript_entries_for_message(
+        &messages[1],
+        TranscriptEntryOptions {
+            session_id: "ss",
+            cwd: "/tmp",
+            timestamp: "2025-01-15T10:00:00Z",
+            parent_uuid: None,
+            logical_parent_uuid: None,
+            is_sidechain: false,
+            agent_id: None,
+            git_branch: None,
+        },
+    );
+    assert_eq!(entries.len(), 1);
+    let restored = messages_from_transcript_entry(&entries[0]);
+    assert_eq!(restored.len(), 1);
+    let coco_messages::Message::User(restored) = &restored[0] else {
+        panic!("expected restored user message");
+    };
+    assert!(
+        restored.is_visible_in_transcript_only,
+        "transcript-only gate must survive resume or the model sees it"
+    );
+    assert_eq!(
+        restored.origin,
+        Some(coco_messages::MessageOrigin::SlashCommand)
+    );
+}
+
+#[test]
 fn test_append_message_chain_parents_tool_result_to_source_assistant() {
     let (_dir, store, _project_dir) = test_store();
     let sid = "source-parent";

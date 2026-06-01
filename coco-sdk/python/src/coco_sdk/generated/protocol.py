@@ -351,6 +351,7 @@ class MessageOrigin(str, Enum):
     tool_result = 'tool_result'
     compact_summary = 'compact_summary'
     subagent_reply = 'subagent_reply'
+    slash_command = 'slash_command'
 
 class ModelRole(str, Enum):
     main = 'main'
@@ -1747,6 +1748,7 @@ class TuiOnlyEventRewindCompleted(BaseModel):
 class TuiOnlyEventSlashCommandResult(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['slash_command_result'] = Field(default='slash_command_result', alias='type')
+    args: str
     name: str
     text: str
 

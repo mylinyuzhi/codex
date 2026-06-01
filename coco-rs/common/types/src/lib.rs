@@ -482,7 +482,6 @@ pub use extended::{
     AttributionSnapshotEntry,
     CommandBaseExt,
     CommandKind,
-    CommandResultDisplay,
     CustomTitleEntry,
     FileAttributionState,
     HookBlockingError,

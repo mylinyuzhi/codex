@@ -829,10 +829,23 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                             Ok(()) => {
                                 s.active_theme = choice.setting.clone();
                                 match crate::theme::save_theme_setting(&choice.setting) {
-                                    Ok(path) => {
-                                        state.ui.add_toast(crate::state::ui::Toast::success(
-                                            format!("Theme saved to {}", path.display()),
-                                        ))
+                                    Ok(_path) => {
+                                        // `❯ /theme` + `⎿ Theme set to …`
+                                        // transcript line, but `System`
+                                        // (transcript-only): theme is a
+                                        // tool-config action the LLM must not
+                                        // see. Same feedback channel as `/model`.
+                                        let messages = coco_messages::build_slash_command_messages(
+                                            "theme",
+                                            /*args*/ "",
+                                            &format!("Theme set to {}", choice.label),
+                                            /*is_sensitive*/ false,
+                                        );
+                                        let _ = command_tx
+                                            .send(crate::command::UserCommand::PushSlashResult {
+                                                messages,
+                                            })
+                                            .await;
                                     }
                                     Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(
                                         format!("Failed to save theme: {err}"),

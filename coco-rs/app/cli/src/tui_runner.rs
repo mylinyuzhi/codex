@@ -1654,6 +1654,20 @@ async fn run_agent_driver(
                 coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
             }
 
+            UserCommand::PushSlashResult { messages } => {
+                // Pre-built slash echo+result `Message::User`s (see
+                // `command_tags`). Push each through engine authority so the
+                // transcript view, SDK, and JSONL converge — and so the
+                // per-message `is_visible_in_transcript_only` gate is the
+                // single source of truth for model visibility.
+                let mut h = runtime.history.lock().await;
+                let event_tx_opt = Some(event_tx.clone());
+                for msg in messages {
+                    coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt)
+                        .await;
+                }
+            }
+
             UserCommand::WriteSkillOverrides { patch } => {
                 handle_write_skill_overrides(
                     &runtime,
@@ -1920,6 +1934,7 @@ async fn dispatch_resume(
                 emit_slash_text(
                     event_tx,
                     "resume",
+                    args,
                     &format!("Failed to list sessions: {err}"),
                 )
                 .await;
@@ -1929,6 +1944,7 @@ async fn dispatch_resume(
                 emit_slash_text(
                     event_tx,
                     "resume",
+                    args,
                     &format!("Session listing task failed: {err}"),
                 )
                 .await;
@@ -1959,6 +1975,7 @@ async fn dispatch_resume(
             emit_slash_text(
                 event_tx,
                 "resume",
+                args,
                 &format!("Failed to resume session: {err}"),
             )
             .await;
@@ -2617,7 +2634,7 @@ async fn dispatch_slash_command(
                     SentinelTrigger::ReloadHooks => SlashOutcome::TriggerReloadHooks,
                 };
             }
-            emit_slash_text(event_tx, name, &text).await;
+            emit_slash_text(event_tx, name, args, &text).await;
             SlashOutcome::Handled
         }
         CommandResult::InjectPrompt(text) => SlashOutcome::RunEngine { content: text },
@@ -2674,7 +2691,7 @@ async fn dispatch_slash_command(
                 )
                 .await;
             }
-            emit_slash_text(event_tx, name, &display_text).await;
+            emit_slash_text(event_tx, name, args, &display_text).await;
             SlashOutcome::Handled
         }
         CommandResult::OpenDialog(spec) => {
@@ -2931,7 +2948,7 @@ async fn dispatch_plan(
         } else {
             format!("Enabled plan mode.\n\n{body}")
         };
-        emit_slash_text(event_tx, "plan", &text).await;
+        emit_slash_text(event_tx, "plan", args, &text).await;
         return SlashOutcome::Handled;
     }
 
@@ -2944,7 +2961,7 @@ async fn dispatch_plan(
                 plan_path.display()
             )
         };
-        emit_slash_text(event_tx, "plan", &text).await;
+        emit_slash_text(event_tx, "plan", args, &text).await;
         return SlashOutcome::TriggerOpenPlanEditor { path: plan_path };
     }
 
@@ -2965,7 +2982,7 @@ async fn dispatch_plan(
             ),
             _ => "Already in plan mode. No plan written yet.".to_string(),
         };
-        emit_slash_text(event_tx, "plan", &text).await;
+        emit_slash_text(event_tx, "plan", args, &text).await;
         return SlashOutcome::Handled;
     }
     match plan_command_query_after_flip(args) {
@@ -3265,6 +3282,7 @@ async fn run_session_rename(
         emit_slash_text(
             event_tx,
             "rename",
+            "",
             "Cannot rename: This session is a swarm teammate. \
              Teammate names are set by the team leader.",
         )
@@ -3280,7 +3298,7 @@ async fn run_session_rename(
         coco_commands::ParsedRename::Auto => match auto_generate_session_name(runtime).await {
             Ok(n) => n,
             Err(err) => {
-                emit_slash_text(event_tx, "rename", err.user_message()).await;
+                emit_slash_text(event_tx, "rename", "", err.user_message()).await;
                 return;
             }
         },
@@ -3297,7 +3315,7 @@ async fn run_session_rename(
             _ => format!("Failed to rename session: {e}"),
         },
     };
-    emit_slash_text(event_tx, "rename", &text).await;
+    emit_slash_text(event_tx, "rename", "", &text).await;
 }
 
 /// `/reload-plugins` runner — rescans plugin + skill dirs and
@@ -3317,7 +3335,7 @@ async fn run_reload_plugins(
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let count = runtime.reload_plugins(&cwd).await;
     let body = format!("Reloaded — {count} commands now registered.");
-    emit_slash_text(event_tx, "reload-plugins", &body).await;
+    emit_slash_text(event_tx, "reload-plugins", "", &body).await;
 
     let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
     let _ = event_tx
@@ -3338,7 +3356,7 @@ async fn run_reload_hooks(
         Ok(count) => format!("Reloaded — {count} hook(s) registered from current settings."),
         Err(e) => format!("Hook reload failed: {e}"),
     };
-    emit_slash_text(event_tx, "hooks", &body).await;
+    emit_slash_text(event_tx, "hooks", "", &body).await;
 }
 
 /// `/add-dir <abs-path>` runner — pushes the (already-validated)
@@ -3381,7 +3399,7 @@ async fn run_session_tag(
         Ok((_, false)) => format!("Tag removed: {tag}"),
         Err(e) => format!("Failed to toggle tag `{tag}` on session {session_id}: {e}"),
     };
-    emit_slash_text(event_tx, "tag", &text).await;
+    emit_slash_text(event_tx, "tag", tag, &text).await;
 }
 
 /// `/permissions allow|deny|reset` dispatch with engine-config mutation.
@@ -3411,6 +3429,7 @@ async fn dispatch_color(
         emit_slash_text(
             event_tx,
             "color",
+            args,
             "Cannot set color: This session is a swarm teammate. \
              Teammate colors are assigned by the team leader.",
         )
@@ -3431,14 +3450,20 @@ async fn dispatch_color(
     let lower = trimmed.to_ascii_lowercase();
     if RESET_ALIASES.contains(&lower.as_str()) {
         runtime.app_state.write().await.agent_color = None;
-        emit_slash_text(event_tx, "color", "Session color reset to default").await;
+        emit_slash_text(event_tx, "color", args, "Session color reset to default").await;
         return Some(SlashOutcome::Handled);
     }
 
     match lower.parse::<AgentColorName>() {
         Ok(color) => {
             runtime.app_state.write().await.agent_color = Some(color);
-            emit_slash_text(event_tx, "color", &format!("Session color set to: {color}")).await;
+            emit_slash_text(
+                event_tx,
+                "color",
+                args,
+                &format!("Session color set to: {color}"),
+            )
+            .await;
             Some(SlashOutcome::Handled)
         }
         Err(_) => {
@@ -3450,6 +3475,7 @@ async fn dispatch_color(
             emit_slash_text(
                 event_tx,
                 "color",
+                args,
                 &format!("Invalid color \"{lower}\". Available colors: {list}, default"),
             )
             .await;
@@ -3556,17 +3582,18 @@ async fn dispatch_permissions_mutation(
                 .to_string()
         }
     };
-    emit_slash_text(event_tx, "permissions", &confirmation).await;
+    emit_slash_text(event_tx, "permissions", args, &confirmation).await;
     Some(SlashOutcome::Handled)
 }
 
 /// Emit a `TuiOnlyEvent::SlashCommandResult` so the TUI appends a
 /// system-role chat message carrying handler-rendered content (verbatim,
 /// no translation).
-async fn emit_slash_text(event_tx: &mpsc::Sender<CoreEvent>, name: &str, text: &str) {
+async fn emit_slash_text(event_tx: &mpsc::Sender<CoreEvent>, name: &str, args: &str, text: &str) {
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::SlashCommandResult {
             name: name.to_string(),
+            args: args.to_string(),
             text: text.to_string(),
         }))
         .await;
@@ -3579,7 +3606,7 @@ async fn dispatch_context(
     match runtime.analyze_main_context().await {
         Ok(report) => {
             let text = coco_query::context_analysis::format_markdown(&report);
-            emit_slash_text(event_tx, "context", &text).await;
+            emit_slash_text(event_tx, "context", "", &text).await;
         }
         Err(e) => {
             emit_slash_status(
@@ -3611,11 +3638,12 @@ async fn dispatch_provider_login(args: &str, event_tx: &mpsc::Sender<CoreEvent>)
     let url_sink: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(move |url| {
         let _ = tx.try_send(CoreEvent::Tui(TuiOnlyEvent::SlashCommandResult {
             name: "login".to_string(),
+            args: String::new(),
             text: format!("Opening your browser to sign in. If it doesn't open, visit:\n{url}"),
         }));
     });
     match coco_cli::provider_login::run_login_session(provider, url_sink).await {
-        Ok(msg) => emit_slash_text(event_tx, "login", &msg).await,
+        Ok(msg) => emit_slash_text(event_tx, "login", args, &msg).await,
         Err(e) => {
             emit_slash_status(
                 event_tx,
@@ -3635,7 +3663,7 @@ async fn dispatch_provider_login(args: &str, event_tx: &mpsc::Sender<CoreEvent>)
 async fn dispatch_provider_logout(args: &str, event_tx: &mpsc::Sender<CoreEvent>) -> SlashOutcome {
     let provider = slash_provider_arg(args);
     match coco_cli::provider_login::run_logout_session(provider).await {
-        Ok(msg) => emit_slash_text(event_tx, "logout", &msg).await,
+        Ok(msg) => emit_slash_text(event_tx, "logout", args, &msg).await,
         Err(e) => {
             emit_slash_status(
                 event_tx,
@@ -5182,7 +5210,7 @@ async fn apply_role_in_memory(
         provider: provider.clone(),
         api,
         model_id: model_id.clone(),
-        display_name,
+        display_name: display_name.clone(),
     };
     // Main: this rebinds the registry runtime. The build can fail
     // (e.g. provider unregistered, model_factory error) — surface
@@ -5226,13 +5254,41 @@ async fn apply_role_in_memory(
         .send(CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
             coco_types::ModelRoleChangedParams {
                 role,
-                model_id,
-                provider,
+                model_id: model_id.clone(),
+                provider: provider.clone(),
                 context_window,
                 effort,
             },
         )))
         .await;
+
+    // Tool-style confirmation for the `/model` picker (no-args → modal →
+    // Enter). Rendered `❯ /model` + `⎿ Set …` like every slash result, but
+    // `System` (transcript-only): model/role selection is a tool-config
+    // action — the LLM must NOT see it in its context. Engine-side push so
+    // it fires ONLY for the picker; the Ctrl+T effort cycle reuses
+    // `ModelRoleChanged` but stays silent (status-bar only).
+    let role_label = title_case_role(role);
+    let effort_suffix = effort
+        .map(|e| format!(" · thinking: {e}"))
+        .unwrap_or_default();
+    let output = format!("Set {role_label} → {provider}/{display_name}{effort_suffix}");
+    let messages = coco_messages::build_slash_command_messages(
+        "model", /*args*/ "", &output, /*is_sensitive*/ false,
+    );
+    let mut h = runtime.history.lock().await;
+    let event_tx_opt = Some(event_tx.clone());
+    for msg in messages {
+        coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
+    }
+}
+
+/// Title-case a `ModelRole` for display (`main` → `Main`).
+fn title_case_role(role: coco_types::ModelRole) -> String {
+    let mut chars = role.as_str().chars();
+    chars.next().map_or_else(String::new, |first| {
+        format!("{}{}", first.to_uppercase(), chars.as_str())
+    })
 }
 
 /// Apply a thinking-level change to the Main role in-memory (Ctrl+T

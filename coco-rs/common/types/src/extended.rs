@@ -96,15 +96,13 @@ pub struct PromptResponse {
 // Command Extended Types (from command.ts)
 // ============================================================================
 
-/// How a command result should be displayed.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandResultDisplay {
-    Skip,
-    System,
-    User,
-}
+// NOTE: TS's `CommandResultDisplay { skip | system | user }` is intentionally
+// NOT ported. coco-rs covers its three behaviors through more orthogonal
+// mechanisms: `skip` → `CommandResult::Skip` (no output); `system` →
+// transcript-only `Message::User` from `coco_messages::build_slash_command_messages`
+// (the slash-feedback default); `user` (model-visible) → the
+// `CommandResult::Prompt`/`InjectPrompt` expansion path. See
+// `core/messages/src/command_tags.rs` module docs for the full map.
 
 /// Entrypoint for session resume.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

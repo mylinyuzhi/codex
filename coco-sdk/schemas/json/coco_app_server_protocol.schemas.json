@@ -4645,14 +4645,23 @@
     },
     "MessageOrigin": {
       "description": "Where a message originated.",
-      "enum": [
-        "user_input",
-        "system_injected",
-        "tool_result",
-        "compact_summary",
-        "subagent_reply"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "user_input",
+            "system_injected",
+            "tool_result",
+            "compact_summary",
+            "subagent_reply"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "slash_command",
+          "description": "Synthesized echo/result of a slash command (`\u276f /cmd` + `\u23bf output`).\nCarried on the `Message::User` envelope; combined with\n`is_visible_in_transcript_only` it mirrors TS's\n`createUserMessage` (model-visible) vs `createCommandInputMessage`\n(transcript-only) split. Drives tag-aware command-pill rendering.",
+          "type": "string"
+        }
+      ]
     },
     "ModelFallbackParams": {
       "properties": {
@@ -11846,6 +11855,10 @@
         {
           "description": "Local slash-command produced a `CommandResult::Text` (or\n`Compact { display_text }`). Surfaced as a system-role chat message\nso it reads inline with the transcript. `text` is the pre-rendered\nbody \u2014 never translated, since it carries the handler's actual\noutput (often command-specific status / git output / prompt\npreview).",
           "properties": {
+            "args": {
+              "description": "Raw argument string the user typed (e.g. `sonnet` for\n`/model sonnet`). Threaded into the model-visible echo\n(`\u276f /name args`) so the model sees the full invocation, matching\nTS `formatCommandInput(command, args)`. Empty for argless commands.",
+              "type": "string"
+            },
             "name": {
               "type": "string"
             },
@@ -11860,6 +11873,7 @@
           "required": [
             "type",
             "name",
+            "args",
             "text"
           ],
           "type": "object"

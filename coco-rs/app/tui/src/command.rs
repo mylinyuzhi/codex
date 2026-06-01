@@ -374,4 +374,14 @@ pub enum UserCommand {
     /// `history_push_and_emit`, so the round-trip surfaces via the
     /// normal `MessageAppended` → `TranscriptView` → render path.
     PushSystemMessage { kind: SystemPushKind },
+    /// Push pre-built slash-command transcript messages (echo + result)
+    /// into engine `MessageHistory`. Unlike [`Self::PushSystemMessage`],
+    /// these are `Message::User` envelopes carrying TS-faithful command
+    /// tags; they are `is_visible_in_transcript_only` (rendered `❯`/`⎿` but
+    /// not sent to the model — slash commands are user↔tool interactions).
+    /// Built via `coco_messages::build_slash_command_messages` so the TUI
+    /// owns the localized text while the engine stays the transcript authority.
+    PushSlashResult {
+        messages: Vec<coco_messages::Message>,
+    },
 }

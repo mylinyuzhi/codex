@@ -108,8 +108,32 @@ pub fn transcript_entries_for_message(
         usage,
         model,
         cost_usd,
-        extra: serde_json::Map::new(),
+        extra: user_envelope_extra(msg),
     }]
+}
+
+/// Persist the `Message::User` envelope flags that don't live inside the
+/// inner `LlmMessage` but must survive a JSONL round-trip. Critically,
+/// `is_visible_in_transcript_only` gates model-visibility: a slash-command
+/// echo/result with `display: system` would otherwise resume as a
+/// model-visible user message (an API leak on resume). `origin` is kept so
+/// the command-pill renderer's classification is stable across resume.
+/// Only non-default values are written, so ordinary user turns serialize
+/// byte-for-byte as before.
+fn user_envelope_extra(msg: &coco_messages::Message) -> serde_json::Map<String, serde_json::Value> {
+    let mut extra = serde_json::Map::new();
+    if let coco_messages::Message::User(u) = msg {
+        if u.is_visible_in_transcript_only {
+            extra.insert("is_visible_in_transcript_only".to_string(), json!(true));
+        }
+        if let Some(origin) = u.origin
+            && origin != coco_messages::MessageOrigin::UserInput
+            && let Ok(value) = serde_json::to_value(origin)
+        {
+            extra.insert("origin".to_string(), value);
+        }
+    }
+    extra
 }
 
 pub(super) fn is_compact_boundary_message(msg: &coco_messages::Message) -> bool {
@@ -239,11 +263,19 @@ fn reconstruct_regular_message(entry: &TranscriptEntry) -> Option<coco_messages:
                 message: llm,
                 uuid,
                 timestamp: entry.timestamp.clone(),
-                is_visible_in_transcript_only: false,
+                // Restore the model-visibility gate (see `user_envelope_extra`).
+                is_visible_in_transcript_only: entry
+                    .extra
+                    .get("is_visible_in_transcript_only")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
                 is_virtual: false,
                 is_compact_summary: false,
                 permission_mode: None,
-                origin: None,
+                origin: entry
+                    .extra
+                    .get("origin")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
                 parent_tool_use_id: None,
             }))
         }

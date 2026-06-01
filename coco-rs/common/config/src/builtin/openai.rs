@@ -148,7 +148,6 @@ fn openai_reasoning_levels() -> Vec<ThinkingLevel> {
     vec![
         ThinkingLevel::disable(),
         ThinkingLevel::low(),
-        ThinkingLevel::low(),
         ThinkingLevel::medium(),
         ThinkingLevel::high(),
         ThinkingLevel::xhigh(),

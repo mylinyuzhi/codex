@@ -536,6 +536,10 @@
       "description": "Local slash-command produced a `CommandResult::Text` (or\n`Compact { display_text }`). Surfaced as a system-role chat message\nso it reads inline with the transcript. `text` is the pre-rendered\nbody — never translated, since it carries the handler's actual\noutput (often command-specific status / git output / prompt\npreview).",
       "type": "object",
       "properties": {
+        "args": {
+          "description": "Raw argument string the user typed (e.g. `sonnet` for\n`/model sonnet`). Threaded into the model-visible echo\n(`❯ /name args`) so the model sees the full invocation, matching\nTS `formatCommandInput(command, args)`. Empty for argless commands.",
+          "type": "string"
+        },
         "name": {
           "type": "string"
         },
@@ -550,6 +554,7 @@
       "required": [
         "type",
         "name",
+        "args",
         "text"
       ]
     },

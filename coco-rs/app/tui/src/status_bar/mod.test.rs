@@ -17,7 +17,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
     let _locale = locale_test_guard("en");
     let mut state = AppState::default();
     state.session.provider = "openai".into();
-    state.session.model = "gpt-5.2".into();
+    state.session.model = "gpt-5.4".into();
     state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
         totals: coco_types::SessionUsageTotals {
             input_tokens: 1_500,
@@ -38,7 +38,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
         ModelRole::Main,
         crate::state::ModelBinding {
             provider: "openai".into(),
-            model_id: "gpt-5.2".into(),
+            model_id: "gpt-5.4".into(),
             context_window: Some(100),
             effort: None,
         },
@@ -51,7 +51,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
                 text: "done".into(),
                 provider_metadata: None,
             })],
-            "gpt-5.2",
+            "gpt-5.4",
             coco_types::TokenUsage {
                 input_tokens: coco_types::InputTokens {
                     total: 70,
@@ -72,7 +72,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
         .map(|span| span.text.as_str())
         .collect::<String>();
 
-    assert!(text.contains(" openai/gpt-5.2"));
+    assert!(text.contains(" openai/gpt-5.4"));
     assert!(text.contains("↑1.5K/$0.0042 ↓250/$0.0030"));
     assert!(text.contains("cache 750/50%"));
     assert!(!text.contains("F2 to expand"));
