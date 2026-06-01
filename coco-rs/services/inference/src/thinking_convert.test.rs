@@ -523,13 +523,28 @@ fn matrix_openai_disable_emits_nothing() {
 }
 
 #[test]
-fn matrix_openai_auto_emits_nothing() {
+fn matrix_openai_auto_emits_reasoning_summary() {
+    // Auto is the builtin default thinking level for every gpt-5 model.
+    // OpenAI must still request the reasoning summary (independent of
+    // effort) so the UI can render "thinking" — only the effort hint is
+    // left to the server default. Regression guard for the bug where
+    // `is_explicit_level()` suppressed the summary on the default path.
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Auto),
         ProviderApi::Openai,
         NO_CAPS,
     );
-    assert!(out.is_empty());
+    assert_eq!(
+        out.get("reasoningSummary")
+            .and_then(serde_json::Value::as_str),
+        Some("auto"),
+        "OpenAI Auto must emit reasoningSummary=auto",
+    );
+    // Effort itself is NOT emitted here — it rides the typed `reasoning`
+    // channel, and Auto leaves it unset (server default).
+    assert!(!out.contains_key("thinking"));
+    assert!(!out.contains_key("output_config"));
+    assert!(!out.contains_key("reasoningEffort"));
 }
 
 #[test]

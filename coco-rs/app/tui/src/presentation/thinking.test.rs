@@ -19,7 +19,7 @@ fn collapsed_thinking_with_content_has_compact_header() {
 
     assert_eq!(
         lines[0].spans[0].content.as_ref(),
-        "⏺ Thinking · 1.2s · 220 reasoning tokens"
+        "⏺ Thinking · 1.2s · 220 reasoning tok"
     );
 }
 
@@ -39,7 +39,7 @@ fn collapsed_thinking_appends_toggle_hint() {
 
     assert_eq!(
         lines[0].spans[0].content.as_ref(),
-        "⏺ Thinking · 1.2s · 220 reasoning tokens · F2 to expand"
+        "⏺ Thinking · 1.2s · 220 reasoning tok · F2 to expand"
     );
 }
 
@@ -59,7 +59,7 @@ fn collapsed_thinking_without_content_has_no_expand_hint() {
 
     assert_eq!(
         lines[0].spans[0].content.as_ref(),
-        "⏺ Thinking · 1.2s · 1.5k reasoning tokens"
+        "⏺ Thinking · 1.2s · 1.5k reasoning tok"
     );
 }
 

@@ -42,7 +42,9 @@
       "Skill(update-claude-md)",
       "Skill(wt-del)",
       "Skill(squash)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Read(//Users/bytedance/.coco/**)",
+      "Read(//Users/bytedance/.coco/logs/**)"
     ],
     "deny": [],
     "ask": [],

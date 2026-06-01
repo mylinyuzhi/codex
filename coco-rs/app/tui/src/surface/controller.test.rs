@@ -453,7 +453,7 @@ fn native_draw_replays_history_when_reasoning_metadata_changes() {
     controller.draw(&mut terminal, &state).expect("first draw");
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
     assert!(text.contains("F2 to expand"));
-    assert!(!text.contains("reasoning tokens"));
+    assert!(!text.contains("reasoning tok"));
 
     state.session.insert_reasoning_metadata(
         uuid,
@@ -474,7 +474,7 @@ fn native_draw_replays_history_when_reasoning_metadata_changes() {
         }
     ));
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
-    assert!(text.contains("22 reasoning tokens"), "{text}");
+    assert!(text.contains("22 reasoning tok"), "{text}");
     assert!(text.contains("F2 to expand"), "{text}");
 }
 

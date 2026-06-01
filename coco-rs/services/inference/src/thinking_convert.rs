@@ -49,7 +49,14 @@ use std::collections::BTreeMap;
 /// `effort-2025-11-24` beta header is not added. Callers wanting that
 /// beta opt in by setting `provider_options["anthropic"]["effort"]`.
 ///
-/// Other arms (Openai/Gemini/OpenaiCompat/Volcengine/Zai) gate on
+/// The `Openai` arm emits `reasoningSummary: "auto"` for `Auto` and
+/// every explicit level (only `Off` is skipped) — requesting the
+/// reasoning summary is independent of the effort level, matching
+/// codex's `summary.unwrap_or(Auto)` default. Without it, gpt-5 models
+/// (whose builtin `default_thinking_level` is `Auto`) return reasoning
+/// items with an empty summary and the stream carries no thinking text.
+///
+/// The remaining arms (Gemini/OpenaiCompat/Volcengine/Zai) gate on
 /// `is_explicit_level()` — `Disable`/`Auto` emit nothing typed for them
 /// (server default applies; `level.options` pass-through is preserved).
 /// `capabilities` is consulted only by the Anthropic arm today.
@@ -131,11 +138,27 @@ pub fn to_extra_body(
             }
         }
         ProviderApi::Openai => {
-            // OpenAI Responses: { "reasoningSummary": "auto" }. Effort
-            // is sent via the `reasoning` typed field on
-            // `LanguageModelV4CallOptions`, not via extra_body.
-            // Disable/Auto: server default applies.
-            if level.effort.is_explicit_level() {
+            // OpenAI Responses: request a human-readable reasoning
+            // summary so the UI can render "thinking". This is
+            // INDEPENDENT of effort — codex (the authoritative reference)
+            // always defaults `summary: auto` for reasoning models
+            // regardless of the effort knob
+            // (`summary.unwrap_or(ReasoningSummary::Auto)`). Without it,
+            // the Responses API returns reasoning items with an empty
+            // summary array and the stream carries no reasoning deltas
+            // (observed as `reasoning_chars=0`).
+            //
+            // Emit for `Auto` + every explicit level; skip only for
+            // `Off` (reasoning disabled → nothing to summarize). The
+            // effort itself rides the typed `reasoning` field on
+            // `LanguageModelV4CallOptions`, so `Auto` still sends no
+            // effort hint (server default) — only the summary request.
+            //
+            // The wire body only writes `reasoning.summary` when the
+            // model is a reasoning model (`is_reasoning_model` gate in
+            // the Responses language model), so a stray key on a
+            // non-reasoning model is a harmless no-op.
+            if level.effort != ReasoningEffort::Off {
                 out.insert(
                     "reasoningSummary".into(),
                     serde_json::Value::String("auto".into()),
