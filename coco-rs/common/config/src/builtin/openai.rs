@@ -67,29 +67,6 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
 
     vec![
         (
-            "gpt-5-2",
-            PartialModelInfo {
-                display_name: Some("GPT-5.2".into()),
-                context_window: Some(PositiveTokens::new(272_000)),
-                max_output_tokens: Some(PositiveTokens::new(12_288)),
-                capabilities: Some(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::ToolCalling,
-                    Capability::StructuredOutput,
-                    Capability::ExtendedThinking,
-                    Capability::ReasoningSummaries,
-                    Capability::ParallelToolCalls,
-                    Capability::ClientSideToolSearch,
-                ]),
-                supported_thinking_levels: Some(thinking.clone()),
-                default_thinking_level: Some(ReasoningEffort::Auto),
-                apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-                tool_overrides: Some(gpt5_overrides.clone()),
-                ..Default::default()
-            },
-        ),
-        (
             "gpt-5-4",
             PartialModelInfo {
                 display_name: Some("GPT-5.4".into()),
@@ -108,7 +85,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::ClientSideToolSearch,
                 ]),
                 supported_thinking_levels: Some(thinking.clone()),
-                default_thinking_level: Some(ReasoningEffort::Auto),
+                default_thinking_level: Some(ReasoningEffort::High),
                 apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
                 tool_overrides: Some(gpt5_overrides.clone()),
                 ..Default::default()
@@ -133,7 +110,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::ClientSideToolSearch,
                 ]),
                 supported_thinking_levels: Some(thinking.clone()),
-                default_thinking_level: Some(ReasoningEffort::Auto),
+                default_thinking_level: Some(ReasoningEffort::High),
                 apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
                 tool_overrides: Some(gpt5_overrides.clone()),
                 ..Default::default()
@@ -158,7 +135,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::ClientSideToolSearch,
                 ]),
                 supported_thinking_levels: Some(thinking),
-                default_thinking_level: Some(ReasoningEffort::Auto),
+                default_thinking_level: Some(ReasoningEffort::High),
                 apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
                 tool_overrides: Some(gpt5_overrides),
                 ..Default::default()
@@ -170,7 +147,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
 fn openai_reasoning_levels() -> Vec<ThinkingLevel> {
     vec![
         ThinkingLevel::disable(),
-        ThinkingLevel::auto(),
+        ThinkingLevel::low(),
         ThinkingLevel::low(),
         ThinkingLevel::medium(),
         ThinkingLevel::high(),

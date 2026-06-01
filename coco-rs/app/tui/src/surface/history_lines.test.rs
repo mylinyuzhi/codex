@@ -146,7 +146,7 @@ fn finalized_history_lines_show_collapsed_thinking_with_toggle_hint() {
 
     assert_eq!(
         plain_lines(&lines),
-        vec!["⏺ Thinking · 1.3s · 15 reasoning tokens · F2 to expand", "",]
+        vec!["⏺ Thinking · 1.3s · 15 reasoning tok · F2 to expand", "",]
     );
 }
 

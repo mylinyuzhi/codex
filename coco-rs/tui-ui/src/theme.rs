@@ -217,15 +217,24 @@ impl Theme {
             // background so user rows separate visually from prose.
             user_message_bg: Some(Color::Rgb(30, 36, 42)),
             assistant_message: Color::Cyan,
-            thinking: Color::Magenta,
+            // Thinking renders as normal text by default: `Color::Reset` =
+            // terminal default foreground. The renderer then de-emphasizes it
+            // with `.dim().italic()` (presentation/thinking.rs), matching
+            // codex-rs (history_cell/messages.rs) and Claude Code. The token
+            // stays wired through `.fg(styles.thinking())`, so a theme / config
+            // can recolor thinking later without touching render code.
+            thinking: Color::Reset,
             system_message: Color::DarkGray,
 
             tool_running: Color::Yellow,
             tool_completed: Color::Green,
-            tool_error: Color::Red,
+            // Soft coral instead of ANSI 31 — palette-independent, reads as a
+            // warm red rather than the terminal's muddy dark red. Matches the
+            // Claude Code TS `dark.error` (rgb(255,107,128)).
+            tool_error: Color::Rgb(255, 107, 128),
             warning: Color::Yellow,
             success: Color::Green,
-            error: Color::Red,
+            error: Color::Rgb(255, 107, 128),
 
             border: Color::DarkGray,
             border_focused: Color::Cyan,
@@ -235,7 +244,7 @@ impl Theme {
             selection_fg: Color::Cyan,
 
             diff_added: Color::Green,
-            diff_removed: Color::Red,
+            diff_removed: Color::Rgb(255, 107, 128),
 
             code_keyword: Color::Magenta,
             code_string: Color::Green,
@@ -276,15 +285,19 @@ impl Theme {
             user_message: Color::LightGreen,
             user_message_bg: Some(Color::Rgb(30, 36, 42)),
             assistant_message: Color::LightCyan,
-            thinking: Color::LightMagenta,
+            // Normal text by default (`Color::Reset`); the renderer adds
+            // `.dim().italic()`. Kept themeable — see default_theme.
+            thinking: Color::Reset,
             system_message: Color::DarkGray,
 
             tool_running: Color::LightYellow,
             tool_completed: Color::LightGreen,
-            tool_error: Color::LightRed,
+            // Soft coral — see default_theme. Brighter than ANSI 91 LightRed
+            // and palette-independent. Matches Claude Code TS `dark.error`.
+            tool_error: Color::Rgb(255, 107, 128),
             warning: Color::LightYellow,
             success: Color::LightGreen,
-            error: Color::LightRed,
+            error: Color::Rgb(255, 107, 128),
 
             border: Color::DarkGray,
             border_focused: Color::LightCyan,
@@ -294,7 +307,7 @@ impl Theme {
             selection_fg: Color::LightCyan,
 
             diff_added: Color::LightGreen,
-            diff_removed: Color::LightRed,
+            diff_removed: Color::Rgb(255, 107, 128),
 
             code_keyword: Color::LightMagenta,
             code_string: Color::LightGreen,
