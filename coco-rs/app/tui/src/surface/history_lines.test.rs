@@ -58,7 +58,7 @@ fn finalized_history_lines_do_not_emit_active_busy_tail() {
 #[test]
 fn finalized_history_lines_collapse_meta_by_default() {
     let theme = Theme::default();
-    let cells = vec![test_helpers::info_cell("", "system reminder")];
+    let cells = vec![test_helpers::info_cell("system", "system reminder")];
 
     let lines = render_finalized_history_lines(
         &cells,
@@ -74,7 +74,40 @@ fn finalized_history_lines_collapse_meta_by_default() {
         },
     );
 
-    assert_eq!(plain_lines(&lines), vec!["  # [system] system reminder"]);
+    assert_eq!(
+        plain_lines(&lines),
+        vec!["  # [system] system: system reminder"]
+    );
+}
+
+#[test]
+fn finalized_history_lines_render_empty_title_info_as_markdown() {
+    let theme = Theme::default();
+    let cells = vec![test_helpers::info_cell(
+        "",
+        "## Context Window Usage\n\n| Category | Tokens |\n|---|---:|\n| Messages | 123 |",
+    )];
+
+    let lines = render_finalized_history_lines(
+        &cells,
+        HistoryLineRenderOptions {
+            styles: UiStyles::new(&theme),
+            width: 80,
+            syntax_highlighting: SyntaxHighlighting::Disabled,
+            show_system_reminders: false,
+            show_thinking: false,
+            kb_handle: None,
+            replay_cache_policy: HistoryReplayCachePolicy::default(),
+            reasoning_metadata: None,
+        },
+    );
+    let rendered = plain_lines(&lines).join("\n");
+
+    assert!(rendered.contains("Context Window Usage"), "{rendered}");
+    assert!(
+        !rendered.contains("# [system] ## Context Window Usage"),
+        "{rendered}"
+    );
 }
 
 #[test]
