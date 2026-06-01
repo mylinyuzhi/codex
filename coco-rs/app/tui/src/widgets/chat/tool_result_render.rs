@@ -34,6 +34,8 @@ use ratatui::text::Text;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use serde_json::Value;
+use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 use super::TOOL_OUTPUT_PREVIEW_ROWS;
 use super::output_result_line;
@@ -43,6 +45,9 @@ use super::transcript_safe_line;
 use crate::presentation::transcript::TRANSCRIPT_EXPANDED_CELL_LINE_CAP;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
+use coco_types::ApplyPatchPreview;
+use coco_types::ApplyPatchPreviewRow;
+use coco_types::ToolDisplayData;
 use coco_types::ToolName;
 
 /// Tool-input field keys, named once so the per-tool renderers don't scatter
@@ -50,7 +55,6 @@ use coco_types::ToolName;
 mod field {
     pub(super) const OLD_STRING: &str = "old_string";
     pub(super) const NEW_STRING: &str = "new_string";
-    pub(super) const PATCH: &str = "patch";
     pub(super) const FILE_PATH: &str = "file_path";
     pub(super) const CONTENT: &str = "content";
     pub(super) const NEW_SOURCE: &str = "new_source";
@@ -69,6 +73,7 @@ const STRUCTURED_PREVIEW_ROWS: usize = 14;
 const PLAIN_TOOL_PREVIEW_ROWS: usize = TOOL_OUTPUT_PREVIEW_ROWS;
 /// Single-line header cap (matches the invocation header's preview width).
 const HEADER_CAP: usize = 96;
+const TAB_WIDTH: usize = 4;
 
 /// Everything the per-tool renderers need from their host surface. Decouples the
 /// renderer from `ChatWidget` so the inline chat and the transcript reader share
@@ -99,12 +104,19 @@ impl ToolResultRenderCtx<'_> {
     /// Truncation marker — a plain indented continuation row (no `└` gutter, which
     /// reads as a new block), eliding the hint when the surface has none.
     fn truncation_line(&self, omitted: usize) -> Line<'static> {
-        let text = if self.expand_hint.is_empty() {
+        output_result_line(
+            self.truncation_text(omitted),
+            self.styles.dim(),
+            /*first*/ false,
+        )
+    }
+
+    fn truncation_text(&self, omitted: usize) -> String {
+        if self.expand_hint.is_empty() {
             format!("… +{omitted} lines")
         } else {
             format!("… +{omitted} lines {}", self.expand_hint)
-        };
-        output_result_line(text, self.styles.dim(), /*first*/ false)
+        }
     }
 }
 
@@ -114,10 +126,20 @@ pub(crate) fn render_tool_result_body(
     tool_name: &str,
     input: Option<&Value>,
     output: &str,
+    display_data: Option<&ToolDisplayData>,
     is_error: bool,
     lines: &mut Vec<Line<'static>>,
 ) {
     if is_error {
+        if matches!(tool_name.parse::<ToolName>(), Ok(ToolName::ApplyPatch))
+            && let Some(preview) = apply_patch_preview(display_data)
+        {
+            lines.extend(render_capped_apply_patch_preview(
+                cx,
+                preview,
+                cx.rows(DIFF_PREVIEW_ROWS),
+            ));
+        }
         // Errors are uniform across tools: the message matters, not the shape.
         push_text_preview(
             cx,
@@ -129,7 +151,7 @@ pub(crate) fn render_tool_result_body(
         return;
     }
     match tool_name.parse::<ToolName>() {
-        Ok(name) => render_known(cx, name, input, output, lines),
+        Ok(name) => render_known(cx, name, input, output, display_data, lines),
         // MCP (`mcp__server__tool`) / plugin / custom names don't parse.
         Err(_) => render_structured_default(cx, output, lines),
     }
@@ -141,13 +163,14 @@ fn render_known(
     name: ToolName,
     input: Option<&Value>,
     output: &str,
+    display_data: Option<&ToolDisplayData>,
     lines: &mut Vec<Line<'static>>,
 ) {
     use ToolName::*;
     match name {
         // ── Edits → colored unified diff ───────────────────────────────
         Edit => render_edit_diff(cx, input, output, lines),
-        ApplyPatch => render_apply_patch(cx, input, output, lines),
+        ApplyPatch => render_apply_patch(cx, input, output, display_data, lines),
         // ── File content → syntax-highlighted code ─────────────────────
         Read => render_read(cx, input, output, lines),
         Write => render_write(cx, input, output, lines),
@@ -184,9 +207,15 @@ fn render_edit_diff(
         let new = str_field(input, field::NEW_STRING).unwrap_or_default();
         if old != new {
             let diff = unified_diff_text(&old, &new);
-            let rendered =
-                coco_tui_ui::widgets::diff_display::render_diff_lines(&diff, cx.styles, cx.width);
-            push_capped(cx, indent2(rendered), cx.rows(DIFF_PREVIEW_ROWS), lines);
+            let width = cx.width.saturating_sub(2);
+            let rendered = coco_tui_ui::widgets::diff_display::render_diff_preview_lines(
+                &diff,
+                cx.styles,
+                width,
+                cx.rows(DIFF_PREVIEW_ROWS),
+                |omitted| Line::from(Span::raw(cx.truncation_text(omitted)).fg(cx.styles.dim())),
+            );
+            lines.extend(indent2(rendered));
             return;
         }
     }
@@ -196,32 +225,269 @@ fn render_edit_diff(
 
 fn render_apply_patch(
     cx: &ToolResultRenderCtx<'_>,
-    input: Option<&Value>,
+    _input: Option<&Value>,
     output: &str,
+    display_data: Option<&ToolDisplayData>,
     lines: &mut Vec<Line<'static>>,
 ) {
-    // apply_patch carries a `*** Begin Patch`-style body that is NOT standard
-    // unified-diff, so colour the +/- lines directly rather than feeding the
-    // unified-diff parser. The field is `patch` (see `ApplyPatchInput`).
-    let patch = input
-        .and_then(|i| str_field(i, field::PATCH))
-        .filter(|p| !p.trim().is_empty());
-    let Some(patch) = patch else {
-        render_output_preview(cx, output, lines);
+    if let Some(preview) = apply_patch_preview(display_data) {
+        lines.extend(render_capped_apply_patch_preview(
+            cx,
+            preview,
+            cx.rows(DIFF_PREVIEW_ROWS),
+        ));
         return;
+    }
+
+    render_output_preview(cx, output, lines);
+}
+
+fn push_apply_patch_signed_row(
+    cx: &ToolResultRenderCtx<'_>,
+    sign: char,
+    content: &str,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let color = match sign {
+        '+' => cx.styles.diff_added(),
+        '-' => cx.styles.diff_removed(),
+        _ => cx.styles.dim(),
     };
-    let rendered: Vec<Line<'static>> = patch
-        .lines()
-        .map(|raw| {
-            let color = match raw.as_bytes().first() {
-                Some(b'+') => cx.styles.diff_added(),
-                Some(b'-') => cx.styles.diff_removed(),
-                _ => cx.styles.dim(),
-            };
-            Line::from(Span::raw(format!("  {}", transcript_safe_line(raw))).fg(color))
+    let content = transcript_safe_line(content);
+    let prefix_cols = 5usize;
+    let content_width = (cx.width as usize).saturating_sub(prefix_cols).max(1);
+    let chunks = wrap_plain_text(&content, content_width);
+
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        let mut spans = if index == 0 {
+            vec![
+                Span::raw("    ").fg(cx.styles.dim()),
+                Span::raw(sign.to_string()).fg(color),
+            ]
+        } else {
+            vec![Span::raw(" ".repeat(prefix_cols)).fg(cx.styles.dim())]
+        };
+        spans.push(Span::raw(chunk).fg(color));
+        lines.push(Line::from(spans));
+    }
+}
+
+fn push_apply_patch_raw_row(
+    cx: &ToolResultRenderCtx<'_>,
+    content: &str,
+    lines: &mut Vec<Line<'static>>,
+) {
+    push_apply_patch_wrapped_row(cx, "    ".to_string(), content, cx.styles.dim(), lines);
+}
+
+fn render_apply_patch_preview(
+    cx: &ToolResultRenderCtx<'_>,
+    preview: &ApplyPatchPreview,
+) -> Vec<Line<'static>> {
+    let mut rendered = Vec::new();
+    for row in &preview.rows {
+        push_apply_patch_preview_row(cx, row, &mut rendered);
+    }
+    rendered
+}
+
+fn render_capped_apply_patch_preview(
+    cx: &ToolResultRenderCtx<'_>,
+    preview: &ApplyPatchPreview,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
+    let rows = cap_apply_patch_preview_rows(cx, &preview.rows, max_rows);
+    let capped = ApplyPatchPreview { rows };
+    render_apply_patch_preview(cx, &capped)
+}
+
+fn apply_patch_preview(display_data: Option<&ToolDisplayData>) -> Option<&ApplyPatchPreview> {
+    match display_data {
+        Some(ToolDisplayData::ApplyPatchPreview(preview)) if !preview.rows.is_empty() => {
+            Some(preview)
+        }
+        Some(ToolDisplayData::ApplyPatchPreview(_)) | None => None,
+    }
+}
+
+fn push_apply_patch_preview_row(
+    cx: &ToolResultRenderCtx<'_>,
+    row: &ApplyPatchPreviewRow,
+    lines: &mut Vec<Line<'static>>,
+) {
+    match row {
+        ApplyPatchPreviewRow::Header { action, target } => {
+            lines.push(output_result_line(
+                single_line_capped(&format!("{} {target}", action.as_str()), HEADER_CAP),
+                cx.styles.secondary(),
+                lines.is_empty(),
+            ));
+        }
+        ApplyPatchPreviewRow::Line { sign, content } => {
+            push_apply_patch_signed_row(cx, sign.as_char(), content, lines);
+        }
+        ApplyPatchPreviewRow::Raw { content } => {
+            push_apply_patch_raw_row(cx, content, lines);
+        }
+        ApplyPatchPreviewRow::Omitted { rows } => {
+            lines.push(output_result_line(
+                cx.truncation_text(omitted_rows_to_usize(*rows)),
+                cx.styles.dim(),
+                lines.is_empty(),
+            ));
+        }
+    }
+}
+
+fn cap_apply_patch_preview_rows(
+    cx: &ToolResultRenderCtx<'_>,
+    rows: &[ApplyPatchPreviewRow],
+    max_rows: usize,
+) -> Vec<ApplyPatchPreviewRow> {
+    if max_rows == 0 || rows.is_empty() {
+        return Vec::new();
+    }
+
+    let row_counts: Vec<usize> = rows
+        .iter()
+        .map(|row| {
+            let mut rendered = Vec::new();
+            push_apply_patch_preview_row(cx, row, &mut rendered);
+            rendered_line_count(cx, &rendered)
         })
         .collect();
-    push_capped(cx, rendered, cx.rows(DIFF_PREVIEW_ROWS), lines);
+    let total_rows: usize = row_counts.iter().sum();
+    if total_rows <= max_rows {
+        return merge_adjacent_omitted_rows(rows.to_vec());
+    }
+
+    let all_omitted = sum_apply_patch_logical_rows(rows);
+    let ellipsis_rows = rendered_line_count(
+        cx,
+        &[output_result_line(
+            cx.truncation_text(omitted_rows_to_usize(all_omitted)),
+            cx.styles.dim(),
+            true,
+        )],
+    );
+    if ellipsis_rows >= max_rows {
+        return vec![ApplyPatchPreviewRow::Omitted { rows: all_omitted }];
+    }
+
+    let available_rows = max_rows - ellipsis_rows;
+    let head_budget = available_rows / 2;
+    let tail_budget = available_rows - head_budget;
+
+    let mut head = Vec::new();
+    let mut head_rows = 0usize;
+    let mut head_end = 0usize;
+    while head_end < rows.len() {
+        let row_count = row_counts[head_end];
+        if head_rows + row_count > head_budget {
+            break;
+        }
+        head_rows += row_count;
+        head.push(rows[head_end].clone());
+        head_end += 1;
+    }
+
+    let mut tail_reversed = Vec::new();
+    let mut tail_rows = 0usize;
+    let mut tail_start = rows.len();
+    while tail_start > head_end {
+        let idx = tail_start - 1;
+        let row_count = row_counts[idx];
+        if tail_rows + row_count > tail_budget {
+            break;
+        }
+        tail_rows += row_count;
+        tail_reversed.push(rows[idx].clone());
+        tail_start -= 1;
+    }
+
+    let omitted = sum_apply_patch_logical_rows(&rows[head_end..tail_start]);
+    if omitted > 0 {
+        head.push(ApplyPatchPreviewRow::Omitted { rows: omitted });
+    }
+    head.extend(tail_reversed.into_iter().rev());
+    merge_adjacent_omitted_rows(head)
+}
+
+fn rendered_line_count(cx: &ToolResultRenderCtx<'_>, lines: &[Line<'static>]) -> usize {
+    if lines.is_empty() {
+        return 0;
+    }
+    let width = cx.width.max(1);
+    lines
+        .iter()
+        .map(|line| {
+            Paragraph::new(Text::from(vec![line.clone()]))
+                .wrap(Wrap { trim: false })
+                .line_count(width)
+                .max(1)
+        })
+        .sum()
+}
+
+fn sum_apply_patch_logical_rows(rows: &[ApplyPatchPreviewRow]) -> i64 {
+    rows.iter().fold(0i64, |total, row| {
+        total.saturating_add(match row {
+            ApplyPatchPreviewRow::Omitted { rows } => (*rows).max(0),
+            ApplyPatchPreviewRow::Header { .. }
+            | ApplyPatchPreviewRow::Line { .. }
+            | ApplyPatchPreviewRow::Raw { .. } => 1,
+        })
+    })
+}
+
+fn merge_adjacent_omitted_rows(rows: Vec<ApplyPatchPreviewRow>) -> Vec<ApplyPatchPreviewRow> {
+    let mut merged: Vec<ApplyPatchPreviewRow> = Vec::with_capacity(rows.len());
+    for row in rows {
+        match (merged.last_mut(), row) {
+            (
+                Some(ApplyPatchPreviewRow::Omitted { rows: existing }),
+                ApplyPatchPreviewRow::Omitted { rows },
+            ) => {
+                *existing = existing.saturating_add(rows.max(0));
+            }
+            (_, ApplyPatchPreviewRow::Omitted { rows }) if rows <= 0 => {}
+            (_, row) => merged.push(row),
+        }
+    }
+    merged
+}
+
+fn omitted_rows_to_usize(rows: i64) -> usize {
+    match usize::try_from(rows.max(0)) {
+        Ok(rows) => rows,
+        Err(_) => usize::MAX,
+    }
+}
+
+fn push_apply_patch_wrapped_row(
+    cx: &ToolResultRenderCtx<'_>,
+    prefix: String,
+    content: &str,
+    color: ratatui::style::Color,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let content = transcript_safe_line(content);
+    let prefix_cols = display_width(&prefix);
+    let content_width = (cx.width as usize).saturating_sub(prefix_cols).max(1);
+    let chunks = wrap_plain_text(&content, content_width);
+    let continuation = " ".repeat(prefix_cols);
+
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        let row_prefix = if index == 0 {
+            prefix.clone()
+        } else {
+            continuation.clone()
+        };
+        lines.push(Line::from(vec![
+            Span::raw(row_prefix).fg(cx.styles.dim()),
+            Span::raw(chunk).fg(color),
+        ]));
+    }
 }
 
 // ── File content ─────────────────────────────────────────────────────────
@@ -424,16 +690,6 @@ fn render_code(
         rendered.push(cx.truncation_line(omitted));
     }
     lines.extend(truncate_lines_middle(cx, rendered, rows, omitted_hint));
-}
-
-/// Head-truncate already-rendered rich lines, appending an expand hint.
-fn push_capped(
-    cx: &ToolResultRenderCtx<'_>,
-    rendered: Vec<Line<'static>>,
-    max: usize,
-    out: &mut Vec<Line<'static>>,
-) {
-    out.extend(truncate_lines_middle(cx, rendered, max, None));
 }
 
 /// Plain-text preview with a configurable row budget and base color.
@@ -647,6 +903,39 @@ fn file_ext(path: &str) -> String {
         .and_then(|e| e.to_str())
         .unwrap_or_default()
         .to_string()
+}
+
+fn wrap_plain_text(text: &str, max_cols: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut current = String::new();
+    let mut col = 0usize;
+
+    for ch in text.chars() {
+        let width = char_width(ch);
+        if col + width > max_cols && !current.is_empty() {
+            rows.push(std::mem::take(&mut current));
+            col = 0;
+        }
+        current.push(ch);
+        col += width;
+        if col >= max_cols {
+            rows.push(std::mem::take(&mut current));
+            col = 0;
+        }
+    }
+
+    if !current.is_empty() || rows.is_empty() {
+        rows.push(current);
+    }
+    rows
+}
+
+fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+fn char_width(ch: char) -> usize {
+    ch.width().unwrap_or(if ch == '\t' { TAB_WIDTH } else { 0 })
 }
 
 #[cfg(test)]

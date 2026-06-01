@@ -11,6 +11,42 @@ fn wrap_patch(body: &str) -> String {
     format!("*** Begin Patch\n{body}\n*** End Patch")
 }
 
+#[test]
+fn test_collect_path_effects_add_delete_update_move() {
+    let dir = tempdir().unwrap();
+    let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).unwrap();
+    let absolute_delete = dir.path().join("absolute-delete.txt");
+    let patch = wrap_patch(&format!(
+        r#"*** Add File: add.txt
++add
+*** Delete File: {}
+*** Update File: update.txt
+@@
+-old
++new
+*** Update File: old-name.txt
+*** Move to: nested/new-name.txt
+@@
+-old_name
++new_name"#,
+        absolute_delete.display(),
+    ));
+    let parsed = parse_patch(&patch).unwrap();
+
+    let effects = collect_path_effects(&parsed.hunks, &cwd);
+
+    let expected = vec![
+        dir.path().join("absolute-delete.txt"),
+        dir.path().join("add.txt"),
+        dir.path().join("nested/new-name.txt"),
+        dir.path().join("old-name.txt"),
+        dir.path().join("update.txt"),
+    ];
+    assert_eq!(effects.permission_paths, expected);
+    assert_eq!(effects.history_paths, expected);
+    assert_eq!(effects.lsp_notify_paths, expected);
+}
+
 #[tokio::test]
 async fn test_add_file_hunk_creates_file_with_contents() {
     let dir = tempdir().unwrap();

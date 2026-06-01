@@ -12,6 +12,7 @@
 mod agent;
 mod agent_ipc;
 mod app_state;
+mod apply_patch_preview;
 mod attachment_kind;
 mod cache;
 mod client_request;
@@ -103,6 +104,13 @@ pub use agent_ipc::TeamContext;
 pub use agent_ipc::TeammateEntry;
 pub use agent_ipc::TeammateProtocolContent;
 pub use agent_ipc::TeammateProtocolMessage;
+
+// Apply-patch UI preview DTOs.
+pub use apply_patch_preview::ApplyPatchPreview;
+pub use apply_patch_preview::ApplyPatchPreviewAction;
+pub use apply_patch_preview::ApplyPatchPreviewRow;
+pub use apply_patch_preview::ApplyPatchPreviewSign;
+pub use apply_patch_preview::ToolDisplayData;
 
 // Event types (three-layer CoreEvent system; see event-system-design.md)
 pub use event::AgentInfo;

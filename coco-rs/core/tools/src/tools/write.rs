@@ -174,6 +174,7 @@ impl Tool for WriteTool {
                         "{file_path} must be read with the Read tool before it can be \
                          overwritten. This prevents accidental data loss from unseen files."
                     ),
+                    display_data: None,
                     source: None,
                 });
             };
@@ -187,6 +188,7 @@ impl Tool for WriteTool {
                         "{file_path} has been modified since it was last read \
                          (mtime changed). Read it again before overwriting."
                     ),
+                    display_data: None,
                     source: None,
                 });
             }
@@ -211,6 +213,7 @@ impl Tool for WriteTool {
                             "{file_path} has been modified since it was last read \
                              (content changed). Read it again before overwriting."
                         ),
+                        display_data: None,
                         source: None,
                     });
                 }
@@ -222,6 +225,7 @@ impl Tool for WriteTool {
         if let Some(err) = crate::check_write_root_fence(ctx, path) {
             return Err(ToolError::ExecutionFailed {
                 message: err,
+                display_data: None,
                 source: None,
             });
         }
@@ -234,6 +238,7 @@ impl Tool for WriteTool {
         if let Some(err) = crate::check_team_mem_secret(ctx, path, content) {
             return Err(ToolError::ExecutionFailed {
                 message: err,
+                display_data: None,
                 source: None,
             });
         }
@@ -269,6 +274,7 @@ impl Tool for WriteTool {
         {
             std::fs::create_dir_all(parent).map_err(|e| ToolError::ExecutionFailed {
                 message: format!("failed to create directory {}: {e}", parent.display()),
+                display_data: None,
                 source: None,
             })?;
         }
@@ -286,6 +292,7 @@ impl Tool for WriteTool {
         )
         .map_err(|e| ToolError::ExecutionFailed {
             message: format!("failed to write {file_path}: {e}"),
+            display_data: None,
             source: None,
         })?;
 
@@ -319,6 +326,7 @@ impl Tool for WriteTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

@@ -2172,6 +2172,7 @@ impl coco_tool_runtime::Tool for HookOrderingTool {
             new_messages: vec![coco_messages::create_user_message("tool new message")],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -2235,6 +2236,7 @@ impl coco_tool_runtime::Tool for HookOrderingMcpTool {
             new_messages: vec![coco_messages::create_user_message("tool new message")],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -2283,6 +2285,7 @@ impl coco_tool_runtime::Tool for HookFailTool {
     ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
         Err(coco_tool_runtime::ToolError::ExecutionFailed {
             message: "kaboom".into(),
+            display_data: None,
             source: None,
         })
     }

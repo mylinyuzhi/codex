@@ -377,6 +377,7 @@ fn tool_results_from_ts_user_entry(entry: &TranscriptEntry) -> Option<Vec<coco_m
             coco_messages::ToolResultMessage {
                 uuid,
                 source_assistant_uuid,
+                display_data: None,
                 message: coco_messages::LlmMessage::tool(vec![
                     coco_messages::ToolContent::ToolResult(part),
                 ]),

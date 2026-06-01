@@ -165,6 +165,7 @@ fn build_transcript_summary_compresses_tool_blocks() {
         Arc::new(Message::ToolResult(ToolResultMessage {
             uuid: Uuid::new_v4(),
             source_assistant_uuid: None,
+            display_data: None,
             message: LlmMessage::Tool {
                 content: vec![ToolContentPart::ToolResult(ToolResultPart::new(
                     "tu_1",

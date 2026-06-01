@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::json;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -288,11 +289,32 @@ async fn run_status_line_command_with_timeout(
         stdin.write_all(b"\n").await?;
     }
 
-    let output = timeout(timeout_duration, child.wait_with_output()).await??;
-    if !output.status.success() {
-        anyhow::bail!("statusLine command exited with {}", output.status);
+    let mut stdout = child.stdout.take();
+    let stdout_task = tokio::spawn(async move {
+        let mut output = Vec::new();
+        if let Some(stdout) = stdout.as_mut() {
+            stdout.read_to_end(&mut output).await?;
+        }
+        Ok::<Vec<u8>, std::io::Error>(output)
+    });
+
+    let status = match timeout(timeout_duration, child.wait()).await {
+        Ok(status) => status?,
+        Err(_) => {
+            #[cfg(unix)]
+            if let Some(pid) = child.id() {
+                let _ = coco_utils_pty::process_group::kill_process_group_by_pid(pid);
+            }
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            anyhow::bail!("statusLine command timed out after {timeout_duration:?}");
+        }
+    };
+    let output = stdout_task.await??;
+    if !status.success() {
+        anyhow::bail!("statusLine command exited with {status}");
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&output);
     let clean = strip_ansi(&stdout);
     Ok(normalize_output(&clean))
 }
@@ -308,6 +330,8 @@ fn shell_command(command: &str) -> Command {
     {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(command);
+        #[cfg(unix)]
+        cmd.process_group(0);
         cmd
     }
 }

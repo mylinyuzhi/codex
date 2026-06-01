@@ -44,6 +44,7 @@ impl crate::traits::Tool for SafeTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -83,6 +84,7 @@ impl crate::traits::Tool for UnsafeTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -211,6 +213,7 @@ impl crate::traits::Tool for SlowSafeTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -255,6 +258,7 @@ impl crate::traits::Tool for PatchSafeTool {
                 state.plan_mode_attachment_count = state.plan_mode_attachment_count * 10 + digit;
             })),
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

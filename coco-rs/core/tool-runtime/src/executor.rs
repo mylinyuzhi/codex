@@ -315,6 +315,7 @@ impl StreamingToolExecutor {
                         tool_id: tracked.tool.id(),
                         result: Err(ToolError::ExecutionFailed {
                             message: SyntheticToolError::StreamingFallback.to_string(),
+                            display_data: None,
                             source: None,
                         }),
                         duration_ms: 0,
@@ -586,6 +587,7 @@ impl StreamingToolExecutor {
                         message: SyntheticToolError::SiblingError {
                             failed_tool: "sibling".into(),
                         }.to_string(),
+                        display_data: None,
                         source: None,
                     }),
                 };
@@ -654,6 +656,7 @@ impl StreamingToolExecutor {
                         tool_id: saved_tool_id,
                         result: Err(ToolError::ExecutionFailed {
                             message: format!("task join error: {e}"),
+                            display_data: None,
                             source: None,
                         }),
                         duration_ms: 0,

@@ -28,6 +28,7 @@ coco-subagent.workspace = true
 # One-way: coco-system-reminder does NOT depend on coco-tool-runtime.
 coco-system-reminder.workspace = true
 coco-utils-json-repair.workspace = true
+coco-utils-string.workspace = true
 
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true

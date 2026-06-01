@@ -691,6 +691,7 @@ impl Tool for BashTool {
                 message:
                     "Background task execution is not available in this context (no TaskRuntime)."
                         .into(),
+                display_data: None,
                 source: None,
             });
         }
@@ -741,6 +742,7 @@ async fn execute_via_task_runtime(
         // Reaching here is a programmer error, not user input.
         ToolError::ExecutionFailed {
             message: "execute_via_task_runtime invoked without task_handle".into(),
+            display_data: None,
             source: None,
         }
     })?;
@@ -793,6 +795,7 @@ async fn execute_via_task_runtime(
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to spawn shell task: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -811,6 +814,7 @@ async fn execute_via_task_runtime(
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         });
     }
 
@@ -820,6 +824,7 @@ async fn execute_via_task_runtime(
         .await
         .ok_or_else(|| ToolError::ExecutionFailed {
             message: "task vanished after spawn (no terminal handle)".into(),
+            display_data: None,
             source: None,
         })?;
     let detach =
@@ -828,6 +833,7 @@ async fn execute_via_task_runtime(
             .await
             .ok_or_else(|| ToolError::ExecutionFailed {
                 message: "task vanished after spawn (no detach handle)".into(),
+                display_data: None,
                 source: None,
             })?;
 
@@ -854,6 +860,7 @@ async fn execute_via_task_runtime(
     match outcome {
         BashOutcome::Cancelled => Err(ToolError::ExecutionFailed {
             message: "Bash command was interrupted by the user.".into(),
+            display_data: None,
             source: None,
         }),
         BashOutcome::Terminal => {
@@ -863,6 +870,7 @@ async fn execute_via_task_runtime(
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: format!("Failed to read terminal outputs: {e}"),
+                    display_data: None,
                     source: None,
                 })?;
             let max_bytes = max_output_bytes(&ctx.tool_config);
@@ -891,6 +899,7 @@ async fn execute_via_task_runtime(
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             })
         }
         BashOutcome::Detached { by_user } => {
@@ -922,6 +931,7 @@ async fn execute_via_task_runtime(
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             })
         }
     }
@@ -1020,6 +1030,7 @@ async fn execute_foreground(
 
     let mut cmd_result = cmd_result.map_err(|e| ToolError::ExecutionFailed {
         message: format!("shell execution failed: {e}"),
+        display_data: None,
         source: None,
     })?;
 
@@ -1078,6 +1089,7 @@ async fn execute_foreground(
         };
         return Err(ToolError::ExecutionFailed {
             message: format!("Command timed out after {timeout_ms}ms.{suggestion}"),
+            display_data: None,
             source: None,
         });
     }
@@ -1153,6 +1165,7 @@ async fn execute_foreground(
         new_messages: vec![],
         app_state_patch: None,
         permission_updates: Vec::new(),
+        display_data: None,
     })
 }
 
@@ -1279,6 +1292,7 @@ async fn apply_sed_edit(
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         });
     }
 
@@ -1298,6 +1312,7 @@ async fn apply_sed_edit(
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             });
         }
     };
@@ -1313,6 +1328,7 @@ async fn apply_sed_edit(
     {
         return Err(ToolError::ExecutionFailed {
             message: format!("failed to write sed-edit result to {file_path}: {e}"),
+            display_data: None,
             source: None,
         });
     }
@@ -1334,6 +1350,7 @@ async fn apply_sed_edit(
         new_messages: vec![],
         app_state_patch: None,
         permission_updates: Vec::new(),
+        display_data: None,
     })
 }
 

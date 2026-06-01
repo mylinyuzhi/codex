@@ -170,11 +170,12 @@ pub(crate) fn tool_call_header_preview_model(
     }
 }
 
-/// Extract `(tool_name, output_text)` from a `Message::ToolResult`.
+/// Project model-facing output and optional typed display data from a
+/// `Message::ToolResult`.
 /// Pure data accessor — consumed by `render_tool::try_render` to
 /// build the result row. Concatenates the `ToolResultOutput` variants
 /// to text (JSON parts serialise to their string representation).
-pub(crate) fn tool_result_output(msg: &Message) -> Option<(String, String)> {
+pub(crate) fn tool_result_output(msg: &Message) -> Option<ToolResultProjection<'_>> {
     use coco_messages::ToolContent;
     use coco_messages::ToolResultContentPart;
     use coco_messages::ToolResultOutput;
@@ -205,7 +206,17 @@ pub(crate) fn tool_result_output(msg: &Message) -> Option<(String, String)> {
         ToolResultOutput::ErrorJson { value, .. } => value.to_string(),
         ToolResultOutput::ExecutionDenied { reason, .. } => reason.clone().unwrap_or_default(),
     };
-    Some((tool_name, output))
+    Some(ToolResultProjection {
+        tool_name,
+        output,
+        display_data: tr.display_data.as_ref(),
+    })
+}
+
+pub(crate) struct ToolResultProjection<'a> {
+    pub(crate) tool_name: String,
+    pub(crate) output: String,
+    pub(crate) display_data: Option<&'a coco_types::ToolDisplayData>,
 }
 
 /// Map a raw id string to a `Uuid`. Returns the parsed UUID when the

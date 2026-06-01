@@ -924,6 +924,7 @@ fn rewrite_tool_result_to_placeholder(
     Some(ToolResultMessage {
         uuid: orig.uuid,
         source_assistant_uuid: orig.source_assistant_uuid,
+        display_data: orig.display_data.clone(),
         message: LlmMessage::Tool {
             content: new_content,
             provider_options: provider_options.clone(),

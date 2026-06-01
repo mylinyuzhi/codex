@@ -670,6 +670,7 @@ impl Tool for ToolSearchTool {
                     build_discovery_patch(&matches)
                 },
                 permission_updates: Vec::new(),
+                display_data: None,
             });
         }
 
@@ -694,6 +695,7 @@ impl Tool for ToolSearchTool {
                 build_discovery_patch(&matches)
             },
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

@@ -151,6 +151,7 @@ impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
         if input.get("_simulatedSedEdit").is_some() {
             return Err(ToolError::ExecutionFailed {
                 message: "execution received unstripped input".into(),
+                display_data: None,
                 source: None,
             });
         }
@@ -160,6 +161,7 @@ impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -253,6 +255,7 @@ impl crate::traits::Tool for EchoTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

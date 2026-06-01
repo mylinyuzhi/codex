@@ -30,6 +30,7 @@ coco-utils-absolute-path.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+similar.workspace = true
 # Per-tool typed Input/Output structs derive `JsonSchema` (Step 3
 # of the Tool trait refactor). The blanket `Tool::input_schema()` /
 # `output_schema()` defaults in `coco-tool-runtime` consume the

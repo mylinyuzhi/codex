@@ -171,6 +171,7 @@ impl Tool for SendMessageTool {
                          minimal SDK embedding) to enable transcript-backed resume.",
                         status = info.status,
                     ),
+                    display_data: None,
                     source: None,
                 });
             };
@@ -183,6 +184,7 @@ impl Tool for SendMessageTool {
                         "Agent '{to}' is stopped ({status:?}) and could not be resumed: {e}",
                         status = info.status,
                     ),
+                    display_data: None,
                     source: None,
                 })?;
             let new_id = resume.agent_id.as_deref().unwrap_or(to);
@@ -200,6 +202,7 @@ impl Tool for SendMessageTool {
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             });
         }
 
@@ -237,6 +240,7 @@ impl Tool for SendMessageTool {
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: e,
+                    display_data: None,
                     source: None,
                 })?;
 
@@ -245,6 +249,7 @@ impl Tool for SendMessageTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

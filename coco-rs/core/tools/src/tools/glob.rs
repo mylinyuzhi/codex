@@ -209,6 +209,7 @@ impl Tool for GlobTool {
         if !search_path.exists() {
             return Err(ToolError::ExecutionFailed {
                 message: format!("search path does not exist: {}", search_path.display()),
+                display_data: None,
                 source: None,
             });
         }
@@ -248,10 +249,12 @@ impl Tool for GlobTool {
                 })?
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: format!("glob search task failed: {e}"),
+                    display_data: None,
                     source: None,
                 })?
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: e,
+                    display_data: None,
                     source: None,
                 })?;
 
@@ -272,6 +275,7 @@ impl Tool for GlobTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

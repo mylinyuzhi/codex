@@ -397,6 +397,7 @@ fn strip_images_walks_tool_result_content() {
     };
     let tool_result = Message::ToolResult(ToolResultMessage {
         source_assistant_uuid: None,
+        display_data: None,
         message: LlmMessage::Tool {
             content: vec![ToolContent::ToolResult(InternalTrc {
                 tool_call_id: "abc".into(),

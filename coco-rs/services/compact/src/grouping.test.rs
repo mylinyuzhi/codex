@@ -60,6 +60,7 @@ fn tool_result_msg() -> Message {
     Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
         source_assistant_uuid: None,
+        display_data: None,
         message: LlmMessage::Tool {
             content: vec![ToolContent::ToolResult(ToolResultContent {
                 tool_call_id: "call_1".into(),
