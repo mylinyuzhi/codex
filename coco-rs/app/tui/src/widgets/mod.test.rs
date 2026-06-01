@@ -198,8 +198,8 @@ fn test_snapshot_tool_result_middle_truncation() {
     state.session.model = "opus-4".to_string();
     test_helpers::push_user_text(&mut state.session, "1", "find the CLAUDE.md");
     test_helpers::push_tool_use(&mut state.session, "c1", "Glob", "**/CLAUDE.md");
-    // 18 paths exceed the Grep/Glob match-list cap so the renderer still
-    // exercises the head + "… +N lines" + tail middle-truncation path.
+    // 18 paths exceed the Glob five-row cap so the renderer still exercises
+    // the head + "… +N lines" + tail middle-truncation path.
     test_helpers::push_tool_result(
         &mut state.session,
         "c1",
@@ -226,6 +226,7 @@ fn test_snapshot_tool_result_middle_truncation() {
     );
 
     let output = render_to_string(&state, 96, 24);
+    assert!(output.contains("… +14 lines (ctrl+o to expand)"));
     insta::assert_snapshot!("tool_result_middle_truncation", output);
 }
 
@@ -264,6 +265,28 @@ fn assistant_text_after_tool_result_keeps_dot_and_full_body() {
     assert!(output.contains("common/error/README.md"));
     assert!(output.contains("Error status codes"));
     assert!(!output.contains("… output truncated in UI"));
+}
+
+#[test]
+fn slash_markdown_result_renders_full_markdown_body() {
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    test_helpers::push_info(
+        &mut state.session,
+        "",
+        "## Context Window Usage\n\n| Category | Tokens |\n|---|---:|\n| Messages | 123 |",
+    );
+
+    let output = render_to_string(&state, 80, 24);
+    assert!(output.contains("Context Window Usage"));
+    assert!(
+        output.contains('┌') && output.contains('└'),
+        "slash markdown table was not rendered:\n{output}"
+    );
+    assert!(
+        !output.contains("# [system] ## Context Window Usage"),
+        "slash markdown result should not collapse to a meta preview:\n{output}"
+    );
 }
 
 #[test]

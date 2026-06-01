@@ -24,11 +24,15 @@
 //! views (diffs, highlighted file content, the web target) degrade gracefully to
 //! output-only.
 
+use std::collections::VecDeque;
 use std::path::Path;
 
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::text::Text;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
 use serde_json::Value;
 
 use super::TOOL_OUTPUT_PREVIEW_ROWS;
@@ -37,8 +41,6 @@ use super::result_line;
 use super::single_line_capped;
 use super::transcript_safe_line;
 use crate::presentation::transcript::TRANSCRIPT_EXPANDED_CELL_LINE_CAP;
-use crate::presentation::transcript::ToolOutputPreview;
-use crate::presentation::transcript::tool_output_preview;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 use coco_types::ToolName;
@@ -63,9 +65,8 @@ mod field {
 /// Inline row caps before truncation (full body shown when `ctx.expanded`).
 const DIFF_PREVIEW_ROWS: usize = 24;
 const CODE_PREVIEW_ROWS: usize = 20;
-const MATCH_PREVIEW_ROWS: usize = 14;
 const STRUCTURED_PREVIEW_ROWS: usize = 14;
-const COMMAND_PREVIEW_ROWS: usize = 10;
+const PLAIN_TOOL_PREVIEW_ROWS: usize = TOOL_OUTPUT_PREVIEW_ROWS;
 /// Single-line header cap (matches the invocation header's preview width).
 const HEADER_CAP: usize = 96;
 
@@ -121,7 +122,7 @@ pub(crate) fn render_tool_result_body(
         push_text_preview(
             cx,
             output,
-            cx.rows(COMMAND_PREVIEW_ROWS),
+            cx.rows(PLAIN_TOOL_PREVIEW_ROWS),
             lines,
             cx.styles.error(),
         );
@@ -152,9 +153,9 @@ fn render_known(
         Write => render_write(cx, input, output, lines),
         NotebookEdit => render_notebook_edit(cx, input, output, lines),
         // ── Shell → output (the `●`/`🔧` header already names the command) ─
-        Bash | PowerShell | Repl => render_text(cx, output, COMMAND_PREVIEW_ROWS, lines),
-        // ── Search → match list (taller, structured) ───────────────────
-        Grep | Glob => render_text(cx, output, MATCH_PREVIEW_ROWS, lines),
+        Bash | PowerShell | Repl => render_text(cx, output, PLAIN_TOOL_PREVIEW_ROWS, lines),
+        // ── Search → match list ────────────────────────────────────────
+        Grep | Glob => render_text(cx, output, PLAIN_TOOL_PREVIEW_ROWS, lines),
         // ── Checklist ──────────────────────────────────────────────────
         TodoWrite => render_todos(cx, input, output, lines),
         // ── Web → target header + output ───────────────────────────────
@@ -379,7 +380,9 @@ fn render_text(
 /// than wrapping the content in a Markdown fence: a fence both
 /// breaks on a `` ``` `` *inside* the content (e.g. reading a Markdown file) and
 /// draws a code-block border that doesn't belong under a tool header. Only the
-/// first `rows` lines are highlighted — truncation happens *before* the work.
+/// first `rows` logical lines are highlighted — truncation happens *before*
+/// the expensive work — and then the rendered block is capped by wrapped
+/// screen rows so a few very long code lines cannot flood the viewport.
 fn render_code(
     cx: &ToolResultRenderCtx<'_>,
     lang: &str,
@@ -403,6 +406,7 @@ fn render_code(
         cx.styles,
         cx.syntax_highlighting,
     );
+    let mut rendered = Vec::with_capacity(visible.len() + 1);
     for (index, line) in visible.iter().enumerate() {
         let prefix = if index == 0 { "  └ " } else { "    " };
         let mut spans = vec![Span::raw(prefix).fg(cx.styles.dim())];
@@ -411,13 +415,15 @@ fn render_code(
         } else {
             spans.push(Span::raw(line.clone()).fg(cx.styles.text()));
         }
-        lines.push(Line::from(spans));
+        rendered.push(Line::from(spans));
     }
     // `count()` consumes the lazy remainder without materializing it.
     let omitted = body.count();
+    let omitted_hint = (omitted > 0).then_some(omitted);
     if omitted > 0 {
-        lines.push(cx.truncation_line(omitted));
+        rendered.push(cx.truncation_line(omitted));
     }
+    lines.extend(truncate_lines_middle(cx, rendered, rows, omitted_hint));
 }
 
 /// Head-truncate already-rendered rich lines, appending an expand hint.
@@ -427,19 +433,17 @@ fn push_capped(
     max: usize,
     out: &mut Vec<Line<'static>>,
 ) {
-    let total = rendered.len();
-    if total <= max {
-        out.extend(rendered);
-        return;
-    }
-    let head = max.saturating_sub(1).max(1);
-    out.extend(rendered.into_iter().take(head));
-    out.push(cx.truncation_line(total - head));
+    out.extend(truncate_lines_middle(cx, rendered, max, None));
 }
 
-/// Plain-text preview with a configurable row budget and base color. This is the
-/// single middle-truncation implementation; `render_output_preview` is the
-/// default-budget, default-color shorthand over it.
+/// Plain-text preview with a configurable row budget and base color.
+///
+/// Mirrors `codex-rs/tui`'s two-stage command-output algorithm:
+/// 1. keep up to `line_limit` logical head lines plus `line_limit` tail lines;
+/// 2. after wrapping, middle-truncate again to the visible row budget.
+///
+/// The second pass is what prevents a few very long lines from flooding the
+/// viewport after terminal wrapping.
 fn push_text_preview(
     cx: &ToolResultRenderCtx<'_>,
     output: &str,
@@ -447,37 +451,145 @@ fn push_text_preview(
     out: &mut Vec<Line<'static>>,
     color: ratatui::style::Color,
 ) {
-    match tool_output_preview(output, rows) {
-        ToolOutputPreview::Empty => {
-            out.push(result_line("(no output)".to_string(), cx.styles.dim()));
-        }
-        ToolOutputPreview::Full(body) => {
-            for (i, line) in body.into_iter().enumerate() {
-                out.push(output_result_line(
-                    transcript_safe_line(line),
-                    color,
-                    i == 0,
-                ));
-            }
-        }
-        ToolOutputPreview::Truncated {
-            head,
-            omitted,
-            tail,
-        } => {
-            for (i, line) in head.into_iter().enumerate() {
-                out.push(output_result_line(
-                    transcript_safe_line(line),
-                    color,
-                    i == 0,
-                ));
-            }
-            out.push(cx.truncation_line(omitted));
-            for line in tail {
-                out.push(output_result_line(transcript_safe_line(line), color, false));
-            }
-        }
+    let Some((rendered, omitted_hint)) = logical_output_lines(cx, output, rows, color) else {
+        out.push(result_line("(no output)".to_string(), cx.styles.dim()));
+        return;
+    };
+    out.extend(truncate_lines_middle(cx, rendered, rows, omitted_hint));
+}
+
+fn logical_output_lines(
+    cx: &ToolResultRenderCtx<'_>,
+    output: &str,
+    line_limit: usize,
+    color: ratatui::style::Color,
+) -> Option<(Vec<Line<'static>>, Option<usize>)> {
+    if line_limit == 0 {
+        return None;
     }
+
+    let mut head = Vec::with_capacity(line_limit);
+    let mut tail = VecDeque::with_capacity(line_limit);
+    let mut total = 0usize;
+    for line in output.lines() {
+        if total < line_limit {
+            head.push(line);
+        } else if line_limit > 0 {
+            if tail.len() == line_limit {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+        total += 1;
+    }
+
+    if total == 0 {
+        return None;
+    }
+
+    let show_ellipsis = total > 2 * line_limit;
+    let omitted = show_ellipsis.then(|| total - 2 * line_limit);
+    let mut rendered = Vec::new();
+    for (i, line) in head.into_iter().enumerate() {
+        rendered.push(output_result_line(
+            transcript_safe_line(line),
+            color,
+            i == 0,
+        ));
+    }
+    if let Some(omitted) = omitted {
+        rendered.push(cx.truncation_line(omitted));
+    }
+    if show_ellipsis {
+        rendered.extend(
+            tail.into_iter()
+                .map(|line| output_result_line(transcript_safe_line(line), color, false)),
+        );
+    } else {
+        rendered.extend(
+            tail.into_iter()
+                .map(|line| output_result_line(transcript_safe_line(line), color, false)),
+        );
+    }
+    Some((rendered, omitted))
+}
+
+fn truncate_lines_middle(
+    cx: &ToolResultRenderCtx<'_>,
+    lines: Vec<Line<'static>>,
+    max_rows: usize,
+    omitted_hint: Option<usize>,
+) -> Vec<Line<'static>> {
+    if max_rows == 0 || lines.is_empty() {
+        return Vec::new();
+    }
+
+    let width = cx.width.max(1);
+    let row_counts: Vec<usize> = lines
+        .iter()
+        .map(|line| {
+            Paragraph::new(Text::from(vec![line.clone()]))
+                .wrap(Wrap { trim: false })
+                .line_count(width)
+                .max(1)
+        })
+        .collect();
+    let total_rows: usize = row_counts.iter().sum();
+    if total_rows <= max_rows {
+        return lines;
+    }
+
+    let estimated_omitted = omitted_hint.unwrap_or(0)
+        + lines
+            .len()
+            .saturating_sub(usize::from(omitted_hint.is_some()));
+    let ellipsis_rows = Paragraph::new(Text::from(vec![cx.truncation_line(estimated_omitted)]))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .max(1);
+    if ellipsis_rows >= max_rows {
+        return vec![cx.truncation_line(estimated_omitted)];
+    }
+
+    let available_rows = max_rows - ellipsis_rows;
+    let head_budget = available_rows / 2;
+    let tail_budget = available_rows - head_budget;
+
+    let mut head = Vec::new();
+    let mut head_rows = 0usize;
+    let mut head_end = 0usize;
+    while head_end < lines.len() {
+        let row_count = row_counts[head_end];
+        if head_rows + row_count > head_budget {
+            break;
+        }
+        head_rows += row_count;
+        head.push(lines[head_end].clone());
+        head_end += 1;
+    }
+
+    let mut tail_reversed = Vec::new();
+    let mut tail_rows = 0usize;
+    let mut tail_start = lines.len();
+    while tail_start > head_end {
+        let idx = tail_start - 1;
+        let row_count = row_counts[idx];
+        if tail_rows + row_count > tail_budget {
+            break;
+        }
+        tail_rows += row_count;
+        tail_reversed.push(lines[idx].clone());
+        tail_start -= 1;
+    }
+
+    let base = omitted_hint.unwrap_or(0);
+    let additional = lines
+        .len()
+        .saturating_sub(head.len() + tail_reversed.len())
+        .saturating_sub(usize::from(omitted_hint.is_some()));
+    head.push(cx.truncation_line(base + additional));
+    head.extend(tail_reversed.into_iter().rev());
+    head
 }
 
 /// Default plain-text preview (text color, default row budget) — the

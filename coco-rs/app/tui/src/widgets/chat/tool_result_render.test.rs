@@ -25,10 +25,23 @@ fn render_ex(
     is_error: bool,
     expanded: bool,
 ) -> Vec<Line<'static>> {
+    render_ex_width(
+        tool_name, input, output, is_error, expanded, /*width*/ 96,
+    )
+}
+
+fn render_ex_width(
+    tool_name: &str,
+    input: Option<Value>,
+    output: &str,
+    is_error: bool,
+    expanded: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
     let theme = Theme::default();
     let cx = ToolResultRenderCtx {
         styles: UiStyles::new(&theme),
-        width: 96,
+        width,
         syntax_highlighting: SyntaxHighlighting::Enabled,
         expand_hint: "(ctrl+o to expand)".to_string(),
         expanded,
@@ -115,6 +128,26 @@ fn read_highlights_file_content() {
 }
 
 #[test]
+fn read_code_truncates_by_wrapped_screen_rows() {
+    let input = json!({"file_path": "main.rs"});
+    let long = "let value = \"".to_string() + &"very_long_segment_".repeat(30) + "\";";
+    let output = format!("{long}\n{long}");
+    let out = text_of(&render_ex_width(
+        "Read",
+        Some(input),
+        &output,
+        false,
+        /*expanded*/ false,
+        /*width*/ 24,
+    ));
+
+    assert!(
+        out.contains("… +"),
+        "wrapped long code should collapse to an ellipsis: {out}"
+    );
+}
+
+#[test]
 fn structured_default_pretty_prints_json() {
     // A tool with no bespoke renderer + JSON output → multi-line pretty print.
     let out = text_of(&render(
@@ -179,5 +212,24 @@ fn expanded_surface_shows_more_rows_than_inline() {
         "reader must show more rows than inline: inline={} reader={}",
         inline.len(),
         reader.len()
+    );
+}
+
+#[test]
+fn plain_output_truncates_by_wrapped_screen_rows() {
+    let long = "https://example.test/".to_string() + &"very-long-segment/".repeat(30);
+    let output = format!("{long}\n{long}");
+    let out = text_of(&render_ex_width(
+        "Bash",
+        Some(json!({"command": "echo long"})),
+        &output,
+        false,
+        /*expanded*/ false,
+        /*width*/ 24,
+    ));
+
+    assert!(
+        out.contains("… +"),
+        "wrapped long output should collapse to an ellipsis: {out}"
     );
 }
