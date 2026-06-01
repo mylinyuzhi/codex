@@ -71,6 +71,11 @@ const SYNTHETIC_XML_FRAGMENTS: &[&str] = &[
     "<tick>",
     "<teammate-message",
 ];
+// NOTE: command-input echoes (`<command-name>`) are intentionally NOT
+// listed here. Slash echoes/results are `System` (transcript-only) under
+// the coco-rs policy that user↔tool commands never enter the model's
+// context, so `is_selectable_user_cell`'s `is_visible_in_transcript_only`
+// check already excludes them from the rewind picker — no tag entry needed.
 
 /// IDE-injected context tags stripped from restored input. Mirrors TS
 /// `stripIdeContextTags()` in `utils/displayTags.ts:49-51`.

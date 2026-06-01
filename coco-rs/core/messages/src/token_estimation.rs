@@ -80,6 +80,10 @@ pub fn estimate_tool_result_message_tokens(tr: &crate::ToolResultMessage) -> i64
 /// `services/compact::estimate_tokens` semantics.
 pub fn estimate_message_tokens(msg: &Message) -> i64 {
     match msg {
+        // Transcript-only user messages (e.g. a slash-command echo/result
+        // with `display: system`) are never sent to the model, so they
+        // must not count toward the context-window / auto-compact budget.
+        Message::User(u) if u.is_visible_in_transcript_only => 0,
         Message::User(u) => llm_message_tokens(&u.message),
         Message::Assistant(a) => llm_message_tokens(&a.message),
         Message::ToolResult(t) => llm_message_tokens(&t.message),

@@ -2,6 +2,7 @@
 //!
 //! TS: utils/messages.ts (~193K LOC), history.ts, cost-tracker.ts
 
+pub mod command_tags;
 pub mod content_kind;
 pub mod cost;
 pub mod creation;
@@ -19,6 +20,18 @@ pub mod wrapping;
 // the operations layer that does normalization / history.
 pub use coco_types::messages::*;
 
+pub use command_tags::COMMAND_ARGS_TAG;
+pub use command_tags::COMMAND_MESSAGE_TAG;
+pub use command_tags::COMMAND_NAME_TAG;
+pub use command_tags::LOCAL_COMMAND_STDERR_TAG;
+pub use command_tags::LOCAL_COMMAND_STDOUT_TAG;
+pub use command_tags::NO_CONTENT_MESSAGE;
+pub use command_tags::build_slash_command_messages;
+pub use command_tags::extract_tag;
+pub use command_tags::format_command_input;
+pub use command_tags::format_local_command_stdout;
+pub use command_tags::is_command_input;
+pub use command_tags::is_local_command_output;
 pub use content_kind::ContentKind;
 pub use content_kind::IMAGE_MAX_TOKEN_SIZE;
 pub use content_kind::classify_assistant;

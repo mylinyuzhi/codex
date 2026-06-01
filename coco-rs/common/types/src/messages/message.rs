@@ -105,9 +105,15 @@ impl Message {
     /// - `Tombstone` — neither (filtered in normalization).
     pub fn visibility(&self) -> Visibility {
         match self {
-            // Human-typed user input is always both API-visible and
-            // UI-visible. Reminder-injected "meta" user content lives in
+            // Human-typed user input is both API- and UI-visible.
+            // Reminder-injected "meta" user content lives in
             // `Message::Attachment` with an appropriate `AttachmentKind`.
+            // `is_visible_in_transcript_only` user messages (e.g. a
+            // slash-command echo/result with `display: system`) render in
+            // the transcript but must never reach the model — the canonical
+            // API gate (`filter_by_options(for_api)` → `visibility().api`)
+            // honors this so the flag cannot leak into the prompt.
+            Self::User(u) if u.is_visible_in_transcript_only => Visibility::UI_ONLY,
             Self::User(_) | Self::Assistant(_) | Self::ToolResult(_) => Visibility::BOTH,
             Self::System(_) => Visibility::API_ONLY,
             Self::Attachment(a) => Visibility {
@@ -761,6 +767,12 @@ pub enum MessageOrigin {
     ToolResult,
     CompactSummary,
     SubagentReply,
+    /// Synthesized echo/result of a slash command (`❯ /cmd` + `⎿ output`).
+    /// Carried on the `Message::User` envelope; combined with
+    /// `is_visible_in_transcript_only` it mirrors TS's
+    /// `createUserMessage` (model-visible) vs `createCommandInputMessage`
+    /// (transcript-only) split. Drives tag-aware command-pill rendering.
+    SlashCommand,
 }
 
 /// Direction hint for partial compaction.

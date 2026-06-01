@@ -23,6 +23,21 @@ pub(super) fn try_render(
 ) -> Option<()> {
     match &cell.kind {
         CellKind::UserText { text } => {
+            // Slash-command echo/result messages carry TS command tags
+            // (`<command-name>…`, `<local-command-stdout>…`). Render them
+            // tool-style (`❯ /cmd args` + `⎿ output`) rather than as raw
+            // XML. Model-visibility is orthogonal (the engine's
+            // `is_visible_in_transcript_only` gate); both display modes
+            // render identically here, matching TS where `createUserMessage`
+            // and `createCommandInputMessage` share the command-pill UI.
+            if coco_messages::is_command_input(text) {
+                render_command_echo(w, text, lines);
+                return Some(());
+            }
+            if coco_messages::is_local_command_output(text) {
+                render_command_output(w, text, lines);
+                return Some(());
+            }
             // Subtle background tint behind user prompt rows. TS parity:
             // `UserPromptMessage` wraps the body in `<Box
             // backgroundColor="userMessageBackground">`, which paints the
@@ -101,5 +116,49 @@ pub(super) fn try_render(
             Some(())
         }
         _ => None,
+    }
+}
+
+/// Render a slash-command echo (`<command-name>…` body) as `❯ /cmd args`,
+/// reusing the user-prompt glyph + background so it reads as a command the
+/// user issued. TS parity: `UserCommandMessage`.
+fn render_command_echo(w: &ChatWidget<'_>, text: &str, lines: &mut Vec<Line<'static>>) {
+    let name = coco_messages::extract_tag(text, coco_messages::COMMAND_NAME_TAG).unwrap_or("");
+    let args = coco_messages::extract_tag(text, coco_messages::COMMAND_ARGS_TAG).unwrap_or("");
+    let echo = if args.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name} {args}")
+    };
+    let span = Span::raw(format!("❯ {echo}")).fg(w.styles.user_message());
+    let mut chat_line = Line::from(span);
+    if let Some(bg) = w.styles.user_message_bg() {
+        chat_line = chat_line.style(ratatui::style::Style::default().bg(bg));
+    }
+    lines.push(chat_line);
+}
+
+/// Render a slash-command result (`<local-command-stdout|stderr>…` body)
+/// as a markdown body under a `└` gutter (first row `  └ `, continuation
+/// rows aligned). TS parity: `UserLocalCommandOutputMessage` (`⎿`).
+fn render_command_output(w: &ChatWidget<'_>, text: &str, lines: &mut Vec<Line<'static>>) {
+    let body = coco_messages::extract_tag(text, coco_messages::LOCAL_COMMAND_STDOUT_TAG)
+        .or_else(|| coco_messages::extract_tag(text, coco_messages::LOCAL_COMMAND_STDERR_TAG))
+        .unwrap_or("");
+    if body.is_empty() {
+        return;
+    }
+    // Markdown-render so rich results (/help, /context) keep formatting;
+    // reserve 4 cols for the gutter so wrapping accounts for it.
+    let opts = coco_tui_markdown::MarkdownOptions::new(
+        w.styles,
+        w.width.saturating_sub(4),
+        w.syntax_highlighting,
+    );
+    let rendered = coco_tui_markdown::render_markdown(body, opts, None);
+    for (index, mut line) in rendered.into_iter().enumerate() {
+        let prefix = if index == 0 { "  └ " } else { "    " };
+        line.spans.insert(0, Span::raw(prefix).fg(w.styles.dim()));
+        lines.push(line);
     }
 }

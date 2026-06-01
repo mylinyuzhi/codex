@@ -3308,13 +3308,22 @@
     },
     "MessageOrigin": {
       "description": "Where a message originated.",
-      "type": "string",
-      "enum": [
-        "user_input",
-        "system_injected",
-        "tool_result",
-        "compact_summary",
-        "subagent_reply"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user_input",
+            "system_injected",
+            "tool_result",
+            "compact_summary",
+            "subagent_reply"
+          ]
+        },
+        {
+          "description": "Synthesized echo/result of a slash command (`❯ /cmd` + `⎿ output`).\nCarried on the `Message::User` envelope; combined with\n`is_visible_in_transcript_only` it mirrors TS's\n`createUserMessage` (model-visible) vs `createCommandInputMessage`\n(transcript-only) split. Drives tag-aware command-pill rendering.",
+          "type": "string",
+          "const": "slash_command"
+        }
       ]
     },
     "ModelFallbackParams": {

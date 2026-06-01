@@ -72,7 +72,7 @@ fn context_viz_content_caps_bar_when_usage_exceeds_total() {
         ModelRole::Main,
         crate::state::ModelBinding {
             provider: "openai".into(),
-            model_id: "gpt-5.2".into(),
+            model_id: "gpt-5.4".into(),
             context_window: Some(100),
             effort: None,
         },
@@ -85,7 +85,7 @@ fn context_viz_content_caps_bar_when_usage_exceeds_total() {
                 text: "done".into(),
                 provider_metadata: None,
             })],
-            "gpt-5.2",
+            "gpt-5.4",
             coco_types::TokenUsage {
                 input_tokens: coco_types::InputTokens {
                     total: 140,
