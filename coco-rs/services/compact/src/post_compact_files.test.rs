@@ -39,6 +39,7 @@ fn make_tool_result(tool_use_id: &str, text: &str) -> Message {
     Message::ToolResult(coco_messages::ToolResultMessage {
         uuid: Uuid::new_v4(),
         source_assistant_uuid: None,
+        display_data: None,
         message: LlmMessage::Tool {
             content: vec![coco_messages::ToolContent::ToolResult(
                 coco_llm_types::ToolResultPart {

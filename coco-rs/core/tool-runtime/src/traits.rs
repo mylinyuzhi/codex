@@ -1003,6 +1003,7 @@ impl<T: Tool> DynTool for T {
             new_messages: r.new_messages,
             app_state_patch: r.app_state_patch,
             permission_updates: r.permission_updates,
+            display_data: None,
         })
     }
     fn get_path(&self, input: &Value) -> Option<String> {

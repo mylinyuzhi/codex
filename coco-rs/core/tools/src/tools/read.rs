@@ -285,6 +285,7 @@ impl Tool for ReadTool {
         if !path.exists() {
             return Err(ToolError::ExecutionFailed {
                 message: format!("File not found: {file_path}"),
+                display_data: None,
                 source: None,
             });
         }
@@ -374,6 +375,7 @@ impl Tool for ReadTool {
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 });
             }
         }
@@ -416,6 +418,7 @@ impl Tool for ReadTool {
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 });
             }
 
@@ -440,6 +443,7 @@ impl Tool for ReadTool {
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 });
             }
         }
@@ -454,6 +458,7 @@ impl Tool for ReadTool {
         // `fs::read_to_string`.
         let raw_bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
             message: format!("failed to read {file_path}: {e}"),
+            display_data: None,
             source: None,
         })?;
 
@@ -462,6 +467,7 @@ impl Tool for ReadTool {
             .decode(&raw_bytes)
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("failed to decode {file_path} as {encoding:?}: {e}"),
+                display_data: None,
                 source: None,
             })?;
 
@@ -472,6 +478,7 @@ impl Tool for ReadTool {
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             });
         }
 
@@ -519,6 +526,7 @@ impl Tool for ReadTool {
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             });
         }
 
@@ -622,6 +630,7 @@ impl Tool for ReadTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 
@@ -864,12 +873,14 @@ fn text_output(
 fn read_notebook(file_path: &str) -> Result<ToolResult<Value>, ToolError> {
     let content = std::fs::read_to_string(file_path).map_err(|e| ToolError::ExecutionFailed {
         message: format!("failed to read notebook: {e}"),
+        display_data: None,
         source: None,
     })?;
 
     let notebook: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| ToolError::ExecutionFailed {
             message: format!("invalid notebook JSON: {e}"),
+            display_data: None,
             source: None,
         })?;
 
@@ -887,6 +898,7 @@ fn read_notebook(file_path: &str) -> Result<ToolResult<Value>, ToolError> {
         .and_then(|v| v.as_array())
         .ok_or_else(|| ToolError::ExecutionFailed {
             message: "notebook has no cells array".into(),
+            display_data: None,
             source: None,
         })?;
 
@@ -907,6 +919,7 @@ fn read_notebook(file_path: &str) -> Result<ToolResult<Value>, ToolError> {
         new_messages: vec![],
         app_state_patch: None,
         permission_updates: Vec::new(),
+        display_data: None,
     })
 }
 
@@ -1136,6 +1149,7 @@ async fn read_image_as_base64(
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("failed to stat image {file_path}: {e}"),
+                display_data: None,
                 source: None,
             })?;
     if metadata.len() > MAX_IMAGE_DECODE_BYTES {
@@ -1147,6 +1161,7 @@ async fn read_image_as_base64(
                  tool (e.g. `magick input.png -resize 2048x2048 output.png`).",
                 metadata.len()
             ),
+            display_data: None,
             source: None,
         });
     }
@@ -1170,10 +1185,12 @@ async fn read_image_as_base64(
         .await
         .map_err(|e| ToolError::ExecutionFailed {
             message: format!("spawn_blocking failed: {e}"),
+            display_data: None,
             source: None,
         })?
         .map_err(|e| ToolError::ExecutionFailed {
             message: e,
+            display_data: None,
             source: None,
         })?;
 
@@ -1223,6 +1240,7 @@ async fn read_image_as_base64(
         new_messages: vec![],
         app_state_patch: None,
         permission_updates: Vec::new(),
+        display_data: None,
     })
 }
 
@@ -1249,6 +1267,7 @@ const PDF_MAX_PAGES_PER_READ: usize = 20;
 fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, ToolError> {
     let bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
         message: format!("failed to read PDF: {e}"),
+        display_data: None,
         source: None,
     })?;
 
@@ -1259,6 +1278,7 @@ fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, T
     let full_text =
         pdf_extract::extract_text_from_mem(&bytes).map_err(|e| ToolError::ExecutionFailed {
             message: format!("failed to extract PDF text from {file_path}: {e}"),
+            display_data: None,
             source: None,
         })?;
 
@@ -1304,6 +1324,7 @@ fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, T
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         });
     }
     // Enforce the per-read page cap even when the user passes a bigger
@@ -1357,6 +1378,7 @@ fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, T
         new_messages: vec![],
         app_state_patch: None,
         permission_updates: Vec::new(),
+        display_data: None,
     })
 }
 

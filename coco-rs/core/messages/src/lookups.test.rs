@@ -27,6 +27,7 @@ fn test_tool_result_lookup() {
         Message::ToolResult(ToolResultMessage {
             uuid: Uuid::new_v4(),
             source_assistant_uuid: None,
+            display_data: None,
             message: LlmMessage::Tool {
                 content: vec![],
                 provider_options: None,

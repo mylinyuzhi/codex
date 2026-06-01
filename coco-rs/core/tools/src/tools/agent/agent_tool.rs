@@ -439,6 +439,7 @@ impl Tool for AgentTool {
                           Use 'worktree' for local isolation or omit the field for \
                           no isolation."
                     .into(),
+                display_data: None,
                 source: None,
             });
         }
@@ -481,6 +482,7 @@ impl Tool for AgentTool {
         if ctx.is_teammate && is_team_spawn {
             return Err(ToolError::ExecutionFailed {
                 message: "Teammates cannot spawn other teammates into a team.".into(),
+                display_data: None,
                 source: None,
             });
         }
@@ -510,6 +512,7 @@ impl Tool for AgentTool {
                               tool calls — without it the prompt-cache invariant cannot be \
                               upheld."
                         .into(),
+                    display_data: None,
                     source: None,
                 });
             };
@@ -525,6 +528,7 @@ impl Tool for AgentTool {
                               the runtime registry snapshot at bootstrap — \
                               without it Fork-mode prompt-cache parity cannot be guaranteed."
                         .into(),
+                    display_data: None,
                     source: None,
                 });
             };
@@ -551,6 +555,7 @@ impl Tool for AgentTool {
                     message: "Fork mode requested from inside a forked child — recursive \
                               forking is forbidden (TS `isInForkChild` guard)."
                         .into(),
+                    display_data: None,
                     source: None,
                 });
             }
@@ -635,6 +640,7 @@ impl Tool for AgentTool {
                             servers_with_tools.join(", ")
                         },
                     ),
+                    display_data: None,
                     source: None,
                 });
             }
@@ -708,6 +714,7 @@ impl Tool for AgentTool {
                      without `background: true`) for synchronous spawn from \
                      within a teammate. Tried agent_type='{effective_subagent_type}'.",
                 ),
+                display_data: None,
                 source: None,
             });
         }
@@ -829,6 +836,7 @@ impl Tool for AgentTool {
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: e,
+                    display_data: None,
                     source: None,
                 })?;
 
@@ -903,6 +911,7 @@ impl Tool for AgentTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -968,6 +977,7 @@ async fn check_mcp_ready(servers: &[&str], ctx: &ToolUseContext) -> Result<(), T
                 servers_with_tools.join(", ")
             },
         ),
+        display_data: None,
         source: None,
     })
 }

@@ -12,6 +12,9 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::ApplyPatchPreview;
+use coco_types::ApplyPatchPreviewRow;
+use coco_types::ToolDisplayData;
 use coco_types::ToolId;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -116,6 +119,13 @@ fn tool_result_text(message: &Message) -> (&str, bool) {
         other => panic!("expected text output, got {other:?}"),
     };
     (text, result.is_error)
+}
+
+fn tool_result_display_data(message: &Message) -> Option<&ToolDisplayData> {
+    let Message::ToolResult(tr) = message else {
+        panic!("expected tool result");
+    };
+    tr.display_data.as_ref()
 }
 
 #[tokio::test]
@@ -253,4 +263,104 @@ async fn structured_output_ignores_model_visible_data_lookalike() {
     let (text, is_error) = tool_result_text(&outcome.ordered_messages[0]);
     assert_eq!(text, "visible result");
     assert!(!is_error);
+}
+
+#[tokio::test]
+async fn success_copies_tool_result_display_data() {
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![text_part("visible result")],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+    });
+    let display_data = ToolDisplayData::ApplyPatchPreview(ApplyPatchPreview {
+        rows: vec![ApplyPatchPreviewRow::Omitted { rows: 5 }],
+    });
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-display".into(),
+        tool_id: tool.id(),
+        tool_name: tool.name().into(),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Ok(
+            CocoToolResult::data(Value::Null).with_display_data(display_data.clone())
+        ),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_result_session_dir: None,
+    })
+    .await;
+
+    assert_eq!(
+        tool_result_display_data(&outcome.ordered_messages[0]),
+        Some(&display_data)
+    );
+}
+
+#[tokio::test]
+async fn error_copies_execution_failed_display_data() {
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![text_part("unused")],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+    });
+    let display_data = ToolDisplayData::ApplyPatchPreview(ApplyPatchPreview {
+        rows: vec![ApplyPatchPreviewRow::Omitted { rows: 9 }],
+    });
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-display-error".into(),
+        tool_id: tool.id(),
+        tool_name: tool.name().into(),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Err(ToolError::ExecutionFailed {
+            message: "failed".into(),
+            display_data: Some(display_data.clone()),
+            source: None,
+        }),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_result_session_dir: None,
+    })
+    .await;
+
+    assert_eq!(
+        tool_result_display_data(&outcome.ordered_messages[0]),
+        Some(&display_data)
+    );
+}
+
+#[tokio::test]
+async fn plain_tool_error_has_no_display_data() {
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![text_part("unused")],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+    });
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-plain-error".into(),
+        tool_id: tool.id(),
+        tool_name: tool.name().into(),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Err(ToolError::ExecutionFailed {
+            message: "failed".into(),
+            display_data: None,
+            source: None,
+        }),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_result_session_dir: None,
+    })
+    .await;
+
+    assert!(tool_result_display_data(&outcome.ordered_messages[0]).is_none());
 }

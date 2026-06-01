@@ -767,11 +767,13 @@ Usage notes:
                             new_messages: vec![],
                             app_state_patch: None,
                             permission_updates: Vec::new(),
+                            display_data: None,
                         });
                     }
                     Err(e) => {
                         return Err(ToolError::ExecutionFailed {
                             message: format!("Failed to fetch {url}: {e}"),
+                            display_data: None,
                             source: None,
                         });
                     }
@@ -861,6 +863,7 @@ Usage notes:
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 });
             }
         };
@@ -876,6 +879,7 @@ Usage notes:
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -1221,6 +1225,7 @@ impl WebSearchErrorType {
     fn into_tool_err(self, message: impl AsRef<str>) -> ToolError {
         ToolError::ExecutionFailed {
             message: format!("[{}] {}", self.as_str(), message.as_ref()),
+            display_data: None,
             source: None,
         }
     }
@@ -1562,6 +1567,7 @@ IMPORTANT - Use the correct year in search queries:
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }

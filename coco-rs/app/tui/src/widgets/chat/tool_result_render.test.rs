@@ -1,6 +1,11 @@
 use super::*;
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::theme::Theme;
+use coco_types::ApplyPatchPreview;
+use coco_types::ApplyPatchPreviewAction;
+use coco_types::ApplyPatchPreviewRow;
+use coco_types::ApplyPatchPreviewSign;
+use coco_types::ToolDisplayData;
 use serde_json::json;
 
 /// Flatten rendered lines to a single string for content assertions.
@@ -38,6 +43,18 @@ fn render_ex_width(
     expanded: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
+    render_ex_width_with_display(tool_name, input, output, None, is_error, expanded, width)
+}
+
+fn render_ex_width_with_display(
+    tool_name: &str,
+    input: Option<Value>,
+    output: &str,
+    display_data: Option<&ToolDisplayData>,
+    is_error: bool,
+    expanded: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
     let theme = Theme::default();
     let cx = ToolResultRenderCtx {
         styles: UiStyles::new(&theme),
@@ -47,7 +64,15 @@ fn render_ex_width(
         expanded,
     };
     let mut lines = Vec::new();
-    render_tool_result_body(&cx, tool_name, input.as_ref(), output, is_error, &mut lines);
+    render_tool_result_body(
+        &cx,
+        tool_name,
+        input.as_ref(),
+        output,
+        display_data,
+        is_error,
+        &mut lines,
+    );
     lines
 }
 
@@ -59,6 +84,40 @@ fn render(
     is_error: bool,
 ) -> Vec<Line<'static>> {
     render_ex(tool_name, input, output, is_error, /*expanded*/ false)
+}
+
+fn apply_patch_display_data(rows: Vec<ApplyPatchPreviewRow>) -> ToolDisplayData {
+    ToolDisplayData::ApplyPatchPreview(ApplyPatchPreview { rows })
+}
+
+fn render_apply_patch(rows: Vec<ApplyPatchPreviewRow>, is_error: bool) -> Vec<Line<'static>> {
+    let display_data = apply_patch_display_data(rows);
+    render_ex_width_with_display(
+        "apply_patch",
+        None,
+        if is_error { "Error: failed" } else { "Done!" },
+        Some(&display_data),
+        is_error,
+        /*expanded*/ false,
+        /*width*/ 96,
+    )
+}
+
+fn render_apply_patch_width(
+    rows: Vec<ApplyPatchPreviewRow>,
+    is_error: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let display_data = apply_patch_display_data(rows);
+    render_ex_width_with_display(
+        "apply_patch",
+        None,
+        if is_error { "Error: failed" } else { "Done!" },
+        Some(&display_data),
+        is_error,
+        /*expanded*/ false,
+        width,
+    )
 }
 
 #[test]
@@ -79,6 +138,31 @@ fn edit_renders_a_diff_from_old_new_input() {
     let out = text_of(&render("Edit", Some(input), "applied", false));
     assert!(out.contains("let x = 1;"), "old content must appear: {out}");
     assert!(out.contains("let x = 2;"), "new content must appear: {out}");
+}
+
+#[test]
+fn edit_diff_preview_caps_wrapped_screen_rows() {
+    let old = (0..40)
+        .map(|i| format!("let old_{i} = \"{}\";", "long_segment_".repeat(8)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new = (0..40)
+        .map(|i| format!("let new_{i} = \"{}\";", "long_segment_".repeat(8)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let input = json!({"file_path": "a.rs", "old_string": old, "new_string": new});
+    let lines = render_ex_width(
+        "Edit",
+        Some(input),
+        "applied",
+        false,
+        /*expanded*/ false,
+        /*width*/ 32,
+    );
+    let out = text_of(&lines);
+
+    assert!(lines.len() <= 24, "inline diff rows must be capped: {out}");
+    assert!(out.contains("… +"), "diff should include truncation: {out}");
 }
 
 #[test]
@@ -188,13 +272,294 @@ fn error_output_renders_regardless_of_tool() {
 }
 
 #[test]
-fn apply_patch_colors_signed_lines_from_input() {
-    // The field is `patch` (see `ApplyPatchInput`), and the registered/wire name
-    // is the serde-renamed `apply_patch`, not the PascalCase variant.
-    let input = json!({"patch": "*** Update File: a.rs\n-old line\n+new line\n"});
-    let out = text_of(&render("apply_patch", Some(input), "applied", false));
-    assert!(out.contains("old line"), "{out}");
-    assert!(out.contains("new line"), "{out}");
+fn apply_patch_add_file_renders_path_header_and_added_lines() {
+    let out = text_of(&render_apply_patch(
+        vec![
+            ApplyPatchPreviewRow::Header {
+                action: ApplyPatchPreviewAction::Add,
+                target: "src/new.rs".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Added,
+                content: "fn main() {}".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Added,
+                content: "println!(\"hi\");".to_string(),
+            },
+        ],
+        false,
+    ));
+
+    assert!(out.contains("add src/new.rs"), "{out}");
+    assert!(out.contains("+fn main() {}"), "{out}");
+    assert!(out.contains("+println!(\"hi\");"), "{out}");
+}
+
+#[test]
+fn apply_patch_update_file_renders_diff_not_raw_patch_markers() {
+    let out = text_of(&render_apply_patch(
+        vec![
+            ApplyPatchPreviewRow::Header {
+                action: ApplyPatchPreviewAction::Update,
+                target: "src/lib.rs".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Removed,
+                content: "old line".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Added,
+                content: "new line".to_string(),
+            },
+        ],
+        false,
+    ));
+
+    assert!(out.contains("update src/lib.rs"), "{out}");
+    assert!(out.contains("-old line"), "{out}");
+    assert!(out.contains("+new line"), "{out}");
+    assert!(
+        !out.contains("@@ -"),
+        "apply_patch previews must not invent source hunk line numbers: {out}"
+    );
+    assert!(
+        !out.contains("*** Update File"),
+        "raw patch marker should not render after parse: {out}"
+    );
+}
+
+#[test]
+fn apply_patch_move_file_shows_source_and_destination() {
+    let out = text_of(&render_apply_patch(
+        vec![
+            ApplyPatchPreviewRow::Header {
+                action: ApplyPatchPreviewAction::Update,
+                target: "old.rs -> new.rs".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Removed,
+                content: "old_name()".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Added,
+                content: "new_name()".to_string(),
+            },
+        ],
+        false,
+    ));
+
+    assert!(out.contains("update old.rs -> new.rs"), "{out}");
+    assert!(out.contains("-old_name()"), "{out}");
+    assert!(out.contains("+new_name()"), "{out}");
+}
+
+#[test]
+fn apply_patch_delete_file_renders_delete_header_only() {
+    let out = text_of(&render_apply_patch(
+        vec![ApplyPatchPreviewRow::Header {
+            action: ApplyPatchPreviewAction::Delete,
+            target: "obsolete.rs".to_string(),
+        }],
+        false,
+    ));
+
+    assert!(out.contains("delete obsolete.rs"), "{out}");
+    assert!(
+        !out.contains("-obsolete"),
+        "delete body is unavailable: {out}"
+    );
+}
+
+#[test]
+fn apply_patch_malformed_patch_falls_back_to_raw_signed_lines() {
+    let out = text_of(&render_apply_patch(
+        vec![
+            ApplyPatchPreviewRow::Raw {
+                content: "*** Update File: src/lib.rs".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Removed,
+                content: "old line".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Added,
+                content: "new line".to_string(),
+            },
+        ],
+        false,
+    ));
+
+    assert!(out.contains("*** Update File: src/lib.rs"), "{out}");
+    assert!(out.contains("-old line"), "{out}");
+    assert!(out.contains("+new line"), "{out}");
+}
+
+#[test]
+fn apply_patch_large_preview_stays_capped() {
+    let rows = std::iter::once(ApplyPatchPreviewRow::Header {
+        action: ApplyPatchPreviewAction::Add,
+        target: "big.rs".to_string(),
+    })
+    .chain((0..80).map(|i| ApplyPatchPreviewRow::Line {
+        sign: ApplyPatchPreviewSign::Added,
+        content: format!("let line_{i} = \"{}\";", "long_segment_".repeat(8)),
+    }))
+    .collect::<Vec<_>>();
+    let lines = render_apply_patch_width(rows, false, /*width*/ 32);
+    let out = text_of(&lines);
+
+    assert!(
+        lines.len() <= 24,
+        "inline apply_patch rows must be globally capped: {out}"
+    );
+    assert!(
+        out.contains("… +"),
+        "large diff should include truncation: {out}"
+    );
+}
+
+#[test]
+fn apply_patch_many_file_preview_stays_globally_capped() {
+    let rows = (0..40)
+        .flat_map(|i| {
+            [
+                ApplyPatchPreviewRow::Header {
+                    action: ApplyPatchPreviewAction::Add,
+                    target: format!("file_{i}.rs"),
+                },
+                ApplyPatchPreviewRow::Line {
+                    sign: ApplyPatchPreviewSign::Added,
+                    content: format!("line {i}"),
+                },
+            ]
+        })
+        .collect();
+    let lines = render_apply_patch_width(rows, false, /*width*/ 48);
+    let out = text_of(&lines);
+
+    assert!(
+        lines.len() <= 24,
+        "multi-file apply_patch rows must share one cap: {out}"
+    );
+    assert!(out.contains("add file_0.rs"), "{out}");
+    assert!(out.contains("add file_39.rs"), "{out}");
+    assert!(out.contains("… +"), "{out}");
+}
+
+#[test]
+fn apply_patch_preview_uses_core_omission_count() {
+    let rows = vec![
+        ApplyPatchPreviewRow::Header {
+            action: ApplyPatchPreviewAction::Add,
+            target: "first.rs".to_string(),
+        },
+        ApplyPatchPreviewRow::Line {
+            sign: ApplyPatchPreviewSign::Added,
+            content: "head".to_string(),
+        },
+        ApplyPatchPreviewRow::Omitted { rows: 37 },
+        ApplyPatchPreviewRow::Header {
+            action: ApplyPatchPreviewAction::Add,
+            target: "last.rs".to_string(),
+        },
+        ApplyPatchPreviewRow::Line {
+            sign: ApplyPatchPreviewSign::Added,
+            content: "tail".to_string(),
+        },
+    ];
+    let out = text_of(&render_apply_patch(rows, false));
+
+    assert!(out.contains("add first.rs"), "{out}");
+    assert!(out.contains("add last.rs"), "{out}");
+    assert!(out.contains("… +37 lines"), "{out}");
+}
+
+#[test]
+fn apply_patch_second_pass_keeps_surviving_omitted_count() {
+    let mut rows = vec![
+        ApplyPatchPreviewRow::Header {
+            action: ApplyPatchPreviewAction::Add,
+            target: "first.rs".to_string(),
+        },
+        ApplyPatchPreviewRow::Line {
+            sign: ApplyPatchPreviewSign::Added,
+            content: "head".to_string(),
+        },
+        ApplyPatchPreviewRow::Omitted { rows: 37 },
+    ];
+    rows.extend((0..40).map(|i| ApplyPatchPreviewRow::Line {
+        sign: ApplyPatchPreviewSign::Added,
+        content: format!("line {i}"),
+    }));
+
+    let out = text_of(&render_apply_patch_width(rows, false, /*width*/ 96));
+
+    assert!(out.contains("… +37 lines"), "{out}");
+    assert!(out.contains("… +20 lines"), "{out}");
+}
+
+#[test]
+fn apply_patch_second_pass_counts_dropped_omitted_row() {
+    let rows = (0..40)
+        .map(|i| {
+            if i == 20 {
+                ApplyPatchPreviewRow::Omitted { rows: 37 }
+            } else {
+                ApplyPatchPreviewRow::Line {
+                    sign: ApplyPatchPreviewSign::Added,
+                    content: format!("line {i}"),
+                }
+            }
+        })
+        .collect();
+
+    let out = text_of(&render_apply_patch_width(rows, false, /*width*/ 96));
+
+    assert!(out.contains("… +53 lines"), "{out}");
+    assert!(!out.contains("… +17 lines"), "{out}");
+    assert!(!out.contains("… +37 lines"), "{out}");
+}
+
+#[test]
+fn apply_patch_error_renders_preview_then_error_text() {
+    let out = text_of(&render_apply_patch(
+        vec![
+            ApplyPatchPreviewRow::Header {
+                action: ApplyPatchPreviewAction::Update,
+                target: "src/lib.rs".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Removed,
+                content: "old".to_string(),
+            },
+        ],
+        true,
+    ));
+
+    assert!(out.contains("update src/lib.rs"), "{out}");
+    assert!(out.contains("-old"), "{out}");
+    assert!(out.contains("Error: failed"), "{out}");
+}
+
+#[test]
+fn non_apply_patch_error_ignores_apply_patch_preview_display_data() {
+    let display_data = apply_patch_display_data(vec![ApplyPatchPreviewRow::Header {
+        action: ApplyPatchPreviewAction::Update,
+        target: "src/lib.rs".to_string(),
+    }]);
+    let out = text_of(&render_ex_width_with_display(
+        "Bash",
+        None,
+        "Error: failed",
+        Some(&display_data),
+        /*is_error*/ true,
+        /*expanded*/ false,
+        /*width*/ 96,
+    ));
+
+    assert!(!out.contains("update src/lib.rs"), "{out}");
+    assert!(out.contains("Error: failed"), "{out}");
 }
 
 #[test]

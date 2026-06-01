@@ -365,16 +365,17 @@ impl<'a> ChatWidget<'a> {
         let coco_messages::Message::ToolResult(tr) = result_cell.source.as_ref() else {
             return;
         };
-        let Some((tool_name, output)) =
+        let Some(projection) =
             crate::state::derive::tool_result_output(result_cell.source.as_ref())
         else {
             return;
         };
         tool_result_render::render_tool_result_body(
             &self.tool_result_ctx(),
-            &tool_name,
+            &projection.tool_name,
             input,
-            &output,
+            &projection.output,
+            projection.display_data,
             tr.is_error,
             lines,
         );

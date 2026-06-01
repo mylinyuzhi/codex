@@ -6,6 +6,7 @@ use crate::AttachmentKind;
 use crate::CompactTrigger;
 use crate::PermissionMode;
 use crate::TokenUsage;
+use crate::ToolDisplayData;
 use crate::ToolId;
 
 use super::AttachmentBody;
@@ -460,6 +461,12 @@ pub struct ToolResultMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_assistant_uuid: Option<Uuid>,
     pub message: LlmMessage,
+    /// Optional typed data for UI renderers.
+    ///
+    /// This is deliberately not part of provider/model history. The
+    /// model-facing `message` remains canonical for tool output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_data: Option<ToolDisplayData>,
     pub tool_use_id: String,
     pub tool_id: ToolId,
     #[serde(default)]

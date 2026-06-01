@@ -22,6 +22,7 @@ coco-keybindings = { workspace = true, features = ["crossterm", "loader"] }
 coco-subagent.workspace = true
 coco-tui-markdown = { workspace = true, features = ["mermaid"] }
 coco-tui-ui.workspace = true
+coco-utils-pty.workspace = true
 coco-utils-string.workspace = true
 dirs.workspace = true
 

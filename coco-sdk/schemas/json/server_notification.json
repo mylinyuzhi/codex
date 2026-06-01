@@ -1489,6 +1489,115 @@
         "message"
       ]
     },
+    "ApplyPatchPreview": {
+      "description": "Bounded, structured preview of an `apply_patch` body for UI rendering.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApplyPatchPreviewRow"
+          }
+        }
+      },
+      "required": [
+        "rows"
+      ]
+    },
+    "ApplyPatchPreviewAction": {
+      "type": "string",
+      "enum": [
+        "add",
+        "delete",
+        "update"
+      ]
+    },
+    "ApplyPatchPreviewRow": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ApplyPatchPreviewAction"
+            },
+            "kind": {
+              "type": "string",
+              "const": "header"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "action",
+            "target"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "line"
+            },
+            "sign": {
+              "$ref": "#/$defs/ApplyPatchPreviewSign"
+            }
+          },
+          "required": [
+            "kind",
+            "sign",
+            "content"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "raw"
+            }
+          },
+          "required": [
+            "kind",
+            "content"
+          ]
+        },
+        {
+          "description": "Placeholder for rows removed from a bounded preview at this position.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "omitted"
+            },
+            "rows": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "kind",
+            "rows"
+          ]
+        }
+      ]
+    },
+    "ApplyPatchPreviewSign": {
+      "type": "string",
+      "enum": [
+        "added",
+        "removed",
+        "context"
+      ]
+    },
     "AssistantContentPart": {
       "description": "Assistant message content parts.",
       "oneOf": [
@@ -6006,6 +6115,27 @@
         }
       ]
     },
+    "ToolDisplayData": {
+      "description": "UI-only side channel for bounded display data produced by tools.\n\nThis data is for transcript/rendering surfaces only. Provider history and\nmodel-visible tool output must continue to use `ToolResultMessage.message`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ApplyPatchPreview"
+            },
+            "kind": {
+              "type": "string",
+              "const": "apply_patch_preview"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ]
+        }
+      ]
+    },
     "ToolInputInvalidReason": {
       "description": "Structured cause for an invalid tool call. Drives the wrap prefix\nchosen by `app/query`'s tool result synthesizer:\n- [`Self::JsonParseFailed`] → `<tool_use_error>JSON parse failed: …</tool_use_error>`\n- [`Self::SchemaViolation`] → `<tool_use_error>InputValidationError: …</tool_use_error>`\n- [`Self::NoSuchTool`] → `<tool_use_error>No such tool available: …</tool_use_error>`\n\nMirrors the three failure modes that TS Claude Code distinguishes\nin `services/tools/toolExecution.ts:337-411,614-680`.",
       "oneOf": [
@@ -6453,6 +6583,17 @@
     "ToolResultMessage": {
       "type": "object",
       "properties": {
+        "display_data": {
+          "description": "Optional typed data for UI renderers.\n\nThis is deliberately not part of provider/model history. The\nmodel-facing `message` remains canonical for tool output.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolDisplayData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "is_error": {
           "type": "boolean",
           "default": false

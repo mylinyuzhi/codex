@@ -24,7 +24,7 @@ pub(super) fn try_render(
     let Message::ToolResult(tr) = cell.source.as_ref() else {
         return Some(());
     };
-    let (tool_name, output) = tool_result_output(cell.source.as_ref())?;
+    let projection = tool_result_output(cell.source.as_ref())?;
     // Header row mirrors the invocation: the `●` glyph groups call+result and
     // its colour encodes status (red ⇒ error, green ⇒ completed).
     let (glyph_color, name_suffix) = if tr.is_error {
@@ -34,7 +34,9 @@ pub(super) fn try_render(
     };
     let mut header = vec![
         Span::raw("  ● ").fg(glyph_color),
-        Span::raw(tool_name.clone()).fg(w.styles.text()).bold(),
+        Span::raw(projection.tool_name.clone())
+            .fg(w.styles.text())
+            .bold(),
     ];
     if !name_suffix.is_empty() {
         header.push(Span::raw(name_suffix).fg(w.styles.dim()));
@@ -44,9 +46,10 @@ pub(super) fn try_render(
     // unavailable and input-derived views (diffs) degrade to output-only.
     super::tool_result_render::render_tool_result_body(
         &w.tool_result_ctx(),
-        &tool_name,
+        &projection.tool_name,
         None,
-        &output,
+        &projection.output,
+        projection.display_data,
         tr.is_error,
         lines,
     );

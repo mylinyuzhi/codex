@@ -711,6 +711,7 @@ impl Tool for ExitPlanModeTool {
             let serialized =
                 serde_json::to_string(&approval_msg).map_err(|e| ToolError::ExecutionFailed {
                     message: format!("failed to serialize plan_approval_request: {e}"),
+                    display_data: None,
                     source: None,
                 })?;
             let envelope = coco_tool_runtime::MailboxEnvelope {
@@ -726,6 +727,7 @@ impl Tool for ExitPlanModeTool {
                     message: format!(
                         "failed to write plan_approval_request to leader mailbox: {e}"
                     ),
+                    display_data: None,
                     source: None,
                 })?;
 

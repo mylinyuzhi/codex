@@ -55,6 +55,16 @@ class ApiProvider(str, Enum):
     vertex = 'vertex'
     foundry = 'foundry'
 
+class ApplyPatchPreviewAction(str, Enum):
+    add = 'add'
+    delete = 'delete'
+    update = 'update'
+
+class ApplyPatchPreviewSign(str, Enum):
+    added = 'added'
+    removed = 'removed'
+    context = 'context'
+
 class ApplyPatchToolType(str, Enum):
     freeform = 'freeform'
     function = 'function'
@@ -520,6 +530,9 @@ SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "Sy
 # Tool message content parts.
 ToolContentPart = Union["ToolResultPart", "ToolApprovalResponsePart"]
 
+# UI-only side channel for bounded display data produced by tools.
+ToolDisplayData = dict[str, Any]
+
 # User message content parts.
 UserContentPart = Union["TextPart", "FilePart"]
 
@@ -580,6 +593,33 @@ class AgentStreamEventMcpToolCallEnd(BaseModel):
 AgentStreamEvent = Annotated[
     Union[AgentStreamEventTextDelta, AgentStreamEventThinkingDelta, AgentStreamEventToolUseQueued, AgentStreamEventToolUseStarted, AgentStreamEventToolUseCompleted, AgentStreamEventMcpToolCallBegin, AgentStreamEventMcpToolCallEnd],
     Field(discriminator='type_'),
+]
+
+class ApplyPatchPreviewRowHeader(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['header'] = Field(default='header', alias='kind')
+    action: ApplyPatchPreviewAction
+    target: str
+
+class ApplyPatchPreviewRowLine(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['line'] = Field(default='line', alias='kind')
+    content: str
+    sign: ApplyPatchPreviewSign
+
+class ApplyPatchPreviewRowRaw(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['raw'] = Field(default='raw', alias='kind')
+    content: str
+
+class ApplyPatchPreviewRowOmitted(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['omitted'] = Field(default='omitted', alias='kind')
+    rows: int
+
+ApplyPatchPreviewRow = Annotated[
+    Union[ApplyPatchPreviewRowHeader, ApplyPatchPreviewRowLine, ApplyPatchPreviewRowRaw, ApplyPatchPreviewRowOmitted],
+    Field(discriminator='kind'),
 ]
 
 class ClientRequestInitialize(BaseModel):
@@ -2888,6 +2928,9 @@ class ApiError(BaseModel):
     error_type: str | None = None
     status_code: int | None = None
 
+class ApplyPatchPreview(BaseModel):
+    rows: list[ApplyPatchPreviewRow]
+
 class AssistantMessage(BaseModel):
     message: LanguageModelV4Message
     uuid: str
@@ -3821,6 +3864,7 @@ class ToolResultMessage(BaseModel):
     tool_id: str
     tool_use_id: str
     uuid: str
+    display_data: ToolDisplayData | None = None
     is_error: bool = False
     source_assistant_uuid: str | None = None
 

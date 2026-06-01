@@ -24,6 +24,7 @@ fn make_tool_result(
     ToolResultMessage {
         uuid: Uuid::new_v4(),
         source_assistant_uuid: None,
+        display_data: None,
         message: LlmMessage::Tool {
             content: vec![ToolContentPart::ToolResult(ToolResultPart {
                 tool_call_id: tool_use_id.to_string(),

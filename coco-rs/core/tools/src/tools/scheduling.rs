@@ -235,6 +235,7 @@ impl Tool for CronCreateTool {
                 message: format!(
                     "Cron job limit reached ({MAX_CRON_JOBS}). Delete an existing job before creating a new one."
                 ),
+                display_data: None,
                 source: None,
             });
         }
@@ -268,9 +269,11 @@ impl Tool for CronCreateTool {
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             }),
             Err(e) => Err(ToolError::ExecutionFailed {
                 message: format!("Failed to create schedule: {e}"),
+                display_data: None,
                 source: None,
             }),
         }
@@ -351,12 +354,14 @@ impl Tool for CronDeleteTool {
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
+                display_data: None,
             }),
             Err(e) => Err(ToolError::ExecutionFailed {
                 message: format!(
                     "Failed to delete schedule {id}: {e}",
                     id = input.schedule_id
                 ),
+                display_data: None,
                 source: None,
             }),
         }
@@ -491,10 +496,12 @@ impl Tool for CronListTool {
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 })
             }
             Err(e) => Err(ToolError::ExecutionFailed {
                 message: format!("Failed to list schedules: {e}"),
+                display_data: None,
                 source: None,
             }),
         }
@@ -638,9 +645,11 @@ impl Tool for RemoteTriggerTool {
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
+                    display_data: None,
                 }),
                 Err(e) => Err(ToolError::ExecutionFailed {
                     message: format!("Failed to list triggers: {e}"),
+                    display_data: None,
                     source: None,
                 }),
             },
@@ -652,9 +661,11 @@ impl Tool for RemoteTriggerTool {
                         new_messages: vec![],
                         app_state_patch: None,
                         permission_updates: Vec::new(),
+                        display_data: None,
                     }),
                     Err(e) => Err(ToolError::ExecutionFailed {
                         message: format!("Failed to get trigger {id}: {e}"),
+                        display_data: None,
                         source: None,
                     }),
                 }
@@ -677,9 +688,11 @@ impl Tool for RemoteTriggerTool {
                         new_messages: vec![],
                         app_state_patch: None,
                         permission_updates: Vec::new(),
+                        display_data: None,
                     }),
                     Err(e) => Err(ToolError::ExecutionFailed {
                         message: format!("Failed to create trigger: {e}"),
+                        display_data: None,
                         source: None,
                     }),
                 }
@@ -696,9 +709,11 @@ impl Tool for RemoteTriggerTool {
                         new_messages: vec![],
                         app_state_patch: None,
                         permission_updates: Vec::new(),
+                        display_data: None,
                     }),
                     Err(e) => Err(ToolError::ExecutionFailed {
                         message: format!("Failed to update trigger {id}: {e}"),
+                        display_data: None,
                         source: None,
                     }),
                 }
@@ -715,9 +730,11 @@ impl Tool for RemoteTriggerTool {
                         new_messages: vec![],
                         app_state_patch: None,
                         permission_updates: Vec::new(),
+                        display_data: None,
                     }),
                     Err(e) => Err(ToolError::ExecutionFailed {
                         message: format!("Failed to run trigger {id}: {e}"),
+                        display_data: None,
                         source: None,
                     }),
                 }

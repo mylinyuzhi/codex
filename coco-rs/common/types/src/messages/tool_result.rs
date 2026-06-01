@@ -1,5 +1,6 @@
 use crate::AppStatePatch;
 use crate::PermissionUpdate;
+use crate::ToolDisplayData;
 use serde_json::Value;
 
 use super::AttachmentMessage;
@@ -32,6 +33,11 @@ use crate::AttachmentKind;
 /// constructor to repeat `structured_output: None,`. Use
 /// [`Self::with_structured_output`] for ergonomic construction.
 ///
+/// **UI display data**: tools that have compact, typed display-only
+/// context can attach it via [`Self::with_display_data`]. The
+/// tool-outcome builder copies it onto `ToolResultMessage.display_data`;
+/// it must not replace model-facing output rendered from `data`.
+///
 /// TS parity: `orchestration.ts:queuedContextModifiers` — per-tool
 /// `(ctx) => newCtx` modifiers keyed by `tool_use_id` and applied
 /// after the concurrent batch finishes.
@@ -53,6 +59,9 @@ pub struct ToolResult<T> {
     /// to forward a skill's frontmatter `allowed-tools` as Command-source
     /// auto-allow rules.
     pub permission_updates: Vec<PermissionUpdate>,
+    /// Typed UI-only data for renderers. The tool's `data` remains the
+    /// source for model-facing stdout/stderr or structured output.
+    pub display_data: Option<ToolDisplayData>,
 }
 
 impl<T> ToolResult<T> {
@@ -64,6 +73,7 @@ impl<T> ToolResult<T> {
             new_messages: Vec::new(),
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         }
     }
 
@@ -74,6 +84,7 @@ impl<T> ToolResult<T> {
             new_messages,
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         }
     }
 
@@ -100,6 +111,12 @@ impl<T> ToolResult<T> {
     /// the running session config after this tool returns.
     pub fn with_permission_updates(mut self, updates: Vec<PermissionUpdate>) -> Self {
         self.permission_updates = updates;
+        self
+    }
+
+    /// Attach typed UI-only display data to the eventual tool result message.
+    pub fn with_display_data(mut self, display_data: ToolDisplayData) -> Self {
+        self.display_data = Some(display_data);
         self
     }
 
@@ -133,6 +150,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for ToolResult<T> {
                 &self.app_state_patch.as_ref().map(|_| "<fn>"),
             )
             .field("permission_updates", &self.permission_updates)
+            .field("display_data", &self.display_data)
             .finish()
     }
 }

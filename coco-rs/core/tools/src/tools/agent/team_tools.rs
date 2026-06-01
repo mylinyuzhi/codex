@@ -99,6 +99,7 @@ impl Tool for TeamCreateTool {
             Some(path) => path,
             None => std::env::current_dir().map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to resolve current directory for TeamCreate: {e}"),
+                display_data: None,
                 source: None,
             })?,
         };
@@ -107,6 +108,7 @@ impl Tool for TeamCreateTool {
                 .clone()
                 .ok_or_else(|| ToolError::ExecutionFailed {
                     message: "TeamCreate requires a real leader session id".into(),
+                    display_data: None,
                     source: None,
                 })?;
 
@@ -124,6 +126,7 @@ impl Tool for TeamCreateTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: e,
+                display_data: None,
                 source: None,
             })?;
 
@@ -136,6 +139,7 @@ impl Tool for TeamCreateTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
@@ -204,6 +208,7 @@ impl Tool for TeamDeleteTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: e,
+                display_data: None,
                 source: None,
             })?;
 
@@ -215,6 +220,7 @@ impl Tool for TeamDeleteTool {
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
+            display_data: None,
         })
     }
 }
