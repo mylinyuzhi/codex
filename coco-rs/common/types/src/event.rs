@@ -1887,7 +1887,15 @@ pub enum TuiOnlyEvent {
     /// body — never translated, since it carries the handler's actual
     /// output (often command-specific status / git output / prompt
     /// preview).
-    SlashCommandResult { name: String, text: String },
+    SlashCommandResult {
+        name: String,
+        /// Raw argument string the user typed (e.g. `sonnet` for
+        /// `/model sonnet`). Threaded into the model-visible echo
+        /// (`❯ /name args`) so the model sees the full invocation, matching
+        /// TS `formatCommandInput(command, args)`. Empty for argless commands.
+        args: String,
+        text: String,
+    },
     /// Dispatcher-side breadcrumb for slash commands the runtime couldn't
     /// fully execute (missing handler, handler error, empty Prompt body,
     /// dialog wiring pending). The TUI translates `kind` via the i18n

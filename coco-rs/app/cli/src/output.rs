@@ -31,7 +31,33 @@ fn render_text(msg: &Message) -> String {
         Message::User(u) => {
             // Post-Phase-2: all `Message::User` are genuine human input.
             // Meta / reminder text lives in `Message::Attachment`.
+            // Slash-command echo/result rows carry TS command tags — strip
+            // them so text mode shows `> /cmd` / the result, not raw XML.
             let text = extract_text(&u.message);
+            if coco_messages::is_command_input(&text) {
+                let name = coco_messages::extract_tag(&text, coco_messages::COMMAND_NAME_TAG)
+                    .unwrap_or("");
+                let args = coco_messages::extract_tag(&text, coco_messages::COMMAND_ARGS_TAG)
+                    .unwrap_or("");
+                let echo = if args.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{name} {args}")
+                };
+                return format!("\x1b[1;36m> {echo}\x1b[0m\n");
+            }
+            if coco_messages::is_local_command_output(&text) {
+                let body =
+                    coco_messages::extract_tag(&text, coco_messages::LOCAL_COMMAND_STDOUT_TAG)
+                        .or_else(|| {
+                            coco_messages::extract_tag(
+                                &text,
+                                coco_messages::LOCAL_COMMAND_STDERR_TAG,
+                            )
+                        })
+                        .unwrap_or("");
+                return format!("\x1b[2m  {body}\x1b[0m\n");
+            }
             format!("\x1b[1;36m> {text}\x1b[0m\n")
         }
         Message::Assistant(a) => {

@@ -318,15 +318,15 @@ fn builtin_deepseek_v4_declares_three_thinking_levels() {
 
 #[test]
 fn builtin_gpt5_models_declare_full_picker_thinking_levels() {
-    // GPT-5 family exposes the full 6-rung picker
-    // (disable / auto / low / medium / high / xhigh).
+    // GPT-5 family exposes the 5-rung picker
+    // (disable / low / medium / high / xhigh).
     let builtin = builtin_models_partial();
-    for model_id in ["gpt-5-2", "gpt-5-4", "gpt-5-5", "gpt-5-3-codex"] {
+    for model_id in ["gpt-5-4", "gpt-5-5", "gpt-5-3-codex"] {
         let info = builtin.get(model_id).expect(model_id);
         assert_eq!(
             info.default_thinking_level,
-            Some(ReasoningEffort::Auto),
-            "{model_id} default thinking level must be Auto"
+            Some(ReasoningEffort::High),
+            "{model_id} default thinking level must be High"
         );
         let levels = info
             .supported_thinking_levels
@@ -336,7 +336,6 @@ fn builtin_gpt5_models_declare_full_picker_thinking_levels() {
             levels.iter().map(|level| level.effort).collect::<Vec<_>>(),
             vec![
                 ReasoningEffort::Off,
-                ReasoningEffort::Auto,
                 ReasoningEffort::Low,
                 ReasoningEffort::Medium,
                 ReasoningEffort::High,
@@ -382,7 +381,6 @@ fn non_anthropic_builtin_models_do_not_declare_prompt_cache() {
     // builtin should declare it (multi-provider isolation invariant).
     let builtin = builtin_models_partial();
     for model_id in [
-        "gpt-5-2",
         "gpt-5-4",
         "gpt-5-5",
         "gpt-5-3-codex",

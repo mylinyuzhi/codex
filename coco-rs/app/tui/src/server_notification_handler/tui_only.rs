@@ -344,14 +344,30 @@ pub(super) fn handle(
             true
         }
 
-        // === Slash-command result (System role transcript line) ===
-        TuiOnlyEvent::SlashCommandResult { name: _, text } => {
-            // Round-trip through engine `MessageHistory` so the transcript
-            // view (and SDK consumers / JSONL transcript) see the slash
-            // output via the standard `MessageAppended` path. The
-            // renderer treats empty-title `Informational` as a bare
-            // SystemText body.
-            enqueue_informational(state, SystemMessageLevel::Info, "", text, command_tx);
+        // === Slash-command result (tool-style `❯ /cmd` + `⎿ output`) ===
+        TuiOnlyEvent::SlashCommandResult { name, args, text } => {
+            // Render `❯ /cmd args` + `⎿ output` (tool-style) but keep it
+            // `System` (transcript-only): these are user↔tool interactions
+            // (/help, /model, /login, …), NOT conversation — the LLM must
+            // not see them. Only Prompt/skill commands (which expand to
+            // real model input) and /compact reach the model. Built here
+            // (TUI owns the localized text) and round-tripped through engine
+            // `MessageHistory` so transcript view, SDK, and JSONL converge.
+            // No in-tree command sets `is_sensitive`, so redaction is a
+            // no-op today (the builder still honors it for future commands).
+            let messages = coco_messages::build_slash_command_messages(
+                &name, &args, &text, /*is_sensitive*/ false,
+            );
+            if let Err(e) =
+                command_tx.try_send(crate::command::UserCommand::PushSlashResult { messages })
+            {
+                tracing::warn!(
+                    target: "coco_tui::system_push",
+                    name,
+                    error = ?e,
+                    "SlashCommandResult: failed to dispatch PushSlashResult",
+                );
+            }
             true
         }
         // === Open the rewind picker state ===

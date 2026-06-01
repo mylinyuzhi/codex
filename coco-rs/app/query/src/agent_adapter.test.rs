@@ -139,7 +139,7 @@ async fn test_adapter_threads_provider_model_selection_to_factory() {
 
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
-        model: "openai/gpt-5.2".into(),
+        model: "openai/gpt-5.4".into(),
         max_turns: Some(1),
         model_role: Some(coco_types::ModelRole::Review),
         ..Default::default()
@@ -154,7 +154,7 @@ async fn test_adapter_threads_provider_model_selection_to_factory() {
         coco_types::LlmModelSelection::ExplicitWithFallbackRole {
             primary: coco_types::ProviderModelSelection {
                 provider: "openai".into(),
-                model_id: "gpt-5.2".into(),
+                model_id: "gpt-5.4".into(),
             },
             fallback_role: coco_types::ModelRole::Review,
         },
